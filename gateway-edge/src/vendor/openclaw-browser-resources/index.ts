@@ -1,10 +1,10 @@
 // @ts-nocheck
-var vs = Object.create;
+var Cs = Object.create;
 var Gt = Object.defineProperty;
-var Cs = Object.getOwnPropertyDescriptor;
+var vs = Object.getOwnPropertyDescriptor;
 var Ts = Object.getOwnPropertyNames;
 var Es = Object.getPrototypeOf, As = Object.prototype.hasOwnProperty;
-var C = (e, t, n) => () => {
+var v = (e, t, n) => () => {
   if (n) throw n[0];
   try {
     return e && (t = e(e = 0)), t;
@@ -24,10 +24,10 @@ var Hn = (e, t) => () => {
 }, _s = (e, t, n, o) => {
   if (t && typeof t == "object" || typeof t == "function")
     for (let r of Ts(t))
-      !As.call(e, r) && r !== n && Gt(e, r, { get: () => t[r], enumerable: !(o = Cs(t, r)) || o.enumerable });
+      !As.call(e, r) && r !== n && Gt(e, r, { get: () => t[r], enumerable: !(o = vs(t, r)) || o.enumerable });
   return e;
 };
-var zn = (e, t, n) => (n = e != null ? vs(Es(e)) : {}, _s(
+var zn = (e, t, n) => (n = e != null ? Cs(Es(e)) : {}, _s(
   // If the importer is in node compatibility mode or this is not an ESM
   // file that has been converted to a CommonJS file using a Babel-
   // compatible transform (i.e. "__esModule" has not been set), then set
@@ -52,7 +52,7 @@ function zt(e) {
 function he(e) {
   return zt(e) ?? null;
 }
-var D = C(() => {
+var D = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/string-coerce.ts
@@ -68,20 +68,20 @@ function W(e) {
 function O(e) {
   return typeof e == "string" && e.trim() ? e : void 0;
 }
-var F = C(() => {
+var F = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/number-coercion.ts
 function re(e) {
   return typeof e == "number" && Number.isFinite(e) ? e : void 0;
 }
-var Is, xu, oe = C(() => {
+var Is, xu, oe = v(() => {
   F();
   Is = 2147e6, xu = Math.floor(Is / 1e3);
 });
 
 // openclaw/node_modules/.pnpm/@noble+ed25519@3.2.0/node_modules/@noble/ed25519/index.js
-var Vn, Ie, Wt, rt, jt, $t, ot, Ps, Ds, qn, it, Ms, Yn, Zn, Jn, Os, ge, B, Wn, x, Ns, qt, Xn, ye, Be, me, Us, Fs, X, Ls, jn, Bs, Kt, Gs, $n, Kn, Hs, Qn = C(() => {
+var Vn, Ie, Wt, rt, jt, $t, ot, Ps, Ds, qn, it, Ms, Yn, Zn, Jn, Os, ge, B, Wn, x, Ns, qt, Xn, ye, Be, me, Us, Fs, X, Ls, jn, Bs, Kt, Gs, $n, Kn, Hs, Qn = v(() => {
   Vn = Object.freeze, Ie = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn, Wt = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn, rt = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n, jt = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an, $t = 0x6666666666666666666666666666666666666666666666666666666666666658n, ot = Ie - 1n, Ps = Vn({
     p: Ie,
     n: Wt,
@@ -326,26 +326,26 @@ var Vn, Ie, Wt, rt, jt, $t, ot, Ps, Ds, qn, it, Ms, Yn, Zn, Jn, Os, ge, B, Wn, x
 });
 
 // openclaw/packages/gateway-client/src/device-auth.ts
-var er = C(() => {
+var er = v(() => {
 });
 
 // openclaw/packages/gateway-client/src/chat-stream-message.ts
-var tr = C(() => {
+var tr = v(() => {
   D();
 });
 
 // openclaw/packages/gateway-client/src/chat-stream-projection.ts
-var nr = C(() => {
+var nr = v(() => {
   D();
 });
 
 // openclaw/packages/normalization-core/src/string-normalization.ts
-var st = C(() => {
+var st = v(() => {
   F();
 });
 
 // openclaw/packages/gateway-protocol/src/connect-error-details.ts
-var P, Fu, Lu, Vt = C(() => {
+var P, Fu, Lu, Vt = v(() => {
   oe();
   st();
   P = {
@@ -415,20 +415,20 @@ var P, Fu, Lu, Vt = C(() => {
 });
 
 // openclaw/packages/gateway-client/src/connect-auth.ts
-var rr = C(() => {
+var rr = v(() => {
   F();
 });
 
 // openclaw/packages/gateway-client/src/browser-device-auth.ts
-var or = C(() => {
+var or = v(() => {
 });
 
 // openclaw/packages/gateway-client/src/gateway-origin-scope.ts
-var ir = C(() => {
+var ir = v(() => {
 });
 
 // openclaw/packages/gateway-client/src/model-catalog-connect.ts
-var sr = C(() => {
+var sr = v(() => {
 });
 
 // openclaw/packages/retry/src/index.ts
@@ -511,7 +511,7 @@ function Ys(e = {}) {
     throw o(l);
   };
 }
-var ar, qs, ju, Yt = C(() => {
+var ar, qs, ju, Yt = v(() => {
   ar = {
     attempts: 3,
     minDelayMs: 300,
@@ -530,13 +530,13 @@ var ar, qs, ju, Yt = C(() => {
 });
 
 // openclaw/packages/gateway-client/src/protocol-client.ts
-var cr = C(() => {
+var cr = v(() => {
   D();
   Yt();
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var np, lr = C(() => {
+var np, lr = v(() => {
   Vt();
   np = /* @__PURE__ */ new Set([
     P.AUTH_TOKEN_MISSING,
@@ -558,11 +558,11 @@ var np, lr = C(() => {
 });
 
 // openclaw/packages/normalization-core/src/stable-stringify.ts
-var dr = C(() => {
+var dr = v(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/gateway-error-details.ts
-var ur = C(() => {
+var ur = v(() => {
 });
 
 // openclaw/packages/gateway-client/src/session-projection-message-identity.ts
@@ -596,39 +596,39 @@ function Zt(e, t) {
     externalSource: p && i && s && a ? JSON.stringify([i, s, a]) : null
   };
 }
-var hr = C(() => {
+var hr = v(() => {
   D();
   F();
 });
 
 // openclaw/packages/gateway-client/src/session-projection.ts
-var gr = C(() => {
+var gr = v(() => {
   D();
   F();
   hr();
 });
 
 // openclaw/packages/normalization-core/src/result.ts
-var mr = C(() => {
+var mr = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/agent-id.ts
-var ct = C(() => {
+var ct = v(() => {
   mr();
 });
 
 // openclaw/packages/normalization-core/src/uuid.ts
-var Jt = C(() => {
+var Jt = v(() => {
 });
 
 // openclaw/packages/gateway-client/src/session-subscriptions.ts
-var yr = C(() => {
+var yr = v(() => {
   ct();
   Jt();
 });
 
 // openclaw/packages/gateway-protocol/src/client-info.ts
-var Js, Xs, Tp, Ep, wr = C(() => {
+var Js, Xs, Tp, Ep, wr = v(() => {
   F();
   Js = {
     WEBCHAT_UI: "webchat-ui",
@@ -662,19 +662,19 @@ var Js, Xs, Tp, Ep, wr = C(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/session-row-deltas.ts
-var br = C(() => {
+var br = v(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/startup-unavailable.ts
-var Sr = C(() => {
+var Sr = v(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/version.ts
-var kr = C(() => {
+var kr = v(() => {
 });
 
 // openclaw/packages/gateway-client/src/browser.ts
-var Rr = C(() => {
+var Rr = v(() => {
   er();
   tr();
   nr();
@@ -695,15 +695,15 @@ var Rr = C(() => {
 });
 
 // openclaw/packages/normalization-core/src/balanced-json.ts
-var xr = C(() => {
+var xr = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/boolean-coercion.ts
-var vr = C(() => {
+var Cr = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/cjk-chars.ts
-var Qt, Qp, ef, Cr = C(() => {
+var Qt, Qp, ef, vr = v(() => {
   Qt = [
     [
       [183, 183],
@@ -760,11 +760,11 @@ var Qt, Qp, ef, Cr = C(() => {
 });
 
 // openclaw/packages/normalization-core/src/code-points.ts
-var en = C(() => {
+var en = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/error-coercion.ts
-var Qs, Er, Ar, Tr, _r = C(() => {
+var Qs, Er, Ar, Tr, _r = v(() => {
   Qs = /* @__PURE__ */ Symbol.for(
     "openclaw.provider-auth-persistence-error"
   ), Tr = class extends (Ar = AggregateError, Er = Qs, Ar) {
@@ -777,11 +777,11 @@ var Qs, Er, Ar, Tr, _r = C(() => {
 });
 
 // openclaw/packages/normalization-core/src/expect.ts
-var tn = C(() => {
+var tn = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/format.ts
-var Ir = C(() => {
+var Ir = v(() => {
   tn();
 });
 
@@ -796,16 +796,16 @@ function nn(e) {
 function be(e) {
   return /^[\t\n\r ]*\{/.test(e) ? G(nn(e)) : void 0;
 }
-var rn = C(() => {
+var rn = v(() => {
   D();
 });
 
 // openclaw/packages/normalization-core/src/response-bytes.ts
-var Pr = C(() => {
+var Pr = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/text-decoding.ts
-var Dr = C(() => {
+var Dr = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/utf16-slice.ts
@@ -833,14 +833,14 @@ function ze(e, t) {
   let n = Math.max(0, Math.floor(t));
   return e.length <= n ? e : Nr(e, 0, n);
 }
-var Pe = C(() => {
+var Pe = v(() => {
 });
 
 // openclaw/packages/normalization-core/src/index.ts
-var Y = C(() => {
+var Y = v(() => {
   xr();
-  vr();
   Cr();
+  vr();
   en();
   _r();
   tn();
@@ -857,7 +857,7 @@ var Y = C(() => {
 });
 
 // openclaw/packages/net-policy/src/redact-sensitive-url.ts
-var Ur = C(() => {
+var Ur = v(() => {
   F();
 });
 
@@ -869,11 +869,11 @@ function Fr(e) {
   let n = t[1] ?? "", o = t[2] ?? "";
   return [n, o.includes("g") ? o : `${o}g`];
 }
-var Lr = C(() => {
+var Lr = v(() => {
 });
 
 // openclaw/packages/acp-core/src/structured-auth-redaction.ts
-var lt, ae, De, Me, ie, se, dt, Se, U, Mf, Of, Br = C(() => {
+var lt, ae, De, Me, ie, se, dt, Se, U, Mf, Of, Br = v(() => {
   lt = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ae = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, De = String.raw`\\{1,64}t`, Me = String.raw`(?:[ \t]+|${De})`, ie = String.raw`(?:[ \t]*\r?\n${Me}|[ \t]*\\{1,64}r\\{1,64}n${Me}|[ \t]*\\{1,64}n${Me}|[ \t]*${De}[ \t]*|[ \t]*)`, se = String.raw`(?:[ \t]*\r?\n${Me}|[ \t]*\\{1,64}r\\{1,64}n${Me}|[ \t]*\\{1,64}n${Me}|[ \t]*${De}[ \t]*|[ \t]+)`, dt = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${De})|[ \t]*\\{1,64}n(?:[ \t]*|${De})|[ \t]*${De}[ \t]*)`, Se = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, U = String.raw`(?:\\{1,64}["']|["']|)`, Mf = String.raw`${Se}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${U}[ \t]*[:=]${ie}${U}([^\s\\"',;]+)`, Of = new RegExp(
     String.raw`${Se}(?:Proxy-)?Authorization${U}[ \t]*[:=]${ie}${U}(${lt})${se}`,
     "giu"
@@ -881,7 +881,7 @@ var lt, ae, De, Me, ie, se, dt, Se, U, Mf, Of, Br = C(() => {
 });
 
 // openclaw/src/logging/redact-pem.ts
-var Gr, Hr = C(() => {
+var Gr, Hr = v(() => {
   Gr = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`;
 });
 
@@ -953,7 +953,7 @@ function* Ra(e) {
 function* Ea(e) {
   if (!/pass\s*:/.test(e))
     return;
-  let t = [...e.matchAll(va)];
+  let t = [...e.matchAll(Ca)];
   if (t.length === 0)
     return;
   let n = 0, o = !1;
@@ -964,7 +964,7 @@ function* Ea(e) {
     if (r === i.index) {
       n++;
       let a = e[r - 1] ?? "", l = i[1] !== "pass" || a === "." || a === "-" || a === "_";
-      if (!(!l && !o && a === " " && Ca.test(e[r - 2] ?? ""))) {
+      if (!(!l && !o && a === " " && va.test(e[r - 2] ?? ""))) {
         o = !0;
         let h = r + i[0].length;
         if (!l) {
@@ -984,7 +984,7 @@ function* Ea(e) {
 ` || s === "\r" ? o = !1 : (s === "=" || s === ":" && !Ta.test(e[r + 1] ?? " ")) && (o = !0);
   }
 }
-var Wr, Oe, ea, pt, ta, na, jr, an, $r, ra, Kr, zr, Bf, oa, ia, sa, aa, ca, la, da, ua, pa, fa, ha, ga, ma, ya, wa, ke, ut, Vr, ba, Sa, ka, xa, va, qr, Ca, Ta, Aa, _a, Ia, Zr, Jr, ft, Pa, Da, Ma, Oa, Na, Ua, Fa, La, Ba, Ga, Ha, Xr, Qr = C(() => {
+var Wr, Oe, ea, pt, ta, na, jr, an, $r, ra, Kr, zr, Bf, oa, ia, sa, aa, ca, la, da, ua, pa, fa, ha, ga, ma, ya, wa, ke, ut, Vr, ba, Sa, ka, xa, Ca, qr, va, Ta, Aa, _a, Ia, Zr, Jr, ft, Pa, Da, Ma, Oa, Na, Ua, Fa, La, Ba, Ga, Ha, Xr, Qr = v(() => {
   Br();
   Hr();
   Wr = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, Oe = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, ea = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, pt = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, ta = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${pt}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, na = String.raw`${ta}|app[-_]?secret|credential|${Oe}`, jr = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${Oe}`, an = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${Oe}`, $r = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${Oe}`, ra = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, Kr = String.raw`password|passphrase|pass|passwd`, zr = String.raw`${pt}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${Oe}`, Bf = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, oa = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${Wr})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, ia = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${Wr})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, sa = String.raw`(^|[\s,;({\["])(?:${jr})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, aa = String.raw`(^|[\s,;({\["])(?:${jr})=(["'\x60]?[^\s&#"'\x60<>]+)`, ca = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${Oe}`, la = String.raw`/(^|[\s,{])(?:(?:${ca})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${Kr})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${an})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, da = String.raw`/(^|[\s,{])(?:(?:${$r})\s*:\s*|(?:${an})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, ua = String.raw`/(^|[\s,{])(?:${ra})=([^\s#"'\x60<>]+)/g`, pa = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${Kr})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, fa = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${an})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, ha = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${pt}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, ga = String.raw`"(?:${ea})"\s*:\s*"([^"]+)"`, ma = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, ya = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, wa = String.raw`(^|[^A-Za-z0-9])`, ke = (e) => String.raw`${wa}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, ut = String.raw`(^|[^A-Za-z0-9_])`;
@@ -994,10 +994,10 @@ var Wr, Oe, ea, pt, ta, na, jr, an, $r, ra, Kr, zr, Bf, oa, ia, sa, aa, ca, la, 
     source: "aws-secret-access-key",
     exec: Ra,
     couldMatch: Yr
-  }), va = new RegExp(
+  }), Ca = new RegExp(
     String.raw`(?<![A-Za-z0-9])(pass|${$r})\s*:\s*`,
     "gi"
-  ), qr = /[^\s#"'\x60<>]+/y, Ca = /[A-Za-z0-9]/, Ta = /[ \t\r\n]/;
+  ), qr = /[^\s#"'\x60<>]+/y, va = /[A-Za-z0-9]/, Ta = /[ \t\r\n]/;
   Aa = Object.freeze({
     source: "bare-pass-assignment",
     exec: Ea
@@ -1137,7 +1137,7 @@ var Wr, Oe, ea, pt, ta, na, jr, an, $r, ra, Kr, zr, Bf, oa, ia, sa, aa, ca, la, 
 });
 
 // openclaw/ui/src/lib/browser-redact.ts
-var Vf, eo = C(() => {
+var Vf, eo = v(() => {
   Ur();
   Pe();
   Lr();
@@ -1148,27 +1148,27 @@ var Vf, eo = C(() => {
 });
 
 // openclaw/ui/src/lib/format-error.ts
-var ht = C(() => {
+var ht = v(() => {
   Y();
   eo();
 });
 
 // openclaw/src/shared/control-ui-storage.ts
-var no, qa, ro = C(() => {
+var no, qa, ro = v(() => {
   no = "openclaw.device.auth.v1", qa = `${no}:`;
 });
 
 // openclaw/src/shared/device-auth.ts
-var cn = C(() => {
+var cn = v(() => {
   st();
 });
 
 // openclaw/ui/src/local-storage.ts
-var oo = C(() => {
+var oo = v(() => {
 });
 
 // openclaw/ui/src/lib/bytes-base64.ts
-var io = C(() => {
+var io = v(() => {
 });
 
 // openclaw/node_modules/.pnpm/@noble+hashes@2.4.0/node_modules/@noble/hashes/_u64.js
@@ -1191,7 +1191,7 @@ function Q(e, t, n, o) {
   let r = (t >>> 0) + (o >>> 0);
   return { h: e + n + (r / 2 ** 32 | 0) | 0, l: r | 0 };
 }
-var gt, so, ja, $a, ln, dn, Re, xe, qe, We, lo, uo, po, fo, ho, go, un = C(() => {
+var gt, so, ja, $a, ln, dn, Re, xe, qe, We, lo, uo, po, fo, ho, go, un = v(() => {
   gt = BigInt(4294967295), so = /* @__PURE__ */ BigInt(32);
   ja = (e) => e / 2 ** 32 | 0, $a = (e) => e >>> 0;
   ln = (e, t, n) => e >>> n, dn = (e, t, n) => e << 32 - n | t >>> n, Re = (e, t, n) => e >>> n | t << 32 - n, xe = (e, t, n) => e << 32 - n | t >>> n, qe = (e, t, n) => e << 64 - n | t >>> n - 32, We = (e, t, n) => e >>> n - 32 | t << 64 - n;
@@ -1241,14 +1241,14 @@ function Z(e, t) {
 function Za(e, t, n = "opts") {
   return yo(e, "defaults"), t !== void 0 && yo(t, n), Object.assign(/* @__PURE__ */ Object.create(null), e, t);
 }
-function ve(e, t = {}) {
+function Ce(e, t = {}) {
   if (typeof e != "function")
     throw new TypeError('"hashCons" expected function, got type=' + typeof e);
   t = Za({}, t, "info");
   let n = (r, i) => e(i).update(r).digest(), o = e(void 0);
   return n.outputLen = o.outputLen, n.blockLen = o.blockLen, n.canXOF = o.canXOF, n.create = (r) => e(r), Object.assign(n, t), Object.freeze(n);
 }
-var pn, Ya, yo, Ce, gn = C(() => {
+var pn, Ya, yo, ve, gn = v(() => {
   pn = (e) => e ? `"${e}" ` : "";
   Ya = (e, t) => {
     if (e === null || typeof e != "object" || Array.isArray(e))
@@ -1261,7 +1261,7 @@ var pn, Ya, yo, Ce, gn = C(() => {
     if (Object.hasOwn(e, "__proto__"))
       throw new TypeError(`"${t}.__proto__" is not allowed`);
   };
-  Ce = (e) => ({
+  ve = (e) => ({
     // Current NIST hashAlgs suffixes used here fit in one DER subidentifier octet.
     // Larger suffix values would need base-128 OID encoding and a different length byte.
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, e])
@@ -1275,7 +1275,7 @@ function bo(e, t, n) {
 function So(e, t, n) {
   return e & t ^ e & n ^ t & n;
 }
-var $e, ko, Ro, xo, vo, Co = C(() => {
+var $e, ko, Ro, xo, Co, vo = v(() => {
   un();
   gn();
   $e = class {
@@ -1368,7 +1368,7 @@ var $e, ko, Ro, xo, vo, Co = C(() => {
     1694076839,
     1203062813,
     3204075428
-  ]), vo = /* @__PURE__ */ Uint32Array.from([
+  ]), Co = /* @__PURE__ */ Uint32Array.from([
     1779033703,
     4089235720,
     3144134277,
@@ -1404,8 +1404,8 @@ Ht(Eo, {
   sha512_224: () => ac,
   sha512_256: () => sc
 });
-var Ja, ce, yt, wt, bt, To, Xa, Qa, le, de, Ne, St, kt, ec, tc, Rt, xt, nc, rc, oc, ic, sc, ac, Ao = C(() => {
-  Co();
+var Ja, ce, yt, wt, bt, To, Xa, Qa, le, de, Ne, St, kt, ec, tc, Rt, xt, nc, rc, oc, ic, sc, ac, Ao = v(() => {
+  vo();
   un();
   gn();
   Ja = /* @__PURE__ */ Uint32Array.from([
@@ -1670,7 +1670,7 @@ var Ja, ce, yt, wt, bt, To, Xa, Qa, le, de, Ne, St, kt, ec, tc, Rt, xt, nc, rc, 
     }
   }, St = class extends Ne {
     constructor() {
-      super(64, vo);
+      super(64, Co);
     }
   }, kt = class extends Ne {
     constructor() {
@@ -1718,29 +1718,29 @@ var Ja, ce, yt, wt, bt, To, Xa, Qa, le, de, Ne, St, kt, ec, tc, Rt, xt, nc, rc, 
     constructor() {
       super(32, tc);
     }
-  }, nc = /* @__PURE__ */ ve(
+  }, nc = /* @__PURE__ */ Ce(
     () => new wt(),
-    /* @__PURE__ */ Ce(1)
-  ), rc = /* @__PURE__ */ ve(
+    /* @__PURE__ */ ve(1)
+  ), rc = /* @__PURE__ */ Ce(
     () => new bt(),
-    /* @__PURE__ */ Ce(4)
-  ), oc = /* @__PURE__ */ ve(
+    /* @__PURE__ */ ve(4)
+  ), oc = /* @__PURE__ */ Ce(
     () => new St(),
-    /* @__PURE__ */ Ce(3)
-  ), ic = /* @__PURE__ */ ve(
+    /* @__PURE__ */ ve(3)
+  ), ic = /* @__PURE__ */ Ce(
     () => new kt(),
-    /* @__PURE__ */ Ce(2)
-  ), sc = /* @__PURE__ */ ve(
+    /* @__PURE__ */ ve(2)
+  ), sc = /* @__PURE__ */ Ce(
     () => new xt(),
-    /* @__PURE__ */ Ce(6)
-  ), ac = /* @__PURE__ */ ve(
+    /* @__PURE__ */ ve(6)
+  ), ac = /* @__PURE__ */ Ce(
     () => new Rt(),
-    /* @__PURE__ */ Ce(5)
+    /* @__PURE__ */ ve(5)
   );
 });
 
 // openclaw/ui/src/lib/nodes/index.ts
-var dc, _o, mn = C(() => {
+var dc, _o, mn = v(() => {
   Qn();
   D();
   ro();
@@ -1768,7 +1768,7 @@ var Pi = Hn((fb, Ii) => {
       n[o] = t(e[o]);
     return n;
   }
-  function Ci(e, t) {
+  function vi(e, t) {
     let n = e.split("@"), o = "";
     n.length > 1 && (o = n[0] + "@", e = n[1]), e = e.replace(fl, ".");
     let r = e.split("."), i = gl(r, t).join(".");
@@ -1788,7 +1788,7 @@ var Pi = Hn((fb, Ii) => {
   }
   var ml = (e) => String.fromCodePoint(...e), yl = function(e) {
     return e >= 48 && e < 58 ? 26 + (e - 48) : e >= 65 && e < 91 ? e - 65 : e >= 97 && e < 123 ? e - 97 : 36;
-  }, vi = function(e, t) {
+  }, Ci = function(e, t) {
     return e + 22 + 75 * (e < 26) - ((t != 0) << 5);
   }, Ei = function(e, t, n) {
     let o = 0;
@@ -1838,20 +1838,20 @@ var Pi = Hn((fb, Ii) => {
               break;
             let d = p - c, m = 36 - c;
             t.push(
-              Pn(vi(c + d % m, 0))
+              Pn(Ci(c + d % m, 0))
             ), p = ee(d / m);
           }
-          t.push(Pn(vi(p, 0))), i = Ei(r, u, a === s), r = 0, ++a;
+          t.push(Pn(Ci(p, 0))), i = Ei(r, u, a === s), r = 0, ++a;
         }
       ++r, ++o;
     }
     return t.join("");
   }, wl = function(e) {
-    return Ci(e, function(t) {
+    return vi(e, function(t) {
       return ul.test(t) ? Ai(t.slice(4).toLowerCase()) : t;
     });
   }, bl = function(e) {
-    return Ci(e, function(t) {
+    return vi(e, function(t) {
       return pl.test(t) ? "xn--" + _i(t) : t;
     });
   }, Sl = {
@@ -2477,13 +2477,13 @@ D();
 
 // openclaw/src/shared/device-bootstrap-profile.ts
 cn();
-var vt = [
+var Ct = [
   "operator.approvals",
   "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write"
-], Ag = new Set(vt), yn = [
+], Ag = new Set(Ct), yn = [
   "operator.admin",
   "operator.approvals",
   "operator.pairing",
@@ -2495,14 +2495,14 @@ var vt = [
   yn
 ), Mo = [
   "operator.admin",
-  ...vt
+  ...Ct
 ], Ig = new Set(Mo);
 var Pg = {
   // QR/setup-code bootstrap must hand off both tokens for native onboarding:
   // iOS/Android suppress the operator loop while bootstrap auth is active and
   // only start it after persisting this bounded operator token.
   roles: ["node", "operator"],
-  scopes: [...vt]
+  scopes: [...Ct]
 }, Dg = {
   roles: ["operator"],
   scopes: [...yn],
@@ -2926,63 +2926,8 @@ var Ke = {
       subtitle: "Bot status and channel configuration."
     },
     whatsapp: {
-      title: "WhatsApp",
-      subtitle: "Link WhatsApp Web and monitor connection health.",
-      phoneNumber: "Phone number",
       loggedOut: "Logged out.",
-      logoutConfirmTitle: "Log out of WhatsApp account {accountId}?",
-      logoutConfirmMessage: "Logging out of account {accountId} stops its listener and deletes its saved credentials.",
       logoutNotCleared: "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup."
-    },
-    nostr: {
-      title: "Nostr",
-      subtitle: "Decentralized DMs via Nostr relays (NIP-04).",
-      profile: "Profile",
-      editProfile: "Edit Profile",
-      profilePicture: "Profile picture",
-      noProfile: "No profile set.",
-      noProfileHint: 'Click "Edit Profile" to add your name, bio, and avatar.',
-      name: "Name",
-      displayName: "Display Name",
-      about: "About",
-      advanced: "Advanced",
-      profilePicturePreview: "Profile picture preview",
-      account: "Account",
-      username: "Username",
-      usernameHelp: "Short username (e.g., satoshi)",
-      bio: "Bio",
-      bioPlaceholder: "Tell people about yourself...",
-      bioHelp: "A brief bio or description",
-      displayNameHelp: "Your full display name",
-      avatarUrl: "Avatar URL",
-      avatarHelp: "HTTPS URL to your profile picture",
-      bannerUrl: "Banner URL",
-      bannerHelp: "HTTPS URL to a banner image",
-      website: "Website",
-      websiteHelp: "Your personal website",
-      nip05Identifier: "NIP-05 Identifier",
-      nip05Help: "Verifiable identifier (e.g., you@domain.com)",
-      lightningAddress: "Lightning Address",
-      lightningHelp: "Lightning address for tips (LUD-16)",
-      placeholders: {
-        username: "satoshi",
-        displayName: "Satoshi Nakamoto",
-        avatarUrl: "https://example.com/avatar.jpg",
-        bannerUrl: "https://example.com/banner.jpg",
-        website: "https://example.com",
-        nip05: "you@example.com",
-        lightningAddress: "you@getalby.com"
-      },
-      notices: {
-        timeout: "Request timed out after 30 seconds; the server may still have applied the change \u2014 check the profile before retrying.",
-        operationFailed: "{prefix}: {error}",
-        updateFailed: "Profile update failed",
-        publishFailed: "Profile publish failed on all relays.",
-        published: "Profile published to relays.",
-        importFailed: "Profile import failed",
-        importedFromRelays: "Profile imported from relays. Review and publish.",
-        imported: "Profile imported. Review and publish."
-      }
     }
   },
   agentStartup: {
@@ -3011,6 +2956,7 @@ var Ke = {
   },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
+    refreshFailed: "Could not refresh. Check your connection and try again.",
     campaign: {
       countdown: "Updating in {time}",
       waitingForIdle: "Waiting for active work \xB7 forced update in {time}",
@@ -4071,6 +4017,8 @@ Delete without a snapshot?`
     sessionAttached: "attached",
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
+    deliveryFailed: "Terminal delivery could not be confirmed. Reconnect before trying again.",
+    inputPaused: "Terminal input is paused until the Gateway reconnects.",
     startCancelled: "Terminal start was cancelled. Try again.",
     connecting: "Connecting to session\u2026",
     connectionTimedOut: "Session did not connect within 30 seconds.",
@@ -4887,8 +4835,7 @@ Delete without a snapshot?`
     suspending: "Suspending\u2026",
     suspended: "Suspended",
     retryNow: "Retry now",
-    actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
-    settingsChangesUnavailable: "Changes to settings are disabled while the Gateway is reconnecting.",
+    queued: "{count} queued",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain: "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
     sessionOperationCompletedPreviousConnection: "The session operation completed on the previous connection. Check the current session list before continuing.",
@@ -6956,7 +6903,7 @@ function Sn(e) {
   let t = Yo(e);
   return t === "toolcall" || t === "tool_call" || t === "tooluse" || t === "tool_use";
 }
-function Ct(e) {
+function vt(e) {
   let t = Yo(e);
   return t === "toolresult" || t === "tool_result";
 }
@@ -6971,9 +6918,9 @@ function Tt(e) {
   let t = e.isError ?? e.is_error;
   return typeof t == "boolean" ? t : void 0;
 }
-var Rc = /^tool not found\.?$/i, xc = 2e4, vc = /* @__PURE__ */ new Set(["error", "failed", "timeout"]);
-function Cc(e) {
-  return typeof e == "string" && vc.has(e.trim().toLowerCase());
+var Rc = /^tool not found\.?$/i, xc = 2e4, Cc = /* @__PURE__ */ new Set(["error", "failed", "timeout"]);
+function vc(e) {
+  return typeof e == "string" && Cc.has(e.trim().toLowerCase());
 }
 function Jo(e) {
   let t = e?.trim();
@@ -6998,7 +6945,7 @@ function Jo(e) {
     if (r && typeof r == "object")
       return !0;
   }
-  return Cc(n.status);
+  return vc(n.status);
 }
 
 // openclaw/ui/src/lib/chat/message-normalizer.ts
@@ -7293,10 +7240,10 @@ Ht(Tn, {
   Cc: () => xn,
   Cf: () => Vc,
   P: () => Ze,
-  S: () => vn,
-  Z: () => Cn
+  S: () => Cn,
+  Z: () => vn
 });
-var Rn = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, xn = /[\0-\x1F\x7F-\x9F]/, Vc = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, Ze = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, vn = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, Cn = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
+var Rn = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, xn = /[\0-\x1F\x7F-\x9F]/, Vc = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, Ze = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, Cn = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, vn = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/decode-codepoint.js
 var Yc = [
@@ -7608,7 +7555,7 @@ var ki;
 var il = class {
   src_Any = Rn.source;
   src_Cc = xn.source;
-  src_Z = Cn.source;
+  src_Z = vn.source;
   src_P = Ze.source;
   src_ZPCc = [
     this.src_Z,
@@ -8091,9 +8038,9 @@ function Je(e) {
   }
   return String.fromCharCode(e);
 }
-var $i = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, xl = new RegExp(`${$i.source}|${/&([a-z#][a-z0-9]{1,31});/gi.source}`, "gi"), vl = /^#((?:x[a-f0-9]{1,8}|[0-9]{1,8}))$/i;
-function Cl(e, t) {
-  if (t.charCodeAt(0) === 35 && vl.test(t)) {
+var $i = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, xl = new RegExp(`${$i.source}|${/&([a-z#][a-z0-9]{1,31});/gi.source}`, "gi"), Cl = /^#((?:x[a-f0-9]{1,8}|[0-9]{1,8}))$/i;
+function vl(e, t) {
+  if (t.charCodeAt(0) === 35 && Cl.test(t)) {
     let o = t[1].toLowerCase() === "x" ? parseInt(t.slice(2), 16) : parseInt(t.slice(1), 10);
     return Fn(o) ? Je(o) : e;
   }
@@ -8105,7 +8052,7 @@ function Tl(e) {
 }
 function Le(e) {
   return e.indexOf("\\") < 0 && e.indexOf("&") < 0 ? e : e.replace(xl, function(t, n, o) {
-    return n || Cl(t, o);
+    return n || vl(t, o);
   });
 }
 var El = /[&<>"]/, Al = /[&<>"]/g, _l = {
@@ -8151,7 +8098,7 @@ function Xe(e) {
   return !1;
 }
 function Ki(e) {
-  return Ze.test(e) || vn.test(e);
+  return Ze.test(e) || Cn.test(e);
 }
 function Qe(e) {
   return Ki(Je(e));
@@ -8318,7 +8265,7 @@ function Bl(e) {
   var t = Ll(e, "string");
   return tt(t) == "symbol" ? t : t + "";
 }
-function v(e, t, n) {
+function C(e, t, n) {
   return (t = Bl(t)) in e ? Object.defineProperty(e, t, {
     value: n,
     enumerable: !0,
@@ -8328,28 +8275,28 @@ function v(e, t, n) {
 }
 var Ae = class {
   constructor(e, t, n) {
-    v(
+    C(
       this,
       /**
       * Source map info. Format: `[ line_begin, line_end ]`
       */
       "map",
       null
-    ), v(
+    ), C(
       this,
       /**
       * nesting level, the same as `state.level`
       */
       "level",
       0
-    ), v(
+    ), C(
       this,
       /**
       * An array of child nodes (inline and img tokens)
       */
       "children",
       null
-    ), v(
+    ), C(
       this,
       /**
       * In a case of self-closing tag (code, html, fence, etc.),
@@ -8357,14 +8304,14 @@ var Ae = class {
       */
       "content",
       ""
-    ), v(
+    ), C(
       this,
       /**
       * '*' or '_' for emphasis, fence string for fence, etc.
       */
       "markup",
       ""
-    ), v(
+    ), C(
       this,
       /**
       * Additional information:
@@ -8375,7 +8322,7 @@ var Ae = class {
       */
       "info",
       ""
-    ), v(
+    ), C(
       this,
       /**
       * True for block-level tokens, false for inline tokens.
@@ -8383,7 +8330,7 @@ var Ae = class {
       */
       "block",
       !1
-    ), v(
+    ), C(
       this,
       /**
       * If it's true, ignore this element when rendering. Used for tight lists
@@ -8432,12 +8379,12 @@ var Ae = class {
   }
 }, nt = class {
   constructor() {
-    v(
+    C(
       this,
       /** @internal */
       "__rules__",
       []
-    ), v(
+    ), C(
       this,
       /** @internal */
       "__cache__",
@@ -8669,7 +8616,7 @@ te.html_inline = function(e, t) {
 };
 var Vi = class {
   constructor() {
-    v(
+    C(
       this,
       /**
       * Contains render rules for tokens. Can be updated and extended.
@@ -8783,7 +8730,7 @@ var Vi = class {
   }
 }, Yi = class {
   constructor(e, t, n) {
-    v(this, "tokens", []), v(this, "inlineMode", !1), v(this, "Token", Ae), this.src = e, this.env = n, this.md = t;
+    C(this, "tokens", []), C(this, "inlineMode", !1), C(this, "Token", Ae), this.src = e, this.env = n, this.md = t;
   }
 }, Gl = /\r\n?/g, Hl = /\0/g;
 function zl(e) {
@@ -9012,14 +8959,14 @@ var Dn = [
   ["text_join", cd]
 ], Ji = class {
   constructor() {
-    v(
+    C(
       this,
       /**
       * {@link Ruler} instance. Keep configuration of core rules.
       */
       "ruler",
       new nt()
-    ), v(this, "State", Yi);
+    ), C(this, "State", Yi);
     for (let e = 0; e < Dn.length; e++) this.ruler.push(Dn[e][0], Dn[e][1]);
   }
   /**
@@ -9031,7 +8978,7 @@ var Dn = [
   }
 }, Xi = class {
   constructor(e, t, n, o) {
-    v(this, "bMarks", []), v(this, "eMarks", []), v(this, "tShift", []), v(this, "sCount", []), v(this, "bsCount", []), v(this, "blkIndent", 0), v(this, "line", 0), v(this, "lineMax", 0), v(this, "tight", !1), v(this, "listIndent", -1), v(this, "parentType", "root"), v(this, "level", 0), v(this, "Token", Ae), this.src = e, this.md = t, this.env = n, this.tokens = o;
+    C(this, "bMarks", []), C(this, "eMarks", []), C(this, "tShift", []), C(this, "sCount", []), C(this, "bsCount", []), C(this, "blkIndent", 0), C(this, "line", 0), C(this, "lineMax", 0), C(this, "tight", !1), C(this, "listIndent", -1), C(this, "parentType", "root"), C(this, "level", 0), C(this, "Token", Ae), this.src = e, this.md = t, this.env = n, this.tokens = o;
     let r = this.src;
     for (let i = 0, s = 0, a = 0, l = 0, u = r.length, h = !1; s < u; s++) {
       let p = r.charCodeAt(s);
@@ -9606,7 +9553,7 @@ function xd(e, t, n) {
   let p = e.push("heading_close", `h${i}`, -1);
   return p.markup = String.fromCharCode(s), e.parentType = r, !0;
 }
-function vd(e, t, n) {
+function Cd(e, t, n) {
   let o = e.md.block.ruler.getRules("paragraph"), r = e.parentType, i = t + 1;
   for (e.parentType = "paragraph"; i < n && !e.isEmpty(i); i++) {
     if (e.sCount[i] - e.blkIndent > 3 || e.sCount[i] < 0) continue;
@@ -9690,17 +9637,17 @@ var Ut = [
     ]
   ],
   ["lheading", xd],
-  ["paragraph", vd]
+  ["paragraph", Cd]
 ], ts = class {
   constructor() {
-    v(
+    C(
       this,
       /**
       * {@link Ruler} instance. Keep configuration of block rules.
       */
       "ruler",
       new nt()
-    ), v(this, "State", Xi);
+    ), C(this, "State", Xi);
     for (let e = 0; e < Ut.length; e++) this.ruler.push(Ut[e][0], Ut[e][1], { alt: (Ut[e][2] || []).slice() });
   }
   tokenize(e, t, n) {
@@ -9730,7 +9677,7 @@ var Ut = [
   }
 }, ns = class {
   constructor(e, t, n, o) {
-    v(this, "pos", 0), v(this, "level", 0), v(this, "pending", ""), v(this, "pendingLevel", 0), v(this, "cache", {}), v(this, "backticks", {}), v(this, "backticksScanned", !1), v(this, "linkLevel", 0), v(this, "delimiters", []), v(this, "_prev_delimiters", []), v(this, "Token", Ae), this.src = e, this.env = n, this.md = t, this.tokens = o, this.tokens_meta = Array(o.length), this.posMax = this.src.length;
+    C(this, "pos", 0), C(this, "level", 0), C(this, "pending", ""), C(this, "pendingLevel", 0), C(this, "cache", {}), C(this, "backticks", {}), C(this, "backticksScanned", !1), C(this, "linkLevel", 0), C(this, "delimiters", []), C(this, "_prev_delimiters", []), C(this, "Token", Ae), this.src = e, this.env = n, this.md = t, this.tokens = o, this.tokens_meta = Array(o.length), this.posMax = this.src.length;
   }
   pushPending() {
     let e = new Ae("text", "", 0);
@@ -9765,7 +9712,7 @@ var Ut = [
     };
   }
 };
-function Cd(e) {
+function vd(e) {
   switch (e) {
     case 10:
     case 33:
@@ -9797,7 +9744,7 @@ function Cd(e) {
 }
 function Td(e, t) {
   let n = e.pos;
-  for (; n < e.posMax && !Cd(e.src.charCodeAt(n)); ) n++;
+  for (; n < e.posMax && !vd(e.src.charCodeAt(n)); ) n++;
   return n === e.pos ? !1 : (t || (e.pending += e.src.slice(e.pos, n)), e.pos = n, !0);
 }
 function Ed(e) {
@@ -10229,14 +10176,14 @@ var On = [
   ["fragments_join", Jd]
 ], is = class {
   constructor() {
-    v(
+    C(
       this,
       /**
       * {@link Ruler} instance. Keep configuration of inline rules.
       */
       "ruler",
       new nt()
-    ), v(
+    ), C(
       this,
       /**
       * {@link Ruler} instance. Second ruler used for post-processing
@@ -10244,7 +10191,7 @@ var On = [
       */
       "ruler2",
       new nt()
-    ), v(this, "State", ns);
+    ), C(this, "State", ns);
     for (let e = 0; e < On.length; e++) this.ruler.push(On[e][0], On[e][1]);
     for (let e = 0; e < Nn.length; e++) this.ruler2.push(Nn[e][0], Nn[e][1]);
   }
@@ -10442,7 +10389,7 @@ var On = [
     return Ve(Fe(t), Ve.defaultChars + "%");
   }
   constructor(...e) {
-    v(
+    C(
       this,
       /**
       * Instance of {@link ParserInline}. You may need it to add new rules when
@@ -10451,7 +10398,7 @@ var On = [
       */
       "inline",
       new is()
-    ), v(
+    ), C(
       this,
       /**
       * Instance of {@link ParserBlock}. You may need it to add new rules when
@@ -10460,7 +10407,7 @@ var On = [
       */
       "block",
       new ts()
-    ), v(
+    ), C(
       this,
       /**
       * Instance of {@link ParserCore} chain executor. You may need it to add new
@@ -10469,7 +10416,7 @@ var On = [
       */
       "core",
       new Ji()
-    ), v(
+    ), C(
       this,
       /**
       * Instance of {@link Renderer}. Use it to modify output look. Or to add rendering
@@ -10493,7 +10440,7 @@ var On = [
       */
       "renderer",
       new Vi()
-    ), v(
+    ), C(
       this,
       /**
       * [linkify-it](https://github.com/markdown-it/linkify-it) instance.
@@ -10502,7 +10449,7 @@ var On = [
       */
       "linkify",
       new xi()
-    ), v(
+    ), C(
       this,
       /**
       * Assorted utility functions, useful to write plugins. See details
@@ -10510,7 +10457,7 @@ var On = [
       */
       "utils",
       kl
-    ), v(
+    ), C(
       this,
       /**
       * Link components parser functions, useful to write plugins. See details
@@ -10680,15 +10627,15 @@ var On = [
     return this.renderer.render(this.parseInline(e, t), this.options, t);
   }
 };
-v(ne, "Token", Ae);
-v(ne, "Ruler", nt);
-v(ne, "Renderer", Vi);
-v(ne, "ParserCore", Ji);
-v(ne, "StateCore", Yi);
-v(ne, "ParserBlock", ts);
-v(ne, "StateBlock", Xi);
-v(ne, "ParserInline", is);
-v(ne, "StateInline", ns);
+C(ne, "Token", Ae);
+C(ne, "Ruler", nt);
+C(ne, "Renderer", Vi);
+C(ne, "ParserCore", Ji);
+C(ne, "StateCore", Yi);
+C(ne, "ParserBlock", ts);
+C(ne, "StateBlock", Xi);
+C(ne, "ParserInline", is);
+C(ne, "StateInline", ns);
 var tu = ji(ne);
 
 // openclaw/packages/net-policy/src/ip.ts
@@ -10743,7 +10690,7 @@ F();
 
 // openclaw/ui/src/lib/chat/message-normalizer.ts
 function Bn(e) {
-  return Ct(G(e)?.role);
+  return vt(G(e)?.role);
 }
 
 // openclaw/ui/src/lib/chat/tool-call-diff.ts
@@ -10950,7 +10897,7 @@ function ms(e) {
   };
   for (let m = 0; m < r.length; m++) {
     let f = r[m] ?? {}, y = yu(f);
-    if (!y && !Ct(f.type))
+    if (!y && !vt(f.type))
       continue;
     let w = O(f.runId) ?? p, b = O(f.parentToolCallId), S = gs(f, t), k = Gn(f, t), R = {
       id: S ?? `${k}:${m}`,
@@ -11050,11 +10997,11 @@ function Rs(e, t) {
 }
 
 // octogee/app/openclaw-browser/resources.ts
-function vR(e, t) {
+function CR(e, t) {
   return [...Rs(e, []).values()].filter((o) => o.tab.target === "host" && o.tab.profile === t).at(-1) ?? null;
 }
 export {
-  vR as latestNativeBrowserTab
+  CR as latestNativeBrowserTab
 };
 /*!
 TypeBox

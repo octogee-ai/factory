@@ -140,38 +140,48 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`50a1fe55bc36ea50ef95d95dc9ff686e96564240`](https://github.com/openclaw/openclaw/commit/50a1fe55bc36ea50ef95d95dc9ff686e96564240),
-frozen for the October 17 recut. Exact native source is
-`7cef82bd67ff34073488ef8e4aea61e203e507df`, fork branch
-`codex/openclaw-50a1-oct17`. It includes the merged queued-config reload
-correction from `600ddf33d647aaf8fe46f6fe5a3c919dd92977e1`. The Octogee
-companion preserves all gateway fixes through main
-`e429602bea9635fffb61dd0213db204b231cd98b`.
+[`1398ba9837e19da853bb6b1d6623cb6fee5421f6`](https://github.com/openclaw/openclaw/commit/1398ba9837e19da853bb6b1d6623cb6fee5421f6),
+frozen for the October 18 recut. Exact native source is
+`e1e1543eeb486e82d9d966df7a3786afe726469b`, fork branch
+`codex/openclaw-1398-oct18`. It retains the reproduced queued-config reload
+correction through the current native reload lifecycle. The Octogee companion
+preserves all merged fixes through main
+`49e5a17c3d164e4e711d0a15e7d02836d9d23e9c`, including the symlink transfer fix.
 Package `2026.10.4` is a main snapshot, not a
 released tag. The operator selected independent local qualification; this is not
 a claim that the selected snapshot passed the full upstream CI matrix. No
 external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-91a509b9.tgz` and
-`openclaw-mattermost-81354e23.tgz`, packed sequentially from this exact clean
+`current.json` selects `openclaw-fork-1e97f1dd.tgz` and
+`openclaw-mattermost-ad6baf38.tgz`, packed sequentially from this exact clean
 build. Publication is write-once; complete hashes, not object-name prefixes,
 identify the qualified pair.
 
-Root generation `1792259188000207` and Mattermost generation
-`1792259190876781` were read back by exact generation and compared
-byte-for-byte with the qualified archives.
+Root generation `1792356165205655` and Mattermost generation
+`1792356099696504` were published write-once, read back by exact generation and
+compared byte-for-byte with the qualified archives. The source branch was pushed
+and read back at the exact native commit without dispatching hosted native CI.
 
-Root: **131231916 bytes**, SHA256
-`91a509b9d8d95c316d25a8e93bce72648bc29548d1121adf440d93826a6b7a38`.
-Mattermost: **1250316 bytes**, SHA256
-`81354e23910187546cf3df83e1ba0783f41db31d3ebdaae3d16fe3d19b73a32b`.
+Root: **132303366 bytes**, SHA256
+`1e97f1dd924aff59395bb4f9baa66e0d0740bfd285ba0ce0441401a56c5ede24`.
+Mattermost: **1250290 bytes**, SHA256
+`ad6baf3870c07854a1ac92419cde3925a0ad69ba10c7fcc3ff5063c153308c9a`.
 
-Shared-state schema **27**, agent schema **31** and protocol **4** are the
+Shared-state schema **28**, agent schema **31** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
 database admission remain native. Do not preserve the old October 12 no-22
 restriction or create an Octogee schema dialect.
 
 ### What was removed
+
+This recut adopts the native session-controller mutation owner, exact-store
+session projections, `reloadSignal`, and `pluginDrainRetry`. It drops the old
+completed-plugin deduplication branch, obsolete restart-target test API, unused
+run-handle predicate and duplicate Talk test glue. Requester/reviewer guards,
+channel sharing, cron custody and reload settlement remain covered at their
+current owners. The channel config budget includes only the retained
+`threadSessionScope` setting at channel and account scope. No retained production
+boundary is declared upstream-covered merely because a file moved.
 
 The prior cut dropped the startup model-publication handoff carry because its
 base already included upstream #173366. Native owner-supersession coverage replaces the
@@ -262,7 +272,7 @@ features are not relabeled as upstream bug fixes.
 The old fork's shared-21 cron layout is recognized only as a complete known
 layout. Normal native Doctor takes verified backups, derives canonical predicate
 columns where needed, imports retained cron custody and performs upstream's
-canonical migration through 27. Partial or ambiguous custody refuses conversion.
+canonical migration through 28. Partial or ambiguous custody refuses conversion.
 Known legacy cron custody tables select the full native repair/import owner rather
 than the bounded fast path. Agent26→27 uses the unchanged upstream FIFO
 outbox migration; native agent migrations through 31 remain unchanged. No
@@ -271,16 +281,18 @@ version bump is invented to force Doctor.
 ### Local qualification and limits
 
 The exact clean native commit passed the pinned full build, targeted behavior
-and production core/UI/extension types, focused formatting, generated catalogs
-and storage ratchets. Changed-scope lint reports one inherited upstream
-`max-lines` failure in `run-attempt-dispatch.ts` (710 counted lines, limit 700);
-the port does not increase its line count. This is not aggregate `pnpm check`
-success. Strict Voice/Activity SDK
+and production core/UI/extension types, changed-scope lint and formatting,
+generated protocol/config/catalog checks and storage/line-growth ratchets. New
+line-cap growth was resolved through the existing expiry and reload owners and
+type-only UI deduplication, without disabling limits or removing coverage. This
+is not aggregate `pnpm check` or full upstream CI success. Strict Voice/Activity SDK
 gates, sequential packers and the native package-tarball checker passed. The
-independent source reviews of the overlay and the subsequently merged reload
-port completed at P0/P1 scope with no actionable findings. The reload port
-reproduced the late identical retry failure before the fix and passed 179
-focused checks afterward. Reviews are source assessments, not live acceptance.
+independent configured source review completed at P0/P1 scope with no actionable
+findings. The reload port reproduced the late identical retry failure on the
+selected base before the fix; its full focused suite passed 371 checks, followed
+by 19 extraction-boundary checks. Approval/expiry, session/storage, requester
+authority and native UI controls also passed. Reviews are source assessments,
+not live acceptance.
 
 Both actual Linux arm64 and amd64 full-plugin installer targets passed native
 registry refresh, Codex/Parallel source matching, bundled trust, driver-artifact
@@ -296,16 +308,18 @@ Defaults, policy, plugin choices and complete per-agent model catalogs stayed
 exact. Only individually checked native version, migration and timed Doctor
 bookkeeping fields changed.
 
-The same Octogee companion removes the retired Flash Lite preview alias from
-the application catalog, emits owner group allowlists, makes Codex available in
-fresh Builder templates and defaults missing configured voice enablement.
-Explicit Builder plugin opt-outs remain intact. These are writer corrections,
-not ignored Doctor translations.
+Already-merged Octogee writer corrections remain intact: the retired Flash Lite
+preview alias stays removed, owner group allowlists are emitted, fresh Builders
+include Codex and missing configured voice enablement is defaulted. Explicit
+Builder plugin opt-outs remain intact. These are writer corrections, not ignored
+Doctor translations.
 
 Hosted islands and Browser resource projections regenerate from the same native
-commit. All 242 focused consumer/artifact checks and app/edge production types
-passed; adapter inputs remain unchanged. Live acceptance belongs to the
-resulting main family.
+commit. The current companion passed 281 focused tests across 29 files and app/
+gateway-edge production types; final-head CI still qualifies the committed PR.
+Previous-family results are not reused as new proof. The complete local amd64
+gateway image passed its runtime gate and offline installed-package smoke check.
+Live acceptance belongs to the resulting immutable main family.
 
 Earlier failed controls remain failed evidence. Doctor emitted isolated-fixture
 and upstream deprecation/ownership diagnostics; a successful command is not a
@@ -313,6 +327,10 @@ warning-free report or clean-close proof. This qualification does not establish
 historical-data migration, full Gateway startup, provider/tool/desktop behavior
 or live acceptance. TEST must qualify the resulting immutable main family;
 PROD remains a separate operator decision.
+The earlier closed-preparation-worker reload, activation timing and Codex tmp-link
+transfer failures remain separate failed controls; this recut does not declare
+them fixed without actual affected acceptance. Schema 28 state must not be
+assumed safe for an older native image rollback.
 
 ### Base-image inputs
 
