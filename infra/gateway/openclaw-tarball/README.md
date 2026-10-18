@@ -140,33 +140,41 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 ## Current overlay
 
 Upstream is operator-selected main
-[`515b3c409583b17f942260767bb6be51640fe355`](https://github.com/openclaw/openclaw/commit/515b3c409583b17f942260767bb6be51640fe355),
-frozen for the October 16 recut. Exact native source is
-`600ddf33d647aaf8fe46f6fe5a3c919dd92977e1`, fork branch
-`codex/config-reload-queued-writers`. Package `2026.10.4` is a main snapshot, not a
+[`50a1fe55bc36ea50ef95d95dc9ff686e96564240`](https://github.com/openclaw/openclaw/commit/50a1fe55bc36ea50ef95d95dc9ff686e96564240),
+frozen for the October 17 recut. Exact native source is
+`7cef82bd67ff34073488ef8e4aea61e203e507df`, fork branch
+`codex/openclaw-50a1-oct17`. It includes the merged queued-config reload
+correction from `600ddf33d647aaf8fe46f6fe5a3c919dd92977e1`. The Octogee
+companion preserves all gateway fixes through main
+`e429602bea9635fffb61dd0213db204b231cd98b`.
+Package `2026.10.4` is a main snapshot, not a
 released tag. The operator selected independent local qualification; this is not
 a claim that the selected snapshot passed the full upstream CI matrix. No
 external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-7083c417.tgz` and
-`openclaw-mattermost-228f48ef.tgz`, packed sequentially from this exact clean
+`current.json` selects `openclaw-fork-91a509b9.tgz` and
+`openclaw-mattermost-81354e23.tgz`, packed sequentially from this exact clean
 build. Publication is write-once; complete hashes, not object-name prefixes,
 identify the qualified pair.
 
-Root: **130036350 bytes**, SHA256
-`7083c417f79672beda360963e0caabb18ecaaf48e9c3c3a5b2e09c5229e27a7e`.
-Mattermost: **1257659 bytes**, SHA256
-`228f48efaebe7535913adee57988770d7a1898d2436320bde4dd97f4f91f43fd`.
+Root generation `1792259188000207` and Mattermost generation
+`1792259190876781` were read back by exact generation and compared
+byte-for-byte with the qualified archives.
 
-Shared-state schema **25**, agent schema **27** and protocol **4** are the
+Root: **131231916 bytes**, SHA256
+`91a509b9d8d95c316d25a8e93bce72648bc29548d1121adf440d93826a6b7a38`.
+Mattermost: **1250316 bytes**, SHA256
+`81354e23910187546cf3df83e1ba0783f41db31d3ebdaae3d16fe3d19b73a32b`.
+
+Shared-state schema **27**, agent schema **31** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
 database admission remain native. Do not preserve the old October 12 no-22
 restriction or create an Octogee schema dialect.
 
 ### What was removed
 
-This cut drops the startup model-publication handoff carry because the selected
-base includes upstream #173366. Native owner-supersession coverage replaces the
+The prior cut dropped the startup model-publication handoff carry because its
+base already included upstream #173366. Native owner-supersession coverage replaces the
 obsolete hanging startup fixture. Native Solid participant/header presence,
 HTTP-disconnect cleanup, maintenance and committed-token/revocation owners replace
 duplicate fork adaptations and fixtures. The unused authority-owner extraction
@@ -212,6 +220,14 @@ native. Obsolete run-completion claims, hook-isolation machinery and fork
 database-admission/startup owners are also removed where upstream supplies the
 contract. No new manager replaces them.
 
+This cut adopts the current native sharing preparation, canonical migration
+owners and config-reload helper layout instead of retaining duplicate helpers.
+The membership integration carries one worker-prepared roster through mention
+and selected-session reads. Membership changes invalidate the existing read
+scope, including capacity eviction and the consumer handoff; ordinary activity
+still reuses selected facts. Reproduced authorization failures have regression
+coverage without a second membership cache or database owner.
+
 This pass also adopts native create-if-absent session entries and the new
 storage-engine interfaces, removes obsolete admission-capture scaffolding and
 redundant cron schema probes, and keeps cron reads inside the native worker
@@ -246,19 +262,25 @@ features are not relabeled as upstream bug fixes.
 The old fork's shared-21 cron layout is recognized only as a complete known
 layout. Normal native Doctor takes verified backups, derives canonical predicate
 columns where needed, imports retained cron custody and performs upstream's
-canonical migration through 25. Partial or ambiguous custody refuses conversion.
+canonical migration through 27. Partial or ambiguous custody refuses conversion.
 Known legacy cron custody tables select the full native repair/import owner rather
 than the bounded fast path. Agent26→27 uses the unchanged upstream FIFO
-outbox migration; no version bump is invented to force Doctor.
+outbox migration; native agent migrations through 31 remain unchanged. No
+version bump is invented to force Doctor.
 
 ### Local qualification and limits
 
 The exact clean native commit passed the pinned full build, targeted behavior
-and changed-test type checks, production core/UI/extension types, scoped
-lint/format, generated catalogs and storage ratchets. Strict Voice/Activity SDK
+and production core/UI/extension types, focused formatting, generated catalogs
+and storage ratchets. Changed-scope lint reports one inherited upstream
+`max-lines` failure in `run-attempt-dispatch.ts` (710 counted lines, limit 700);
+the port does not increase its line count. This is not aggregate `pnpm check`
+success. Strict Voice/Activity SDK
 gates, sequential packers and the native package-tarball checker passed. The
-independent source review completed at its requested P0 scope with no findings;
-it is not a full-priority or runtime review.
+independent source reviews of the overlay and the subsequently merged reload
+port completed at P0/P1 scope with no actionable findings. The reload port
+reproduced the late identical retry failure before the fix and passed 179
+focused checks afterward. Reviews are source assessments, not live acceptance.
 
 Both actual Linux arm64 and amd64 full-plugin installer targets passed native
 registry refresh, Codex/Parallel source matching, bundled trust, driver-artifact
@@ -281,8 +303,9 @@ Explicit Builder plugin opt-outs remain intact. These are writer corrections,
 not ignored Doctor translations.
 
 Hosted islands and Browser resource projections regenerate from the same native
-commit. Two runs produced identical output, with unchanged adapter inputs;
-217 focused consumer/artifact checks and app/edge production types passed.
+commit. All 242 focused consumer/artifact checks and app/edge production types
+passed; adapter inputs remain unchanged. Live acceptance belongs to the
+resulting main family.
 
 Earlier failed controls remain failed evidence. Doctor emitted isolated-fixture
 and upstream deprecation/ownership diagnostics; a successful command is not a
@@ -303,8 +326,8 @@ documented checksum for the unversioned download does not match this versioned o
 GitHub CLI 2.102.0, Helm 4.3.0, yq 4.54.1, Terraform 1.16.5, Builder Firebase
 CLI 15.32.1, npm 12.2.0 and fd 10.5.0 stay unchanged. The native CUA driver
 builder uses the pinned Rust 1.99.0 image and the source's toolchain selector.
-The selected OpenClaw snapshot pins pnpm 12.10.1,
-Codex plugin dependency 0.160.1 and matched CUA package 0.34.0.
+The selected OpenClaw snapshot pins pnpm 12.11.1,
+Codex plugin dependency 0.162.0 and matched CUA package 0.34.0.
 
 The base retains the existing immutable Node 26.11.1 image, which satisfies
 the selected OpenClaw engine requirement. This recut does not refresh unrelated
