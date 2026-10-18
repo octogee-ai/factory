@@ -78,6 +78,23 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+async function realMigrationSpawn() {
+  const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const image = process.env.OCTOGEE_RSYNC_TEST_IMAGE;
+  if (!image) return real.spawn;
+  return ((command: string, args: string[], options: import("node:child_process").SpawnOptions) => {
+    if (command !== "/usr/bin/rsync") return real.spawn(command, args, options);
+    const mounts = [...new Set(args.slice(-2).map(directory => {
+      let existing = path.resolve(directory);
+      while (!fsSync.existsSync(existing)) existing = path.dirname(existing);
+      return existing;
+    }))];
+    return real.spawn("docker", ["run", "--rm", "--network=none", "--user=0:0",
+      ...mounts.flatMap(directory => ["--mount", `type=bind,src=${fsSync.realpathSync(directory)},dst=${directory}`]),
+      "--entrypoint", command, image, ...args], options);
+  }) as typeof real.spawn;
+}
+
 const migrationTempRoots: string[] = [];
 
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
@@ -2639,8 +2656,8 @@ describe("queued-rsync migration control handlers", () => {
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "final-customer-state-"));
     migrationTempRoots.push(importDir);
     const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => importDir) });
-    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(real.spawn);
+    const spawn = await realMigrationSpawn();
+    spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(spawn);
     const deps = mkDeps({ adapter, waitForRsyncReady: vi.fn(async () => undefined) });
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-exact-state", slug: "chris", rpcPhase: "prepare-rsync-import",
@@ -3493,7 +3510,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     await fs.writeFile(path.join(stageDir, "agents/octogee-chris-coach/agent/auth.json"), "agent configuration");
     await fs.mkdir(path.join(stageDir, "customers/chris/projects/project"), { recursive: true });
     await fs.writeFile(path.join(stageDir, "customers/chris/projects/project/README.md"), "source checkout");
-    const { spawn } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const spawn = await realMigrationSpawn();
     spawnMock.mockImplementation(spawn);
 
     const finished = await finishImport(deps, migrationId, "pre");
@@ -3780,7 +3797,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     const requiredMemory = "agents/octogee-chris-coach/agent/memory.sqlite";
     await writeStore(stageDir, requiredMemory, () => {});
     const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    const { spawn } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const spawn = await realMigrationSpawn();
     spawnMock.mockImplementation(spawn);
     const installed = await finishImport(deps, "restore-config-only", "final", policy, certificate);
     expect(installed.getStatus(), JSON.stringify(installed.getBody())).toBe(200);
@@ -4192,9 +4209,9 @@ describe("Git metadata across migration imports", () => {
   async function importMetadata(sourceDir: string, importDir: string) {
     const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => importDir) });
     const deps = mkDeps({ adapter, waitForRsyncReady: vi.fn(async () => undefined) });
-    const migrationId = "mig-git-rsync";
-    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(real.spawn);
+    const migrationId = `mig-git-rsync-${path.basename(sourceDir)}`;
+    const spawn = await realMigrationSpawn();
+    spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementation(spawn);
     const prepare: PrepareRsyncImportRequestBody = {
       migrationId, slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
       transferUser: "migration", transferKey: "c".repeat(64),
@@ -4272,9 +4289,14 @@ describe("Git metadata across migration imports", () => {
       await fs.mkdir(path.join(sourceDir, "customers/chris"), { recursive: true });
       await fs.writeFile(path.join(sourceDir, "customers/chris/draft.txt"), "source draft");
 
+      await fs.symlink("/rsyncd-munged/draft.txt", path.join(sourceDir, "customers/chris/draft-link"));
       const result = await importMetadata(sourceDir, importDir);
 
       expect(result.getStatus()).toBe(200);
+      expect(await fs.readlink(path.join(importDir, "customers/chris/draft-link"))).toBe("draft.txt");
+      const copies = spawnMock.mock.calls.filter(([command, args]) => command === "/usr/bin/rsync" && args[0] === "-a");
+      expect(copies).toHaveLength(2);
+      expect(copies.every(([, args]) => args.includes("--munge-links"))).toBe(true);
       expect(await fs.readFile(path.join(importDir, "customers/chris/draft.txt"), "utf8")).toBe("source draft");
       expect(result.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
     });
@@ -4298,7 +4320,7 @@ describe("Git metadata across migration imports", () => {
 
       const result = await importMetadata(sourceDir, importDir);
 
-      expect(result.getStatus()).toBe(200);
+      expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
       for (const [relative, content] of files) {
         expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe(content);
       }
@@ -4795,7 +4817,7 @@ describe("prepared migration staging", () => {
       unreserveSurgeTarget: vi.fn(async () => HELD_BUILDER_GATE_STATE),
       waitForRsyncReady: vi.fn(async () => undefined),
     });
-    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const spawn = await realMigrationSpawn();
     const migrationId = `prepared-placeholder-baseline-${kind}`;
     const prepare = async (mode: "pre" | "final") => {
       spawnMock.mockReturnValueOnce(mkFakeChild());
@@ -4807,7 +4829,7 @@ describe("prepared migration staging", () => {
       return /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
     };
     const finish = async (mode: "pre" | "final") => {
-      spawnMock.mockImplementation(real.spawn);
+      spawnMock.mockImplementation(spawn);
       const body = { migrationId, slug: "chris", mode, rpcPhase: "finish-rsync-import" };
       const response = mkResponse();
       await createFinishRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());

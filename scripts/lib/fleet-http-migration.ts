@@ -1,3 +1,4 @@
+import { assertSafeStagedSymlinks, RSYNC_DAEMON_SYMLINK_POLICY, STAGED_RSYNC_COPY_OPTIONS } from "./rsync-staged-symlinks.js";
 import { recoverSharedAgentContextCheckpoint } from "./shared-agent-context-checkpoint.js";
 import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
 import { assertMatchingSharedContextPreparation } from "./shared-agent-context-preparation.js";
@@ -1345,6 +1346,7 @@ async function writeRsyncDaemonConfig(params: {
     configPath,
     [
       "use chroot = no",
+      RSYNC_DAEMON_SYMLINK_POLICY,
       "address = 127.0.0.1",
       "max connections = 1",
       "log file = /dev/stdout",
@@ -1396,7 +1398,7 @@ async function copyStageToOpenClaw(
   }
   await runSpawnChecked(
     RSYNC_BIN,
-    ["-a", ...CODEX_STORE_EXCLUDE_ARGS, CODEX_SNAPSHOT_EXCLUDE_ARG, ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
+    [...STAGED_RSYNC_COPY_OPTIONS, ...CODEX_STORE_EXCLUDE_ARGS, CODEX_SNAPSHOT_EXCLUDE_ARG, ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
     { label: "rsync import copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS },
   );
   if (baselineEntries) return;
@@ -1404,7 +1406,7 @@ async function copyStageToOpenClaw(
     const relative = path.join(directory, slug);
     if (!await hasRealStageAncestors(stageDir, path.join(relative, ".entry"))) continue;
     await runSpawnChecked(RSYNC_BIN, [
-      "-a", "--delete", `${path.join(stageDir, relative)}/`, `${path.join(importDir, relative)}/`,
+      ...STAGED_RSYNC_COPY_OPTIONS, "--delete", `${path.join(stageDir, relative)}/`, `${path.join(importDir, relative)}/`,
     ], { label: "rsync customer state copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS });
   }
 }
@@ -1871,6 +1873,7 @@ async function validateStagedRsyncImport(
     : undefined;
   const violation = findPathTraversalViolation(entries, slug, mode, [], configuredBuilderStatePlan);
   if (violation !== null) return violation;
+  await assertSafeStagedSymlinks(session.stageDir, session.importDir, slug);
   const liveStores = await findStagedLiveAgentStores(session.stageDir);
   if (liveStores.length > 0) {
     return `carried live agent database files instead of snapshots: ${liveStores.join(", ")}`;
