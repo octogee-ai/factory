@@ -3170,20 +3170,21 @@ describe("agent sqlite stores across an rsync carry", () => {
     ]));
   });
 
-  it("carries a consistent agent snapshot during pre-sync without transferring the live database", async () => {
+  it("pushes files only during pre-sync without snapshotting or transferring agent databases", async () => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
     const runOpenClaw = fakeOpenClaw();
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const { handler, req } = pushRsync(stateDir, "mig-carry-pre", { mode: "pre", runOpenClaw });
+    const { handler, req } = pushRsync(stateDir, "mig-files-only-pre", { mode: "pre", runOpenClaw });
     const { res, getStatus } = mkResponse();
 
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
-    expect(runOpenClaw).toHaveBeenCalledWith(expect.arrayContaining(["backup", "sqlite", "create"]), expect.any(Object));
+    expect(runOpenClaw).not.toHaveBeenCalled();
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(args).toContain("--exclude=openclaw-agent.sqlite");
+    expect(args.some((arg) => arg.includes(SNAPSHOT_REPOSITORY))).toBe(false);
   });
 
   it("continues a Hobby push when a managed Codex database is corrupt", async () => {
@@ -3384,7 +3385,7 @@ describe("agent sqlite stores across an rsync carry", () => {
   it.each(["pre", "final"] as const)("imports required state while omitting legacy Codex temporary helpers (%s)", async mode => {
     const importDir = await mkTempRoot(), migrationId = `mig-codex-temporary-${mode}`;
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('required')"));
+    if (mode === "final") await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('required')"));
     const home = path.join(stageDir, "agents/octogee-chris-coach/agent/codex-home");
     const temporary = path.join(home, "tmp/arg0/codex-arg0l58nfp");
     await fs.mkdir(temporary, { recursive: true });
@@ -3502,15 +3503,14 @@ describe("agent sqlite stores across an rsync carry", () => {
     const releaseAgent = vi.fn(async () => undefined);
     const adapter = { isBuilderGateway: () => false, releaseAgent };
     const pre = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre", adapter, deps: { procRoot } });
-    await stageSnapshot(pre.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre')"));
+    await fs.mkdir(path.join(pre.stageDir, "agents/octogee-chris-coach/agent"), { recursive: true });
+    await fs.writeFile(path.join(pre.stageDir, "agents/octogee-chris-coach/agent/auth.json"), "agent configuration");
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
     expect((await finishImport(pre.deps, migrationId, "pre")).getStatus()).toBe(200);
+    expect(pre.deps.runOpenClaw).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(path.dirname(pre.stageDir), ".octogee-import"))).rejects.toThrow();
 
     const liveDatabase = path.join(importDir, CARRIED_STORE);
-    if (fsSync.existsSync(liveDatabase)) {
-      await fs.mkdir(path.join(procRoot, "92", "fd"), { recursive: true });
-      await fs.symlink(liveDatabase, path.join(procRoot, "92", "fd", "53"));
-    }
     const final = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter, deps: { procRoot } });
     await stageSnapshot(final.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre'), ('final')"));
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
@@ -3525,11 +3525,11 @@ describe("agent sqlite stores across an rsync carry", () => {
     await expect(fs.access(path.dirname(pre.stageDir))).rejects.toThrow();
   });
 
-  it("pre-copies Shared repositories while keeping agent files private and removes them on abort", async () => {
+  it("pre-copies Shared repositories without agent state and removes the staging on abort", async () => {
     const importDir = await mkTempRoot();
     const migrationId = "mig-shared-private-pre";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre" });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre')"));
+    await fs.mkdir(path.join(stageDir, "agents/octogee-chris-coach/agent"), { recursive: true });
     await fs.writeFile(path.join(stageDir, "agents/octogee-chris-coach/agent/auth.json"), "agent configuration");
     await fs.mkdir(path.join(stageDir, "customers/chris/projects/project"), { recursive: true });
     await fs.writeFile(path.join(stageDir, "customers/chris/projects/project/README.md"), "source checkout");
@@ -3541,9 +3541,8 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(finished.getStatus()).toBe(200);
     expect(await fs.readFile(path.join(importDir, "customers/chris/projects/project/README.md"), "utf8")).toBe("source checkout");
     await expect(fs.access(path.join(importDir, "agents"))).rejects.toThrow();
-    const privateRoot = path.join(path.dirname(stageDir), ".octogee-import", migrationId);
-    expect(rowCount(path.join(privateRoot, CARRIED_STORE))).toBe(1);
-    expect((await fs.stat(privateRoot)).mode & 0o777).toBe(0o700);
+    await expect(fs.access(path.join(path.dirname(stageDir), ".octogee-import"))).rejects.toThrow();
+    expect(deps.runOpenClaw).not.toHaveBeenCalled();
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
 
     const body: AbortRsyncImportRequestBody = { migrationId, slug: "chris", mode: "pre", rpcPhase: "abort-rsync-import" };
@@ -4045,7 +4044,8 @@ describe("agent sqlite stores across an rsync carry", () => {
     const prepareSurgeTarget = vi.fn(async () => { expect(rowCount(previous)).toBe(2); });
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode, agentContext: retainedContext,
       adapter: target.adapter, deps: { ...target.deps, procRoot, prepareSurgeTarget } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    if (mode === "final") await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    else await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
     await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-coach", "agent", "memory.md"), "shared-memory");
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
     const result = await finishImport(deps, migrationId, mode, retainedContext);
@@ -4056,6 +4056,8 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(copy![1]).toContain("--exclude=/agents/");
     if (mode === "pre") {
       expect(result.getBody()).not.toHaveProperty("sharedAgentContext");
+      expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("preserved retained native agent context during pre-copy slug=chris"));
+      expect(deps.runOpenClaw).not.toHaveBeenCalled();
       expect(prepareSurgeTarget).toHaveBeenCalledOnce();
       migrationTempRoots.push(path.dirname(stageDir));
     } else {
@@ -4091,36 +4093,53 @@ describe("agent sqlite stores across an rsync carry", () => {
     vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
     const { deps, stageDir } = await prepareImport({ migrationId: "mig-custody-corrupt", importDir, daemon: mkFakeChild(), mode: "pre",
       agentContext: retainedContext, adapter: target.adapter, deps: { ...target.deps, procRoot } });
-    await stageSnapshot(stageDir, () => {});
+    await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
     const result = await finishImport(deps, "mig-custody-corrupt", "pre", retainedContext);
     expect(result.getStatus()).toBe(500);
     expect(await fs.readFile(previous, "utf8")).toBe("corrupt-native-history");
     expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
   });
 
-  it("prepares a held Builder with its agent snapshot installed before offline hydration", async () => {
+  it("prepares a held Builder from a file-only pre-copy without touching its agent database", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
-    const migrationId = "mig-builder-pre-installed";
+    const migrationId = "mig-builder-pre-files-only";
     const target = builderTargetImport(async () => true);
-    await writeStore(importDir, CARRIED_STORE, () => {});
+    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
     const prepareSurgeTarget = vi.fn(async () => {
-      expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+      expect(rowCount(previous)).toBe(1);
     });
     const { deps, stageDir } = await prepareImport({
       migrationId, importDir, daemon: mkFakeChild(), mode: "pre", adapter: target.adapter,
       deps: { ...target.deps, procRoot, prepareSurgeTarget },
     });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre')"));
+    await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
+    await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-coach", "agent", "memory.md"), "shared-memory");
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
     const result = await finishImport(deps, migrationId, "pre");
 
     expect(result.getStatus()).toBe(200);
     expect(prepareSurgeTarget).toHaveBeenCalledOnce();
+    expect(deps.runOpenClaw).not.toHaveBeenCalled();
     expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
     expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+    expect(rowCount(previous)).toBe(1);
     migrationTempRoots.push(path.dirname(stageDir));
+  });
+
+  it("rejects a pre-copy that carries agent snapshots", async () => {
+    const importDir = await mkTempRoot();
+    const migrationId = "mig-pre-snapshot-rejected";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre" });
+    await stageSnapshot(stageDir, () => {});
+
+    const result = await finishImport(deps, migrationId, "pre");
+
+    expect(result.getStatus()).toBe(400);
+    expect(result.getBody()).toMatchObject({ message: "pre-copy carried agent snapshots: octogee-chris-coach" });
+    expect(deps.runOpenClaw).not.toHaveBeenCalled();
+    expect(spawnMock.mock.calls).toHaveLength(1);
   });
 
   it("replaces an occupied database on a held Builder target without calling its unreleased OpenClaw", async () => {

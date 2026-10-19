@@ -65,6 +65,31 @@ export async function findPortableAgentStores(
   return [...byAgent.values()].sort((left, right) => left.agentId.localeCompare(right.agentId));
 }
 
+const SNAPSHOT_CLI_CONCURRENCY = 4;
+
+async function mapConcurrently<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  const failures = new Map<number, unknown>();
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (failures.size === 0 && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await work(items[index]!);
+      } catch (error) {
+        failures.set(index, error);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SNAPSHOT_CLI_CONCURRENCY, items.length) }, worker));
+  const errors = [...failures.entries()].sort(([left], [right]) => left - right).map(([, error]) => error);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join("; "));
+  }
+  return results;
+}
+
 function parseOkJson(label: string, result: OpenClawCommandResult): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -81,6 +106,26 @@ function parseOkJson(label: string, result: OpenClawCommandResult): Record<strin
   return record;
 }
 
+async function withPrivateCommandRoot<T>(
+  store: PortableAgentStore,
+  work: (env: NodeJS.ProcessEnv) => Promise<T>,
+): Promise<T> {
+  const privateRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octogee-store-snapshot-")));
+  try {
+    const configPath = path.join(privateRoot, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({
+      plugins: { enabled: false },
+      agents: { ownership: "explicit", entries: { [store.agentId]: { agentDir: store.sourceAgentDir } } },
+    }), { mode: 0o600 });
+    return await work({
+      PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1",
+      OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1",
+    });
+  } finally {
+    await fs.rm(privateRoot, { recursive: true, force: true });
+  }
+}
+
 export async function exportAgentStoreSnapshots(
   input: Pick<SnapshotCommandContext, "run" | "signal"> & {
     sources: ReadonlyArray<{ cwd: string; path: string }>;
@@ -91,39 +136,24 @@ export async function exportAgentStoreSnapshots(
   const run = input.run ?? runOpenClaw;
   const stores = await findPortableAgentStores(input.sources);
   if (stores.length === 0) return exportCodexStoreSnapshots(input);
-  const privateRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octogee-store-snapshot-")));
-  const configPath = path.join(privateRoot, "openclaw.json");
-  const env: NodeJS.ProcessEnv = {
-    PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1",
-    OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1",
-  };
-  const carried: Array<{ cwd: string; path: string }> = [];
-  try {
-    await fs.writeFile(configPath, JSON.stringify({
-      plugins: { enabled: false },
-      agents: { ownership: "explicit", entries: Object.fromEntries(stores.map((store) => [store.agentId, { agentDir: store.sourceAgentDir }])) },
-    }), { mode: 0o600 });
-    for (const store of stores) {
-      input.signal?.throwIfAborted();
-      const repositoryRelative = path.posix.join(store.agentDir, AGENT_SNAPSHOT_DIRNAME);
-      const repository = path.join(input.exportRoot, ...repositoryRelative.split("/"));
-      await fs.mkdir(repository, { recursive: true, mode: 0o700 });
-      const result = parseOkJson(
-        `snapshot of ${store.agentId}`,
-        await run(
-          ["backup", "sqlite", "create", "--agent", store.agentId, "--repository", repository, "--json"],
-          { env, signal: input.signal },
-        ),
-      );
-      if (typeof result.snapshotPath !== "string" || path.dirname(result.snapshotPath) !== repository) {
-        throw new Error(`OpenClaw snapshot of ${store.agentId} was not published in ${repository}`);
-      }
-      carried.push({ cwd: input.exportRoot, path: repositoryRelative });
+  const carried = await mapConcurrently(stores, (store) => withPrivateCommandRoot(store, async (env) => {
+    input.signal?.throwIfAborted();
+    const repositoryRelative = path.posix.join(store.agentDir, AGENT_SNAPSHOT_DIRNAME);
+    const repository = path.join(input.exportRoot, ...repositoryRelative.split("/"));
+    await fs.mkdir(repository, { recursive: true, mode: 0o700 });
+    const result = parseOkJson(
+      `snapshot of ${store.agentId}`,
+      await run(
+        ["backup", "sqlite", "create", "--agent", store.agentId, "--repository", repository, "--json"],
+        { env, signal: input.signal },
+      ),
+    );
+    if (typeof result.snapshotPath !== "string" || path.dirname(result.snapshotPath) !== repository) {
+      throw new Error(`OpenClaw snapshot of ${store.agentId} was not published in ${repository}`);
     }
-    return [...carried, ...await exportCodexStoreSnapshots(input)];
-  } finally {
-    await fs.rm(privateRoot, { recursive: true, force: true });
-  }
+    return { cwd: input.exportRoot, path: repositoryRelative };
+  }));
+  return [...carried, ...await exportCodexStoreSnapshots(input)];
 }
 
 export interface StagedAgentSnapshot {
@@ -250,9 +280,7 @@ export async function prepareAgentStoreSnapshots(
   await fs.mkdir(importRoot, { recursive: true, mode: 0o700 });
   await fs.rm(landingRoot, { recursive: true, force: true });
   await fs.mkdir(landingRoot, { mode: 0o700 });
-  const stores: PreparedAgentStore[] = [];
-  let requiresUpgrade = false;
-  for (const snapshot of snapshots) {
+  const landed = await mapConcurrently(snapshots, async (snapshot) => {
     const restoredDir = path.join(landingRoot, ...snapshot.agentDir.split("/"));
     await fs.mkdir(restoredDir, { recursive: true, mode: 0o700 });
     const restoredPath = path.join(restoredDir, AGENT_STORE_BASENAME);
@@ -267,17 +295,18 @@ export async function prepareAgentStoreSnapshots(
         ),
       );
     } else {
-      requiresUpgrade = true;
       await landRepairableAgentSnapshot(snapshot, restoredPath);
     }
     await fs.rm(path.dirname(snapshot.snapshotDir), { recursive: true, force: true });
-    stores.push({
+    const store: PreparedAgentStore = {
       agentId: snapshot.agentId,
       restoredPath,
       destinationPath: path.join(input.importDir, ...snapshot.agentDir.split("/"), AGENT_STORE_BASENAME),
-    });
-  }
-  if (requiresUpgrade) await upgradeStagedAgentStores(landingRoot, { signal: input.signal, log: input.log });
+    };
+    return { store, requiresUpgrade: fit !== "exact" };
+  });
+  const stores = landed.map((item) => item.store);
+  if (landed.some((item) => item.requiresUpgrade)) await upgradeStagedAgentStores(landingRoot, { signal: input.signal, log: input.log });
   if (input.requireDrained) await assertCarriedAgentSessionsDrained(landingRoot);
   input.log?.(`[agent-store-snapshot] restored ${stores.length} carried agent database(s)`);
   return { landingRoot, stores };

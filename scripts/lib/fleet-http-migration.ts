@@ -75,6 +75,7 @@ import {
   AGENT_STORE_BASENAME,
   AGENT_IMPORT_DIRNAME,
   exportAgentStoreSnapshots,
+  findStagedAgentSnapshots,
   findStagedLiveAgentStores,
   installPreparedAgentStores,
   isAgentSnapshotArtifact,
@@ -1766,7 +1767,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
-      if (mode !== "keys") {
+      if (mode === "final") {
         sources.push(...await exportAgentStoreSnapshots({
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),
@@ -1880,6 +1881,12 @@ async function validateStagedRsyncImport(
   const liveStores = await findStagedLiveAgentStores(session.stageDir);
   if (liveStores.length > 0) {
     return `carried live agent database files instead of snapshots: ${liveStores.join(", ")}`;
+  }
+  if (mode === "pre") {
+    const snapshots = await findStagedAgentSnapshots(session.stageDir);
+    if (snapshots.length > 0) {
+      return `pre-copy carried agent snapshots: ${snapshots.map((snapshot) => snapshot.agentId).join(", ")}`;
+    }
   }
   await omitRawCodexDatabases(session.stageDir, log);
   const staged = (await listSqliteStores(session.stageDir)).filter((store) => !isAgentSnapshotArtifact(store) &&
@@ -2115,13 +2122,8 @@ function deferImportedAgentState(input: StagedImportInput, retained: RetainedAge
   return !!retained || input.mode === "pre" && !input.activation;
 }
 
-async function archiveRetainedImport(input: StagedImportInput, prepared: PreparedAgentStores, retained: RetainedAgentContextTransfer): Promise<NativeSharedAgentContextArchive | undefined> {
+async function archiveRetainedImport(input: StagedImportInput, prepared: PreparedAgentStores, retained: RetainedAgentContextTransfer): Promise<NativeSharedAgentContextArchive> {
   const { session, log } = input;
-  if (input.mode === "pre") {
-    if (prepared.landingRoot) await fs.rm(prepared.landingRoot, { recursive: true, force: true });
-    log(`[migration-rsync] preserved retained native agent context during pre-copy slug=${input.slug}`);
-    return;
-  }
   const receipt = await archiveNativeSharedAgentContext({ stateDir: session.importDir, stageDir: session.stageDir, prepared,
     procRoot: input.deps.procRoot ?? PROC_ROOT, transfer: retained, signal: input.signal });
   log(`[migration-rsync] preserved native context and archived Shared agents slug=${receipt.slug} archiveId=${receipt.archiveId} digest=${receipt.contextSha256} agents=${receipt.agentIds.join(",")}`);
@@ -2132,28 +2134,27 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
   const { deps, session, log } = input;
   const retained = await retainedImportPolicy(input);
   const deferAgentState = deferImportedAgentState(input, retained);
-  const prepared = input.mode !== "keys"
-    ? await prepareAgentStoreSnapshots({
-      stageDir: session.stageDir,
-      importDir: deferAgentState && !retained ? path.dirname(session.stageDir) : session.importDir,
-      migrationId: session.migrationId,
-      requireDrained: input.mode === "final",
-      run: deps.runOpenClaw,
-      signal: input.signal,
-      log,
-    })
-    : null;
+  const copyOptions = { baselineEntries: session.baselineEntries, deferAgentState };
+  if (input.mode !== "final") {
+    if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
+    await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+    if (retained) log(`[migration-rsync] preserved retained native agent context during pre-copy slug=${input.slug}`);
+    return;
+  }
+  const prepared = await prepareAgentStoreSnapshots({
+    stageDir: session.stageDir,
+    importDir: session.importDir,
+    migrationId: session.migrationId,
+    requireDrained: true,
+    run: deps.runOpenClaw,
+    signal: input.signal,
+    log,
+  });
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
-  const codex = input.mode !== "keys" && !deferAgentState
-    ? await prepareCodexStoreSnapshots(session.stageDir, log)
-    : null;
+  const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
   try {
-    await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, {
-      baselineEntries: session.baselineEntries,
-      deferAgentState,
-    });
-    if (retained && prepared) return archiveRetainedImport(input, prepared, retained);
-    if (!prepared || deferAgentState) return;
+    await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+    if (retained) return archiveRetainedImport(input, prepared, retained);
     await installPreparedAgentStores({
       prepared,
       releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log),
