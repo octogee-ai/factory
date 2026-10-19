@@ -129,7 +129,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     typecheck: 'echo "octogee-ops-tools — no tsconfig; vitest is the gate"',
   },
   { name: JOBS.functions, dir: "functions", typecheck: TYPECHECK },
-  { name: JOBS.site, dir: "site", typecheck: TYPECHECK },
+  { name: JOBS.site, dir: "site", typecheck: TYPECHECK, nodeVersion: 24 },
   { name: JOBS.desktop, dir: "desktop", typecheck: TYPECHECK },
   {
     name: JOBS.obsidianConnect,

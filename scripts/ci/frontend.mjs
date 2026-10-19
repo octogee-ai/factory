@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { delimiter } from 'node:path';
 import { siteSsrRepository } from './frontend-registry.mjs';
 
 const environment = process.env.RELEASE_ENVIRONMENT ?? 'test';
@@ -34,9 +35,13 @@ for (const [key, value] of Object.entries(publicConfig)) {
   env[`PUBLIC_${key}`] = value;
   env[`VITE_${key}`] = value;
 }
+const node24Env = { ...env, PATH: `${process.env.CI_NODE_24_BIN ?? '/opt/node24/bin'}${delimiter}${env.PATH}` };
+const node24Major = Number(run('node', ['-p', 'process.versions.node'], { env: node24Env }).split('.')[0]);
+if (node24Major !== 24) throw new Error(`Firebase 13 frontends require Node 24; set CI_NODE_24_BIN (found Node ${node24Major})`);
 for (const directory of ['functions', 'site', 'app']) {
-  run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: directory, env, stdio: 'inherit' });
-  run('npm', ['run', 'build'], { cwd: directory, env, stdio: 'inherit' });
+  const packageEnv = directory === 'functions' ? env : node24Env;
+  run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: directory, env: packageEnv, stdio: 'inherit' });
+  run('npm', ['run', 'build'], { cwd: directory, env: packageEnv, stdio: 'inherit' });
 }
 function publishSsr() {
   const image = `${repository}/site-ssr:${environment}-${process.env.SOURCE_SHA.slice(0, 8)}`;

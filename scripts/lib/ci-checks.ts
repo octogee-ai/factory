@@ -68,8 +68,8 @@ function testJob(name: JobKey): CheckJob {
   };
   const directory = emulatorDirectories[name];
   if (directory) return { name, directory, nodeVersion: 22, installs: installsFor(directory), commands: ["npm run test:emulator"] };
-  if (name === JOBS.app) return { name, directory: "app", nodeVersion: 22, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
-  if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: 22, installs: ["firestore-rules-tests"], commands: ["npm test"] };
+  if (name === JOBS.app) return { name, directory: "app", nodeVersion: 24, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
+  if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: 24, installs: ["firestore-rules-tests"], commands: ["npm test"] };
   if (name === JOBS.desktopPackage) return {
     name, directory: "desktop", nodeVersion: 22, installs: ["desktop"],
     commands: ["npm run build", "CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --linux --publish never", "bash ../scripts/ci/verify-linux-package.sh"],

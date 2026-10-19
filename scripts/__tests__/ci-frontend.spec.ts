@@ -37,12 +37,32 @@ it('rejects an unknown SSR release environment before building packages', async 
 
 function tools(lookup: () => string) {
   command.mockImplementation((file: string, _args: string[]) => {
+    if (file === 'node' && _args[0] === '-p') return process.env.FAKE_NODE_24_VERSION ?? '24.12.0';
     if (file === 'node') return 'hosting_project_id=octogee-test\nfirebase_project_id=octogee-test\nartifact_registry_repository=us-central1-docker.pkg.dev/octogee/octogee\napi_origin=https://api-test.octogee.com\napp_origin=https://app-test.octogee.com\nsite_origin=https://octogee-test.web.app\ngit_origin=https://git-test.octogee.com';
     if (file === 'gcloud') return 'public-posthog-token';
     if (file === 'bash') return lookup();
     return '';
   });
 }
+
+it('builds site and app with the Node 24 toolchain while Cloud Functions keeps the Node 22 default', async () => {
+  vi.stubEnv('CI_NODE_24_BIN', '/opt/node24/bin');
+  tools(() => 'sha256:existing');
+  await import('../ci/frontend.mjs');
+  const npmCalls = command.mock.calls.filter(([file]) => file === 'npm');
+  expect(npmCalls).toHaveLength(6);
+  for (const [, , options] of npmCalls) {
+    const onNode24 = options.env.PATH.startsWith(`/opt/node24/bin:`);
+    expect(onNode24).toBe(options.cwd !== 'functions');
+  }
+});
+
+it('stops before installing any frontend package when the Node 24 toolchain is missing', async () => {
+  vi.stubEnv('FAKE_NODE_24_VERSION', '22.20.0');
+  tools(() => 'sha256:existing');
+  await expect(import('../ci/frontend.mjs')).rejects.toThrow('require Node 24');
+  expect(command.mock.calls.filter(([file]) => file === 'npm')).toEqual([]);
+});
 
 it('verifies frontend packages while reusing an existing SHA-addressed SSR image', async () => {
   tools(() => 'sha256:existing');

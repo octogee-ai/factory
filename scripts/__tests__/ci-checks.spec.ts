@@ -15,6 +15,12 @@ describe("portable Linux PR checks", () => {
     expect(plan.find(job => job.name === "app")?.commands).toContain("npm test");
   });
 
+  it("runs the Firebase 13 client packages on Node 24 and keeps Cloud Functions on its Node 22 runtime", () => {
+    const plan = checkPlan(["package-lock.json"], "tests");
+    for (const name of ["app", "site", "firestore-rules"]) expect(plan.find(job => job.name === name)?.nodeVersion).toBe(24);
+    expect(plan.find(job => job.name === "functions-emulator")?.nodeVersion).toBe(22);
+  });
+
   it("constructs installers only when explicitly requested", () => {
     expect(checkPlan(["desktop/package.json"], "tests").some(job => job.name === "desktop-package")).toBe(false);
     expect(checkPlan(["desktop/package.json"], "tests", true).find(job => job.name === "desktop-package")?.commands.join("\n")).toContain("--publish never");
