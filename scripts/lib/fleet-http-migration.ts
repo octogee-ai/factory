@@ -1724,9 +1724,11 @@ function validateRsyncPushTarget(body: PushRsyncStateRequestBody, res: Response)
 
 async function migrationAgentContextExportSources(deps: MigrationHandlerDeps, body: MigrationRequestBody & { agentContext?: unknown }, mode: MigrationTransferMode): Promise<Array<{ cwd: string; path: string }>> {
   const agentContext = await validateAgentContextTransfer(deps, body, "source", mode);
-  return agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT
-    ? archivedSharedAgentExportPaths({ stateDir: resolveOpenClawStateDir(), archive: agentContext.archive })
-    : deps.adapter.listExportPaths(body.slug);
+  if (agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) return deps.adapter.listExportPaths(body.slug);
+  const archived = await archivedSharedAgentExportPaths({ stateDir: resolveOpenClawStateDir(), archive: agentContext.archive });
+  const customerFiles = (await deps.adapter.listExportPaths(body.slug)).filter(source =>
+    ["customers", "git-metadata", "customer-keys"].some(directory => source.path === path.join(directory, body.slug)));
+  return [...archived, ...customerFiles];
 }
 
 export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): RequestHandler {

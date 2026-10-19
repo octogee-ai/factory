@@ -3683,12 +3683,88 @@ describe("agent sqlite stores across an rsync carry", () => {
     return { stateDir, archive, destinationPath };
   }
 
-  it("pushes only the archived Shared context through the real rsync export handler", async () => {
+  it("retains current customer memory across archived Shared return and retained Native activation", async () => {
+    const input = await archivedContextFixture(), sharedDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const note = "memory/qa-20261019-4530-fresh.md", contents = "Synthetic customer memory created after activation.\n";
+    await fs.mkdir(path.join(input.stateDir, "customers/chris/memory"), { recursive: true });
+    await fs.writeFile(path.join(input.stateDir, "customers/chris", note), contents);
+    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
+    vi.stubEnv("OPENCLAW_STATE_DIR", sharedDir);
+    const returned = await prepareImport({ migrationId: "memory-return", importDir: sharedDir, daemon: mkFakeChild(), agentContext: policy,
+      adapter: sharedRestoreAdapter(sharedDir, input.archive, "memory-return"), deps: { procRoot } });
+    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementationOnce((command: string, args: string[], options: import("node:child_process").SpawnOptions) => {
+      const password = args.indexOf("--password-file");
+      const sources = args.slice(password + 2, -1);
+      const local = [...args.slice(0, password), ...sources, `${returned.stageDir}/`];
+      const image = process.env.OCTOGEE_RSYNC_TEST_IMAGE;
+      if (!image) return real.spawn(command, local, options);
+      const roots = [...new Set([...sources.map(source => source.split("/./")[0]!), returned.stageDir])];
+      return real.spawn("docker", ["run", "--rm", "--network=none", "--user=0:0",
+        ...roots.flatMap(root => ["--mount", `type=bind,src=${fsSync.realpathSync(root)},dst=${root}`]),
+        "--entrypoint", command, image, ...local], options);
+    });
+    const runOpenClaw = fakeOpenClaw();
+    const snapshot = runOpenClaw.getMockImplementation()!;
+    runOpenClaw.mockImplementation(async args => {
+      const result = await snapshot(args);
+      if (args[2] === "create") {
+        const snapshotPath = JSON.parse(result.stdout).snapshotPath;
+        const archiveRoot = path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId);
+        await fs.copyFile(path.join(archiveRoot, CARRIED_STORE), path.join(snapshotPath, "database.sqlite"));
+      }
+      return result;
+    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
+    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
+    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
+    const body: PushRsyncStateRequestBody = { migrationId: "memory-return", slug: "chris", rpcPhase: "push-rsync-state", mode: "final",
+      targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM, transferUser: "migration", transferKey: "b".repeat(64),
+      agentContext: policy, includeActivationManifest: false };
+    const adapter = mkAdapter({ isBuilderGateway: () => true, listExportPaths: async () => [
+      { cwd: input.stateDir, path: "agents/octogee-chris-coach" }, { cwd: input.stateDir, path: "customers/chris" },
+    ] });
+    const exported = mkResponse();
+    await createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw }))(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), exported.res, vi.fn());
+    expect(exported.getStatus(), JSON.stringify(exported.getBody())).toBe(200);
+    expect(await fs.readFile(path.join(returned.stageDir, "customers/chris", note), "utf8")).toBe(contents);
+    vi.stubEnv("OPENCLAW_STATE_DIR", sharedDir);
+    vi.stubEnv("GATEWAY_RUNTIME_KIND", "cluster");
+    vi.stubEnv("POD_UID", "shared-pod");
+    spawnMock.mockImplementation(await realMigrationSpawn());
+    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
+    const installed = await finishImport(returned.deps, "memory-return", "final", policy, certificate);
+    expect(installed.getStatus(), JSON.stringify(installed.getBody())).toBe(200);
+    expect(await fs.readFile(path.join(sharedDir, "customers/chris", note), "utf8")).toBe(contents);
+    expect(rowCount(path.join(sharedDir, CARRIED_STORE))).toBe(1);
+    expect(rowCount(input.destinationPath)).toBe(2);
+    const nextRetained = { ...retainedContext, archiveId: "memory-reactivation-shared" };
+    const target = builderTargetImport(async () => true);
+    vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
+    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
+    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
+    const activated = await prepareImport({ migrationId: "memory-reactivation", importDir: input.stateDir, daemon: mkFakeChild(),
+      agentContext: nextRetained, adapter: target.adapter, deps: { ...target.deps, procRoot } });
+    await fs.cp(path.join(sharedDir, "customers"), path.join(activated.stageDir, "customers"), { recursive: true });
+    await stageSnapshot(activated.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    const resumed = await finishImport(activated.deps, "memory-reactivation", "final", nextRetained);
+    expect(resumed.getStatus(), JSON.stringify(resumed.getBody())).toBe(200);
+    expect(await fs.readFile(path.join(input.stateDir, "customers/chris", note), "utf8")).toBe(contents);
+    expect(rowCount(input.destinationPath)).toBe(2);
+    expect(rowCount(path.join(input.stateDir, ".octogee-shared-context", nextRetained.archiveId, CARRIED_STORE))).toBe(1);
+  });
+
+  it("pushes archived Shared agents instead of active Native agents through the real rsync export handler", async () => {
     const input = await archivedContextFixture();
     vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
     vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
     vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const adapter = mkAdapter({ isBuilderGateway: () => true, listExportPaths: vi.fn(async () => { throw new Error("must not export native active context"); }) });
+    const adapter = mkAdapter({ isBuilderGateway: () => true, listExportPaths: vi.fn(async () => [
+      { cwd: input.stateDir, path: "agents/octogee-chris-coach" },
+      ...["customers/chris", "git-metadata/chris", "customer-keys/chris", "customers/someone-else"].map(relative => ({ cwd: input.stateDir, path: relative })),
+    ]) });
     const body: PushRsyncStateRequestBody = { migrationId: "restore-shared-export", slug: "chris", rpcPhase: "push-rsync-state", mode: "final",
       targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM, transferUser: "migration", transferKey: "b".repeat(64),
       agentContext: { mode: "restore-shared", archive: input.archive }, includeActivationManifest: false };
@@ -3697,10 +3773,14 @@ describe("agent sqlite stores across an rsync carry", () => {
     const response = mkResponse();
     await createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(200);
-    expect(adapter.listExportPaths).not.toHaveBeenCalled();
+    expect(adapter.listExportPaths).toHaveBeenCalledWith("chris");
     const args = spawnMock.mock.calls[0]![1] as string[];
     expect(args).toContain(`${await fs.realpath(input.stateDir)}/.octogee-shared-context/${input.archive.archiveId}/./agents/octogee-chris-coach`);
     expect(args).not.toContain(`${input.stateDir}/./agents/octogee-chris-coach`);
+    expect(args).toContain(`${input.stateDir}/./customers/chris`);
+    expect(args).toContain(`${input.stateDir}/./git-metadata/chris`);
+    expect(args).not.toContain(`${input.stateDir}/./customer-keys/chris`);
+    expect(args).not.toContain(`${input.stateDir}/./customers/someone-else`);
     expect(rowCount(input.destinationPath)).toBe(2);
     expect(runOpenClaw).toHaveBeenCalledWith(expect.arrayContaining(["--agent", "octogee-chris-coach"]), expect.anything());
   });
