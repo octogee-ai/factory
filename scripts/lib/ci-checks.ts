@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import { JOBS, UNIT_PACKAGES, type JobKey } from "./scope/manifest.js";
 import { resolveScope } from "./scope/resolve.js";
 
@@ -53,9 +54,12 @@ export function dependencyInstaller(): (job: CheckJob, install: (directory: stri
   };
 }
 
-export function vitestOptions(script: string, emulated: boolean): string {
+const CONCURRENT_UNIT_LANES = 4;
+
+export function vitestOptions(script: string, emulated: boolean, cpus = availableParallelism()): string {
   if (!script.includes("vitest") || script.includes("emulators:exec")) return "";
-  return emulated ? " -- --testTimeout=60000 --hookTimeout=60000 --maxWorkers=2" : " -- --maxWorkers=4";
+  if (emulated) return " -- --testTimeout=60000 --hookTimeout=60000 --maxWorkers=2";
+  return ` -- --maxWorkers=${Math.max(1, Math.floor(cpus / CONCURRENT_UNIT_LANES))}`;
 }
 
 function installsFor(directory: string): string[] {

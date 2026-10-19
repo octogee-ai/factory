@@ -112,9 +112,11 @@ describe("portable Linux PR checks", () => {
     expect(vitestOptions(script, true)).toBe("");
   });
 
-  it("bounds direct Vitest workers and retains emulation timeouts", () => {
-    expect(vitestOptions("vitest run", false)).toBe(" -- --maxWorkers=4");
-    expect(vitestOptions("vitest run", true)).toContain("--testTimeout=60000 --hookTimeout=60000 --maxWorkers=2");
-    expect(vitestOptions("node --test", false)).toBe("");
+  it("gives each concurrent unit lane a quarter of the machine and retains emulation timeouts", () => {
+    expect(vitestOptions("vitest run", false, 8)).toBe(" -- --maxWorkers=2");
+    expect(vitestOptions("vitest run", false, 24)).toBe(" -- --maxWorkers=6");
+    expect(vitestOptions("vitest run", false, 2)).toBe(" -- --maxWorkers=1");
+    expect(vitestOptions("vitest run", true, 8)).toContain("--testTimeout=60000 --hookTimeout=60000 --maxWorkers=2");
+    expect(vitestOptions("node --test", false, 8)).toBe("");
   });
 });
