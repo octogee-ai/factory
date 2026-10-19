@@ -141,29 +141,38 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 Upstream is operator-selected main
 [`1398ba9837e19da853bb6b1d6623cb6fee5421f6`](https://github.com/openclaw/openclaw/commit/1398ba9837e19da853bb6b1d6623cb6fee5421f6),
-frozen for the October 18 recut. Exact native source is
-`e1e1543eeb486e82d9d966df7a3786afe726469b`, fork branch
-`codex/openclaw-1398-oct18`. It retains the reproduced queued-config reload
-correction through the current native reload lifecycle. The Octogee companion
-preserves all merged fixes through main
-`49e5a17c3d164e4e711d0a15e7d02836d9d23e9c`, including the symlink transfer fix.
+frozen for the October 18 recut. The October 19 acceptance repair uses exact native
+source `97623938234d3c9b0050385c13dcb80233b2c75b`, fork branch
+`codex/native-worker-cleanup-and-launchers`, and preserves the merged Octogee
+companion through main `9a5ae75b0aa93dd454c2a5f9291b7aa80931a397`.
+
+TEST reproduced keyed agent-database cleanup disposing unrelated plugin captures,
+which broke later configuration and secret reloads. The preparation owner now
+preserves those captures during keyed cleanup while retaining terminal disposal.
+The packaged runtime also omitted ordinary Memory and Skills launchers because
+they lived under the intentionally sealed portable-worker directory. Their
+unchanged entrypoints now live under the ordinary agent runtime directory; the
+portable-worker exclusion remains intact. Both repairs have failing controls and
+focused green regressions. The existing queued-config reload correction remains.
+
 Package `2026.10.4` is a main snapshot, not a
 released tag. The operator selected independent local qualification; this is not
 a claim that the selected snapshot passed the full upstream CI matrix. No
 external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-1e97f1dd.tgz` and
+`current.json` selects `openclaw-fork-f4516e3e.tgz` and
 `openclaw-mattermost-ad6baf38.tgz`, packed sequentially from this exact clean
 build. Publication is write-once; complete hashes, not object-name prefixes,
 identify the qualified pair.
 
-Root generation `1792356165205655` and Mattermost generation
-`1792356099696504` were published write-once, read back by exact generation and
-compared byte-for-byte with the qualified archives. The source branch was pushed
+Root generation `1792431201505831` and Mattermost generation
+`1792356099696504` were read back by exact generation and compared byte-for-byte
+with the qualified archives. The root was published write-once; the unchanged
+Mattermost object was verified and reused. The source branch was pushed
 and read back at the exact native commit without dispatching hosted native CI.
 
-Root: **132303366 bytes**, SHA256
-`1e97f1dd924aff59395bb4f9baa66e0d0740bfd285ba0ce0441401a56c5ede24`.
+Root: **132301381 bytes**, SHA256
+`f4516e3e14268d609dc77827258727494794ff7c1219bbb5c4127c99be9cb415`.
 Mattermost: **1250290 bytes**, SHA256
 `ad6baf3870c07854a1ac92419cde3925a0ad69ba10c7fcc3ff5063c153308c9a`.
 
