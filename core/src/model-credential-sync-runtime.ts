@@ -1,7 +1,9 @@
 import {
+  PLATFORM_MODEL_POLICY_ALLOW_PATH,
   applyCoachModelPatch,
   customerMountConfigPatch,
   customerSecurityProjectionReplacePaths,
+  platformModelAllowlistPatch,
   brokerFetchByosubCreds,
   restoreOauthStoreForSlug,
   refreshCoachRuntimeSessions,
@@ -41,8 +43,10 @@ export async function syncModelCredentialsForCustomer(
 }
 
 export {
+  PLATFORM_MODEL_POLICY_ALLOW_PATH,
   customerMountConfigPatch,
   customerSecurityProjectionReplacePaths,
+  platformModelAllowlistPatch,
   applyCoachModelPatch as applyModelCredentialCoachPatch,
   brokerFetchByosubCreds as brokerFetchModelCredentialOauthCreds,
   refreshCoachRuntimeSessions as refreshModelCredentialRuntimeSessions,

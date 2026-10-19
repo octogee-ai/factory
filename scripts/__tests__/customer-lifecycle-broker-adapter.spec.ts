@@ -28,7 +28,7 @@ import {
   applyConfigPatch as realApplyConfigPatch,
   mergePatchValueAlreadyApplied,
 } from "@octogee/core/apply-config-patch";
-import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch } from "@octogee/core/byot-sync-runtime";
+import { applyAgentModelOverrides, customerOauthRuntimeConfigPatch, platformModelAllowlistPatch } from "@octogee/core/byot-sync-runtime";
 import { canonicalCustomerModelDefinition } from "../../shared/types/agent-models.js";
 import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, finalizeConvergedMount, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
@@ -338,6 +338,18 @@ function mkRemovalRpc(
 
 function keyedRoster(agentIds: readonly string[]): Record<string, unknown> {
   return Object.fromEntries(agentIds.map((agentId) => [agentId, { model: "house" }]));
+}
+
+function mergePatch(base: unknown, patch: unknown): unknown {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) return patch;
+  const out: Record<string, unknown> = {
+    ...(base && typeof base === "object" && !Array.isArray(base) ? base as Record<string, unknown> : {}),
+  };
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (value === null) delete out[key];
+    else out[key] = mergePatch(out[key], value);
+  }
+  return out;
 }
 
 function aliceSnapshot(
@@ -3434,7 +3446,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
       buildPatch: (current: unknown) => {
         agents: {
-          defaults?: { models?: Record<string, unknown> };
+          defaults?: { models?: Record<string, unknown>; modelPolicy?: unknown };
           list: Array<{ id?: string; model?: unknown }>;
         };
       };
@@ -3443,9 +3455,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const coach = patch.agents.list.find((agent) => agent.id === "octogee-alice-coach");
 
     expect(coach?.model).toEqual(snapshot.builderAgentDefault);
-    expect(patch.agents.defaults?.models).toEqual({
-      "platform-openrouter/openai/gpt-5.6-luna": {},
+    expect(patch.agents.defaults?.models).toMatchObject({
+      "platform-openrouter/openai/gpt-5.6-luna": canonicalCustomerModelDefinition("platform-openrouter/openai/gpt-5.6-luna"),
       "platform-openrouter/z-ai/glm-5.2": { alias: "glm", params: { thinking: "xhigh" } },
+    });
+    expect(patch.agents.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/*", "platform-openrouter/*", "platform-openai/*"],
     });
   });
 
@@ -3499,8 +3514,8 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
     expect(coach?.model).toEqual({ primary: "platform-openrouter/openai/gpt-5.6-luna", fallbacks: [] });
     expect(coach?.tools).toMatchObject({ profile: "minimal" });
-    expect(patch.agents.defaults?.models).toEqual({
-      "platform-openrouter/openai/gpt-5.6-luna": {},
+    expect(patch.agents.defaults?.models).toMatchObject({
+      "platform-openrouter/openai/gpt-5.6-luna": canonicalCustomerModelDefinition("platform-openrouter/openai/gpt-5.6-luna"),
     });
   });
 
@@ -4050,17 +4065,6 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       bindings: [],
       channels: { mattermost: { accounts: {} } },
     };
-    const mergePatch = (base: unknown, patch: unknown): unknown => {
-      if (patch === null || typeof patch !== "object" || Array.isArray(patch)) return patch;
-      const out: Record<string, unknown> = {
-        ...(base && typeof base === "object" && !Array.isArray(base) ? base as Record<string, unknown> : {}),
-      };
-      for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
-        if (value === null) delete out[key];
-        else out[key] = mergePatch(out[key], value);
-      }
-      return out;
-    };
     let mountPatch: unknown;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args: { buildPatch(current: unknown): unknown }) => {
       mountPatch = args.buildPatch(current);
@@ -4097,6 +4101,89 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
     const purge = customerOauthRuntimeConfigPatch(applied, "alice", selection.primary);
     expect(mergePatchValueAlreadyApplied(applied, purge)).toBe(true);
+    const overridePatches: unknown[] = [];
+    await applyAgentModelOverrides("alice", { [coach]: selection }, { houseOnly: false }, {
+      applyConfigPatch: (async (args: { buildPatch(current: unknown): unknown }) => {
+        overridePatches.push(args.buildPatch(applied));
+        return { mode: "rpc" as const, attempts: 1 };
+      }) as never,
+      logFn: vi.fn(),
+    });
+    expect(overridePatches).toHaveLength(1);
+    expect(mergePatchValueAlreadyApplied(applied, overridePatches[0])).toBe(true);
+  });
+
+  it("leaves nothing for the post-mount purge, platform allowlist, or model override to patch when a shared gateway suppresses the owner's byosub", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "http://llm-broker:3010");
+    vi.stubEnv("OPENROUTER_BASE_URL", "http://llm-broker:3010/v1");
+    vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://llm-broker:3010/v1");
+    const coach = "octogee-alice-coach";
+    const selection = {
+      primary: "platform-openrouter/openai/gpt-5.6-luna",
+      fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
+    };
+    const current = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          models: {
+            "platform-openrouter/deepseek/deepseek-v4-pro": {},
+            "openai/gpt-6-astra": { alias: "astra" },
+          },
+        },
+        entries: {},
+      },
+      models: { providers: { anthropic: { baseUrl: "http://llm-broker:3010" } } },
+      plugins: { entries: { codex: { enabled: true } } },
+      bindings: [],
+      channels: { mattermost: { accounts: {} } },
+    };
+    let mountPatch: unknown;
+    let replacePaths: string[] = [];
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args: {
+      buildPatch(current: unknown): unknown;
+      buildReplacePaths?(current: unknown): string[];
+    }) => {
+      mountPatch = args.buildPatch(current);
+      replacePaths = args.buildReplacePaths?.(current) ?? [];
+      return { mode: "rpc" as const, attempts: 1 };
+    });
+    const snapshot = aliceSnapshot({
+      status: "complete",
+      tier: "trial",
+      byotActive: true,
+      systemConfig: { byot: { provider: "openai-codex" } },
+      channels: [{ scope: "workspace", kind: "coach-dm", channelId: "dm-alice" }],
+      builderAgentDefault: selection,
+      trialGrant: {
+        schemaVersion: 3,
+        offerId: "builder-signup",
+        offerVersion: 1,
+        personalTier: "personal",
+        builderTier: "hobby",
+        configHash: "0123456789abcdef",
+        claimedAt: Date.now() - 60_000,
+        endsAt: Date.now() + 7 * 24 * 60 * 60_000,
+      },
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
+      rpc: mkGatewayRpc({ ...rosterRpc(current) }),
+      log: vi.fn(),
+    });
+    await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" });
+
+    const applied = mergePatch(current, mountPatch) as {
+      agents: { entries: Record<string, { model?: unknown }>; defaults: { models: Record<string, unknown> } };
+    };
+    expect(applied.agents.entries[coach]?.model).toEqual(selection);
+    expect(replacePaths).toContain("agents.defaults.modelPolicy.allow");
+    const purge = customerOauthRuntimeConfigPatch(applied, "alice", selection.primary, {
+      forceSafeAll: true,
+      gatewayEnv: process.env,
+    });
+    expect(mergePatchValueAlreadyApplied(applied, purge)).toBe(true);
+    expect(mergePatchValueAlreadyApplied(applied, platformModelAllowlistPatch(applied, false))).toBe(true);
     const overridePatches: unknown[] = [];
     await applyAgentModelOverrides("alice", { [coach]: selection }, { houseOnly: false }, {
       applyConfigPatch: (async (args: { buildPatch(current: unknown): unknown }) => {

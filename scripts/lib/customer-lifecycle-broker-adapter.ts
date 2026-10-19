@@ -142,12 +142,15 @@ import {
 } from "./openclaw-config-builders.js";
 import { createSurgeOpenClawProcessSupervisorClient } from "./surge-openclaw-process-gate.js";
 import {
+  PLATFORM_MODEL_POLICY_ALLOW_PATH,
   customerMountConfigPatch,
   customerSecurityProjectionReplacePaths,
+  platformModelAllowlistPatch,
   refreshModelCredentialRuntimeSessions,
   restoreModelCredentialOauthStoreForSlug,
   syncModelCredentialsForCustomer,
 } from "./model-credential-sync-runtime.js";
+import { MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS } from "./model-credential-materializer.js";
 import {
   byosCoachConfigPatch,
   convergedCoachToolsValue,
@@ -661,8 +664,19 @@ function initialHouseCoachPatch(snapshot: UserSnapshot) {
   }));
 }
 
+function sharedByosubSuppressed(snapshot: UserSnapshot): boolean {
+  if (snapshot.byotActive !== true || isConfiguredGatewayBuilder(snapshot.slug)) return false;
+  const provider = snapshot.systemConfig?.byot?.provider;
+  return provider !== undefined &&
+    MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS[provider as keyof typeof MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS]?.mode === "oauth";
+}
+
+function customerModelCredentialsActive(snapshot: UserSnapshot): boolean {
+  return snapshot.byotActive === true && !sharedByosubSuppressed(snapshot);
+}
+
 function initialCoachModelSelection(snapshot: UserSnapshot): BuilderAgentModelDefault | null {
-  if (snapshot.byotActive === true) return null;
+  if (customerModelCredentialsActive(snapshot)) return null;
   const housePatch = initialHouseCoachPatch(snapshot);
   if (housePatch) return housePatch.agents.list[0].model as BuilderAgentModelDefault;
   const agentId = `octogee-${snapshot.slug}-coach`;
@@ -671,7 +685,7 @@ function initialCoachModelSelection(snapshot: UserSnapshot): BuilderAgentModelDe
 }
 
 function initialCoachTools(snapshot: UserSnapshot, current: unknown) {
-  if (snapshot.byotActive === true) return current;
+  if (customerModelCredentialsActive(snapshot)) return current;
   const tools = initialHouseCoachPatch(snapshot)?.agents.list[0].tools;
   return tools ? convergedCoachToolsValue(current, tools) : current;
 }
@@ -685,14 +699,22 @@ function platformModelDefaults(
 }
 
 function customerAgentDefaults(
+  current: unknown,
   coachModelDefaults: Record<string, object> | null,
   builderGateway: boolean,
-): Record<string, unknown> | null {
-  if (!coachModelDefaults && !builderGateway) return null;
-  return {
-    ...(coachModelDefaults ? { models: coachModelDefaults } : {}),
-    ...(builderGateway ? { authInheritance: { agentId: SAFE_DEFAULT_AGENT_ID } } : {}),
-  };
+): Record<string, unknown> {
+  if (builderGateway) {
+    return {
+      ...(coachModelDefaults ? { models: coachModelDefaults } : {}),
+      authInheritance: { agentId: SAFE_DEFAULT_AGENT_ID },
+    };
+  }
+  const platform = platformModelAllowlistPatch(current, false).agents.defaults;
+  const models = { ...platform.models };
+  for (const [ref, definition] of Object.entries(coachModelDefaults ?? {})) {
+    if (models[ref] === undefined) models[ref] = definition;
+  }
+  return { models, modelPolicy: platform.modelPolicy };
 }
 
 function customerGatewayAgentRoster(
@@ -858,8 +880,11 @@ function projectMountPolicy(
   snapshot: UserSnapshot,
   builderGateway: boolean,
 ): Record<string, unknown> {
-  if (builderGateway || snapshot.byotActive === true) return patch;
-  return customerMountConfigPatch(current, patch, snapshot.slug, mountSafeModelRef(snapshot), process.env);
+  if (builderGateway || customerModelCredentialsActive(snapshot)) return patch;
+  return customerMountConfigPatch(current, patch, snapshot.slug, mountSafeModelRef(snapshot), {
+    gatewayEnv: process.env,
+    forceSafeAll: sharedByosubSuppressed(snapshot),
+  });
 }
 
 function mountSafeModelRef(snapshot: UserSnapshot): string {
@@ -1029,7 +1054,7 @@ async function applyAddCustomerConfigPatch(
           );
           routingActivationRequired = true;
         }
-        const agentDefaults = customerAgentDefaults(coachModelDefaults, builderGateway);
+        const agentDefaults = customerAgentDefaults(current, coachModelDefaults, builderGateway);
         const roster = customerGatewayAgentRoster(
           current,
           snapshot.slug,
@@ -1043,7 +1068,7 @@ async function applyAddCustomerConfigPatch(
           ...(ownerCommands ? { commands: ownerCommands } : {}),
           agents: {
             ownership: "explicit",
-            ...(agentDefaults ? { defaults: agentDefaults } : {}),
+            defaults: agentDefaults,
             ...customerAgentRosterPatch(
               current,
               snapshot.slug,
@@ -1072,7 +1097,8 @@ async function applyAddCustomerConfigPatch(
         ...[snapshot.slug, ...evictionSlugs].flatMap((slug) =>
           customerConfigAgentRosterReplacePaths(current, slug)
         ),
-        ...(!builderGateway && snapshot.byotActive !== true
+        ...(builderGateway ? [] : [PLATFORM_MODEL_POLICY_ALLOW_PATH]),
+        ...(!builderGateway && !customerModelCredentialsActive(snapshot)
           ? customerSecurityProjectionReplacePaths(current) : []),
       ])],
       logPrefix: `[add:${snapshot.slug}]`,

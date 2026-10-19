@@ -347,7 +347,12 @@ export interface AddCustomerResult {
 export interface RestoreCustomerRuntimeResult {
   restored: boolean;
   steps: AddCustomerStep[];
+  appliedFingerprint?: string;
+  pendingProjectClones: string[];
+  convergedState: boolean;
 }
+
+const CONVERGED_STATE_STEPS: readonly AddCustomerStep[] = ["byot-reassert", "context-files-reassert"];
 
 export type RemoveCustomerStep =
   | "config-patch-remove"
@@ -569,7 +574,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   throwIfAborted(signal, uid);
 
   markStep(CONFIG_PATCH);
-  await applyConfigPatchAndMount(adapter, snapshot, null, {
+  const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, null, {
     byosActive: byos.present,
     signal,
     withoutProjectIds: projectClones.pending,
@@ -579,7 +584,9 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   throwIfAborted(signal, uid);
 
   markStep("reassert-converged");
-  steps.push(...(await reassertConvergedState(adapter, snapshot)));
+  const reassertSteps = await reassertConvergedState(adapter, snapshot);
+  steps.push(...reassertSteps);
+  const convergedState = CONVERGED_STATE_STEPS.every((step) => reassertSteps.includes(step));
   throwIfAborted(signal, uid);
 
   markStep("community-membership");
@@ -604,7 +611,13 @@ async function restoreCustomerRuntimeFromSnapshotInner(
   adapter.log(
     `[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`,
   );
-  return { restored: true, steps };
+  return {
+    restored: true,
+    steps,
+    pendingProjectClones: projectClones.pending,
+    convergedState,
+    ...(appliedFingerprint !== undefined ? { appliedFingerprint } : {}),
+  };
 }
 
 function githubRepoSourceOf(target: ProjectCloneTarget): ProjectRepoSource | null {

@@ -98,6 +98,7 @@ import {
   cloneMissingProjects,
   removeCustomerFromGateway,
   restoreCustomerRuntimeFromSnapshot,
+  type RestoreCustomerRuntimeResult,
   type UserSnapshot,
 } from "./customer-lifecycle.js";
 import { withCustomerRemoval } from "./customer-removal-exclusion.js";
@@ -753,6 +754,7 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
             uidForSlug: async (slug) => slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
           };
           const restored = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot);
+          recordRestoredConvergence(deps, body.slug, restored);
           return { migrationId: body.migrationId, slug: body.slug, restored: restored.restored, steps: restored.steps };
         });
         entry = { identity, result };
@@ -1998,6 +2000,33 @@ async function markSharedRestoreInstalled(deps: MigrationHandlerDeps, body: Fini
     response: completedImportResponse(body, undefined, body.agentContext.archive), phase: "installed" });
 }
 
+function recordRestoredConvergence(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  restored: RestoreCustomerRuntimeResult,
+): void {
+  if (!deps.adapter.recordAppliedFingerprint) return;
+  const log = deps.log ?? provisionerLog;
+  if (!restored.convergedState) {
+    log(
+      `⚠ [migration-http] restore of ${slug} left its re-assert incomplete; no fingerprint recorded so the reconcile re-ensures it`,
+    );
+    return;
+  }
+  if (restored.appliedFingerprint === undefined) {
+    log(
+      `⚠ [migration-http] restore of ${slug} reported no applied fingerprint; the reconcile re-ensures it as content-stale`,
+    );
+    return;
+  }
+  deps.adapter.recordAppliedFingerprint(
+    slug,
+    restored.pendingProjectClones.length > 0
+      ? pendingCloneAppliedFingerprint(restored.appliedFingerprint)
+      : restored.appliedFingerprint,
+  );
+}
+
 async function activateFinishedRsyncImport(input: {
   deps: MigrationHandlerDeps;
   body: FinishRsyncImportRequestBody;
@@ -2009,7 +2038,8 @@ async function activateFinishedRsyncImport(input: {
   deps.adapter.markCustomerMigratingIn?.(body.slug);
   if (body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) {
     const snapshot = await sharedRestoreSnapshot(deps, body, false);
-    await restoreCustomerRuntimeFromSnapshot(deps.adapter, snapshot, { signal });
+    const restored = await restoreCustomerRuntimeFromSnapshot(deps.adapter, snapshot, { signal });
+    recordRestoredConvergence(deps, body.slug, restored);
     deps.adapter.onMounted?.(body.slug);
     return undefined;
   }

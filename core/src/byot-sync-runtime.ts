@@ -1440,10 +1440,16 @@ export function customerMountConfigPatch(
   mountPatch: Record<string, unknown>,
   slug: string,
   safeModelRef: string,
-  gatewayEnv?: GatewayResolutionEnv,
+  opts?: { gatewayEnv?: GatewayResolutionEnv; forceSafeAll?: boolean },
 ): Record<string, unknown> {
   const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
-  const security = customerOauthRuntimeConfigPlan(candidate, slug, safeModelRef, false, gatewayEnv).patch;
+  const security = customerOauthRuntimeConfigPlan(
+    candidate,
+    slug,
+    safeModelRef,
+    opts?.forceSafeAll === true,
+    opts?.gatewayEnv,
+  ).patch;
   const candidateAgents = recordChild(candidate, "agents");
   const securityAgents = recordChild(security, "agents");
   const projectAgent = (id: string, entry: unknown, patch: unknown) => {
@@ -1672,25 +1678,38 @@ async function materializePlatformBrokerSurfaces(slug: string): Promise<boolean>
   return result.materialized > 0 || allowlistChanged;
 }
 
+export const PLATFORM_MODEL_POLICY_ALLOW_PATH = "agents.defaults.modelPolicy.allow";
+
+export interface PlatformModelAllowlistPatch {
+  agents: {
+    defaults: {
+      models: Record<string, unknown>;
+      modelPolicy: { allow: string[] };
+    };
+  };
+}
+
+export function platformModelAllowlistPatch(current: unknown, builder: boolean): PlatformModelAllowlistPatch {
+  const existing = (current as { agents?: { defaults?: { models?: unknown } } } | null)?.agents?.defaults?.models;
+  const models: Record<string, unknown> = Object.fromEntries(
+    platformModelRefs().map((ref) => [ref, canonicalCustomerModelDefinition(ref)]),
+  );
+  for (const ref of Object.keys(isRecord(existing) ? existing : {})) {
+    if (isPlatformProviderRef(ref) && !Object.prototype.hasOwnProperty.call(models, ref)) models[ref] = null;
+  }
+  return { agents: { defaults: {
+    models,
+    modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
+  } } };
+}
+
 export async function applyPlatformModelAllowlist(
   applyConfigPatchFn: typeof applyConfigPatch = applyConfigPatch,
   builder = isBuilderGateway(),
 ): Promise<boolean> {
   const result = await applyConfigPatchFn({
-    buildPatch: (current) => {
-      const existing = (current as { agents?: { defaults?: { models?: unknown } } } | null)?.agents?.defaults?.models;
-      const models: Record<string, unknown> = Object.fromEntries(
-        platformModelRefs().map((ref) => [ref, canonicalCustomerModelDefinition(ref)]),
-      );
-      for (const ref of Object.keys(isRecord(existing) ? existing : {})) {
-        if (isPlatformProviderRef(ref) && !Object.prototype.hasOwnProperty.call(models, ref)) models[ref] = null;
-      }
-      return { agents: { defaults: {
-        models,
-        modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
-      } } };
-    },
-    buildReplacePaths: () => ["agents.defaults.modelPolicy.allow"],
+    buildPatch: (current) => platformModelAllowlistPatch(current, builder),
+    buildReplacePaths: () => [PLATFORM_MODEL_POLICY_ALLOW_PATH],
     skipIfAlreadyApplied: true,
     logPrefix: "[byot-sync:platform-models]",
   }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
@@ -1976,7 +1995,7 @@ async function syncSharedBrokerByotState(
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true },
   );
 
-  const catalog = await materializePlatformCatalog(slug, actions);
+  const catalogChanged = await actions.materializePlatformBrokerSurfaces(slug);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(
     restore,
     actions,
@@ -1986,18 +2005,12 @@ async function syncSharedBrokerByotState(
   const patched = restore.present && desired.coachModelInput
     ? await actions.applyCoachModelPatch(desired.coachModelInput)
     : false;
-  const restartRequested = await requestRestartIfRequired(
-    runtimePatched,
-    actions,
-    undefined,
-    catalog.restartPending,
-  );
+  const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
 
   if (
     (changed ||
       restore.restored ||
-      catalog.changed ||
-      catalog.restartPending ||
+      catalogChanged ||
       runtimePatched.patched ||
       patched ||
       opts?.customerOauthRuntimeChanged) &&

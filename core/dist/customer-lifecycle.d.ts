@@ -246,6 +246,9 @@ export interface AddCustomerResult {
 export interface RestoreCustomerRuntimeResult {
     restored: boolean;
     steps: AddCustomerStep[];
+    appliedFingerprint?: string;
+    pendingProjectClones: string[];
+    convergedState: boolean;
 }
 export type RemoveCustomerStep = "config-patch-remove" | "delete-dir" | "release-gitea-key";
 export interface RemoveCustomerResult {

@@ -1067,9 +1067,9 @@ function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAl
 export function customerOauthRuntimeConfigPatch(current, slug, safeModelRef, opts) {
     return customerOauthRuntimeConfigPlan(current, slug, safeModelRef, opts?.forceSafeAll === true, opts?.gatewayEnv).patch;
 }
-export function customerMountConfigPatch(current, mountPatch, slug, safeModelRef, gatewayEnv) {
+export function customerMountConfigPatch(current, mountPatch, slug, safeModelRef, opts) {
     const candidate = mergeConfigPatches(isRecord(current) ? current : {}, mountPatch);
-    const security = customerOauthRuntimeConfigPlan(candidate, slug, safeModelRef, false, gatewayEnv).patch;
+    const security = customerOauthRuntimeConfigPlan(candidate, slug, safeModelRef, opts?.forceSafeAll === true, opts?.gatewayEnv).patch;
     const candidateAgents = recordChild(candidate, "agents");
     const securityAgents = recordChild(security, "agents");
     const projectAgent = (id, entry, patch) => {
@@ -1240,21 +1240,23 @@ async function materializePlatformBrokerSurfaces(slug) {
     const allowlistChanged = await applyPlatformModelAllowlist();
     return result.materialized > 0 || allowlistChanged;
 }
+export const PLATFORM_MODEL_POLICY_ALLOW_PATH = "agents.defaults.modelPolicy.allow";
+export function platformModelAllowlistPatch(current, builder) {
+    const existing = current?.agents?.defaults?.models;
+    const models = Object.fromEntries(platformModelRefs().map((ref) => [ref, canonicalCustomerModelDefinition(ref)]));
+    for (const ref of Object.keys(isRecord(existing) ? existing : {})) {
+        if (isPlatformProviderRef(ref) && !Object.prototype.hasOwnProperty.call(models, ref))
+            models[ref] = null;
+    }
+    return { agents: { defaults: {
+                models,
+                modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
+            } } };
+}
 export async function applyPlatformModelAllowlist(applyConfigPatchFn = applyConfigPatch, builder = isBuilderGateway()) {
     const result = await applyConfigPatchFn({
-        buildPatch: (current) => {
-            const existing = current?.agents?.defaults?.models;
-            const models = Object.fromEntries(platformModelRefs().map((ref) => [ref, canonicalCustomerModelDefinition(ref)]));
-            for (const ref of Object.keys(isRecord(existing) ? existing : {})) {
-                if (isPlatformProviderRef(ref) && !Object.prototype.hasOwnProperty.call(models, ref))
-                    models[ref] = null;
-            }
-            return { agents: { defaults: {
-                        models,
-                        modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
-                    } } };
-        },
-        buildReplacePaths: () => ["agents.defaults.modelPolicy.allow"],
+        buildPatch: (current) => platformModelAllowlistPatch(current, builder),
+        buildReplacePaths: () => [PLATFORM_MODEL_POLICY_ALLOW_PATH],
         skipIfAlreadyApplied: true,
         logPrefix: "[byot-sync:platform-models]",
     }, { maxRetries: Number.POSITIVE_INFINITY, totalDeadlineMs: BYOT_RUNTIME_BOOT_PATIENCE_MS });
@@ -1428,16 +1430,15 @@ async function syncSharedBrokerByotState(slug, desired, actions, opts) {
     // A suppressed byosub owner may carry a pre-gate OAuth profile in the
     // store — purge it; every other shared path preserves the store.
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true });
-    const catalog = await materializePlatformCatalog(slug, actions);
+    const catalogChanged = await actions.materializePlatformBrokerSurfaces(slug);
     const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions, STANDARD_CODEX_APP_SERVER);
     const patched = restore.present && desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
         : false;
-    const restartRequested = await requestRestartIfRequired(runtimePatched, actions, undefined, catalog.restartPending);
+    const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
     if ((changed ||
         restore.restored ||
-        catalog.changed ||
-        catalog.restartPending ||
+        catalogChanged ||
         runtimePatched.patched ||
         patched ||
         opts?.customerOauthRuntimeChanged) &&

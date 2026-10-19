@@ -5,6 +5,7 @@ import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
 const CONFIG_PATCH = "config-patch";
+const CONVERGED_STATE_STEPS = ["byot-reassert", "context-files-reassert"];
 const inFlightUids = new Map();
 export class ConcurrentMountError extends Error {
     name = "ConcurrentMountError";
@@ -133,7 +134,7 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     steps.push(...byos.steps);
     throwIfAborted(signal, uid);
     markStep(CONFIG_PATCH);
-    await applyConfigPatchAndMount(adapter, snapshot, null, {
+    const appliedFingerprint = await applyConfigPatchAndMount(adapter, snapshot, null, {
         byosActive: byos.present,
         signal,
         withoutProjectIds: projectClones.pending,
@@ -142,7 +143,9 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     steps.push(CONFIG_PATCH);
     throwIfAborted(signal, uid);
     markStep("reassert-converged");
-    steps.push(...(await reassertConvergedState(adapter, snapshot)));
+    const reassertSteps = await reassertConvergedState(adapter, snapshot);
+    steps.push(...reassertSteps);
+    const convergedState = CONVERGED_STATE_STEPS.every((step) => reassertSteps.includes(step));
     throwIfAborted(signal, uid);
     markStep("community-membership");
     steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
@@ -161,7 +164,13 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
     throwIfAborted(signal, uid);
     adapter.writeMountMarker?.(slug);
     adapter.log(`[restore:${slug}] durable restore complete in ${Date.now() - startedAt}ms`);
-    return { restored: true, steps };
+    return {
+        restored: true,
+        steps,
+        pendingProjectClones: projectClones.pending,
+        convergedState,
+        ...(appliedFingerprint !== undefined ? { appliedFingerprint } : {}),
+    };
 }
 function githubRepoSourceOf(target) {
     return target.repoSource?.provider === "github" ? target.repoSource : null;

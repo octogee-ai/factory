@@ -86,7 +86,10 @@ export declare function customerOauthRuntimeConfigPatch(current: unknown, slug: 
     forceSafeAll?: boolean;
     gatewayEnv?: GatewayResolutionEnv;
 }): Record<string, unknown>;
-export declare function customerMountConfigPatch(current: unknown, mountPatch: Record<string, unknown>, slug: string, safeModelRef: string, gatewayEnv?: GatewayResolutionEnv): Record<string, unknown>;
+export declare function customerMountConfigPatch(current: unknown, mountPatch: Record<string, unknown>, slug: string, safeModelRef: string, opts?: {
+    gatewayEnv?: GatewayResolutionEnv;
+    forceSafeAll?: boolean;
+}): Record<string, unknown>;
 type PurgeCustomerOauthRuntimeDeps = {
     config?: unknown;
     openclawDir?: string;
@@ -109,6 +112,18 @@ export declare function refreshCoachRuntimeSessions(slug: string, deps?: {
     refreshed: boolean;
     resetCount: number;
 }>;
+export declare const PLATFORM_MODEL_POLICY_ALLOW_PATH = "agents.defaults.modelPolicy.allow";
+export interface PlatformModelAllowlistPatch {
+    agents: {
+        defaults: {
+            models: Record<string, unknown>;
+            modelPolicy: {
+                allow: string[];
+            };
+        };
+    };
+}
+export declare function platformModelAllowlistPatch(current: unknown, builder: boolean): PlatformModelAllowlistPatch;
 export declare function applyPlatformModelAllowlist(applyConfigPatchFn?: typeof applyConfigPatch, builder?: boolean): Promise<boolean>;
 export declare function gateCustomerByosub(desired: DesiredByotState, userData: SyncByotUserData, logFn: (m: string) => void): {
     desired: DesiredByotState;

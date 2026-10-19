@@ -141,7 +141,7 @@ describe("customer mount configuration projection", () => {
       const resolved = { config: { tokenPath: "/var/run/secrets/octogee-gateway-broker/token" } };
       const drifted = { config: { tokenPath: "/tmp/other-token" } };
       const current = { plugins: { entries: { "octogee-chat-tools": resolved, "octogee-board-tools": drifted } } };
-      const patch = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2", process.env) as any;
+      const patch = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2", { gatewayEnv: process.env }) as any;
       expect(patch.plugins.entries["octogee-chat-tools"].config).not.toHaveProperty("tokenPath");
       expect(patch.plugins.entries["octogee-board-tools"].config.tokenPath).toBe("${OCTOGEE_API_SA_TOKEN_PATH}");
       const withoutGatewayEnv = customerMountConfigPatch(current, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
@@ -2749,12 +2749,13 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     };
   };
 
-  it("platform customer restarts after materializing the model catalog on a shared gateway", async () => {
+  it("platform customer hot-reloads a materialized model catalog on a shared gateway, never a gateway restart", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: false, present: true }));
     const reloadFn = vi.fn(async () => {});
     const requestGatewayRestartFn = vi.fn(async () => true);
+    const markPendingFn = vi.fn();
 
     await syncByotForCustomer(
       { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
@@ -2764,13 +2765,35 @@ describe("shared gateway — per-customer broker-token materialization", () => {
         restoreOauthStoreForSlug: restoreOauthFn,
         triggerSecretsReload: reloadFn,
         requestGatewayRestart: requestGatewayRestartFn,
+        markPlatformCatalogRestartPending: markPendingFn,
       }),
     );
 
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
     expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
     expect(restoreOauthFn).not.toHaveBeenCalled();
-    expect(requestGatewayRestartFn).toHaveBeenCalledWith("platform-model-catalog");
+    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
+    expect(markPendingFn).not.toHaveBeenCalled();
+    expect(reloadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a pending platform-catalog restart marker on a shared gateway", async () => {
+    const reloadFn = vi.fn(async () => {});
+    const requestGatewayRestartFn = vi.fn(async () => true);
+
+    await syncByotForCustomer(
+      { byotActive: false, username: "tester-70", provisioning: { openclaw: { status: "complete" } } },
+      baseDeps({
+        applyByotState: vi.fn(() => false),
+        materializePlatformBrokerSurfaces: vi.fn(() => false),
+        restoreOauthStoreForSlug: vi.fn(async () => ({ restored: false, present: true })),
+        triggerSecretsReload: reloadFn,
+        requestGatewayRestart: requestGatewayRestartFn,
+        hasPendingPlatformCatalogRestart: () => true,
+      }),
+    );
+
+    expect(requestGatewayRestartFn).not.toHaveBeenCalled();
     expect(reloadFn).not.toHaveBeenCalled();
   });
 

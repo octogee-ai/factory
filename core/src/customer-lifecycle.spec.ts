@@ -2427,6 +2427,52 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     expect(marked).toBe(false);
   });
 
+  it("returns the applied fingerprint and pending checkouts so the caller can record convergence", async () => {
+    const state = makeState(snap({
+      status: "complete",
+      projects: [{ projectSlug: "pending", giteaRepoName: "test-pending" }],
+      projectAgents: [
+        { projectId: "pending", enabled: true, mmUserId: "pending-bot", token: "pending-pat", status: "ready" },
+      ],
+    }), emptyDisk());
+    state.configPatchFingerprint = "restored-fingerprint";
+    state.cloneProjectLands = false;
+    const adapter = makeAdapter(state);
+    adapter.projectAgentsHealthy = async (snapshot) =>
+      !snapshot.projectAgents?.some((agent) => agent.projectId === "pending");
+
+    const result = await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+
+    expect(result.appliedFingerprint).toBe("restored-fingerprint");
+    expect(result.pendingProjectClones).toEqual(["pending"]);
+  });
+
+  it("reports converged state only when every re-assert completed", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    state.configPatchFingerprint = "restored-fingerprint";
+
+    const converged = await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+    expect(converged.convergedState).toBe(true);
+
+    _resetInFlightUidsForTests();
+    state.reassertByotShouldFail = true;
+    const incomplete = await restoreCustomerRuntimeFromSnapshot(makeAdapter(state), state.user!);
+    expect(incomplete.restored).toBe(true);
+    expect(incomplete.convergedState).toBe(false);
+  });
+
+  it("stamps the mount marker once the restored runtime is verified", async () => {
+    const state = makeState(snap({ status: "complete" }), emptyDisk());
+    const marked: string[] = [];
+    const adapter = makeAdapter(state);
+    adapter.writeMountMarker = (slug) => { marked.push(slug); };
+
+    const result = await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
+
+    expect(result.restored).toBe(true);
+    expect(marked).toEqual(["test"]);
+  });
+
   it("does not call blobSyncForSlug during restore — the source rsync + the post-online loop own blob backfill", async () => {
     const state = makeState(snap({ status: "complete" }), emptyDisk());
 

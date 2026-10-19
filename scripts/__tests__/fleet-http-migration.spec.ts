@@ -3776,6 +3776,43 @@ describe("agent sqlite stores across an rsync carry", () => {
     }
   });
 
+  it("records the restored config fingerprint and mount marker so the reconcile does not re-mount the returned Builder", async () => {
+    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
+    const migrationId = "restore-records-convergence";
+    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
+    const recordAppliedFingerprint = vi.fn();
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
+      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId),
+        applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1, appliedFingerprint: "fp-restored" })),
+        recordAppliedFingerprint }, deps: { procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const result = await finishImport(deps, migrationId, "final", policy, createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex"));
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(recordAppliedFingerprint).toHaveBeenCalledExactlyOnceWith("chris", "fp-restored");
+    expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+  });
+
+  it("records no fingerprint when a restore's re-assert failed, so the reconcile re-ensures the returned Builder", async () => {
+    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
+    const migrationId = "restore-reassert-incomplete";
+    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
+    const recordAppliedFingerprint = vi.fn();
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
+      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId),
+        applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1, appliedFingerprint: "fp-restored" })),
+        reassertByotForCustomer: vi.fn(async () => { throw new Error("broker hiccup"); }),
+        recordAppliedFingerprint }, deps: { procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const result = await finishImport(deps, migrationId, "final", policy, createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex"));
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(recordAppliedFingerprint).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("re-assert incomplete"));
+  });
+
   it("restores the exact Shared history after cutover and confirms lost-ACK replay without replacing newer history", async () => {
     const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
