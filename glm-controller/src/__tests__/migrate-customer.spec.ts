@@ -229,6 +229,17 @@ const CONTEXT_ARCHIVE = { archiveId: "mig-op-1", uid: "uid-alice", slug: "alice"
   agentIds: ["octogee-alice-coach"], contextSha256: "a".repeat(64), custody: CONTEXT_CUSTODY };
 const RETAIN_CONTEXT = { mode: "retain-native" as const, archiveId: "mig-op-1", custody: CONTEXT_CUSTODY };
 
+function mockNativeReturn(checkpointRequested = false) {
+  return {
+    checkpointRequested,
+    requestCheckpoint: vi.fn(async () => {}),
+    awaitCheckpoint: vi.fn(async () => {}),
+    release: vi.fn(async () => ({ sourceStopped: false })),
+    acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}),
+    isSourceFencedOff: vi.fn(async () => false),
+  };
+}
+
 describe("retained native agent context transfer", () => {
   it.each([false, true])("selects before pre-sync and acknowledges the verified final receipt before source cleanup (durable=%s)", async durable => {
     const h = mkDeps({ durable });
@@ -487,7 +498,7 @@ describe("abandoned Shared migration recovery", () => {
 
 describe("native computer return", () => {
   function nativeReturn(h: ReturnType<typeof mkDeps>) {
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = mockNativeReturn();
     h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
     return native;
   }
@@ -520,8 +531,13 @@ describe("native computer return", () => {
       order.push("archive-finish"); expect(request.stage).toEqual(stage);
       return { migrationId: request.migrationId, slug: request.slug, imported: true, sharedAgentContext: CONTEXT_ARCHIVE };
     });
-    native.checkpoint.mockImplementation(async () => { order.push("checkpoint"); });
-    native.release.mockImplementation(async () => { order.push("release"); });
+    native.requestCheckpoint.mockImplementation(async () => { order.push("request-checkpoint"); });
+    native.awaitCheckpoint.mockImplementation(async () => {
+      await new Promise(resolve => setImmediate(resolve));
+      if (hasArchive) expect(h.client.finishAgentContextRestore).toHaveBeenCalledOnce();
+      order.push("checkpoint");
+    });
+    native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
     vi.mocked(h.deps.commitCutover).mockImplementation(async commit => {
       if (hasArchive) { expect(commit.nativeSharedContextHold).toMatchObject({ operationId: "op-1", claimedStartedAt: 4000, migrationId: "mig-op-1", stage }); targetState = "quiescing"; }
       else expect(commit.nativeSharedContextHold).toBeUndefined();
@@ -532,21 +548,67 @@ describe("native computer return", () => {
     expect(h.deps.prepareNativeAgentContextTransfer).toHaveBeenCalledWith(expect.objectContaining({ mode: "final", uid: "uid-alice", claimedStartedAt: 4000, fromGatewayId: "gw-blue", toGatewayId: "gw-green" }));
     if (hasArchive) {
       expect(h.client.transferState).toHaveBeenCalledOnce();
-      expect(order).toEqual(["archive-stage", "stage-ack", "checkpoint", "cutover", "archive-finish", "restore-ack", "release"]);
+      expect(order).toEqual(["archive-stage", "stage-ack", "request-checkpoint", "cutover", "archive-finish", "restore-ack", "checkpoint", "release"]);
     } else {
       expect(h.client.transferState).not.toHaveBeenCalled();
       expect(h.client.finishAgentContextRestore).not.toHaveBeenCalled();
-      expect(order).toEqual(["checkpoint", "cutover", "release"]);
+      expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "release"]);
     }
   });
 
-  it.each(["checkpoint", "stage-ack"])("aborts private archive staging and preserves the source when %s fails", async scenario => {
+  it("retains the source without stopping it when the checkpoint fails after cutover", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);
     const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
     h.deps.prepareNativeAgentContextTransfer = vi.fn(async () => ({ mode: "restore-shared", archive: CONTEXT_ARCHIVE }));
     h.client.transferState = vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: false, sharedAgentContextStage: stage }));
-    if (scenario === "checkpoint") native.checkpoint.mockRejectedValue(new Error("checkpoint failed"));
+    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => ({ stage, completed: false }));
+    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
+    h.ctx.withCustomerRestoreFence = vi.fn(async (_scope, work) => work());
+    vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, gatewayId: "gw-green" });
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
+      vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
+    });
+    native.awaitCheckpoint.mockRejectedValue(new Error("native computer checkpoint timeout; source retained"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("checkpoint timeout; source retained") });
+    expect(classifyOperationFailure(result.error)).toBe("transient");
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+    expect(h.client.finishAgentContextRestore).toHaveBeenCalledOnce();
+    expect(h.deps.acknowledgeNativeSharedContextRestore).toHaveBeenCalledOnce();
+    expect(native.release).not.toHaveBeenCalled();
+    expect(h.client.abortImport).not.toHaveBeenCalled();
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+    expect(h.client.verifyTarget).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
+    expect(h.steps.filter(step => step.status === "failed").map(step => step.name)).toEqual(["checkpoint-native-computer"]);
+  });
+
+  it("reports both failures when the checkpoint and the Shared restore fail together after cutover", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    const native = nativeReturn(h);
+    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
+    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => ({ stage, completed: false }));
+    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
+    h.ctx.withCustomerRestoreFence = vi.fn(async (_scope, work) => work());
+    h.client.finishAgentContextRestore = vi.fn(async () => { throw new Error("rsync import session not found"); });
+    native.awaitCheckpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+    const request = mkOp({ startedAt: 4000, cutoverCommittedAt: 3000, input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" } });
+    const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toContain("checkpoint upload failed");
+    expect(result.error).toContain("rsync import session not found");
+    expect(native.release).not.toHaveBeenCalled();
+  });
+
+  it.each(["checkpoint-claim", "stage-ack"])("aborts private archive staging and preserves the source when %s fails", async scenario => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
+    h.deps.prepareNativeAgentContextTransfer = vi.fn(async () => ({ mode: "restore-shared", archive: CONTEXT_ARCHIVE }));
+    h.client.transferState = vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: false, sharedAgentContextStage: stage }));
+    if (scenario === "checkpoint-claim") native.requestCheckpoint.mockRejectedValue(new Error("native computer has another checkpoint request"));
     else h.deps.acknowledgeNativeSharedContextStage = vi.fn(async () => { throw new Error("stage claim changed"); });
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: false, rolledBack: true });
     expect(h.client.abortImport).toHaveBeenCalledExactlyOnceWith({ migrationId: "mig-op-1", slug: "alice", gatewayId: "gw-green", mode: "final" });
@@ -568,7 +630,8 @@ describe("native computer return", () => {
     const request = mkOp({ startedAt: 4000, cutoverCommittedAt: 3000, input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" } });
     expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
     expect(h.client.transferState).not.toHaveBeenCalled();
-    expect(native.checkpoint).not.toHaveBeenCalled();
+    expect(native.requestCheckpoint).not.toHaveBeenCalled();
+    expect(native.awaitCheckpoint).toHaveBeenCalledOnce();
     expect(h.ctx.withCustomerRestoreFence).toHaveBeenCalledWith(expect.objectContaining({ resume: true }), expect.any(Function));
     if (completed) {
       expect(h.client.restoreTarget).not.toHaveBeenCalled();
@@ -613,7 +676,7 @@ describe("native computer return", () => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
       const native = nativeReturn(h);
       const order: string[] = [];
-      native.release.mockImplementation(async () => { order.push("release"); });
+      native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
       const scheduler = h.client.scheduler;
       h.client.scheduler = vi.fn(async (request) => {
         if (request.phase === "retire") {
@@ -677,7 +740,7 @@ describe("native computer return", () => {
       const h = mkDeps();
       const native = nativeReturn(h);
       let ready = false;
-      native.checkpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+      native.requestCheckpoint.mockRejectedValue(new Error("native return checkpoint claim authority changed"));
       const scheduler = h.client.scheduler;
       let resuming = false;
       h.client.scheduler = vi.fn(async (request) => {
@@ -688,7 +751,7 @@ describe("native computer return", () => {
         return scheduler(request);
       });
       vi.mocked(h.client.resume).mockImplementation(async () => { expect(ready).toBe(true); });
-      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "checkpoint upload failed" });
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "native return checkpoint claim authority changed" });
       expect(native.release).toHaveBeenCalledOnce();
       expect(h.deps.sleep).toHaveBeenCalledOnce();
       expect(h.deps.commitCutover).not.toHaveBeenCalled();
@@ -699,7 +762,7 @@ describe("native computer return", () => {
       const native = nativeReturn(h);
       native.checkpointRequested = true;
       const order: string[] = [];
-      native.release.mockImplementation(async () => { order.push("release"); });
+      native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
       const quiesce = h.client.quiesce;
       let calls = 0;
       h.client.quiesce = vi.fn(async (request) => {
@@ -719,14 +782,14 @@ describe("native computer return", () => {
       });
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ waitingForBuilderIdle: true, rolledBack: false });
       expect(order).toEqual(["release", "paused", "resumed"]);
-      expect(native.checkpoint).not.toHaveBeenCalled();
+      expect(native.requestCheckpoint).not.toHaveBeenCalled();
       expect(h.deps.commitCutover).not.toHaveBeenCalled();
     });
 
     it("preserves authorization failure classification during native rollback", async () => {
       const h = mkDeps();
       const native = nativeReturn(h);
-      native.checkpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+      native.requestCheckpoint.mockRejectedValue(new Error("native return checkpoint claim authority changed"));
       h.client.resume = vi.fn().mockRejectedValue(new MigrationRpcError("unauthorized", { status: 401 }));
       const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
       expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("unauthorized") });
@@ -738,7 +801,7 @@ describe("native computer return", () => {
     it("does not resume a rollback until the running source is reachable", async () => {
       const h = mkDeps();
       const native = nativeReturn(h);
-      native.checkpoint.mockRejectedValue(new Error("checkpoint upload failed"));
+      native.requestCheckpoint.mockRejectedValue(new Error("native return checkpoint claim authority changed"));
       let clock = 5_000;
       vi.mocked(h.deps.now).mockImplementation(() => clock);
       vi.mocked(h.deps.sleep).mockImplementation(async (ms) => { clock += ms; });
@@ -766,10 +829,32 @@ describe("native computer return", () => {
       expect(h.client.unmount).not.toHaveBeenCalled();
     });
 
-    it("does not let a stopped-source proof bypass a lost operation claim", async () => {
+    it.each([true, false])("skips the stopped computer's scheduler retire and unmount once release confirms the stop (handoff=%s)", async withHandoff => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
       const native = nativeReturn(h);
-      native.isSourceFencedOff.mockResolvedValue(true);
+      native.release.mockResolvedValue({ sourceStopped: true });
+      const request = op();
+      if (!withHandoff) delete request.schedulerHandoff;
+      expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
+      expect(vi.mocked(h.client.scheduler).mock.calls.map(([call]) => [call.gatewayId, call.phase])).toEqual(withHandoff ? [["gw-green", "activate"]] : []);
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.deps.sleep).not.toHaveBeenCalled();
+      expect(native.isSourceFencedOff).not.toHaveBeenCalled();
+      expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+      expect(native.acknowledgeCompletedSchedulerHandoff).toHaveBeenCalledOnce();
+      expect(h.steps.filter(step => step.status === "done").map(step => step.name)).toEqual([
+        "checkpoint-native-computer", ...(withHandoff ? ["activate-scheduler"] : []), "unmount-source", "verify-target",
+      ]);
+      const log = vi.mocked(h.deps.log).mock.calls.flat().join("\n");
+      expect(log).toContain("confirmed stopped");
+      if (withHandoff) expect(log).toContain(handoff.migrationId);
+    });
+
+    it.each(["compute-probe", "release"])("does not let a stopped-source proof bypass a lost operation claim: %s", async proof => {
+      const h = mkDeps({ sourceGatewayId: "gw-green" });
+      const native = nativeReturn(h);
+      if (proof === "release") native.release.mockResolvedValue({ sourceStopped: true });
+      else native.isSourceFencedOff.mockResolvedValue(true);
       h.ctx.assertActiveClaim = vi.fn().mockRejectedValue(new Error("operation re-claimed"));
       expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("operation re-claimed") });
       expect(h.client.scheduler).not.toHaveBeenCalled();
@@ -794,7 +879,8 @@ describe("native computer return", () => {
     const h = mkDeps();
     const native = nativeReturn(h);
     const order: string[] = [];
-    native.checkpoint.mockImplementation(async () => { order.push("checkpoint"); });
+    native.requestCheckpoint.mockImplementation(async () => { order.push("request-checkpoint"); });
+    native.awaitCheckpoint.mockImplementation(async () => { order.push("checkpoint"); });
     const verify = h.client.verifyTarget;
     h.client.verifyTarget = vi.fn(async (input) => {
       order.push("verify");
@@ -802,10 +888,10 @@ describe("native computer return", () => {
       return verify(input);
     });
     vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
-    native.release.mockImplementation(async () => { order.push("release"); });
+    native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
 
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
-    expect(order).toEqual(["checkpoint", "cutover", "release", "verify"]);
+    expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "release", "verify"]);
     expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
       operation: expect.objectContaining({ id: "op-1" }),
       event: expect.objectContaining({ status: "running", slug: "alice", at: expect.any(Number) }),
@@ -1089,19 +1175,20 @@ describe("native computer return", () => {
     expect(h.client.verifyTarget).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("checkpoints native state before Shared cutover (resumed=%s)", async (requested) => {
+  it.each([false, true])("requests the native checkpoint before Shared cutover and awaits it after, before release (resumed=%s)", async (requested) => {
     const { deps, ctx, client, events } = mkDeps();
-    const native = {
-      checkpointRequested: requested,
-      checkpoint: vi.fn(async () => { events.push("native-checkpoint"); }),
-      release: vi.fn(async () => {}),
-      acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false),
-    };
+    const native = mockNativeReturn(requested);
+    native.requestCheckpoint.mockImplementation(async () => { events.push("request-checkpoint"); });
+    native.awaitCheckpoint.mockImplementation(async () => { events.push("native-checkpoint"); });
+    native.release.mockImplementation(async () => { events.push("release"); return { sourceStopped: false }; });
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
     expect(result.success).toBe(true);
-    expect(native.checkpoint).toHaveBeenCalledOnce();
-    expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
+    expect(native.requestCheckpoint).toHaveBeenCalledOnce();
+    expect(native.awaitCheckpoint).toHaveBeenCalledOnce();
+    expect(events.indexOf("request-checkpoint")).toBeLessThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
+    expect(events.indexOf("native-checkpoint")).toBeGreaterThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
+    expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("release"));
     expect(client.transferState).not.toHaveBeenCalled();
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).toHaveBeenCalledTimes(requested ? 0 : 1);
@@ -1110,7 +1197,7 @@ describe("native computer return", () => {
 
   it("finishes source cleanup when a retry finds the native return already cut over", async () => {
     const { deps, ctx, client } = mkDeps({ sourceGatewayId: "gw-green" });
-    const native = { checkpointRequested: true, checkpoint: vi.fn(), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = mockNativeReturn(true);
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({ input: {
       uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
@@ -1119,7 +1206,7 @@ describe("native computer return", () => {
     expect(native.release).toHaveBeenCalledOnce();
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).not.toHaveBeenCalled();
-    expect(native.checkpoint).not.toHaveBeenCalled();
+    expect(native.requestCheckpoint).not.toHaveBeenCalled();
     expect(client.verifyTarget).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
   });
 
@@ -1135,7 +1222,7 @@ describe("native computer return", () => {
 
   it("rolls forward after an uncertain cutover response when Shared already owns the Builder", async () => {
     const { deps, ctx, client } = mkDeps();
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = mockNativeReturn();
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     vi.mocked(deps.commitCutover).mockImplementation(async () => {
       vi.mocked(deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
@@ -1148,17 +1235,14 @@ describe("native computer return", () => {
     expect(deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
   });
 
-  it("keeps the source assignment when the native checkpoint fails", async () => {
+  it("keeps the source assignment when the native checkpoint claim fails", async () => {
     const { deps, ctx, client } = mkDeps();
-    const native = {
-      checkpointRequested: false,
-      checkpoint: vi.fn(async () => { throw new Error("checkpoint timed out"); }),
-      release: vi.fn(async () => {}),
-      acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false),
-    };
+    const native = mockNativeReturn();
+    native.requestCheckpoint.mockRejectedValue(new Error("native computer has another checkpoint request"));
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
-    expect(result).toMatchObject({ success: false, rolledBack: true, error: "checkpoint timed out" });
+    expect(result).toMatchObject({ success: false, rolledBack: true, error: "native computer has another checkpoint request" });
+    expect(native.awaitCheckpoint).not.toHaveBeenCalled();
     expect(deps.commitCutover).not.toHaveBeenCalled();
     expect(client.unmount).not.toHaveBeenCalled();
     expect(native.release).toHaveBeenCalledOnce();
@@ -1203,7 +1287,7 @@ describe("native computer return", () => {
       ]);
       expect(vi.mocked(h.client.scheduler).mock.calls[1][0]).toMatchObject({ migrationId: handoffId, agentIds: ["octogee-alice-coach"], snapshot });
       expect(h.steps.filter((step) => step.status === "done").map((step) => step.name)).toEqual([
-        "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "checkpoint-native-computer", "cutover-firestore", "activate-scheduler", "unmount-source", "verify-target",
+        "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer", "activate-scheduler", "unmount-source", "verify-target",
       ]);
       expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");
     });
@@ -1223,7 +1307,7 @@ describe("native computer return", () => {
     it("aborts Shared's staged schedules and reopens the computer's scheduler when the checkpoint fails", async () => {
       const h = mkDeps();
       const native = nativeReturn(h);
-      native.checkpoint.mockRejectedValue(new Error("checkpoint timed out"));
+      native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim refused"));
       const order: string[] = [];
       vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase, migrationId }) => {
         order.push(`${gatewayId}:${phase}`);
@@ -1231,7 +1315,7 @@ describe("native computer return", () => {
       });
       vi.mocked(h.client.resume).mockImplementation(async () => { order.push("resume-ingress"); });
 
-      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "checkpoint timed out" });
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "checkpoint claim refused" });
       expect(order).toEqual(["gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "resume-ingress"]);
       expect(h.deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
     });
@@ -1239,7 +1323,7 @@ describe("native computer return", () => {
     it("does not report a rollback while the computer's scheduler fence is unconfirmed", async () => {
       const h = mkDeps();
       const native = nativeReturn(h);
-      native.checkpoint.mockRejectedValue(new Error("checkpoint timed out"));
+      native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim refused"));
       vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
         if (phase === "resume") throw new Error("computer unreachable");
         return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
@@ -1247,7 +1331,7 @@ describe("native computer return", () => {
 
       const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
       expect(result).toMatchObject({ success: false, rolledBack: false });
-      expect(result.error).toContain("checkpoint timed out");
+      expect(result.error).toContain("checkpoint claim refused");
       expect(result.error).toContain("computer unreachable");
       expect(h.client.resume).not.toHaveBeenCalled();
       expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
@@ -1330,7 +1414,8 @@ describe("native computer return", () => {
       ]);
       expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({ ...previous, migrationId: retried });
       expect(h.client.flushGateway).not.toHaveBeenCalled();
-      expect(native.checkpoint).toHaveBeenCalledOnce();
+      expect(native.requestCheckpoint).toHaveBeenCalledOnce();
+      expect(native.awaitCheckpoint).toHaveBeenCalledOnce();
     });
   });
 });
@@ -2333,11 +2418,11 @@ describe("waiting for active Builder work", () => {
   });
   it("defers native computer return before checkpointing or fencing an active voice call", async () => {
     const h = mkDeps();
-    const native = { checkpointRequested: false, checkpoint: vi.fn(async () => {}), release: vi.fn(async () => {}), acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}), isSourceFencedOff: vi.fn(async () => false) };
+    const native = mockNativeReturn();
     h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
     vi.mocked(h.client.quiesce).mockRejectedValue(new MigrationDrainPendingError("voice call active"));
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ waitingForBuilderIdle: true, rolledBack: false });
-    expect(native.checkpoint).not.toHaveBeenCalled();
+    expect(native.requestCheckpoint).not.toHaveBeenCalled();
     expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
     expect(h.client.resume).toHaveBeenCalled();
     expect(h.client.unmount).not.toHaveBeenCalled();

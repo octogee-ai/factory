@@ -16,10 +16,15 @@ export interface NativeComputerReturnInput {
   claimedStartedAt: number | null;
 }
 
+export interface NativeReturnRelease {
+  sourceStopped: boolean;
+}
+
 export interface NativeComputerReturn {
   checkpointRequested: boolean;
-  checkpoint: () => Promise<void>;
-  release: () => Promise<void>;
+  requestCheckpoint: () => Promise<void>;
+  awaitCheckpoint: () => Promise<void>;
+  release: () => Promise<NativeReturnRelease>;
   acknowledgeCompletedSchedulerHandoff: () => Promise<void>;
   isSourceFencedOff: () => Promise<boolean>;
 }
@@ -205,7 +210,7 @@ async function acknowledgeCompletedSchedulerHandoff(deps: NativeReturnDeps, inpu
   });
 }
 
-async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<void> {
+async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<NativeReturnRelease> {
   let fence: ReturnType<typeof nativeReturnSourceIdentity> = null;
   const committed = await pauseCommittedSource(deps, input);
   if (committed) {
@@ -219,6 +224,7 @@ async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComp
     if (!await pauseCommittedSource(deps, input)) throw new Error("native return source pause authority changed");
   }
   await releaseCheckpoint(deps, input, requestedAt, fence);
+  return { sourceStopped: fence !== null };
 }
 
 async function stoppedSourceIdentity(deps: NativeReturnDeps, input: NativeComputerReturnInput) {
@@ -246,8 +252,11 @@ export async function prepareNativeComputerReturn(
   let requestedAt = returnRequest(source.data(), input.operationId);
   return {
     checkpointRequested: returnRequest(source.data(), input.operationId) !== null,
-    checkpoint: async () => {
+    requestCheckpoint: async () => {
       requestedAt = await claimCheckpoint(deps, input);
+    },
+    awaitCheckpoint: async () => {
+      if (requestedAt === null) return;
       const result = await awaitHomeCheckpoint({
         ...deps,
         readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(deps.db, gatewayId),

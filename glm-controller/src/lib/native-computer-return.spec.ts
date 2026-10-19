@@ -93,12 +93,15 @@ describe("native computer return checkpoint", () => {
     });
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
     expect(native.checkpointRequested).toBe(false);
-    await native.checkpoint();
-    expect(h.deps.wait).toHaveBeenCalledOnce();
+    await native.requestCheckpoint();
     expect(h.source.vmHome).toMatchObject({ checkpointRequestedAt: 1000, parkRequestedAt: 1000, returnOperationId: "return-1" });
+    expect(h.deps.wait).not.toHaveBeenCalled();
+    await native.awaitCheckpoint();
+    expect(h.deps.wait).toHaveBeenCalledOnce();
     const resumed = (await prepareNativeComputerReturn(h.deps, input))!;
     expect(resumed.checkpointRequested).toBe(true);
-    await resumed.checkpoint();
+    await resumed.requestCheckpoint();
+    await resumed.awaitCheckpoint();
     expect(h.update).toHaveBeenCalledOnce();
   });
 
@@ -106,21 +109,23 @@ describe("native computer return checkpoint", () => {
     const h = harness();
     h.source.vmHome.lastCheckpoint = { completedAt: 2000 };
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
-    await expect(native.checkpoint()).rejects.toThrow(/timeout/);
-    await native.release();
+    await native.requestCheckpoint();
+    await expect(native.awaitCheckpoint()).rejects.toThrow(/timeout/);
+    await expect(native.release()).resolves.toEqual({ sourceStopped: false });
     expect(h.source.vmHome.checkpointRequestedAt).toBeUndefined();
     expect(h.source.vmHome.parkRequestedAt).toBeUndefined();
     expect(h.source.vmHome.lastCheckpoint).toEqual({ completedAt: 2000 });
     h.source.vmHome = { returnOperationId: "other", checkpointRequestedAt: 3000 };
     await native.release();
     expect(h.source.vmHome.checkpointRequestedAt).toBe(3000);
-    await expect(native.checkpoint()).rejects.toThrow(/another checkpoint/);
+    await expect(native.requestCheckpoint()).rejects.toThrow(/another checkpoint/);
   });
 
   it.each(["takeover", "terminal", "missing", "scope", "hold"])("retains a pre-cutover hold after %s changes", async change => {
     const h = harness();
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
-    await expect(native.checkpoint()).rejects.toThrow(/timeout/);
+    await native.requestCheckpoint();
+    await expect(native.awaitCheckpoint()).rejects.toThrow(/timeout/);
     if (change === "takeover") h.docs["glmOperations/return-1"].startedAt = 901;
     if (change === "terminal") h.docs["glmOperations/return-1"].status = "failed";
     if (change === "missing") delete h.docs["glmOperations/return-1"];
@@ -134,7 +139,7 @@ describe("native computer return checkpoint", () => {
     const h = harness();
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
     h.docs["glmOperations/return-1"].startedAt = 901;
-    await expect(native.checkpoint()).rejects.toThrow(/authority changed/);
+    await expect(native.requestCheckpoint()).rejects.toThrow(/authority changed/);
     expect(h.update).not.toHaveBeenCalled();
   });
 
@@ -159,7 +164,9 @@ describe("native computer return checkpoint", () => {
       return { status: "STOPPING", instanceId: "computer-id" };
     }).mockResolvedValue({ status: "TERMINATED", instanceId: "computer-id" });
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
-    await native.release();
+    await expect(native.awaitCheckpoint()).resolves.toBeUndefined();
+    expect(h.deps.wait).not.toHaveBeenCalled();
+    await expect(native.release()).resolves.toEqual({ sourceStopped: true });
     expect(h.root.desiredStatus).toBe("paused");
     expect(h.deps.wait).toHaveBeenCalledOnce();
     expect(h.source.vmHome.checkpointRequestedAt).toBeUndefined();
@@ -236,7 +243,7 @@ describe("native computer return checkpoint", () => {
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
     if (change === "owner") h.root.ownerUid = "bob";
     else h.user.provisioning.openclaw.gatewayId = "elsewhere";
-    await expect(native.checkpoint()).rejects.toThrow(/changed/);
+    await expect(native.requestCheckpoint()).rejects.toThrow(/changed/);
     expect(h.update).not.toHaveBeenCalled();
   });
 });
