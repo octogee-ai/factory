@@ -18,6 +18,14 @@ const emulatorDirectories: Partial<Record<JobKey, string>> = {
   [JOBS.octogeeApiEmulator]: "octogee-api",
 };
 
+export const NODE_MINIMUMS: Record<number, string> = { 22: "22.0.0", 24: "24.12.0" };
+
+export function nodeVersionCheck(nodeVersion: number): string {
+  const minimum = NODE_MINIMUMS[nodeVersion];
+  if (!minimum) throw new Error(`No Node ${nodeVersion} toolchain is declared for CI`);
+  return `node -e 'const [major, minor] = process.versions.node.split(".").map(Number); const [, wantMinor] = "${minimum}".split(".").map(Number); if (major !== ${nodeVersion} || minor < wantMinor) throw new Error("CI requires Node >=${minimum} <${nodeVersion + 1} (found " + process.versions.node + "); set CI_NODE_${nodeVersion}_BIN or use ci:docker")'`;
+}
+
 export const CHECK_LANES = ["units-1", "units-2", "units-3", "emulators", "quality"] as const;
 const unitNames: readonly string[] = [...UNIT_PACKAGES.map(pkg => pkg.name), JOBS.desktopPackage];
 
@@ -68,8 +76,8 @@ function testJob(name: JobKey): CheckJob {
   };
   const directory = emulatorDirectories[name];
   if (directory) return { name, directory, nodeVersion: 22, installs: installsFor(directory), commands: ["npm run test:emulator"] };
-  if (name === JOBS.app) return { name, directory: "app", nodeVersion: 22, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
-  if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: 22, installs: ["firestore-rules-tests"], commands: ["npm test"] };
+  if (name === JOBS.app) return { name, directory: "app", nodeVersion: 24, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
+  if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: 24, installs: ["firestore-rules-tests"], commands: ["npm test"] };
   if (name === JOBS.desktopPackage) return {
     name, directory: "desktop", nodeVersion: 22, installs: ["desktop"],
     commands: ["npm run build", "CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --linux --publish never", "bash ../scripts/ci/verify-linux-package.sh"],

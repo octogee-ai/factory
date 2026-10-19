@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkPlan, executeChecks, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
+import { checkPlan, executeChecks, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const args = process.argv.slice(2);
@@ -27,7 +27,7 @@ if (args.includes("--plan")) {
     const path = existsSync(nodeBin) ? `${nodeBin}${delimiter}${process.env.PATH}` : process.env.PATH;
     const env = { ...process.env, PATH: path, CI: "true", CI_BASE_SHA: base, CI_HEAD_SHA: head, CI_REPO_ROOT: root, CI_INCLUDE_WORKING_TREE: String(!value("head")) };
     const run = (command: string, directory = root) => execFileSync("/bin/bash", ["-euc", command], { cwd: directory, env, stdio: "inherit" });
-    run(`node -e 'if (Number(process.versions.node.split(".")[0]) !== ${job.nodeVersion}) throw new Error("CI requires Node ${job.nodeVersion}; set CI_NODE_${job.nodeVersion}_BIN or use ci:docker")'`);
+    run(nodeVersionCheck(job.nodeVersion));
     if (job.matchGatewayImageNpm) {
       const npmVersion = readFileSync(resolve(root, "infra/gateway/Dockerfile.base"), "utf8").match(/^ARG NPM_VERSION=([\d.]+)$/m)?.[1];
       if (!npmVersion) throw new Error("Gateway npm version is missing");
