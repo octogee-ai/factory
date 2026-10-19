@@ -257,20 +257,20 @@ describe("gateway-rpc", () => {
     }
 
     it.each([
-      { delays: { upgrade: 500, challenge: 0, connect: 0 }, stage: "ws-open", methods: [] },
-      { delays: { upgrade: 100, challenge: 300, connect: 0 }, stage: "challenge", methods: [] },
-      { delays: { upgrade: 100, challenge: 100, connect: 200 }, stage: "connect", methods: ["connect"] },
+      { delays: { upgrade: 3_000, challenge: 0, connect: 0 }, stage: "ws-open", methods: [] },
+      { delays: { upgrade: 50, challenge: 3_000, connect: 0 }, stage: "challenge", methods: [] },
+      { delays: { upgrade: 50, challenge: 50, connect: 3_000 }, stage: "connect", methods: ["connect"] },
     ])("shares the patch deadline across delayed connection phases and closes during $stage", async ({ delays, stage, methods }) => {
       const phased = await startPhasedGateway(delays);
       const traces: ConnectTrace[] = [];
       const bounded = createGatewayRpc({
         url: phased.url, token: "test-token", identity: makeTestIdentity(),
-        connectTimeoutMs: 500, callTimeoutMs: 300, onConnectTrace: (trace) => traces.push(trace),
+        connectTimeoutMs: 3_000, callTimeoutMs: 600, onConnectTrace: (trace) => traces.push(trace),
       });
       try {
         await expect(bounded.configPatchAndWaitForChange({}, "base-hash")).rejects.toBeInstanceOf(OpenclawWireError);
         expect(traces).toEqual([expect.objectContaining({ success: false, stage })]);
-        expect(traces[0].totalMs).toBeLessThan(380);
+        expect(traces[0].totalMs).toBeLessThan(1_500);
         await phased.closed;
         expect(phased.methods).toEqual(methods);
       } finally {

@@ -2365,6 +2365,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         const frame = JSON.parse(data.toString()) as Record<string, unknown>;
         upstreamFrames.push(frame);
         if (frame.method === "connect") {
+          syncOrder.push("upstream-connect");
           ws.send(JSON.stringify({
             type: "res",
             id: frame.id,
@@ -2474,7 +2475,10 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         }
       });
     });
-    expect(syncOrder).toEqual(["browser-connect", "sync:uid-owner", "channel-sync"]);
+    const connectSteps = ["browser-connect", "sync:uid-owner", "channel-sync", "upstream-connect"];
+    const reached = syncOrder.reduce((next, step) => step === connectSteps[next] ? next + 1 : next, 0);
+    expect(reached).toBe(connectSteps.length);
+    expect(syncOrder.filter((step) => step !== "channel-sync")).toEqual(["browser-connect", "sync:uid-owner", "upstream-connect"]);
     expect(proxyIdentity.syncChannelMemberships).toHaveBeenCalledWith(expect.objectContaining({ uid: "uid-owner" }), { force: true });
     const clock = vi.spyOn(Date, "now");
     const now = Date.now();
