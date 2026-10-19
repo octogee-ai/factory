@@ -5,7 +5,11 @@ const PLATFORM_OWNED_CONNECTION_KEYS = ["network", "interactions", "callbackBase
 function objectValue(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-export function mattermostAccountEndpointsForTarget(current, accounts, platformOwned) {
+function resolvesPlatformBaseUrl(existing, env) {
+    const platformUrl = env.MM_URL;
+    return typeof platformUrl === "string" && platformUrl !== "" && existing?.baseUrl === platformUrl;
+}
+export function mattermostAccountEndpointsForTarget(current, accounts, platformOwned, env = process.env) {
     const channels = objectValue(objectValue(current)?.channels);
     const mattermost = objectValue(channels?.mattermost);
     const currentAccounts = objectValue(mattermost?.accounts);
@@ -13,13 +17,17 @@ export function mattermostAccountEndpointsForTarget(current, accounts, platformO
         const account = objectValue(rawAccount);
         if (!account)
             return [accountId, rawAccount];
+        const existing = objectValue(currentAccounts?.[accountId]);
         let baseUrl = PLATFORM_MATTERMOST_BASE_URL;
-        if (!platformOwned) {
-            const existing = objectValue(currentAccounts?.[accountId]);
-            if (existing && Object.prototype.hasOwnProperty.call(existing, "baseUrl"))
+        if (platformOwned) {
+            if (resolvesPlatformBaseUrl(existing, env))
                 baseUrl = existing.baseUrl;
-            else if (Object.prototype.hasOwnProperty.call(account, "baseUrl"))
-                baseUrl = account.baseUrl;
+        }
+        else if (existing && Object.prototype.hasOwnProperty.call(existing, "baseUrl")) {
+            baseUrl = existing.baseUrl;
+        }
+        else if (Object.prototype.hasOwnProperty.call(account, "baseUrl")) {
+            baseUrl = account.baseUrl;
         }
         return [accountId, { ...account, baseUrl }];
     }));

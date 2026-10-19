@@ -13,10 +13,18 @@ function objectValue(value: unknown): JsonObject | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
 }
 
+export type PlatformResolutionEnv = Readonly<Record<string, string | undefined>>;
+
+function resolvesPlatformBaseUrl(existing: JsonObject | null, env: PlatformResolutionEnv): boolean {
+  const platformUrl = env.MM_URL;
+  return typeof platformUrl === "string" && platformUrl !== "" && existing?.baseUrl === platformUrl;
+}
+
 export function mattermostAccountEndpointsForTarget(
   current: unknown,
   accounts: JsonObject,
   platformOwned: boolean,
+  env: PlatformResolutionEnv = process.env,
 ): JsonObject {
   const channels = objectValue(objectValue(current)?.channels);
   const mattermost = objectValue(channels?.mattermost);
@@ -24,11 +32,14 @@ export function mattermostAccountEndpointsForTarget(
   return Object.fromEntries(Object.entries(accounts).map(([accountId, rawAccount]) => {
     const account = objectValue(rawAccount);
     if (!account) return [accountId, rawAccount];
+    const existing = objectValue(currentAccounts?.[accountId]);
     let baseUrl: unknown = PLATFORM_MATTERMOST_BASE_URL;
-    if (!platformOwned) {
-      const existing = objectValue(currentAccounts?.[accountId]);
-      if (existing && Object.prototype.hasOwnProperty.call(existing, "baseUrl")) baseUrl = existing.baseUrl;
-      else if (Object.prototype.hasOwnProperty.call(account, "baseUrl")) baseUrl = account.baseUrl;
+    if (platformOwned) {
+      if (resolvesPlatformBaseUrl(existing, env)) baseUrl = existing!.baseUrl;
+    } else if (existing && Object.prototype.hasOwnProperty.call(existing, "baseUrl")) {
+      baseUrl = existing.baseUrl;
+    } else if (Object.prototype.hasOwnProperty.call(account, "baseUrl")) {
+      baseUrl = account.baseUrl;
     }
     return [accountId, { ...account, baseUrl }];
   }));
