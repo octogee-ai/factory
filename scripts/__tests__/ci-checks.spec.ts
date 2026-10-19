@@ -1,6 +1,18 @@
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+function fakeNode(version: string): string {
+  const bin = mkdtempSync(join(tmpdir(), "fake-node-"));
+  const script = join(bin, "node");
+  writeFileSync(script, `#!/bin/bash\nexec ${process.execPath} -e 'Object.defineProperty(process.versions, "node", { value: "${version}" }); eval(process.argv[1])' "\${@:2}"\n`);
+  chmodSync(script, 0o755);
+  return `${bin}:${process.env.PATH}`;
+}
 import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
-import { CHECK_LANES, checkPlan, executeChecks, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
+import { CHECK_LANES, checkPlan, executeChecks, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
 
 describe("portable Linux PR checks", () => {
   it("runs every registered test on a global change, leaving installer construction out of default CI", () => {
@@ -19,6 +31,16 @@ describe("portable Linux PR checks", () => {
     const plan = checkPlan(["package-lock.json"], "tests");
     for (const name of ["app", "site", "firestore-rules"]) expect(plan.find(job => job.name === name)?.nodeVersion).toBe(24);
     expect(plan.find(job => job.name === "functions-emulator")?.nodeVersion).toBe(22);
+  });
+
+  it("rejects a Node 24 toolchain older than Firebase 13's 24.12 floor", () => {
+    const check = (version: string) => () => execFileSync("/bin/bash", ["-euc", nodeVersionCheck(24)], {
+      env: { ...process.env, PATH: fakeNode(version) }, stdio: "pipe",
+    });
+    expect(check("24.11.9")).toThrow(/requires Node >=24.12.0/);
+    expect(check("22.20.0")).toThrow(/requires Node >=24.12.0/);
+    expect(check("24.12.0")).not.toThrow();
+    expect(() => nodeVersionCheck(20)).toThrow("No Node 20 toolchain");
   });
 
   it("constructs installers only when explicitly requested", () => {

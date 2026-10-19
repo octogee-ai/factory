@@ -57,10 +57,10 @@ it('builds site and app with the Node 24 toolchain while Cloud Functions keeps t
   }
 });
 
-it('stops before installing any frontend package when the Node 24 toolchain is missing', async () => {
-  vi.stubEnv('FAKE_NODE_24_VERSION', '22.20.0');
+it.each(['22.20.0', '24.11.9'])('stops before installing any frontend package when the Node 24 toolchain resolves to %s', async version => {
+  vi.stubEnv('FAKE_NODE_24_VERSION', version);
   tools(() => 'sha256:existing');
-  await expect(import('../ci/frontend.mjs')).rejects.toThrow('require Node 24');
+  await expect(import('../ci/frontend.mjs')).rejects.toThrow('require Node >=24.12');
   expect(command.mock.calls.filter(([file]) => file === 'npm')).toEqual([]);
 });
 
