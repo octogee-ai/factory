@@ -56,7 +56,7 @@ export interface GatewayRestartRequestResult {
     restart: {
         ok: true;
         pid: number;
-        signal: "SIGUSR1";
+        signal: "SIGUSR2";
         coalesced: boolean;
         [extra: string]: unknown;
     };

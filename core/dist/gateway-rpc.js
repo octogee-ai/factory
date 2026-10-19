@@ -466,7 +466,7 @@ async function requestGatewayRestart(call, params) {
         restart.ok !== true ||
         !Number.isSafeInteger(restart.pid) ||
         restart.pid <= 0 ||
-        restart.signal !== "SIGUSR1" ||
+        restart.signal !== "SIGUSR2" ||
         typeof restart.coalesced !== "boolean" ||
         (result.status === "coalesced") !== restart.coalesced) {
         throw new OpenclawWireError(INVALID_RESPONSE, "gateway.restart.request returned malformed restart acknowledgement");

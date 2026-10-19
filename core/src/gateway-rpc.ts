@@ -138,7 +138,7 @@ export interface GatewayRestartRequestResult {
   restart: {
     ok: true;
     pid: number;
-    signal: "SIGUSR1";
+    signal: "SIGUSR2";
     coalesced: boolean;
     [extra: string]: unknown;
   };
@@ -874,7 +874,7 @@ async function requestGatewayRestart(
     restart.ok !== true ||
     !Number.isSafeInteger(restart.pid) ||
     restart.pid <= 0 ||
-    restart.signal !== "SIGUSR1" ||
+    restart.signal !== "SIGUSR2" ||
     typeof restart.coalesced !== "boolean" ||
     (result.status === "coalesced") !== restart.coalesced
   ) {

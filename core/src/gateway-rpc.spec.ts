@@ -654,7 +654,7 @@ describe("gateway-rpc", () => {
             restart: {
               ok: true,
               pid: 123,
-              signal: "SIGUSR1",
+              signal: "SIGUSR2",
               coalesced: false,
             },
           },
@@ -676,9 +676,27 @@ describe("gateway-rpc", () => {
         restart: {
           ok: true,
           pid: 123,
-          signal: "SIGUSR1",
+          signal: "SIGUSR2",
           coalesced: false,
         },
+      });
+    });
+
+    it("rejects a legacy SIGUSR1 restart acknowledgement", async () => {
+      server.setHandler("gateway.restart.request", () => ({
+        ok: true,
+        payload: {
+          ok: true,
+          status: "scheduled",
+          restart: { ok: true, pid: 123, signal: "SIGUSR1", coalesced: false },
+        },
+      }));
+
+      await expect(
+        client.gatewayRestartRequest({ reason: "routing", skipDeferral: true }),
+      ).rejects.toMatchObject({
+        code: "invalid-response",
+        message: expect.stringContaining("malformed restart acknowledgement"),
       });
     });
 
