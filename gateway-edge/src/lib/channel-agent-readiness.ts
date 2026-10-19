@@ -1,3 +1,6 @@
+import type { WebSocket } from "ws";
+import type { UpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-rpc.js";
+
 export interface ChannelAgentScope {
   workspaceId: string;
   project: string | null;
@@ -69,14 +72,22 @@ export function channelAgentReady(scope: ChannelAgentScope, snapshot: ReadinessS
 async function readNativeReadiness(scope: ChannelAgentScope, timeoutMs: number): Promise<ReadinessSnapshot> {
   const { openAuthenticatedUpstream } = await import("../chat-proxy/openclaw/authenticated-upstream.js");
   const { attachUpstreamRpcClient } = await import("../chat-proxy/openclaw/bridge-upstream-rpc.js");
-  const rpcTimeoutMs = Math.max(1, Math.floor(timeoutMs / 5));
-  const ws = await openAuthenticatedUpstream({
-    gatewayId: process.env.GATEWAY_ID ?? "",
-    url: process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
-    timeoutMs: rpcTimeoutMs,
-  });
-  const rpc = attachUpstreamRpcClient(ws, { timeoutMs: rpcTimeoutMs });
-  try {
+  let ws: WebSocket | undefined;
+  let rpc: UpstreamRpcClient | undefined;
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const snapshot = async (): Promise<ReadinessSnapshot> => {
+    const opened = await openAuthenticatedUpstream({
+      gatewayId: process.env.GATEWAY_ID ?? "",
+      url: process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.1:18789",
+      timeoutMs,
+    });
+    if (expired) {
+      opened.close();
+      throw new Error("Channel readiness timed out");
+    }
+    ws = opened;
+    rpc = attachUpstreamRpcClient(ws, { timeoutMs });
     const config = await rpc.call("config.get", {});
     if (!config.ok) throw new Error(`Channel routing config read failed: ${config.reason}`);
     const channels = await rpc.call("channels.status", {});
@@ -88,9 +99,21 @@ async function readNativeReadiness(scope: ChannelAgentScope, timeoutMs: number):
     const models = await rpc.call("models.authStatus", { agentId: scope.agentId });
     if (!models.ok) throw new Error(`Channel model readiness read failed: ${models.reason}`);
     return { config: config.result, channels: channels.result, models: models.result, session: session.result };
+  };
+  try {
+    return await Promise.race([
+      snapshot(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new Error("Channel readiness timed out"));
+        }, timeoutMs);
+      }),
+    ]);
   } finally {
-    rpc.dispose();
-    ws.close();
+    clearTimeout(timer);
+    rpc?.dispose();
+    ws?.close();
   }
 }
 
@@ -104,5 +127,5 @@ export function readinessFailureReason(error: unknown): ReadinessFailureReason {
 }
 
 export async function readChannelAgentReadiness(scope: ChannelAgentScope): Promise<boolean> {
-  return channelAgentReady(scope, await readNativeReadiness(scope, 6_000));
+  return channelAgentReady(scope, await readNativeReadiness(scope, 25_000));
 }

@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-const native = vi.hoisted(() => ({ open: vi.fn(), call: vi.fn(), close: vi.fn(), dispose: vi.fn() }));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const native = vi.hoisted(() => ({ open: vi.fn(), call: vi.fn(), close: vi.fn(), dispose: vi.fn(), attach: vi.fn() }));
 vi.mock("../chat-proxy/openclaw/authenticated-upstream.js", () => ({ openAuthenticatedUpstream: native.open }));
-vi.mock("../chat-proxy/openclaw/bridge-upstream-rpc.js", () => ({ attachUpstreamRpcClient: () => ({ call: native.call, dispose: native.dispose }) }));
+vi.mock("../chat-proxy/openclaw/bridge-upstream-rpc.js", () => ({ attachUpstreamRpcClient: native.attach }));
 import { channelAgentReady, readChannelAgentReadiness } from "./channel-agent-readiness.js";
 
 const scope = { workspaceId: "alice", project: null, channelId: "planning", agentId: "octogee-alice-coach", peerKind: "channel" as "group" | "channel" };
@@ -102,9 +102,11 @@ describe("channel Agent readiness", () => {
 });
 
 describe("native channel readiness snapshot", () => {
+  afterEach(() => { vi.useRealTimers(); });
   beforeEach(() => {
     vi.resetAllMocks();
     native.open.mockResolvedValue({ close: native.close });
+    native.attach.mockReturnValue({ call: native.call, dispose: native.dispose });
     const snapshot = ready();
     native.call.mockImplementation(async (method) => ({ ok: true, result:
       method === "config.get" ? snapshot.config : method === "channels.status" ? snapshot.channels : method === "sessions.describe" ? snapshot.session : snapshot.models,
@@ -119,6 +121,51 @@ describe("native channel readiness snapshot", () => {
     ]);
     expect(native.dispose).toHaveBeenCalledOnce();
     expect(native.close).toHaveBeenCalledOnce();
+  });
+  it("accepts healthy native connection and reads beyond the old per-stage allowance", async () => {
+    vi.useFakeTimers();
+    native.open.mockImplementation(({ timeoutMs }) => new Promise((resolve, reject) => {
+      const response = setTimeout(() => { clearTimeout(timeout); resolve({ close: native.close }); }, 5_651);
+      const timeout = setTimeout(() => { clearTimeout(response); reject(new Error("connect timed out")); }, timeoutMs);
+    }));
+    const success = native.call.getMockImplementation()!;
+    native.call.mockImplementation(async (method, params) => {
+      await new Promise(resolve => setTimeout(resolve, 1_700));
+      return success(method, params);
+    });
+    const checked = readChannelAgentReadiness(scope).then(value => ({ value }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(12_451);
+    expect(await checked).toEqual({ value: true });
+    expect(native.dispose).toHaveBeenCalledOnce();
+    expect(native.close).toHaveBeenCalledOnce();
+  });
+  it("bounds the entire snapshot instead of granting each stage a separate deadline", async () => {
+    vi.useFakeTimers();
+    native.open.mockImplementation(() => new Promise(resolve => {
+      setTimeout(() => resolve({ close: native.close }), 5_000);
+    }));
+    native.call.mockImplementation(() => new Promise(() => {}));
+    const checked = readChannelAgentReadiness(scope).catch(error => error);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await checked).toEqual(new Error("Channel readiness timed out"));
+    expect(native.call).toHaveBeenCalledOnce();
+    expect(native.dispose).toHaveBeenCalledOnce();
+    expect(native.close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("closes a connection completed after the snapshot deadline without starting reads", async () => {
+    vi.useFakeTimers();
+    native.open.mockImplementation(() => new Promise(resolve => {
+      setTimeout(() => resolve({ close: native.close }), 26_000);
+    }));
+    const checked = readChannelAgentReadiness(scope).catch(error => error);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await checked).toEqual(new Error("Channel readiness timed out"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(native.attach).not.toHaveBeenCalled();
+    expect(native.call).not.toHaveBeenCalled();
+    expect(native.close).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
   it("checks the private channel's live group session override", async () => {
     const success = native.call.getMockImplementation()!;
