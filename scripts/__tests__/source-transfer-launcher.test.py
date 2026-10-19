@@ -136,7 +136,7 @@ class LauncherTest(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "Linux process namespace monitoring tested in immutable image")
     def test_excess_namespace_threads_terminate_child(self):
         with tempfile.TemporaryDirectory() as scratch:
-            script = "import pathlib,os,threading,time;pathlib.Path('pid').write_text(str(os.getpid()));threading.stack_size(65536);threads=[threading.Thread(target=lambda:time.sleep(20),daemon=True) for _ in range(70)];[t.start() for t in threads];time.sleep(20)"
+            script = "import pathlib,os,threading,time;pathlib.Path('pid').write_text(str(os.getpid()));threading.stack_size(max(65536,os.sysconf('SC_THREAD_STACK_MIN')));threads=[threading.Thread(target=lambda:time.sleep(20),daemon=True) for _ in range(70)];[t.start() for t in threads];time.sleep(20)"
             env = {**os.environ, 'MALLOC_ARENA_MAX': '1'}
             def child_thread_count():
                 pidfile = pathlib.Path(scratch, 'pid')
