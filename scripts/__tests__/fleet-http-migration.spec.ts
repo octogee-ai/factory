@@ -3381,6 +3381,29 @@ describe("agent sqlite stores across an rsync carry", () => {
     await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), "{}");
   }
 
+  it.each(["pre", "final"] as const)("imports required state while omitting legacy Codex temporary helpers (%s)", async mode => {
+    const importDir = await mkTempRoot(), migrationId = `mig-codex-temporary-${mode}`;
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('required')"));
+    const home = path.join(stageDir, "agents/octogee-chris-coach/agent/codex-home");
+    const temporary = path.join(home, "tmp/arg0/codex-arg0l58nfp");
+    await fs.mkdir(temporary, { recursive: true });
+    await fs.symlink("/rsyncd-munged//usr/local/lib/node_modules/@openai/codex/bin/codex", path.join(temporary, "apply_patch"));
+    await fs.writeFile(path.join(home, "auth.json"), "durable auth");
+    await fs.writeFile(path.join(home, "session.jsonl"), "durable transcript");
+    spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
+      expect(fsSync.existsSync(path.join(home, "tmp"))).toBe(false);
+      expect(fsSync.readFileSync(path.join(home, "auth.json"), "utf8")).toBe("durable auth");
+      expect(fsSync.readFileSync(path.join(home, "session.jsonl"), "utf8")).toBe("durable transcript");
+      expect(args).toContain("--exclude=/agents/*/agent/codex-home/tmp");
+      return mkFakeChild({ exitCode: 0 });
+    });
+    const { getStatus, getBody } = await finishImport(deps, migrationId, mode);
+    expect(getStatus(), JSON.stringify(getBody())).toBe(200);
+    if (mode === "final") expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+    else await expect(fs.lstat(path.join(importDir, CARRIED_STORE))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("activates with the required OpenClaw snapshot even when Codex raw files and its backup are corrupt", async () => {
     const importDir = await mkTempRoot();
     const migrationId = "mig-codex-import-optional";

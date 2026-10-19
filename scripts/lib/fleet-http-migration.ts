@@ -20,7 +20,7 @@ import type { Request, Response, RequestHandler } from "express";
 import { findUnsafeCustomerGitMetadataEntry } from "@octogee/core/git-metadata";
 import { spawn, type ChildProcess } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { CODEX_SNAPSHOT_EXCLUDE_ARG, CODEX_STORE_EXCLUDE_ARGS, discardCodexStoreSnapshots, installCodexStoreSnapshots, isCodexDatabase, omitRawCodexDatabases, prepareCodexStoreSnapshots } from "./codex-store-snapshot.js";
+import { CODEX_SNAPSHOT_EXCLUDE_ARG, CODEX_STORE_EXCLUDE_ARGS, CODEX_TEMP_EXCLUDE_ARG, discardCodexStoreSnapshots, installCodexStoreSnapshots, isCodexDatabase, omitRawCodexDatabases, omitStagedCodexTemporaryFiles, prepareCodexStoreSnapshots } from "./codex-store-snapshot.js";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -1398,7 +1398,7 @@ async function copyStageToOpenClaw(
   }
   await runSpawnChecked(
     RSYNC_BIN,
-    [...STAGED_RSYNC_COPY_OPTIONS, ...CODEX_STORE_EXCLUDE_ARGS, CODEX_SNAPSHOT_EXCLUDE_ARG, ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
+    [...STAGED_RSYNC_COPY_OPTIONS, ...CODEX_STORE_EXCLUDE_ARGS, CODEX_SNAPSHOT_EXCLUDE_ARG, CODEX_TEMP_EXCLUDE_ARG, ...(deferAgentState ? ["--exclude=/agents/"] : []), `${trimTrailingSlash(stageDir)}/`, `${trimTrailingSlash(importDir)}/`],
     { label: "rsync import copy", timeoutMs: MIGRATION_TRANSFER_TIMEOUT_MS },
   );
   if (baselineEntries) return;
@@ -1873,6 +1873,7 @@ async function validateStagedRsyncImport(
     : undefined;
   const violation = findPathTraversalViolation(entries, slug, mode, [], configuredBuilderStatePlan);
   if (violation !== null) return violation;
+  await omitStagedCodexTemporaryFiles(session.stageDir, log);
   await assertSafeStagedSymlinks(session.stageDir, session.importDir, slug);
   const liveStores = await findStagedLiveAgentStores(session.stageDir);
   if (liveStores.length > 0) {

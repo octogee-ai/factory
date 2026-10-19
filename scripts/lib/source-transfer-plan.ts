@@ -5,7 +5,7 @@ import { isIP } from 'node:net';
 import { agentIdBelongsToSlug } from '../../shared/types/agent-models.js';
 import { isValidUsername } from '../../shared/types/identity.js';
 import { isMigrationCertificatePem } from './migration-rsync-tls.js';
-import { isCodexDatabase } from './codex-store-snapshot.js';
+import { isCodexDatabase, isCodexTemporaryDirectory } from './codex-store-snapshot.js';
 
 export const SOURCE_TRANSFER_LIMITS = { maxStores: 2, maxBytes: 256 * 1024 ** 2, maxFiles: 16384, scratchBytes: 512 * 1024 ** 2, lifetimeSeconds: 600 } as const;
 export interface TransferSource { cwd: string; path: string }
@@ -71,14 +71,15 @@ export async function admitSourceTree(root: string, slug: string, sources: Trans
  async function walk(file: string): Promise<void> {
   entries++;
   if (entries > (limits.maxFiles ?? SOURCE_TRANSFER_LIMITS.maxFiles)) throw new Error('source exceeds entry limit');
+  const relative = path.relative(canonical, file).split(path.sep).join('/');
+  if (isCodexTemporaryDirectory(relative)) return;
   const stat = await fsp.lstat(file);
   if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new Error('unsupported source file type');
   if (stat.isDirectory()) {
    for (const child of await fsp.readdir(file)) { await walk(path.join(file, child)); }
    return;
   }
-  const relative = path.relative(canonical, file).split(path.sep).join('/').replace(/-(?:wal|shm|journal)$/, '');
-  if (isCodexDatabase(relative)) return;
+  if (isCodexDatabase(relative.replace(/-(?:wal|shm|journal)$/, ''))) return;
   bytes += stat.size; files++;
   if (bytes > (limits.maxBytes ?? SOURCE_TRANSFER_LIMITS.maxBytes) || files > (limits.maxFiles ?? SOURCE_TRANSFER_LIMITS.maxFiles)) throw new Error('source exceeds transfer limits');
  }

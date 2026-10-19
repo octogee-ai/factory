@@ -49,6 +49,17 @@ it('does not charge excluded Codex database bytes to mandatory state but still r
  await fs.symlink('/tmp', path.join(home, 'state_5.sqlite'));
  await expect(admitSourceTree(state, 'alice', [{ cwd: state, path: agent }])).rejects.toThrow();
 });
+it('admits owned state without traversing excluded legacy Codex helpers and still rejects durable-state symlinks', async () => {
+ const state = await root(), agent = 'agents/octogee-alice-coach';
+ const home = path.join(state, agent, 'agent/codex-home');
+ const temporary = path.join(home, 'tmp/arg0/codex-arg0l58nfp');
+ await fs.mkdir(temporary, { recursive: true });
+ await fs.symlink('/usr/local/lib/node_modules/@openai/codex/bin/codex', path.join(temporary, 'apply_patch'));
+ await fs.writeFile(path.join(home, 'config.toml'), 'keep');
+ expect(await admitSourceTree(state, 'alice', [{ cwd: state, path: agent }], { maxBytes: 4 })).toEqual({ bytes: 4, files: 1 });
+ await fs.symlink('/tmp', path.join(home, 'auth.json'));
+ await expect(admitSourceTree(state, 'alice', [{ cwd: state, path: agent }])).rejects.toThrow('unsupported source file type');
+});
 it('plans and finishes owned state with a genuine activation manifest and optional Codex snapshots', async () => {
  const state = await root();
  const scratch = await fs.mkdtemp('/tmp/octogee-source-transfer-'); roots.push(scratch);

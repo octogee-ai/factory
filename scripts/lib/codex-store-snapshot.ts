@@ -10,6 +10,7 @@ import { assertNotHeld, matchFiles, sqliteFamily } from "./held-files.js";
 const exec = promisify(execFile);
 const SNAPSHOTS = ".octogee-codex-snapshots";
 export const CODEX_SNAPSHOT_EXCLUDE_ARG = `--exclude=/agents/*/agent/codex-home/${SNAPSHOTS}`;
+export const CODEX_TEMP_EXCLUDE_ARG = "--exclude=/agents/*/agent/codex-home/tmp";
 const BUDGET_MS = 5_000;
 const MAX_BYTES = 64 * 1024 ** 2;
 const MAX_TOTAL_BYTES = 128 * 1024 ** 2;
@@ -20,6 +21,12 @@ interface Artifact { sha256: string; size: number }
 interface Options { log?: Log; signal?: AbortSignal; timeoutMs?: number }
 
 
+
+export function isCodexTemporaryDirectory(relative: string): boolean {
+  const parts = relative.split("/");
+  return parts.length === 5 && parts[0] === "agents" && !!parts[1] &&
+    parts[2] === "agent" && parts[3] === "codex-home" && parts[4] === "tmp";
+}
 
 export const CODEX_STORE_EXCLUDE_ARGS = ["", "-wal", "-shm", "-journal"].map(
   suffix => `--exclude=/agents/*/agent/codex-home/*.sqlite${suffix}`,
@@ -140,6 +147,20 @@ async function codexHomes(root: string): Promise<string[]> {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   return homes;
+}
+
+export async function omitStagedCodexTemporaryFiles(stageDir: string, log: Log): Promise<void> {
+  for (const home of await codexHomes(stageDir)) {
+    const relative = `${home}/tmp`;
+    const temporary = path.join(stageDir, relative);
+    try { await fs.lstat(temporary); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    await fs.rm(temporary, { recursive: true, force: true });
+    log(`[migration-rsync] omitted staged Codex temporary files: ${relative}`);
+  }
 }
 
 export async function omitRawCodexDatabases(stageDir: string, log: Log): Promise<void> {

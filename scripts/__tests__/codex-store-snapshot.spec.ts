@@ -170,3 +170,21 @@ it("strips unverified received Codex families without touching required OpenClaw
   expect(await fs.readdir(path.join(f.stage, home))).toEqual([]);
   expect(await fs.readFile(required, "utf8")).toBe("required");
 });
+
+it("does not export retained Codex temporary helpers while preserving durable homes and workspace context", async () => {
+  const f = await fixture();
+  const temporary = path.join(f.source, home, "tmp/arg0/codex-arg0l58nfp");
+  await fs.mkdir(temporary, { recursive: true });
+  await fs.symlink("/usr/local/lib/node_modules/@openai/codex/bin/codex", path.join(temporary, "apply_patch"));
+  for (const name of ["auth.json", "config.toml", "session.jsonl"]) await fs.writeFile(path.join(f.source, home, name), name);
+  const context = "customers/alice/.codex/tmp/context.txt";
+  await fs.mkdir(path.dirname(path.join(f.source, context)), { recursive: true });
+  await fs.writeFile(path.join(f.source, context), "durable customer context");
+  const sources = [...f.sources, { cwd: f.source, path: "customers/alice" }];
+  const args = sourceTransferRsyncArgs(sources, "/unused", "unused").filter(arg => arg.startsWith("--exclude="));
+  execFileSync("rsync", ["-a", "--relative", ...args, ...sources.map(source => source.path), `${f.target}/`], { cwd: f.source });
+  await expect(fs.lstat(path.join(f.target, home, "tmp"))).rejects.toMatchObject({ code: "ENOENT" });
+  for (const name of ["auth.json", "config.toml", "session.jsonl"]) expect(await fs.readFile(path.join(f.target, home, name), "utf8")).toBe(name);
+  expect(await fs.readFile(path.join(f.target, context), "utf8")).toBe("durable customer context");
+  expect(await fs.readlink(path.join(temporary, "apply_patch"))).toBe("/usr/local/lib/node_modules/@openai/codex/bin/codex");
+});
