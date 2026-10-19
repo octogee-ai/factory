@@ -139,42 +139,55 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 ## Current overlay
 
-Upstream is operator-selected main
-[`1398ba9837e19da853bb6b1d6623cb6fee5421f6`](https://github.com/openclaw/openclaw/commit/1398ba9837e19da853bb6b1d6623cb6fee5421f6),
-frozen for the October 18 recut. The October 19 acceptance repair uses exact native
-source `97623938234d3c9b0050385c13dcb80233b2c75b`, fork branch
-`codex/native-worker-cleanup-and-launchers`, and preserves the merged Octogee
-companion through main `9a5ae75b0aa93dd454c2a5f9291b7aa80931a397`.
+The October 19 recut selects upstream
+`954a610f5d0fd1e5c542e7a7ed4206ad1484bb02` (2026.10.5). Its native dependency
+requires CUA 0.34.1, so this local recipe pins official source
+`0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc` and matching driver and skills
+provenance. The existing Linux discovery patch applies unchanged; native
+0.34.1 still lacks that discovery behavior. The official skill changes only
+its version; the Linux guide remains byte-identical.
+
+The root npm install explicitly approves only registry packages `@google/genai`,
+`esbuild` and `protobufjs`, plus the exact `file:/tmp/openclaw-fork.tgz` source,
+matching the selected source's `allowBuilds` decisions. Strict approval rejects
+unknown install hooks, and the image requires
+the package lifecycle marker to be cleared before its first CLI check.
+
+The exact native overlay is `7e1288187a50c0b2ae1c91a79fc22383c03988d0`,
+fork branch `codex/openclaw-954a-oct19`. It merges the selected upstream with
+the reviewed worker-cleanup overlay `97623938234d3c9b0050385c13dcb80233b2c75b`.
+Octogee dependency updates already on main remain intact. Recovery's separate
+SGID first-boot correction is not included or implicitly approved by this pin.
 
 TEST reproduced keyed agent-database cleanup disposing unrelated plugin captures,
 which broke later configuration and secret reloads. The preparation owner now
 preserves those captures during keyed cleanup while retaining terminal disposal.
-The packaged runtime also omitted ordinary Memory and Skills launchers because
-they lived under the intentionally sealed portable-worker directory. Their
-unchanged entrypoints now live under the ordinary agent runtime directory; the
-portable-worker exclusion remains intact. Both repairs have failing controls and
-focused green regressions. The existing queued-config reload correction remains.
+Upstream #177130 now owns packaged Memory and Skills workers under `dist/agents`.
+The duplicate relocation and its guard were removed; canonical source locations,
+the native runtime manifest and the portable-worker exclusion remain intact.
+Actual installed public-SDK launchers were exercised on both architectures.
+The keyed-cleanup and queued-config reload corrections remain.
 
-Package `2026.10.4` is a main snapshot, not a
+Package `2026.10.5` is a main snapshot, not a
 released tag. The operator selected independent local qualification; this is not
 a claim that the selected snapshot passed the full upstream CI matrix. No
 external OpenClaw/fork/iOS validation is dispatched.
 
-`current.json` selects `openclaw-fork-f4516e3e.tgz` and
-`openclaw-mattermost-ad6baf38.tgz`, packed sequentially from this exact clean
+`current.json` selects `openclaw-fork-29cc68fe.tgz` and
+`openclaw-mattermost-07c9e2a1.tgz`, packed sequentially from this exact clean
 build. Publication is write-once; complete hashes, not object-name prefixes,
 identify the qualified pair.
 
-Root generation `1792431201505831` and Mattermost generation
-`1792356099696504` were read back by exact generation and compared byte-for-byte
-with the qualified archives. The root was published write-once; the unchanged
-Mattermost object was verified and reused. The source branch was pushed
-and read back at the exact native commit without dispatching hosted native CI.
+Root: **114387257 bytes**, SHA256
+`29cc68fe931d47a7e9f667e18717655ad8cfd012dc9a1c6b064820262ce753e1`.
+Mattermost: **1252347 bytes**, SHA256
+`07c9e2a119adb73e6ef8f47321f5dc798a14556f8497146508c15ccb4f56d410`.
 
-Root: **132301381 bytes**, SHA256
-`f4516e3e14268d609dc77827258727494794ff7c1219bbb5c4127c99be9cb415`.
-Mattermost: **1250290 bytes**, SHA256
-`ad6baf3870c07854a1ac92419cde3925a0ad69ba10c7fcc3ff5063c153308c9a`.
+Both objects were published write-once. Exact root generation
+`1792438273576865` and Mattermost generation `1792438276629742` were read back
+and verified against complete hashes and byte-identical local archives.
+The public native branch reads back at the exact
+commit; no hosted native workflow was dispatched or started by its push.
 
 Shared-state schema **28**, agent schema **31** and protocol **4** are the
 selected upstream contracts. Canonical DDL, versions, migration ownership and
@@ -183,7 +196,17 @@ restriction or create an Octogee schema dialect.
 
 ### What was removed
 
-This recut adopts the native session-controller mutation owner, exact-store
+This cut adopts upstream's packaged worker source/output split, host-owned native
+capture custody, requester-origin admission, native queue/drain and Mattermost
+reply owners. Tenant/requester execution authority and keyed database cleanup
+remain scoped at those owners. Completed deleteFiles tombstones are not retained
+store custody; canonical admission refusal and original deletion fences remain.
+Native SQLite/cron APIs replace obsolete adapter test APIs without another
+database owner. Doctor now persists the native collaborative-steering default
+as false; it preserves explicit settings, and runtime already requires true to
+enable cross-requester steering. This is not a grant of collaborative authority.
+
+Earlier reductions adopted the native session-controller mutation owner, exact-store
 session projections, `reloadSignal`, and `pluginDrainRetry`. It drops the old
 completed-plugin deduplication branch, obsolete restart-target test API, unused
 run-handle predicate and duplicate Talk test glue. Requester/reviewer guards,
@@ -297,10 +320,10 @@ type-only UI deduplication, without disabling limits or removing coverage. This
 is not aggregate `pnpm check` or full upstream CI success. Strict Voice/Activity SDK
 gates, sequential packers and the native package-tarball checker passed. The
 independent configured source review completed at P0/P1 scope with no actionable
-findings. The reload port reproduced the late identical retry failure on the
-selected base before the fix; its full focused suite passed 371 checks, followed
-by 19 extraction-boundary checks. Approval/expiry, session/storage, requester
-authority and native UI controls also passed. Reviews are source assessments,
+findings. Approval/expiry, session/storage, requester authority, worker/package
+and native UI controls passed. The source review used the operator-approved
+independent reviewer because the CLI model route was unavailable; it is not an
+automated CLI or hosted upstream clearance. Reviews are source assessments,
 not live acceptance.
 
 Both actual Linux arm64 and amd64 full-plugin installer targets passed native
@@ -313,9 +336,11 @@ account, pre-boot, class-policy and broker-catalog writers. All four architectur
 class combinations passed installed config validation, actual writable
 post-plugin update Doctor, second validation and strict before/after comparison.
 The image was read-only, UID1000 used fresh tmpfs, and networking was disconnected.
-Defaults, policy, plugin choices and complete per-agent model catalogs stayed
-exact. Only individually checked native version, migration and timed Doctor
-bookkeeping fields changed.
+Policy, plugin choices and complete per-agent model catalogs stayed exact.
+Doctor persisted the native absent-to-false collaborative-steering default;
+negative controls reject an added true or any change to an authored setting.
+Other changes were individually checked native version, migration and timed
+Doctor bookkeeping fields. The initial comparison failure remains recorded.
 
 Already-merged Octogee writer corrections remain intact: the retired Flash Lite
 preview alias stays removed, owner group allowlists are emitted, fresh Builders
@@ -324,9 +349,10 @@ Builder plugin opt-outs remain intact. These are writer corrections, not ignored
 Doctor translations.
 
 Hosted islands and Browser resource projections regenerate from the same native
-commit. The current companion passed 281 focused tests across 29 files and app/
-gateway-edge production types; final-head CI still qualifies the committed PR.
-Previous-family results are not reused as new proof. The complete local amd64
+commit. With current main dependencies, the refreshed companion passed 256
+focused tests across 25 files plus app/gateway-edge production types. Final-head
+CI and configured reviews still qualify the committed PR. Previous-family
+results are not reused as new proof. The complete local amd64
 gateway image passed its runtime gate and offline installed-package smoke check.
 Live acceptance belongs to the resulting immutable main family.
 
@@ -352,14 +378,14 @@ through both Google's download service and official release bucket. Google's
 documented checksum for the unversioned download does not match this versioned object.
 GitHub CLI 2.102.0, Helm 4.3.0, yq 4.54.1, Terraform 1.16.5, Builder Firebase
 CLI 15.32.1, npm 12.2.0 and fd 10.5.0 stay unchanged. The native CUA driver
-builder uses the pinned Rust 1.99.0 image and the source's toolchain selector.
-The selected OpenClaw snapshot pins pnpm 12.11.1,
-Codex plugin dependency 0.162.0 and matched CUA package 0.34.0.
+builder uses main's pinned Rust 1.99.1 image and the source's toolchain selector.
+The selected OpenClaw snapshot pins pnpm 12.12.1,
+Codex plugin dependency 0.162.1 and matched CUA package 0.34.1.
 
-The base retains the existing immutable Node 26.11.1 image, which satisfies
-the selected OpenClaw engine requirement. This recut does not refresh unrelated
-CLI or operating-system pins, and October 8 image results are not fresh runtime
-qualification for the new OpenClaw/CUA pair.
+The PR preserves main's immutable Node 26.12.0 image, which satisfies the
+selected OpenClaw engine requirement. The earlier local image used Node 26.11.1
+and Rust 1.99.0; the resulting main build qualifies the current combined recipe.
+This recut does not independently refresh unrelated CLI or operating-system pins.
 Builder's duplicate `fd-find` and redundant npm dependency override remain removed.
 
 The October 5 lock audit reports three high-severity entries from one Firebase
@@ -378,7 +404,7 @@ the same image-build instruction. Reopening an inherited Docker-layer SQLite
 database changes its birth time during copy-up and trips native admission.
 Native guards and live state remain unchanged.
 
-CUA uses the matched 0.34.0 JavaScript/native package and the narrow Linux
+CUA uses the matched 0.34.1 JavaScript/native package and the narrow Linux
 desktop-discovery source patch below. The published modifier fix is adopted;
 the old modifier-only fork is no longer an input.
 No desktop OS image change is included. Environment rollout is separately gated
@@ -437,18 +463,18 @@ preservation remain removed. No replacement admin RPC is needed.
 ## Native CUA desktop-discovery preservation
 
 `Dockerfile.base` builds the Linux SDK from the official
-[CUA 0.34.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.34.0),
-exact source `b0968e1b12834e485dda68789541a3cc57664a9f`, with
+[CUA 0.34.1 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.34.1),
+exact source `0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc`, with
 `cua-desktop-discovery.patch`. The published modifier fix is already present,
 so the older modifier-only fork is not used. Rust and the other CLI/tool pins
 remain unchanged.
 
 The sparse checkout also includes `libs/cua/Cargo.toml` and
-`libs/cua/crates/cua-telemetry`, the 0.34.0 driver's existing path dependency.
-The source revision, Cargo lockfile, dependency features and test gates remain
+`libs/cua/crates/cua-telemetry`, the 0.34.1 driver's existing path dependency.
+The selected revision's Cargo lockfile, dependency features and test gates remain
 unchanged; the recipe does not fetch the rest of the CUA workspace.
 
-The 0.34.0 `GetAccessibilityTreeTool` still discovers only X11 windows. The
+The 0.34.1 `GetAccessibilityTreeTool` still discovers only X11 windows. The
 patch keeps discovery on the native Wayland/X11 dispatcher, excludes
 off-screen windows and known dead owners, remembers observed Wayland origins,
 and emits the existing canonical window record (including bounds, app name,
@@ -465,7 +491,7 @@ new source/library pair must include the Linux crate tests, both required image
 architectures, dynamic loading and the installed driver artifact check; old
 0.28.2 build results do not qualify this pair.
 
-The installer requires matching 0.34.0 installed JavaScript bindings, native
+The installer requires matching 0.34.1 installed JavaScript bindings, native
 package, plugin dependency and patch metadata, the exact official source/tag,
 and a patch digest. It first validates the original SDK against OpenClaw's
 native artifact manifest, then replaces only that architecture's SDK digest in
@@ -480,16 +506,16 @@ Wayland/visible/live/origin/canonical-record boundaries and passes matched
 artifact and desktop qualification. A version bump or modifier fix alone does
 not meet that removal condition.
 
-The small upstream discovery correction is draft [CUA #5286](https://github.com/trycua/cua/pull/5286).
+The small upstream discovery correction is proposed in [CUA #5286](https://github.com/trycua/cua/pull/5286).
 Its headless Linux tests passed; real Wayland qualification and the author's CLA
 remain separate. Its newer upstream base does not qualify or replace this pinned
-0.34.0 package/library pair. Both local architecture installers passed here.
+0.34.1 package/library pair. Both local architecture installers passed here.
 
 ## Vendored computer-use skills
 
 `infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
-0.34.0 skill pack
-([`b0968e1b`](https://github.com/trycua/cua/tree/b0968e1b12834e485dda68789541a3cc57664a9f/libs/cua-driver/rust/Skills/cua-driver))
+0.34.1 skill pack
+([`0c69d9a2`](https://github.com/trycua/cua/tree/0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc/libs/cua-driver/rust/Skills/cua-driver))
 and the `cua-omarchy` companion from Omarchy
 [PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
 `provenance.json` records each repository, commit, and the SHA-256 of every
