@@ -3,22 +3,137 @@ title: Testing
 slug: 11-testing
 order: 11
 part: Dev Workflow
-audience: [agent]
+audience: [ops, agent]
 description: Where tests live and how to choose the smallest signal that catches the changed behavior.
-updated: 2026-07-28
+updated: 2026-10-20
 ---
 
 # Testing
 
+Use the smallest suite that exercises the behavior you changed. Unit tests use
+Vitest; the site also has a real-browser Vitest project backed by Playwright.
+Ordinary contributions need no Octogee account, cloud credentials, or provider keys.
+
+## Quick start without cloud credentials
+
+Use Node 24.12+ in the 24.x line and npm for these examples. Install each package
+independently; root `npm ci` does not install the monorepo. Internal packages ship
+committed `dist/` interfaces, so consumers do not need an unpublished npm package.
+
+From the repository root:
+
 ```bash
-npm test          # package tests
-npm run ci:check -- --plan  # canonical affected-check plan
-npm run ci:docker          # same Linux checks as Cloud Build, including on Mac Studio
-npm run typecheck # tsc --noEmit per package
+npm ci --prefix shared
+npm test --prefix shared
+npm run typecheck --prefix shared
 ```
 
-Vitest is the test runner. The site also has a Vitest browser project backed by
-Playwright. Manual signed-in product checks use TEST.
+Package `engines` fields and the [CI package map](../../scripts/lib/scope/manifest.ts)
+describe runtime requirements. The [CI toolchain](../../ci/Dockerfile) supplies
+Node 22 and 24, Java 21, and Linux tools. Firebase Functions uses Node 22.
+Do not copy another contributor's `node_modules` into your checkout.
+
+## Run a focused package test
+
+Use the owning package's test script so its setup and exclusions apply:
+
+```bash
+npm ci --prefix app
+npm test --prefix app -- src/__tests__/ToolRow.spec.tsx
+npm run typecheck --prefix app
+```
+
+`npm run test:watch --prefix app` runs the app suite in watch mode. For other
+packages, inspect their `package.json`: not every package has the same scripts.
+For example, the scripts package typechecks with `cd scripts && npx tsc --noEmit`.
+
+The root `npm test` and `npm run typecheck` delegate to a selection of packages;
+they do not install dependencies and do not cover the complete CI matrix. Use
+focused checks while developing and the affected CI plan before opening a PR.
+
+## Site browser tests
+
+The site has separate Node and Chromium projects. Use Node 24.x:
+
+```bash
+npm ci --prefix shared
+npm ci --prefix site
+npm run test:unit --prefix site
+(cd site && npx playwright install chromium)
+npm run test:browser --prefix site
+npm run typecheck --prefix site
+```
+
+On a fresh Linux host, browser system libraries are also required; Playwright's
+`install --with-deps chromium` installs them and may require administrator access.
+`npm test --prefix site` runs both projects. These checks use fixtures; signed-in
+manual product checks are a separate operator task.
+
+## Run emulator tests
+
+Install Java 21 and select the package's Node version. Test scripts start and stop
+the required Firebase emulators; do not substitute real Firestore credentials.
+For the rules suite, use Node 24.x:
+
+```bash
+npm ci --prefix firestore-rules-tests
+npm test --prefix firestore-rules-tests
+```
+
+Service suites use `npm run test:emulator --prefix <package>` where that script
+exists. For example, `octogee-api` uses Node 24+ and Functions uses Node 22.
+Install dependencies in the package before running it. First use can download
+emulator binaries. Local project IDs such as `octogee-test` are fixture labels;
+the test helper requires the emulator host for emulator-backed database access.
+
+## Run the affected CI checks
+
+From the repository root:
+
+```bash
+npm ci --prefix scripts
+npm run ci:check -- --plan
+```
+
+The plan includes your branch's changes against `origin/main` plus local edits.
+It shows package installs, Node versions, and commands. Fetch current main before
+planning; an outdated base can select the wrong scope.
+
+On a Linux host with the declared toolchain installed, run `npm run ci:check`.
+Otherwise use Docker:
+
+```bash
+npm run ci:docker
+npm run ci:docker -- --lane=units-1
+```
+
+The Docker runner builds the Linux toolchain locally, includes local edits,
+and does not mount host cloud credentials. It requires Docker, network access
+for dependency/tool downloads, and enough disk and memory for the selected lane.
+On Apple Silicon it uses x86 emulation, so it is slower than a native runner.
+
+GitHub Actions runs three unit lanes, an emulator lane, and a quality lane.
+The aggregate **Required checks** succeeds only when all five pass. PR checks
+have read-only repository access and no deployment identity. Image builds,
+desktop packaging, and live TEST checks are separate operator workflows; see
+[Deploy & CI/CD](21-deploy-and-cicd.md).
+
+## Troubleshooting local runs
+
+| Symptom | Check |
+| --- | --- |
+| Missing module or executable | Install the owning package with `npm ci --prefix <package>`; root install is separate. |
+| Type errors resolving a sibling package | Install the source packages listed by the CI plan; see [package conventions](13-repo-conventions.md#internal-package-directory-dependencies). |
+| `Invalid hook call` in a component test | Keep React component tests in `app/` so they use its React installation. |
+| Emulator connection failure or missing Java | Use Java 21 and the package's emulator script; remove conflicting emulator processes/ports. |
+| Chromium executable missing | Install Chromium from `site/` with Playwright, plus Linux system libraries if needed. |
+| GNU tool or `/proc` failures on macOS | Reproduce with the Linux Docker runner; scripts exercise real Linux tools. |
+| Out-of-memory or worker exhaustion | Run a focused suite or pass `-- --maxWorkers=2` to its test script. |
+| App dev page cannot sign in | Unit tests use mocks; interactive login needs your own configured Firebase/backend services. |
+
+Never solve a local failure by adding production credentials or deleting an
+integration assertion. Report the exact command, Node version, operating system,
+and redacted error when asking for help.
 
 ## Where tests live
 
@@ -66,7 +181,7 @@ import-graph audit:
 
 ```bash
 npm run --prefix scripts audit-coverage                 # whole repo, 120d churn
-tsx scripts/audit-coverage.ts --since=90d --top=30 app  # scope to a package
+npm run --prefix scripts audit-coverage -- --since=90d --top=30 app
 ```
 
 It ranks modules by churn × size and flags only those with **no test importing
@@ -101,7 +216,7 @@ point itself.
 
 ## Live tests (`tests/live/*.live.spec.ts`) must self-clean at every depth
 
-`test-live.yml` runs these against deployed TEST (api-test.octogee.com +
+[`live-test.yml`](../../.github/workflows/live-test.yml) runs these against deployed TEST (api-test.octogee.com +
 `octogee-test` Firestore) on a cron. Any live spec that provisions real
 resources (reservations, customers, gateways) must tear them down on **every**
 depth/branch it can run, not only its deepest "activate" path — a provisioning
