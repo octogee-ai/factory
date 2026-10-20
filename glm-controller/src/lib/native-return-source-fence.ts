@@ -10,8 +10,18 @@ export function nativeReturnSourceIdentity(runtime: DocumentData | undefined, ro
     instanceName: vm.instanceName, zone: vm.zone, instanceId: vm.instanceId };
 }
 
+export type NativeReturnSourceState = "running" | "suspended" | "stopped";
+
+export async function nativeReturnSourceState(vm: Pick<GatewayVmClient, "describe">,
+  identity: { instanceName: string; zone: string; instanceId: string }): Promise<NativeReturnSourceState> {
+  const current = await vm.describe(identity.instanceName, identity.zone);
+  if (current === null) return "stopped";
+  if (current.instanceId !== identity.instanceId) return "running";
+  if (current.status === "SUSPENDED") return "suspended";
+  return ["TERMINATED", "STOPPED"].includes(current.status) ? "stopped" : "running";
+}
+
 export async function nativeReturnSourceStopped(vm: Pick<GatewayVmClient, "describe">,
   identity: NonNullable<ReturnType<typeof nativeReturnSourceIdentity>>): Promise<boolean> {
-  const current = await vm.describe(identity.instanceName, identity.zone);
-  return current === null || current.instanceId === identity.instanceId && ["TERMINATED", "STOPPED", "SUSPENDED"].includes(current.status);
+  return await nativeReturnSourceState(vm, identity) !== "running";
 }

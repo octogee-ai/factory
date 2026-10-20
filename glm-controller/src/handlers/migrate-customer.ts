@@ -20,7 +20,7 @@ import {
   type NativeAgentContextTransfer,
   type NativeSharedAgentContextStage,
 } from "@octogee/shared/types/fleet-controller";
-import type { NativeComputerReturn, NativeComputerReturnInput, NativeReturnRelease } from "../lib/native-computer-return.js";
+import type { NativeComputerReturn, NativeComputerReturnInput, NativeReturnPark, NativeSourcePark } from "../lib/native-computer-return.js";
 import type { NativeAgentContextTransferInput } from "../lib/native-agent-context-transfer.js";
 import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
 import type {
@@ -736,8 +736,9 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
   if (agentContext && agentContext.mode !== "restore-shared") throw new Error("native return requires archived Shared agent context");
   const handoff = input.nativeReturn ? await persistNativeReturnHandoff(input) : null;
   const client = await gatewayClient(deps, handoff ? [targets.fromGatewayId, targets.toGatewayId] : [targets.fromGatewayId]);
-  const step = (name: string, action: () => Promise<unknown>) =>
-    reportFreshStep(deps, ctx, name, action);
+  const step = async (name: string, action: () => Promise<unknown>): Promise<void> => {
+    await reportFreshStep(deps, ctx, name, action);
+  };
   const sourceAssignment: SourceAssignment = {
     gatewayId: targets.fromGatewayId,
     uid,
@@ -1047,33 +1048,19 @@ async function reopenSourceScheduler(
   }
 }
 
-async function activateHandedOffSchedules(
+async function activateSharedSchedules(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
-  native: NativeComputerReturn,
   handoff: SchedulerHandoffState,
-  released: NativeReturnRelease,
 ): Promise<void> {
-  const { migrationId, slug } = handoff;
-  if (released.sourceStopped) logFencedSchedulerRetirement(deps, handoff, "release confirmed the stop");
-  else {
-    try {
-      const source = await gatewayClient(deps, [handoff.fromGatewayId]);
-      await runReleasedNativeSource(deps, ctx, handoff.fromGatewayId, slug,
-        () => source.scheduler({ migrationId, slug, gatewayId: handoff.fromGatewayId, phase: "retire" }));
-    } catch (error) {
-      if (!await native.isSourceFencedOff()) throw error;
-      logFencedSchedulerRetirement(deps, handoff, errorMessage(error));
-    }
-  }
   await ctx.assertActiveClaim?.();
   const target = await gatewayClient(deps, [handoff.toGatewayId]);
-  await target.scheduler({ migrationId, slug, gatewayId: handoff.toGatewayId, phase: "activate" });
+  await target.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "activate" });
 }
 
 function logFencedSchedulerRetirement(deps: MigrateCustomerDeps, handoff: SchedulerHandoffState, cause: string): void {
   deps.log(
-    `[migrate-customer] ⚠ native return ${handoff.slug}: Compute confirmed the computer stopped before its schedules retired; ` +
+    `[migrate-customer] ⚠ native return ${handoff.slug}: the computer's schedules were not retired before it parked; ` +
     `its exported copies stay fenced under ${handoff.migrationId} on ${handoff.fromGatewayId} for automatic retirement on the next native activation: ${cause}`,
   );
 }
@@ -1113,15 +1100,16 @@ function destinationProgressContext(
   };
 }
 
-async function reportFreshStep(
+async function reportFreshStep<T>(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   name: string,
-  action: () => Promise<unknown>,
-): Promise<void> {
+  action: () => Promise<T>,
+): Promise<T> {
   await ctx.reportStep(reportedToOperationStep({ name, status: "running" }, deps.now()));
+  let result: T;
   try {
-    await action();
+    result = await action();
   } catch (error) {
     await ctx.reportStep(reportedToOperationStep(
       { name, status: error instanceof MigrationDrainPendingError ? "skipped" : "failed", error: errorMessage(error) },
@@ -1130,6 +1118,7 @@ async function reportFreshStep(
     throw error;
   }
   await ctx.reportStep(reportedToOperationStep({ name, status: "done" }, deps.now()));
+  return result;
 }
 
 // Post-cutover cleanup: the destination already owns the customer, so a source
@@ -1391,15 +1380,17 @@ async function completeNativeReturn(
       await restoreInterruptedSharedMount(deps, ctx, input, true);
       await ctx.assertCustomerRestoreSettled?.();
     }
-    const released = await native.release();
+    await reportFreshStep(deps, ctx, "release-native-writers", native.releaseWriterHold);
+    const park = await closeLiveNativeSource(deps, ctx, native, input);
+    const parked = await reportFreshStep(deps, ctx, "park-native-computer", () => native.park(park));
+    logNativePark(deps, input, parked);
     if (input.handoff) {
       const handoff = input.handoff;
-      await reportFreshStep(deps, ctx, "activate-scheduler", () => activateHandedOffSchedules(deps, ctx, native, handoff, released));
+      await reportFreshStep(deps, ctx, "activate-scheduler", () => activateSharedSchedules(deps, ctx, handoff));
     }
-    await reportFreshStep(deps, ctx, "unmount-source", () => unmountReleasedNativeSource(deps, ctx, native, input, released));
     await reportFreshStep(deps, ctx, "verify-target", () => verifyOrRestoreNativeReturnTarget(deps, ctx, input));
     await native.acknowledgeCompletedSchedulerHandoff();
-    return { steps: [], success: true, rolledBack: false };
+    return { steps: [], success: true, rolledBack: false, output: { nativeSourcePark: { ...parked } } };
   } catch (error) {
     return failure(`native return completion pending: status 503: ${errorMessage(error)}`, false);
   }
@@ -1412,28 +1403,44 @@ async function settleTogether(work: Array<Promise<void>>): Promise<void> {
   throw new Error(failures.map(errorMessage).join("; "));
 }
 
-async function unmountReleasedNativeSource(
+async function closeLiveNativeSource(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   native: NativeComputerReturn,
-  input: NativeReturnTarget,
-  released: NativeReturnRelease,
-): Promise<void> {
-  if (released.sourceStopped) {
-    deps.log(`native return ${input.slug}: source ${input.fromGatewayId} confirmed stopped by Compute at release; unmount RPC skipped`);
-  } else {
-    try {
-      const url = await deps.resolveGatewayUrl(input.fromGatewayId);
-      await runReleasedNativeSource(deps, ctx, input.fromGatewayId, input.slug,
-        () => deps.buildClient(() => url).unmount({
-          migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug,
-        }));
-    } catch (error) {
-      if (!await native.isSourceFencedOff()) throw error;
-      deps.log(`native return ${input.slug}: paused/retired source confirmed stopped by Compute; cleanup RPC skipped: ${errorMessage(error)}`);
-    }
+  input: NativeReturnTarget & { handoff: SchedulerHandoffState | null },
+): Promise<NativeSourcePark> {
+  const { handoff, slug, fromGatewayId } = input;
+  const status = await native.sourceComputerStatus();
+  if (status !== "RUNNING") {
+    const reason = `source computer is ${status ?? "absent"}`;
+    deps.log(`native return ${slug}: ${reason}; scheduler retire and unmount RPCs skipped`);
+    if (handoff) logFencedSchedulerRetirement(deps, handoff, reason);
+    return { mode: "stop", reason };
   }
-  await ctx.assertActiveClaim?.();
+  let schedulesRetired = false;
+  try {
+    const live = await gatewayClient(deps, [fromGatewayId]);
+    if (handoff) {
+      await reportFreshStep(deps, ctx, "retire-source-scheduler", () => runReleasedNativeSource(deps, ctx, fromGatewayId, slug,
+        () => live.scheduler({ migrationId: handoff.migrationId, slug, gatewayId: fromGatewayId, phase: "retire" })));
+      schedulesRetired = true;
+    }
+    await reportFreshStep(deps, ctx, "unmount-source", () => runReleasedNativeSource(deps, ctx, fromGatewayId, slug,
+      () => live.unmount({ migrationId: input.migrationId, gatewayId: fromGatewayId, slug })));
+    return { mode: "suspend" };
+  } catch (error) {
+    await ctx.assertActiveClaim?.();
+    const reason = `live source cleanup failed: ${errorMessage(error)}`;
+    deps.log(`[migrate-customer] ⚠ native return ${slug}: ${reason}; stopping ${fromGatewayId} instead of suspending it`);
+    if (handoff && !schedulesRetired) logFencedSchedulerRetirement(deps, handoff, reason);
+    return { mode: "stop", reason };
+  }
+}
+
+function logNativePark(deps: MigrateCustomerDeps, input: NativeReturnTarget, parked: NativeReturnPark): void {
+  deps.log(parked.stopReason === undefined
+    ? `native return ${input.slug}: source ${input.fromGatewayId} ${parked.parked} for reuse`
+    : `[migrate-customer] ⚠ native return ${input.slug}: source ${input.fromGatewayId} ${parked.parked} instead of suspended: ${parked.stopReason}`);
 }
 
 async function restoreNativeSharedAgentContext(

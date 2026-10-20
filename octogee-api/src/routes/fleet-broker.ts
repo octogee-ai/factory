@@ -180,7 +180,9 @@ type CreateBlobSignedUrl = (input: {
 type PruneBuilderRuntimeState = (input: {
   canonicalPath: string;
   runtimeStatePrefix: string;
+  allocationGeneration: number;
   now: number;
+  confirmAllocationCurrent: () => Promise<void>;
 }) => Promise<number>;
 
 type RenderAvatar = (bytes: Buffer) => Promise<Buffer>;
@@ -818,8 +820,24 @@ function gcsPathForBuilderRuntimeStateRoot(slug: string): string {
   return `customers/${slug}/runtime-state`;
 }
 
-function gcsPathForBuilderRuntimeState(slug: string): string {
-  return `${gcsPathForBuilderRuntimeStateRoot(slug)}/openclaw.sqlite`;
+function gcsPathForBuilderRuntimeState(scope: BuilderRuntimeStateScope): string {
+  return `${gcsPathForBuilderRuntimeStateRoot(scope.slug)}/allocations/${scope.gatewayId}-g${scope.generation}/openclaw.sqlite`;
+}
+
+const ALLOCATION_RUNTIME_STATE_PATH = /^allocations\/[^/]+-g([1-9]\d*)\/openclaw\.sqlite$/u;
+
+function allocationRuntimeStateGeneration(runtimeStatePrefix: string, gcsPath: string): number | null {
+  if (!gcsPath.startsWith(`${runtimeStatePrefix}/`)) return null;
+  const match = ALLOCATION_RUNTIME_STATE_PATH.exec(gcsPath.slice(runtimeStatePrefix.length + 1));
+  const generation = match ? Number(match[1]) : Number.NaN;
+  return Number.isSafeInteger(generation) ? generation : null;
+}
+
+export class BuilderRuntimeStateAllocationSupersededError extends Error {
+  constructor(readonly scope: BuilderRuntimeStateScope) {
+    super(`runtime-state allocation ${scope.gatewayId}-g${scope.generation} is no longer current`);
+    this.name = "BuilderRuntimeStateAllocationSupersededError";
+  }
 }
 
 function padUtcPart(value: number): string {
@@ -956,6 +974,7 @@ function expiredRecoveryRuntimeStateGeneration(input: {
 export function builderRuntimeStatePruneCandidates(input: {
   canonicalPath: string;
   runtimeStatePrefix: string;
+  allocationGeneration: number;
   liveCanonicalGeneration: string | null;
   now: number;
   generations: readonly BuilderRuntimeStateStoredGeneration[];
@@ -969,6 +988,15 @@ export function builderRuntimeStatePruneCandidates(input: {
         liveCanonicalGeneration: input.liveCanonicalGeneration,
         cutoff: input.now - BUILDER_RUNTIME_STATE_MINUTE_RETENTION_MS,
       })) candidates.push(generation);
+      continue;
+    }
+    const allocationGeneration = allocationRuntimeStateGeneration(input.runtimeStatePrefix, generation.gcsPath);
+    if (allocationGeneration !== null) {
+      if (allocationGeneration >= input.allocationGeneration) continue;
+      if (!generation.generation) {
+        throw new Error("runtime-state earlier allocation object is missing its generation identifier");
+      }
+      candidates.push(generation);
       continue;
     }
     if (expiredRecoveryRuntimeStateGeneration({
@@ -1007,6 +1035,7 @@ const defaultPruneBuilderRuntimeState: PruneBuilderRuntimeState = async (input) 
       };
     }),
   });
+  await input.confirmAllocationCurrent();
   await Promise.all(candidates.map(async (candidate) => {
     await bucket.file(candidate.gcsPath, { generation: candidate.generation }).delete({
       ifGenerationMatch: candidate.generation,
@@ -2143,11 +2172,69 @@ function configuredBuilderBootstrapRequest(
   return { slug };
 }
 
+interface BuilderRuntimeStateScope {
+  gatewayId: string;
+  podName: string | undefined;
+  leaseId: string;
+  generation: number;
+  slug: string;
+}
+
+async function readBuilderRuntimeStateScope(
+  db: Firestore,
+  input: { gatewayId: string; podName: string | undefined; slug: string },
+): Promise<BuilderRuntimeStateScope | null> {
+  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId).get();
+  const gateway = gatewaySnap.data();
+  const config = projectGatewayMutableConfigForGateway(gateway, input.gatewayId);
+  const uid = config?.ownerUid;
+  const allocation = config?.allocation;
+  if (
+    typeof uid !== "string" ||
+    !allocation ||
+    !configuredBuilderCredentialBootstrapAllowed(gateway, { ...input, uid })
+  ) return null;
+  return { ...input, leaseId: allocation.leaseId, generation: allocation.generation };
+}
+
+async function confirmBuilderRuntimeStateAllocationCurrent(
+  db: Firestore,
+  scope: BuilderRuntimeStateScope,
+): Promise<void> {
+  const current = await readBuilderRuntimeStateScope(db, scope);
+  if (current?.leaseId !== scope.leaseId || current.generation !== scope.generation) {
+    throw new BuilderRuntimeStateAllocationSupersededError(scope);
+  }
+}
+
+async function pruneBuilderRuntimeStateForScope(
+  db: Firestore,
+  prune: PruneBuilderRuntimeState,
+  scope: BuilderRuntimeStateScope,
+  now: number,
+): Promise<number | null> {
+  try {
+    return await prune({
+      canonicalPath: gcsPathForBuilderRuntimeState(scope),
+      runtimeStatePrefix: gcsPathForBuilderRuntimeStateRoot(scope.slug),
+      allocationGeneration: scope.generation,
+      now,
+      confirmAllocationCurrent: () => confirmBuilderRuntimeStateAllocationCurrent(db, scope),
+    });
+  } catch (error) {
+    if (!(error instanceof BuilderRuntimeStateAllocationSupersededError)) throw error;
+    logger.warn("[fleet-broker] runtime-state prune refused: allocation superseded", {
+      gatewayId: scope.gatewayId, slug: scope.slug, generation: scope.generation,
+    });
+    return null;
+  }
+}
+
 async function requireConfiguredBuilderRuntimeState(
   db: Firestore,
   req: Request,
   res: Response,
-): Promise<{ bound: GatewayBinding; slug: string } | null> {
+): Promise<BuilderRuntimeStateScope | null> {
   const bound = boundGateway(req, res);
   if (!bound) return null;
   const request = configuredBuilderBootstrapRequest(
@@ -2160,23 +2247,16 @@ async function requireConfiguredBuilderRuntimeState(
     return null;
   }
 
-  const gatewaySnap = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-  const gateway = gatewaySnap.data();
-  const config = projectGatewayMutableConfigForGateway(gateway, bound.gatewayId);
-  const uid = config?.ownerUid;
-  if (
-    typeof uid !== "string" ||
-    !configuredBuilderCredentialBootstrapAllowed(gateway, {
-      gatewayId: bound.gatewayId,
-      podName: bound.podName,
-      slug: request.slug,
-      uid,
-    })
-  ) {
+  const scope = await readBuilderRuntimeStateScope(db, {
+    gatewayId: bound.gatewayId,
+    podName: bound.podName,
+    slug: request.slug,
+  });
+  if (!scope) {
     res.status(403).json(FORBIDDEN);
     return null;
   }
-  return { bound, slug: request.slug };
+  return scope;
 }
 
 function openClawBootRequest(
@@ -2950,7 +3030,7 @@ function installGatewayOpsRoutes(
     if (!configured) return;
     await runBrokered(res, async () => {
       const signed = await createBlobSignedUrl({
-        gcsPath: gcsPathForBuilderRuntimeState(configured.slug),
+        gcsPath: gcsPathForBuilderRuntimeState(configured),
         action: "read",
       });
       res.json(signed);
@@ -2974,7 +3054,7 @@ function installGatewayOpsRoutes(
     await runBrokered(res, async () => {
       const snapshotAt = now();
       const live = await createBlobSignedUrl({
-        gcsPath: gcsPathForBuilderRuntimeState(configured.slug),
+        gcsPath: gcsPathForBuilderRuntimeState(configured),
         action: "write",
         contentType: BUILDER_RUNTIME_STATE_CONTENT_TYPE,
       });
@@ -2993,11 +3073,11 @@ function installGatewayOpsRoutes(
     const configured = await requireConfiguredBuilderRuntimeState(db, req, res);
     if (!configured) return;
     await runBrokered(res, async () => {
-      const deleted = await pruneBuilderRuntimeState({
-        canonicalPath: gcsPathForBuilderRuntimeState(configured.slug),
-        runtimeStatePrefix: gcsPathForBuilderRuntimeStateRoot(configured.slug),
-        now: now(),
-      });
+      const deleted = await pruneBuilderRuntimeStateForScope(db, pruneBuilderRuntimeState, configured, now());
+      if (deleted === null) {
+        res.status(409).json({ error: "runtime_state_allocation_superseded" });
+        return;
+      }
       const response: FleetBrokerBuilderRuntimeStatePruneResult = { deleted };
       res.json(response);
     });

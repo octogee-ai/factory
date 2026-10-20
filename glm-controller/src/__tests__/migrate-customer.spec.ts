@@ -12,6 +12,7 @@ import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import { buildOperationCompletionUpdate, classifyOperationFailure } from "../operation-retry";
 import { PendingCustomerRestoreError } from "../operation-context";
+import type { NativeReturnPark, NativeSourcePark } from "../lib/native-computer-return";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
 const TARGET_SYSTEM_CONFIG_COMMIT = "c".repeat(40);
@@ -234,9 +235,12 @@ function mockNativeReturn(checkpointRequested = false) {
     checkpointRequested,
     requestCheckpoint: vi.fn(async () => {}),
     awaitCheckpoint: vi.fn(async () => {}),
-    release: vi.fn(async () => ({ sourceStopped: false })),
+    release: vi.fn(async () => {}),
+    releaseWriterHold: vi.fn(async () => {}),
+    sourceComputerStatus: vi.fn(async (): Promise<string | null> => "RUNNING"),
+    park: vi.fn(async (park: NativeSourcePark): Promise<NativeReturnPark> =>
+      park.mode === "suspend" ? { parked: "suspended" } : { parked: "stopped", stopReason: park.reason }),
     acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}),
-    isSourceFencedOff: vi.fn(async () => false),
   };
 }
 
@@ -537,7 +541,7 @@ describe("native computer return", () => {
       if (hasArchive) expect(h.client.finishAgentContextRestore).toHaveBeenCalledOnce();
       order.push("checkpoint");
     });
-    native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
+    native.park.mockImplementation(async () => { order.push("park"); return { parked: "suspended" }; });
     vi.mocked(h.deps.commitCutover).mockImplementation(async commit => {
       if (hasArchive) { expect(commit.nativeSharedContextHold).toMatchObject({ operationId: "op-1", claimedStartedAt: 4000, migrationId: "mig-op-1", stage }); targetState = "quiescing"; }
       else expect(commit.nativeSharedContextHold).toBeUndefined();
@@ -548,12 +552,32 @@ describe("native computer return", () => {
     expect(h.deps.prepareNativeAgentContextTransfer).toHaveBeenCalledWith(expect.objectContaining({ mode: "final", uid: "uid-alice", claimedStartedAt: 4000, fromGatewayId: "gw-blue", toGatewayId: "gw-green" }));
     if (hasArchive) {
       expect(h.client.transferState).toHaveBeenCalledOnce();
-      expect(order).toEqual(["archive-stage", "stage-ack", "request-checkpoint", "cutover", "archive-finish", "restore-ack", "checkpoint", "release"]);
+      expect(order).toEqual(["archive-stage", "stage-ack", "request-checkpoint", "cutover", "archive-finish", "restore-ack", "checkpoint", "park"]);
     } else {
       expect(h.client.transferState).not.toHaveBeenCalled();
       expect(h.client.finishAgentContextRestore).not.toHaveBeenCalled();
-      expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "release"]);
+      expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "park"]);
     }
+  });
+
+  it("unmounts the customer on the live Builder after its writer hold is released and before suspending it", async () => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    const order: string[] = [];
+    native.awaitCheckpoint.mockImplementation(async () => { order.push("checkpoint"); });
+    native.releaseWriterHold.mockImplementation(async () => { order.push("release-writers"); });
+    vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
+      order.push(`unmount:${gatewayId}`);
+      return { migrationId: "mig-op-1", slug, unmounted: true };
+    });
+    native.park.mockImplementation(async park => { order.push(`park:${park.mode}`); return { parked: "suspended" }; });
+    const verify = h.client.verifyTarget;
+    h.client.verifyTarget = vi.fn(async request => { order.push("verify"); return verify(request); });
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true, output: { nativeSourcePark: { parked: "suspended" } } });
+    expect(order).toEqual(["checkpoint", "release-writers", "unmount:gw-blue", "park:suspend", "verify"]);
+    expect(native.sourceComputerStatus).toHaveBeenCalledOnce();
+    expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("source gw-blue suspended for reuse");
   });
 
   it("retains the source without stopping it when the checkpoint fails after cutover", async () => {
@@ -577,6 +601,8 @@ describe("native computer return", () => {
     expect(h.client.finishAgentContextRestore).toHaveBeenCalledOnce();
     expect(h.deps.acknowledgeNativeSharedContextRestore).toHaveBeenCalledOnce();
     expect(native.release).not.toHaveBeenCalled();
+    expect(native.releaseWriterHold).not.toHaveBeenCalled();
+    expect(native.park).not.toHaveBeenCalled();
     expect(h.client.abortImport).not.toHaveBeenCalled();
     expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.client.unmount).not.toHaveBeenCalled();
@@ -642,7 +668,7 @@ describe("native computer return", () => {
       expect(h.client.finishAgentContextRestore).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sharedAgentContextRecovery: { checkpoint } }));
       expect(h.deps.acknowledgeNativeSharedContextRestore).toHaveBeenCalledOnce();
     }
-    expect(native.release).toHaveBeenCalledOnce();
+    expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "suspend" });
   });
 
   it("retains the checkpoint and closed restore fence while archive finish is pending", async () => {
@@ -672,30 +698,31 @@ describe("native computer return", () => {
       new MigrationRpcError("VM containers paused", { status: 503 }),
       new MigrationRpcError("WS open failed: Unexpected server response: 503", { status: 500 }),
       new MigrationTransportError("VM containers paused"),
-    ])("waits for released containers before activating schedules or unmounting: %s", async (unavailable) => {
+    ])("waits for the thawed Builder to retire its schedules and unmount before suspending it: %s", async (unavailable) => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
       const native = nativeReturn(h);
       const order: string[] = [];
-      native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
+      native.releaseWriterHold.mockImplementation(async () => { order.push("release-writers"); });
+      native.park.mockImplementation(async () => { order.push("park"); return { parked: "suspended" }; });
+      const unmount = h.client.unmount;
+      h.client.unmount = vi.fn(async (request) => { order.push(`unmount:${request.gatewayId}`); return unmount(request); });
       const scheduler = h.client.scheduler;
       h.client.scheduler = vi.fn(async (request) => {
         if (request.phase === "retire") {
-          if (order.at(-1) === "release") {
-            expect(h.client.unmount).not.toHaveBeenCalled();
+          if (order.at(-1) === "release-writers") {
             order.push("paused");
             throw unavailable;
           }
           order.push("retired");
         } else {
-          expect(order.at(-1)).toBe("retired");
           order.push("activated");
         }
         return scheduler(request);
       });
       expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
-      expect(order).toEqual(["release", "paused", "retired", "activated"]);
+      expect(order).toEqual(["release-writers", "paused", "retired", "unmount:gw-blue", "park", "activated"]);
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "suspend" });
       expect(h.deps.sleep).toHaveBeenCalledOnce();
-      expect(h.client.unmount).toHaveBeenCalledOnce();
     });
 
     it("does not require a new endpoint on an older native source", async () => {
@@ -708,20 +735,26 @@ describe("native computer return", () => {
       expect(h.client.unmount).toHaveBeenCalledOnce();
     });
 
-    it("leaves the committed return pending if the VM does not resume before the deadline", async () => {
+    it("stops instead of suspending a source whose thawed Builder never answers the retire", async () => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
-      nativeReturn(h);
+      const native = nativeReturn(h);
       let clock = 5_000;
       vi.mocked(h.deps.now).mockImplementation(() => clock);
       vi.mocked(h.deps.sleep).mockImplementation(async (ms) => { clock += ms; });
-      vi.mocked(h.client.scheduler).mockRejectedValue(new MigrationRpcError("VM paused", { status: 503 }));
-      const result = await createMigrateCustomerHandler(h.deps)(op(), h.ctx);
-      expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("did not resume") });
-      expect(classifyOperationFailure(result.error)).toBe("transient");
+      const scheduler = h.client.scheduler;
+      h.client.scheduler = vi.fn(async (request) => {
+        if (request.phase === "retire") throw new MigrationRpcError("VM paused", { status: 503 });
+        expect(native.park).toHaveBeenCalledOnce();
+        return scheduler(request);
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
       expect(clock).toBe(65_000);
-      expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("activate");
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: expect.stringContaining("did not resume") });
+      expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase).at(-1)).toBe("activate");
       expect(h.client.unmount).not.toHaveBeenCalled();
-      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+      const log = vi.mocked(h.deps.log).mock.calls.flat().join("\n");
+      expect(log).toContain(`stay fenced under ${handoff.migrationId}`);
+      expect(log).toContain("stopped instead of suspended");
     });
 
     it("waits for released source cleanup when no scheduler handoff was retained", async () => {
@@ -762,7 +795,7 @@ describe("native computer return", () => {
       const native = nativeReturn(h);
       native.checkpointRequested = true;
       const order: string[] = [];
-      native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
+      native.release.mockImplementation(async () => { order.push("release"); });
       const quiesce = h.client.quiesce;
       let calls = 0;
       h.client.quiesce = vi.fn(async (request) => {
@@ -829,49 +862,57 @@ describe("native computer return", () => {
       expect(h.client.unmount).not.toHaveBeenCalled();
     });
 
-    it.each([true, false])("skips the stopped computer's scheduler retire and unmount once release confirms the stop (handoff=%s)", async withHandoff => {
+    it.each([
+      ["TERMINATED", true], ["STOPPED", false], [null, true], ["SUSPENDED", false],
+    ] as const)("skips the RPCs and stops a source computer Compute reports %s (handoff=%s)", async (status, withHandoff) => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
       const native = nativeReturn(h);
-      native.release.mockResolvedValue({ sourceStopped: true });
+      native.sourceComputerStatus.mockResolvedValue(status);
       const request = op();
       if (!withHandoff) delete request.schedulerHandoff;
       expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
       expect(vi.mocked(h.client.scheduler).mock.calls.map(([call]) => [call.gatewayId, call.phase])).toEqual(withHandoff ? [["gw-green", "activate"]] : []);
       expect(h.client.unmount).not.toHaveBeenCalled();
       expect(h.deps.sleep).not.toHaveBeenCalled();
-      expect(native.isSourceFencedOff).not.toHaveBeenCalled();
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: `source computer is ${status ?? "absent"}` });
       expect(h.client.verifyTarget).toHaveBeenCalledOnce();
       expect(native.acknowledgeCompletedSchedulerHandoff).toHaveBeenCalledOnce();
       expect(h.steps.filter(step => step.status === "done").map(step => step.name)).toEqual([
-        "checkpoint-native-computer", ...(withHandoff ? ["activate-scheduler"] : []), "unmount-source", "verify-target",
+        "checkpoint-native-computer", "release-native-writers", "park-native-computer", ...(withHandoff ? ["activate-scheduler"] : []), "verify-target",
       ]);
       const log = vi.mocked(h.deps.log).mock.calls.flat().join("\n");
-      expect(log).toContain("confirmed stopped");
+      expect(log).toContain(`source computer is ${status ?? "absent"}; scheduler retire and unmount RPCs skipped`);
       if (withHandoff) expect(log).toContain(handoff.migrationId);
     });
 
-    it.each(["compute-probe", "release"])("does not let a stopped-source proof bypass a lost operation claim: %s", async proof => {
+    it.each(["stopped", "cleanup-failure"])("does not let a stop decision bypass a lost operation claim: %s", async path => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
       const native = nativeReturn(h);
-      if (proof === "release") native.release.mockResolvedValue({ sourceStopped: true });
-      else native.isSourceFencedOff.mockResolvedValue(true);
+      if (path === "stopped") native.sourceComputerStatus.mockResolvedValue("TERMINATED");
       h.ctx.assertActiveClaim = vi.fn().mockRejectedValue(new Error("operation re-claimed"));
       expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("operation re-claimed") });
       expect(h.client.scheduler).not.toHaveBeenCalled();
       expect(h.client.unmount).not.toHaveBeenCalled();
+      if (path === "cleanup-failure") expect(native.park).not.toHaveBeenCalled();
     });
 
     it.each([
       new MigrationRpcError("unauthorized", { status: 401 }),
       new MigrationRpcError("held database files", { status: 500 }),
-    ])("does not poll away an unrelated failure: %s", async (error) => {
+    ])("stops the source on an unrelated cleanup failure without polling it away: %s", async (error) => {
       const h = mkDeps({ sourceGatewayId: "gw-green" });
-      nativeReturn(h);
-      vi.mocked(h.client.scheduler).mockRejectedValue(error);
-      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining(error.message) });
+      const native = nativeReturn(h);
+      const scheduler = h.client.scheduler;
+      h.client.scheduler = vi.fn(async (request) => {
+        if (request.phase === "retire") throw error;
+        return scheduler(request);
+      });
+      expect(await createMigrateCustomerHandler(h.deps)(op(), h.ctx)).toMatchObject({ success: true });
       expect(h.deps.sleep).not.toHaveBeenCalled();
-      expect(h.client.scheduler).toHaveBeenCalledOnce();
+      expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).toEqual(["retire", "activate"]);
       expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: `live source cleanup failed: ${error.message}` });
+      expect(h.steps.filter(step => step.status === "failed").map(step => step.name)).toEqual(["retire-source-scheduler"]);
     });
   });
 
@@ -888,10 +929,10 @@ describe("native computer return", () => {
       return verify(input);
     });
     vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
-    native.release.mockImplementation(async () => { order.push("release"); return { sourceStopped: false }; });
+    native.park.mockImplementation(async () => { order.push("park"); return { parked: "suspended" }; });
 
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
-    expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "release", "verify"]);
+    expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "park", "verify"]);
     expect(h.deps.recordMigrationProgress).toHaveBeenCalledWith({
       operation: expect.objectContaining({ id: "op-1" }),
       event: expect.objectContaining({ status: "running", slug: "alice", at: expect.any(Number) }),
@@ -1147,22 +1188,26 @@ describe("native computer return", () => {
     expect(h.deps.sleep).not.toHaveBeenCalled();
   });
 
-  it("keeps the return incomplete when source cleanup fails", async () => {
+  it("stops instead of suspending a source whose live unmount fails, and says so", async () => {
     const h = mkDeps();
-    nativeReturn(h);
+    const native = nativeReturn(h);
     vi.mocked(h.client.unmount).mockRejectedValue(new Error("source unreachable"));
     const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("source unreachable");
-    expect(result.rolledBack).toBe(false);
-    expect(h.client.verifyTarget).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: true, rolledBack: false, output: {
+      nativeSourcePark: { parked: "stopped", stopReason: "live source cleanup failed: source unreachable" },
+    } });
+    expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: "live source cleanup failed: source unreachable" });
+    expect(h.client.verifyTarget).toHaveBeenCalledOnce();
+    expect(h.steps.filter(step => step.status === "failed").map(step => step.name)).toEqual(["unmount-source"]);
+    const log = vi.mocked(h.deps.log).mock.calls.flat().join("\n");
+    expect(log).toContain("live source cleanup failed: source unreachable; stopping gw-blue instead of suspending it");
+    expect(log).toContain("source gw-blue stopped instead of suspended: live source cleanup failed: source unreachable");
     expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
   });
 
-  it("finishes a cutover after Compute proves the lost source is stopped", async () => {
+  it("finishes a cutover by stopping a source whose route is gone", async () => {
     const h = mkDeps({ sourceGatewayId: "gw-green" });
-    const native = { ...nativeReturn(h), isSourceFencedOff: vi.fn(async () => true) };
-    h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    const native = nativeReturn(h);
     vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async (id) => {
       if (id === "gw-blue") throw new Error("source VM disappeared");
       return `http://${id}:18789`;
@@ -1171,7 +1216,7 @@ describe("native computer return", () => {
       uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
     } }), h.ctx);
     expect(result).toMatchObject({ success: true, rolledBack: false });
-    expect(native.isSourceFencedOff).toHaveBeenCalledOnce();
+    expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: "live source cleanup failed: source VM disappeared" });
     expect(h.client.verifyTarget).toHaveBeenCalledOnce();
   });
 
@@ -1180,7 +1225,7 @@ describe("native computer return", () => {
     const native = mockNativeReturn(requested);
     native.requestCheckpoint.mockImplementation(async () => { events.push("request-checkpoint"); });
     native.awaitCheckpoint.mockImplementation(async () => { events.push("native-checkpoint"); });
-    native.release.mockImplementation(async () => { events.push("release"); return { sourceStopped: false }; });
+    native.park.mockImplementation(async () => { events.push("park"); return { parked: "suspended" }; });
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
     expect(result.success).toBe(true);
@@ -1188,11 +1233,12 @@ describe("native computer return", () => {
     expect(native.awaitCheckpoint).toHaveBeenCalledOnce();
     expect(events.indexOf("request-checkpoint")).toBeLessThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
     expect(events.indexOf("native-checkpoint")).toBeGreaterThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
-    expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("release"));
+    expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("park"));
     expect(client.transferState).not.toHaveBeenCalled();
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).toHaveBeenCalledTimes(requested ? 0 : 1);
-    expect(native.release).toHaveBeenCalledOnce();
+    expect(native.release).not.toHaveBeenCalled();
+    expect(native.park).toHaveBeenCalledOnce();
   });
 
   it("finishes source cleanup when a retry finds the native return already cut over", async () => {
@@ -1203,7 +1249,7 @@ describe("native computer return", () => {
       uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
     } }), ctx);
     expect(result.success).toBe(true);
-    expect(native.release).toHaveBeenCalledOnce();
+    expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "suspend" });
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).not.toHaveBeenCalled();
     expect(native.requestCheckpoint).not.toHaveBeenCalled();
@@ -1230,7 +1276,8 @@ describe("native computer return", () => {
     });
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
     expect(result).toMatchObject({ success: true, rolledBack: false });
-    expect(native.release).toHaveBeenCalledOnce();
+    expect(native.release).not.toHaveBeenCalled();
+    expect(native.park).toHaveBeenCalledOnce();
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
   });
@@ -1263,6 +1310,7 @@ describe("native computer return", () => {
         return { migrationId: "mig-op-1", slug: "alice", ready: true };
       });
       native.acknowledgeCompletedSchedulerHandoff.mockImplementation(async () => { order.push("acknowledge"); });
+      native.park.mockImplementation(async () => { order.push("park"); return { parked: "suspended" }; });
       const snapshot = { version: 1, operationId: handoffId, agentIds: ["octogee-alice-coach"], jobs: [], scratch: [], retainedJobIds: ["desktop-watch"] };
       vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
         order.push(`quiesce:${request.gatewayId}`);
@@ -1280,14 +1328,15 @@ describe("native computer return", () => {
       });
 
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
-      expect(order).toEqual(["quiesce:gw-blue", "quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue", "verify", "acknowledge"]);
+      expect(order).toEqual(["quiesce:gw-blue", "quiesce:gw-blue", "gw-blue:export", "gw-green:stage", "cutover", "gw-blue:retire", "unmount:gw-blue", "park", "gw-green:activate", "verify", "acknowledge"]);
       expect(vi.mocked(h.client.quiesce).mock.calls[1][0]).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: handoffId, retainNonportable: true });
       expect(schedulerCalls(h)).toEqual([
         ["gw-blue", "export", true], ["gw-green", "stage", undefined], ["gw-blue", "retire", undefined], ["gw-green", "activate", undefined],
       ]);
       expect(vi.mocked(h.client.scheduler).mock.calls[1][0]).toMatchObject({ migrationId: handoffId, agentIds: ["octogee-alice-coach"], snapshot });
       expect(h.steps.filter((step) => step.status === "done").map((step) => step.name)).toEqual([
-        "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer", "activate-scheduler", "unmount-source", "verify-target",
+        "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer",
+        "release-native-writers", "retire-source-scheduler", "unmount-source", "park-native-computer", "activate-scheduler", "verify-target",
       ]);
       expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");
     });
@@ -1337,32 +1386,31 @@ describe("native computer return", () => {
       expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
     });
 
-    it("keeps the return pending while the computer's schedules are not retired", async () => {
-      const h = mkDeps();
-      nativeReturn(h);
-      vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
-        if (phase === "retire") throw new Error("computer unreachable");
-        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
-      });
-
-      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("computer unreachable") });
-      expect(schedulerCalls(h).map(([, phase]) => phase)).not.toContain("activate");
-      expect(h.client.unmount).not.toHaveBeenCalled();
-      expect(h.deps.commitCutover).toHaveBeenCalledOnce();
-    });
-
-    it("activates Shared's schedules once Compute proves the lost computer is stopped", async () => {
+    it("stops the computer and leaves its exported copies fenced for the next activation when the live retire fails", async () => {
       const h = mkDeps();
       const native = nativeReturn(h);
-      native.isSourceFencedOff.mockResolvedValue(true);
       vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
         if (phase === "retire") throw new Error("computer unreachable");
+        if (phase === "activate") expect(native.park).toHaveBeenCalledOnce();
         return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
       });
 
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
       expect(schedulerCalls(h).map(([, phase]) => phase)).toEqual(["export", "stage", "retire", "activate"]);
-      expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain(handoffId);
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: "live source cleanup failed: computer unreachable" });
+      expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain(`stay fenced under ${handoffId}`);
+    });
+
+    it("does not report the schedules fenced once the live Builder retired them, even if its unmount then fails", async () => {
+      const h = mkDeps();
+      const native = nativeReturn(h);
+      vi.mocked(h.client.unmount).mockRejectedValue(new MigrationRpcError("unmount refused", { status: 500 }));
+
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+      expect(schedulerCalls(h).map(([, phase]) => phase)).toEqual(["export", "stage", "retire", "activate"]);
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "stop", reason: "live source cleanup failed: unmount refused" });
+      expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).not.toContain("stay fenced");
     });
 
     it("finishes the scheduler handoff when a retry finds the native return already cut over", async () => {
@@ -1382,8 +1430,8 @@ describe("native computer return", () => {
       expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff, attempts: 1, input: {
         uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease",
       } }), h.ctx)).toMatchObject({ success: true });
-      expect(order).toEqual(["gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
-      expect(native.release).toHaveBeenCalledOnce();
+      expect(order).toEqual(["gw-blue:retire", "unmount:gw-blue", "gw-green:activate"]);
+      expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "suspend" });
       expect(h.client.verifyTarget).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
       expect(h.client.transferState).not.toHaveBeenCalled();
     });

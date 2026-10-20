@@ -737,6 +737,28 @@ export function writeConfigAtomically(configPath: string, config: unknown): void
   }
 }
 
+export async function materializeBrokerProfilesBeforeBoot(
+  config: unknown,
+  env: NodeJS.ProcessEnv,
+  sweep: (agentIds: string[]) => Promise<{ materialized: number; deferred: string[] }>,
+  logFn: (message: string) => void = log,
+): Promise<void> {
+  if (!shouldMaterializeAnthropicBrokerProfiles(env)) return;
+  if (env.GATEWAY_CLASS?.trim() === "builder") {
+    logFn("model-ready: Builder gateway broker profiles are materialized by the post-boot sweep");
+    return;
+  }
+  const result = await sweep(agentIdsFromConfig(config));
+  if (result.materialized > 0) {
+    logFn(`model-ready broker profiles materialized for ${result.materialized} agent(s)`);
+  }
+  if (result.deferred.length > 0) {
+    logFn(
+      `model-ready: broker profile deferred for ${result.deferred.length} agent(s) until openclaw can accept the secrets apply`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   let configRaw: string;
   try {
@@ -767,21 +789,13 @@ async function main(): Promise<void> {
     );
   }
 
-  if (shouldMaterializeAnthropicBrokerProfiles(process.env)) {
-    const sweep = await materializeBrokerProfilesForAgents(agentIdsFromConfig(config), {
+  await materializeBrokerProfilesBeforeBoot(config, process.env, (agentIds) =>
+    materializeBrokerProfilesForAgents(agentIds, {
       logFn: log,
       secretsApply: { apply: (plan) => applyOpenClawSecretsPlan(plan, { log }) },
       ...platformBrokerCatalogOpts(process.env),
-    });
-    if (sweep.materialized > 0) {
-      log(`model-ready broker profiles materialized for ${sweep.materialized} agent(s)`);
-    }
-    if (sweep.deferred.length > 0) {
-      log(
-        `model-ready: broker profile deferred for ${sweep.deferred.length} agent(s) until openclaw can accept the secrets apply`,
-      );
-    }
-  }
+    }),
+  );
 
   try {
     const homeDir = process.env.HOME ?? "/home/node";

@@ -127,6 +127,26 @@ describe("broker profile retry (level-triggered)", () => {
     );
   });
 
+  it("materializes every Builder agent whose store the final import replaced, without a pre-boot pass", async () => {
+    const builderAgents = [AGENT, "octogee-alice-proj-orbit-coach"];
+    for (const agentId of builderAgents) seedAgentStore(agentsDir, agentId);
+    applyOutcome = "accept";
+
+    const readiness = await materializeDeferredBrokerProfiles((m) => logs.push(m), {
+      agentsDir,
+      readConfig: () => ({ agents: { entries: Object.fromEntries(builderAgents.map((id) => [id, { model: "house" }])) } }),
+      secretsApply: { apply },
+      secretsReload: { secretsReload: reload },
+    });
+
+    const appliedAgents = new Set(
+      apply.mock.calls.flatMap(([plan]) => (plan as { targets: Array<{ agentId: string }> }).targets.map((t) => t.agentId)),
+    );
+    expect([...appliedAgents].sort()).toEqual([...builderAgents].sort());
+    expect(readiness).toMatchObject({ settled: true, deferred: [] });
+    expect(logs).toContain("[agent-model-token] post-boot sweep materialized 2 agent(s)");
+  });
+
   it("reloads the active secret snapshot after profiles are accepted", async () => {
     seedAgentStore(agentsDir, AGENT);
     applyOutcome = "accept";

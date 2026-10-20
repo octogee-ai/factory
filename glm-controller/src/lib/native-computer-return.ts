@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { nativeReturnSourceIdentity, nativeReturnSourceStopped } from "./native-return-source-fence.js";
+import { nativeReturnSourceIdentity, nativeReturnSourceState, type NativeReturnSourceState } from "./native-return-source-fence.js";
 import { FieldValue, type DocumentData, type Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
@@ -16,17 +16,22 @@ export interface NativeComputerReturnInput {
   claimedStartedAt: number | null;
 }
 
-export interface NativeReturnRelease {
-  sourceStopped: boolean;
+export type NativeSourcePark = { mode: "suspend" } | { mode: "stop"; reason: string };
+
+export interface NativeReturnPark {
+  parked: "suspended" | "stopped";
+  stopReason?: string;
 }
 
 export interface NativeComputerReturn {
   checkpointRequested: boolean;
   requestCheckpoint: () => Promise<void>;
   awaitCheckpoint: () => Promise<void>;
-  release: () => Promise<NativeReturnRelease>;
+  release: () => Promise<void>;
+  releaseWriterHold: () => Promise<void>;
+  sourceComputerStatus: () => Promise<string | null>;
+  park: (park: NativeSourcePark) => Promise<NativeReturnPark>;
   acknowledgeCompletedSchedulerHandoff: () => Promise<void>;
-  isSourceFencedOff: () => Promise<boolean>;
 }
 
 function persistSchedulerRetirement(
@@ -40,7 +45,7 @@ function persistSchedulerRetirement(
 type NativeReturnDb = Pick<Firestore, "collection" | "runTransaction">;
 type NativeReturnDeps = {
   db: NativeReturnDb;
-  vm: Pick<GatewayVmClient, "describe">;
+  vm: Pick<GatewayVmClient, "describe" | "stop">;
   now: () => number;
   wait: (ms: number) => Promise<void>;
   timeoutMs?: number;
@@ -91,7 +96,13 @@ async function claimCheckpoint(deps: NativeReturnDeps, input: NativeComputerRetu
   });
 }
 
-async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null, fence: ReturnType<typeof nativeReturnSourceIdentity>): Promise<void> {
+const RELEASED_RETURN_HOLD = {
+  "vmHome.returnOperationId": FieldValue.delete(),
+  "vmHome.checkpointRequestedAt": FieldValue.delete(),
+  "vmHome.parkRequestedAt": FieldValue.delete(),
+};
+
+async function releaseUncommittedCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<void> {
   const source = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
   await deps.db.runTransaction(async (tx) => {
     const [snap, root, operation, user] = await Promise.all([
@@ -99,17 +110,34 @@ async function releaseCheckpoint(deps: NativeReturnDeps, input: NativeComputerRe
       tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
       tx.get(deps.db.collection("users").doc(input.uid)),
     ]);
-    if (returnRequest(snap.data(), input.operationId) === null) return;
     assertOwner(root.data(), input);
-    if (returnRequest(snap.data(), input.operationId) !== requestedAt ||
-        !releaseAuthorityMatches(input, fence, { operation: operation.data(), user: user.data(), source: snap.data(), root: root.data() })) {
+    if (!precutoverOperationMatches(operation.data(), input) || user.data()?.provisioning?.openclaw?.gatewayId !== input.fromGatewayId) {
       throw new Error("native return checkpoint release authority changed");
     }
-    tx.update(source, {
-      "vmHome.returnOperationId": FieldValue.delete(),
-      "vmHome.checkpointRequestedAt": FieldValue.delete(),
-      "vmHome.parkRequestedAt": FieldValue.delete(),
-    });
+    const held = returnRequest(snap.data(), input.operationId);
+    if (held === null) return;
+    if (held !== requestedAt) throw new Error("native return checkpoint release authority changed");
+    tx.update(source, RELEASED_RETURN_HOLD);
+  });
+}
+
+async function releaseCommittedWriterHold(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<void> {
+  const source = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
+  await deps.db.runTransaction(async (tx) => {
+    const [snap, root, operation, user, target, assignment] = await Promise.all([
+      tx.get(source), tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
+      tx.get(deps.db.collection("users").doc(input.uid)),
+      tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.toGatewayId)),
+      tx.get(deps.db.collection(`${GATEWAYS_COLLECTION}/${input.toGatewayId}/assignments`).doc(input.uid)),
+    ]);
+    if (returnRequest(snap.data(), input.operationId) === null) return;
+    assertOwner(root.data(), input);
+    const exact = returnRequest(snap.data(), input.operationId) === requestedAt && committedOperationMatches(operation.data(), input) &&
+      user.data()?.provisioning?.openclaw?.gatewayId === input.toGatewayId && target.data()?.gatewayClass === "shared" &&
+      sharedAssignmentMatches(assignment.data(), input) && sourceCheckpointMatches(snap.data(), input) && root.data()?.desiredStatus === "running";
+    if (!exact) throw new Error("native return writer hold release authority changed");
+    tx.update(source, RELEASED_RETURN_HOLD);
   });
 }
 
@@ -121,15 +149,6 @@ function currentOperationMatches(op: DocumentData | undefined, input: NativeComp
 
 function precutoverOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
   return currentOperationMatches(op, input) && op?.cutoverCommittedAt === undefined;
-}
-
-function releaseAuthorityMatches(input: NativeComputerReturnInput, fence: ReturnType<typeof nativeReturnSourceIdentity>,
-  records: { operation?: DocumentData; user?: DocumentData; source?: DocumentData; root?: DocumentData }): boolean {
-  const { operation, user, source, root } = records;
-  const current = user?.provisioning?.openclaw?.gatewayId;
-  if (!fence) return precutoverOperationMatches(operation, input) && current === input.fromGatewayId;
-  return committedOperationMatches(operation, input) && current === input.toGatewayId &&
-    isDeepStrictEqual(fence, nativeReturnSourceIdentity(source, root));
 }
 
 function committedOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
@@ -156,33 +175,62 @@ function sourceCheckpointMatches(runtime: DocumentData | undefined, input: Nativ
   return returnHoldMatches(runtime, input);
 }
 
-async function pauseCommittedSource(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
+type SourceIdentity = NonNullable<ReturnType<typeof nativeReturnSourceIdentity>>;
+type PauseIntent = { requestStop: string | null } | { parkedAs: SourceIdentity; clearStop: boolean };
+
+type StopRequest = { operationId: string; reason: string; claimedAt?: number };
+
+function readStopRequest(source: DocumentData | undefined): StopRequest | null {
+  const request = source?.vmStopOnPark as Partial<StopRequest> | undefined;
+  if (request === undefined) return null;
+  if (typeof request?.operationId !== "string" || typeof request.reason !== "string" ||
+      (request.claimedAt !== undefined && typeof request.claimedAt !== "number")) throw new Error("vmStopOnPark request is malformed");
+  return request as StopRequest;
+}
+
+async function pauseCommittedSource(deps: NativeReturnDeps, input: NativeComputerReturnInput, intent: PauseIntent): Promise<StopRequest | null> {
   return deps.db.runTransaction(async (tx) => {
     const rootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId);
     const userRef = deps.db.collection("users").doc(input.uid);
+    const sourceRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
     const [user, root, source, operation, target, assignment] = await Promise.all([
-      tx.get(userRef), tx.get(rootRef),
-      tx.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId)),
+      tx.get(userRef), tx.get(rootRef), tx.get(sourceRef),
       tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
       tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.toGatewayId)),
       tx.get(deps.db.collection(`${GATEWAYS_COLLECTION}/${input.toGatewayId}/assignments`).doc(input.uid)),
     ]);
-    const current = user.data()?.provisioning?.openclaw?.gatewayId;
-    if (current === input.fromGatewayId) return false;
     const desired = root.data();
     assertOwner(desired, input);
-    const exact = current === input.toGatewayId && target.data()?.gatewayClass === "shared" &&
-      sharedAssignmentMatches(assignment.data(), input) && committedOperationMatches(operation.data(), input) &&
-      sourceCheckpointMatches(source.data(), input) &&
-      ["running", "paused"].includes(desired?.desiredStatus);
-    if (!exact) throw new Error("native return source pause authority changed");
-    const retirement = nativeSchedulerRetirementForReturn(input, user.data(), source.data(), operation.data());
+    const records = { user: user.data(), desired, source: source.data(), operation: operation.data(), target: target.data(), assignment: assignment.data() };
+    if (!pauseAuthorityMatches(input, records, intent)) throw new Error("native return source pause authority changed");
+    const retirement = nativeSchedulerRetirementForReturn(input, records.user, records.source, records.operation);
     persistSchedulerRetirement(tx, userRef, retirement);
     if (desired?.desiredStatus !== "paused") {
       tx.update(rootRef, { desiredStatus: "paused", updatedAt: deps.now(), updatedBy: input.operationId });
     }
-    return true;
+    const token = readStopRequest(records.source);
+    const claimed = token?.claimedAt !== undefined ? token : null;
+    const stopOnPark = stopOnParkUpdate(input, intent, claimed);
+    if (stopOnPark) tx.update(sourceRef, { vmStopOnPark: stopOnPark });
+    return claimed;
   });
+}
+
+function pauseAuthorityMatches(input: NativeComputerReturnInput, records: Record<"user" | "desired" | "source" | "operation" | "target" | "assignment", DocumentData | undefined>,
+  intent: PauseIntent): boolean {
+  const { user, desired, source, operation, target, assignment } = records;
+  return user?.provisioning?.openclaw?.gatewayId === input.toGatewayId && target?.gatewayClass === "shared" &&
+    sharedAssignmentMatches(assignment, input) && committedOperationMatches(operation, input) &&
+    sourceCheckpointMatches(source, input) && ["running", "paused"].includes(desired?.desiredStatus) &&
+    (!("parkedAs" in intent) || isDeepStrictEqual(intent.parkedAs, nativeReturnSourceIdentity(source, desired)));
+}
+
+function stopOnParkUpdate(input: NativeComputerReturnInput, intent: PauseIntent, claimed: StopRequest | null): Record<string, string> | FieldValue | null {
+  if ("requestStop" in intent) {
+    if (claimed) return null;
+    return intent.requestStop === null ? FieldValue.delete() : { operationId: input.operationId, reason: intent.requestStop };
+  }
+  return intent.clearStop ? FieldValue.delete() : null;
 }
 
 async function acknowledgeCompletedSchedulerHandoff(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<void> {
@@ -210,24 +258,49 @@ async function acknowledgeCompletedSchedulerHandoff(deps: NativeReturnDeps, inpu
   });
 }
 
-async function releaseReturnCheckpoint(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<NativeReturnRelease> {
-  let fence: ReturnType<typeof nativeReturnSourceIdentity> = null;
-  const committed = await pauseCommittedSource(deps, input);
-  if (committed) {
-    const deadline = deps.now() + (deps.timeoutMs ?? 300_000);
-    fence = await stoppedSourceIdentity(deps, input);
-    while (!fence) {
-      if (deps.now() >= deadline) throw new Error("native return source stop timed out; final checkpoint remains held");
-      await deps.wait(Math.min(5_000, deadline - deps.now()));
-      fence = await stoppedSourceIdentity(deps, input);
+async function parkCommittedSource(deps: NativeReturnDeps, input: NativeComputerReturnInput, park: NativeSourcePark): Promise<NativeReturnPark> {
+  const stopReason = await pauseForPark(deps, input, park);
+  const deadline = deps.now() + (deps.timeoutMs ?? 300_000);
+  let observed = await parkedSourceState(deps, input);
+  let stoppedSuspended = false;
+  while (observed.state === "running" || (stopReason !== null && observed.state === "suspended")) {
+    if (deps.now() >= deadline) throw new Error(`native return source ${stopReason === null ? "park" : "stop"} timed out`);
+    if (observed.state === "suspended" && observed.identity && !stoppedSuspended) {
+      await stopSuspendedSource(deps, input, observed.identity);
+      stoppedSuspended = true;
     }
-    if (!await pauseCommittedSource(deps, input)) throw new Error("native return source pause authority changed");
+    await deps.wait(Math.min(5_000, deadline - deps.now()));
+    observed = await parkedSourceState(deps, input);
   }
-  await releaseCheckpoint(deps, input, requestedAt, fence);
-  return { sourceStopped: fence !== null };
+  await pauseCommittedSource(deps, input, { parkedAs: observed.identity!, clearStop: stopReason !== null });
+  return stopReason === null ? { parked: observed.state === "suspended" ? "suspended" : "stopped" } : { parked: "stopped", stopReason };
 }
 
-async function stoppedSourceIdentity(deps: NativeReturnDeps, input: NativeComputerReturnInput) {
+async function pauseForPark(deps: NativeReturnDeps, input: NativeComputerReturnInput, park: NativeSourcePark): Promise<string | null> {
+  const requested = park.mode === "stop" ? park.reason : null;
+  const inFlight = await pauseCommittedSource(deps, input, { requestStop: requested });
+  return requested ?? (inFlight ? `a claimed stop of ${inFlight.operationId} is in flight: ${inFlight.reason}` : null);
+}
+
+async function stopSuspendedSource(deps: NativeReturnDeps, input: NativeComputerReturnInput, identity: SourceIdentity): Promise<void> {
+  if (await claimSuspendedSourceStop(deps, input)) await deps.vm.stop(identity.instanceName, identity.zone);
+}
+
+async function claimSuspendedSourceStop(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<boolean> {
+  const sourceRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
+  return deps.db.runTransaction(async (tx) => {
+    const [source, operation] = await Promise.all([
+      tx.get(sourceRef), tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
+    ]);
+    if (!committedOperationMatches(operation.data(), input)) throw new Error("native return source stop authority changed");
+    const token = readStopRequest(source.data());
+    if (token?.operationId !== input.operationId) return false;
+    if (token.claimedAt === undefined) tx.update(sourceRef, { "vmStopOnPark.claimedAt": deps.now() });
+    return true;
+  });
+}
+
+async function parkedSourceState(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<{ state: NativeReturnSourceState; identity: SourceIdentity | null }> {
   const [source, root] = await Promise.all([
     deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
     deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
@@ -235,7 +308,18 @@ async function stoppedSourceIdentity(deps: NativeReturnDeps, input: NativeComput
   const desired = root.data();
   assertOwner(desired, input);
   const identity = nativeReturnSourceIdentity(source.data(), desired);
-  return identity && await nativeReturnSourceStopped(deps.vm, identity) ? identity : null;
+  return { state: identity ? await nativeReturnSourceState(deps.vm, identity) : "running", identity };
+}
+
+async function sourceComputerStatus(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<string | null> {
+  const vm = (await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId).get()).data()?.vm;
+  if (![vm?.instanceName, vm?.zone, vm?.instanceId].every(v => typeof v === "string" && v.length > 0)) {
+    throw new Error(`native return source ${input.fromGatewayId} has no recorded computer`);
+  }
+  const current = await deps.vm.describe(vm.instanceName, vm.zone);
+  if (current === null) return null;
+  if (current.instanceId !== vm.instanceId) throw new Error(`native return source computer ${vm.instanceName} was replaced`);
+  return current.status;
 }
 
 export async function prepareNativeComputerReturn(
@@ -263,8 +347,10 @@ export async function prepareNativeComputerReturn(
       }, { gatewayId: input.fromGatewayId, requestedAt });
       if (result.outcome !== "completed") throw new Error(`native computer checkpoint ${result.outcome}; source retained`);
     },
-    release: () => releaseReturnCheckpoint(deps, input, requestedAt),
+    release: () => releaseUncommittedCheckpoint(deps, input, requestedAt),
+    releaseWriterHold: () => releaseCommittedWriterHold(deps, input, requestedAt),
+    sourceComputerStatus: () => sourceComputerStatus(deps, input),
+    park: (park) => parkCommittedSource(deps, input, park),
     acknowledgeCompletedSchedulerHandoff: () => acknowledgeCompletedSchedulerHandoff(deps, input),
-    isSourceFencedOff: async () => await stoppedSourceIdentity(deps, input) !== null,
   };
 }

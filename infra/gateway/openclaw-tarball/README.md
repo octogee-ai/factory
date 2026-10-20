@@ -137,7 +137,72 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## October 20 overlay
+## October 20 strict-stop correction
+
+The current clean native source is
+`9d3a53f772b904d1436f3a962cd268336c492c14` (2026.10.5), on the same selected
+upstream `2d03d5632a69d04181844f85b05d5509240dcc14`. It adds the confirmed
+strict-stop correction to the previous October 20 overlay; it does not select
+newer upstream source or change schemas, toolchains, CUA, desktop OS or fleet state.
+
+A strict caller joining an existing non-strict account stop must still reject
+while retained startup preparation owns work. The prior source incorrectly
+returned success for this case. The manager now includes that existing
+preparation slot in its join decision, preserving route-handoff retirement and
+running-task ownership. The existing task regression also covers preparation;
+its table lives with the existing recovery-test support to respect the file-size
+ratchet. An equivalent nested account-enumeration condition was simplified, and
+one obsolete test-only argument was removed. No runtime owner or public API was added.
+
+The independent exact-previous-source control failed the intended preparation
+assertion, and the corrected owner cases passed. Six focused lifecycle cases and
+all 13 existing restart cases passed. Both affected Gateway type graphs, targeted
+lint/formatting, the pinned-base line ratchet, full exact-head native build,
+Voice/Activity SDK checks, sequential packers and package-integrity checker passed.
+Fresh Astra source review found no actionable P0–P2 issue in its supplied scope;
+it did not execute the code. The inherited startup-JavaScript warning remains
+318.5 KiB against 317.5 KiB, without a raised budget.
+
+The new packed root is **120295686 bytes**, SHA256
+`8c08bc5559c3a55ab4213dd766e41573784610a25c3e16209617f9ca15b4ffd6`.
+Mattermost is byte-identical to the previous pair: **1251616 bytes**, SHA256
+`74ec55a2bd9e080775442940c42347e61797271e478aa100ae64085ee6ddf062`.
+Its existing write-once generation `1792503776188007` is reused, not republished.
+The new root was published write-once as
+`gs://octogee-openclaw-fork/openclaw-fork-8c08bc55.tgz#1792509079123088`;
+the exact-generation download matches its full hash, size and original bytes.
+The retained Mattermost object is
+`gs://octogee-openclaw-fork/openclaw-mattermost-74ec55a2.tgz#1792503776188007`.
+Fork branch `ceckert/openclaw:codex/openclaw-strict-stop-oct20` reads back at
+the exact native commit above. Publication does not merge or deploy anything.
+
+The actual Linux AMD64 full-plugin installer passed against this exact pair:
+native registry/bundled trust, Parallel's nine source-matched files, Codex's
+186 runtime files, three native-hook imports and CUA artifact validation.
+Offline read-only UID1000 verification confirmed the installed full native commit
+and all 874 Mattermost archive files. AMD64 ran under ARM64-host emulation.
+The unchanged system/CUA build inputs were cached; no full local Gateway image
+or new ARM64 installer pass is claimed for this correction.
+
+Hosted native UI and Browser resources regenerate from the exact new source.
+The generator reports no changed native UI inputs since the previous source;
+generated chunk names/references are not claimed byte-identical.
+Three narrow consuming-island files passed all seven loading/contract cases.
+Before the CI dependency repair, full-hash comparison matched all 623 captured
+materializer inputs. The repair changes only the scripts manifest and lockfile's
+development-only Hono floor/version; the other 621 inputs, all 557 runtime inputs,
+29 native config inputs and three proof helpers still match. Hono and its MCP
+parent are absent from the 237 captured materializer dependency inputs. The prior
+four architecture/class config and isolated Doctor results are reused within
+that boundary; this is not a fresh config matrix, ARM64 or live pass.
+
+Immutable Octogee build `6c4f575b866c3cd66bb0768e8be032cab53299b7` retains
+the previous native source and is not cleared for TEST by this correction.
+Accepted build 517 is unchanged. No merge, deployment, live Gateway test or
+fleet mutation is included. Historical failures remain failed evidence; the
+resulting new immutable main family needs its own actual TEST acceptance.
+
+## Previous October 20 overlay
 
 The operator selected refreshed upstream main
 `2d03d5632a69d04181844f85b05d5509240dcc14` for independent local
@@ -339,7 +404,6 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 | Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
 | Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. An identical `config.apply` retry blocked the channel reload it awaited during a real Builder import. Reloader-local claimed waiters are excluded only from that reload’s drain; unrelated work and global admission remain counted. Retain these reproduced lifetime/settlement repairs while preserving native FIFO, cancellation and database owners. Drop each hunk when the selected upstream passes its boundary control, including a late identical retry after startup drains. |
 | Memory reindex shadow custody | A creation descriptor can outlive the joined shadow workers and prevent source cleanup after unlink. Retain retirement through the existing descriptor owner; remove when native shadow creation/retirement passes the actual file-descriptor regression. Canonical database and held-file guards remain unchanged. |
-| Queued Mattermost channel identity | A drained follow-up must keep its originating nativeChannelId instead of inferring the current reply destination. Upstream #163685 remains a separate contribution; remove this carry only once the selected upstream includes it and the queued-turn controls pass. |
 | Channel account removal and deleted-agent discovery | Removing one account must join its startup/cleanup without stopping siblings; Doctor must discover journaled deleted identities and restored files. Keep these scoped owner repairs until native removal and maintenance discovery preserve those cases. |
 | Plugin instance through final delivery | Finalization must use the originating plugin instance and receiver, not a replacement ID lookup; AbortSignal and other data retain identity. Remove when native delivery custody covers that finalization boundary. |
 | Final-reply observation | Octogee's delivery/archive consumers need the actual terminal provider reply, not progress text or an invented run-completion claim. Keep the narrow observer contract until an equivalent native public event is available. |

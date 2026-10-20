@@ -45,6 +45,7 @@ const docs = {
     profile: "builder", gatewayClass: "builder", imageProfile: "builder", sizingTier: null, gcpProject: null,
     gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null, builderAccess: null,
     ownerUid: "UidA", builderSlug: "mama", modelBrokerLimits: null, preemption: null,
+    allocation: { kind: "disposable-builder", schemaVersion: 1, leaseId: "lease-mama", generation: 2, claimedByUid: "UidA" },
   },
   "glmGateways/b-x": {
     docKind: "runtime", gatewayId: "b-x", release: 1, lifecycle: "serving", runtime: "gce-vm",
@@ -118,6 +119,6 @@ describe("builder runtime-state routes for a VM gateway", () => {
       .send({ gatewayId: "b-x", revisionId: "b-x", slug: "mama" });
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toMatch(/^signed:.*mama/);
+    expect(res.body.url).toBe("signed:customers/mama/runtime-state/allocations/b-x-g2/openclaw.sqlite");
   });
 });
