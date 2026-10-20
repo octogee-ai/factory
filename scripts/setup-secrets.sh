@@ -293,6 +293,7 @@ resolve_environment_secret_value() {
   local k8s_secret="$3"
   local k8s_key="$4"
   local normalizer="$5"
+  local secret_manager_project="${6:-$FIREBASE_PROJECT}"
   local env_value secret_manager_value kubernetes_value
   env_value="$("$normalizer" "$initial")"
   kubernetes_value="$("$normalizer" "$(ksecret_key "$k8s_secret" "$k8s_key")")"
@@ -301,13 +302,13 @@ resolve_environment_secret_value() {
       printf '%s' "$kubernetes_value"
       return 0
     fi
-    secret_manager_value="$("$normalizer" "$(sm_get "$sm_name" "$FIREBASE_PROJECT")")"
+    secret_manager_value="$("$normalizer" "$(sm_get "$sm_name" "$secret_manager_project")")"
     select_environment_secret_value \
       "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
     return 0
   fi
   secret_manager_value="$(read_authoritative_secret_manager_value \
-    "$sm_name" "$FIREBASE_PROJECT" "$normalizer")" || return 1
+    "$sm_name" "$secret_manager_project" "$normalizer")" || return 1
   select_environment_secret_value \
     "$ENV" "$secret_manager_value" "$env_value" "$kubernetes_value"
 }
@@ -504,24 +505,26 @@ fi
 
 # ── 6. Anthropic API key ──────────────────────────────────────────────────
 info "octogee-anthropic"
-set +u; ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"; set -u
-# Per-env UNIQUE key — read from this env's own SM project (where
-# rotate-secret.sh anthropic writes), NOT the shared octogee project, so a
-# rotated test key isn't clobbered by the prod key on re-run.
-[[ -z "$ANTHROPIC_API_KEY" ]] && ANTHROPIC_API_KEY=$(sm_get ANTHROPIC_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+ANTHROPIC_API_KEY="$(resolve_environment_secret_value \
+  "${ANTHROPIC_API_KEY:-}" ANTHROPIC_API_KEY octogee-anthropic api_key configured_secret_value)" \
+  || fail "Could not resolve ANTHROPIC_API_KEY from its environment source of truth"
 [[ -n "$ANTHROPIC_API_KEY" ]] || fail "ANTHROPIC_API_KEY not found in .env or Secret Manager"
+if [[ "$ENV" != "custom" ]]; then
+  sync_secret_manager_value ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" "$FIREBASE_PROJECT"
+  save_env_file_value "$ENV_FILE" ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+fi
 ksecret octogee-anthropic --from-literal=api_key="$ANTHROPIC_API_KEY"
 
 # ── 6b. OpenRouter API key ─────────────────────────────────────────────────
 info "octogee-openrouter"
-set +u
-OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
-OPENROUTER_PLATFORM_API_KEY="${OPENROUTER_PLATFORM_API_KEY:-}"
-set -u
-[[ -z "$OPENROUTER_API_KEY" && -n "$OPENROUTER_PLATFORM_API_KEY" ]] && OPENROUTER_API_KEY="$OPENROUTER_PLATFORM_API_KEY"
-[[ -z "$OPENROUTER_API_KEY" ]] && OPENROUTER_API_KEY=$(sm_get OPENROUTER_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
-[[ -z "$OPENROUTER_API_KEY" ]] && OPENROUTER_API_KEY=$(sm_get OPENROUTER_PLATFORM_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+OPENROUTER_API_KEY="$(resolve_environment_secret_value \
+  "${OPENROUTER_API_KEY:-}" OPENROUTER_API_KEY octogee-openrouter api_key configured_secret_value)" \
+  || fail "Could not resolve OPENROUTER_API_KEY from its environment source of truth"
 [[ -n "$OPENROUTER_API_KEY" ]] || fail "OPENROUTER_API_KEY not found in .env or Secret Manager"
+if [[ "$ENV" != "custom" ]]; then
+  sync_secret_manager_value OPENROUTER_API_KEY "$OPENROUTER_API_KEY" "$FIREBASE_PROJECT"
+  save_env_file_value "$ENV_FILE" OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+fi
 ksecret octogee-openrouter --from-literal=api_key="$OPENROUTER_API_KEY"
 
 # ── 6c. OpenAI API key (llm-broker platform provider + embeddings) ────────
@@ -549,9 +552,14 @@ fi
 
 # ── 7. Brave API key ──────────────────────────────────────────────────────
 info "octogee-brave"
-set +u; BRAVE_API_KEY="${BRAVE_API_KEY:-}"; set -u
-[[ -z "$BRAVE_API_KEY" ]] && BRAVE_API_KEY=$(sm_get BRAVE_API_KEY octogee 2>/dev/null || echo "")
+BRAVE_API_KEY="$(resolve_environment_secret_value \
+  "${BRAVE_API_KEY:-}" BRAVE_API_KEY octogee-brave key configured_secret_value octogee)" \
+  || fail "Could not resolve BRAVE_API_KEY from its platform source of truth"
 if [[ -n "$BRAVE_API_KEY" ]]; then
+  if [[ "$ENV" != "custom" ]]; then
+    sync_secret_manager_value BRAVE_API_KEY "$BRAVE_API_KEY" octogee
+    save_env_file_value "$ENV_FILE" BRAVE_API_KEY "$BRAVE_API_KEY"
+  fi
   ksecret octogee-brave --from-literal=key="$BRAVE_API_KEY"
 else
   warn "BRAVE_API_KEY not found — creating empty secret (optional)"
@@ -979,7 +987,13 @@ RESEND_FROM_NAME="${RESEND_FROM_NAME:-Octo}"
 RESEND_WEBHOOK_SECRET="${RESEND_WEBHOOK_SECRET:-}"
 EMAIL_UNSUBSCRIBE_SECRET="${EMAIL_UNSUBSCRIBE_SECRET:-}"
 set -u
-[[ -z "$RESEND_API_KEY" ]]   && RESEND_API_KEY=$(sm_get RESEND_API_KEY "$FIREBASE_PROJECT" 2>/dev/null || echo "")
+RESEND_API_KEY="$(resolve_environment_secret_value \
+  "$RESEND_API_KEY" RESEND_API_KEY resend-secrets api_key configured_secret_value)" \
+  || fail "Could not resolve RESEND_API_KEY from its environment source of truth"
+if [[ -n "$RESEND_API_KEY" && "$ENV" != "custom" ]]; then
+  sync_secret_manager_value RESEND_API_KEY "$RESEND_API_KEY" "$FIREBASE_PROJECT"
+  save_env_file_value "$ENV_FILE" RESEND_API_KEY "$RESEND_API_KEY"
+fi
 [[ -z "$RESEND_FROM_EMAIL" ]] && RESEND_FROM_EMAIL=$(sm_get RESEND_FROM_EMAIL "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$RESEND_WEBHOOK_SECRET" ]] && RESEND_WEBHOOK_SECRET=$(sm_get RESEND_WEBHOOK_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
 [[ -z "$EMAIL_UNSUBSCRIBE_SECRET" ]] && EMAIL_UNSUBSCRIBE_SECRET=$(sm_get EMAIL_UNSUBSCRIBE_SECRET "$FIREBASE_PROJECT" 2>/dev/null || echo "")
