@@ -15,6 +15,7 @@ import {
   applySharedMattermostRoutingSafetyPatch,
   buildGitconfigContent,
   hydrateGitIdentity,
+  materializeBrokerProfilesBeforeBoot,
   pickSoleTenantSlug,
   slugFromCoachAgentId,
   writeConfigAtomically,
@@ -1058,6 +1059,37 @@ describe("shouldMaterializeAnthropicBrokerProfiles", () => {
 
   it("skips unknown classes", () => {
     expect(shouldMaterializeAnthropicBrokerProfiles({ GATEWAY_CLASS: "preview" })).toBe(false);
+  });
+});
+
+describe("materializeBrokerProfilesBeforeBoot", () => {
+  const config = { agents: { list: [{ id: "octogee-alice-coach" }, { id: "octogee-alice-proj-orbit-coach" }] } };
+  const sweepResult = { materialized: 2, deferred: [] };
+
+  it("applies broker profiles for every configured agent before a Shared gateway boots", async () => {
+    const sweep = vi.fn(async () => sweepResult);
+
+    await materializeBrokerProfilesBeforeBoot(config, { GATEWAY_CLASS: "shared" }, sweep, vi.fn());
+
+    expect(sweep).toHaveBeenCalledExactlyOnceWith(["octogee-alice-coach", "octogee-alice-proj-orbit-coach"]);
+  });
+
+  it("leaves a Builder gateway's broker profiles to the post-boot sweep", async () => {
+    const sweep = vi.fn(async () => sweepResult);
+    const log = vi.fn();
+
+    await materializeBrokerProfilesBeforeBoot(config, { GATEWAY_CLASS: "builder" }, sweep, log);
+
+    expect(sweep).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("post-boot sweep"));
+  });
+
+  it("skips gateways that hold no broker profiles", async () => {
+    const sweep = vi.fn(async () => sweepResult);
+
+    await materializeBrokerProfilesBeforeBoot(config, { GATEWAY_CLASS: "preview" }, sweep, vi.fn());
+
+    expect(sweep).not.toHaveBeenCalled();
   });
 });
 

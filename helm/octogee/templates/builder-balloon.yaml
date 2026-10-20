@@ -5,6 +5,7 @@
 {{- $builderTag := required "glm-controller.platformRelease.builderImageTag is required while builderBalloon.replicas > 0" $release.builderImageTag }}
 {{- $computeClass := required "gatewayFleet.computeClass.name is required" .Values.gatewayFleet.computeClass.name }}
 {{- $priorityClass := printf "octogee-builder-balloon-%s" .Release.Namespace }}
+{{- $warmRoots := list "/usr/local/bin/node" "/usr/local/lib/node_modules/openclaw" "/opt/openclaw-runtime-deps" "/opt/octogee" "/octogee" "/usr/bin/Xvnc" "/usr/bin/openbox" "/usr/bin/tint2" "/usr/lib/chromium" "/usr/lib/x86_64-linux-gnu" "/usr/share/octogee" "/usr/share/themes/Octogee" }}
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
@@ -57,7 +58,21 @@ spec:
       containers:
         - name: placeholder
           image: "{{ trimSuffix "/octogee-gateway" $gatewayRepository }}/octogee-gateway-builder:{{ $builderTag }}"
-          command: ["sleep", "infinity"]
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              started=$(date +%s)
+              for root in {{ join " " $warmRoots }}; do
+                if [ ! -e "$root" ]; then
+                  echo "builder-balloon: warm root $root is missing from the image" >&2
+                  exit 1
+                fi
+              done
+              find -H {{ join " " $warmRoots }} -type f -exec cat {} + >/dev/null
+              echo "builder-balloon: warmed {{ len $warmRoots }} roots in $(( $(date +%s) - started )) s"
+              exec sleep infinity
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
