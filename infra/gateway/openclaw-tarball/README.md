@@ -137,9 +137,81 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## October 20 strict-stop correction
+## October 20 refresh on frozen main 04789278
 
-The current clean native source is
+The operator selected upstream main
+`04789278f8b0cd4cac95386ef91a37ece34082c5` for independent qualification.
+The clean native source is `ac2ff7bfc8b271149b67bc6dadae5c13816fa907`
+(2026.10.5), published from `codex/openclaw-refresh-04789278` after qualification.
+The selected upstream [CI run](https://github.com/openclaw/openclaw/actions/runs/39468753038)
+was cancelled without jobs. None of the latest 50 successful main CI runs
+included a successful build-artifacts job; a green security-fast run is not full CI.
+The inspected successful scheduled [full run](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+qualified `d8612ec864bb4c872616cfda5340c53803655f5f`, not this snapshot.
+Its skipped jobs include Node 24 compatibility, Android/iOS screenshot evidence,
+iOS release e2e, the alternate shared-SDK job and release-child evidence sealing.
+No newer upstream tip or older green source was substituted.
+
+The remaining-gap table below continues to describe the retained overlay.
+The selected upstream does not change the strict-stop preparation fix,
+independent explicit/channel-derived grants, requester authorization,
+keyed plugin-capture cleanup or queued reload recovery owners. Related upstream
+PRs #177823, #177968 and #167431 remain open. No equivalent retained fix was
+identified for removal. Native guest-mention scope changes, HTTP/avatar listener
+owners and Terminal's removal of private test-injection properties are adopted;
+Octogee does not use those removed properties. The sole overlay integration
+conflict was the upstream reorganization of requester-authority tests; its real
+boundary regression remains. An unchanged delivery receipt helper moved to the
+existing delivery-result owner to satisfy the current line cap.
+Native state schema 29, agent schema 31 and protocol 4 remain authoritative.
+
+The pinned pnpm 12.12.1 frozen install, production core/UI/extension types,
+focused lint/format, channel metadata, line-cap gate, full native build,
+Voice/Activity contracts, sequential packers and package integrity passed.
+All 243 focused native tests across 13 files passed, covering strict stop,
+reload recovery, grant separation, requester/Codex authority, delivery,
+mentions and native capture custody. The refreshed UI consumers passed
+184 tests. Aggregate `pnpm check` is not claimed: its max-lines-suppression
+preflight rejects three UI files already byte-identical in the selected
+upstream, including their unchanged baseline. No suppression or budget was
+relaxed. The build warns that startup JS is 317.8 KiB against 317.5 KiB.
+
+The root archive is **120334525 bytes**, SHA256
+`7353d64e0bff6a2080e5f82fbb91aa431723442296b7311979c98af2e01aa3e7`.
+Mattermost is **1251635 bytes**, SHA256
+`74cca5fdd7c77472e6794b83cb3816aa0f019175503d2de0bf19e93bcdb59654`.
+Both were packed sequentially from the same clean built source. Their write-once
+objects are `gs://octogee-openclaw-fork/openclaw-fork-7353d64e.tgz#1792520295253214`
+and `gs://octogee-openclaw-fork/openclaw-mattermost-74cca5fd.tgz#1792520298183836`.
+Exact-generation downloads match both complete hashes, sizes and original bytes.
+The fork branch reads back at the exact native commit.
+
+The actual Linux AMD64 full-plugin installer passed native registry/bundled
+trust, Parallel's nine-file source match, Codex's 186-file match, three native
+hook imports and CUA artifact checks. Offline read-only UID1000 qualification
+also passed the exact installed pair and public Memory/Skills worker launchers.
+Local AMD64 ran under ARM64-host emulation. Hosted island license/runtime/pin
+contracts passed all 31 cases; app and gateway-edge production types passed.
+The two focused base-image suites passed 19 cases. An inadvertently broad
+scripts-suite invocation was interrupted after failures outside those selected
+suites; no full scripts-suite success is claimed.
+
+Shared materialization, installed schema validation and the strict writable
+Doctor comparison passed. The initial Builder fixture failed because it still
+supplied retired pod owner hints and omitted the current root claim. The fixture
+now uses the canonical `writeBuilderClaim` owner without weakening its policy
+assertions; current main's 14 computer/browser claim-policy cases pass. All 629
+captured production inputs still match current main. Final class comparisons
+and complete Gateway image results are recorded separately in the refresh PR.
+Local file-handle exhaustion and Docker's subsequently unavailable guest engine
+are host/tooling failures, not successful image evidence; remaining image work
+uses the build-only Cloud Build identity and maintained Dockerfiles.
+No TEST/PROD deployment, fleet mutation, desktop image construction or live
+acceptance is part of this refresh. A main release family still follows merge.
+
+## Previous October 20 strict-stop correction
+
+That correction's clean native source is
 `9d3a53f772b904d1436f3a962cd268336c492c14` (2026.10.5), on the same selected
 upstream `2d03d5632a69d04181844f85b05d5509240dcc14`. It adds the confirmed
 strict-stop correction to the previous October 20 overlay; it does not select
