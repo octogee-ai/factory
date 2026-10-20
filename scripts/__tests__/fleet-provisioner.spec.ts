@@ -767,6 +767,7 @@ describe("configured Builder surge release", () => {
         }),
         holdNormal: vi.fn(),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const log = vi.fn();
       const wiring = createBuilderSurgeGateWiring({
         adapter,
         processGate,
@@ -774,14 +775,19 @@ describe("configured Builder surge release", () => {
         waitForGatewayReady: async () => {
           events.push("ready");
         },
-        log: () => undefined,
+        log,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         configuredBuilderAssigned: async () => true,
       });
 
+      await expect(wiring.selfReleaseHoldReason()).resolves.toBeNull();
       await wiring.selfRelease("target-pod");
 
       expect(events).toEqual(["permit", "ready"]);
+      expect(log).toHaveBeenCalledWith(
+        "[surge-handoff] canonical assignment present and no migration in flight; " +
+        "permitting OpenClaw and releasing readiness slug=ceckert-test",
+      );
       expect(adapter.reconcileConfiguredBuilderProjectAgents).not.toHaveBeenCalled();
       expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
       const pending = new Map<string, string>();
@@ -886,7 +892,9 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
       });
 
-      await expect(wiring.selfReleaseReserved()).resolves.toBe(true);
+      await expect(wiring.selfReleaseHoldReason()).resolves.toBe(
+        "no canonical assignment for ceckert-test on this gateway",
+      );
       await expect(wiring.selfRelease("target-pod")).rejects.toThrow(/assignment/u);
       await expect(reconcileAdmission()).resolves.toBe(false);
       expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
@@ -1890,6 +1898,58 @@ describe("configured Builder surge release", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it.each([
+    ["a migration reserves the pod", { role: "target", migrationId: "activation-2", slug: "ceckert-test", targetPodUid: "target-pod" }, true, true,
+      "reserved by migration activation-2 as target"],
+    ["the retained overlay is missing", { role: "normal" }, false, true, "configured Builder overlay is unavailable"],
+    ["the gateway has no canonical assignment", { role: "normal" }, true, false,
+      "no canonical assignment for ceckert-test on this gateway"],
+    ["the gateway serves its Builder with no migration in flight", { role: "normal" }, true, true, null],
+  ] as const)("names why a configured Builder boot keeps its readiness hold: %s", async (_label, gate, overlay, assigned, expected) => {
+    stubBuilderClaim("ceckert-test");
+    const processGate = {
+      status: async () => ({ version: 1, podUid: "target-pod", mode: "held", phase: "held", ...gate }),
+    } as unknown as SurgeOpenClawProcessSupervisorClient;
+    const wiring = createBuilderSurgeGateWiring({
+      adapter: {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
+        configuredBuilderOverlayPresent: () => overlay,
+      } as unknown as CustomerLifecycleAdapter,
+      processGate,
+      surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayReady: async () => undefined,
+      log: () => undefined,
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      configuredBuilderAssigned: async () => assigned,
+    });
+
+    await expect(wiring.selfReleaseHoldReason()).resolves.toBe(expected);
+  });
+
+  it("propagates a failing assignment read so the readiness hold names it", async () => {
+    stubBuilderClaim("ceckert-test");
+    const wiring = createBuilderSurgeGateWiring({
+      adapter: {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: () => true,
+        configuredBuilderOverlayPresent: () => true,
+      } as unknown as CustomerLifecycleAdapter,
+      processGate: {
+        status: async () => ({ version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" }),
+      } as unknown as SurgeOpenClawProcessSupervisorClient,
+      surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayReady: async () => undefined,
+      log: () => undefined,
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      configuredBuilderAssigned: async () => {
+        throw new Error("assignment roster unavailable: HTTP 502");
+      },
+    });
+
+    await expect(wiring.selfReleaseHoldReason()).rejects.toThrow("assignment roster unavailable: HTTP 502");
   });
 
   it.each(["unassigned", "assigned", "assignment-read-failed"])(

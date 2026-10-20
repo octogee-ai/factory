@@ -20,7 +20,7 @@ export interface StartSurgeReadinessSelfReleaseOptions {
   released: () => Promise<boolean>;
   observe: () => Promise<ReadySiblingObservation>;
   release: () => Promise<void>;
-  reserved?: () => Promise<boolean>;
+  holdReason?: () => Promise<string | null>;
   schedule?: (callback: () => void, delayMs: number) => () => void;
   now?: () => number;
   log: (message: string) => void;
@@ -43,6 +43,8 @@ interface SurgeReadinessSelfReleaseState {
   absenceObservations: number;
   siblingAbsentSince: number | null;
   lastProgressLogAt: number;
+  pendingProgress: string | null;
+  blocker: string | null;
 }
 
 function defaultSchedule(callback: () => void, delayMs: number): () => void {
@@ -103,18 +105,25 @@ function describeObservation(observation: ReadySiblingObservation): string {
   return `no Ready sibling: ${observation.reason}`;
 }
 
-function logHoldProgress(
+function noteHoldProgress(
   state: SurgeReadinessSelfReleaseState,
   observation: ReadySiblingObservation,
   at: number,
-  log: (message: string) => void,
 ): void {
   if (at - state.lastProgressLogAt < HOLD_PROGRESS_LOG_MS) return;
   state.lastProgressLogAt = at;
-  log(
+  state.pendingProgress =
     `[surge-handoff] still holding readiness after ` +
-    `${Math.round((at - state.startedAt) / 1_000)}s — ${describeObservation(observation)}`,
-  );
+    `${Math.round((at - state.startedAt) / 1_000)}s — ${describeObservation(observation)}`;
+}
+
+function logPendingHoldProgress(
+  state: SurgeReadinessSelfReleaseState,
+  log: (message: string) => void,
+): void {
+  if (state.pendingProgress === null) return;
+  log(state.pendingProgress + (state.blocker ? `; ${state.blocker}` : ""));
+  state.pendingProgress = null;
 }
 
 function holdDeadlineReason(
@@ -152,14 +161,14 @@ function selfReleaseReason(
       state.siblingAbsentSince = at;
       log(`[surge-handoff] Ready sibling disappeared: ${observation.reason}`);
     }
-    logHoldProgress(state, observation, at, log);
+    noteHoldProgress(state, observation, at);
     return at - state.siblingAbsentSince >= SEEN_SIBLING_ABSENCE_MS
       ? "Ready sibling remained absent for 60s"
       : null;
   }
   const capped = holdDeadlineReason(state, at, describeObservation(observation));
   if (capped) return capped;
-  logHoldProgress(state, observation, at, log);
+  noteHoldProgress(state, observation, at);
   state.absenceObservations += 1;
   if (state.absenceObservations === 1) {
     log(`[surge-handoff] no Ready sibling observed: ${observation.reason}`);
@@ -169,8 +178,20 @@ function selfReleaseReason(
     : null;
 }
 
+function recordBlocker(
+  state: SurgeReadinessSelfReleaseState,
+  blocker: string,
+  log: (message: string) => void,
+  logEvery: boolean,
+  message: string,
+): void {
+  if (logEvery || state.blocker !== blocker) log(message);
+  state.blocker = blocker;
+}
+
 async function releaseSurgeReadinessLocally(
   opts: StartSurgeReadinessSelfReleaseOptions,
+  state: SurgeReadinessSelfReleaseState,
   reason: string,
 ): Promise<boolean> {
   try {
@@ -178,9 +199,35 @@ async function releaseSurgeReadinessLocally(
     opts.log(`[surge-handoff] self-released: ${reason}`);
     return true;
   } catch (error) {
-    opts.log(`[surge-handoff] marker self-release failed: ${errorMessage(error)}`);
+    const message = errorMessage(error);
+    recordBlocker(state, `last self-release failed: ${message}`, opts.log, true,
+      `[surge-handoff] marker self-release failed: ${message}`);
     return false;
   }
+}
+
+type SelfReleaseHold = "free" | "held" | "unknown";
+
+async function selfReleaseHold(
+  opts: StartSurgeReadinessSelfReleaseOptions,
+  state: SurgeReadinessSelfReleaseState,
+): Promise<SelfReleaseHold> {
+  let held: string | null;
+  try {
+    held = await opts.holdReason?.() ?? null;
+  } catch (error) {
+    const message = errorMessage(error);
+    recordBlocker(state, `self-release check failed: ${message}`, opts.log, false,
+      `[surge-handoff] self-release check failed: ${message}`);
+    return "unknown";
+  }
+  if (held === null) {
+    state.blocker = null;
+    return "free";
+  }
+  recordBlocker(state, `self-release held: ${held}`, opts.log, false,
+    `[surge-handoff] self-release held: ${held}`);
+  return "held";
 }
 
 export function startSurgeReadinessSelfRelease(
@@ -191,7 +238,7 @@ export function startSurgeReadinessSelfRelease(
   let stopped = false;
   let finished = false;
   let checking = false;
-  let failedReleases = 0;
+  let failures = 0;
   let cancelCheck: (() => void) | null = null;
   const startedAt = now();
   const state: SurgeReadinessSelfReleaseState = {
@@ -200,6 +247,19 @@ export function startSurgeReadinessSelfRelease(
     absenceObservations: 0,
     siblingAbsentSince: null,
     lastProgressLogAt: startedAt,
+    pendingProgress: null,
+    blocker: null,
+  };
+
+  const releaseUnlessHeld = async (reason: string): Promise<void> => {
+    const hold = await selfReleaseHold(opts, state);
+    if (hold === "held") return;
+    if (hold === "unknown") {
+      failures += 1;
+      return;
+    }
+    finished = await releaseSurgeReadinessLocally(opts, state, reason);
+    failures = finished ? 0 : failures + 1;
   };
 
   const check = async (): Promise<void> => {
@@ -212,10 +272,9 @@ export function startSurgeReadinessSelfRelease(
       }
       const observation = await opts.observe();
       const reason = selfReleaseReason(state, observation, now(), opts.log);
-      if (reason !== null && !(await opts.reserved?.())) {
-        finished = await releaseSurgeReadinessLocally(opts, reason);
-        failedReleases = finished ? 0 : failedReleases + 1;
-      }
+      if (reason !== null) await releaseUnlessHeld(reason);
+      else if (state.pendingProgress !== null) await selfReleaseHold(opts, state);
+      if (!finished) logPendingHoldProgress(state, opts.log);
     } catch (error) {
       resetAbsence(state);
       const message = errorMessage(error);
@@ -223,15 +282,15 @@ export function startSurgeReadinessSelfRelease(
       if (!state.sawSibling) {
         const capped = holdDeadlineReason(state, now(), `probe failing: ${message}`);
         if (capped) {
-          finished = await releaseSurgeReadinessLocally(opts, capped);
-          failedReleases = finished ? 0 : failedReleases + 1;
+          finished = await releaseSurgeReadinessLocally(opts, state, capped);
+          failures = finished ? 0 : failures + 1;
         }
       }
     } finally {
       checking = false;
     }
     if (!stopped && !finished) {
-      cancelCheck = schedule(() => void check(), selfReleaseRetryDelayMs(failedReleases));
+      cancelCheck = schedule(() => void check(), selfReleaseRetryDelayMs(failures));
     }
   };
 

@@ -485,7 +485,7 @@ describe("surge OpenClaw process supervisor", () => {
         return settled;
       },
       observe: async () => ({ kind: "none", reason: "no Ready sibling" }),
-      reserved: wiring.selfReleaseReserved,
+      holdReason: wiring.selfReleaseHoldReason,
       release: () => wiring.selfRelease("target-pod"),
       schedule: (callback) => { scheduled.push(callback); return () => undefined; },
       log,

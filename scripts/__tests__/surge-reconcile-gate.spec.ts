@@ -144,7 +144,7 @@ describe("surge reconcile gate", () => {
   it("self-releases 60s after a previously seen Ready sibling disappears unless a reservation holds it", async () => {
     let now = 0;
     let observation: "sibling" | "none" = "sibling";
-    let reserved = true;
+    let holdReason: string | null = "reserved by migration mig-1 as target";
     let scheduled: (() => void) | null = null;
     const release = vi.fn(async () => undefined);
     const runScheduled = () => {
@@ -158,7 +158,7 @@ describe("surge reconcile gate", () => {
         ? { kind: "sibling", podUid: "source-uid" }
         : { kind: "none", reason: "connection refused" },
       release,
-      reserved: async () => reserved,
+      holdReason: async () => holdReason,
       schedule: (callback) => {
         scheduled = callback;
         return vi.fn();
@@ -181,7 +181,7 @@ describe("surge reconcile gate", () => {
     await vi.waitFor(() => expect(scheduled).not.toBeNull());
     expect(release).not.toHaveBeenCalled();
 
-    reserved = false;
+    holdReason = null;
     now = 61_000;
     runScheduled();
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
@@ -340,6 +340,188 @@ describe("surge reconcile gate", () => {
     now = 91_000;
     runScheduled();
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+
+    stop();
+  });
+
+  it("names the reason a due self-release is held in the readiness hold log", async () => {
+    let now = 0;
+    let scheduled: (() => void) | null = null;
+    const release = vi.fn(async () => undefined);
+    const log = vi.fn();
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => ({ kind: "none", reason: "connection refused" }),
+      release,
+      holdReason: async () => "no canonical assignment for chris on this gateway",
+      schedule: (callback) => {
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => now,
+      log,
+    });
+
+    for (const nextNow of [1_000, 2_000, 3_000, 61_000]) {
+      await vi.waitFor(() => expect(scheduled).not.toBeNull());
+      now = nextNow;
+      runScheduled();
+    }
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+
+    expect(release).not.toHaveBeenCalled();
+    expect(log.mock.calls.filter(([message]) => message ===
+      "[surge-handoff] self-release held: no canonical assignment for chris on this gateway")).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(
+      "[surge-handoff] still holding readiness after 61s — no Ready sibling: connection refused; " +
+      "self-release held: no canonical assignment for chris on this gateway",
+    );
+
+    stop();
+  });
+
+  it("names the current hold reason on the check where a seen-sibling self-release first becomes due", async () => {
+    let now = 0;
+    let observation: "sibling" | "none" = "sibling";
+    let holdReason = "reserved by migration mig-1 as target";
+    let scheduled: (() => void) | null = null;
+    const release = vi.fn(async () => undefined);
+    const log = vi.fn();
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => observation === "sibling"
+        ? { kind: "sibling", podUid: "source-uid" }
+        : { kind: "none", reason: "connection refused" },
+      release,
+      holdReason: async () => holdReason,
+      schedule: (callback) => {
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => now,
+      log,
+    });
+    const progressLines = () => log.mock.calls
+      .map(([message]) => message as string)
+      .filter((message) => message.startsWith("[surge-handoff] still holding readiness"));
+
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    observation = "none";
+    for (const nextNow of [1_000, 30_000, 61_000]) {
+      now = nextNow;
+      runScheduled();
+      await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    }
+    expect(progressLines()).toEqual([
+      "[surge-handoff] still holding readiness after 61s — no Ready sibling: connection refused; " +
+      "self-release held: reserved by migration mig-1 as target",
+    ]);
+
+    holdReason = "no canonical assignment for chris on this gateway";
+    now = 121_000;
+    runScheduled();
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+    expect(progressLines().at(-1)).toBe(
+      "[surge-handoff] still holding readiness after 121s — no Ready sibling: connection refused; " +
+      "self-release held: no canonical assignment for chris on this gateway",
+    );
+    expect(release).not.toHaveBeenCalled();
+
+    stop();
+  });
+
+  it("names the last self-release failure in the readiness hold log", async () => {
+    let now = 0;
+    let scheduled: (() => void) | null = null;
+    const release = vi.fn(async () => {
+      throw new Error("EBUSY: resource busy or locked, rmdir '/home/node/.openclaw/customers/chris/projects'");
+    });
+    const log = vi.fn();
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => ({ kind: "none", reason: "connection refused" }),
+      release,
+      holdReason: async () => null,
+      schedule: (callback) => {
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => now,
+      log,
+    });
+
+    for (const nextNow of [1_000, 2_000, 61_000]) {
+      await vi.waitFor(() => expect(scheduled).not.toBeNull());
+      now = nextNow;
+      runScheduled();
+    }
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith(
+      "[surge-handoff] still holding readiness after 61s — no Ready sibling: connection refused; " +
+      "last self-release failed: EBUSY: resource busy or locked, rmdir '/home/node/.openclaw/customers/chris/projects'",
+    );
+
+    stop();
+  });
+
+  it("keeps holding with a backed-off, named reason while the hold-reason read keeps failing", async () => {
+    let now = 0;
+    const delays: number[] = [];
+    let scheduled: (() => void) | null = null;
+    const release = vi.fn(async () => undefined);
+    const log = vi.fn();
+    const runScheduled = () => {
+      const callback = scheduled;
+      scheduled = null;
+      callback?.();
+    };
+    const stop = startSurgeReadinessSelfRelease({
+      released: async () => false,
+      observe: async () => ({ kind: "none", reason: "connection refused" }),
+      release,
+      holdReason: async () => {
+        throw new Error("assignment roster unavailable: HTTP 502");
+      },
+      schedule: (callback, delayMs) => {
+        delays.push(delayMs);
+        scheduled = callback;
+        return vi.fn();
+      },
+      now: () => now,
+      log,
+    });
+
+    for (let check = 1; check <= 12; check += 1) {
+      await vi.waitFor(() => expect(scheduled).not.toBeNull());
+      now = check * 10_000;
+      runScheduled();
+    }
+    await vi.waitFor(() => expect(scheduled).not.toBeNull());
+
+    expect(release).not.toHaveBeenCalled();
+    expect(delays.at(-1)).toBeGreaterThan(selfReleaseRetryDelayMs(0));
+    expect(log.mock.calls.filter(([message]) => message ===
+      "[surge-handoff] self-release check failed: assignment roster unavailable: HTTP 502")).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(
+      /^\[surge-handoff\] still holding readiness after \d+s — no Ready sibling: connection refused; self-release check failed: assignment roster unavailable: HTTP 502$/u,
+    ));
 
     stop();
   });

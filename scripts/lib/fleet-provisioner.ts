@@ -1888,7 +1888,7 @@ function startPodSurgeReadinessRecovery(input: {
   port: number;
   released?: () => Promise<boolean>;
   release?: (targetPodUid: string) => Promise<void>;
-  reserved?: () => Promise<boolean>;
+  holdReason?: () => Promise<string | null>;
   log: (message: string) => void;
 }): () => void {
   const ownPodUid = process.env.POD_UID?.trim() || null;
@@ -1903,7 +1903,7 @@ function startPodSurgeReadinessRecovery(input: {
       ownPodUid,
     }),
     release: () => input.release?.(ownPodUid) ?? input.surgeReadiness.release({ targetPodUid: ownPodUid }),
-    ...(input.reserved ? { reserved: input.reserved } : {}),
+    ...(input.holdReason ? { holdReason: input.holdReason } : {}),
     log: input.log,
   });
 }
@@ -2160,7 +2160,7 @@ interface BuilderSurgeGateWiring {
     slug: string;
     targetPodUid: string;
   }) => Promise<SurgeOpenClawProcessGateState>;
-  selfReleaseReserved: () => Promise<boolean>;
+  selfReleaseHoldReason: () => Promise<string | null>;
   surgeTargetOpenClawHeld: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
   surgeTargetLive: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
   admitLiveSurgeTarget: (input: BuilderSurgeTargetRequest) => Promise<void>;
@@ -2344,6 +2344,10 @@ async function selfReleaseConfiguredBuilder(input: {
       `configured Builder assignment does not match this gateway: ${slug ?? "unknown"}`,
     );
   }
+  log(
+    "[surge-handoff] canonical assignment present and no migration in flight; " +
+    `permitting OpenClaw and releasing readiness slug=${slug}`,
+  );
   await waitForActiveProvisioningDrain();
   try {
     await attachConfiguredBuilderWithProvisioning({ adapter, attachConfigured, log, provisioning });
@@ -2360,16 +2364,19 @@ async function selfReleaseConfiguredBuilder(input: {
   }
 }
 
-async function configuredBuilderSelfReleaseReserved(input: {
+async function configuredBuilderSelfReleaseHoldReason(input: {
   adapter: CustomerLifecycleAdapter;
   configuredBuilderAssigned: (slug: string) => Promise<boolean>;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
-}): Promise<boolean> {
-  if (!input.processGate) return false;
+}): Promise<string | null> {
+  if (!input.processGate) return null;
   const state = await input.processGate.status();
-  if (state.role !== "normal") return true;
+  if (state.role !== "normal") return `reserved by migration ${state.migrationId} as ${state.role}`;
   const slug = configuredBuilderSlug(input.adapter);
-  return !slug || !(await input.configuredBuilderAssigned(slug));
+  if (!slug) return "configured Builder overlay is unavailable";
+  return await input.configuredBuilderAssigned(slug)
+    ? null
+    : `no canonical assignment for ${slug} on this gateway`;
 }
 
 interface BuilderSurgeGateWiringOptions {
@@ -2715,7 +2722,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       const state = await processGate.status();
       return state.mode === "permitted" && state.phase === "running";
     },
-    selfReleaseReserved: () => configuredBuilderSelfReleaseReserved({
+    selfReleaseHoldReason: () => configuredBuilderSelfReleaseHoldReason({
       adapter, configuredBuilderAssigned, processGate,
     }),
   };
@@ -3016,7 +3023,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     port: boundPort,
     released: surgeGate.selfReleaseLoopSettled,
     release: surgeGate.selfRelease,
-    reserved: surgeGate.selfReleaseReserved,
+    holdReason: surgeGate.selfReleaseHoldReason,
     log: opts.log,
   });
   const whenReady = waitForGatewayReady();
