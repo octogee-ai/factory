@@ -2,6 +2,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
+  GLM_OPERATIONS_COLLECTION,
   builderComputerInstanceName,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
@@ -385,22 +386,99 @@ async function stopSuspendedComputer(deps: ComputerLifecycleDeps, gatewayId: str
   return stopped;
 }
 
+interface StopOnPark {
+  operationId: string;
+  reason: string;
+  claimedAt?: number;
+}
+
+function readStopOnPark(data: Record<string, unknown> | undefined): StopOnPark | null {
+  const value = data?.vmStopOnPark as Partial<StopOnPark> | undefined;
+  if (value === undefined) return null;
+  if (typeof value?.operationId !== "string" || !value.operationId || typeof value.reason !== "string" ||
+      (value.claimedAt !== undefined && typeof value.claimedAt !== "number")) {
+    throw new Error("vmStopOnPark request is malformed");
+  }
+  return { operationId: value.operationId, reason: value.reason, ...(value.claimedAt === undefined ? {} : { claimedAt: value.claimedAt }) };
+}
+
+async function recordAwakeComputer(
+  deps: ComputerLifecycleDeps,
+  gatewayId: string,
+  record: Record<string, unknown>,
+): Promise<void> {
+  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
+  const outcome = await deps.db.runTransaction(async (tx) => {
+    const [runtime, root] = await Promise.all([tx.get(ref), tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId))]);
+    const stop = readStopOnPark(runtime.data());
+    const writer = stop ? await tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(stop.operationId)) : null;
+    const stale = stop !== null && stop.claimedAt === undefined && root.data()?.desiredStatus === "running" && writer?.data()?.status !== "running";
+    tx.set(ref, { ...record, ...(stale ? { vmStopOnPark: FieldValue.delete() } : {}) }, { merge: true });
+    return stop ? { stop, stale } : null;
+  });
+  if (!outcome) return;
+  deps.log(outcome.stale
+    ? `[vm-gateway-runtime] ${gatewayId}: cleared the leftover stop request of ${outcome.stop.operationId} on wake (${outcome.stop.reason})`
+    : `[vm-gateway-runtime] ${gatewayId}: kept the stop request of ${outcome.stop.operationId}; it is claimed, its return is running, or the gateway is no longer running`);
+}
+
+async function claimStopOnPark(deps: ComputerLifecycleDeps, gatewayId: string, stopFor: StopOnPark): Promise<boolean> {
+  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
+  return deps.db.runTransaction(async (tx) => {
+    const current = readStopOnPark((await tx.get(ref)).data());
+    if (current?.operationId !== stopFor.operationId) return false;
+    if (current.claimedAt === undefined) tx.set(ref, { vmStopOnPark: { ...current, claimedAt: deps.now() } }, { merge: true });
+    return true;
+  });
+}
+
+async function releaseConfirmedStop(deps: ComputerLifecycleDeps, gatewayId: string, stopFor: StopOnPark): Promise<void> {
+  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
+  await deps.db.runTransaction(async (tx) => {
+    if (readStopOnPark((await tx.get(ref)).data())?.operationId !== stopFor.operationId) return;
+    tx.set(ref, { vmStopOnPark: FieldValue.delete() }, { merge: true });
+  });
+}
+
+async function parkNow(
+  deps: ComputerLifecycleDeps,
+  gatewayId: string,
+  description: GatewayVmDescription,
+  stopFor: StopOnPark | undefined,
+): Promise<{ description: GatewayVmDescription; verb: string; parkedHere: boolean }> {
+  const status = description.status;
+  const wouldStop = stopFor !== undefined && (status === "SUSPENDED" || needsPark(description));
+  if (wouldStop && !await claimStopOnPark(deps, gatewayId, stopFor)) {
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: the stop request of ${stopFor.operationId} was withdrawn; parking normally`);
+    return parkNow(deps, gatewayId, description, undefined);
+  }
+  if (stopFor && status === "SUSPENDED") {
+    const stopped = await stopSuspendedComputer(deps, gatewayId, description, `satisfy ${stopFor.operationId} (${stopFor.reason})`);
+    await releaseConfirmedStop(deps, gatewayId, stopFor);
+    return { description: stopped, verb: "stopped", parkedHere: true };
+  }
+  if (!needsPark(description)) return { description, verb: status === "SUSPENDED" ? "suspended" : "stopped", parkedHere: false };
+  if (stopFor) {
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: stopping ${description.name} instead of suspending it for ${stopFor.operationId}: ${stopFor.reason}`);
+    await deps.vm.stop(description.name, description.zone);
+    const stopped = verifiedStoppedComputer(description, await deps.vm.describe(description.name, description.zone));
+    await releaseConfirmedStop(deps, gatewayId, stopFor);
+    return { description: stopped, verb: "stopped", parkedHere: true };
+  }
+  const verb = await suspendOrStop(deps, gatewayId, description);
+  return { description: verifiedStoppedComputer(description, await deps.vm.describe(description.name, description.zone), PARKED_STATUSES), verb, parkedHere: true };
+}
+
 async function parkComputerInstance(
   deps: ComputerLifecycleDeps,
   gatewayId: string,
   described: GatewayVmDescription,
   recorded: GatewayVmState,
-  park: { reason: GatewayVmStopReason; note?: string },
+  park: { reason: GatewayVmStopReason; note?: string; stopFor?: StopOnPark },
 ): Promise<GatewayVmState> {
-  const { reason, note = "" } = park;
-  let description = described;
-  const parkedHere = needsPark(description);
-  let verb = description.status === "SUSPENDED" ? "suspended" : "stopped";
-  if (parkedHere) {
-    verb = await suspendOrStop(deps, gatewayId, description);
-    description = verifiedStoppedComputer(description, await deps.vm.describe(description.name, description.zone), PARKED_STATUSES);
-  }
-  description = verifiedStoppedComputer(described, description, PARKED_STATUSES);
+  const { reason, note = "", stopFor } = park;
+  const { description: parkedDescription, verb, parkedHere } = await parkNow(deps, gatewayId, described, stopFor);
+  const description = verifiedStoppedComputer(described, parkedDescription, PARKED_STATUSES);
   const cowboyPark = parkedHere || (recorded.stopReason !== null && COWBOY_STOP_REASONS.has(recorded.stopReason));
   const what = cowboyPark
     ? `${verb} ${description.name} for ${reason} -> ${description.status}`
@@ -639,7 +717,6 @@ async function bindParkedComputer(deps: ComputerLifecycleDeps, gatewayId: string
 }
 
 export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLifecycle {
-  const glm = (gatewayId: string) => deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
 
   async function recordVm(gatewayId: string, vm: GatewayVmState | null, what: string): Promise<boolean> {
     return recordVmObservation(deps, gatewayId, { vm }, what);
@@ -748,7 +825,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       description = await wakeComputer(gatewayId, description);
     }
     const state = stateFrom(description, deps.now(), null, origin);
-    await glm(gatewayId).set({ runtime: "gce-vm", vmSpec: spec, vm: state }, { merge: true });
+    await recordAwakeComputer(deps, gatewayId, { runtime: "gce-vm", vmSpec: spec, vm: state });
     return state;
   }
 
@@ -769,11 +846,12 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function pauseComputer(gatewayId: string): Promise<void> {
-    const { vm } = await readVmRecord(deps.db, gatewayId);
+    const { data, vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
     if (!description) return;
-    await recordVm(gatewayId, await parkComputerInstance(deps, gatewayId, description, vm, { reason: "operator" }), "pause");
+    const stopFor = readStopOnPark(data);
+    await recordVm(gatewayId, await parkComputerInstance(deps, gatewayId, description, vm, { reason: "operator", ...(stopFor ? { stopFor } : {}) }), "pause");
   }
 
   async function stoppableComputer(gatewayId: string, vm: GatewayVmState): Promise<GatewayVmDescription | null> {

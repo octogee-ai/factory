@@ -813,6 +813,136 @@ describe("suspend parking", () => {
     expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: stopped octogee-computer-test-uida for operator -> TERMINATED; boot and home disks retained/));
   });
 
+  it("stops instead of suspending a computer whose return asked for a stop", async () => {
+    let current = running;
+    const stopOnPark = { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed: unmount refused" };
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: stopOnPark } }, {
+      describe: vi.fn(async () => current),
+      stop: vi.fn(async () => {
+        expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual({ ...stopOnPark, claimedAt: 1_000 });
+        current = stopped;
+      }),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.vm.suspend).not.toHaveBeenCalled();
+    expect(h.vm.stop).toHaveBeenCalledExactlyOnceWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vmStopOnPark).toBeUndefined();
+    expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, status: "TERMINATED", internalIp: null, stopReason: "operator", updatedAt: 1_000 });
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: stopping octogee-computer-test-uida instead of suspending it for builder-return-b-x-g1: live source cleanup failed: unmount refused/));
+  });
+
+  it("suspends instead of stopping when the stop request it read was withdrawn before it acts", async () => {
+    let current = running;
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded },
+      vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed: earlier attempt" } } }, {
+      describe: vi.fn(async () => {
+        if (vi.mocked(h.vm.describe).mock.calls.length === 1) {
+          const { vmStopOnPark: _withdrawn, ...rest } = h.docs["glmGateways/b-x"];
+          h.docs["glmGateways/b-x"] = rest;
+        }
+        return current;
+      }),
+      suspend: vi.fn(async () => { current = suspended; }),
+      stop: vi.fn(async () => { current = stopped; }),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "SUSPENDED", stopReason: "operator" });
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: the stop request of builder-return-b-x-g1 was withdrawn; parking normally/));
+  });
+
+  it("honors a stop claimed by a pass that crashed before stopping, and deletes it once the stop is confirmed", async () => {
+    let current = running;
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded },
+      vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed", claimedAt: 500 } } }, {
+      describe: vi.fn(async () => current),
+      stop: vi.fn(async () => { current = stopped; }),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.vm.suspend).not.toHaveBeenCalled();
+    expect(h.vm.stop).toHaveBeenCalledExactlyOnceWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vmStopOnPark).toBeUndefined();
+  });
+
+  it("keeps a claimed stop across a wake even when its return finished", async () => {
+    const claimed = { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed", claimedAt: 500 };
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: claimed },
+      "gateways/b-x": { gatewayClass: "builder", desiredStatus: "running" },
+      "glmOperations/builder-return-b-x-g1": { kind: "migrate-customer", status: "failed" },
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(claimed);
+  });
+
+  it("stops an already suspended computer whose return asked for a stop", async () => {
+    let current = suspended;
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" },
+      vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "source computer is SUSPENDED" } } }, {
+      describe: vi.fn(async () => current),
+      stop: vi.fn(async () => { current = stopped; }),
+    });
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.vm.suspend).not.toHaveBeenCalled();
+    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ status: "TERMINATED", stopReason: "operator" });
+  });
+
+  it("keeps a stop request whose return paused the gateway after the wake pass snapshotted running, so the next park stops", async () => {
+    let current = running;
+    const stopOnPark = { operationId: "builder-return-b-x-g2", reason: "live source cleanup failed: unmount refused" };
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: stopOnPark },
+      "gateways/b-x": { gatewayClass: "builder", desiredStatus: "paused" },
+      "glmOperations/builder-return-b-x-g2": { kind: "migrate-customer", status: "running" },
+    }, {
+      describe: vi.fn(async () => current),
+      stop: vi.fn(async () => { current = stopped; }),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(stopOnPark);
+    await h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 });
+    expect(h.vm.suspend).not.toHaveBeenCalled();
+    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+  });
+
+  it("keeps a stop request whose return is still running even while the root reads running", async () => {
+    const stopOnPark = { operationId: "builder-return-b-x-g2", reason: "live source cleanup failed: unmount refused" };
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: stopOnPark },
+      "gateways/b-x": { gatewayClass: "builder", desiredStatus: "running" },
+      "glmOperations/builder-return-b-x-g2": { kind: "migrate-customer", status: "running" },
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.docs["glmGateways/b-x"].vmStopOnPark).toEqual(stopOnPark);
+  });
+
+  it("clears a finished return's leftover stop request when the gateway wakes its computer", async () => {
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "operator" },
+        vmStopOnPark: { operationId: "builder-return-b-x-g1", reason: "live source cleanup failed: abandoned" } },
+      "gateways/b-x": { gatewayClass: "builder", desiredStatus: "running" },
+      "glmOperations/builder-return-b-x-g1": { kind: "migrate-customer", status: "failed" },
+    }, {
+      describe: vi.fn(async () => running).mockResolvedValueOnce(suspended),
+      resume: vi.fn(async () => ({ fellBackToStandard: false })),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vmStopOnPark).toBeUndefined();
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: cleared the leftover stop request of builder-return-b-x-g1/));
+  });
+
+  it("refuses to park on a malformed stop request", async () => {
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded }, vmStopOnPark: { reason: 7 } } }, {
+      describe: vi.fn(async () => running),
+    });
+    await expect(h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 })).rejects.toThrow(/vmStopOnPark request is malformed/);
+    expect(h.vm.suspend).not.toHaveBeenCalled();
+    expect(h.vm.stop).not.toHaveBeenCalled();
+  });
+
   it("wakes a suspended computer by resuming it instead of starting it", async () => {
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "idle" } } }, {
       describe: vi.fn(async () => running).mockResolvedValueOnce(suspended),
