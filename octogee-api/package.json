@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-sts": "^3.1150.0",
-    "@google-cloud/kms": "^6.2.1",
+    "@google-cloud/kms": "^6.3.0",
     "@google-cloud/secret-manager": "^7.0.0",
     "@octogee/core": "file:../core",
     "@octogee/shared": "file:../shared",
