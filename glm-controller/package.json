@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Gateway Lifecycle Manager — runs in-cluster, reconciles Firestore desired-state to Helm + drives migration operations",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "main": "dist/glm-controller/src/index.js",
   "scripts": {

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Octogee cluster-singleton API \u2014 non-locality routes lifted out of gateway-edge (POST-BENDER-CLEANUP-SPEC \u00a72)",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "main": "dist/octogee-api/src/index.js",
   "scripts": {

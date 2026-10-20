@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Octogee gateway-edge sidecar \u2014 locality-bound HTTP routes (ESM)",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "main": "dist/gateway-edge/src/index.js",
   "scripts": {

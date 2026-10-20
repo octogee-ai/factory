@@ -6,15 +6,17 @@ import { expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { createMainBuildReleaseDigestManifest } from '../../.github/actions/release-digest-manifest/release-digest-manifest.mjs';
 
-const build = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/build-main.yml'), 'utf8'));
+const build = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/desktop-image.yml'), 'utf8'));
+const main = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/build-main.yml'), 'utf8'));
 const cloud = parse(readFileSync(resolve(import.meta.dirname, '../../ci/cloudbuild-main.yaml'), 'utf8'));
 
-it('keeps desktop construction out of default Cloud Build and requires an explicit Actions opt-in', () => {
+it('keeps desktop construction explicit and out of automatic main builds', () => {
   expect(build.on.workflow_dispatch.inputs.build_desktop_image).toMatchObject({ type: 'boolean', default: false });
   expect(build.jobs.build.if).toBe('inputs.build_desktop_image');
   expect(cloud.steps[0].env).toContain('CI_BUILD_DESKTOP_IMAGE=false');
   expect(cloud.substitutions).not.toHaveProperty('_BUILD_DESKTOP_IMAGE');
   expect(build.on).not.toHaveProperty('push');
+  expect(main.on.workflow_dispatch.inputs).not.toHaveProperty('build_desktop_image');
 });
 
 it.each(['', JSON.stringify({
