@@ -11,6 +11,7 @@ import {
   type GatewayVmRuntimeContainer,
   type GatewayVmRuntimeMount,
   type GatewayVmRuntimeVolume,
+  type RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 
 interface JsonScan {
@@ -118,6 +119,7 @@ export interface GatewayComputerIdentity {
 
 export interface RenderVmRuntimeBundleInput {
   gatewayId: string;
+  builderIdentity?: RuntimeBuilderIdentity;
   homeStorageId?: string;
   namespace: string;
   imageRepository: string;
@@ -279,9 +281,11 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
   if (!gateway) throw new Error("rendered Deployment has no gateway container");
   containers.push(renderDesktopNode(gateway));
   configureHomeIdentity(input.homeStorageId, init, containers);
+  const builderIdentity = bindBuilderIdentity(input.builderIdentity, containers);
   volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" }, { name: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, kind: "emptyDir" });
   const unversioned = {
     gatewayId: input.gatewayId,
+    ...builderIdentity,
     namespace: input.namespace,
     imageRepository: input.imageRepository,
     imageTag: input.imageTag,
@@ -292,6 +296,32 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
     kubernetes: input.kubernetes,
   };
   return { version: bundleVersion(unversioned), ...unversioned, renderedAt: input.now() };
+}
+
+const PROJECT_MATERIALIZATIONS_VOLUME = "project-materializations";
+const PROJECT_MATERIALIZATIONS_MOUNT = "/work/materialized";
+
+function bindBuilderIdentity(
+  identity: RuntimeBuilderIdentity | undefined,
+  containers: GatewayVmRuntimeContainer[],
+): { builderIdentity?: RuntimeBuilderIdentity } {
+  if (!identity) return {};
+  mountBuilderProjects(identity, containers);
+  return { builderIdentity: { ...identity } };
+}
+
+function mountBuilderProjects(identity: RuntimeBuilderIdentity, containers: GatewayVmRuntimeContainer[]): void {
+  for (const container of containers) {
+    const materialized = container.mounts.find((mount) =>
+      mount.volume === PROJECT_MATERIALIZATIONS_VOLUME && mount.mountPath === PROJECT_MATERIALIZATIONS_MOUNT && mount.subPath === "projects");
+    if (!materialized) continue;
+    container.mounts.push({
+      volume: PROJECT_MATERIALIZATIONS_VOLUME,
+      mountPath: `/home/node/.openclaw/customers/${identity.builderSlug}/projects`,
+      readOnly: materialized.readOnly,
+      subPath: "projects",
+    });
+  }
 }
 
 function configureHomeIdentity(homeStorageId: string | undefined, init: GatewayVmRuntimeContainer | null, containers: GatewayVmRuntimeContainer[]): void {

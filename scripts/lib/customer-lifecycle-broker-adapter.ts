@@ -201,6 +201,7 @@ import {
   stopStaleMattermostRoutingAccounts,
 } from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
 
@@ -1730,7 +1731,7 @@ export function projectCheckoutScopeForRuntime(
   const gatewayClass = env.GATEWAY_CLASS?.trim();
   const includesProjects = gatewayClass === "shared" || (
     gatewayClass === "builder" &&
-    env.GATEWAY_BUILDER_SLUG?.trim() === slug
+    builderClaimSlug(env) === slug
   );
   return includesProjects
     ? "workspace-and-projects"

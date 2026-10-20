@@ -108,9 +108,8 @@ describe("planBundle", () => {
     bundle.containers[0].mounts.at(-1)!.subPath = "../home";
     expect(() => planBundle(bundle, ctx)).toThrow(/subPath/);
   });
-  it("labels dedicated Builder container logs with the configured slug", () => {
-    const bundle = bundleFixture();
-    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
+  it("labels dedicated Builder container logs with the bundle's Builder slug", () => {
+    const bundle = bundleFixture({ builderIdentity: { ownerUid: "uid-alice", builderSlug: "alice" } });
     const plan = planBundle(bundle, ctx);
     for (const spec of [plan.init, ...plan.services]) {
       expect(spec!.config.Labels).toMatchObject({ "ai.octogee.builder-slug": "alice" });
@@ -119,19 +118,20 @@ describe("planBundle", () => {
   });
 
   it("replaces sidecars when their logged Builder identity changes", () => {
-    const bundle = bundleFixture();
-    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
-    const before = planBundle(bundle, ctx);
-    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "bob";
-    const after = planBundle(bundle, ctx);
+    const before = planBundle(bundleFixture({ builderIdentity: { ownerUid: "uid-alice", builderSlug: "alice" } }), ctx);
+    const after = planBundle(bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }), ctx);
     expect(specVersion(before.services[1])).not.toBe(specVersion(after.services[1]));
   });
 
-  it("rejects conflicting Builder identities instead of mislabelling logs", () => {
-    const bundle = bundleFixture();
-    bundle.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
-    bundle.containers[1].env.GATEWAY_BUILDER_SLUG = "bob";
-    expect(() => planBundle(bundle, ctx)).toThrow(/conflicting/);
+  it("labels an older platform's bundle from its rendered owner env and rejects conflicting identities", () => {
+    const older = bundleFixture();
+    for (const container of older.containers) Object.assign(container.env, { GATEWAY_BUILDER_SLUG: "alice", GATEWAY_OWNER_UID: "uid-alice" });
+    expect(planBundle(older, ctx).services[0].config.Labels).toMatchObject({ "ai.octogee.builder-slug": "alice" });
+
+    const conflicting = bundleFixture();
+    conflicting.containers[0].env.GATEWAY_BUILDER_SLUG = "alice";
+    conflicting.containers[1].env.GATEWAY_BUILDER_SLUG = "bob";
+    expect(() => planBundle(conflicting, ctx)).toThrow(/conflicting/);
   });
 
   it("ships every container's logs to Cloud Logging tagged with its gateway and namespace", () => {

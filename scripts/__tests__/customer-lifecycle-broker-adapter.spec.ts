@@ -33,6 +33,7 @@ import { canonicalCustomerModelDefinition } from "../../shared/types/agent-model
 import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, finalizeConvergedMount, materializeDeferredBrokerProfiles } from "../lib/fleet-provisioner.js";
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
+import { clearBuilderClaim, stubBuilderClaim, withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -1062,8 +1063,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 
   it("waits through a cold Builder control handshake before changing its roster", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     try {
       const rpc = mkGatewayRpc({
         channelsStatus: vi.fn(async () => ({ channelAccounts: {
@@ -1076,14 +1076,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       await expect(adapter.activateImportedCustomer("tester10")).resolves.toMatchObject({ appliedFingerprint: expect.any(String) });
       expect(vi.mocked(rpc.configGet).mock.invocationCallOrder[1]).toBeLessThan(vi.mocked(rpc.agentsCreate).mock.invocationCallOrder[0]);
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
   it.each(["connect-failed", "timeout"] as const)("exhausts cold Builder admission without roster changes for %s", async (code) => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     let now = Date.now();
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
@@ -1099,8 +1097,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
     } finally {
       clock.mockRestore();
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
@@ -1118,8 +1115,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 
   it("anchors inherited auth to the neutral agent for the configured Builder", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     try {
       const rpc = {
         channelsStatus: vi.fn(async () => ({
@@ -1145,14 +1141,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         }),
       );
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
   it("grants the configured Builder owner authority in its import activation patch", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     try {
       const rpc = {
         channelsStatus: vi.fn(async () => ({
@@ -1173,14 +1167,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect(ownerCommandsPatch?.({})).toEqual({ ownerAllowFrom: [`mattermost:${ALICE_OWNER_MM_ID}`] });
       expect(ownerCommandsPatch?.({ commands: { ownerAllowFrom: ["mattermost:other"] } })).toBeUndefined();
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
   it("refuses a configured Builder import activation whose owner Mattermost id is unavailable", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     try {
       const rpc = {
         configGet: vi.fn(async () => configSnapshot({})),
@@ -1193,14 +1185,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       );
       expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
   it("does not add a Builder auth anchor for another Builder's customer", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "someone-else";
+    stubBuilderClaim("someone-else");
     try {
       const rpc = {
         channelsStatus: vi.fn(async () => ({
@@ -1223,8 +1213,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         "ownerCommandsPatch",
       );
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
@@ -1361,8 +1350,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   });
 
   it("restarts only the configured Builder manifest accounts after a retained-overlay no-op", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     try {
       const desiredAccountIds = ["tester10-coach", "tester10-proj-orbit"];
       mocks.readActivationManifest.mockResolvedValueOnce({
@@ -1471,14 +1459,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         routingActivationMocks.activate.mock.invocationCallOrder[0]!,
       );
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
   it("keeps a configured Builder no-op activation pending when its account restart fails", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "tester10";
+    stubBuilderClaim("tester10");
     try {
       mocks.readActivationManifest.mockResolvedValueOnce({
         slug: "tester10",
@@ -1526,8 +1512,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
       expect(rpc.channelsStatus).not.toHaveBeenCalled();
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
@@ -2323,7 +2308,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
   it.each(["builder", "shared"])("keeps %s account endpoint ownership through a full remount", async (gatewayClass) => {
     vi.stubEnv("GATEWAY_CLASS", gatewayClass);
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", gatewayClass === "builder" ? "alice" : "");
+    stubBuilderClaim(gatewayClass === "builder" ? "alice" : "");
     const snapshot = aliceSnapshot({ projectAgents: [
       { projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "orbit-pat", status: "ready" },
       { projectId: "scout", enabled: true, mmUserId: "bot-scout", token: "scout-pat", status: "ready" },
@@ -2504,7 +2489,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     ["Builder", "alice", [`mattermost:${ALICE_OWNER_MM_ID}`]],
     ["shared", "", undefined],
   ] as const)("names the owner as the native OpenClaw command owner only on a %s gateway", async (_label, builderSlug, ownerAllowFrom) => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", builderSlug);
+    stubBuilderClaim(builderSlug);
     const snapshot = aliceSnapshot();
     let patch: { commands?: { ownerAllowFrom?: unknown } } | undefined;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
@@ -3014,7 +2999,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it("preserves isolated coach policy while refreshing no-op routing monitors", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+    stubBuilderClaim("alice");
     routingActivationMocks.pending = true;
     patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
       const patch = args.buildPatch({
@@ -3904,8 +3889,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
   });
 
   it("declares roster ownership on a Barn, which is multi-agent once a customer lands", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    delete process.env.GATEWAY_BUILDER_SLUG;
+    clearBuilderClaim();
     try {
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(),
@@ -3926,14 +3910,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
       expect(patch.agents.ownership).toBe("explicit");
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
   it("leads a Builder roster with the configured coach and keeps the auth anchor last during list-roster reconciliation", async () => {
-    const originalBuilderSlug = process.env.GATEWAY_BUILDER_SLUG;
-    process.env.GATEWAY_BUILDER_SLUG = "alice";
+    stubBuilderClaim("alice");
     try {
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient(),
@@ -3980,8 +3962,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
         model: "foreign",
       }));
     } finally {
-      if (originalBuilderSlug === undefined) delete process.env.GATEWAY_BUILDER_SLUG;
-      else process.env.GATEWAY_BUILDER_SLUG = originalBuilderSlug;
+      clearBuilderClaim();
     }
   });
 
@@ -4617,23 +4598,20 @@ describe("projectCheckoutScopeForRuntime", () => {
   });
 
   it("restores project checkouts for the exact configured isolated Builder", () => {
-    expect(projectCheckoutScopeForRuntime("alice", {
+    expect(projectCheckoutScopeForRuntime("alice", withBuilderClaim({
       GATEWAY_CLASS: "builder",
-      GATEWAY_BUILDER_SLUG: "alice",
-    })).toBe("workspace-and-projects");
+    }, "alice"))).toBe("workspace-and-projects");
   });
 
   it.each([
-    ["a mismatched isolated Builder", "bob", {
+    ["a mismatched isolated Builder", "bob", withBuilderClaim({
       GATEWAY_CLASS: "builder",
-      GATEWAY_BUILDER_SLUG: "alice",
-    }],
+    }, "alice")],
     ["an isolated Builder with no configured slug", "alice", { GATEWAY_CLASS: "builder" }],
-    ["a runtime with no class", "alice", { GATEWAY_BUILDER_SLUG: "alice" }],
-    ["an unknown runtime class", "alice", {
+    ["a runtime with no class", "alice", withBuilderClaim({ }, "alice")],
+    ["an unknown runtime class", "alice", withBuilderClaim({
       GATEWAY_CLASS: "unknown",
-      GATEWAY_BUILDER_SLUG: "alice",
-    }],
+    }, "alice")],
   ])("keeps %s workspace-only", (_label, slug, env) => {
     expect(projectCheckoutScopeForRuntime(slug, env)).toBe("workspace-only");
   });

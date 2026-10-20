@@ -29,7 +29,7 @@ describe("disruption observer classification", () => {
     expect(node.zone).toBe("us-central1-a");
   });
 
-  it("extracts gateway and Builder identity from pod metadata", () => {
+  it("extracts gateway identity from pod metadata and leaves Builder identity to the gateway root", () => {
     const pod = disruptionObserverTest.parsePod({
       metadata: {
         name: "octogee-gateway-default-abc",
@@ -51,8 +51,8 @@ describe("disruption observer classification", () => {
       nodeName: "node-a",
       gatewayId: "default",
       gatewayClass: "shared",
-      builderSlug: "ada",
     });
+    expect(pod).not.toHaveProperty("builderSlug");
   });
 });
 
@@ -113,6 +113,67 @@ describe("disruption observer environment isolation", () => {
           affectedGateways: [{ gatewayId: "gateway-a" }],
         });
       }
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("disruption observer Builder attribution", () => {
+  it.each([
+    ["an owned Builder root", { gatewayClass: "builder", ownerUid: "uid-ada", builderSlug: "ada" }, "ada"],
+    ["an unowned Builder root", { gatewayClass: "builder", ownerUid: null, builderSlug: null }, null],
+  ])("attributes a Builder pod disruption from %s", async (_label, root, builderSlug) => {
+    const pod = {
+      metadata: { name: "octogee-gateway-b-ada-abc", uid: "pod-uid", namespace: "octogee-test", labels: { "gateway-id": "b-ada", "gateway-class": "builder" } },
+      spec: { nodeName: "node-a" },
+      status: { phase: "Running" },
+    };
+    const event = {
+      metadata: { uid: "event-uid" },
+      reason: "FailedPreStopHook",
+      type: "Warning",
+      involvedObject: { kind: "Pod", namespace: "octogee-test", name: pod.metadata.name, uid: "pod-uid" },
+    };
+    const runKubectl = vi.fn(async (args: string[]) => {
+      let response: unknown;
+      if (args.includes("nodes")) response = { items: [{ metadata: { name: "node-a", uid: "node-uid" } }] };
+      else if (args.includes("events")) response = { items: [event] };
+      else if (args.includes("pods")) response = { items: [pod] };
+      else response = pod;
+      return { code: 0, stdout: JSON.stringify(response), stderr: "" };
+    });
+    const query = { get: vi.fn(async () => ({ docs: [] })) };
+    const docs: Record<string, Record<string, unknown>> = {
+      "gateways/b-ada": { gatewayId: "b-ada", desiredStatus: "running", ...root },
+      "glmGateways/b-ada": { gatewayId: "b-ada", lifecycle: "serving" },
+    };
+    const collection = vi.fn((name: string) => ({
+      doc: (id: string) => ({
+        get: async () => ({ exists: Boolean(docs[`${name}/${id}`]), data: () => docs[`${name}/${id}`] }),
+        collection: () => query,
+      }),
+      where: () => query,
+    }));
+    const emit = vi.fn();
+    vi.useFakeTimers();
+    const stop = startDisruptionObserver({
+      db: { collection } as unknown as Firestore,
+      runKubectl,
+      environment: "test",
+      cluster: "cluster-a",
+      namespace: "octogee-test",
+      intervalMs: 60_000,
+      log: vi.fn(),
+      emit,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls[0][0].affectedGateways).toEqual([
+        expect.objectContaining({ gatewayId: "b-ada", gatewayClass: "builder", desiredStatus: "running", builderSlug }),
+      ]);
     } finally {
       stop();
       vi.useRealTimers();

@@ -20,6 +20,11 @@ import type {
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import { isAssignmentState } from "../../shared/types/gateway-releases.js";
+import {
+  BUILDER_IDENTITY_ROUTE,
+  parseBuilderIdentity,
+  type BuilderIdentity,
+} from "../../shared/types/builder-identity.js";
 import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "../../shared/types/fleet-broker.js";
 import { internalFetch } from "./internal-fetch.js";
 import { gatewayCredentialHeaders as defaultGatewayCredentialHeaders } from "@octogee/core/internal-fetch";
@@ -120,6 +125,7 @@ export interface FleetBrokerClient {
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   assignmentRoster(): Promise<FleetBrokerAssignmentRosterEntry[]>;
+  builderIdentity(): Promise<BuilderIdentity>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
   npmRegistryCredentials(slug: string): Promise<FleetBrokerNpmRegistryCredentials>;
   uidForSlug(slug: string): Promise<string | null>;
@@ -297,6 +303,20 @@ async function sharedContextCheckpointDownload(gatewayId: string, request: Fleet
       }
 }
 
+async function readBuilderIdentity(
+  gatewayId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Promise<BuilderIdentity> {
+  const data = await postJson<{ identity?: unknown }>(
+    BUILDER_IDENTITY_ROUTE,
+    { gatewayId },
+    await gatewayCredentialHeaders(),
+  );
+  const identity = parseBuilderIdentity(data.identity, gatewayId);
+  if (!identity) throw new Error(`fleet-broker returned a malformed Builder identity for ${gatewayId}`);
+  return identity;
+}
+
 function assignmentRosterFromResponse(data: unknown): FleetBrokerAssignmentRosterEntry[] {
   const assignments = (data as { assignments?: unknown } | null)?.assignments;
   if (!Array.isArray(assignments)) throw new Error("fleet-broker invalid assignment roster");
@@ -322,6 +342,7 @@ export function createFleetBrokerClient(
     ?? defaultGatewayCredentialHeaders;
   return {
     ...npmRegistryCredentialClient(gatewayId, gatewayCredentialHeaders),
+    builderIdentity: () => readBuilderIdentity(gatewayId, gatewayCredentialHeaders),
     watchAssignments: (wake, log) => watchFleetAssignments({
       url: `${baseUrl()}/internal/fleet/assignment-watch`,
       gatewayId, revisionId, headers: gatewayCredentialHeaders, wake, log,

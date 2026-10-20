@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runBuilderProjectCleanup } from "../entrypoints/clean-builder-project-placeholders.js";
 import { prepareConfiguredBuilderTarget } from "../entrypoints/surge-openclaw-supervisor.js";
+import { TEST_CLAIM_GATEWAY_ID, withBuilderClaim, writeTestBuilderClaim } from "./helpers/builder-claim.js";
 
 const repo = path.resolve(import.meta.dirname, "../..");
 let root: string;
@@ -31,12 +32,14 @@ async function boot(gatewayClass: string, runtime: string, expectEmptyRemoved: b
   const prefix = (await readFile(path.join(repo, "infra/gateway/entrypoint.sh"), "utf8"))
     .split('mkdir -p "$HOME/.ssh"')[0]
     .replace("export OPENCLAW_DIR=/home/node/.openclaw", `export OPENCLAW_DIR='${state}'`)
+    .replace(/BUILDER_SLUG=""\nif [^\n]*\n[\s\S]*?\nfi\n/u, "BUILDER_SLUG=alice\n")
     .replaceAll("/octogee", repo);
+  if (gatewayClass === "builder") writeTestBuilderClaim(state, "alice");
   const reader = path.join(root, "reader.mjs");
   await writeFile(reader, `import assert from 'node:assert/strict';import fs from 'node:fs';assert.equal(fs.existsSync(process.env.OPENCLAW_DIR+'/customers/alice/projects/rvshare'),${!expectEmptyRemoved});console.log('runtime-reader-started');`);
   return spawnSync("sh", ["-s"], {
     input: `${prefix}\nnode '${reader}'\n`, encoding: "utf8",
-    env: { ...process.env, HOME: root, GATEWAY_CLASS: gatewayClass, GATEWAY_RUNTIME_KIND: runtime, GATEWAY_BUILDER_SLUG: "alice" },
+    env: { ...process.env, HOME: root, GATEWAY_CLASS: gatewayClass, GATEWAY_RUNTIME_KIND: runtime, GATEWAY_ID: TEST_CLAIM_GATEWAY_ID },
   });
 }
 
@@ -73,7 +76,7 @@ it("cleans directory shells imported after boot before a held Builder is release
   const run = vi.fn(async (_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
     if (args[0].endsWith("clean-builder-project-placeholders.ts")) await runBuilderProjectCleanup(options.env);
   });
-  await prepareConfiguredBuilderTarget({ OPENCLAW_DIR: state, GATEWAY_BUILDER_SLUG: "alice" }, run);
+  await prepareConfiguredBuilderTarget(withBuilderClaim({ OPENCLAW_DIR: state }, "alice"), run);
   await expect(readdir(path.join(projects, "rvshare"))).rejects.toMatchObject({ code: "ENOENT" });
   expect(run.mock.calls.map(([, args]) => path.basename(args[0]))).toEqual([
     "pre-boot-config.ts", "apply-gateway-class-policy.mjs", "ensure-configured-agent-runtime-dirs.ts", "clean-builder-project-placeholders.ts",
@@ -83,7 +86,7 @@ it("cleans directory shells imported after boot before a held Builder is release
 
 it("permits a fresh Builder with no existing projects without creating a working set", async () => {
   await rm(path.join(state, "customers"), { recursive: true });
-  await runBuilderProjectCleanup({ GATEWAY_CLASS: "builder", OPENCLAW_DIR: state, GATEWAY_BUILDER_SLUG: "alice" });
+  await runBuilderProjectCleanup(withBuilderClaim({ GATEWAY_CLASS: "builder", OPENCLAW_DIR: state }, "alice"));
   await expect(readdir(path.join(state, "customers"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
@@ -93,14 +96,15 @@ it("rejects a symlink customer ancestor without entering its work", async () => 
   await mkdir(path.join(foreign, "alice/projects/demo"), { recursive: true });
   await writeFile(path.join(foreign, "alice/projects/demo/local.txt"), "foreign work");
   await symlink(foreign, path.join(state, "customers"));
-  await expect(runBuilderProjectCleanup({ GATEWAY_CLASS: "builder", OPENCLAW_DIR: state, GATEWAY_BUILDER_SLUG: "alice" })).rejects.toThrow();
+  await expect(runBuilderProjectCleanup(withBuilderClaim({ GATEWAY_CLASS: "builder", OPENCLAW_DIR: state }, "alice"))).rejects.toThrow();
   expect(await readFile(path.join(foreign, "alice/projects/demo/local.txt"), "utf8")).toBe("foreign work");
 });
 
 it.each([
-  { GATEWAY_CLASS: "shared", GATEWAY_BUILDER_SLUG: "alice" },
-  { GATEWAY_CLASS: "builder", GATEWAY_BUILDER_SLUG: "../alice" },
-])("rejects invalid cleanup identity %j", async env => {
-  await expect(runBuilderProjectCleanup({ ...env, OPENCLAW_DIR: state })).rejects.toThrow();
+  { label: "a shared gateway", gatewayClass: "shared", claimed: true },
+  { label: "a Builder without a claim", gatewayClass: "builder", claimed: false },
+])("rejects cleanup for $label", async ({ gatewayClass, claimed }) => {
+  const env = { GATEWAY_CLASS: gatewayClass, OPENCLAW_DIR: state, GATEWAY_ID: TEST_CLAIM_GATEWAY_ID, GATEWAY_BUILDER_SLUG: "alice" };
+  await expect(runBuilderProjectCleanup(claimed ? withBuilderClaim(env, "alice") : env)).rejects.toThrow();
   expect(await readdir(path.join(projects, "rvshare"))).toEqual([]);
 });

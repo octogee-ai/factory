@@ -89,6 +89,7 @@ import type {
   FleetBrokerUserSnapshot,
 } from "@octogee/shared/types/fleet-broker";
 import { BUILDER_RUNTIME_STATE_RECOVERY_TIERS } from "@octogee/shared/types/fleet-broker";
+import type { BuilderIdentity } from "@octogee/shared/types/builder-identity";
 import { isDeveloperToolchainStatus } from "@octogee/shared/types/developer-toolchain";
 import {
   byotSnapshotProjectionFromSystemConfig,
@@ -1943,6 +1944,48 @@ function installAssignmentWatchRoute(router: Router, db: Firestore): void {
       return;
     }
     streamAssignmentChanges(req, res, db, bound.gatewayId, (message) => logger.error(message));
+  });
+}
+
+export function builderIdentityForRoot(value: unknown, gatewayId: string): BuilderIdentity | null {
+  const root = projectGatewayDesiredRootForGateway(value, gatewayId) as
+    (GatewayDoc & GatewayMutableConfig & { retirementClaim?: unknown }) | null;
+  if (!root) return null;
+  if (root.gatewayClass !== "builder") return { gatewayId, state: "unavailable", reason: "not-builder" };
+  if (root.desiredStatus === "retired") return { gatewayId, state: "unavailable", reason: "retired" };
+  if (root.retireAfter != null || root.retirementClaim != null) {
+    return { gatewayId, state: "unavailable", reason: "retiring" };
+  }
+  if (!root.ownerUid || !root.builderSlug) return null;
+  return {
+    gatewayId,
+    state: "claimed",
+    ownerUid: root.ownerUid,
+    builderSlug: root.builderSlug,
+    leaseId: root.allocation?.leaseId ?? null,
+    generation: root.allocation?.generation ?? null,
+  };
+}
+
+function installBuilderIdentityRoute(router: Router, db: Firestore): void {
+  router.post("/builder-identity", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    if (!podBelongsToGateway(bound.gatewayId, bound.podName)) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
+    const identity = builderIdentityForRoot(snapshot.data(), bound.gatewayId);
+    if (!identity) {
+      logger.error("[fleet-broker] builder identity refused: gateway root is missing or illegal", {
+        gatewayId: bound.gatewayId,
+      });
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    res.set("Cache-Control", "no-store");
+    res.json({ identity });
   });
 }
 
@@ -3908,6 +3951,7 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
   const router = Router();
   const deps = resolveFleetBrokerRouteDeps(opts);
   installSnapshotRoutes(router, deps);
+  installBuilderIdentityRoute(router, deps.db);
   installProvisioningRoutes(router, deps);
   installGatewayOpsRoutes(router, deps);
   installVmRuntimeRoutes(router, deps);

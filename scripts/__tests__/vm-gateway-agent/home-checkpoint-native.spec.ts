@@ -18,7 +18,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root,
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "octogee-home-native-"));
   roots.push(root);
-  const scope = homeScope(root, bundleFixture({ containers: bundleFixture().containers.map((container) => ({ ...container, env: { ...container.env, GATEWAY_BUILDER_SLUG: "bob" } })) }))!;
+  const scope = homeScope(root, bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }))!;
   await mkdir(scope.dataDir, { recursive: true });
   await mkdir(`${scope.desktopDir}/.config/octogee-chromium/Default/Cache`, { recursive: true });
   await mkdir(`${scope.desktopDir}/Documents`, { recursive: true });

@@ -30,6 +30,7 @@ import {
   snapshotBuilderRuntimeState,
 } from "../lib/builder-runtime-state.js";
 import { pathToFileURL } from "node:url";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 export interface PreStopFlushConfig {
   builderSlug: string;
@@ -79,7 +80,7 @@ export function resolvePreStopFlushConfig(
   return {
     gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
     gatewayClass: runtime.gatewayClass ?? "",
-    builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
+    builderSlug: builderClaimSlug(env) ?? "",
   };
 }
 

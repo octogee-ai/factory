@@ -110,6 +110,17 @@ function seedCanonicalAgentRuntimeDisk(
   db.close();
 }
 
+function builderClaim(ownerUid: string, builderSlug: string) {
+  return {
+    setup: (dir: string) => writeFileSync(path.join(dir, "builder-claim.json"), JSON.stringify({
+      schemaVersion: 1, gatewayId: "gw-test", ownerUid, builderSlug,
+      leaseId: null, generation: null, claimedAt: 1, overlayAppliedAt: null,
+    })),
+    env: { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_ID: "gw-test" },
+  };
+}
+const JEFE = builderClaim("owner", "jefe");
+
 function runPolicyWithDir(
   gatewayClass: string,
   config: Record<string, unknown>,
@@ -816,7 +827,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         "OCTOGEE_API_SA_TOKEN_PATH",
         "INTERNAL_SERVICE_KEY",
         "OPENCLAW_AGENTS_DIR",
-        "GATEWAY_BUILDER_SLUG",
+        "OPENCLAW_DIR",
+        "GATEWAY_ID",
         "HOME",
       ],
       jsonOnly: true,
@@ -1873,12 +1885,11 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
   });
 
   it("defaults authenticated Builder Talk to platform OpenAI without replacing their chosen provider", () => {
-    const env = { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" };
-    const out = runPolicyWithDir("builder", {}, undefined, env).config;
+    const out = runPolicyWithDir("builder", {}, JEFE.setup, JEFE.env).config;
     expect(out.plugins.entries["octogee-voice-tools"]).toMatchObject({ enabled: true, config: brokerPluginConfig });
     expect(out.talk.realtime).toMatchObject({ provider: "octogee-openai", providers: { "octogee-openai": { model: "gpt-live-1" } }, brain: "agent-consult", transport: "gateway-relay" });
     const custom = { provider: "google", providers: { google: {} }, transport: "provider-websocket" };
-    const preserved = runPolicyWithDir("builder", { talk: { realtime: custom } }, undefined, env).config;
+    const preserved = runPolicyWithDir("builder", { talk: { realtime: custom } }, JEFE.setup, JEFE.env).config;
     expect(preserved.talk.realtime).toEqual(custom);
     const shared = runPolicy("shared", {});
     expect(shared.plugins.entries["octogee-voice-tools"]?.enabled).not.toBe(true);
@@ -1890,9 +1901,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         brokerUrl: "http://127.0.0.1:9999", tokenPath: "/home/node/customer-file",
       } } } },
       talk: { realtime: { provider: "google", providers: { google: { voice: "custom-voice" } } } },
-    }, undefined, {
-      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe",
-    }).config;
+    }, JEFE.setup, JEFE.env).config;
 
     expect(out.plugins.entries["octogee-voice-tools"]).toEqual({ enabled: true, config: brokerPluginConfig });
     expect(out.talk.realtime).toEqual({ provider: "google", providers: { google: { voice: "custom-voice" } } });
@@ -1902,9 +1911,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     const out = runPolicyWithDir("builder", {
       plugins: { allow: ["mattermost"] },
       tools: { profile: "coding" },
-    }, undefined, {
-      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe",
-    }).config;
+    }, JEFE.setup, JEFE.env).config;
 
     expect(out.plugins.allow).toEqual(expect.arrayContaining(["mattermost", "talk-voice", "octogee-voice-tools"]));
     expect(out.plugins.allow).not.toContain("screen");
@@ -1926,9 +1933,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       tools: { profile: "minimal", allow: ["read"], deny: ["screen", "talk_voice"] },
       agents: { entries: { "octogee-jefe-coach": { tools: { allow: ["read"], deny: ["talk_voice"] } } } },
     };
-    const out = runPolicyWithDir("builder", config, undefined, {
-      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe",
-    }).config;
+    const out = runPolicyWithDir("builder", config, JEFE.setup, JEFE.env).config;
 
     expect(out.plugins.enabled).toBe(false);
     expect(out.plugins.deny).toEqual(config.plugins.deny);
@@ -1954,8 +1959,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     const { config: out } = runPolicyWithDir(
       "builder",
       { gateway: { auth: { mode: "token", token: "pod-token", rateLimit: { maxAttempts: 10 } } } },
-      undefined,
-      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "uid-owner", GATEWAY_BUILDER_SLUG: "team-workspace" },
+      builderClaim("uid-owner", "team-workspace").setup,
+      builderClaim("uid-owner", "team-workspace").env,
     );
     expect(out.gateway.auth).toEqual({
       mode: "trusted-proxy",
@@ -1982,6 +1987,15 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.gateway.roles.definitions.member.agents).toEqual(["octogee-team-workspace-coach"]);
   });
 
+  it("grants no owner identity scope or member agents without a Builder claim, whatever the environment says", () => {
+    const { config: out } = runPolicyWithDir("builder", {}, undefined, {
+      OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_ID: "gw-test",
+      GATEWAY_OWNER_UID: "uid-mallory", GATEWAY_BUILDER_SLUG: "mallory",
+    });
+    expect(Object.keys(out.gateway.auth.identityScopes).sort()).toEqual(["svc:gateway-edge", "svc:octogee-provisioner"]);
+    expect(JSON.stringify(out.gateway.roles)).not.toContain("mallory");
+  });
+
   it("restores the canonical member, admin, and service definitions over a pre-native role set", () => {
     const stale = {
       default: "member",
@@ -1995,8 +2009,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
         viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
       },
     };
-    const { config } = runPolicyWithDir("builder", { gateway: { roles: stale } }, undefined,
-      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" });
+    const { config } = runPolicyWithDir("builder", { gateway: { roles: stale } }, JEFE.setup, JEFE.env);
     const canonical = openClawOperatorRoles("jefe").definitions;
     expect(config.gateway.roles.definitions).toMatchObject(canonical);
     expect(config.gateway.roles.definitions.admin).toEqual(canonical.admin);
@@ -2005,8 +2018,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
 
   it("keeps Builder-defined roles and the Builder's default across gateway restarts", () => {
     const roles = { default: "reader", definitions: { reader: { scopes: ["operator.read"], sessions: { others: "none" }, agents: "*" } } };
-    const { config } = runPolicyWithDir("builder", { gateway: { roles } }, undefined,
-      { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", GATEWAY_BUILDER_SLUG: "jefe" });
+    const { config } = runPolicyWithDir("builder", { gateway: { roles } }, JEFE.setup, JEFE.env);
     expect(config.gateway.roles).toEqual({
       default: "reader",
       definitions: { ...roles.definitions, ...openClawOperatorRoles("jefe").definitions },

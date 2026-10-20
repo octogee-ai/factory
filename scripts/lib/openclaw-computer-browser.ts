@@ -1,3 +1,4 @@
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 type JsonObject = Record<string, unknown>;
 
 function objectAt(parent: JsonObject, key: string): JsonObject {
@@ -47,7 +48,7 @@ export function applyComputerBrowserAgentPolicy(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (!builderComputer(env)) return;
-  const ownerSlug = env.GATEWAY_BUILDER_SLUG?.trim();
+  const ownerSlug = builderClaimSlug(env);
   const ownerCoach = ownerSlug && agent.id === `octogee-${ownerSlug}-coach`;
   if (ownerCoach) {
     const tools = agent.tools;

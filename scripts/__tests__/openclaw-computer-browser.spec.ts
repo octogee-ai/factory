@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
 import { gatewayAgentRoster } from "../lib/openclaw-config-builders.js";
 import { applyPreBootPatches } from "../entrypoints/pre-boot-config.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
-const vmEnv = { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_BUILDER_SLUG: "owner" };
+const vmEnv = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" }, "owner");
 const template = (): Record<string, any> => JSON.parse(readFileSync(
   new URL("../../infra/gateway/openclaw.builder.template.json", import.meta.url), "utf8",
 ));
@@ -143,7 +144,7 @@ describe("computer browser runtime", () => {
 
   it("denies the desktop tools for every agent when the VM has no assigned owner", () => {
     const config = { agents: { entries: { "octogee-owner-coach": {} } } };
-    applyOpenClawComputerBrowserConfig(config, { ...vmEnv, GATEWAY_BUILDER_SLUG: "" });
+    applyOpenClawComputerBrowserConfig(config, { ...vmEnv, OPENCLAW_DIR: `${vmEnv.OPENCLAW_DIR}-unclaimed` });
     expect(config.agents.entries["octogee-owner-coach"]).toEqual({ tools: { deny: ["browser", "computer", "nodes", "file-transfer", "ollama"] } });
   });
 

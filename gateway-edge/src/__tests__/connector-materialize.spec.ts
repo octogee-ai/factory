@@ -58,6 +58,7 @@ import {
   readOwnerRuntimeConnectorAccessToken,
 } from "../lib/connector-tokens.js";
 import { cloneGithubProjectCheckout } from "../lib/github-project-clone.js";
+import { claimedTestBuilder, installTestBuilderIdentity } from "./helpers/builder-identity.js";
 
 function app() {
   const a = express();
@@ -71,6 +72,16 @@ describe("internal connector materialize route", () => {
     vi.clearAllMocks();
     process.env.GATEWAY_CLASS = "builder";
     process.env.GATEWAY_PROFILE = "builder";
+    installTestBuilderIdentity(null);
+  });
+
+  it("refuses a project clone before the Builder identity is claimed", async () => {
+    const res = await request(app())
+      .post("/internal/connectors/github/clone")
+      .send({ builderSlug: "alice", projectSlug: "octo" });
+
+    expect(res.status).toBe(403);
+    expect(readOwnerGithubProjectCloneAccess).not.toHaveBeenCalled();
   });
 
   it("materializes a connected owner-runtime token without direct Firestore access", async () => {
@@ -164,7 +175,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("clones through the sidecar broker without returning the GitHub credential", async () => {
-    process.env.GATEWAY_BUILDER_SLUG = "alice";
+    installTestBuilderIdentity(claimedTestBuilder("alice"));
     vi.mocked(readOwnerGithubProjectCloneAccess).mockResolvedValue({
       accessToken: "gho_secret",
       repository: { owner: "octogee-ai", repo: "octogee" },
@@ -185,7 +196,7 @@ describe("internal connector materialize route", () => {
   });
 
   it("preserves the owner reauthorization signal from the broker", async () => {
-    process.env.GATEWAY_BUILDER_SLUG = "alice";
+    installTestBuilderIdentity(claimedTestBuilder("alice"));
     vi.mocked(readOwnerGithubProjectCloneAccess).mockRejectedValue(
       new mocks.ConnectorTokenBrokerError(409, "reauth_required"),
     );

@@ -35,9 +35,8 @@ function helmTemplate(setValues: Record<string, string> = {}): string {
   if (setValues.profile === "builder") {
     merged.gatewayClass = "builder";
     merged.imageProfile = "builder";
-    merged.ownerUid = "test-owner";
-    merged.builderSlug = "test-builder";
   }
+  if (setValues.computerDesktop === "omarchy") merged.runtimeKind = "gce-vm";
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);
   }
@@ -233,7 +232,8 @@ describe("Builder working-set partition", () => {
     const diskBacked = pod.volumes.filter((volume: any) => volume.emptyDir && volume.emptyDir.medium !== "Memory");
     expect(pod.volumes.filter((volume: any) => volume.emptyDir?.medium === "Memory" && !volume.emptyDir.sizeLimit)).toEqual([]);
     expect(diskBacked.filter((volume: any) => !volume.emptyDir.sizeLimit).map((volume: any) => volume.name)).toEqual([]);
-    expect(pod.volumes.find((volume: any) => volume.name === "data").emptyDir).toEqual({ sizeLimit: `${hobbyHomeGiB}Gi` });
+    const dataGiB = computerDesktop === "x11" ? hobbyHomeGiB + 2 : hobbyHomeGiB;
+    expect(pod.volumes.find((volume: any) => volume.name === "data").emptyDir).toEqual({ sizeLimit: `${dataGiB}Gi` });
     const gateway = pod.containers.find((container: any) => container.name === "gateway");
     const boundedGiB = diskBacked.reduce((total: number, volume: any) => total + Number(volume.emptyDir.sizeLimit.replace("Gi", "")), 0);
     expect(`${boundedGiB}Gi`).toBe(gateway.resources.limits["ephemeral-storage"]);

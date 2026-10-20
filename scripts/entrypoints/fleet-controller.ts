@@ -50,6 +50,7 @@ import {
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 export interface FleetControllerEntrypointConfig {
   builderSlug: string;
@@ -75,7 +76,7 @@ export function resolveFleetControllerEntrypointConfig(
   const rawGatewayId = runtime.gatewayId ?? "local";
   return {
     gatewayId: rawGatewayId === "local" ? "default" : rawGatewayId,
-    builderSlug: env.GATEWAY_BUILDER_SLUG?.trim() ?? "",
+    builderSlug: builderClaimSlug(env) ?? "",
     port: parseInt(env.FLEET_CONTROLLER_PORT ?? "3003", 10),
     publicKey: env.FLEET_CONTROLLER_PUBLIC_KEY || "",
     version: env.GATEWAY_IMAGE_TAG?.trim() || env.BUILD_SHA || "unknown",

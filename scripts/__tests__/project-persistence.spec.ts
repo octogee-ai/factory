@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { persistBuilderProjects, startProjectAutosave } from "../lib/project-persistence.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 afterEach(() => vi.useRealTimers());
 describe("project remote save client", () => {
   it("requires the same owner and a current workload token", async () => {
-    const deps = { env: { GATEWAY_BUILDER_SLUG: "alice" }, readToken: vi.fn(async () => "jwt\n"), fetch: vi.fn(async () => Response.json({ projects: 2 })) };
+    const deps = { env: withBuilderClaim({}, "alice"), readToken: vi.fn(async () => "jwt\n"), fetch: vi.fn(async () => Response.json({ projects: 2 })) };
     await expect(persistBuilderProjects("bob", deps)).rejects.toThrow(/slug/);
     expect(deps.readToken).not.toHaveBeenCalled();
     await persistBuilderProjects("alice", deps);
@@ -13,7 +14,7 @@ describe("project remote save client", () => {
     await expect(persistBuilderProjects("alice", deps)).rejects.toThrow(/credential/);
   });
   it.each([new Response("", { status: 503 }), Response.json({ projects: "1" }), Response.json({})])("refuses an unsuccessful or malformed acknowledgement", async response => {
-    await expect(persistBuilderProjects("alice", { env: { GATEWAY_BUILDER_SLUG: "alice" }, readToken: async () => "jwt", fetch: vi.fn(async () => response) })).rejects.toThrow();
+    await expect(persistBuilderProjects("alice", { env: withBuilderClaim({}, "alice"), readToken: async () => "jwt", fetch: vi.fn(async () => response) })).rejects.toThrow();
   });
   it("does not overlap slow saves and retries after a logged failure", async () => {
     vi.useFakeTimers();

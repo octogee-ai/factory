@@ -85,8 +85,6 @@ describe("helm-runner helpers", () => {
       chartPath: "/charts/octogee-gateway",
       namespace: "octogee",
       gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
       imageTag: "3280519",
       imageRepository: REPO,
       upgradeTimeout: "10m",
@@ -167,7 +165,7 @@ describe("helm-runner helpers", () => {
     expect(args).not.toContain("env.mmInternalUrl=http://mattermost.octogee.svc.cluster.local:8065");
   });
 
-  it("clears a previous trial claim identity when the gateway returns to ownerless prewarm", () => {
+  it("never passes Builder owner identity to the chart", () => {
     const args = buildUpgradeArgs({
       release: "octogee-gw-trial-op-000001",
       chartPath: "/charts/octogee-gateway",
@@ -179,14 +177,8 @@ describe("helm-runner helpers", () => {
       gatewayClass: "builder",
     });
 
-    const stringPair = (key: string): string | undefined => {
-      const index = args.findIndex(
-        (arg, position) => arg === "--set-string" && args[position + 1]?.startsWith(`${key}=`),
-      );
-      return index === -1 ? undefined : args[index + 1];
-    };
-    expect(stringPair("ownerUid")).toBe("ownerUid=");
-    expect(stringPair("builderSlug")).toBe("builderSlug=");
+    expect(args.some((arg) => arg.startsWith("ownerUid="))).toBe(false);
+    expect(args.some((arg) => arg.startsWith("builderSlug="))).toBe(false);
   });
 
   // Regression: a leftover resource (e.g. a hand-created operator WI SA) without
@@ -376,9 +368,9 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     ]);
     const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn() });
     const map = await runner.readDeployedInstances({ namespace: "octogee" });
+    expect(map.bender).not.toHaveProperty("ownerUid");
+    expect(map.bender).not.toHaveProperty("builderSlug");
     expect(map.bender).toMatchObject({
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
       serviceAccountName: "octogee-gateway-bender",
       gatewayContainerSecurityContext: {
         allowPrivilegeEscalation: true,
@@ -680,8 +672,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     await runner.upsertInstance({
       namespace: "octogee",
       gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
+      builderIdentity: { ownerUid: "uid-ceckert", builderSlug: "ceckert" },
       imageRepository: REPO,
       imageTag: "3280519", // digits only — would be coerced to number by plain --set
       chartPath: "/charts/octogee-gateway",
@@ -698,8 +689,7 @@ describe("createHelmSubprocessRunner — upsertInstance", () => {
     };
     expect(stringPair("imageTag")).toBe("imageTag=3280519");
     expect(stringPair("gatewayId")).toBe("gatewayId=bender");
-    expect(stringPair("builderSlug")).toBe("builderSlug=ceckert");
-    expect(stringPair("ownerUid")).toBe("ownerUid=uid-ceckert");
+    expect(args.join(" ")).not.toMatch(/ceckert/);
     expect(stringPair("profile")).toBe("profile=builder");
     expect(stringPair("sizingTier")).toBe("sizingTier=l");
     // replicas stays on --set because it's number-typed.
@@ -2004,7 +1994,7 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
    const runKubectl = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
    const { runHelm } = mockSubprocess([{ stdout: "ok" }, { stdout: "ok" }]);
    const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), runKubectl });
-   await runner.upsertInstance({ namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder", ownerUid: "UidA", builderSlug: "builder", sizingTier: "s", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" });
+   await runner.upsertInstance({ namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder", sizingTier: "s", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" });
    expect(runKubectl.mock.calls.flat(2)).not.toContain("pvc");
    const upgrade = runHelm.mock.calls.map(([args]) => args).find(args => args.includes("upgrade"))!;
    expect(upgrade.filter(arg => arg.startsWith("builderHome"))).toEqual([`builderHomeSizeGiB=${BUILDER_TIERS.hobby.computer!.homeSizeGiB}`]);

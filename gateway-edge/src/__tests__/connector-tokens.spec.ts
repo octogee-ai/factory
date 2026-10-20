@@ -50,6 +50,7 @@ import { getConnector } from '../lib/connectors/index.js';
 import { decryptSecret } from '../lib/kms.js';
 import { internalFetch } from '../lib/internal-fetch.js';
 import { sidecarBrokerHeaders } from '@octogee/core/internal-fetch';
+import { claimedTestBuilder, installTestBuilderIdentity } from "./helpers/builder-identity.js";
 
 beforeEach(() => {
   for (const k of Object.keys(firestoreData)) delete firestoreData[k];
@@ -64,7 +65,7 @@ afterEach(() => {
   delete process.env.GOOGLE_CLIENT_SECRET;
   delete process.env.CONNECTOR_TOKEN_BROKER_URL;
   delete process.env.GATEWAY_ID;
-  delete process.env.GATEWAY_BUILDER_SLUG;
+  installTestBuilderIdentity(null);
   delete process.env.CONNECTOR_TOKEN_AUTHORITY;
 });
 
@@ -191,7 +192,7 @@ describe('readConnectorAccessToken', () => {
   it('forwards owner-runtime access context for agent-side materialization', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
     process.env.GATEWAY_ID = 'bender';
-    process.env.GATEWAY_BUILDER_SLUG = 'alice';
+    installTestBuilderIdentity(claimedTestBuilder('alice'));
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({ accessToken: 'cf_brokered' }), {
         status: 200,
@@ -215,7 +216,7 @@ describe('readConnectorAccessToken', () => {
     );
   });
 
-  it('fails closed when the mounted builder identity is unavailable', async () => {
+  it('fails closed when the Builder identity is not claimed', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
     process.env.GATEWAY_ID = 'bender';
     vi.mocked(internalFetch).mockResolvedValue(
@@ -226,7 +227,7 @@ describe('readConnectorAccessToken', () => {
     );
 
     await expect(readOwnerRuntimeConnectorAccessToken('cloudflare')).rejects.toThrow(
-      'GATEWAY_BUILDER_SLUG is required',
+      'no claimed owner',
     );
     expect(internalFetch).not.toHaveBeenCalled();
   });
@@ -234,7 +235,7 @@ describe('readConnectorAccessToken', () => {
   it('uses the sidecar capability to obtain a GitHub project clone credential', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
     process.env.GATEWAY_ID = 'bender';
-    process.env.GATEWAY_BUILDER_SLUG = 'alice';
+    installTestBuilderIdentity(claimedTestBuilder('alice'));
     vi.mocked(internalFetch).mockResolvedValue(
       new Response(JSON.stringify({
         accessToken: 'gho_brokered',
@@ -268,7 +269,7 @@ describe('readConnectorAccessToken', () => {
   it('reports an unavailable sidecar capability as a typed broker failure', async () => {
     process.env.CONNECTOR_TOKEN_BROKER_URL = 'http://octogee-api.octogee-test.svc.cluster.local:3001';
     process.env.GATEWAY_ID = 'bender';
-    process.env.GATEWAY_BUILDER_SLUG = 'alice';
+    installTestBuilderIdentity(claimedTestBuilder('alice'));
     vi.mocked(sidecarBrokerHeaders).mockRejectedValueOnce(
       new Error('projected sidecar broker token unavailable'),
     );

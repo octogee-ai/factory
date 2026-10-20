@@ -6,6 +6,7 @@
   "required": ["gatewayId", "imageTag", "image", "gatewayEdge"],
   "properties": {
     "computerDesktop": { "type": "string", "enum": ["auto", "none", "x11", "omarchy"] },
+    "runtimeKind": { "type": "string", "enum": ["cluster", "gce-vm"] },
     "gatewayId": {
       "type": "string",
       "pattern": "^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$",
@@ -18,16 +19,6 @@
       "pattern": "^(?:|[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$",
       "maxLength": 64,
       "description": "Disposable revision instance id ({gatewayId}-r{n}). Every per-instance resource NAME (Deployment, Services, PDB, NetworkPolicies) and the gateway-instance selector derive from it. Empty defaults to gatewayId (legacy single-revision render)."
-    },
-    "ownerUid": {
-      "type": "string",
-      "description": "Owner-bound disposable Builder UID rendered into immutable pod metadata."
-    },
-    "builderSlug": {
-      "type": "string",
-      "pattern": "^(?:|[a-z0-9]+(?:-[a-z0-9]+)*)$",
-      "maxLength": 24,
-      "description": "Owner-bound disposable Builder slug. Empty on shared gateways; when set, Builder gateways restore openclaw.json from the builder's system_config repo."
     },
     "builderHomeSizeGiB": {
       "type": "integer",

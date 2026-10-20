@@ -1,6 +1,5 @@
 import { type GatewayControlIdentity } from "./glm.js";
 export declare const OPENCLAW_CONTROL_IDENTITY_ENV = "OPENCLAW_CONTROL_IDENTITY";
-export declare const OPENCLAW_OWNER_UID_ENV = "GATEWAY_OWNER_UID";
 export declare const OPENCLAW_PROXY_USER_HEADER = "x-octogee-user";
 export declare const OPENCLAW_PROXY_ATTESTATION_HEADER = "x-octogee-proxy";
 export declare const OPENCLAW_PROXY_ATTESTATION_VALUE = "1";
@@ -57,7 +56,6 @@ export declare function withOpenClawOperatorRoles(roles: unknown, workspaceSlug?
 export declare function openClawRoleScopes(role: OpenClawOperatorRole): string[];
 export declare function resolveControlIdentityFromEnv(env?: NodeJS.ProcessEnv): GatewayControlIdentity;
 export declare function isPerUserControlIdentity(env?: NodeJS.ProcessEnv): boolean;
-export declare function resolveOwnerUidFromEnv(env?: NodeJS.ProcessEnv): string | undefined;
 export declare function serviceProxyIdentity(name: string): string;
 export declare function openClawDeviceSubject(gatewayId: string, uid: string): string;
 export declare function openClawProxyOrigin(env?: NodeJS.ProcessEnv): string;

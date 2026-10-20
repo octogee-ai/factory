@@ -725,6 +725,14 @@ describe("gateway convergence pass outcomes", () => {
     await runGatewayConvergencePass(deps);
     expect(runtimes.hobby).toMatchObject({ runtime: "cluster" });
     expect(helm.upsertInstance.mock.calls.map(([opts]: any) => opts.gatewayId).sort()).toEqual(["healthy", "hobby"]);
+    const hobby = (helm.upsertInstance.mock.calls as unknown as Array<[Record<string, unknown>]>)
+      .find(([opts]) => opts.gatewayId === "hobby")![0];
+    expect(hobby.builderIdentity).toEqual({ ownerUid: "u", builderSlug: "alice" });
+    expect(hobby).not.toHaveProperty("ownerUid");
+    expect(hobby).not.toHaveProperty("builderSlug");
+    const healthy = (helm.upsertInstance.mock.calls as unknown as Array<[Record<string, unknown>]>)
+      .find(([opts]) => opts.gatewayId === "healthy")![0];
+    expect(healthy).not.toHaveProperty("builderIdentity");
   });
 
   it("holds same-release stale Helm intent until native restore acknowledges customer custody", async () => {

@@ -3,6 +3,7 @@ import { bootRecoveryReport } from "./boot-recovery.js";
 import { prepareScratchVolumes, inspectInactiveScratchVolumes } from "./scratch.js";
 import { captureHomeSnapshot, discardHomeSnapshot } from "./home-snapshot.js";
 import { basename, dirname } from "node:path";
+import { BUILDER_CLAIM_FILE, builderClaimFromIdentity, parseBuilderClaimRecord } from "@octogee/shared/types/builder-identity";
 import {
   isGatewayVmRuntimeBundle,
   type GatewayVmDiskSample,
@@ -27,6 +28,7 @@ import {
 } from "./docker-engine.js";
 import {
   HOME_CHECKPOINT_INTERVAL_MS,
+  HOME_VOLUME_NAME,
   checkpointHome,
   homeScope,
   restoreHome,
@@ -40,6 +42,7 @@ import type { DesktopControl } from "./desktop-control.js";
 import {
   CA_FILE,
   SERVICE_RESTART_POLICY,
+  bundleBuilderIdentity,
   containerName,
   TOKEN_FILE,
   imagesToPull,
@@ -269,6 +272,48 @@ export async function restoreHomeIfEmpty(deps: VmAgentDeps, bundle: GatewayVmRun
   else if (result.status === "none") deps.log("[vm-agent] home restore none: no checkpoint for this customer yet");
 }
 
+async function assertHomeClaimOwner(
+  deps: VmAgentDeps,
+  file: string,
+  claim: { gatewayId: string; ownerUid: string; builderSlug: string },
+): Promise<void> {
+  const raw = await deps.fs.readFile(file);
+  if (raw === null) return;
+  let existing: ReturnType<typeof parseBuilderClaimRecord> = null;
+  try {
+    existing = parseBuilderClaimRecord(JSON.parse(raw));
+  } catch {
+    existing = null;
+  }
+  if (!existing) throw new Error(`[vm-agent] Builder claim ${file} in this home is malformed; refusing to start ${claim.gatewayId}`);
+  if (existing.ownerUid !== claim.ownerUid || existing.builderSlug !== claim.builderSlug) {
+    throw new Error(
+      `[vm-agent] this home is claimed by ${existing.ownerUid}/${existing.builderSlug} on ${existing.gatewayId}, ` +
+      `not ${claim.ownerUid}/${claim.builderSlug}; refusing to start ${claim.gatewayId}`,
+    );
+  }
+  if (existing.gatewayId !== claim.gatewayId) {
+    deps.log(`[vm-agent] ${claim.builderSlug}'s home moves its claim from ${existing.gatewayId} to ${claim.gatewayId}`);
+  }
+}
+
+export async function writeBundleBuilderClaim(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {
+  const identity = bundleBuilderIdentity(bundle);
+  const data = bundle.volumes.find((volume) => volume.name === HOME_VOLUME_NAME && volume.kind === "emptyDir");
+  if (!identity || !data) {
+    deps.log(`[vm-agent] bundle ${bundle.version} carries no Builder identity; the gateway reads its claim from the broker`);
+    return;
+  }
+  const dir = `${volumeHostPath(deps.stateRoot, data)}/.openclaw`;
+  const file = `${dir}/${BUILDER_CLAIM_FILE}`;
+  const claim = builderClaimFromIdentity({ gatewayId: bundle.gatewayId, state: "claimed", leaseId: null, generation: null, ...identity }, deps.now());
+  await assertHomeClaimOwner(deps, file, claim);
+  await deps.fs.mkdir(dir);
+  await deps.fs.chown(dir, RUNTIME_UID, RUNTIME_GID);
+  await deps.fs.writeFile(file, `${JSON.stringify(claim)}\n`, 0o600);
+  await deps.fs.chown(file, RUNTIME_UID, RUNTIME_GID);
+}
+
 export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, plan: BundlePlan): Promise<void> {
   const accessToken = await deps.metadata.accessToken();
   for (const image of imagesToPull(bundle)) {
@@ -277,6 +322,7 @@ export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
   }
   for (const service of plan.services) await removeContainer(deps.engine, service.name);
   await restoreHomeIfEmpty(deps, bundle);
+  await writeBundleBuilderClaim(deps, bundle);
   if (plan.init) {
     deps.log(`[vm-agent] running init ${plan.init.name}`);
     await replaceContainer(deps.engine, plan.init);
@@ -336,7 +382,7 @@ export async function checkpointHomeIfDue(
   const scope = homeScope(deps.stateRoot, bundle);
   if (!scope) {
     const requested = force ? ` (requested at ${signal.requestedAt})` : "";
-    deps.log(`[vm-agent] home checkpoint skipped${requested}: bundle ${bundle.version} carries no Builder home (data emptyDir + GATEWAY_BUILDER_SLUG)`);
+    deps.log(`[vm-agent] home checkpoint skipped${requested}: bundle ${bundle.version} carries no Builder home (data emptyDir + Builder identity)`);
     return { ...state, homeCheckpointCheckedAt: now };
   }
   try {

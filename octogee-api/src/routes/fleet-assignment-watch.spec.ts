@@ -11,7 +11,7 @@ function setup() {
   };
   const assignments = { onSnapshot };
   const where = vi.fn(() => ({ onSnapshot }));
-  const doc = vi.fn(() => ({ collection: vi.fn(() => assignments) }));
+  const doc = vi.fn((_gatewayId: string) => ({ onSnapshot, collection: vi.fn(() => assignments) }));
   const collection = vi.fn((name: string) => name === "users" ? { where } : { doc });
   const req = new EventEmitter();
   const res = Object.assign(new EventEmitter(), {
@@ -30,9 +30,19 @@ describe("assignment change stream", () => {
       expect(h.doc).toHaveBeenCalledWith("shared-a");
       expect(h.where).toHaveBeenCalledWith("provisioning.openclaw.gatewayId", "==", "shared-a");
       h.subscriptions.forEach((subscription) => subscription.next());
-      expect(h.res.write.mock.calls).toEqual([["data: changed\n\n"], ["data: changed\n\n"]]);
+      expect(h.res.write.mock.calls).toEqual([["data: changed\n\n"], ["data: changed\n\n"], ["data: changed\n\n"]]);
     } finally { h.res.emit("close"); }
     h.subscriptions.forEach((subscription) => expect(subscription.stop).toHaveBeenCalledOnce());
+  });
+
+  it("wakes the pod when its own gateway root changes", () => {
+    const h = setup();
+    try {
+      expect(h.subscriptions).toHaveLength(3);
+      h.subscriptions[2].next();
+      expect(h.res.write.mock.calls).toEqual([["data: changed\n\n"]]);
+      expect(h.doc.mock.calls.every(([gatewayId]) => gatewayId === "shared-a")).toBe(true);
+    } finally { h.res.emit("close"); }
   });
 
   it("closes both listeners and logs a failed Firestore watch", () => {

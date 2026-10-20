@@ -7,6 +7,7 @@ import {
   type GatewayVmRuntimeBundle,
   type GatewayVmRuntimeContainer,
   type GatewayVmRuntimeVolume,
+  type RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 import { GATEWAY_HOST_DESKTOP_AUTH_DIR } from "../openclaw-computer-browser.js";
 
@@ -25,13 +26,29 @@ function homeRestoreVersion(bundle: GatewayVmRuntimeBundle): string | null {
   return bundle.homeRestoreCheckpoint ? createHash("sha256").update(JSON.stringify(bundle.homeRestoreCheckpoint)).digest("hex") : null;
 }
 
-function bundleBuilderSlug(bundle: Pick<GatewayVmRuntimeBundle, "containers" | "init">): string | undefined {
-  const slugs = new Set([bundle.init, ...bundle.containers].flatMap(container => container?.env.GATEWAY_BUILDER_SLUG ? [container.env.GATEWAY_BUILDER_SLUG] : []));
-  if (slugs.size > 1) throw new Error("VM bundle contains conflicting Builder slugs");
-  return [...slugs][0];
+const OLDER_PLATFORM_SLUG_ENV = "GATEWAY_BUILDER_SLUG";
+const OLDER_PLATFORM_OWNER_ENV = "GATEWAY_OWNER_UID";
+
+type IdentityBundle = Pick<GatewayVmRuntimeBundle, "containers" | "init" | "builderIdentity">;
+
+function renderedEnvValue(bundle: IdentityBundle, name: string): string | undefined {
+  const values = new Set([bundle.init, ...bundle.containers].flatMap(container => container?.env[name] ? [container.env[name]] : []));
+  if (values.size > 1) throw new Error(`VM bundle contains conflicting Builder identities in ${name}`);
+  return [...values][0];
 }
 
-export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace" | "containers" | "init">): string[] {
+export function bundleBuilderIdentity(bundle: IdentityBundle): RuntimeBuilderIdentity | null {
+  if (bundle.builderIdentity) return bundle.builderIdentity;
+  const builderSlug = renderedEnvValue(bundle, OLDER_PLATFORM_SLUG_ENV);
+  const ownerUid = renderedEnvValue(bundle, OLDER_PLATFORM_OWNER_ENV);
+  return builderSlug && ownerUid ? { ownerUid, builderSlug } : null;
+}
+
+function bundleBuilderSlug(bundle: IdentityBundle): string | undefined {
+  return bundleBuilderIdentity(bundle)?.builderSlug;
+}
+
+export function loggedLabelsFor(bundle: Pick<GatewayVmRuntimeBundle, "namespace" | "containers" | "init" | "builderIdentity">): string[] {
   return [
     ...LOGGED_LABELS.filter(label => label !== NAMESPACE_LABEL || Boolean(bundle.namespace)),
     ...(bundleBuilderSlug(bundle) ? [BUILDER_SLUG_LABEL] : []),

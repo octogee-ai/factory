@@ -66,6 +66,10 @@
       "types": "./dist/types/builder-gateway-id.d.ts",
       "default": "./dist/types/builder-gateway-id.js"
     },
+    "./types/builder-identity": {
+      "types": "./dist/types/builder-identity.d.ts",
+      "default": "./dist/types/builder-identity.js"
+    },
     "./types/placement-receipts": {
       "types": "./dist/types/placement-receipts.d.ts",
       "default": "./dist/types/placement-receipts.js"
@@ -261,6 +265,10 @@
     "./server/service-logger": {
       "types": "./dist/server/service-logger.d.ts",
       "default": "./dist/server/service-logger.js"
+    },
+    "./server/builder-claim": {
+      "types": "./dist/server/builder-claim.d.ts",
+      "default": "./dist/server/builder-claim.js"
     }
   },
   "typesVersions": {
@@ -294,6 +302,9 @@
       ],
       "types/builder-gateway-id": [
         "dist/types/builder-gateway-id.d.ts"
+      ],
+      "types/builder-identity": [
+        "dist/types/builder-identity.d.ts"
       ],
       "types/placement-receipts": [
         "dist/types/placement-receipts.d.ts"
@@ -432,6 +443,9 @@
       ],
       "server/service-logger": [
         "dist/server/service-logger.d.ts"
+      ],
+      "server/builder-claim": [
+        "dist/server/builder-claim.d.ts"
       ]
     }
   },

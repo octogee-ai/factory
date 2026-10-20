@@ -10,6 +10,7 @@ import {
   type GatewayVmSpec,
   type GatewayVmState,
   type HelmInstancesMap,
+  type RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 import type { GatewayVmClient } from "./lib/compute-vm.js";
 import { createComputerLifecycle, recordVmObservation } from "./vm-computer-lifecycle.js";
@@ -165,6 +166,8 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
   return runtime;
 }
 
+type VmInstanceRecord = HelmInstancesMap[string] & Partial<RuntimeBuilderIdentity>;
+
 function withoutUndefined<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -208,7 +211,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
 
   async function renderManifests(opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<unknown[]> {
     const release = `octogee-gw-${opts.revisionId ?? opts.gatewayId}`;
-    const args = [...helmTemplateArgsFromUpgradeArgs(buildUpgradeArgs({ ...opts, release, upgradeTimeout })), "--set", "computerDesktop=omarchy"];
+    const args = [...helmTemplateArgsFromUpgradeArgs(buildUpgradeArgs({ ...opts, release, upgradeTimeout })), "--set", "computerDesktop=omarchy", "--set", "runtimeKind=gce-vm"];
     const rendered = await deps.runHelm(args);
     if (rendered.code !== 0) {
       throw new Error(`helm template ${release} failed (code=${rendered.code}): ${rendered.stderr.trim() || rendered.stdout.trim()}`);
@@ -269,9 +272,11 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
       const { gatewayId } = opts;
       if (deps.ensureAuthSecret) await deps.ensureAuthSecret({ namespace: deps.namespace, gatewayId });
       const [manifests, bridge] = await Promise.all([renderManifests(opts), bridgeIp()]);
-      const homeStorageId = opts.ownerUid ? (await deps.db.collection("users").doc(opts.ownerUid).get()).data()?.provisioning?.homeStorage?.disk?.id : undefined;
+      const ownerUid = opts.builderIdentity?.ownerUid;
+      const homeStorageId = ownerUid ? (await deps.db.collection("users").doc(ownerUid).get()).data()?.provisioning?.homeStorage?.disk?.id : undefined;
       const bundle = await renderVmRuntimeBundle({
         ...(homeStorageId ? { homeStorageId } : {}),
+        ...(opts.builderIdentity ? { builderIdentity: opts.builderIdentity } : {}),
         gatewayId,
         namespace: deps.namespace,
         imageRepository: opts.imageRepository,
@@ -283,7 +288,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         kubernetes: deps.kubernetes,
         now: deps.now,
       });
-      const instance: HelmInstancesMap[string] = withoutUndefined({
+      const instance: VmInstanceRecord = withoutUndefined({
         enabled: true,
         image: { repository: opts.imageRepository, tag: opts.imageTag },
         gatewayId,
@@ -296,18 +301,18 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         profile: opts.profile,
         gatewayClass: opts.gatewayClass,
         imageProfile: opts.imageProfile,
-        ownerUid: opts.ownerUid,
-        builderSlug: opts.builderSlug,
+        ownerUid,
+        builderSlug: opts.builderIdentity?.builderSlug,
         sizingTier: opts.sizingTier,
         replicas: opts.replicas,
       });
       if (opts.replicas === 0) {
         await computers.pauseComputer(gatewayId);
       } else {
-        await computers.ensureVm(gatewayId, `${opts.imageRepository}:${opts.imageTag}`, opts.ownerUid, bridge);
+        await computers.ensureVm(gatewayId, `${opts.imageRepository}:${opts.imageTag}`, ownerUid, bridge);
       }
-      if (opts.ownerUid && bundle.volumes.some(volume => volume.name === "project-materializations" && volume.kind === "ephemeral")) {
-        await deps.db.collection("users").doc(opts.ownerUid).set({ provisioning: { projectStorage: { nativeBoot: true } } }, { merge: true });
+      if (ownerUid && bundle.volumes.some(volume => volume.name === "project-materializations" && volume.kind === "ephemeral")) {
+        await deps.db.collection("users").doc(ownerUid).set({ provisioning: { projectStorage: { nativeBoot: true } } }, { merge: true });
       }
       await deps.db.doc(gatewayVmRuntimeDocPath(gatewayId)).set(bundle);
       deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime bundle ${bundle.version} rendered (${opts.imageTag})`);

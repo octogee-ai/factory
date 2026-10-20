@@ -11,6 +11,7 @@ import {
   buildProjectAgents,
   buildSafeDefaultAgent,
 } from "../lib/openclaw-config-builders.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 function config(): Record<string, unknown> {
   return {
@@ -213,12 +214,11 @@ describe("system config platform invariants", () => {
     }).controlIdentity).toBe("per-user");
 
     const candidate = config();
-    reconcilePlatformInvariants(candidate, {
+    reconcilePlatformInvariants(candidate, withBuilderClaim({
       ...env,
       GATEWAY_CLASS: "builder",
       OPENCLAW_CONTROL_IDENTITY: "per-user",
-      GATEWAY_BUILDER_SLUG: "alice",
-    });
+    }, "alice"));
     expect((candidate.gateway as { auth: { mode: string } }).auth.mode).toBe("trusted-proxy");
     expect(candidate.gateway).toMatchObject({ roles: { definitions: { member: { agents: ["octogee-alice-coach"] } } } });
   });

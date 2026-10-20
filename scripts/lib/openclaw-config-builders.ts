@@ -14,6 +14,7 @@ import {
   mattermostAccountSecretRef,
   type MattermostAccountSecretRef,
 } from "./mattermost-account-secrets.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 export {
   PLATFORM_EMBEDDING_SECRET_PREFIX,
@@ -479,7 +480,7 @@ export function gatewayAgentRosterBuilderSlug(
 ): string {
   const gatewayClass = env.GATEWAY_CLASS?.trim();
   if (gatewayClass === "shared") return "";
-  if (gatewayClass === "builder") return env.GATEWAY_BUILDER_SLUG?.trim() || "";
+  if (gatewayClass === "builder") return builderClaimSlug(env) || "";
   return "";
 }
 

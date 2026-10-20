@@ -14,7 +14,7 @@ import type {
   FleetBrokerComputerHomePruneResult,
 } from "@octogee/shared/types/fleet-broker";
 import { brokerFailure, brokerPost, type BrokerClientDeps } from "./broker.js";
-import { volumeHostPath } from "./plan.js";
+import { bundleBuilderIdentity, volumeHostPath } from "./plan.js";
 import type { DesktopControl } from "./desktop-control.js";
 
 export const HOME_VOLUME_NAME = "data";
@@ -33,7 +33,6 @@ export const HOME_DESKTOP_RUNTIME_PATHS = [
   ".config/octogee-chromium/SingletonSocket",
   ".config/octogee-chromium/DevToolsActivePort",
 ] as const;
-const BUILDER_SLUG_ENV = "GATEWAY_BUILDER_SLUG";
 const SHA256_RE = /^[a-f0-9]{64}$/u;
 
 export interface HomeShell {
@@ -89,7 +88,7 @@ export type HomeRestoreResult =
 
 export function homeScope(stateRoot: string, bundle: GatewayVmRuntimeBundle): HomeScope | null {
   const volume = bundle.volumes.find((candidate) => candidate.name === HOME_VOLUME_NAME && candidate.kind === "emptyDir");
-  const slug = [bundle.init, ...bundle.containers].find((container) => container?.env[BUILDER_SLUG_ENV])?.env[BUILDER_SLUG_ENV];
+  const slug = bundleBuilderIdentity(bundle)?.builderSlug;
   if (!volume || !slug) return null;
   return {
     slug, dataDir: volumeHostPath(stateRoot, volume), marker: `${stateRoot}/${HOME_CHECKPOINT_MARKER}`,

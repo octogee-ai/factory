@@ -19,7 +19,6 @@ import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-pr
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commit-proof-broker.js";
-import { createGatewayPodOwnerIdentityReader } from "./lib/gateway-pod-owner-identity.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createAgentProjectRunRoutes, finalizeProjectRun } from "./routes/agent-project-runs.js";
@@ -182,6 +181,7 @@ export const GATEWAY_CREDENTIAL_ROUTES = new Set([
   "/internal/fleet/assigned-users",
   "/internal/fleet/assignment-watch",
   "/internal/fleet/configured-builder-bootstrap",
+  "/internal/fleet/builder-identity",
   "/internal/fleet/npm-registry-credentials",
   "/internal/fleet/user-snapshot",
   "/internal/fleet/runtime-reset-ack",
@@ -722,12 +722,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
-  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({
-    db,
-    readPodOwnerIdentity: createGatewayPodOwnerIdentityReader({
-      namespace: process.env.K8S_NAMESPACE ?? "octogee",
-    }),
-  }));
+  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
   app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ db }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and

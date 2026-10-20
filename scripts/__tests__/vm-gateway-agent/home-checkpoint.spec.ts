@@ -77,7 +77,7 @@ function fakeHome(overrides: Partial<FakeHome["world"]> = {}, routes: FakeHome["
     log: vi.fn(),
   };
   const scope = homeScope("/srv/octogee", bundleFixture({
-    containers: bundleFixture().containers.map((c) => ({ ...c, env: { ...c.env, GATEWAY_BUILDER_SLUG: "bob" } })),
+    builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" },
   }))!;
   scope.desktopToolsRebuildable = true;
   return { deps, scope, shell, fetches, touched, removed, world, routes };
@@ -87,7 +87,7 @@ const signedUpload = { url: "https://storage.example/customers/bob/computer-home
 
 describe("homeScope", () => {
   it("derives the home volume and builder slug from the bundle and is absent when either is missing", () => {
-    const scope = homeScope("/srv/octogee", bundleFixture({ containers: bundleFixture().containers.map((c) => ({ ...c, env: { ...c.env, GATEWAY_BUILDER_SLUG: "bob" } })) }));
+    const scope = homeScope("/srv/octogee", bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }));
     expect(scope).toEqual({ slug: "bob", dataDir: "/srv/octogee/volumes/data", marker: "/srv/octogee/home-checkpoint.marker", desktopDir: "/srv/octogee/desktop-home", restorePending: "/srv/octogee/home-restore.pending" });
     expect(homeScope("/srv/octogee", bundleFixture())).toBeNull();
     expect(homeScope("/srv/octogee", bundleFixture({ volumes: [{ name: "data", kind: "identityToken", audience: "x" }] }))).toBeNull();

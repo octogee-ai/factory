@@ -633,7 +633,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (namespace,pod,node,label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug) ((kube_pod_info{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"} * on(namespace,pod) group_left(label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"}) and on(namespace,pod) (kube_pod_status_ready{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",condition=\"true\"} == 1))",
+          "expr": "sum by (namespace,pod,node,label_gateway_id,label_gateway_class) ((kube_pod_info{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"} * on(namespace,pod) group_left(label_gateway_id,label_gateway_class) kube_pod_labels{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"}) and on(namespace,pod) (kube_pod_status_ready{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",condition=\"true\"} == 1))",
           "legendFormat": "{{pod}}",
           "refId": "A",
           "format": "table",
@@ -673,7 +673,6 @@
               "node": "Node",
               "label_gateway_id": "Gateway",
               "label_gateway_class": "Class",
-              "label_octogee_ai_builder_slug": "Builder",
               "Value": "Ready"
             }
           }

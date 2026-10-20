@@ -1,6 +1,5 @@
 import { resolveGatewayControlIdentity, } from "./glm.js";
 export const OPENCLAW_CONTROL_IDENTITY_ENV = "OPENCLAW_CONTROL_IDENTITY";
-export const OPENCLAW_OWNER_UID_ENV = "GATEWAY_OWNER_UID";
 export const OPENCLAW_PROXY_USER_HEADER = "x-octogee-user";
 export const OPENCLAW_PROXY_ATTESTATION_HEADER = "x-octogee-proxy";
 export const OPENCLAW_PROXY_ATTESTATION_VALUE = "1";
@@ -80,10 +79,6 @@ export function resolveControlIdentityFromEnv(env = process.env) {
 }
 export function isPerUserControlIdentity(env = process.env) {
     return resolveControlIdentityFromEnv(env) === "per-user";
-}
-export function resolveOwnerUidFromEnv(env = process.env) {
-    const value = env[OPENCLAW_OWNER_UID_ENV]?.trim();
-    return value ? value : undefined;
 }
 export function serviceProxyIdentity(name) {
     const trimmed = name.trim();

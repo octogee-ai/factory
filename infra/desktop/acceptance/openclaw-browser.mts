@@ -31,7 +31,13 @@ const config = {
   agents: { entries: { "octogee-native-coach": {}, "octogee-native-proj-site-coach": {}, arbitrary: { tools: { profile: "full" } } } },
   plugins: { load: { paths: [`${source}/${packageRoot ? "dist/" : ""}extensions/browser`] } },
 };
-applyOpenClawComputerBrowserConfig(config, { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_BUILDER_SLUG: "native" });
+const { builderClaimFromIdentity, writeBuilderClaim } = await import("../../../shared/server/builder-claim.ts");
+const claimDir = `${output}/builder-claim`;
+await mkdir(claimDir, { recursive: true });
+writeBuilderClaim(claimDir, builderClaimFromIdentity({
+  gatewayId: "acceptance", state: "claimed", ownerUid: "uid-native", builderSlug: "native", leaseId: null, generation: null,
+}, Date.now()));
+applyOpenClawComputerBrowserConfig(config, { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm", OPENCLAW_DIR: claimDir, GATEWAY_ID: "acceptance" });
 setRuntimeConfigSnapshot(config);
 const resolvedProfile = (config.browser as typeof config.browser & { profiles: { computer: { cdpUrl: string; attachOnly: boolean } } }).profiles.computer;
 assert.equal(resolvedProfile.cdpUrl, "http://127.0.0.1:9222");

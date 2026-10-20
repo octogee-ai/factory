@@ -9,6 +9,7 @@ import {
 import { cloneGithubProjectCheckout } from "../../lib/github-project-clone.js";
 import { logger } from "../../middleware/logging.js";
 import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
+import { claimedBuilderIdentity } from "../../lib/builder-identity.js";
 
 const router = Router();
 
@@ -98,7 +99,7 @@ router.post(
   async (req: Request, res: Response) => {
     const projectSlug = paramString(req.body?.projectSlug);
     const builderSlug = paramString(req.body?.builderSlug);
-    const expectedBuilderSlug = nonBlank(process.env.GATEWAY_BUILDER_SLUG);
+    const expectedBuilderSlug = claimedBuilderIdentity()?.builderSlug;
     if (
       !projectSlug ||
       !builderSlug ||

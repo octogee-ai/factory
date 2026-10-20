@@ -226,6 +226,7 @@ export interface ConvergenceHooks {
 // applied-fingerprint store.
 export { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 import { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 export interface SettleConvergenceInput {
   now: number;
@@ -1908,7 +1909,7 @@ function startPodSurgeReadinessRecovery(input: {
 }
 
 function configuredBuilderSlug(adapter: CustomerLifecycleAdapter): string | null {
-  const slug = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  const slug = builderClaimSlug();
   if (!slug || adapter.isBuilderGateway?.() !== true) return null;
   return adapter.isConfiguredBuilderCustomer?.(slug) === true &&
       adapter.configuredBuilderOverlayPresent?.(slug) === true

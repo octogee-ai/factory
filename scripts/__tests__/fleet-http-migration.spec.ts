@@ -70,6 +70,7 @@ import {
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
+import { stubBuilderClaim } from "./helpers/builder-claim.js";
 
 const spawnMock = vi.fn();
 const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -1006,7 +1007,7 @@ describe("createVerifyHandler", () => {
     { configTransferMode: "configured-builder-system-config", overlayPresent: true },
     { configTransferMode: undefined, overlayPresent: false },
   ])("verifies configured Builder readiness (mode=$configTransferMode, overlay=$overlayPresent)", async ({ configTransferMode, overlayPresent }) => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    stubBuilderClaim("chris");
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
       configuredBuilderOverlayPresent: vi.fn(() => overlayPresent),
@@ -1416,7 +1417,7 @@ describe("createUnmountHandler", () => {
   });
 
   it("rejects an unmount that crosses the dedicated watcher tenant boundary", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+    stubBuilderClaim("alice");
     const removeImportedCustomerBySlug = vi.fn(async () => ({ wasMounted: false, steps: [] }));
     const adapter = mkAdapter({ removeImportedCustomerBySlug });
     const handler = createUnmountHandler(mkDeps({ adapter }));
@@ -1937,7 +1938,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("reserves the surge target only for a configured Builder final import, before opening its session, and fails closed", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    stubBuilderClaim("chris");
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
       prepareKeyImportDir: vi.fn(async () => "/openclaw-keys"),
@@ -2338,7 +2339,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("does not materialize an activation manifest for a configured Builder final transfer", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    stubBuilderClaim("chris");
     const exportOpenClawActivationManifest = vi.fn(async () => {
       throw new Error("Builder transfer must not materialize an activation manifest");
     });
@@ -2382,7 +2383,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("rejects a configured Builder transfer on a nonmatching gateway", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+    stubBuilderClaim("alice");
     const body: PrepareRsyncImportRequestBody = {
       migrationId: "mig-builder-wrong-target",
       slug: "chris",
@@ -2782,10 +2783,10 @@ describe("queued-rsync migration control handlers", () => {
     await fs.writeFile(configPath, JSON.stringify({
       agents: { list: [{ id: "discord-helper" }, { id: "octogee-unmatched-route" }] },
     }));
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
     vi.stubEnv("OPENCLAW_DIR", stateDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    stubBuilderClaim("chris");
     const mounted: string[] = [];
     const onMounted = vi.fn((slug: string) => {
       if (!mounted.includes(slug)) mounted.push(slug);
@@ -2885,7 +2886,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("rejects a final import whose config transfer mode does not match the prepared Builder session", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    stubBuilderClaim("chris");
     const adapter = mkAdapter({ prepareImportDir: vi.fn(async () => "/openclaw") });
     const daemon = mkFakeChild();
     spawnMock.mockReturnValueOnce(daemon);
@@ -2948,7 +2949,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("clears only Builder migration observation when a final import is aborted", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    stubBuilderClaim("chris");
     const clearMountMarker = vi.fn();
     const clearCustomerMigratingIn = vi.fn();
     const onUnmounted = vi.fn();

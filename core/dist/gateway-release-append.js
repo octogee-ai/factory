@@ -28,6 +28,22 @@ export class InvalidGatewayRootError extends Error {
         this.gatewayId = gatewayId;
     }
 }
+export class GatewayOwnerChangeError extends Error {
+    gatewayId;
+    field;
+    constructor(gatewayId, field) {
+        super(`gateway ${gatewayId} ${field} is already bound; a release cannot change it`);
+        this.gatewayId = gatewayId;
+        this.field = field;
+    }
+}
+function assertOwnerUnchanged(current, caller) {
+    for (const field of ["ownerUid", "builderSlug"]) {
+        if (current[field] !== null && caller[field] !== current[field]) {
+            throw new GatewayOwnerChangeError(current.gatewayId, field);
+        }
+    }
+}
 export function rolloutOperationInput(gatewayId, targetRelease, artifact) {
     return {
         gatewayId,
@@ -41,6 +57,7 @@ async function currentRootForAppend(transaction, gatewayRef, args) {
     const current = asDurableGatewayRoot(snapshot.data(), args.gateway.gatewayId);
     if (!current)
         throw new InvalidGatewayRootError(args.gateway.gatewayId);
+    assertOwnerUnchanged(current, args.gateway);
     if (current.desiredStatus === "retired" || current.retirementClaim != null) {
         throw new GatewayRetirementConflictError(`gateway ${args.gateway.gatewayId} has a current retirement claim`);
     }

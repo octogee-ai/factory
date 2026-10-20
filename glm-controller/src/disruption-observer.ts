@@ -41,7 +41,6 @@ export interface DisruptionPodRecord {
   gatewayId: string | null;
   gatewayInstance: string | null;
   gatewayClass: string | null;
-  builderSlug: string | null;
 }
 
 export interface DisruptionGatewayRecord {
@@ -216,7 +215,6 @@ function parseNode(value: KubeObject): DisruptionNodeRecord {
 function parsePod(value: KubeObject): DisruptionPodRecord {
   const metadata = metadataOf(value);
   const labels = labelsOf(value);
-  const annotations = annotationsOf(value);
   const spec = isRecord(value.spec) ? value.spec : {};
   const status = isRecord(value.status) ? value.status : {};
   return {
@@ -228,9 +226,6 @@ function parsePod(value: KubeObject): DisruptionPodRecord {
     gatewayId: stringOrNull(labels["gateway-id"]),
     gatewayInstance: stringOrNull(labels["gateway-instance"]),
     gatewayClass: stringOrNull(labels["gateway-class"]),
-    builderSlug:
-      stringOrNull(labels["octogee.ai/builder-slug"]) ??
-      stringOrNull(annotations["octogee.ai/builder-slug"]),
   };
 }
 
@@ -333,7 +328,7 @@ async function gatewayRecords(
 ): Promise<DisruptionGatewayRecord[]> {
   return Promise.all(gatewayIds.map(async (gatewayId) => {
     const [root, assignments, operations] = await Promise.all([
-      db.collection("glmGateways").doc(gatewayId).get(),
+      db.collection("gateways").doc(gatewayId).get(),
       db.collection("gateways").doc(gatewayId).collection("assignments").get(),
       db.collection("glmOperations").where("gatewayId", "==", gatewayId).get(),
     ]);

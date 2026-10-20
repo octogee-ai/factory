@@ -48,6 +48,13 @@ import {
 } from "./roll-roster.js";
 import { createBrokerRollRosterSubscription } from "./broker-roll-roster.js";
 import { workspaceServingResolver } from "./openclaw-control/workspace-serving.js";
+import {
+  brokerBuilderIdentityReader,
+  builderIdentity,
+  claimedBuilderIdentity,
+  createBuilderIdentityStore,
+  installBuilderIdentityStore,
+} from "./lib/builder-identity.js";
 import { chatProxyOwnsHttpPath } from "./chat-proxy/http-paths.js";
 import { stripGatewayPrefix } from "./chat-proxy/gateway-prefix.js";
 import { validateRequiredEnv } from "./lib/required-env.js";
@@ -434,6 +441,16 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
+  const edgeGatewayClass = process.env.GATEWAY_CLASS === "builder" ? "builder" : "shared";
+  if (edgeGatewayClass === "builder") {
+    const identityStore = createBuilderIdentityStore({
+      read: brokerBuilderIdentityReader(process.env),
+      log: (msg) => logger.error(msg),
+    });
+    installBuilderIdentityStore(identityStore);
+    process.once("exit", identityStore.start());
+  }
+
   // Gateway pods gate customer-state traffic on the durable assignment roster
   // (the migration quiesce gate). The gate installs SYNCHRONOUSLY with a
   // not-yet-loaded store facade, so an edge booting mid-migration answers 503 +
@@ -501,7 +518,10 @@ if (process.env.NODE_ENV !== "test") {
       attachTerminalWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         tickets: terminalTickets,
-        defaultAgentId: process.env.GATEWAY_BUILDER_SLUG ? workspaceCoachAgentId(process.env.GATEWAY_BUILDER_SLUG) : null,
+        defaultAgentId: () => {
+          const identity = claimedBuilderIdentity();
+          return identity ? workspaceCoachAgentId(identity.builderSlug) : null;
+        },
         openUpstream: openTerminalUserSocket,
         isAllowedOrigin: isAllowedWsOrigin,
         log: (message, meta) => logger.warn(message, meta),
@@ -513,7 +533,11 @@ if (process.env.NODE_ENV !== "test") {
         env: process.env,
         metrics: activeOpenClawControlMetrics,
         authorizationCache: openClawControlAuthorizationCache,
-        workspaceServing: workspaceServingResolver(process.env, rosterFacade),
+        workspaceServing: workspaceServingResolver({
+          gatewayClass: edgeGatewayClass,
+          identity: builderIdentity,
+          store: rosterFacade,
+        }),
       });
       const dashboardHeartbeat = startOpenClawDashboardCapabilityHeartbeat({
         env: process.env,

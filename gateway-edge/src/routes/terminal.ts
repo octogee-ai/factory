@@ -247,7 +247,7 @@ export interface TerminalUpstream {
 export interface AttachTerminalWsRouteOptions {
   router: WsUpgradeRouter;
   tickets: WsTicketStore<TerminalSession>;
-  defaultAgentId: string | null;
+  defaultAgentId: () => string | null;
   openUpstream: (session: TerminalSession) => Promise<TerminalUpstream>;
   isAllowedOrigin: (origin: string | undefined) => boolean;
   log: (message: string, meta?: Record<string, unknown>) => void;
@@ -339,7 +339,7 @@ function bridgeTerminal(
       closeBoth(1008, "text frames only");
       return;
     }
-    const decision = decideTerminalRequest(raw, { defaultAgentId: session.conversation?.agentId ?? options.defaultAgentId });
+    const decision = decideTerminalRequest(raw, { defaultAgentId: session.conversation?.agentId ?? options.defaultAgentId() });
     if (!decision.allowed) {
       if (decision.reason === "invalid-frame" && decision.id === null) {
         closeBoth(1008, "invalid frame");

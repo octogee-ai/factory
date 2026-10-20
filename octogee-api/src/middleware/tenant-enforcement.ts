@@ -67,6 +67,7 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/byok/byosub-user",
   "/internal/byok/byosub-flow-read",
   "/internal/fleet/configured-builder-bootstrap",
+  "/internal/fleet/builder-identity",
   "/internal/fleet/npm-registry-credentials",
   "/internal/fleet/user-snapshot",
   "/internal/fleet/builder-runtime-state/download-url",

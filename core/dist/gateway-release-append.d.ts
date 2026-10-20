@@ -14,8 +14,13 @@ export declare class InvalidGatewayRootError extends Error {
     readonly gatewayId: string;
     constructor(gatewayId: string);
 }
+export declare class GatewayOwnerChangeError extends Error {
+    readonly gatewayId: string;
+    readonly field: "ownerUid" | "builderSlug";
+    constructor(gatewayId: string, field: "ownerUid" | "builderSlug");
+}
 export interface AppendGatewayReleaseArgs {
-    gateway: GatewayDoc;
+    gateway: DurableGatewayRoot;
     artifact: GatewayArtifact;
     payload?: ReleasePayload;
     createdBy: string;

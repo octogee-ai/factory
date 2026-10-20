@@ -17,8 +17,8 @@ import {
   OPENCLAW_TRUSTED_PROXY_AUTH,
   isPerUserControlIdentity,
   openClawIdentityScopes,
-  resolveOwnerUidFromEnv,
 } from "../../shared/dist/types/openclaw-proxy-identity.js";
+import { readBuilderClaim } from "../../shared/dist/server/builder-claim.js";
 
 export const CUSTOMER_CODE_DENIED_TOOLS = [
   "exec",
@@ -1454,7 +1454,8 @@ function projectBuilderSecretProviders(config, openclawDir) {
       "OCTOGEE_API_SA_TOKEN_PATH",
       "INTERNAL_SERVICE_KEY",
       "OPENCLAW_AGENTS_DIR",
-      "GATEWAY_BUILDER_SLUG",
+      "OPENCLAW_DIR",
+      "GATEWAY_ID",
       "HOME",
     ],
     jsonOnly: true,
@@ -1480,7 +1481,7 @@ function applyBuilderPolicy(config, openclawDir, env) {
   convergePlatformCapabilities(config, true);
   preserveBuilderPluginConfiguration(config);
   projectBuilderSecretProviders(config, openclawDir);
-  applyControlIdentityPolicy(config, env);
+  applyControlIdentityPolicy(config, env, readBuilderClaim(openclawDir, env.GATEWAY_ID?.trim()));
 }
 
 function applyBuilderTalkDefaults(config) {
@@ -1498,7 +1499,7 @@ function applyBuilderTalkDefaults(config) {
   };
 }
 
-function applyControlIdentityPolicy(config, env) {
+function applyControlIdentityPolicy(config, env, claim) {
   config.plugins ??= {};
   config.plugins.entries ??= {};
   config.plugins.entries["octogee-identity-tools"] = { enabled: isPerUserControlIdentity(env) };
@@ -1511,9 +1512,9 @@ function applyControlIdentityPolicy(config, env) {
     delete auth.allowTailscale;
     auth.mode = OPENCLAW_TRUSTED_PROXY_AUTH.mode;
     auth.trustedProxy = structuredClone(OPENCLAW_TRUSTED_PROXY_AUTH.trustedProxy);
-    auth.identityScopes = openClawIdentityScopes(resolveOwnerUidFromEnv(env));
+    auth.identityScopes = openClawIdentityScopes(claim?.ownerUid);
     config.gateway.trustedProxies = [...OPENCLAW_TRUSTED_PROXIES];
-    config.gateway.roles = withOpenClawOperatorRoles(config.gateway.roles, env.GATEWAY_BUILDER_SLUG);
+    config.gateway.roles = withOpenClawOperatorRoles(config.gateway.roles, claim?.builderSlug);
     // Only extend an allowlist that already exists. An absent `plugins.allow`
     // means "every plugin is allowed", so identity-tools is permitted already;
     // materializing a list here would narrow the gateway to this single entry

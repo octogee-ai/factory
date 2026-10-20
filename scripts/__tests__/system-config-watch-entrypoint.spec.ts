@@ -8,6 +8,7 @@ import {
   runSystemConfigWatch,
 } from "../entrypoints/system-config-watch.js";
 import { disableSystemConfigWatch } from "../lib/system-config-watch-state.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("system-config-watch entrypoint planning", () => {
   const dirs: string[] = [];
@@ -19,7 +20,7 @@ describe("system-config-watch entrypoint planning", () => {
   it("runs only for isolated gateways with a builder slug and canonical path", () => {
     expect(resolveSystemConfigWatchPlan({
       GATEWAY_CLASS: "builder",
-      GATEWAY_BUILDER_SLUG: " alice ",
+      ...withBuilderClaim({}, "alice"),
       OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/system_config/openclaw.json",
     })).toEqual({
       action: "watch",
@@ -35,7 +36,7 @@ describe("system-config-watch entrypoint planning", () => {
     });
     expect(() => resolveSystemConfigWatchPlan({
       GATEWAY_CLASS: "builder",
-      GATEWAY_BUILDER_SLUG: "alice",
+      ...withBuilderClaim({}, "alice"),
       HOME: "/home/node",
     })).toThrow(/OPENCLAW_CONFIG_PATH/);
   });
@@ -49,7 +50,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        GATEWAY_BUILDER_SLUG: "alice",
+        ...withBuilderClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/system_config/openclaw.json",
       },
       createWatcher,
@@ -87,7 +88,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        GATEWAY_BUILDER_SLUG: "alice",
+        ...withBuilderClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: configPath,
       },
       createWatcher,
@@ -121,7 +122,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        GATEWAY_BUILDER_SLUG: "alice",
+        ...withBuilderClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: configPath,
       },
       createWatcher,
@@ -149,7 +150,7 @@ describe("system-config-watch entrypoint planning", () => {
     runSystemConfigWatch({
       env: {
         GATEWAY_CLASS: "builder",
-        GATEWAY_BUILDER_SLUG: "alice",
+        ...withBuilderClaim({}, "alice"),
         OPENCLAW_CONFIG_PATH: configPath,
       },
       createWatcher,

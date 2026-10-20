@@ -17,30 +17,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: octogee-api-pod-identity
-  namespace: {{ .Release.Namespace }}
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: octogee-api-pod-identity
-  namespace: {{ .Release.Namespace }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: octogee-api-pod-identity
-subjects:
-  - kind: ServiceAccount
-    name: {{ .Values.serviceAccountName }}
-    namespace: {{ .Release.Namespace }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
   name: octogee-api-context-derivation
   namespace: {{ .Release.Namespace }}
 rules:

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 const DISABLED_MARKER = "system_config.watch.disabled";
 const STATE_LOCK = "system_config.watch.state.lock";
@@ -62,7 +63,7 @@ export function isConfiguredGatewayBuilder(
   slug: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return env.GATEWAY_BUILDER_SLUG?.trim() === slug;
+  return builderClaimSlug(env) === slug;
 }
 
 function rejectDifferentBuilderFence(openclawDir: string, slug: string): void {

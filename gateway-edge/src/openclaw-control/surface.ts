@@ -68,6 +68,8 @@ import {
   type MattermostChatPreparation,
   type MattermostControlChat,
 } from "./mattermost-chat.js";
+import type { ClaimedBuilderIdentity } from "@octogee/shared/types/builder-identity";
+import { claimedBuilderIdentity } from "../lib/builder-identity.js";
 
 const MAX_BROWSER_WS_FRAME_BYTES = 1_048_576;
 const MAX_UPSTREAM_WS_FRAME_BYTES = 25 * 1024 * 1024;
@@ -246,18 +248,22 @@ function metricIdentity(env: NodeJS.ProcessEnv): OpenClawControlMetricIdentity {
   };
 }
 
-function invariantContext(env: NodeJS.ProcessEnv, gatewayId: string): SystemConfigInvariantContext {
+export function invariantContext(
+  env: NodeJS.ProcessEnv,
+  gatewayId: string,
+  identity: ClaimedBuilderIdentity | null,
+): SystemConfigInvariantContext | null {
   const value = gatewayClass(env);
-  return value === "shared"
-    ? { gatewayClass: value }
-    : {
-      gatewayClass: value,
-      gatewayId,
-      apiOrigin: apiOrigin(env),
-      controlIdentity: resolveControlIdentityFromEnv(env),
-      ownerUid: env.GATEWAY_OWNER_UID,
-      workspaceSlug: env.GATEWAY_BUILDER_SLUG,
-    };
+  if (value === "shared") return { gatewayClass: value };
+  if (!identity) return null;
+  return {
+    gatewayClass: value,
+    gatewayId,
+    apiOrigin: apiOrigin(env),
+    controlIdentity: resolveControlIdentityFromEnv(env),
+    ownerUid: identity.ownerUid,
+    workspaceSlug: identity.builderSlug,
+  };
 }
 
 export function isOpenClawControlWsPath(pathname: string): boolean {
@@ -1614,11 +1620,17 @@ class OpenClawControlSocketBridge {
         return;
       }
     }
-    const decision: OpenClawControlRpcDecision = this.args.proxyIdentity.enabled && !managedConfigWrite
+    const evaluated = this.args.proxyIdentity.enabled && !managedConfigWrite;
+    const context = evaluated ? null : invariantContext(this.args.env, this.activeSession.gatewayId, claimedBuilderIdentity());
+    if (!evaluated && !context) {
+      this.deny(frame, { allowed: false, category, reason: "workspace-not-serving" }, "workspace-not-serving");
+      return;
+    }
+    const decision: OpenClawControlRpcDecision = evaluated
       ? { allowed: true, category, outbound: frame }
       : evaluateOpenClawControlRpc(frame, {
         installedMethods: this.installedMethods!,
-        invariantContext: invariantContext(this.args.env, this.activeSession.gatewayId),
+        invariantContext: context!,
         currentConfig: this.currentConfig,
         configFrozen: configFrozen(this.args.env),
       }, !this.args.proxyIdentity.enabled || this.nativeScopes.has("operator.admin"));

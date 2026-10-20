@@ -93,6 +93,29 @@ if [ ! -f "$MATTERMOST_ACCOUNT_SECRETS" ]; then
 fi
 chmod 600 "$MATTERMOST_ACCOUNT_SECRETS"
 
+# GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
+export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
+
+# ── Builder identity ───────────────────────────────────────────────────────
+BUILDER_SLUG=""
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  log "Pre-boot: reading Builder identity for ${GATEWAY_ID}..."
+  while true; do
+    if BUILDER_SLUG=$("$TSX" /octogee/scripts/entrypoints/builder-identity.ts); then
+      break
+    else
+      identity_status=$?
+    fi
+    if [ "$identity_status" -eq 2 ]; then
+      log "FATAL: Builder identity for ${GATEWAY_ID} is unavailable or conflicts with this pod's claim"
+      exit 2
+    fi
+    log "Pre-boot: Builder identity unavailable; retrying in 5s..."
+    sleep 5
+  done
+  log "Pre-boot: Builder identity claimed for ${BUILDER_SLUG}"
+fi
+
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   log "Pre-boot: removing empty Builder project placeholders..."
   "$TSX" /octogee/scripts/entrypoints/clean-builder-project-placeholders.ts
@@ -100,8 +123,8 @@ fi
 
 GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  case "${GATEWAY_BUILDER_SLUG:-}" in
-    ""|*[!a-z0-9-]*) log "FATAL: a valid GATEWAY_BUILDER_SLUG is required for Builder SSH"; exit 1 ;;
+  case "${BUILDER_SLUG}" in
+    ""|*[!a-z0-9-]*) log "FATAL: a valid Builder slug is required for Builder SSH"; exit 1 ;;
   esac
 fi
 mkdir -p "$HOME/.ssh"
@@ -116,7 +139,7 @@ Host gitea
 SSHEOF
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   cat >> "$HOME/.ssh/config" <<SSHEOF
-  IdentityFile ${OPENCLAW_DIR}/customer-keys/${GATEWAY_BUILDER_SLUG}/id_ed25519
+  IdentityFile ${OPENCLAW_DIR}/customer-keys/${BUILDER_SLUG}/id_ed25519
   IdentitiesOnly yes
 SSHEOF
 fi
@@ -162,14 +185,6 @@ export OPENCLAW_GATEWAY_TOKEN
 export OCTOGEE_POD_RELAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN"
 # ── End require ────────────────────────────────────────────────────────────
 
-# GATEWAY_ID is set by the deployment's env block. Fail fast if it is missing.
-export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
-
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ] && [ -z "${GATEWAY_BUILDER_SLUG:-}" ]; then
-  log "FATAL: GATEWAY_BUILDER_SLUG is required for ${GATEWAY_CLASS_EFFECTIVE} durable config"
-  exit 1
-fi
-
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_DIR/system_config/openclaw.json"
 else
@@ -181,7 +196,7 @@ fi
 # regular config file. Restore includes the idempotent schema migration
 # (roll-forward only; reconcileSystemConfigSchema).
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
-  log "Pre-boot: restoring system_config for builder slug ${GATEWAY_BUILDER_SLUG}..."
+  log "Pre-boot: restoring system_config for builder slug ${BUILDER_SLUG}..."
   until "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts; do
     log "Pre-boot: system_config restore unavailable; retrying in 5s..."
     sleep 5
@@ -191,7 +206,7 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     log "Pre-boot: configured builder credential unavailable; retrying in 5s..."
     sleep 5
   done
-  log "Pre-boot: restoring Builder OpenClaw runtime state for ${GATEWAY_BUILDER_SLUG}..."
+  log "Pre-boot: restoring Builder OpenClaw runtime state for ${BUILDER_SLUG}..."
   while true; do
     if "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-restore.ts; then
       break

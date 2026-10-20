@@ -2,12 +2,13 @@ import { Router } from "express";
 import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
 import { persistBuilderProjects } from "../../lib/project-persistence.js";
 import { logger } from "../../middleware/logging.js";
+import { claimedBuilderIdentity } from "../../lib/builder-identity.js";
 
 export function createProjectPersistenceRouter(persist = persistBuilderProjects): Router {
   const router = Router();
   router.use(requireGatewayInternalAuth);
   router.post("/flush", async (req, res) => {
-    const slug = process.env.GATEWAY_BUILDER_SLUG;
+    const slug = claimedBuilderIdentity()?.builderSlug;
     if (process.env.GATEWAY_CLASS !== "builder" || !slug || req.body?.slug !== slug) {
       res.status(403).json({ error: "project owner differs from this Builder" });
       return;

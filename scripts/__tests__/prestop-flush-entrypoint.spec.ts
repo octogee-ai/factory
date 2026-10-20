@@ -8,11 +8,12 @@ import {
   resolvePreStopFlushConfig,
 } from "../entrypoints/prestop-flush.js";
 import { snapshotBuilderRuntimeState } from "../lib/builder-runtime-state.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("prestop-flush entrypoint config", () => {
   it("normalizes the local gateway id to default", () => {
     expect(resolvePreStopFlushConfig(
-      { GATEWAY_BUILDER_SLUG: " alice " },
+      withBuilderClaim({}, "alice"),
       { gatewayClass: "standard", gatewayId: "local" },
     )).toEqual({
       gatewayId: "default",

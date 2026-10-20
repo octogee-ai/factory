@@ -153,9 +153,15 @@ export type GatewayVmRuntimeVolume = {
     name: string;
     kind: "kubernetesApi";
 };
+export interface RuntimeBuilderIdentity {
+    ownerUid: string;
+    builderSlug: string;
+}
+export declare function isRuntimeBuilderIdentity(value: unknown): value is RuntimeBuilderIdentity;
 export interface GatewayVmRuntimeBundle {
     version: string;
     gatewayId: string;
+    builderIdentity?: RuntimeBuilderIdentity;
     namespace?: string;
     imageRepository: string;
     imageTag: string;
@@ -531,8 +537,6 @@ export interface HelmInstanceValue {
     profile?: GatewayProfile;
     gatewayClass?: GatewayClass;
     imageProfile?: GatewayImageProfile;
-    ownerUid?: string;
-    builderSlug?: string;
     sizingTier?: SizingTier;
     replicas?: number;
 }

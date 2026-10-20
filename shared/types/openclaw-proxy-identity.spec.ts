@@ -17,7 +17,6 @@ import {
   openClawOperatorRoles,
   openClawProxyIdentityHeaders,
   resolveControlIdentityFromEnv,
-  resolveOwnerUidFromEnv,
   serviceProxyIdentity,
 } from "./openclaw-proxy-identity";
 
@@ -36,8 +35,6 @@ describe("OpenClaw proxy identity contract", () => {
     expect(resolveControlIdentityFromEnv({ OPENCLAW_CONTROL_IDENTITY: "per-user" })).toBe("per-user");
     expect(resolveControlIdentityFromEnv({ OPENCLAW_CONTROL_IDENTITY: " per-user " })).toBe("per-user");
     expect(isPerUserControlIdentity({ OPENCLAW_CONTROL_IDENTITY: "trusted-proxy" })).toBe(false);
-    expect(resolveOwnerUidFromEnv({ GATEWAY_OWNER_UID: " uid-owner " })).toBe("uid-owner");
-    expect(resolveOwnerUidFromEnv({})).toBeUndefined();
   });
 
   it("mints the user and attestation headers the gateway is configured to trust", () => {

@@ -132,6 +132,7 @@ import {
 import { OpenclawWireError } from "./gateway-rpc.js";
 import type { SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
 import { pendingCloneAppliedFingerprint } from "./pending-clone-fingerprint.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as const;
@@ -222,7 +223,7 @@ async function pauseSystemConfigWatchForBuilder(
   if (deps.pauseSystemConfigWatch) {
     return (await deps.pauseSystemConfigWatch(slug)) ?? undefined;
   }
-  const configuredBuilder = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  const configuredBuilder = builderClaimSlug();
   if (!configuredBuilder) return undefined;
   if (!isConfiguredGatewayBuilder(slug)) {
     throw new Error(
@@ -239,7 +240,7 @@ async function readSystemConfigWatchFenceForBuilder(
   if (deps.readSystemConfigWatchFence) {
     return deps.readSystemConfigWatchFence(slug);
   }
-  const configuredBuilder = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  const configuredBuilder = builderClaimSlug();
   if (!configuredBuilder) return undefined;
   if (!isConfiguredGatewayBuilder(slug)) {
     throw new Error(
@@ -262,7 +263,7 @@ async function resumeSystemConfigWatchForBuilder(
     }
     return;
   }
-  const configuredBuilder = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  const configuredBuilder = builderClaimSlug();
   if (!configuredBuilder) return;
   if (!isConfiguredGatewayBuilder(slug)) {
     throw new Error(

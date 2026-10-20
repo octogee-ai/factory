@@ -16,6 +16,7 @@ import {
   readSystemConfigStatus,
   updateSystemConfigStatus,
 } from "../lib/system-config-status.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 export type SystemConfigWatchPlan =
   | { action: "skip"; reason: "shared-gateway" }
@@ -28,8 +29,8 @@ export function resolveSystemConfigWatchPlan(
   if (gatewayClass === "shared" || gatewayClass === "standard" || gatewayClass === "") {
     return { action: "skip", reason: "shared-gateway" };
   }
-  const slug = env.GATEWAY_BUILDER_SLUG?.trim();
-  if (!slug) throw new Error("GATEWAY_BUILDER_SLUG is required for durable config watch");
+  const slug = builderClaimSlug(env);
+  if (!slug) throw new Error("a Builder claim is required for durable config watch");
   const explicitPath = env.OPENCLAW_CONFIG_PATH?.trim();
   if (!explicitPath) throw new Error("OPENCLAW_CONFIG_PATH is required for durable config watch");
   const configPath = openClawConfigPath(env);

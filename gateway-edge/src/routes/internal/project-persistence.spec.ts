@@ -6,11 +6,12 @@ import request from "supertest";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { _setGatewayTokenReviewerForTests } from "../../middleware/gateway-internal-auth.js";
 import { createProjectPersistenceRouter } from "./project-persistence.js";
+import { claimedTestBuilder, installTestBuilderIdentity } from "../../__tests__/helpers/builder-identity.js";
 let directory: string;
 beforeEach(()=>{
   directory=mkdtempSync(join(tmpdir(),"project-flush-auth-"));
   writeFileSync(join(directory,"token"),"projected-token");
-  vi.stubEnv("GATEWAY_CLASS","builder");vi.stubEnv("GATEWAY_BUILDER_SLUG","alice");
+  vi.stubEnv("GATEWAY_CLASS","builder");installTestBuilderIdentity(claimedTestBuilder("alice","builder-one"));
   vi.stubEnv("GATEWAY_PROFILE","builder");vi.stubEnv("INTERNAL_SERVICE_KEY","");
   vi.stubEnv("GATEWAY_ID","builder-one");vi.stubEnv("K8S_NAMESPACE","octogee-test");
   vi.stubEnv("K8S_SERVICE_ACCOUNT_NAME","octogee-gw-builder-one");

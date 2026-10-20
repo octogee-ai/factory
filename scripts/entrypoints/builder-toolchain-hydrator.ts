@@ -2,6 +2,7 @@ import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("builder-toolchain-hydrator");
 import { builderToolchainRoot } from "../lib/builder-storage.js";
 import { pathToFileURL } from "node:url";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 import type { DeveloperToolchainStatusArtifact } from "../../shared/types/developer-toolchain.js";
 import type { FleetBrokerNpmRegistryCredentials } from "../../shared/types/fleet-broker.js";
@@ -69,7 +70,7 @@ export function resolveBuilderToolchainHydratorConfig(
       DEFAULT_BUILDER_NPM_FALLBACK_REGISTRY,
     ),
     gatewayId: envValue(env, "GATEWAY_ID"),
-    builderSlug: envValue(env, "GATEWAY_BUILDER_SLUG"),
+    builderSlug: builderClaimSlug(env) ?? "",
     readinessUrl: `http://127.0.0.1:${fleetControllerPort}/toolchain-ready`,
   };
 }
@@ -276,7 +277,7 @@ export function waitForBuilderToolchainShutdown(signal: AbortSignal): Promise<vo
 async function main(): Promise<void> {
   const config = resolveBuilderToolchainHydratorConfig();
   if (!config.gatewayId || !config.builderSlug) {
-    throw new Error("GATEWAY_ID and GATEWAY_BUILDER_SLUG are required for Builder toolchain hydration");
+    throw new Error("GATEWAY_ID and a Builder claim are required for Builder toolchain hydration");
   }
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());

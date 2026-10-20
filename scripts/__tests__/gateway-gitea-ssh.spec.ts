@@ -12,7 +12,7 @@ function configure(gatewayClass: string, slug = "sep091"): string {
   const home = mkdtempSync(path.join(tmpdir(), "octogee-gitea-ssh-"));
   homes.push(home);
   execFileSync("sh", ["-ec", `log() { :; }\n${sshSetup}`], {
-    env: { ...process.env, HOME: home, OPENCLAW_DIR: "/home/node/.openclaw", GIT_SSH_HOST: "gitea.test.internal", GATEWAY_CLASS_EFFECTIVE: gatewayClass, GATEWAY_BUILDER_SLUG: slug },
+    env: { ...process.env, HOME: home, OPENCLAW_DIR: "/home/node/.openclaw", GIT_SSH_HOST: "gitea.test.internal", GATEWAY_CLASS_EFFECTIVE: gatewayClass, BUILDER_SLUG: slug },
     stdio: "pipe",
   });
   return path.join(home, ".ssh/config");

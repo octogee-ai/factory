@@ -321,7 +321,7 @@ describe("terminal websocket relay", () => {
     attachTerminalWsRoute({
       router,
       tickets,
-      defaultAgentId: COACH,
+      defaultAgentId: () => COACH,
       openUpstream,
       isAllowedOrigin: (origin) => origin === "https://app.example",
       log: (message) => { logged.push(message); },

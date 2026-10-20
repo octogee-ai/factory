@@ -74,6 +74,7 @@ import {
   type SystemConfigDurableFilename,
   SYSTEM_CONFIG_DURABLE_FILENAMES,
 } from "./system-config-durable-files.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -223,7 +224,7 @@ function legacyMacAgentIds(env: NodeJS.ProcessEnv): Set<string> {
   for (const value of [
     env.OPERATOR_AGENT_ID,
     env.GATEWAY_ID,
-    env.GATEWAY_BUILDER_SLUG,
+    builderClaimSlug(env) ?? undefined,
     env.OPERATOR_AGENT_SLUG,
   ]) {
     if (!value) continue;
@@ -361,7 +362,7 @@ function selectBuilderCoach(
   agents: UnknownRecord | null,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const builderSlug = env.GATEWAY_BUILDER_SLUG?.trim();
+  const builderSlug = builderClaimSlug(env);
   if (!builderSlug || agents?.ownership === "explicit") return false;
   const coach = rosterAgentEntry(agents, `octogee-${builderSlug}-coach`);
   if (!coach || coach.default === true) return false;
@@ -441,7 +442,7 @@ function liftHostCodeToolFences(tools: UnknownRecord | null): boolean {
 }
 
 function liftBuilderCoachToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
-  const slug = env.GATEWAY_BUILDER_SLUG?.trim();
+  const slug = builderClaimSlug(env);
   if (!slug) return false;
   const coach = rosterAgentEntry(asRecord(config.agents), `octogee-${slug}-coach`);
   if (!coach) return false;
@@ -451,7 +452,7 @@ function liftBuilderCoachToolFences(config: UnknownRecord, env: NodeJS.ProcessEn
 }
 
 function liftBuilderAgentToolFences(config: UnknownRecord, env: NodeJS.ProcessEnv): boolean {
-  const slug = env.GATEWAY_BUILDER_SLUG?.trim();
+  const slug = builderClaimSlug(env);
   if (!slug) return false;
   const agents = asRecord(config.agents);
   if (!agents) return false;

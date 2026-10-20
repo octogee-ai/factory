@@ -13,6 +13,7 @@ import {
   readSystemConfigWatchFenceGeneration,
   systemConfigWatchDisabledPath,
 } from "../lib/system-config-watch-state.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("system-config watch state", () => {
   const dirs: string[] = [];
@@ -103,8 +104,10 @@ describe("system-config watch state", () => {
   });
 
   it("retains the generated key only for the configured dedicated builder", () => {
-    expect(isConfiguredGatewayBuilder("alice", { GATEWAY_BUILDER_SLUG: "alice" })).toBe(true);
-    expect(isConfiguredGatewayBuilder("bob", { GATEWAY_BUILDER_SLUG: "alice" })).toBe(false);
+    const env = withBuilderClaim({}, "alice");
+    expect(isConfiguredGatewayBuilder("alice", env)).toBe(true);
+    expect(isConfiguredGatewayBuilder("bob", env)).toBe(false);
+    expect(isConfiguredGatewayBuilder("alice", { GATEWAY_BUILDER_SLUG: "alice" })).toBe(false);
     expect(isConfiguredGatewayBuilder("alice", {})).toBe(false);
   });
 });

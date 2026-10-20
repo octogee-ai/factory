@@ -3,6 +3,7 @@ import {
   resolveSystemConfigRestorePlan,
   runSystemConfigRestore,
 } from "../entrypoints/system-config-restore.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("system-config-restore entrypoint planning", () => {
   it("skips shared, standard, and unset gateway classes", () => {
@@ -24,7 +25,7 @@ describe("system-config-restore entrypoint planning", () => {
     expect(resolveSystemConfigRestorePlan({ GATEWAY_CLASS: "dedicated" })).toEqual({
       action: "skip",
       gatewayClass: "dedicated",
-      reason: "skipping restore for dedicated: GATEWAY_BUILDER_SLUG is unset",
+      reason: "skipping restore for dedicated: this gateway has no Builder claim",
     });
   });
 
@@ -36,10 +37,7 @@ describe("system-config-restore entrypoint planning", () => {
     }));
 
     await expect(runSystemConfigRestore({
-      env: {
-        GATEWAY_CLASS: "dedicated",
-        GATEWAY_BUILDER_SLUG: " alice ",
-      },
+      env: withBuilderClaim({ GATEWAY_CLASS: "dedicated" }, "alice"),
       log: () => {},
       restore,
     })).rejects.toThrow(/checkout-unavailable/);

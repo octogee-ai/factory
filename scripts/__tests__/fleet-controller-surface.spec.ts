@@ -13,6 +13,7 @@ import {
   FLEET_STATE_PATH,
   SIGNATURE_HEADER,
 } from "../../shared/types/fleet-controller.js";
+import { stubBuilderClaim } from "./helpers/builder-claim.js";
 
 const GATEWAY_ID = "builder-jack";
 
@@ -86,7 +87,7 @@ describe("fleet controller port surface", () => {
     ["running process", "normal", "permitted", "running", "pod-uid-1", true],
     ["another pod", "normal", "held", "held", "old-pod", true],
   ])("publishes the mount proof appropriate to %s", async (_name, role, mode, phase, podUid, expectedMounted) => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "jack");
+    stubBuilderClaim("jack");
     let mounted = true;
     const clearMountMarker = vi.fn(() => { mounted = false; });
     const opts = controllerOpts();
@@ -108,6 +109,29 @@ describe("fleet controller port surface", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).customers).toEqual(expectedMounted ? ["jack"] : []);
     expect(clearMountMarker).toHaveBeenCalledTimes(expectedMounted ? 0 : 1);
+  });
+
+  it("treats a Builder slug that is only in the environment as no configured Builder", async () => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "jack");
+    const clearMountMarker = vi.fn();
+    const opts = controllerOpts();
+    opts.adapter = {
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: () => true,
+      configuredBuilderOverlayPresent: () => true,
+      listLocalCustomerSlugs: () => ["jack"],
+      hasWorkspaceGitDir: () => true,
+      hasGitRemote: () => true,
+      customerMountMarked: () => true,
+      clearMountMarker,
+    } as unknown as CustomerLifecycleAdapter;
+    opts.surgeOpenClawProcessGate = {
+      status: async () => ({ version: 1, podUid: "pod-uid-1", role: "normal", mode: "held", phase: "held" }),
+    } as unknown as NonNullable<StartFleetOptions["surgeOpenClawProcessGate"]>;
+    controller = await startFleetController(opts);
+    const response = await signedFleetStateRequest(controller.port, { requestId: "env-only", gatewayId: GATEWAY_ID });
+    expect(response.status).toBe(200);
+    expect(clearMountMarker).not.toHaveBeenCalled();
   });
 
   it("serves the roster only to a fleet-controller-signed request", async () => {

@@ -6,7 +6,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import express from "express";
 import request from "supertest";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
 } from "@octogee/core/gateway-principal-access";
@@ -22,6 +22,7 @@ import {
   openClawControlRpcDeadlineMs,
   openClawControlUpstreamBase,
   openClawControlUpstreamPath,
+  invariantContext,
 } from "./surface.js";
 import { OpenClawControlSessionManager } from "./session.js";
 const OPENCLAW_TEST_METHODS = ["health", "status", "config.get", "config.schema", "config.patch", "config.set", "config.apply", "agents.list", "models.list", "channels.status", "tools.catalog", "skills.status", "tools.invoke", "approval.history", "approval.get", "approval.resolve"];
@@ -32,11 +33,20 @@ import {
   OpenClawControlBrokerError,
 } from "./broker.js";
 
+import { installTestBuilderIdentity } from "../__tests__/helpers/builder-identity.js";
+
 const servers: http.Server[] = [];
 const tempDirs: string[] = [];
 const SESSION_ID = "7f9b8a1e-429d-4c43-9e1a-9f3bd49d9a70";
 
+const CLAIMED_ALICE = {
+  gatewayId: "bender", state: "claimed" as const, ownerUid: "uid-owner", builderSlug: "alice", leaseId: null, generation: null,
+};
+
+beforeEach(() => installTestBuilderIdentity(CLAIMED_ALICE));
+
 afterEach(async () => {
+  installTestBuilderIdentity(null);
   vi.useRealTimers();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => {
     server.close(() => resolve());
@@ -147,6 +157,17 @@ it.each(["admin", "member"] as const)("forwards parameterless reads for %s throu
     for (const client of upstreamWs.clients) client.terminate();
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   }
+});
+
+describe("OpenClaw Dashboard invariant context", () => {
+  it("builds a Builder context only from the claimed identity", () => {
+    expect(invariantContext(env(), "bender", null)).toBeNull();
+    expect(invariantContext({ ...env(), GATEWAY_OWNER_UID: "uid-mallory", GATEWAY_BUILDER_SLUG: "mallory" }, "bender", null)).toBeNull();
+    expect(invariantContext(env(), "bender", CLAIMED_ALICE)).toMatchObject({
+      gatewayClass: "builder", gatewayId: "bender", ownerUid: "uid-owner", workspaceSlug: "alice",
+    });
+    expect(invariantContext({ ...env(), GATEWAY_CLASS: "shared" }, "shared-a", null)).toEqual({ gatewayClass: "shared" });
+  });
 });
 
 describe("OpenClaw Dashboard HTTP surface", () => {
@@ -2127,7 +2148,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fence-"));
     tempDirs.push(openclawDir);
     const config: Record<string, unknown> = { agents: { defaults: { timeoutSeconds: 60 } } };
-    reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" });
+    reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user", ownerUid: CLAIMED_ALICE.ownerUid, workspaceSlug: CLAIMED_ALICE.builderSlug });
     const calls: string[] = [];
     const upstream = http.createServer();
     const wss = new WebSocketServer({ server: upstream });
@@ -2192,7 +2213,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-config-"));
     tempDirs.push(openclawDir);
     const config: Record<string, unknown> = { agents: { defaults: { timeoutSeconds: 60 } } };
-    reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user" });
+    reconcilePlatformInvariants(config, { gatewayClass: "builder", gatewayId: "bender", apiOrigin: "https://api.octogee.com", controlIdentity: "per-user", ownerUid: CLAIMED_ALICE.ownerUid, workspaceSlug: CLAIMED_ALICE.builderSlug });
     const retained: Array<{ release(): Promise<void> }> = [];
     const calls: Array<{ method: string; user: string | undefined }> = [];
     const upstream = http.createServer();

@@ -9,6 +9,7 @@ import { writeActivationManifest, type MigrationActivationManifest } from "../li
 import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
 import { hasMountedMarker, writeMigratingInPin, writeMountedMarker } from "../lib/local-coach-wired.js";
+import { stubBuilderClaim } from "./helpers/builder-claim.js";
 
 const temporaryDirectories: string[] = [];
 const request = { migrationId: "prepare-alice", slug: "alice", targetPodUid: "target-pod" };
@@ -30,7 +31,7 @@ function manifest(fingerprint: string): MigrationActivationManifest {
 }
 
 async function preparationFixture() {
-  vi.stubEnv("GATEWAY_BUILDER_SLUG", request.slug);
+  stubBuilderClaim(request.slug);
   vi.stubEnv("POD_UID", request.targetPodUid);
   vi.stubEnv("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256", "");
   vi.stubEnv("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256", "");

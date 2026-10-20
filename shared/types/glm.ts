@@ -232,9 +232,22 @@ export type GatewayVmRuntimeVolume =
   | { name: string; kind: "identityToken"; audience: string }
   | { name: string; kind: "kubernetesApi" };
 
+export interface RuntimeBuilderIdentity {
+  ownerUid: string;
+  builderSlug: string;
+}
+
+export function isRuntimeBuilderIdentity(value: unknown): value is RuntimeBuilderIdentity {
+  const identity = value as Partial<RuntimeBuilderIdentity> | null;
+  return !!identity && typeof identity === "object" &&
+    typeof identity.ownerUid === "string" && identity.ownerUid.length > 0 &&
+    typeof identity.builderSlug === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(identity.builderSlug);
+}
+
 export interface GatewayVmRuntimeBundle {
   version: string;
   gatewayId: string;
+  builderIdentity?: RuntimeBuilderIdentity;
   namespace?: string;
   imageRepository: string;
   imageTag: string;
@@ -261,6 +274,7 @@ export function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRunt
     && Array.isArray(b.containers) && b.containers.length > 0
     && Array.isArray(b.volumes)
     && runtimeBundleHostsValid(b)
+    && (b.builderIdentity === undefined || isRuntimeBuilderIdentity(b.builderIdentity))
     && (b.homeRestoreCheckpoint === undefined || isDisposableHomeCheckpoint(b.homeRestoreCheckpoint));
 }
 
@@ -1107,8 +1121,6 @@ export interface HelmInstanceValue {
   profile?: GatewayProfile;
   gatewayClass?: GatewayClass;
   imageProfile?: GatewayImageProfile;
-  ownerUid?: string;
-  builderSlug?: string;
 
   sizingTier?: SizingTier;
 

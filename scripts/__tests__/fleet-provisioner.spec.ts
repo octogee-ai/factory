@@ -62,6 +62,7 @@ import {
   listLocalCustomerDirs,
   writeMigratingInPin,
 } from "../lib/local-coach-wired.js";
+import { stubBuilderClaim } from "./helpers/builder-claim.js";
 
 const tmpDirs: string[] = [];
 
@@ -740,7 +741,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("leaves a prelaunch-attached Builder stale so the reconcile loop runs its deferred runtime reconciliation", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -793,7 +794,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("keeps an unassigned prelaunch empty until canonical migration reserves it", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       let mounted = false;
@@ -921,7 +922,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -1045,7 +1046,7 @@ describe("configured Builder surge release", () => {
 
   it("does not reconcile a released-marker target until its Builder process gate is permitted", async () => {
     vi.useFakeTimers();
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     try {
       let mode: "held" | "permitted" = "held";
       const logs: string[] = [];
@@ -1147,7 +1148,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("defers target release until an actual deadline-raced Builder clone settles", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -1296,7 +1297,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("holds reservation and release through the actual ensure stamp and marker tail", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];
@@ -1469,7 +1470,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("does not mutate a target cancelled after its completion claim", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const counter = createProvisioningCounter();
@@ -1569,7 +1570,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("does not publish readiness when a matching hold finishes during post-permit verification", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const counter = createProvisioningCounter();
@@ -1681,7 +1682,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("finishes explicit cancellation while failure cleanup is already finalizing", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-cancel-"));
     tmpDirs.push(dir);
@@ -1732,7 +1733,7 @@ describe("configured Builder surge release", () => {
   });
 
   it("reholds, drains, and finalizes a permitted target unreserve without raw fallback", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const counter = createProvisioningCounter();
@@ -1857,7 +1858,7 @@ describe("configured Builder surge release", () => {
     ["overlay missing", { overlayPresent: false }, "requires its retained overlay"],
     ["customer mounted", { mounted: true }, "already mounts its customer"],
   ] as const)("admits a live Builder import only for a running, Ready, unmounted retained overlay: %s", async (_label, variant, expected) => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    stubBuilderClaim("chris");
     try {
       const { readinessReleased = true, overlayPresent = true, mounted = false, ...gate } = variant as Record<string, unknown>;
       const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
@@ -1936,7 +1937,7 @@ describe("configured Builder surge release", () => {
   );
 
   it("shares an in-progress target release only with the same migration and target", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
       const events: string[] = [];

@@ -4,6 +4,7 @@ import type {
   GatewayImageProfile,
   GatewayProfile,
   HelmInstancesMap,
+  RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
@@ -29,8 +30,7 @@ upsertInstance(opts: {
     // Disposable revision instance id ({gatewayId}-r{n}). Names the Helm release
     // + per-instance resources; defaults to gatewayId (legacy single-revision).
     revisionId?: string;
-    ownerUid?: string;
-    builderSlug?: string;
+    builderIdentity?: RuntimeBuilderIdentity;
     imageRepository: string;
     imageTag: string;
     gatewayEdgeImageRepository?: string;
@@ -274,8 +274,6 @@ interface HelmListItem {
 
 interface PerReleaseValues {
   gatewayId?: unknown;
-  ownerUid?: unknown;
-  builderSlug?: unknown;
   imageTag?: unknown;
   image?: { repository?: unknown; tag?: unknown };
   chartFingerprint?: unknown;
@@ -357,8 +355,6 @@ async function readInstanceValue(
     enabled: true,
     image: { repository: imageRepo, tag: imageTag },
     gatewayId,
-    ...knob("ownerUid", nonEmptyString(v.ownerUid)),
-    ...knob("builderSlug", nonEmptyString(v.builderSlug)),
     ...(chartFingerprint ? { chartFingerprint } : {}),
     ...(deploymentIntentFingerprint ? { deploymentIntentFingerprint } : {}),
     ...readPersonalKnobs(v),
@@ -438,8 +434,6 @@ export interface BuildUpgradeArgsOpts {
   namespace: string;
   gatewayId: string;
   revisionId?: string;
-  ownerUid?: string;
-  builderSlug?: string;
   imageTag: string;
   imageRepository: string;
   gatewayEdgeImageRepository?: string;
@@ -540,10 +534,6 @@ function baseUpgradeArgs(opts: BuildUpgradeArgsOpts): string[] {
     `imageTag=${opts.imageTag}`,
     HELM_SET_STRING,
     `image.repository=${opts.imageRepository}`,
-    HELM_SET_STRING,
-    `ownerUid=${opts.ownerUid ?? ""}`,
-    HELM_SET_STRING,
-    `builderSlug=${opts.builderSlug ?? ""}`,
     HELM_SET_STRING,
     `env.mmInternalUrl=http://mattermost.${opts.namespace}.svc.cluster.local:8065`,
   ];

@@ -57,7 +57,6 @@ import {
   isGatewayRuntimeDoc,
   type AssignmentDoc,
   type AssignmentState,
-  type GatewayDoc,
   type GatewayRuntimeDoc,
   type PlacementFirestore,
   type ReleaseDoc,
@@ -3260,7 +3259,7 @@ type RollbackReleaseResolution =
   | { error: RolloutBodyError }
   | {
       ok: {
-        gateway: GatewayDoc;
+        gateway: DurableGatewayRoot;
         target: ReleaseDoc;
         artifact: GatewayArtifact;
         release: number;

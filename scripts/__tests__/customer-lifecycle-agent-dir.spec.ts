@@ -8,6 +8,7 @@ import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import type { GatewayRpcClient } from "../lib/gateway-rpc.js";
 import type { UserSnapshot } from "../lib/customer-lifecycle.js";
+import { stubBuilderClaim } from "./helpers/builder-claim.js";
 
 const supervisorStatus = vi.hoisted(() => vi.fn());
 vi.mock("../lib/surge-openclaw-process-gate.js", () => ({
@@ -679,7 +680,7 @@ describe("customer lifecycle config patch agent directories", () => {
   it("carries the configured Builder agent root, workspace, and session store as one portable plan", async () => {
     await withRuntimeMock(async ({ tempRoot }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
-      vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+      stubBuilderClaim("alice");
       const customAgentDir = path.join(tempRoot, "agents", "discord-helper", "runtime");
       const workspace = path.join(tempRoot, "workspaces", "discord-helper");
       const sessions = path.join(tempRoot, "agents", "discord-helper", "sessions", "sessions.json");
@@ -728,7 +729,7 @@ describe("customer lifecycle config patch agent directories", () => {
     async (adapterKind) => {
       await withRuntimeMock(async ({ tempRoot }) => {
         process.env.OPENCLAW_STATE_DIR = tempRoot;
-        vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+        stubBuilderClaim("alice");
         const fallbackAgentId = "octogee-unmatched-route";
         const coachAgentId = "octogee-alice-coach";
         const projectAgentId = "octogee-alice-proj-orbit-coach";
@@ -804,7 +805,7 @@ describe("customer lifecycle config patch agent directories", () => {
     async (adapterKind, _handoff, partialHandoff, expectedAgentIds) => {
       await withRuntimeMock(async ({ tempRoot }) => {
         process.env.OPENCLAW_STATE_DIR = tempRoot;
-        vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+        stubBuilderClaim("alice");
         const config = {
           agents: {
             list: [
@@ -855,7 +856,7 @@ describe("customer lifecycle config patch agent directories", () => {
   it.each(["stopped", "held", "running", "stopping", "other-pod", "unknown"])("retains a configured Builder overlay with proven chat shutdown (%s)", async (state) => {
     await withRuntimeMock(async ({ tempRoot, agentsDir, applyConfigPatch }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
-      vi.stubEnv("GATEWAY_BUILDER_SLUG", "alice");
+      stubBuilderClaim("alice");
       vi.stubEnv("POD_UID", "pod-current");
       supervisorStatus.mockImplementation(async () => {
         if (state === "unknown") throw new Error("supervisor unreachable");

@@ -191,7 +191,7 @@ function harness(
 
 const upsertOpts = {
   namespace: "octogee-test", gatewayId: "b-x", imageRepository: "us-docker.pkg.dev/octogee/octogee/gateway", imageTag: "main.abc123",
-  chartPath: "/chart", ownerUid: "UidA", builderSlug: "mama", gatewayClass: "builder" as const, profile: "builder" as const,
+  chartPath: "/chart", builderIdentity: { ownerUid: "UidA", builderSlug: "mama" }, gatewayClass: "builder" as const, profile: "builder" as const,
   imageProfile: "builder" as const, chartFingerprint: "cf", deploymentIntentFingerprint: "dif",
 };
 
@@ -383,15 +383,17 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
 
     expect(h.helmCalls[0].slice(0, 3)).toEqual(["template", "octogee-gw-b-x", "/chart"]);
     expect(h.helmCalls[0]).not.toContain("--wait");
+    expect(h.helmCalls[0].join(" ")).toContain("--set computerDesktop=omarchy --set runtimeKind=gce-vm");
     const bundle = h.docs["glmGateways/b-x/vm/runtime"] as Record<string, unknown>;
     expect(bundle.gatewayId).toBe("b-x");
+    expect(bundle.builderIdentity).toEqual({ ownerUid: "UidA", builderSlug: "mama" });
     expect((bundle.containers as Array<{ name: string; env: Record<string, string> }>)[0].env.OPENCLAW_GATEWAY_TOKEN).toBe("gateway-auth-token-b-x-value");
     expect(bundle.hostAliases).toEqual({
       "octogee-api.octogee-test.svc.cluster.local": "172.20.7.7",
       "mattermost.octogee-test.svc.cluster.local": "172.20.7.7",
     });
     const glm = h.docs["glmGateways/b-x"];
-    expect(glm.vmInstance).toMatchObject({ enabled: true, gatewayId: "b-x", image: { repository: upsertOpts.imageRepository, tag: "main.abc123" }, chartFingerprint: "cf", ownerUid: "UidA" });
+    expect(glm.vmInstance).toMatchObject({ enabled: true, gatewayId: "b-x", image: { repository: upsertOpts.imageRepository, tag: "main.abc123" }, chartFingerprint: "cf", ownerUid: "UidA", builderSlug: "mama" });
     expect(JSON.stringify(glm.vmInstance)).not.toContain("undefined");
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
     expect(h.vm.find).not.toHaveBeenCalled();
@@ -782,7 +784,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
 
   it("requires an owner and waits out a computer Compute is still stopping", async () => {
     const ownerless = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
-    await expect(ownerless.runtime.upsertInstance({ ...upsertOpts, ownerUid: undefined })).rejects.toThrow(/needs an owner/);
+    await expect(ownerless.runtime.upsertInstance({ ...upsertOpts, builderIdentity: undefined })).rejects.toThrow(/needs an owner/);
     expect(ownerless.vm.findByLabels).not.toHaveBeenCalled();
     expect(ownerless.vm.list).not.toHaveBeenCalled();
 

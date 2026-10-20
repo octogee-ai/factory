@@ -7,14 +7,11 @@
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
 {{- $hobbyComputer := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
+{{- if and (eq $gatewayClass "builder") (not $hobbyComputer) (ne (.Values.runtimeKind | default "cluster") "gce-vm") -}}
+{{- fail (printf "octogee-gateway: Kubernetes Builder gateways run the Hobby X11 computer; a %s Builder renders only as a GCE VM bundle (runtimeKind=gce-vm)" $computerDesktop) -}}
+{{- end -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
-{{- if ne (empty .Values.ownerUid) (empty .Values.builderSlug) -}}
-{{- fail "octogee-gateway: ownerUid and builderSlug must be provided together" -}}
-{{- end -}}
-{{- if and (ne $gatewayClass "shared") (empty .Values.ownerUid) -}}
-{{- fail "octogee-gateway: ownerUid and builderSlug are required for owner-bound disposable gateways" -}}
-{{- end -}}
 {{- $builderControlUiEnabled := and (eq $gatewayClass "builder") (.Values.builderAccess.controlUiEnabled | default false) -}}
 {{- $controlIdentity := ternary (.Values.builderAccess.controlIdentity | default "shared-operator") "shared-operator" (eq $gatewayClass "builder") -}}
 {{- if not $preset -}}
@@ -52,17 +49,11 @@ spec:
       gateway-instance: {{ $revision }}
   template:
     metadata:
-      annotations:
-        octogee.ai/owner-uid: {{ .Values.ownerUid | quote }}
-        octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
       labels:
         app: octogee-gateway
         gateway-id: {{ .Values.gatewayId }}
         gateway-instance: {{ $revision }}
         gateway-class: {{ $gatewayClass | quote }}
-        {{- if .Values.builderSlug }}
-        octogee.ai/builder-slug: {{ .Values.builderSlug | quote }}
-        {{- end }}
         gateway-profile: {{ $imageProfile | quote }}
         # Per-pod sizing tier — stamped on the pod so
         # GCP Billing Export can roll up cost by tier for the chargeback
@@ -152,15 +143,15 @@ spec:
                 set -eu
                 cp -rn /etc/skel/. /home/node/
                 mkdir -p /home/node/.npm-cache
-                {{- if eq $gatewayClass "builder" }}
+                {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
                 /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prepare-project-storage.ts
                 {{- end }}
                 install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
               '
           env:
-            {{- if eq $gatewayClass "builder" }}
-            - name: GATEWAY_BUILDER_SLUG
-              value: {{ .Values.builderSlug | quote }}
+            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
+            - name: GATEWAY_ID
+              value: {{ .Values.gatewayId | quote }}
             {{- end }}
             # OPENCLAW_GATEWAY_TOKEN is platform-owned: Cowboy creates the
             # per-gateway K8s secret `gateway-auth-token-<gatewayId>` with a
@@ -190,6 +181,8 @@ spec:
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
+            {{- end }}
+            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
             - name: project-materializations
               mountPath: /work/materialized
             {{- end }}
@@ -253,7 +246,7 @@ spec:
             - name: OCTOGEE_BUILDER_TOOLCHAIN_ROOT
               value: "/work/cache/toolchains"
             - name: OCTOGEE_PROJECTS_MOUNT
-              value: "/work/materialized"
+              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $hobbyComputer | quote }}
             {{- end }}
             - name: CUSTOMERS_DIR
               value: "/home/node/.openclaw/customers"
@@ -283,10 +276,6 @@ spec:
             # gateway-edge stamps it into the Dashboard-bridge capability file.
             - name: GATEWAY_REVISION_ID
               value: {{ $revision | quote }}
-            - name: GATEWAY_BUILDER_SLUG
-              value: {{ .Values.builderSlug | quote }}
-            - name: GATEWAY_OWNER_UID
-              value: {{ .Values.ownerUid | quote }}
             - name: GATEWAY_IMAGE_TAG
               value: {{ $gatewayImageTag | quote }}
             {{- if and (eq .Release.Namespace "octogee-test") (contains "-main." $gatewayImageTag) }}
@@ -413,11 +402,10 @@ spec:
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
+            {{- end }}
+            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
             - name: project-materializations
               mountPath: /work/materialized
-              subPath: projects
-            - name: project-materializations
-              mountPath: /home/node/.openclaw/customers/{{ .Values.builderSlug }}/projects
               subPath: projects
             {{- end }}
             {{- if $hobbyComputer }}
@@ -519,7 +507,7 @@ spec:
               value: "{{ .Values.gatewayEdge.port }}"
             {{- if eq $gatewayClass "builder" }}
             - name: OCTOGEE_PROJECTS_MOUNT
-              value: "/work/materialized"
+              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $hobbyComputer | quote }}
             {{- end }}
             - name: K8S_NAMESPACE
               valueFrom:
@@ -553,10 +541,6 @@ spec:
             # gateway-edge stamps it into the Dashboard-bridge capability file.
             - name: GATEWAY_REVISION_ID
               value: {{ $revision | quote }}
-            - name: GATEWAY_BUILDER_SLUG
-              value: {{ .Values.builderSlug | quote }}
-            - name: GATEWAY_OWNER_UID
-              value: {{ .Values.ownerUid | quote }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
             {{- if $hobbyComputer }}
@@ -652,11 +636,10 @@ spec:
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
+            {{- end }}
+            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
             - name: project-materializations
               mountPath: /work/materialized
-              subPath: projects
-            - name: project-materializations
-              mountPath: /home/node/.openclaw/customers/{{ .Values.builderSlug }}/projects
               subPath: projects
             {{- end }}
             {{- if $hobbyComputer }}
@@ -703,15 +686,22 @@ spec:
         {{- end }}
       volumes:
         {{- if eq $gatewayClass "builder" }}
+        {{- $builderHomeSizeGiB := int (required "builderHomeSizeGiB is required for Builder gateways" .Values.builderHomeSizeGiB) }}
         - name: builder-cache
           emptyDir:
             sizeLimit: 2Gi
+        {{- if $hobbyComputer }}
+        - name: data
+          emptyDir:
+            sizeLimit: {{ printf "%dGi" (add $builderHomeSizeGiB 2) }}
+        {{- else }}
         - name: project-materializations
           emptyDir:
             sizeLimit: 2Gi
         - name: data
           emptyDir:
-            sizeLimit: {{ printf "%dGi" (int (required "builderHomeSizeGiB is required for Builder gateways" .Values.builderHomeSizeGiB)) }}
+            sizeLimit: {{ printf "%dGi" $builderHomeSizeGiB }}
+        {{- end }}
         {{- else }}
         - name: data
           emptyDir: {}

@@ -247,10 +247,7 @@
    },
    "template": {
     "metadata": {
-     "annotations": {
-      "octogee.ai/builder-slug": "mama",
-      "octogee.ai/owner-uid": "UidA"
-     },
+     "annotations": {},
      "labels": {
       "app": "octogee-gateway",
       "gateway-class": "builder",
@@ -258,7 +255,6 @@
       "gateway-image": "main.abc123",
       "gateway-instance": "b-x",
       "gateway-profile": "builder",
-      "octogee.ai/builder-slug": "mama",
       "tier": "s"
      }
     },
@@ -359,14 +355,6 @@
         {
          "name": "GATEWAY_REVISION_ID",
          "value": "b-x"
-        },
-        {
-         "name": "GATEWAY_BUILDER_SLUG",
-         "value": "mama"
-        },
-        {
-         "name": "GATEWAY_OWNER_UID",
-         "value": "UidA"
         },
         {
          "name": "GATEWAY_IMAGE_TAG",
@@ -649,14 +637,6 @@
         {
          "name": "GATEWAY_REVISION_ID",
          "value": "b-x"
-        },
-        {
-         "name": "GATEWAY_BUILDER_SLUG",
-         "value": "mama"
-        },
-        {
-         "name": "GATEWAY_OWNER_UID",
-         "value": "UidA"
         },
         {
          "name": "GATEWAY_PROFILE",

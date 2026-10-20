@@ -4,6 +4,7 @@ import {
   parseOctogeeConfigArgs,
   runOctogeeConfig,
 } from "../entrypoints/octogee-config.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("octogee config CLI", () => {
   it("prints only redacted durable status fields", async () => {
@@ -54,11 +55,9 @@ describe("octogee config CLI", () => {
       changedPaths: ["channels.mattermost.accounts.ceckert-coach.botToken"],
     }));
 
+    const env = withBuilderClaim({}, "ceckert");
     await runOctogeeConfig(["config", "adopt", "--from=/tmp/bender.json"], {
-      env: {
-        OPENCLAW_DIR: "/durable",
-        GATEWAY_BUILDER_SLUG: "ceckert",
-      },
+      env,
       readStatus: vi.fn(),
       write: (line) => lines.push(line),
       adopt,
@@ -70,7 +69,7 @@ describe("octogee config CLI", () => {
     expect(adopt).toHaveBeenCalledWith(expect.objectContaining({
       slug: "ceckert",
       sourcePath: "/tmp/bender.json",
-      openclawDir: "/durable",
+      openclawDir: env.OPENCLAW_DIR,
     }));
   });
 
@@ -80,6 +79,6 @@ describe("octogee config CLI", () => {
       readStatus: vi.fn(),
       write: vi.fn(),
       adopt: vi.fn(),
-    })).rejects.toThrow("GATEWAY_BUILDER_SLUG");
+    })).rejects.toThrow("Builder claim");
   });
 });

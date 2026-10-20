@@ -113,8 +113,6 @@ export interface ObservedHelmInstance {
   imageRepository: string | null;
   imageTag: string | null;
   replicas: number | null;
-  ownerUid?: string;
-  builderSlug?: string;
   chartFingerprint?: string;
   deploymentIntentFingerprint?: string | null;
 }
@@ -205,8 +203,6 @@ function gatewayDeploymentDrifted(
     helm.imageTag !== image.imageTag ||
     helm.imageRepository !== image.imageRepository ||
     helm.replicas !== replicas ||
-    helm.ownerUid !== (gateway.ownerUid ?? undefined) ||
-    helm.builderSlug !== (gateway.builderSlug ?? undefined) ||
     (input.desiredDeploymentIntentFingerprint !== undefined &&
       helm.deploymentIntentFingerprint !== input.desiredDeploymentIntentFingerprint)
   );
@@ -215,8 +211,6 @@ function gatewayDeploymentDrifted(
 export interface GatewayUpsertOpts {
   namespace: string;
   gatewayId: string;
-  ownerUid?: string;
-  builderSlug?: string;
   imageRepository: string;
   imageTag: string;
   gatewayEdgeImageRepository?: string;
@@ -312,8 +306,6 @@ export function gatewayUpsertOptsFromRelease(input: {
   const intent: Omit<GatewayUpsertOpts, "deploymentIntentFingerprint"> = {
     namespace: input.namespace,
     gatewayId: gateway.gatewayId,
-    ownerUid: gateway.ownerUid ?? undefined,
-    builderSlug: gateway.builderSlug ?? undefined,
     imageRepository: gatewayImage.imageRepository,
     imageTag: gatewayImage.imageTag,
     gatewayEdgeImageRepository: artifact.gatewayEdgeImage.imageRepository,

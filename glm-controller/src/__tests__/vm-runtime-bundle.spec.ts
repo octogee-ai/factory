@@ -82,6 +82,37 @@ describe("renderVmRuntimeBundle", () => {
     expect(bundle.volumes).toContainEqual({ name: "project-materializations", kind: "ephemeral" });
   });
 
+  it("binds the Builder identity and mounts its projects at the Builder's own customer path", async () => {
+    const changed = structuredClone(manifests) as Array<{ kind: string; spec?: { template: { spec: {
+      volumes: unknown[];
+      initContainers: Array<{ volumeMounts: unknown[] }>;
+      containers: Array<{ name: string; volumeMounts: unknown[] }>;
+    } } } }>;
+    const pod = changed.find(item => item.kind === "Deployment")!.spec!.template.spec;
+    pod.volumes.push({ name: "project-materializations", emptyDir: { sizeLimit: "2Gi" } });
+    pod.initContainers[0].volumeMounts.push({ name: "project-materializations", mountPath: "/work/materialized" });
+    for (const container of pod.containers) {
+      container.volumeMounts.push({ name: "project-materializations", mountPath: "/work/materialized", subPath: "projects" });
+    }
+
+    const bundle = await render({ manifests: changed, builderIdentity: { ownerUid: "UidA", builderSlug: "mama" } });
+
+    expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);
+    expect(bundle.builderIdentity).toEqual({ ownerUid: "UidA", builderSlug: "mama" });
+    const projectMount = { volume: "project-materializations", mountPath: "/home/node/.openclaw/customers/mama/projects", readOnly: false, subPath: "projects" };
+    for (const name of ["gateway", "gateway-edge"]) {
+      expect(bundle.containers.find(container => container.name === name)?.mounts).toContainEqual(projectMount);
+    }
+    expect(bundle.init?.mounts).not.toContainEqual(projectMount);
+    expect(Object.values(bundle.containers.map(container => container.env))).not.toContainEqual(expect.objectContaining({ GATEWAY_BUILDER_SLUG: expect.anything() }));
+  });
+
+  it("renders a bundle without Builder identity when the gateway has none", async () => {
+    const bundle = await render();
+    expect(bundle).not.toHaveProperty("builderIdentity");
+    expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);
+  });
+
   it("renders the chart's pod into containers, resolved secrets, token volumes, and mounts", async () => {
     const bundle = await render();
     expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);

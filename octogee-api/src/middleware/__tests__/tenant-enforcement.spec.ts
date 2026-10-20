@@ -152,6 +152,7 @@ function app(opts: {
   a.post("/internal/fleet/agent/web-search", enforcement, handler);
   a.post("/internal/fleet/agent/web-extract", enforcement, handler);
   a.post("/internal/fleet/configured-builder-bootstrap", enforcement, handler);
+  a.post("/internal/fleet/builder-identity", enforcement, handler);
   a.post("/internal/fleet/assigned-users", enforcement, handler);
   a.post("/internal/fleet/system-config-status", enforcement, handler);
   a.post("/internal/fleet/user-snapshot", enforcement, handler);
@@ -986,6 +987,17 @@ const STILL_ON_SHARED = {
     expect(res.status).toBe(200);
   });
 
+  it("passes Builder identity reads to their route-level authorization without a named gateway", async () => {
+    const res = await request(app({
+      boundTenant: BENDER_R2,
+      gateways: { bender: configuredBender() },
+    }))
+      .post("/internal/fleet/builder-identity")
+      .send({});
+
+    expect(res.status).toBe(200);
+  });
+
   it("passes configured builder owner snapshots to their stricter route-level authorization", async () => {
     const target = app({
       boundTenant: BENDER_R2,
@@ -1085,6 +1097,7 @@ const STILL_ON_SHARED = {
       "/internal/fleet/computer-home/download-url",
       "/internal/fleet/user-snapshot",
       "/internal/fleet/configured-builder-bootstrap",
+      "/internal/fleet/builder-identity",
       "/internal/fleet/builder-runtime-state/download-url",
       "/internal/openclaw-control/authorize",
       "/internal/workspace-git/authorize",

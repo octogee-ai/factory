@@ -26,7 +26,7 @@ describe("workspace identity boot in the gateway package layout", () => {
       cwd: root,
       encoding: "utf8",
       env: { PATH: process.env.PATH, GATEWAY_CLASS: gatewayClass, OPENCLAW_CONTROL_IDENTITY: "per-user",
-        GATEWAY_ID: "test-gateway", GATEWAY_OWNER_UID: "owner", OPENCLAW_DIR: root },
+        GATEWAY_ID: "test-gateway", OPENCLAW_DIR: root },
     });
     expect(result.status, result.stderr).toBe(0);
     if (gatewayClass === "builder") expect(readFileSync(path.join(root, "workspace-identity-boot"), "utf8")).toMatch(/^[0-9a-f-]{36}$/u);

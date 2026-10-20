@@ -158,7 +158,7 @@ describe("OpenClaw control proxy identity", () => {
   it("preserves the initialized owner when first encountered as a chat author and after native edits", async () => {
     const gateway = await mockGateway([{ id: "owner-profile", emails: ["owner"], role: "admin" }]);
     const identity = createOpenClawControlProxyIdentity({
-      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_OWNER_UID: "owner", API_PUBLIC_URL: "https://api-test.octogee.com" },
+      env: { OPENCLAW_CONTROL_IDENTITY: "per-user", API_PUBLIC_URL: "https://api-test.octogee.com" },
       upstreamBase: () => gateway.base, podAddress: () => "10.8.0.4",
       loadAppearance: async () => ({ displayName: "Owner", avatar: null }),
       loadChatAppearance: async () => ({ uid: "owner", username: "owner", mattermostUserId: "m".repeat(26), appearance: { displayName: "Owner", avatar: null } }),

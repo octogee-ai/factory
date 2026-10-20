@@ -15,13 +15,13 @@ import {
 } from "../entrypoints/builder-toolchain-hydrator.js";
 import { runBuilderToolchainHydrationLoop } from "../lib/builder-toolchain-hydrator.js";
 import { FleetBrokerHttpError } from "../lib/fleet-broker-client.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("Builder toolchain hydrator entrypoint", () => {
   it("resolves the image-pinned npm lock and managed proxy contract", () => {
     expect(resolveBuilderToolchainHydratorConfig({
       HOME: "/home/builder",
-      GATEWAY_ID: "bender",
-      GATEWAY_BUILDER_SLUG: "alice",
+      ...withBuilderClaim({ GATEWAY_ID: "bender" }, "alice"),
       FLEET_CONTROLLER_PORT: "4111",
       OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_JSON_PATH: "/octogee/toolchain/package.json",
       OCTOGEE_BUILDER_TOOLCHAIN_PACKAGE_LOCK_PATH: "/octogee/toolchain/package-lock.json",

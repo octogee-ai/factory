@@ -146,7 +146,7 @@ describe("Grafana solo-operator SPOG", () => {
     );
 
     expect(activePods?.targets?.[0].expr).toMatch(
-      /^sum by \(namespace,pod,node,label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug\) \(/,
+      /^sum by \(namespace,pod,node,label_gateway_id,label_gateway_class\) \(/,
     );
     expect(activeContainers?.targets?.[0].expr).toMatch(
       /^sum by \(namespace,pod,node,container\) \(/,

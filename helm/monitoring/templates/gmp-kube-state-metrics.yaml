@@ -109,7 +109,7 @@ spec:
           args:
             - --port=8080
             - --telemetry-port=8081
-            - --metric-labels-allowlist=nodes=[cloud.google.com/gke-spot,cloud.google.com/gke-provisioning,cloud.google.com/compute-class,topology.kubernetes.io/zone],pods=[gateway-class,gateway-id,gateway-instance,octogee.ai/builder-slug]
+            - --metric-labels-allowlist=nodes=[cloud.google.com/gke-spot,cloud.google.com/gke-provisioning,cloud.google.com/compute-class,topology.kubernetes.io/zone],pods=[gateway-class,gateway-id,gateway-instance]
           ports:
             - name: http-metrics
               containerPort: 8080

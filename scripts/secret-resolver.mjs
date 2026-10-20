@@ -50,6 +50,7 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { isValidUsername, parseAgentId } from "../shared/dist/types/identity.js";
+import { readBuilderClaimFromEnv } from "../shared/dist/server/builder-claim.js";
 
 // Cattle gateways are egress-blocked from the GCP metadata server, so this
 // resolver materializes byok-* keys through the octogee-api broker
@@ -139,10 +140,19 @@ function parseAgentScopedId(id, pattern) {
  *  new customer becomes visible on the next spawn. No TOCTOU concern
  *  within a single resolver invocation. Same env var as the provisioner's
  *  AGENTS_DIR (scripts/lib/config.ts:18-19). */
+function claimedBuilderSlug() {
+  try {
+    return readBuilderClaimFromEnv(process.env)?.builderSlug ?? null;
+  } catch (err) {
+    process.stderr.write(`[secret-resolver] Builder claim unreadable; no Builder slug is admitted: ${err?.message || err}\n`);
+    return null;
+  }
+}
+
 function loadKnownAgentRoster() {
   const slugs = new Set();
   const agentIds = new Set();
-  const builderSlug = process.env.GATEWAY_BUILDER_SLUG?.trim();
+  const builderSlug = claimedBuilderSlug();
   if (builderSlug && isValidUsername(builderSlug)) slugs.add(builderSlug);
   try {
     const entries = fs.readdirSync(AGENTS_DIR, { withFileTypes: true });

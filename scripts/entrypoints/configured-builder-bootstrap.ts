@@ -1,6 +1,7 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("configured-builder-bootstrap");
 import { pathToFileURL } from "node:url";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 import { hydrateConfiguredBuilderBootstrap } from "../lib/configured-builder-bootstrap.js";
 
@@ -19,6 +20,12 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return value;
 }
 
+function claimedSlug(env: NodeJS.ProcessEnv): string {
+  const slug = builderClaimSlug(env);
+  if (!slug) throw new Error("a Builder claim is required for the configured Builder bootstrap");
+  return slug;
+}
+
 export function resolveConfiguredBuilderBootstrapInput(
   env: NodeJS.ProcessEnv = process.env,
 ): ConfiguredBuilderBootstrapInput {
@@ -26,7 +33,7 @@ export function resolveConfiguredBuilderBootstrapInput(
   return {
     openclawDir: required(env, "OPENCLAW_DIR"),
     gatewayId: required(env, "GATEWAY_ID"),
-    slug: required(env, "GATEWAY_BUILDER_SLUG"),
+    slug: claimedSlug(env),
     ...(hobbyComputer ? { desktopHome: HOBBY_DESKTOP_HOME } : {}),
   };
 }

@@ -19,6 +19,7 @@ import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 import * as builderStores from "../lib/openclaw-builder-store-preflight.js";
 import { startSurgeReadinessSelfRelease } from "../lib/surge-reconcile-gate.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
+import { stubBuilderClaim } from "./helpers/builder-claim.js";
 
 const roots: string[] = [];
 
@@ -420,7 +421,7 @@ describe("surge OpenClaw process supervisor", () => {
   });
 
   it("keeps Builder self-release alive when a permitted first boot fails before health", async () => {
-    vi.stubEnv("GATEWAY_BUILDER_SLUG", "ceckert-test");
+    stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);

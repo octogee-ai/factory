@@ -173,7 +173,7 @@ function deps(
 }
 
 const homeBundle = (overrides: Parameters<typeof bundleFixture>[0] = {}) => bundleFixture({
-  containers: bundleFixture().containers.map((c) => ({ ...c, env: { ...c.env, GATEWAY_BUILDER_SLUG: "bob" } })),
+  builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" },
   ...overrides,
 });
 
@@ -494,6 +494,87 @@ describe("convergeOnce", () => {
     expect(docker.log.slice(settled).filter((l) => l.startsWith("POST /containers/create"))).toHaveLength(0);
   });
 
+  it("writes the bundle's Builder claim into the home volume before init and the services start", async () => {
+    const docker = fakeDocker();
+    const h = deps(docker, () => runtimeReply(homeBundle()), { now: 1_000 });
+    let logAtClaim = -1;
+    const writeFile = h.d.fs.writeFile;
+    h.d.fs.writeFile = async (path, content, mode) => {
+      if (path.endsWith("/builder-claim.json")) logAtClaim = docker.log.length;
+      await writeFile(path, content, mode);
+    };
+
+    await convergeOnce(h.d, initialAgentState());
+
+    const claim = h.files.get("/srv/octogee/volumes/data/.openclaw/builder-claim.json");
+    expect(claim?.mode).toBe(0o600);
+    expect(JSON.parse(claim!.content)).toEqual({
+      schemaVersion: 1, gatewayId: "b-x", ownerUid: "uid-bob", builderSlug: "bob",
+      leaseId: null, generation: null, claimedAt: 1_000, overlayAppliedAt: null,
+    });
+    expect(h.chowns).toEqual(expect.arrayContaining(["/srv/octogee/volumes/data/.openclaw", "/srv/octogee/volumes/data/.openclaw/builder-claim.json"]));
+    const initStart = docker.log.indexOf("POST /containers/octogee-fix-perms/start");
+    expect(logAtClaim).toBeGreaterThanOrEqual(0);
+    expect(logAtClaim).toBeLessThan(initStart);
+  });
+
+  describe("an existing Builder claim in the home volume", () => {
+    const CLAIM_PATH = "/srv/octogee/volumes/data/.openclaw/builder-claim.json";
+    const existing = (overrides: Record<string, unknown>) => JSON.stringify({
+      schemaVersion: 1, gatewayId: "b-x", ownerUid: "uid-bob", builderSlug: "bob",
+      leaseId: null, generation: null, claimedAt: 500, overlayAppliedAt: null, ...overrides,
+    });
+
+    it.each([
+      ["the same gateway and owner", {}],
+      ["the owner's own computer rebound from an earlier gateway", { gatewayId: "b-old" }],
+    ])("rewrites a claim for %s", async (_label, overrides) => {
+      const docker = fakeDocker();
+      const h = deps(docker, () => runtimeReply(homeBundle()), { now: 1_000 });
+      h.files.set(CLAIM_PATH, { content: existing(overrides), mode: 0o600 });
+
+      await convergeOnce(h.d, initialAgentState());
+
+      expect(JSON.parse(h.files.get(CLAIM_PATH)!.content)).toMatchObject({ gatewayId: "b-x", ownerUid: "uid-bob", builderSlug: "bob", claimedAt: 1_000 });
+      expect(docker.log).toContain("POST /containers/octogee-gateway/start");
+    });
+
+    it.each([
+      ["another owner", { ownerUid: "uid-mallory" }, /uid-mallory/],
+      ["another Builder slug", { builderSlug: "mallory" }, /mallory/],
+      ["unreadable content", { schemaVersion: 7 }, /malformed/],
+    ])("refuses to start the gateway over a claim for %s", async (_label, overrides, named) => {
+      const docker = fakeDocker();
+      const h = deps(docker, () => runtimeReply(homeBundle()), { now: 1_000 });
+      h.files.set(CLAIM_PATH, { content: existing(overrides), mode: 0o600 });
+
+      await expect(convergeOnce(h.d, initialAgentState())).rejects.toThrow(named);
+
+      expect(JSON.parse(h.files.get(CLAIM_PATH)!.content)).toMatchObject({ claimedAt: 500 });
+      expect(docker.log.some((line) => line.startsWith("POST /containers/") && line.endsWith("/start"))).toBe(false);
+    });
+
+    it("writes a claim when the home holds none", async () => {
+      const h = deps(fakeDocker(), () => runtimeReply(homeBundle()), { now: 1_000 });
+      await convergeOnce(h.d, initialAgentState());
+      expect(JSON.parse(h.files.get(CLAIM_PATH)!.content)).toMatchObject({ gatewayId: "b-x", ownerUid: "uid-bob" });
+    });
+  });
+
+  it("derives the claim from an older platform's rendered owner env and writes none without an owner", async () => {
+    const older = bundleFixture({
+      containers: bundleFixture().containers.map((c) => ({ ...c, env: { ...c.env, GATEWAY_BUILDER_SLUG: "bob", GATEWAY_OWNER_UID: "uid-bob" } })),
+    });
+    const withEnv = deps(fakeDocker(), () => runtimeReply(older), { now: 1_000 });
+    await convergeOnce(withEnv.d, initialAgentState());
+    expect(JSON.parse(withEnv.files.get("/srv/octogee/volumes/data/.openclaw/builder-claim.json")!.content)).toMatchObject({ ownerUid: "uid-bob", builderSlug: "bob" });
+
+    const ownerless = deps(fakeDocker(), () => runtimeReply(bundleFixture()), { now: 1_000 });
+    await convergeOnce(ownerless.d, initialAgentState());
+    expect([...ownerless.files.keys()].some((path) => path.endsWith("builder-claim.json"))).toBe(false);
+    expect(ownerless.d.log).toHaveBeenCalledWith(expect.stringContaining("carries no Builder identity"));
+  });
+
   it("re-runs init and recreates every service when only the init container changed, then settles", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
@@ -710,12 +791,12 @@ describe("convergeOnce", () => {
     const h = deps(docker, () => runtimeReply(bundleFixture(), signal), clock);
     let state = await convergeOnce(h.d, initialAgentState());
     state = await convergeOnce(h.d, state);
-    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped: bundle v1 carries no Builder home (data emptyDir + GATEWAY_BUILDER_SLUG)");
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped: bundle v1 carries no Builder home (data emptyDir + Builder identity)");
     expect(state.homeCheckpointCheckedAt).toBe(1_000);
     signal = { requestedAt: 1_500, completedAt: null };
     clock.now = 2_000;
     await convergeOnce(h.d, state);
-    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped (requested at 1500): bundle v1 carries no Builder home (data emptyDir + GATEWAY_BUILDER_SLUG)");
+    expect(h.d.log).toHaveBeenCalledWith("[vm-agent] home checkpoint skipped (requested at 1500): bundle v1 carries no Builder home (data emptyDir + Builder identity)");
     expect(calls(h.fetchImpl, "/upload")).toHaveLength(0);
   });
 

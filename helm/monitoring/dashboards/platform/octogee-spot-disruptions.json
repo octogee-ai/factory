@@ -460,7 +460,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "(kube_pod_info{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels{job=\"gmp-kube-state-metrics\"}) and on(namespace,pod) (kube_pod_status_ready{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",condition=\"true\"} == 1)",
+          "expr": "(kube_pod_info{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class) kube_pod_labels{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",pod=~\"octogee-gateway-.*\"} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels{job=\"gmp-kube-state-metrics\"}) and on(namespace,pod) (kube_pod_status_ready{job=\"gmp-kube-state-metrics\",namespace=\"$namespace\",condition=\"true\"} == 1)",
           "legendFormat": "{{pod}} \u2192 {{node}} \u00b7 {{label_gateway_id}} \u00b7 {{label_topology_kubernetes_io_zone}}",
           "refId": "A",
           "format": "table",

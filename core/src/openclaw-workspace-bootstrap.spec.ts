@@ -5,10 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities, workspaceIdentityReady } from "./openclaw-workspace-bootstrap.js";
 
 const dirs: string[] = [];
+function writeClaim(dir: string, ownerUid: string, gatewayId = "b-alice"): void {
+  fs.writeFileSync(path.join(dir, "builder-claim.json"), JSON.stringify({
+    schemaVersion: 1, gatewayId, ownerUid, builderSlug: ownerUid,
+    leaseId: null, generation: null, claimedAt: 1, overlayAppliedAt: null,
+  }));
+}
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "native-workspace-bootstrap-")); dirs.push(dir);
-  const env = { OPENCLAW_DIR: dir, GATEWAY_ID: "b-alice", GATEWAY_OWNER_UID: "alice", GATEWAY_CLASS: "builder", OPENCLAW_CONTROL_IDENTITY: "per-user" };
+  const env = { OPENCLAW_DIR: dir, GATEWAY_ID: "b-alice", GATEWAY_CLASS: "builder", OPENCLAW_CONTROL_IDENTITY: "per-user" };
+  writeClaim(dir, "alice");
   const profiles: Array<{ id: string; emails: string[]; role: string | null }> = [];
   const request = vi.fn(async (method: string, params: Record<string, unknown>, options: { scopes: string[] }) => {
     expect(options.scopes).toEqual(["operator.admin"]);
@@ -74,6 +81,7 @@ describe("native workspace identity initialization", () => {
     await bootstrapWorkspaceIdentities(args);
     profiles[2].role = "custom";
     env.GATEWAY_ID = "b-alice-replacement";
+    writeClaim(env.OPENCLAW_DIR, "alice", "b-alice-replacement");
     beginWorkspaceIdentityBoot(env);
     request.mockClear();
     await bootstrapWorkspaceIdentities(args);
@@ -109,9 +117,18 @@ describe("native workspace identity initialization", () => {
   it("rejects an identity journal belonging to a different owner", async () => {
     const { env, args } = fixture();
     await bootstrapWorkspaceIdentities(args);
-    env.GATEWAY_OWNER_UID = "bob";
+    writeClaim(env.OPENCLAW_DIR, "bob");
     beginWorkspaceIdentityBoot(env);
     await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow("does not match");
+    expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
+  });
+
+  it("refuses to admit an owner that is not the Builder claim's", async () => {
+    const { env, profiles, args, createProfile } = fixture();
+    fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
+    await expect(bootstrapWorkspaceIdentities({ ...args, env: { ...env, GATEWAY_OWNER_UID: "mallory" } as typeof env })).rejects.toThrow("claimed owner");
+    expect(createProfile).not.toHaveBeenCalled();
+    expect(profiles).toEqual([]);
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 

@@ -6,12 +6,13 @@ import { WebSocket } from "ws";
 import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { sendWsRequest, startConnectChallengeTracker, waitForWsOpen } from "@octogee/shared/types/openclaw-wire-core";
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
+import { builderClaimOwnerUid } from "@octogee/shared/server/builder-claim";
 function enabled(env) {
     return env.GATEWAY_CLASS === "builder" && env.OPENCLAW_CONTROL_IDENTITY === "per-user";
 }
 function files(env) {
-    if (!env.OPENCLAW_DIR || !env.GATEWAY_ID || !env.GATEWAY_OWNER_UID)
-        throw new Error("Workspace identity initialization requires gateway, owner, and state directory");
+    if (!env.OPENCLAW_DIR || !env.GATEWAY_ID)
+        throw new Error("Workspace identity initialization requires gateway and state directory");
     return { boot: path.join(env.OPENCLAW_DIR, "workspace-identity-boot"), ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"), journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json") };
 }
 function atomicWrite(file, value) {
@@ -66,21 +67,24 @@ export async function bootstrapWorkspaceIdentities(args) {
     if (!enabled(env))
         return;
     const state = files(env);
+    const ownerUid = builderClaimOwnerUid(env);
+    if (!ownerUid)
+        throw new Error("Workspace identity initialization requires this Builder's claimed owner");
     const boot = fs.readFileSync(state.boot, "utf8");
     const services = [
         { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, role: "service" },
         { uid: OPENCLAW_PROVISIONER_SERVICE_IDENTITY, role: "service" },
     ];
-    const identities = [...services, { uid: env.GATEWAY_OWNER_UID, role: "admin" }];
+    const identities = [...services, { uid: ownerUid, role: "admin" }];
     const list = async () => (await args.request("users.list", {}, { scopes: ["operator.admin"] })).profiles;
     const find = (profiles, uid) => profiles.find(profile => profile.emails.includes(uid.toLowerCase()));
     if (fs.existsSync(state.journal)) {
         const journal = JSON.parse(fs.readFileSync(state.journal, "utf8"));
-        if (journal.ownerUid !== env.GATEWAY_OWNER_UID)
+        if (journal.ownerUid !== ownerUid)
             throw new Error("Workspace identity initialization journal does not match this owner");
     }
     else {
-        atomicWrite(state.journal, JSON.stringify({ ownerUid: env.GATEWAY_OWNER_UID }));
+        atomicWrite(state.journal, JSON.stringify({ ownerUid }));
     }
     for (const identity of identities) {
         let profile = find(await list(), identity.uid);

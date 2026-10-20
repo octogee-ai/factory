@@ -47,10 +47,7 @@ function helmTemplate(
   if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "imageProfile")) {
     merged.imageProfile = "builder";
   }
-  if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "ownerUid")) {
-    merged.ownerUid = "test-owner";
-    merged.builderSlug = "test-builder";
-  }
+  if (setValues.computerDesktop === "omarchy") merged.runtimeKind = "gce-vm";
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);
   }
@@ -259,39 +256,9 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(ownerRequired).not.toContain("topologyKey: topology.kubernetes.io/zone");
   });
 
-  it("renders the dedicated owner snapshot into immutable pod annotations", () => {
-    const dep = findDoc(helmTemplate("octogee-gw-bender", {
-      gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
-      profile: "builder",
-    }), "Deployment", "octogee-gateway-bender") ?? "";
-
-    expect(dep).toMatch(/octogee\.ai\/owner-uid:\s*"uid-ceckert"/);
-    expect(dep).toMatch(/octogee\.ai\/builder-slug:\s*"ceckert"/);
-  });
-
-  it("refuses a partial dedicated owner snapshot", () => {
-    expect(() => helmTemplate("octogee-gw-bender", {
-      gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      profile: "builder",
-    })).toThrow(/ownerUid and builderSlug must be provided together/);
-  });
-
-  it("rejects ownerless Builder gateways and renders owned Builders normally", () => {
-    expect(() => helmTemplate("octogee-gw-builder-alice", {
-      gatewayId: "builder-alice",
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      ownerUid: "",
-      builderSlug: "",
-    })).toThrow(/ownerUid and builderSlug are required for owner-bound disposable gateways/);
-
+  it("renders Builder gateways with their durable config paths", () => {
     const owned = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
       gatewayClass: "builder",
       imageProfile: "builder",
       "builderAccess.controlUiEnabled": "true",
@@ -314,8 +281,6 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
   it("threads the Builder control identity to both containers and pins shared gateways to the operator identity", () => {
     const perUser = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
       gatewayClass: "builder",
       imageProfile: "builder",
       "builderAccess.controlUiEnabled": "true",
@@ -325,15 +290,10 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
       expect(containerBlock(perUser, container)).toMatch(
         /name:\s*OPENCLAW_CONTROL_IDENTITY[\s\S]*?value:\s*"per-user"/,
       );
-      expect(containerBlock(perUser, container)).toMatch(
-        /name:\s*GATEWAY_OWNER_UID[\s\S]*?value:\s*"uid-ceckert"/,
-      );
     }
 
     const defaulted = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
       gatewayClass: "builder",
       imageProfile: "builder",
     }), "Deployment", "octogee-gateway-bender") ?? "";
@@ -405,7 +365,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
   });
 
   it("hands /home/node to the runtime user before seeding it as that user", () => {
-    const profiles: Record<string, string>[] = [{}, { profile: "builder" }, { gatewayClass: "builder", imageProfile: "builder", sizingTier: "s", builderSlug: "alice", ownerUid: "uid-alice", computerDesktop: "x11" }];
+    const profiles: Record<string, string>[] = [{}, { profile: "builder" }, { gatewayClass: "builder", imageProfile: "builder", sizingTier: "s", computerDesktop: "x11" }];
     for (const values of profiles) {
       const dep = findDoc(helmTemplate("octogee-gw-default", values), "Deployment", "octogee-gateway-default")!;
       const init = containerBlock(dep, "fix-perms");
@@ -579,7 +539,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
   });
 
   it("routes Builder sidecar asset edits through the canonical project mount", () => {
-    const dep = findDoc(helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "builder" }), "Deployment", "octogee-gateway-bender") ?? "";
+    const dep = findDoc(helmTemplate("octogee-gw-bender", { gatewayId: "bender", profile: "builder", computerDesktop: "omarchy" }), "Deployment", "octogee-gateway-bender") ?? "";
     const pod = parseDocument(dep).toJSON().spec.template.spec;
     for (const name of ["gateway", "gateway-edge"]) {
       const container = pod.containers.find((entry: any) => entry.name === name);
@@ -1030,8 +990,6 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
     const dep = findDoc(helmTemplate("octogee-gw-bender", {
       gatewayId: "bender",
       gatewayClass: "builder",
-      ownerUid: "uid-ceckert",
-      builderSlug: "ceckert",
     }), "Deployment", "octogee-gateway-bender") ?? "";
     expect(dep).not.toMatch(/SYSTEM_CONFIG_MIGRATION_ID/);
     expect(dep).not.toMatch(/systemConfigRollContext/);
@@ -1042,8 +1000,6 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       helmTemplate("octogee-gw-bender", {
         gatewayId: "bender",
         gatewayClass: "builder",
-        ownerUid: "uid-ceckert",
-        builderSlug: "ceckert",
       }),
       "Deployment",
       "octogee-gateway-bender",
@@ -1065,8 +1021,6 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       helmTemplate("octogee-gw-builder", {
         gatewayId: "builder",
         gatewayClass: "builder",
-        ownerUid: "uid-ceckert",
-        builderSlug: "ceckert",
         "builderAccess.controlUiEnabled": "true",
       }),
       "Deployment",
@@ -1097,15 +1051,11 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       {
         gatewayId: "builder-disabled",
         gatewayClass: "builder",
-        ownerUid: "uid-ceckert",
-        builderSlug: "ceckert",
         "builderAccess.controlUiEnabled": "false",
       },
       {
         gatewayId: "builder-default",
         gatewayClass: "builder",
-        ownerUid: "uid-ceckert",
-        builderSlug: "ceckert",
       },
     ];
     for (const values of disabledValueSets) {
@@ -1295,8 +1245,6 @@ describe("helm/octogee-gateway/ — profile-aware credential injection", () => {
         helmTemplate("octogee-gw-jack", {
           gatewayId: "jack",
           gatewayClass: "builder",
-          ownerUid: "uid-jack",
-          builderSlug: "jack",
         }),
         "Deployment",
         "octogee-gateway-jack",
@@ -1463,24 +1411,6 @@ const cattleDep = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default
     expect(cattleEdge).toMatch(/- name:\s*GATEWAY_PROFILE[\s\S]*?value:\s*"standard"/);
     expect(cattleEdge).toMatch(/- name:\s*GATEWAY_CLASS[\s\S]*?value:\s*"shared"/);
   });
-
-  it("threads builderSlug into gateway runtime env for dedicated class config restore", () => {
-    const dep =
-      findDoc(
-        helmTemplate("octogee-gw-jack", {
-          gatewayId: "jack",
-          gatewayClass: "builder",
-          ownerUid: "uid-jack",
-          builderSlug: "jack",
-        }),
-        "Deployment",
-        "octogee-gateway-jack",
-      ) ?? "";
-    const gateway = containerBlock(dep, "gateway");
-    const edge = containerBlock(dep, "gateway-edge");
-    expect(gateway).toMatch(/- name:\s*GATEWAY_BUILDER_SLUG[\s\S]*?value:\s*"jack"/);
-    expect(edge).toMatch(/- name:\s*GATEWAY_BUILDER_SLUG[\s\S]*?value:\s*"jack"/);
-  });
 });
 
 describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
@@ -1505,13 +1435,13 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
 
 describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
   it.each(["s", "m", "l"])("renders all X11 surfaces on ephemeral home and project storage at tier %s", (sizingTier) => {
-    const out = helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", ownerUid: "UidA", builderSlug: "builder", sizingTier, rollStrategy: "surge", "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" });
+    const out = helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", sizingTier, rollStrategy: "surge", "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" });
     const dep = parseDocument(findDoc(out, "Deployment", "octogee-gateway-hobby")!).toJSON();
     const pod = dep.spec.template.spec;
     expect(dep.spec.strategy).toEqual({ type: "Recreate" });
     expect(pod.runtimeClassName).toBe("gvisor");
-    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "4Gi" } });
-    expect(pod.volumes).toContainEqual({ name: "project-materializations", emptyDir: { sizeLimit: "2Gi" } });
+    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "6Gi" } });
+    expect(pod.volumes.map((entry: any) => entry.name)).not.toContain("project-materializations");
     expect(pod.volumes.filter((entry: any) => entry.persistentVolumeClaim)).toEqual([]);
     expect(pod.nodeSelector).toEqual({ "cloud.google.com/compute-class": "octogee-gateway" });
     for (const name of ["gateway", "gateway-edge"]) {
@@ -1908,8 +1838,6 @@ describe("helm/octogee-gateway/ — platform model catalog convergence", () => {
     const dep = findDoc(
       helmTemplate("octogee-gw-builder-alice", {
         gatewayId: "builder-alice",
-        ownerUid: "uid-alice",
-        builderSlug: "alice",
         gatewayClass: "builder",
         imageProfile: "builder",
       }),
@@ -1964,8 +1892,6 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
   it("renders Builder profile when legacy gatewayEdge.secrets omits INTERNAL_SERVICE_KEY", () => {
     const result = templateWithLegacyGatewayEdgeSecrets({
       profile: "builder",
-      ownerUid: "test-owner",
-      builderSlug: "test-builder",
     });
     expect(result.status).toBe(0);
   });

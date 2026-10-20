@@ -10,15 +10,11 @@ import { getFreshAccessTokenFromDb } from "../../../gateway-edge/src/lib/connect
 import { isSafeCanvasPath, resolveCanvasFile } from "../../../gateway-edge/src/lib/canvas-file.js";
 import { decryptSecret } from "../../../gateway-edge/src/lib/kms.js";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
-import { readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
+import { podBelongsToGateway, readServingGatewayAuthorization } from "@octogee/core/gateway-live-release";
 import { gatewayVmPodName, resolveGatewayRuntime } from "@octogee/shared/types/glm";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { readComputerRuntimeObservation } from "../lib/computer-runtime-observation.js";
-import type {
-  GatewayPodOwnerIdentity,
-  GatewayPodOwnerIdentityReader,
-} from "../lib/gateway-pod-owner-identity.js";
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -209,10 +205,15 @@ function recordOf(value: unknown): Record<string, unknown> {
     : {};
 }
 
+interface RuntimeOwnerIdentity {
+  ownerUid: string;
+  builderSlug: string;
+}
+
 function vmOwnerIdentity(
   runtime: Record<string, unknown> | undefined,
   bound: GatewayBinding,
-): GatewayPodOwnerIdentity | null {
+): RuntimeOwnerIdentity | null {
   const instanceId = recordOf(runtime?.vm).instanceId;
   if (typeof instanceId !== "string" || !/^\d+$/.test(instanceId)) return null;
   if (bound.podUid !== instanceId || bound.podName !== gatewayVmPodName(bound.gatewayId, instanceId)) {
@@ -224,10 +225,19 @@ function vmOwnerIdentity(
     : null;
 }
 
+function clusterOwnerIdentity(
+  config: { ownerUid: string | null; builderSlug: string | null },
+  bound: GatewayBinding,
+): RuntimeOwnerIdentity | null {
+  if (!podBelongsToGateway(bound.gatewayId, bound.podName)) return null;
+  return config.ownerUid && config.builderSlug
+    ? { ownerUid: config.ownerUid, builderSlug: config.builderSlug }
+    : null;
+}
+
 async function verifiedGatewayAuthorization(
   db: Firestore,
   bound: GatewayBinding,
-  readPodOwnerIdentity: GatewayPodOwnerIdentityReader,
 ): Promise<{ builderSlug: string; gatewayClass: string } | null> {
   const authorization = await readServingGatewayAuthorization(db, bound.gatewayId);
   if (!authorization) return refused(bound, "gateway is not serving");
@@ -236,8 +246,8 @@ async function verifiedGatewayAuthorization(
   const vmRuntime = resolveGatewayRuntime(runtime?.runtime) === "gce-vm";
   const ownerIdentity = vmRuntime
     ? vmOwnerIdentity(runtime, bound)
-    : await readPodOwnerIdentity({ podName: bound.podName!, podUid: bound.podUid! });
-  if (!ownerIdentity) return refused(bound, vmRuntime ? "caller is not the gateway's VM instance" : "pod identity unresolved");
+    : clusterOwnerIdentity(authorization.config, bound);
+  if (!ownerIdentity) return refused(bound, vmRuntime ? "caller is not the gateway's VM instance" : "caller is not an owned pod of the gateway");
   if (
     ownerIdentity.ownerUid !== authorization.config.ownerUid
     || ownerIdentity.builderSlug !== authorization.config.builderSlug
@@ -257,12 +267,11 @@ async function accessAuthorized(
     uid: string;
     connectorId: string;
     access: ConnectorAccessContext | null;
-    readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
   },
 ): Promise<boolean> {
-  const { db, bound, uid, connectorId, access, readPodOwnerIdentity } = input;
+  const { db, bound, uid, connectorId, access } = input;
   if (!safeDocId(uid) || !bound.ownerUid || !bound.podName || !bound.podUid) return false;
-  const authorization = await verifiedGatewayAuthorization(db, bound, readPodOwnerIdentity);
+  const authorization = await verifiedGatewayAuthorization(db, bound);
   if (!authorization) return false;
   if (access?.kind === OWNER_RUNTIME_ACCESS_KIND) return ownerRuntimeAccessAuthorized({
     db,
@@ -310,11 +319,10 @@ type ProjectCloneAuthorizationInput = {
   bound: GatewayBinding;
   uid: string;
   access: ProjectCloneAccessContext;
-  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
 };
 
 async function projectCloneGatewayMode(input: ProjectCloneAuthorizationInput): Promise<"preparing" | "serving" | null> {
-  const { db, bound, uid, access, readPodOwnerIdentity } = input;
+  const { db, bound, uid, access } = input;
   if (!safeDocId(uid) || !bound.ownerUid || uid !== bound.ownerUid) return refused(bound, "clone request is not from the owner runtime");
   if (await configuredBuilderPreparationAllowed(db, bound, access.builderSlug, uid)) return "preparing";
   const [user, assignmentSnapshot] = await Promise.all([
@@ -325,7 +333,7 @@ async function projectCloneGatewayMode(input: ProjectCloneAuthorizationInput): P
   const assignment = parseAssignmentDoc(uid, assignmentSnapshot.data());
   if (assignedGateway !== bound.gatewayId || assignment?.gatewayId !== bound.gatewayId ||
     assignment.slug !== access.builderSlug || assignment.state !== "serving") return refused(bound, "clone gateway does not own the serving assignment");
-  const authorization = await verifiedGatewayAuthorization(db, bound, readPodOwnerIdentity);
+  const authorization = await verifiedGatewayAuthorization(db, bound);
   if (!authorization) return null;
   if (authorization.gatewayClass !== "builder" || authorization.builderSlug !== access.builderSlug) {
     return refused(bound, `clone requested for ${access.builderSlug} on a ${authorization.gatewayClass} gateway of ${authorization.builderSlug}`);
@@ -389,16 +397,14 @@ async function respondProjectCloneAccess(input: {
   uid: string;
   access: ProjectCloneAccessContext;
   connectorId: string;
-  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
   res: Response;
 }): Promise<void> {
-  const { db, bound, uid, access, connectorId, readPodOwnerIdentity, res } = input;
+  const { db, bound, uid, access, connectorId, res } = input;
   const repository = await projectCloneSourceAuthorized({
     db,
     bound,
     uid,
     access,
-    readPodOwnerIdentity,
   });
   if (!repository) {
     res.status(403).json(FORBIDDEN);
@@ -409,7 +415,7 @@ async function respondProjectCloneAccess(input: {
     res.status(token.reason === "reauth_required" ? 409 : 404).json({ error: token.reason });
     return;
   }
-  const currentRepository = await projectCloneSourceAuthorized({ db, bound, uid, access, readPodOwnerIdentity });
+  const currentRepository = await projectCloneSourceAuthorized({ db, bound, uid, access });
   if (!currentRepository || currentRepository.owner !== repository.owner || currentRepository.repo !== repository.repo) {
     res.status(403).json(FORBIDDEN);
     return;
@@ -424,17 +430,15 @@ async function respondAuthorizedAccess(input: {
   uid: string;
   connectorId: string;
   access: Exclude<ConnectorAccessContext, ProjectCloneAccessContext> | null;
-  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
   res: Response;
 }): Promise<void> {
-  const { db, bound, uid, connectorId, access, readPodOwnerIdentity, res } = input;
+  const { db, bound, uid, connectorId, access, res } = input;
   if (!(await accessAuthorized({
     db,
     bound,
     uid,
     connectorId,
     access,
-    readPodOwnerIdentity,
   }))) {
     res.status(403).json(FORBIDDEN);
     return;
@@ -458,10 +462,9 @@ async function respondAuthorizedAccess(input: {
 
 export function createConnectorTokenBrokerRoutes(opts: {
   db: Firestore;
-  readPodOwnerIdentity: GatewayPodOwnerIdentityReader;
 }): Router {
   const router = Router();
-  const { db, readPodOwnerIdentity } = opts;
+  const { db } = opts;
 
   router.post(["/access-token", "/github-project-clone-access"], async (req, res) => {
     const bound = boundGateway(req, res);
@@ -502,7 +505,6 @@ export function createConnectorTokenBrokerRoutes(opts: {
         uid,
         access,
         connectorId,
-        readPodOwnerIdentity,
         res,
       });
       return;
@@ -514,8 +516,7 @@ export function createConnectorTokenBrokerRoutes(opts: {
       uid,
       connectorId,
       access,
-      readPodOwnerIdentity,
-      res,
+        res,
     });
   });
 

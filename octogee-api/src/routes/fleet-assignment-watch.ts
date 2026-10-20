@@ -50,6 +50,7 @@ export function streamAssignmentChanges(
     for (const query of [
       db.collection("gateways").doc(gatewayId).collection("assignments"),
       db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId),
+      db.collection("gateways").doc(gatewayId),
     ]) {
       const unsubscribe = query.onSnapshot(notify, failed);
       if (closed) unsubscribe();

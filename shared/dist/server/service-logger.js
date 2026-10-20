@@ -47,7 +47,7 @@ export function createServiceLogger(service, options = {}) {
                 throw new Error(`Invalid LOG_LEVEL '${configured}'`);
             if (LEVEL_RANK[level] < LEVEL_RANK[configured])
                 return;
-            const merged = { ...(process.env.GATEWAY_BUILDER_SLUG ? { builderSlug: process.env.GATEWAY_BUILDER_SLUG } : {}), ...(process.env.GATEWAY_ID ? { gatewayId: process.env.GATEWAY_ID } : {}), ...bindings, ...context.getStore(), ...fields };
+            const merged = { ...(process.env.GATEWAY_ID ? { gatewayId: process.env.GATEWAY_ID } : {}), ...bindings, ...context.getStore(), ...fields };
             const safe = Object.fromEntries(Object.entries(merged).filter(([key]) => !RESERVED.has(key)));
             const redacted = redactStructuredSecrets(serializeFields(safe));
             for (const key of ["builderSlug", "gatewayId", "operationId", "sourceGateway", "targetGateway", "requestId"]) {

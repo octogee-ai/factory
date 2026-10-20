@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { hydrateGithubCliAuth } from "../lib/github-cli-auth-hydrate.js";
+import { withBuilderClaim, writeTestBuilderClaim } from "./helpers/builder-claim.js";
 
 const execFile = promisify(execFileCallback);
 const connected = (token = "gho_test_owner") => Response.json({
@@ -23,13 +24,13 @@ describe("Builder GitHub CLI authentication", () => {
     vi.clearAllMocks();
     root = await mkdtemp(path.join(os.tmpdir(), "builder-gh-auth-"));
     hostsPath = path.join(root, "gh", "hosts.yml");
-    env = {
+    env = withBuilderClaim({
       HOME: root,
       GH_CONFIG_DIR: path.dirname(hostsPath),
       GATEWAY_CLASS: "builder",
-      GATEWAY_BUILDER_SLUG: "alice",
+      OPENCLAW_DIR: path.join(root, ".openclaw"),
       OCTOGEE_API_SA_TOKEN_PATH: path.join(root, "gateway-token"),
-    };
+    }, "alice");
     await writeFile(env.OCTOGEE_API_SA_TOKEN_PATH!, "projected-gateway-token");
     fetchImpl.mockImplementation(async (url) => url === "https://api.github.com/user"
       ? Response.json({ login: "alice-github" }) : connected());
@@ -100,9 +101,9 @@ describe("Builder GitHub CLI authentication", () => {
   });
 
   it("fails before fetching when the Builder identity or gateway token is absent", async () => {
-    delete env.GATEWAY_BUILDER_SLUG;
+    await rm(path.join(env.OPENCLAW_DIR!, "builder-claim.json"));
     await expect(hydrateGithubCliAuth({ env, fetchImpl, setupGit })).rejects.toThrow("Builder identity");
-    env.GATEWAY_BUILDER_SLUG = "alice";
+    writeTestBuilderClaim(env.OPENCLAW_DIR!, "alice");
     await rm(env.OCTOGEE_API_SA_TOKEN_PATH!);
     await expect(hydrateGithubCliAuth({ env, fetchImpl, setupGit })).rejects.toThrow("projected service-account token");
     expect(fetchImpl).not.toHaveBeenCalled();

@@ -157,8 +157,32 @@ describe("secret-resolver — defense-in-depth", () => {
     expect(out.stderr).toContain(`reject id="${id}"`);
   });
 
+  function builderClaimEnv(slug: string): { env: Record<string, string>; cleanup: () => void } {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-resolver-claim-"));
+    fs.writeFileSync(path.join(openclawDir, "builder-claim.json"), JSON.stringify({
+      schemaVersion: 1, gatewayId: "gw-alice", ownerUid: `uid-${slug}`, builderSlug: slug,
+      leaseId: null, generation: null, claimedAt: 1, overlayAppliedAt: null,
+    }));
+    return {
+      env: { OPENCLAW_DIR: openclawDir, GATEWAY_ID: "gw-alice" },
+      cleanup: () => fs.rmSync(openclawDir, { recursive: true, force: true }),
+    };
+  }
+
+  it("does not take the Builder slug from the environment", async () => {
+    const ownId = "byok-alice-anthropic/latest";
+    const out = await runResolver({
+      ...envFor(),
+      OPENCLAW_AGENTS_DIR: "/nonexistent/path/octogee-builder-resolver-test",
+      GATEWAY_BUILDER_SLUG: "alice",
+    }, JSON.stringify({ protocolVersion: 1, provider: "gcp-secret-manager", ids: [ownId] }));
+
+    expect(out.stderr).toContain(`reject id="${ownId}"`);
+  });
+
   it("accepts the validated Builder's BYOK ref without a canonical coach dir and rejects a foreign Builder", async () => {
     const builderAgentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-resolver-builder-"));
+    const claim = builderClaimEnv("alice");
     try {
       fs.mkdirSync(path.join(builderAgentsDir, "discord-helper", "agent"), { recursive: true });
       const ownId = "byok-alice-openai/latest";
@@ -166,7 +190,7 @@ describe("secret-resolver — defense-in-depth", () => {
       const out = await runResolver({
         ...envFor(),
         OPENCLAW_AGENTS_DIR: builderAgentsDir,
-        GATEWAY_BUILDER_SLUG: "alice",
+        ...claim.env,
       }, JSON.stringify({
         protocolVersion: 1,
         provider: "gcp-secret-manager",
@@ -182,21 +206,24 @@ describe("secret-resolver — defense-in-depth", () => {
       expect(response.errors?.[foreignId]?.message).toMatch(/^Refused by resolver:/);
     } finally {
       fs.rmSync(builderAgentsDir, { recursive: true, force: true });
+      claim.cleanup();
     }
   });
 
   it("keeps the validated Builder slug when its custom runtime directory is not present yet", async () => {
     const ownId = "byok-alice-anthropic/latest";
     const foreignId = "byok-eve-anthropic/latest";
+    const claim = builderClaimEnv("alice");
     const out = await runResolver({
       ...envFor(),
       OPENCLAW_AGENTS_DIR: "/nonexistent/path/octogee-builder-resolver-test",
-      GATEWAY_BUILDER_SLUG: "alice",
+      ...claim.env,
     }, JSON.stringify({
       protocolVersion: 1,
       provider: "gcp-secret-manager",
       ids: [ownId, foreignId],
     }));
+    claim.cleanup();
     const response = parseResponse(out.stdout);
 
     expect(out.stderr).toContain(`accept id="${ownId}"`);

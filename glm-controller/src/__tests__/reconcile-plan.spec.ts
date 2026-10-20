@@ -111,14 +111,13 @@ describe("buildInstancesMap", () => {
     expect(map.canary).toMatchObject({ gatewayId: "canary", image: { tag: "def" } });
   });
 
-  it("propagates builderSlug for dedicated Builder config restore", () => {
+  it("never renders the Builder's owner identity into its instance values", () => {
     const map = buildInstancesMap([
-      mkDesired({ gatewayId: "jack", gatewayClass: "builder", builderSlug: "jack" }),
+      mkDesired({ gatewayId: "jack", gatewayClass: "builder", builderSlug: "jack", ownerUid: "uid-jack" }),
     ]);
-    expect(map.jack).toMatchObject({
-      gatewayClass: "builder",
-      builderSlug: "jack",
-    });
+    expect(map.jack).toMatchObject({ gatewayClass: "builder" });
+    expect(map.jack).not.toHaveProperty("builderSlug");
+    expect(map.jack).not.toHaveProperty("ownerUid");
   });
 
   it("preserves personal gateway helm knobs from desired state", () => {
@@ -413,15 +412,6 @@ describe("diffInstancesMap", () => {
     const changes = diffInstancesMap(actual, desired);
     expect(changes).toEqual<ReconcileChange[]>([
       { kind: "update", gatewayId: "default", from: actual.default, to: desired.default },
-    ]);
-  });
-
-  it("reports an update when builderSlug changes", () => {
-    const actual: HelmInstancesMap = { jack: { ...baseInstance("abc"), builderSlug: "jack" } };
-    const desired: HelmInstancesMap = { jack: { ...baseInstance("abc"), builderSlug: "jill" } };
-    const changes = diffInstancesMap(actual, desired);
-    expect(changes).toEqual<ReconcileChange[]>([
-      { kind: "update", gatewayId: "jack", from: actual.jack, to: desired.jack },
     ]);
   });
 

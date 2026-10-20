@@ -517,7 +517,6 @@ def d_fleet():
                 "node": "Node",
                 "label_gateway_id": "Gateway",
                 "label_gateway_class": "Class",
-                "label_octogee_ai_builder_slug": "Builder",
                 "Value": "Ready",
             },
         },
@@ -558,7 +557,7 @@ def d_fleet():
         ], w=24, h=8, transformations=[{"id": "merge", "options": {}}, deployment_columns]),
         row("Active gateway runtime"),
         table("Active gateway pods and nodes", [
-            (f'sum by (namespace,pod,node,label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug) ((kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}}) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1))', "{{pod}}"),
+            (f'sum by (namespace,pod,node,label_gateway_id,label_gateway_class) ((kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_class) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}}) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1))', "{{pod}}"),
         ], w=24, h=10, transformations=[pod_columns]),
         table("Active gateway containers", [
             (f'sum by (namespace,pod,node,container) ((kube_pod_container_status_ready{{namespace="{NS}",pod=~"octogee-gateway-.*",container=~"gateway|gateway-edge"}} == 1) * on(namespace,pod) group_left(node) kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}})', "{{pod}}/{{container}}"),
@@ -785,7 +784,7 @@ def d_spot_disruptions():
             ('kube_node_info * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels', "{{node}}"),
         ], w=24, h=8),
         table("Gateway pod → node → Octogee identity", [
-            (f'(kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class,label_octogee_ai_builder_slug) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}} → {{node}} · {{label_gateway_id}} · {{label_topology_kubernetes_io_zone}}"),
+            (f'(kube_pod_info{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(namespace,pod) group_left(label_gateway_id,label_gateway_instance,label_gateway_class) kube_pod_labels{{namespace="{NS}",pod=~"octogee-gateway-.*"}} * on(node) group_left(label_cloud_google_com_gke_spot,label_cloud_google_com_gke_provisioning,label_cloud_google_com_compute_class,label_topology_kubernetes_io_zone) kube_node_labels) and on(namespace,pod) (kube_pod_status_ready{{namespace="{NS}",condition="true"}} == 1)', "{{pod}} → {{node}} · {{label_gateway_id}} · {{label_topology_kubernetes_io_zone}}"),
         ], w=24, h=9),
         row("Authoritative GCP evidence"),
         cloud_panel("Confirmed Spot preemptions by zone", "logging.googleapis.com/user/octogee_spot_preemptions",

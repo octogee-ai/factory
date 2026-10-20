@@ -39,6 +39,7 @@ import {
   type OperationAuditRecord,
   type Operation,
   type GatewayVmState,
+  type RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 import {
   type GatewayMutableConfig,
@@ -1274,7 +1275,13 @@ async function upsertGateway(
       { merge: true },
     );
   if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
-  await helm.upsertInstance(desiredOpts);
+  await helm.upsertInstance({ ...desiredOpts, ...runtimeBuilderIdentity(gateway) });
+}
+
+function runtimeBuilderIdentity(gateway: DurableGateway): { builderIdentity?: RuntimeBuilderIdentity } {
+  return gateway.ownerUid && gateway.builderSlug
+    ? { builderIdentity: { ownerUid: gateway.ownerUid, builderSlug: gateway.builderSlug } }
+    : {};
 }
 
 export async function markGatewayLive(
@@ -1341,8 +1348,6 @@ function observedHelmInstance(
     imageRepository: instance.image.repository ?? null,
     imageTag: instance.image.tag ?? null,
     replicas: typeof instance.replicas === "number" ? instance.replicas : 1,
-    ownerUid: instance.ownerUid,
-    builderSlug: instance.builderSlug,
     chartFingerprint: instance.chartFingerprint,
     deploymentIntentFingerprint: instance.deploymentIntentFingerprint ?? null,
   };

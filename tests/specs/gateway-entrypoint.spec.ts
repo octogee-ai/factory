@@ -76,17 +76,19 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     );
     expect(restoreBlock).toMatch(/GATEWAY_CLASS_EFFECTIVE/);
     expect(restoreBlock).toMatch(/!= "shared"/);
-    expect(restoreBlock).toMatch(/GATEWAY_BUILDER_SLUG/);
+    expect(restoreBlock).toMatch(/\$\{BUILDER_SLUG\}/);
   });
 
-  it("requires a builder slug for every owner-bound runtime", () => {
-    const identityBlock = entrypoint.slice(
-      entrypoint.indexOf("GATEWAY_ID is set by the deployment's env block"),
-      entrypoint.indexOf("# ── Owner-bound runtime system_config restore"),
-    );
-    expect(identityBlock).toMatch(
-      /FATAL: GATEWAY_BUILDER_SLUG is required for \$\{GATEWAY_CLASS_EFFECTIVE\} durable config/,
-    );
+  it("reads the Builder identity from the broker before any owner-scoped pre-boot step", () => {
+    const identityIdx = entrypoint.indexOf("/octogee/scripts/entrypoints/builder-identity.ts");
+    const identityBlock = entrypoint.slice(entrypoint.indexOf("# ── Builder identity"), entrypoint.indexOf('GIT_SSH_HOST="'));
+    expect(identityIdx).toBeGreaterThan(-1);
+    expect(identityIdx).toBeLessThan(entrypoint.indexOf("IdentityFile"));
+    expect(identityIdx).toBeLessThan(entrypoint.indexOf("system-config-restore.ts"));
+    expect(identityBlock).toMatch(/BUILDER_SLUG=\$\("\$TSX" \/octogee\/scripts\/entrypoints\/builder-identity\.ts\)/);
+    expect(identityBlock).toMatch(/identity_status" -eq 2[\s\S]*?exit 2/);
+    expect(identityBlock).toMatch(/sleep 5/);
+    expect(entrypoint).not.toMatch(/GATEWAY_BUILDER_SLUG|GATEWAY_OWNER_UID/);
     expect(entrypoint).not.toMatch(/UNOWNED_OPERATOR_PREWARM/);
   });
 

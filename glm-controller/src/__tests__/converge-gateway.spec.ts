@@ -384,7 +384,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).not.toBe(base.deploymentIntentFingerprint);
   });
 
-  it("upserts an unchanged release when only the rendered owner pair changes", () => {
+  it("keeps a Builder steady when only the root owner pair changes", () => {
     const previous = gatewayUpsertOptsFromRelease({
       namespace: "octogee-test",
       gateway: gateway({
@@ -410,7 +410,9 @@ describe("gatewayUpsertOptsFromRelease", () => {
       chartPath: "/charts/octogee-gateway",
     });
 
-    expect(successor).toMatchObject({ ownerUid: "uid-successor", builderSlug: "successor" });
+    expect(successor).not.toHaveProperty("ownerUid");
+    expect(successor).not.toHaveProperty("builderSlug");
+    expect(successor.deploymentIntentFingerprint).toBe(previous.deploymentIntentFingerprint);
     expect(planGatewayConvergence({
       gateway: gateway({
         gatewayClass: "builder",
@@ -421,14 +423,14 @@ describe("gatewayUpsertOptsFromRelease", () => {
       }),
       artifact: artifact(),
       helm: {
-        imageRepository: REPO,
+        imageRepository: BUILDER_REPO,
         imageTag: "def5678",
         replicas: 1,
         deploymentIntentFingerprint: previous.deploymentIntentFingerprint,
       },
       desiredDeploymentIntentFingerprint: successor.deploymentIntentFingerprint,
       deploymentReady: true,
-    })).toEqual({ kind: "upsert", replicas: 1 });
+    })).toEqual({ kind: "steady" });
   });
 
   it("ignores ambient chart drift but applies it during a journaled release", () => {
@@ -489,7 +491,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
     )).toBe(true);
   });
 
-  it("retains owner drift when ambient chart-only drift is suppressed", () => {
+  it("finds no owner drift when ambient chart-only drift is suppressed", () => {
     const observed = gatewayUpsertOptsFromRelease({
       namespace: "octogee",
       gateway: gateway({
@@ -522,7 +524,7 @@ describe("gatewayUpsertOptsFromRelease", () => {
       observedChartFingerprint: "chart-a",
       observedDeploymentIntentFingerprint: observed.deploymentIntentFingerprint,
       applyChartDrift: false,
-    })).not.toBe(observed.deploymentIntentFingerprint);
+    })).toBe(observed.deploymentIntentFingerprint);
   });
 
   it("upserts a missing legacy intent fingerprint in PROD", () => {
@@ -559,7 +561,8 @@ describe("gatewayUpsertOptsFromRelease", () => {
     });
     expect(opts.gatewayClass).toBe("builder");
     expect(opts.builderAccess).toBeDefined();
-    expect(opts.builderSlug).toBe("ceckert");
+    expect(opts).not.toHaveProperty("builderSlug");
+    expect(opts).not.toHaveProperty("ownerUid");
   });
 
 });

@@ -21,13 +21,10 @@ gatewayId: ""
 # stays gateway-scoped on gatewayId, never revisionId.
 revisionId: ""
 
-ownerUid: ""
+# Where this render runs: "cluster" for a Kubernetes Deployment, "gce-vm" when
+# Cowboy renders a Builder VM's runtime bundle from this chart.
+runtimeKind: cluster
 
-# Owner-bound disposable Builder slug. Shared gateways leave this empty.
-# When present on Builder gateways, the gateway restores durable
-# openclaw.json from that builder's Gitea system_config repo before OpenClaw
-# starts.
-builderSlug: ""
 # Builder home emptyDir size; Cowboy sets it from BUILDER_TIERS.hobby.computer.homeSizeGiB.
 builderHomeSizeGiB: 4
 

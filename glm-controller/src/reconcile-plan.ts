@@ -128,7 +128,6 @@ function withOptionalHelmFields(
   fields: OptionalHelmFields,
 ): HelmInstanceValue {
   const out: HelmInstanceValue = { ...instance };
-  if (fields.d.builderSlug) out.builderSlug = fields.d.builderSlug;
   if (fields.chartFingerprint) out.chartFingerprint = fields.chartFingerprint;
   if (fields.serviceAccountName) out.serviceAccountName = fields.serviceAccountName;
   if (fields.serviceAccount) out.serviceAccount = fields.serviceAccount;
@@ -218,7 +217,6 @@ function instanceEqual(
     [a.image.repository, b.image.repository],
     [a.image.tag, b.image.tag],
     [a.gatewayId, b.gatewayId],
-    [a.builderSlug, b.builderSlug],
     [effectiveServiceAccountName(a), effectiveServiceAccountName(b)],
     [a.sizingTier, b.sizingTier],
     [a.replicas, b.replicas],
@@ -260,7 +258,6 @@ export function isReplicasOnlyUpdate(c: ReconcileChange): boolean {
   if (c.from.image.repository !== c.to.image.repository) return false;
   if (c.from.image.tag !== c.to.image.tag) return false;
   if (c.from.gatewayId !== c.to.gatewayId) return false;
-  if (c.from.builderSlug !== c.to.builderSlug) return false;
   if (effectiveServiceAccountName(c.from) !== effectiveServiceAccountName(c.to)) return false;
   if (resolveGatewayClass(c.from) !== resolveGatewayClass(c.to)) return false;
   if (resolveGatewayImageProfile(c.from) !== resolveGatewayImageProfile(c.to)) return false;

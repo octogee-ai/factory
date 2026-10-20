@@ -62,6 +62,12 @@ export const GLM_GATEWAY_VM_RUNTIME_DOC = "runtime";
 export function gatewayVmRuntimeDocPath(gatewayId) {
     return `${GLM_GATEWAYS_COLLECTION}/${gatewayId}/${GLM_GATEWAY_VM_SUBCOLLECTION}/${GLM_GATEWAY_VM_RUNTIME_DOC}`;
 }
+export function isRuntimeBuilderIdentity(value) {
+    const identity = value;
+    return !!identity && typeof identity === "object" &&
+        typeof identity.ownerUid === "string" && identity.ownerUid.length > 0 &&
+        typeof identity.builderSlug === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(identity.builderSlug);
+}
 function runtimeBundleHostsValid(b) {
     return !!b.hostAliases && typeof b.hostAliases === "object" && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
 }
@@ -75,6 +81,7 @@ export function isGatewayVmRuntimeBundle(value) {
         && Array.isArray(b.containers) && b.containers.length > 0
         && Array.isArray(b.volumes)
         && runtimeBundleHostsValid(b)
+        && (b.builderIdentity === undefined || isRuntimeBuilderIdentity(b.builderIdentity))
         && (b.homeRestoreCheckpoint === undefined || isDisposableHomeCheckpoint(b.homeRestoreCheckpoint));
 }
 export const GATEWAY_VM_IMAGE_SERVICES = ["gateway", "gateway-edge"];

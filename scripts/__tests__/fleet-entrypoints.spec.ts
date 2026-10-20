@@ -45,6 +45,7 @@ import {
   resolveFleetOperatorEmail,
   resolveFleetOperatorUid,
 } from "../ops/fleet.js";
+import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("fleet-controller entrypoint config", () => {
   it("reports the complete gateway image tag instead of its ambiguous build SHA", () => {
@@ -262,13 +263,12 @@ describe("fleet-controller entrypoint config", () => {
     }, "owner-uid")).rejects.toThrow("missing canonical assignment for owner-uid");
   });
 
-  it("normalizes local gateways and trims dedicated builder slugs", () => {
-    expect(resolveFleetControllerEntrypointConfig({
+  it("normalizes local gateways and reads the dedicated builder slug from the claim", () => {
+    expect(resolveFleetControllerEntrypointConfig(withBuilderClaim({
       BUILD_SHA: "abc123",
       FLEET_CONTROLLER_PORT: "3999",
       FLEET_CONTROLLER_PUBLIC_KEY: "pub",
-      GATEWAY_BUILDER_SLUG: " alice ",
-    }, { gatewayId: "local" })).toEqual({
+    }, "alice"), { gatewayId: "local" })).toEqual({
       gatewayId: "default",
       builderSlug: "alice",
       port: 3999,
