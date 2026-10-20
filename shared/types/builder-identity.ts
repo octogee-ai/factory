@@ -2,6 +2,7 @@ import { isValidGatewayId } from "./glm.js";
 import { isValidUsername } from "./identity.js";
 
 export const BUILDER_IDENTITY_ROUTE = "/internal/fleet/builder-identity";
+export const BUILDER_STANDBY_BOOT_ENV = "OCTOGEE_BUILDER_STANDBY_BOOT";
 
 export type BuilderIdentityUnavailableReason = "retired" | "retiring" | "not-builder";
 

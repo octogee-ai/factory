@@ -311,6 +311,7 @@ export interface GatewayHeartbeatObservation {
   mountedCustomers: string[];
   migratingIn: string[];
   configStatus?: import("./fleet-controller.js").GatewayConfigStatus;
+  configuredBuilder?: import("./fleet-controller.js").ConfiguredBuilderReport | null;
 }
 
 // glmGateways/{gatewayId} — the Cowboy-owned runtime observation record for the
@@ -513,6 +514,7 @@ export const GATEWAY_MUTABLE_FIELDS = [
   "builderSlug",
   "modelBrokerLimits",
   "allocation",
+  "standby",
   "desiredStatus",
   "liveRelease",
   "retireAfter",

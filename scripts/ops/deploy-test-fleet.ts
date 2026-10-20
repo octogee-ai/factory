@@ -74,7 +74,7 @@ async function readGateway(input: {
   ]);
   const runtime = object(runtimeDoc.data());
   return {
-    gatewayId: root.gatewayId, gatewayClass: root.gatewayClass, imageProfile: root.imageProfile,
+    gatewayId: root.gatewayId, gatewayClass: root.gatewayClass, imageProfile: root.imageProfile, standby: root.standby != null,
     desiredStatus: root.desiredStatus, latestRelease: root.latestRelease, desiredRelease: root.desiredRelease, liveRelease: root.liveRelease,
     desiredPayload: payloadOf(desired.data(), root.gatewayId, root.desiredRelease), latestPayload: payloadOf(latest.data(), root.gatewayId, root.latestRelease),
     runtime: runtimeOf(runtime, root.gatewayId),
@@ -139,6 +139,7 @@ export async function deployTestFleetBuilder(db: Firestore, gateway: Pick<TestFl
   if (current?.desiredStatus === "retired") throw new TestFleetDeploymentDeferredError(`${gateway.gatewayId} retired during deployment selection`);
   if (!snapshot.exists && !current) await rethrowMutationError(db, gateway.gatewayId, new InvalidGatewayRootError(gateway.gatewayId));
   if (!current || current.gatewayClass !== "builder") throw new Error(`${gateway.gatewayId} is no longer a non-retired Builder`);
+  if (current.standby != null) throw new Error(`${gateway.gatewayId} is a standby Builder; standbys ride the platform release`);
   if (!matchesTestPlatformRelease(parsePlatformReleaseRecord(platform.data()), payload, manifest.sourceSha)) throw new Error("platform release was superseded before Builder deployment");
   const actor = process.env.RELEASE_ACTOR ?? "operator:test-fleet";
   try { return await runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {

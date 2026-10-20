@@ -7,6 +7,7 @@ import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { sendWsRequest, startConnectChallengeTracker, waitForWsOpen } from "@octogee/shared/types/openclaw-wire-core";
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
 import { builderClaimOwnerUid } from "@octogee/shared/server/builder-claim";
+import { BUILDER_STANDBY_BOOT_ENV } from "@octogee/shared/types/builder-identity";
 function enabled(env) {
     return env.GATEWAY_CLASS === "builder" && env.OPENCLAW_CONTROL_IDENTITY === "per-user";
 }
@@ -62,30 +63,34 @@ async function createProfile(uid, env) {
         ws.terminate();
     }
 }
+function recordOwnerJournal(journalPath, ownerUid) {
+    if (!fs.existsSync(journalPath)) {
+        atomicWrite(journalPath, JSON.stringify({ ownerUid }));
+        return;
+    }
+    const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+    if (journal.ownerUid !== ownerUid)
+        throw new Error("Workspace identity initialization journal does not match this owner");
+}
 export async function bootstrapWorkspaceIdentities(args) {
     const env = args.env ?? process.env;
     if (!enabled(env))
         return;
     const state = files(env);
     const ownerUid = builderClaimOwnerUid(env);
-    if (!ownerUid)
+    if (!ownerUid && env[BUILDER_STANDBY_BOOT_ENV] !== "1") {
         throw new Error("Workspace identity initialization requires this Builder's claimed owner");
+    }
     const boot = fs.readFileSync(state.boot, "utf8");
     const services = [
         { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, role: "service" },
         { uid: OPENCLAW_PROVISIONER_SERVICE_IDENTITY, role: "service" },
     ];
-    const identities = [...services, { uid: ownerUid, role: "admin" }];
+    const identities = ownerUid ? [...services, { uid: ownerUid, role: "admin" }] : services;
     const list = async () => (await args.request("users.list", {}, { scopes: ["operator.admin"] })).profiles;
     const find = (profiles, uid) => profiles.find(profile => profile.emails.includes(uid.toLowerCase()));
-    if (fs.existsSync(state.journal)) {
-        const journal = JSON.parse(fs.readFileSync(state.journal, "utf8"));
-        if (journal.ownerUid !== ownerUid)
-            throw new Error("Workspace identity initialization journal does not match this owner");
-    }
-    else {
-        atomicWrite(state.journal, JSON.stringify({ ownerUid }));
-    }
+    if (ownerUid)
+        recordOwnerJournal(state.journal, ownerUid);
     for (const identity of identities) {
         let profile = find(await list(), identity.uid);
         if (!profile) {

@@ -157,7 +157,7 @@ function runnerBlockSource(): string {
 
 function runRunnerBlock(
   profile: string,
-  opts: { gatewayClass?: string } = {},
+  opts: { gatewayClass?: string; standby?: boolean } = {},
 ): {
   status: number | null;
   stderr: string;
@@ -167,11 +167,14 @@ function runRunnerBlock(
   try {
     const marker = path.join(tmp, "runners");
     const gatewayClass = opts.gatewayClass ?? (profile === "builder" ? "builder" : "shared");
+    const claimed = gatewayClass === "builder" && !opts.standby;
     const script = `
       set -e
       log() { echo "$*" >&2; }
       export GATEWAY_PROFILE="${profile}"
       export GATEWAY_CLASS_EFFECTIVE="${gatewayClass}"
+      BUILDER_CLAIMED=${claimed ? 1 : 0}
+      ${opts.standby ? "export OCTOGEE_BUILDER_STANDBY_BOOT=1" : ""}
       export RUNNER_MARKER="${marker}"
       TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
@@ -201,6 +204,15 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
     expect(result.runners).toContain("system-config-watch");
     expect(result.runners).toContain("builder-toolchain-hydrator");
     expect(result.stderr).toMatch(/site-build-api disabled/);
+  });
+
+  it("starts the controller but no customer runners on an unclaimed standby Builder", () => {
+    const result = runRunnerBlock("builder", { standby: true });
+    expect(result.status).toBe(0);
+    expect(result.runners).toContain("fleet-controller");
+    expect(result.runners).toContain("byosub-syncback");
+    expect(result.runners).not.toContain("system-config-watch");
+    expect(result.runners).not.toContain("builder-toolchain-hydrator");
   });
 
   it("does not start optional Builder tool hydration on shared gateways", () => {

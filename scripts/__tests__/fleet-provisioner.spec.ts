@@ -2658,8 +2658,27 @@ describe("in-pod gateway heartbeat", () => {
         startedAt: 42,
         customers: ["alice"],
         migratingIn: [],
+        configuredBuilder: null,
       }),
     ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1", customers: ["alice"] });
+  });
+
+  it("reports a standby Builder through the signed fleet state, never the unauthenticated probe", () => {
+    const state = buildFleetStateResponse({
+      status: "ready",
+      gatewayId: "standby-s-0a1b2c3d",
+      podUid: "pod-uid-1",
+      version: "sha-1",
+      openclawVersion: "2026.7.1",
+      startedAt: 42,
+      customers: [],
+      migratingIn: [],
+      configuredBuilder: { state: "standby" },
+    });
+
+    expect(state).toMatchObject({ status: "ready", customers: [], configuredBuilder: { state: "standby" } });
+    expect(buildFleetHealthResponse({ status: "ready", podUid: "pod-uid-1", startedAt: 42 }))
+      .not.toHaveProperty("configuredBuilder");
   });
 
   it("keeps the unauthenticated probe body free of tenant identity", () => {

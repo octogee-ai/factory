@@ -221,6 +221,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   rollActive?: boolean;
   recoveryGraceUntil?: number;
   mountedCustomers?: readonly string[];
+  standby?: boolean;
 }
 
 export const SHARED_GATEWAY_RECOVERY_GRACE_MS = GATEWAY_UNREACHABLE_AFTER_MS;
@@ -3104,6 +3105,7 @@ function placementGatewayFromDocument(input: {
     sizingTier: root.sizingTier,
     desiredStatus: root.desiredStatus,
     disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
+    standby: root.standby != null,
     allocation: root.allocation ?? null,
     ready: runtimeReady,
     ...gatewayRuntimeObservation(runtimeData),

@@ -1,3 +1,4 @@
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -662,7 +663,67 @@ describe("projectDisposableFleetCapacity", () => {
       failedBuilders: 0,
       staleActivations: 0,
       oldestActivationAgeMs: null,
+      standbyInstances: 0,
     });
+  });
+
+  it("counts standby Builders apart from customer capacity", () => {
+    const now = 1_700_000_900_000;
+    const standbyRoot = (gatewayId: string, desiredStatus: string) => ({
+      gatewayId,
+      gatewayClass: "builder",
+      sizingTier: "s",
+      desiredStatus,
+      ownerUid: null,
+      builderSlug: null,
+      allocation: null,
+      standby: { kind: "hobby", schemaVersion: 1, mintedAt: now - 600_000 },
+    });
+    const ready = projectGatewaySummary(
+      { id: "standby-s-0a1b2c3d", data: () => ({ gatewayId: "standby-s-0a1b2c3d", status: "ready", configuredBuilder: { state: "standby" }, lastHeartbeatAt: now - 5_000 }) },
+      standbyRoot("standby-s-0a1b2c3d", "running"),
+      now,
+    );
+    const booting = projectGatewaySummary(
+      { id: "standby-s-1a1b2c3d", data: () => ({ gatewayId: "standby-s-1a1b2c3d", status: "booting" }) },
+      standbyRoot("standby-s-1a1b2c3d", "running"),
+      now,
+    );
+    const retired = projectGatewaySummary(
+      { id: "standby-s-2a1b2c3d", data: () => ({ gatewayId: "standby-s-2a1b2c3d" }) },
+      standbyRoot("standby-s-2a1b2c3d", "retired"),
+      now,
+    );
+
+    expect(ready.standby).toEqual({ mintedAt: now - 600_000, ageMs: 600_000, ready: true });
+    expect(booting.standby).toMatchObject({ ready: false });
+    const silent = projectGatewaySummary(
+      {
+        id: "standby-s-3a1b2c3d",
+        data: () => ({
+          gatewayId: "standby-s-3a1b2c3d", status: "ready", configuredBuilder: { state: "standby" },
+          lastHeartbeatAt: now - GATEWAY_UNREACHABLE_AFTER_MS - 1,
+        }),
+      },
+      standbyRoot("standby-s-3a1b2c3d", "running"),
+      now,
+    );
+    expect(silent.standby).toMatchObject({ ready: false });
+    expect(ready.disposableRuntime).toBeNull();
+    expect(projectDisposableFleetCapacity([ready, booting, retired])).toMatchObject({
+      disposableInstances: 0,
+      byTier: {},
+      standbyInstances: 2,
+    });
+  });
+
+  it("projects no standby for an owned Builder", () => {
+    const summary = projectGatewaySummary(
+      { id: "run-alice", data: () => ({ gatewayId: "run-alice", status: "ready" }) },
+      { gatewayId: "run-alice", gatewayClass: "builder", ownerUid: "uid-alice", builderSlug: "alice" },
+      Date.now(),
+    );
+    expect(summary.standby).toBeNull();
   });
 });
 
@@ -1042,6 +1103,7 @@ describe("fleet gateway projection", () => {
       failedBuilders: 0,
       staleActivations: 0,
       oldestActivationAgeMs: null,
+      standbyInstances: 0,
     });
   });
 

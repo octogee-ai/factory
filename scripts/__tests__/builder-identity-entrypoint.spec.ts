@@ -9,6 +9,7 @@ import { readBuilderClaim, writeBuilderClaim, builderClaimFromIdentity } from "@
 import type { BuilderIdentity } from "../../shared/types/builder-identity.js";
 import {
   BUILDER_IDENTITY_FATAL_EXIT,
+  BUILDER_IDENTITY_STANDBY_EXIT,
   resolveBuilderIdentityBoot,
   runBuilderIdentityEntrypoint,
 } from "../entrypoints/builder-identity.js";
@@ -77,16 +78,32 @@ describe("Builder identity pre-boot", () => {
     expect(readBuilderClaim(dir, "gw-alice")?.ownerUid).toBe("uid-mallory");
   });
 
-  it.each<[string, BuilderIdentity]>([
-    ["retired", { gatewayId: "gw-alice", state: "unavailable", reason: "retired" }],
-    ["standby", { gatewayId: "gw-alice", state: "standby" }],
-  ])("is fatal for a %s gateway and writes no claim", async (_label, identity) => {
+  it("is fatal for a retired gateway and writes no claim", async () => {
     const dir = openclawDir();
-    const { result, log } = boot(dir, async () => identity);
+    const { result, log } = boot(dir, async () => ({ gatewayId: "gw-alice", state: "unavailable", reason: "retired" }));
 
     await expect(result).resolves.toEqual({ exitCode: BUILDER_IDENTITY_FATAL_EXIT });
     expect(log).toHaveBeenCalled();
     expect(readBuilderClaim(dir, "gw-alice")).toBeNull();
+  });
+
+  it("boots an unclaimed standby without writing a claim", async () => {
+    const dir = openclawDir();
+    const { result, log } = boot(dir, async () => ({ gatewayId: "gw-alice", state: "standby" }));
+
+    await expect(result).resolves.toEqual({ exitCode: BUILDER_IDENTITY_STANDBY_EXIT });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("standby"));
+    expect(readBuilderClaim(dir, "gw-alice")).toBeNull();
+  });
+
+  it("is fatal when the broker reports a standby for a pod that already holds a claim", async () => {
+    const dir = openclawDir();
+    writeBuilderClaim(dir, builderClaimFromIdentity(CLAIMED, 1));
+    const { result, log } = boot(dir, async () => ({ gatewayId: "gw-alice", state: "standby" }));
+
+    await expect(result).resolves.toEqual({ exitCode: BUILDER_IDENTITY_FATAL_EXIT });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("already claimed"));
+    expect(readBuilderClaim(dir, "gw-alice")?.ownerUid).toBe("uid-alice");
   });
 
   it("asks the entrypoint to retry when the broker is unreachable", async () => {

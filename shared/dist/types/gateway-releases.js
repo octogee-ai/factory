@@ -240,6 +240,7 @@ export const GATEWAY_MUTABLE_FIELDS = [
     "builderSlug",
     "modelBrokerLimits",
     "allocation",
+    "standby",
     "desiredStatus",
     "liveRelease",
     "retireAfter",

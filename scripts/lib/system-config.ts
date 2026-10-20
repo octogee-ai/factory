@@ -840,6 +840,31 @@ export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: s
   return before !== after || defaultsChanged;
 }
 
+export function writeStandbySystemConfig(opts: {
+  openclawDir?: string;
+  env?: NodeJS.ProcessEnv;
+  templatePath?: string;
+} = {}): string {
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const env = opts.env ?? process.env;
+  const repoDir = systemConfigDir(openclawDir);
+  if (fs.existsSync(path.join(repoDir, ".git"))) {
+    throw new Error(`[system_config] standby Builder ${repoDir} already holds a durable checkout`);
+  }
+  const config = JSON.parse(seedConfigContents(opts.templatePath ?? defaultSystemConfigTemplatePath(env), env)) as UnknownRecord;
+  const agents = asRecord(config.agents) ?? {};
+  config.agents = agents;
+  const { id: _anchorId, ...anchorSeed } = buildSafeDefaultAgent();
+  writeRosterEntries(agents, readRosterEntries(agents).form, [{ id: SAFE_DEFAULT_AGENT_ID, entry: anchorSeed }]);
+  agents.ownership = "explicit";
+  const defaults = asRecord(agents.defaults) ?? {};
+  agents.defaults = { ...defaults, authInheritance: { agentId: SAFE_DEFAULT_AGENT_ID } };
+  fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
+  const configPath = systemConfigPath(openclawDir);
+  atomicWrite(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return configPath;
+}
+
 function ensureBuilderRosterAtPath(configPath: string, slug: string, log: (msg: string) => void): void {
   const contents = fs.readFileSync(configPath, "utf8");
   const value = readTrackedConfigObject(contents);

@@ -227,6 +227,7 @@ export interface ConvergenceHooks {
 export { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 import { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { configuredBuilderReport } from "./builder-standby-boot.js";
 
 export interface SettleConvergenceInput {
   now: number;
@@ -653,6 +654,7 @@ export function buildFleetStateResponse(input: {
   startedAt: number;
   customers: string[];
   migratingIn: string[];
+  configuredBuilder: FleetStateResponse["configuredBuilder"];
 }): FleetStateResponse {
   return {
     status: input.status,
@@ -663,6 +665,7 @@ export function buildFleetStateResponse(input: {
     startedAt: input.startedAt,
     customers: input.customers,
     migratingIn: input.migratingIn,
+    configuredBuilder: input.configuredBuilder,
   };
 }
 
@@ -2924,6 +2927,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       startedAt: PROCESS_STARTED_AT_MS,
       customers: getMountObservedSlugs(adapter),
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
+      configuredBuilder: configuredBuilderReport(),
     }),
   }));
 

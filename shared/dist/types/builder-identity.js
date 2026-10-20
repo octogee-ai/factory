@@ -1,6 +1,7 @@
 import { isValidGatewayId } from "./glm.js";
 import { isValidUsername } from "./identity.js";
 export const BUILDER_IDENTITY_ROUTE = "/internal/fleet/builder-identity";
+export const BUILDER_STANDBY_BOOT_ENV = "OCTOGEE_BUILDER_STANDBY_BOOT";
 const UNAVAILABLE_REASONS = new Set(["retired", "retiring", "not-builder"]);
 const OWNER_UID_MAX_LENGTH = 128;
 function isRecord(value) {

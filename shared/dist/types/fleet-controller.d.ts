@@ -67,7 +67,15 @@ export interface FleetStateResponse {
     startedAt: number;
     customers: string[];
     migratingIn: string[];
+    configuredBuilder: ConfiguredBuilderReport | null;
 }
+export type ConfiguredBuilderReport = {
+    state: "standby";
+} | {
+    state: "claimed";
+    generation: number | null;
+};
+export declare function parseConfiguredBuilderReport(value: unknown): ConfiguredBuilderReport | null;
 export declare const FLEET_STATE_PATH = "/fleet-state";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL: "openclaw-dashboard-bridge";
 export declare const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION: 1;

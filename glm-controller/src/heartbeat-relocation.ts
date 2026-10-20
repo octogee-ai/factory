@@ -1,5 +1,5 @@
 import { isGatewayDesiredDoc } from "@octogee/shared/types/gateway-releases";
-import { GATEWAY_HEARTBEAT_INTERVAL_MS } from "@octogee/shared/types/fleet-controller";
+import { GATEWAY_HEARTBEAT_INTERVAL_MS, type ConfiguredBuilderReport } from "@octogee/shared/types/fleet-controller";
 
 export const HEARTBEAT_FIELD = "heartbeat";
 
@@ -30,6 +30,7 @@ export interface PollerHeartbeatRecord {
   startedAt?: number;
   version?: string;
   openclawVersion?: string;
+  configuredBuilder?: ConfiguredBuilderReport | null;
 }
 
 // glmGateways/{id} merge payload for the poller's live telemetry.
@@ -47,6 +48,7 @@ export function revisionHeartbeatMerge(
   if (typeof record.openclawVersion === "string") {
     heartbeat.openclawVersion = record.openclawVersion;
   }
+  if (record.configuredBuilder !== undefined) heartbeat.configuredBuilder = record.configuredBuilder;
   return { [HEARTBEAT_FIELD]: heartbeat };
 }
 

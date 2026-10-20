@@ -366,6 +366,7 @@ import {
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
 import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
+import { parseBuilderStandbyPoolConfig, startBuilderStandbyPool } from "./builder-standby-pool.js";
 import { FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
@@ -399,6 +400,8 @@ const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const BUILDER_VM_SPEC = process.env.GATEWAY_VM_SPEC_JSON ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
 const BUILDER_VM_WARM_POOL = parseVmWarmPoolConfig(process.env);
+const BUILDER_STANDBY_POOL = parseBuilderStandbyPoolConfig(process.env);
+const BUILDER_STANDBY_POOL_RECONCILE_MS = 30_000;
 const VM_WARM_POOL_RECONCILE_MS = 60_000;
 const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker", "octogee-npm-cache-proxy"] as const;
 const vmGatewayRuntimeRef: { current?: VmGatewayRuntime } = {};
@@ -2824,6 +2827,21 @@ async function main(): Promise<void> {
       now: () => Date.now(),
       recordMaxCapacity: recordSharedGatewayMaxCapacity,
     }, SHARED_POOL_SCALER_MS),
+  );
+  log(
+    `[glm-controller] builder standby pool size=${BUILDER_STANDBY_POOL.size} maxAgeMs=${BUILDER_STANDBY_POOL.maxAgeMs}`,
+  );
+  stoppers.push(
+    startBuilderStandbyPool({
+      db,
+      config: BUILDER_STANDBY_POOL,
+      platformArtifact,
+      namespace: NAMESPACE,
+      controllerStartedAt,
+      ensureAuthSecret: deps.ensureGatewayAuthSecret,
+      log,
+      now: () => Date.now(),
+    }, BUILDER_STANDBY_POOL_RECONCILE_MS),
   );
   if (BUILDER_VM_SPEC) {
     const builderImage = platformArtifact.profileImages?.builder;

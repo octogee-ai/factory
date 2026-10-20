@@ -20,6 +20,8 @@
  * liveness signal (it only writes when /fleet-state responds).
 */
 
+import { parseConfiguredBuilderReport, type ConfiguredBuilderReport } from "@octogee/shared/types/fleet-controller";
+
 export const EVICT_AFTER_STREAK = 2;
 
 export interface GatewayFleetState {
@@ -33,11 +35,13 @@ export interface GatewayFleetState {
   /** Slugs mid-migration-import (coach-wired here but cutover hasn't moved their assignment
    *  yet). Skipped as eviction candidates so a slow import→cutover isn't drained. */
   migratingIn?: string[];
+  configuredBuilder?: ConfiguredBuilderReport | null;
 }
 
 export interface GatewayHeartbeatRecord {
   status: string;
   mountedCustomers: string[];
+  configuredBuilder?: ConfiguredBuilderReport | null;
   version?: string;
   openclawVersion?: string;
   /** Live pod-boot time (epoch ms). */
@@ -108,6 +112,7 @@ export function parseFleetStateResponse(json: unknown): GatewayFleetState | null
     version?: unknown;
     openclawVersion?: unknown;
     migratingIn?: unknown;
+    configuredBuilder?: unknown;
   };
   if (typeof body.status !== "string" || body.status.length === 0) return null;
   if (!Array.isArray(body.customers)) return null;
@@ -122,6 +127,9 @@ export function parseFleetStateResponse(json: unknown): GatewayFleetState | null
     ...(typeof body.startedAt === "number" ? { startedAt: body.startedAt } : {}),
     ...(Array.isArray(body.migratingIn)
       ? { migratingIn: body.migratingIn.filter(isString) }
+      : {}),
+    ...("configuredBuilder" in body
+      ? { configuredBuilder: parseConfiguredBuilderReport(body.configuredBuilder) }
       : {}),
   };
 }
@@ -222,6 +230,7 @@ export async function pollGatewayHeartbeatsOnce(
         record.openclawVersion = state.openclawVersion;
       }
       if (typeof state.startedAt === "number") record.startedAt = state.startedAt;
+      if (state.configuredBuilder !== undefined) record.configuredBuilder = state.configuredBuilder;
       await deps.writeHeartbeat(gatewayId, record);
       if (deps.ownsEviction && !(await deps.ownsEviction(gatewayId))) {
         streaks.delete(gatewayId);

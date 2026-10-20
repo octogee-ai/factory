@@ -132,6 +132,16 @@ describe("native workspace identity initialization", () => {
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 
+  it("initializes only the service identities on an unclaimed standby boot", async () => {
+    const { env, profiles, args } = fixture();
+    fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
+    const standbyEnv = { ...env, OCTOGEE_BUILDER_STANDBY_BOOT: "1" };
+    await bootstrapWorkspaceIdentities({ ...args, env: standbyEnv });
+    expect(profiles.map(profile => profile.role)).toEqual(["service", "service"]);
+    expect(fs.existsSync(path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"))).toBe(false);
+    expect(workspaceIdentityReady(standbyEnv)).toBe(true);
+  });
+
   it("forces a preexisting owner to admin and does nothing on shared gateways", async () => {
     const { env, profiles, args, request } = fixture();
     profiles.push({ id: "existing-owner", emails: ["alice"], role: "custom" });

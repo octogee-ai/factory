@@ -7,10 +7,10 @@ import { GithubCliAuthError, type GithubCliAuthResult } from "../lib/github-cli-
 const repoRoot = path.resolve(__dirname, "../..");
 
 describe("Builder GitHub credentials", () => {
-  it("starts supervised GitHub auth convergence only on Builder gateways", () => {
+  it("starts supervised GitHub auth convergence only on claimed Builder gateways", () => {
     const entrypoint = readFileSync(path.join(repoRoot, "infra/gateway/entrypoint.sh"), "utf8");
 
-    expect(entrypoint).toMatch(/if \[ "\$GATEWAY_CLASS_EFFECTIVE" = "builder" \]; then\n {2}supervise_runner github-cli-auth /);
+    expect(entrypoint).toMatch(/if \[ "\$GATEWAY_CLASS_EFFECTIVE" = "builder" \]; then\n {2}if \[ "\$BUILDER_CLAIMED" = 1 \]; then\n {4}supervise_runner github-cli-auth /);
     expect(entrypoint.indexOf("github-cli-auth-hydrate.ts")).toBeLessThan(entrypoint.indexOf("supervise_runner surge-openclaw-supervisor"));
   });
 

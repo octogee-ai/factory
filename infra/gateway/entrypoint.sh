@@ -97,6 +97,7 @@ chmod 600 "$MATTERMOST_ACCOUNT_SECRETS"
 export GATEWAY_ID="${GATEWAY_ID:?GATEWAY_ID env var is required (set via Helm values.env.gatewayId)}"
 
 # ── Builder identity ───────────────────────────────────────────────────────
+unset OCTOGEE_BUILDER_STANDBY_BOOT
 BUILDER_SLUG=""
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   log "Pre-boot: reading Builder identity for ${GATEWAY_ID}..."
@@ -106,6 +107,10 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
     else
       identity_status=$?
     fi
+    if [ "$identity_status" -eq 3 ]; then
+      export OCTOGEE_BUILDER_STANDBY_BOOT=1
+      break
+    fi
     if [ "$identity_status" -eq 2 ]; then
       log "FATAL: Builder identity for ${GATEWAY_ID} is unavailable or conflicts with this pod's claim"
       exit 2
@@ -113,16 +118,24 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
     log "Pre-boot: Builder identity unavailable; retrying in 5s..."
     sleep 5
   done
-  log "Pre-boot: Builder identity claimed for ${BUILDER_SLUG}"
+  if [ "${OCTOGEE_BUILDER_STANDBY_BOOT:-0}" = 1 ]; then
+    log "Pre-boot: ${GATEWAY_ID} is an unclaimed standby Builder; booting OpenClaw with no customer"
+  else
+    log "Pre-boot: Builder identity claimed for ${BUILDER_SLUG}"
+  fi
+fi
+BUILDER_CLAIMED=0
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ "${OCTOGEE_BUILDER_STANDBY_BOOT:-0}" != 1 ]; then
+  BUILDER_CLAIMED=1
 fi
 
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+if [ "$BUILDER_CLAIMED" = 1 ]; then
   log "Pre-boot: removing empty Builder project placeholders..."
   "$TSX" /octogee/scripts/entrypoints/clean-builder-project-placeholders.ts
 fi
 
 GIT_SSH_HOST="${GIT_SSH_HOST:-octogee-gitea-ssh.octogee.svc.cluster.local}"
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+if [ "$BUILDER_CLAIMED" = 1 ]; then
   case "${BUILDER_SLUG}" in
     ""|*[!a-z0-9-]*) log "FATAL: a valid Builder slug is required for Builder SSH"; exit 1 ;;
   esac
@@ -137,7 +150,7 @@ Host gitea
   UserKnownHostsFile /dev/null
   LogLevel ERROR
 SSHEOF
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+if [ "$BUILDER_CLAIMED" = 1 ]; then
   cat >> "$HOME/.ssh/config" <<SSHEOF
   IdentityFile ${OPENCLAW_DIR}/customer-keys/${BUILDER_SLUG}/id_ed25519
   IdentitiesOnly yes
@@ -195,7 +208,10 @@ fi
 # Builder gateways run the tracked Gitea checkout as OpenClaw's active
 # regular config file. Restore includes the idempotent schema migration
 # (roll-forward only; reconcileSystemConfigSchema).
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+if [ "${OCTOGEE_BUILDER_STANDBY_BOOT:-0}" = 1 ]; then
+  log "Pre-boot: writing the standby Builder config (anchor agent only, no durable checkout)..."
+  "$TSX" /octogee/scripts/entrypoints/standby-builder-config.ts
+elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: restoring system_config for builder slug ${BUILDER_SLUG}..."
   until "$TSX" /octogee/scripts/entrypoints/system-config-restore.ts; do
     log "Pre-boot: system_config restore unavailable; retrying in 5s..."
@@ -235,12 +251,14 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     RUNTIME_ROOT_QUARANTINE=""
     for runtime_name in npm extensions; do
       runtime_root="$OPENCLAW_CONFIG_DIR/$runtime_name"
-      if [ -n "$(git -C "$OPENCLAW_CONFIG_DIR" ls-files -- "$runtime_name" "$runtime_name/**")" ]; then
-        log "FATAL: tracked system_config path conflicts with OpenClaw runtime root: ${runtime_name}"
-        exit 1
+      if [ "$BUILDER_CLAIMED" = 1 ]; then
+        if [ -n "$(git -C "$OPENCLAW_CONFIG_DIR" ls-files -- "$runtime_name" "$runtime_name/**")" ]; then
+          log "FATAL: tracked system_config path conflicts with OpenClaw runtime root: ${runtime_name}"
+          exit 1
+        fi
+        grep -qxF "/$runtime_name" "$OPENCLAW_CONFIG_DIR/.git/info/exclude" 2>/dev/null || \
+          printf '/%s\n' "$runtime_name" >> "$OPENCLAW_CONFIG_DIR/.git/info/exclude"
       fi
-      grep -qxF "/$runtime_name" "$OPENCLAW_CONFIG_DIR/.git/info/exclude" 2>/dev/null || \
-        printf '/%s\n' "$runtime_name" >> "$OPENCLAW_CONFIG_DIR/.git/info/exclude"
       if [ -L "$runtime_root" ]; then
         rm "$runtime_root"
       elif [ -e "$runtime_root" ]; then
@@ -395,10 +413,14 @@ fi
 # entrypoint must not gate the auxiliary runners on OpenClaw health — the fleet
 # controller is what hydrates and releases a held pod.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  supervise_runner github-cli-auth 5000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
+  if [ "$BUILDER_CLAIMED" = 1 ]; then
+    supervise_runner github-cli-auth 5000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
+  fi
   log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
-  supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
+  if [ "$BUILDER_CLAIMED" = 1 ]; then
+    supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
+  fi
 else
   "$TSX" /octogee/scripts/entrypoints/prepare-openclaw-sqlite-journals.ts
   "$TSX" /octogee/scripts/entrypoints/openclaw-boot-sentinel.ts before-start
@@ -430,13 +452,13 @@ fi
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
-if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+if [ "$BUILDER_CLAIMED" = 1 ]; then
   supervise_runner builder-toolchain-hydrator 30000 "$TSX" /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts
 fi
 log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
 log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
 supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
-if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
+if [ "$BUILDER_CLAIMED" = 1 ]; then
   supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
 fi
 

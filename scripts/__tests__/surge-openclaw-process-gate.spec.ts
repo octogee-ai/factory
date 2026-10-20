@@ -356,6 +356,41 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); }
   });
 
+  it("self-releases readiness on a standby boot and starts OpenClaw permitted", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const children: FakeChild[] = [];
+    const log = vi.fn();
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: "standby-pod", log, socketPath, standbyBoot: true,
+      prepareTarget: async () => undefined, prepareDatabaseJournals: async () => undefined,
+      spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+      probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+    });
+    try {
+      await vi.waitFor(() => expect(children).toHaveLength(1));
+      await expect(createSurgeReadinessGate(openclawDir, "standby-pod").released()).resolves.toBe(true);
+      await vi.waitFor(() => expect(supervisor.state()).resolves.toMatchObject({ role: "normal", mode: "permitted", phase: "running" }));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("standby"));
+    } finally { await supervisor.stop(); }
+  });
+
+  it("keeps a non-standby Builder boot held until a migration releases it", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const spawnOpenClaw = vi.fn(() => new FakeChild());
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: "owned-pod", log: () => undefined, socketPath,
+      prepareTarget: async () => undefined, prepareDatabaseJournals: async () => undefined,
+      spawnOpenClaw, probeHealthz: async () => false, healthTimeoutMs: 100,
+    });
+    try {
+      await expect(supervisor.state()).resolves.toMatchObject({ mode: "held" });
+      await expect(createSurgeReadinessGate(openclawDir, "owned-pod").released()).resolves.toBe(false);
+      expect(spawnOpenClaw).not.toHaveBeenCalled();
+    } finally { await supervisor.stop(); }
+  });
+
   it("keeps OpenClaw held when journal integrity preparation fails", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);

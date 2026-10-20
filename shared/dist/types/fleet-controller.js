@@ -27,6 +27,19 @@ export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_IMPORT_FINISH_TIMEOUT_MS +
     MIGRATION_VERIFY_TIMEOUT_MS +
     60_000;
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+export function parseConfiguredBuilderReport(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const report = value;
+    if (report.state === "standby" && Object.keys(report).length === 1)
+        return { state: "standby" };
+    if (report.state !== "claimed")
+        return null;
+    const generation = report.generation;
+    if (generation !== null && !(Number.isSafeInteger(generation) && generation > 0))
+        return null;
+    return { state: "claimed", generation: generation };
+}
 export const FLEET_STATE_PATH = "/fleet-state";
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge";
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION = 1;

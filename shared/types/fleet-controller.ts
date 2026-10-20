@@ -122,6 +122,21 @@ export interface FleetStateResponse {
   startedAt: number;
   customers: string[];
   migratingIn: string[];
+  configuredBuilder: ConfiguredBuilderReport | null;
+}
+
+export type ConfiguredBuilderReport =
+  | { state: "standby" }
+  | { state: "claimed"; generation: number | null };
+
+export function parseConfiguredBuilderReport(value: unknown): ConfiguredBuilderReport | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const report = value as { state?: unknown; generation?: unknown };
+  if (report.state === "standby" && Object.keys(report).length === 1) return { state: "standby" };
+  if (report.state !== "claimed") return null;
+  const generation = report.generation;
+  if (generation !== null && !(Number.isSafeInteger(generation) && (generation as number) > 0)) return null;
+  return { state: "claimed", generation: generation as number | null };
 }
 
 export const FLEET_STATE_PATH = "/fleet-state";

@@ -3,16 +3,28 @@ import {
   BuilderClaimError,
   DEFAULT_OPENCLAW_DIR,
   builderClaimFromIdentity,
+  readBuilderClaim,
   writeBuilderClaim,
 } from "@octogee/shared/server/builder-claim";
 import type { BuilderIdentity } from "../../shared/types/builder-identity.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 
 export const BUILDER_IDENTITY_FATAL_EXIT = 2;
+export const BUILDER_IDENTITY_STANDBY_EXIT = 3;
 
 export type BuilderIdentityBootResult =
   | { exitCode: 0; builderSlug: string }
-  | { exitCode: 1 | typeof BUILDER_IDENTITY_FATAL_EXIT };
+  | { exitCode: 1 | typeof BUILDER_IDENTITY_FATAL_EXIT | typeof BUILDER_IDENTITY_STANDBY_EXIT };
+
+function standbyBoot(openclawDir: string, gatewayId: string, log: (message: string) => void): BuilderIdentityBootResult {
+  const existing = readBuilderClaim(openclawDir, gatewayId);
+  if (existing) {
+    log(`[builder-identity] FATAL: gateway ${gatewayId} is a standby but this pod already claimed it for ${existing.builderSlug}`);
+    return { exitCode: BUILDER_IDENTITY_FATAL_EXIT };
+  }
+  log(`[builder-identity] gateway ${gatewayId} is an unclaimed standby; booting without a customer`);
+  return { exitCode: BUILDER_IDENTITY_STANDBY_EXIT };
+}
 
 export async function resolveBuilderIdentityBoot(input: {
   env: NodeJS.ProcessEnv;
@@ -32,16 +44,14 @@ export async function resolveBuilderIdentityBoot(input: {
     input.log(`[builder-identity] broker read failed: ${error instanceof Error ? error.message : String(error)}`);
     return { exitCode: 1 };
   }
-  if (identity.state !== "claimed") {
-    const detail = identity.state === "unavailable" ? `unavailable (${identity.reason})` : identity.state;
-    input.log(`[builder-identity] FATAL: gateway ${gatewayId} has no claimed Builder: ${detail}`);
+  const openclawDir = input.env.OPENCLAW_DIR?.trim() || DEFAULT_OPENCLAW_DIR;
+  if (identity.state === "unavailable") {
+    input.log(`[builder-identity] FATAL: gateway ${gatewayId} has no claimed Builder: unavailable (${identity.reason})`);
     return { exitCode: BUILDER_IDENTITY_FATAL_EXIT };
   }
   try {
-    const claim = writeBuilderClaim(
-      input.env.OPENCLAW_DIR?.trim() || DEFAULT_OPENCLAW_DIR,
-      builderClaimFromIdentity(identity, input.now()),
-    );
+    if (identity.state === "standby") return standbyBoot(openclawDir, gatewayId, input.log);
+    const claim = writeBuilderClaim(openclawDir, builderClaimFromIdentity(identity, input.now()));
     return { exitCode: 0, builderSlug: claim.builderSlug };
   } catch (error) {
     if (!(error instanceof BuilderClaimError)) throw error;

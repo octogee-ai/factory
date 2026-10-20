@@ -17,6 +17,7 @@ import {
   type SurgeOpenClawProcessSupervisorRequest,
 } from "../lib/surge-openclaw-process-gate.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
+import { isStandbyBuilderBoot } from "../lib/builder-standby-boot.js";
 import { prepareOpenClawSqliteJournals } from "../lib/openclaw-sqlite-journal-preflight.js";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { inspectConfiguredBuilderAgentStores } from "../lib/openclaw-builder-store-preflight.js";
@@ -45,6 +46,7 @@ export interface StartSurgeOpenClawSupervisorOptions {
   healthTimeoutMs?: number;
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
+  standbyBoot?: boolean;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
   prepareDatabaseJournals?: () => Promise<void>;
@@ -513,6 +515,14 @@ function defaultBootWatcher(): OpenClawBootWatcher {
   return { beforeStart: async () => {}, healthy: async () => {} };
 }
 
+async function selfReleaseStandbyReadiness(
+  readiness: Pick<ReturnType<typeof createSurgeReadinessGate>, "release">,
+  opts: Pick<StartSurgeOpenClawSupervisorOptions, "podUid" | "log">,
+): Promise<void> {
+  await readiness.release({ targetPodUid: opts.podUid });
+  opts.log("[surge-openclaw] standby Builder boot: no migration owns this pod, so readiness is self-released");
+}
+
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
@@ -674,6 +684,7 @@ export async function startSurgeOpenClawSupervisor(
   const settle = (): Promise<SurgeOpenClawProcessGateState> =>
     gate.settle({ podUid: opts.podUid });
 
+  if (opts.standbyBoot) await selfReleaseStandbyReadiness(readiness, opts);
   const readinessReleased = opts.readinessReleased ?? (() => readiness.released());
   const initial = await gate.ensure({
     podUid: opts.podUid,
@@ -773,6 +784,7 @@ async function main(): Promise<void> {
     podUid,
     log,
     bootWatcher,
+    standbyBoot: isStandbyBuilderBoot(),
     onUnexpectedChildExit: () => {
       runtimeLogger.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");
       process.exit(1);

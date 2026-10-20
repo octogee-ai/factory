@@ -17,6 +17,7 @@ export interface TestFleetGateway {
   gatewayId: string;
   gatewayClass: "shared" | "builder";
   imageProfile: "standard" | "builder";
+  standby: boolean;
   desiredStatus: "running" | "paused" | "draining" | "retired";
   latestRelease: number;
   desiredRelease: number;
@@ -50,7 +51,7 @@ export interface TestFleetTargetResult {
   desiredStatus: TestFleetGateway["desiredStatus"];
   desiredRelease: number;
   liveRelease: number | null;
-  status: "live" | "paused-desired-only" | "retired-skipped" | "shared-retired" | "waiting" | "failed";
+  status: "live" | "paused-desired-only" | "retired-skipped" | "standby-skipped" | "shared-retired" | "waiting" | "failed";
   reasons: string[];
   expectedImages: Record<string, string>;
   observed: TestFleetLiveObservation | null;
@@ -187,6 +188,7 @@ function targetAssessment(gateway: TestFleetGateway, options: TestFleetDeployOpt
     desiredRelease: gateway.desiredRelease, liveRelease: gateway.liveRelease, status: "waiting", reasons: [],
     expectedImages: expectedTestFleetImages(gateway, options.payload), observed: gateway.live,
   };
+  if (gateway.standby) return { ...result, status: "standby-skipped" };
   if (gateway.desiredStatus === "retired") {
     result.reasons = gateway.gatewayClass === "shared" ? retiredSharedProblems(gateway, timing) : [];
     if (result.reasons.length === 0) result.status = gateway.gatewayClass === "shared" ? "shared-retired" : "retired-skipped";
@@ -223,7 +225,7 @@ async function deployMissingBuilders(snapshot: TestFleetSnapshot, options: TestF
   const { attempts, failures, deferred } = state;
   deferred.clear();
   for (const gateway of snapshot.gateways) {
-    if (gateway.gatewayClass !== "builder" || gateway.desiredStatus === "retired" || matchesPayload(gateway.latestPayload, options.payload) || attempts.has(gateway.gatewayId) || failures.has(gateway.gatewayId)) continue;
+    if (gateway.gatewayClass !== "builder" || gateway.standby || gateway.desiredStatus === "retired" || matchesPayload(gateway.latestPayload, options.payload) || attempts.has(gateway.gatewayId) || failures.has(gateway.gatewayId)) continue;
     try { attempts.set(gateway.gatewayId, await deps.deploy(gateway)); }
     catch (error) {
       if (error instanceof TestFleetDeploymentDeferredError) deferred.set(gateway.gatewayId, error.message);
@@ -242,7 +244,7 @@ function snapshotProblems(snapshot: TestFleetSnapshot): string[] {
 }
 
 function assessMissingTarget(previous: TestFleetTargetResult, snapshot: TestFleetSnapshot, timing: ObservationTiming): TestFleetTargetResult {
-  if (previous.status === "shared-retired" || previous.status === "retired-skipped") return previous;
+  if (previous.status === "shared-retired" || previous.status === "retired-skipped" || previous.status === "standby-skipped") return previous;
   const retirement = snapshot.retirements.find((proof) => proof.gatewayId === previous.gatewayId && proof.completedAt >= timing.startedAt && proof.completedAt <= timing.now);
   if (!retirement) return { ...previous, status: "failed", reasons: ["gateway disappeared before retirement was verified"] };
   if (previous.gatewayClass === "builder") return { ...previous, desiredStatus: "retired", status: "retired-skipped", reasons: [], observed: null, retirementOperationId: retirement.operationId };
@@ -316,6 +318,7 @@ export function formatTestFleetSummary(report: TestFleetDeployReport): string {
     "| Gateway | Status | Desired release | Live release | Operation |", "| --- | --- | --- | --- | --- |",
     ...rows.map((row) => `| ${row} |`), "",
     `Showing ${targets.length} of ${report.targets.length} targets. Full digest observations and failure reasons are in the job log.`,
-    "Paused Builders report desired release only; their computers were not started.", "",
+    "Paused Builders report desired release only; their computers were not started.",
+    "Standby Builders are skipped: Cowboy retires and re-mints them on the platform release.", "",
   ].join("\n");
 }

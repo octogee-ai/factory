@@ -49,6 +49,17 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
     });
   });
 
+  it("writes the configured Builder report, including an explicit null, only when the poll carried one", () => {
+    expect(revisionHeartbeatMerge(
+      { status: "ready", mountedCustomers: [], configuredBuilder: { state: "standby" } }, 1000,
+    ).heartbeat.configuredBuilder).toEqual({ state: "standby" });
+    expect(revisionHeartbeatMerge(
+      { status: "ready", mountedCustomers: [], configuredBuilder: null }, 1000,
+    ).heartbeat).toHaveProperty("configuredBuilder", null);
+    expect(revisionHeartbeatMerge({ status: "ready", mountedCustomers: [] }, 1000).heartbeat)
+      .not.toHaveProperty("configuredBuilder");
+  });
+
   it("leaves the separately published config marker untouched", () => {
     const timestamp = { toMillis: () => 1000 };
     const controlProtocol = { protocol: "durable-openclaw-config" as const, version: 2 as const };

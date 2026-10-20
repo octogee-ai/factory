@@ -168,6 +168,32 @@ describe("gateway mutable config", () => {
     expect(isGatewayMutableConfig(validConfig({ ownerUid: null, builderSlug: "owner" }))).toBe(false);
   });
 
+  it("accepts an unowned Builder only as a Hobby standby with no allocation", () => {
+    const standby = { kind: "hobby", schemaVersion: 1, mintedAt: 1_700_000_000_000 } as const;
+    const unowned = { ownerUid: null, builderSlug: null, allocation: null };
+    expect(isGatewayMutableConfig(validConfig({ ...unowned, sizingTier: "s", standby }))).toBe(true);
+    expect(isGatewayMutableConfig(validConfig({ ...unowned, standby: null }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig(unowned))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({ standby }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({ ownerUid: null, builderSlug: "owner", allocation: null, standby }))).toBe(false);
+    expect(isGatewayMutableConfig(validConfig({
+      ...unowned,
+      standby,
+      allocation: { kind: "disposable-builder", schemaVersion: 1, leaseId: "lease-one", generation: 1, claimedByUid: "uid-owner" },
+    }))).toBe(false);
+    for (const malformed of [
+      { ...standby, kind: "pro" },
+      { ...standby, schemaVersion: 2 },
+      { ...standby, mintedAt: 0 },
+      { ...standby, ownerUid: "uid-owner" },
+    ]) {
+      expect(isGatewayMutableConfig(validConfig({ ...unowned, standby: malformed as never }))).toBe(false);
+    }
+    expect(isGatewayMutableConfig(validConfig({
+      profile: null, gatewayClass: "shared", imageProfile: "standard", ...unowned, standby,
+    }))).toBe(false);
+  });
+
   it("requires disposable allocations to carry the matching owner and lease generation", () => {
     expect(isGatewayMutableConfig(validConfig({
       allocation: {

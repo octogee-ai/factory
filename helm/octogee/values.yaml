@@ -433,6 +433,9 @@ serviceAccount:
 # pods. Per-env override in values.test.yaml swaps to the env's GSA.
 glm-controller:
   gcpServiceAccount: "octogee-glm-controller@octogee.iam.gserviceaccount.com"
+  # PROD keeps no standby until the Builder balloon is removed.
+  builderStandbyPool:
+    size: 0
   kmsKeyName: ""
   # Gateway-pod consumer GSA for new per-gateway auth-token secrets (NOT Cowboy's).
   gatewayServiceAccount: "octogee-gateway@octogee.iam.gserviceaccount.com"
