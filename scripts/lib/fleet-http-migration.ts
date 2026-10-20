@@ -23,6 +23,7 @@ import type { Request, Response, RequestHandler } from "express";
 import { findUnsafeCustomerGitMetadataEntry } from "@octogee/core/git-metadata";
 import { spawn, type ChildProcess } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { readPostgresAgentAnchor, queryAgentStore } from "@octogee/core/agent-postgres";
 import { CODEX_SNAPSHOT_EXCLUDE_ARG, CODEX_STORE_EXCLUDE_ARGS, CODEX_TEMP_EXCLUDE_ARG, discardCodexStoreSnapshots, installCodexStoreSnapshots, isCodexDatabase, omitRawCodexDatabases, omitStagedCodexTemporaryFiles, prepareCodexStoreSnapshots } from "./codex-store-snapshot.js";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -109,6 +110,7 @@ import { withCustomerRemoval } from "./customer-removal-exclusion.js";
 import {
   MIGRATION_ACTIVATION_DIR,
   writeActivationManifest,
+  readActivationManifest,
 } from "./migration-activation-manifest.js";
 import {
   disableSystemConfigWatch,
@@ -971,15 +973,24 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
 async function maybeMaterializeActivationManifest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody & { includeActivationManifest?: boolean },
-  options: { signal: AbortSignal; timeoutMs: number },
+  options: { signal: AbortSignal; timeoutMs: number; preserveForRollback?: boolean },
 ): Promise<{ source: { cwd: string; path: string } | null; cleanup: () => Promise<void> }> {
-  if (body.includeActivationManifest !== true) {
+  if (body.includeActivationManifest !== true && !options.preserveForRollback) {
     return { source: null, cleanup: async () => undefined };
   }
   if (!deps.adapter.exportOpenClawActivationManifest) {
     throw new Error("source gateway cannot export an OpenClaw activation manifest");
   }
-  const manifest = await deps.adapter.exportOpenClawActivationManifest(body.slug, options);
+  let manifest;
+  if (options.preserveForRollback) {
+    manifest = await readActivationManifest(OPENCLAW_DIR, body.slug).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+  }
+  manifest ??= await deps.adapter.exportOpenClawActivationManifest(body.slug, options);
+  if (options.preserveForRollback) await writeActivationManifest(OPENCLAW_DIR, manifest);
+  if (body.includeActivationManifest !== true) return { source: null, cleanup: async () => undefined };
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
   try {
     const source = await writeActivationManifest(tmpDir, manifest);
@@ -1790,23 +1801,30 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           .json({ error: "no export paths", message: `nothing to push for slug=${body.slug}` });
         return;
       }
+      const postgresHandoff = mode === "final" && (await findPortableAgentStores(sources)).some(store =>
+        readPostgresAgentAnchor(path.join(store.sourceAgentDir, AGENT_STORE_BASENAME)) !== null);
+      const manifestRequest = configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER ? { ...body, includeActivationManifest: false } : body;
+      const activationManifest = mode === "keys"
+        ? { source: null, cleanup: async () => {} }
+        : await maybeMaterializeActivationManifest(deps, manifestRequest, {
+            signal: controller.signal,
+            timeoutMs: remainingTransferTimeout(deadline, controller.signal),
+            preserveForRollback: postgresHandoff,
+          });
+      cleanupActivationManifest = activationManifest.cleanup;
       if (mode === "final") {
         sources.push(...await exportAgentStoreSnapshots({
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),
-          run: deps.runOpenClaw,
           signal: controller.signal,
           log,
+          detachAgent: async (agentId) => {
+            if (!deps.adapter.releaseAgent) throw new Error("Gateway cannot detach PostgreSQL agents");
+            await deps.adapter.releaseAgent(agentId);
+          },
         }));
       }
 
-      const activationManifest = mode === "keys" || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER
-        ? { source: null, cleanup: async () => {} }
-        : await maybeMaterializeActivationManifest(deps, body, {
-          signal: controller.signal,
-          timeoutMs: remainingTransferTimeout(deadline, controller.signal),
-        });
-      cleanupActivationManifest = activationManifest.cleanup;
       if (activationManifest.source) sources.push(activationManifest.source);
 
       const passwordFile = path.join(tmpDir, "rsync.pass");
@@ -2222,8 +2240,6 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
     stageDir: session.stageDir,
     importDir: session.importDir,
     migrationId: session.migrationId,
-    requireDrained: true,
-    run: deps.runOpenClaw,
     signal: input.signal,
     log,
   });
@@ -2962,6 +2978,11 @@ export async function readAgentSessionsAtPath(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
+  }
+  const anchor = readPostgresAgentAnchor(storePath);
+  if (anchor) {
+    return queryAgentStore<AgentSessionEntry & Record<string, unknown>>(anchor,
+      'SELECT session_key AS key, current_session_id AS "sessionId", status FROM $schema.session_nodes');
   }
   const db = new DatabaseSync(storePath, { readOnly: true });
   try {

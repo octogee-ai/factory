@@ -8,7 +8,7 @@ import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } fr
 import { internalFetch } from "./internal-fetch.js";
 import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, } from "./model-credential-materializer.js";
 import { codexAgentDir, purgeCustomerOauthRuntimeArtifacts, removeStaleCodexAuthJson, removeSubscriptionProfiles, restoreByosubCredentials, sharedAuthAgentDir, } from "./byosub-restore.js";
-import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-sqlite.js";
+import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-store.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
 import { openAiCatalogInputForBaseUrl, OPENAI_BROKER_PROFILE_ID, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
@@ -294,7 +294,7 @@ export async function brokerPushByosubCred(agentId, provider, credential) {
         const body = (await r.text().catch(() => "")).slice(0, 200);
         throw new Error(`byosub-cred-syncback ${r.status} ${body}`);
     }
-    const data = (await r.json());
+    const data = await r.json();
     if (typeof data.changed !== "boolean" || typeof data.destroyed !== "number") {
         throw new Error("byosub-cred-syncback: malformed broker response");
     }
@@ -312,7 +312,7 @@ export async function brokerFetchByosubCreds(agentId) {
         const body = (await r.text().catch(() => "")).slice(0, 200);
         throw new Error(`byosub-cred ${r.status} ${body}`);
     }
-    const data = (await r.json());
+    const data = await r.json();
     const credentials = data.credentials;
     if (!Array.isArray(credentials) ||
         credentials.some((cred) => !cred ||
@@ -350,15 +350,15 @@ function claudeCliHomeOption(explicit) {
     const claudeCliNativeHomeDir = explicit ?? claudeCliNativeHomeDirForGateway();
     return claudeCliNativeHomeDir ? { claudeCliNativeHomeDir } : {};
 }
-function inheritSharedSubscription({ slug, openclawDir, agentIds, providers, restore, logFn, }) {
+async function inheritSharedSubscription({ slug, openclawDir, agentIds, providers, restore, logFn, }) {
     if (restore.failed > 0 || restore.restored + restore.skipped === 0)
         return;
     const disconnected = SUBSCRIPTION_PROVIDERS.filter((provider) => !providers.includes(provider));
-    if (removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), disconnected)) {
+    if (await removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), disconnected)) {
         logFn(`[byot-sync] ${slug}: dropped disconnected subscription(s) ${disconnected.join(", ")} from the shared store`);
     }
     for (const agentId of agentIds ?? mountedAgentIdsForSlug(slug)) {
-        if (removeSubscriptionProfiles(codexAgentDir(openclawDir, agentId), providers)) {
+        if (await removeSubscriptionProfiles(codexAgentDir(openclawDir, agentId), providers)) {
             logFn(`[byot-sync] ${slug}: ${agentId} now inherits the shared subscription credential`);
         }
         if (removeStaleCodexAuthJson(openclawDir, agentId)) {
@@ -387,7 +387,7 @@ export async function restoreOauthStoreForSlug(slug, deps) {
         });
         const present = r.restored > 0 || r.skipped > 0;
         if (shared) {
-            inheritSharedSubscription({ slug, openclawDir: ocDir, agentIds: deps?.agentIds, providers, restore: r, logFn });
+            await inheritSharedSubscription({ slug, openclawDir: ocDir, agentIds: deps?.agentIds, providers, restore: r, logFn });
         }
         return { restored: r.restored > 0, present, providers };
     }
@@ -1150,8 +1150,8 @@ export async function purgeCustomerOauthRuntime(slug, safeModelRef, deps) {
     const initialConfigPlan = customerOauthRuntimeConfigPlan(config, slug, safeModelRef, forceSafeAll);
     const openclawDir = options.openclawDir ?? OPENCLAW_DIR;
     const sharedProfilesRemoved = sharedAuthStoreUsable(openclawDir) &&
-        removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), SUBSCRIPTION_PROVIDERS);
-    const artifacts = purgeCustomerOauthRuntimeArtifacts({
+        await removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), SUBSCRIPTION_PROVIDERS);
+    const artifacts = await purgeCustomerOauthRuntimeArtifacts({
         openclawDir,
         homeDir: options.homeDir ?? os.homedir(),
         agentIds,
@@ -1350,7 +1350,7 @@ function isBrokerResolvedAnthropic(desired, usesBrokerToken) {
     return usesBrokerToken && desired.input?.provider === "anthropic";
 }
 async function clearBrokerResolvedAnthropic(slug, actions, customerOauthRuntimeChanged = false) {
-    const changed = actions.applyByotState(slug, null);
+    const changed = await actions.applyByotState(slug, null);
     const catalog = await materializePlatformCatalog(slug, actions);
     log(`[byot-sync] ${slug}: anthropic BYOT is broker-resolved; local provider-key refs removed`);
     const restartRequested = await requestRestartIfRequired({ patched: false, changed: false, restartRequired: false }, actions, undefined, catalog.restartPending);
@@ -1368,8 +1368,8 @@ async function restoreOauthIfNeeded(slug, desired, actions) {
 }
 async function syncStandardByotState(slug, desired, actions, opts) {
     const changed = opts?.purgeAuthProfileStore
-        ? actions.applyByotState(slug, desired.input, undefined, { preserveAuthProfileStore: false })
-        : actions.applyByotState(slug, desired.input);
+        ? await actions.applyByotState(slug, desired.input, undefined, { preserveAuthProfileStore: false })
+        : await actions.applyByotState(slug, desired.input);
     const restore = await restoreOauthIfNeeded(slug, desired, actions);
     const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions, STANDARD_CODEX_APP_SERVER);
     const patched = restore.present && desired.coachModelInput
@@ -1426,7 +1426,7 @@ async function syncSharedBrokerByotState(slug, desired, actions, opts) {
     const restore = isOauth
         ? await actions.restoreOauthStoreForSlug(slug)
         : { restored: false, present: true };
-    const changed = actions.applyByotState(slug, isNonAnthropicKey ? desired.input : null, undefined, 
+    const changed = await actions.applyByotState(slug, isNonAnthropicKey ? desired.input : null, undefined, 
     // A suppressed byosub owner may carry a pre-gate OAuth profile in the
     // store — purge it; every other shared path preserves the store.
     { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true });

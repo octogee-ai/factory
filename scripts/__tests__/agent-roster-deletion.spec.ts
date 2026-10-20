@@ -198,3 +198,12 @@ describe("customerAgentIdsInRoster", () => {
     ).toEqual(["octogee-alice-coach"]);
   });
 });
+
+it("uses detach for a PostgreSQL handoff and never falls back to delete", async () => {
+  const agentsDelete = vi.fn(async () => { throw new Error("must not delete"); });
+  const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
+  await expect(deleteRosterAgents(["octogee-alice-coach"], { rpc: { agentsDelete, agentsDetach }, preserveStore: true, log: vi.fn() })).resolves.toHaveLength(1);
+  expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-alice-coach" });
+  await expect(deleteRosterAgents(["octogee-alice-coach"], { rpc: { agentsDelete }, preserveStore: true, log: vi.fn() })).rejects.toThrow("does not support agents.detach");
+  expect(agentsDelete).not.toHaveBeenCalled();
+});

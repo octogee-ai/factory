@@ -706,6 +706,19 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).not.toHaveBeenCalled();
   });
 
+  it("re-adopts a detached source from its saved activation manifest before resuming channels", async () => {
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot({ agents: { entries: {} }, channels: { mattermost: { accounts: { "tester10-coach": {} } } } })),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] } })),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await adapter.resumeCustomer("tester10");
+    expect(rpc.agentsCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "octogee-tester10-coach" }));
+    expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+    expect(rpc.channelsStart).toHaveBeenCalledWith({ channel: "mattermost", accountId: "tester10-coach" });
+    expect(mocks.removeActivationManifest.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(rpc.channelsStart).mock.invocationCallOrder[0]!);
+  });
+
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
     const client = mkClient();
     const rpc = {
@@ -1124,6 +1137,20 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     ).rejects.toThrow(
       /config revision changed while waiting \(expected=revision-import, observed=revision-other\)/,
     );
+  });
+
+  it("detaches superseded PostgreSQL entries during an import without purging their stores", async () => {
+    const config = { agents: { entries: keyedRoster(["octogee-tester10-coach", "octogee-tester10-proj-surplus-coach", "octogee-bob-coach"]) } };
+    await withPostgresAgentConfig(config, async () => {
+      const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
+      const rpc = mkGatewayRpc({ ...rosterRpc(config), agentsDetach,
+        channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] } })),
+      });
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+      await adapter.activateImportedCustomer("tester10");
+      expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-tester10-proj-surplus-coach" });
+      expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    });
   });
 
   it("waits through a cold Builder control handshake before changing its roster", async () => {
@@ -1833,6 +1860,7 @@ describe("broker migration admission", () => {
   });
 
   it("stops incoming coach turns before reporting an idle customer drained", async () => {
+    mocks.readActivationManifest.mockRejectedValueOnce(Object.assign(new Error("no rollback manifest"), { code: "ENOENT" }));
     const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot({
       channels: { mattermost: { accounts: { "migrationqa-coach": {} } } },
     })) });
@@ -4901,5 +4929,80 @@ describe("durable Shared context eviction hold", () => {
     const client = mkClient({ uidForSlug: vi.fn(async () => hold.uid), userSnapshot: vi.fn(async () => ({ uid: hold.uid, slug: hold.slug, gatewayId: "shared", nativeSharedContextRestore }) as unknown as FleetBrokerUserSnapshot) });
     const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
     await expect(adapter.customerContextRestoreHeld!(hold.slug)).rejects.toThrow("hold is malformed");
+  });
+});
+
+it("releases a PostgreSQL roster entry through detach while preserving its anchor", async () => {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = testRuntime.dir;
+  const agentId = "octogee-pgfixture-coach";
+  const directory = path.join(testRuntime.dir, "agents", agentId, "agent");
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "openclaw-agent.sqlite");
+  const db = new DatabaseSync(file);
+  db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
+  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run("1514f000-4540-4f4e-92a1-831adeac3d5b", "octogee_agent_fixture"); db.close();
+  const rpc = mkGatewayRpc({ agentsDetach: vi.fn(async ({ agentId }) => ({ ok: true, agentId })) });
+  try {
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await adapter.releaseAgent!(agentId);
+    expect(rpc.agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId });
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect((await fs.stat(file)).size).toBeGreaterThan(0);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    await fs.rm(path.dirname(directory), { recursive: true, force: true });
+  }
+});
+
+async function withPostgresAgentConfig(config: Record<string, unknown>, run: () => Promise<void>): Promise<void> {
+  const previous = await fs.readFile(OPENCLAW_CONFIG).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+  await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ ...config, database: { engine: "sqlite", families: { agent: { engine: "postgres" } } } }));
+  try { await run(); }
+  finally {
+    if (previous) await fs.writeFile(OPENCLAW_CONFIG, previous);
+    else await fs.rm(OPENCLAW_CONFIG, { force: true });
+  }
+}
+
+it("purges a retired PostgreSQL project while detaching evicted customer stores", async () => {
+  const current = { agents: { entries: keyedRoster(["octogee-alice-coach", "octogee-alice-proj-retired-coach", "octogee-stale-coach", "octogee-bob-coach"]) } };
+  await withPostgresAgentConfig(current, async () => {
+    const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
+    const rpc = mkRemovalRpc(current, { agentsDetach });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }, { evictionBatch: ["stale"] });
+    expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-stale-coach" });
+    expect(rpc.agentsDelete).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-alice-proj-retired-coach", deleteFiles: false });
+  });
+});
+
+it("purges a retired configured Builder PostgreSQL project without deleting imported agents", async () => {
+  const retiredId = "octogee-alice-proj-retired-coach";
+  const importedId = "octogee-alice-proj-imported-coach";
+  const config = {
+    agents: { entries: keyedRoster(["octogee-alice-coach", retiredId, importedId]) },
+    channels: { mattermost: { accounts: {
+      "alice-proj-retired": { botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-proj-retired" } },
+      "alice-proj-imported": { botToken: { source: "file", provider: "octogee-mattermost", id: "/owner-custom" } },
+    } } },
+    bindings: [
+      { agentId: retiredId, match: { channel: "mattermost", accountId: "alice-proj-retired" } },
+      { agentId: importedId, match: { channel: "mattermost", accountId: "alice-proj-imported" } },
+    ],
+  };
+  await withPostgresAgentConfig(config, async () => {
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [] });
+    const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
+    const rpc = mkGatewayRpc({ ...rosterRpc(config), agentsDetach });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+    await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+    expect(rpc.agentsDelete).toHaveBeenCalledExactlyOnceWith({ agentId: retiredId, deleteFiles: false });
+    expect(agentsDetach).not.toHaveBeenCalled();
   });
 });

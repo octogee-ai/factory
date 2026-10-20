@@ -22,7 +22,7 @@ import {
   deleteAuthProfileStore,
   readAuthProfileStore,
   writeAuthProfileStore,
-} from "./auth-profile-sqlite.js";
+} from "./auth-profile-store.js";
 
 function agentIdForSlug(slug: string): string {
   return `octogee-${slug}-coach`;
@@ -33,7 +33,7 @@ function agentDirForSlug(slug: string, agentsDir: string = AGENTS_DIR): string {
 }
 
 // auth-profiles moved to SQLite in openclaw v2026.6.1+ (PR #89102) — we
-// write that row directly via auth-profile-sqlite. models.json stayed as a
+// write that row directly via auth-profile-store. models.json stayed as a
 // file, so it's the only entry in this list.
 const BYOT_FILES = ["models.json"] as const;
 type ByotFile = (typeof BYOT_FILES)[number];
@@ -464,21 +464,21 @@ function removeIfExists(target: string): boolean {
   return true;
 }
 
-function removeManagedByotState(
+async function removeManagedByotState(
   slug: string,
   dir: string,
   markerPath: string,
   filePath: (f: string) => string,
   preserveAuthProfileStore: boolean,
-): boolean {
+): Promise<boolean> {
   if (!fs.existsSync(markerPath)) return false;
   let changed = false;
   for (const f of BYOT_FILES) changed = removeIfExists(filePath(f)) || changed;
   // On a shared (per-agent broker-token) pod the auth-profile store holds the
   // anthropic:default broker token (+ any byosub OAuth) that the materializer owns;
   // tearing down a customer's local BYOT files must NOT delete it.
-  if (!preserveAuthProfileStore && readAuthProfileStore(dir) !== null) {
-    deleteAuthProfileStore(dir);
+  if (!preserveAuthProfileStore && await readAuthProfileStore(dir) !== null) {
+    await deleteAuthProfileStore(dir);
     changed = true;
   }
   changed = removeIfExists(markerPath) || changed;
@@ -513,17 +513,17 @@ function writeDesiredByotFiles(
   return changed;
 }
 
-function syncAuthProfileStore(
+async function syncAuthProfileStore(
   dir: string,
   input: ByotInput,
   preserveAuthProfileStore: boolean,
-): boolean {
+): Promise<boolean> {
   if (isModelCredentialOauthProvider(input.provider)) return false;
   const cfg = buildModelCredentialConfigForProvider(input);
   if (cfg.authProfiles) {
-    const before = readAuthProfileStore(dir);
+    const before = await readAuthProfileStore(dir);
     if (JSON.stringify(before) !== JSON.stringify(cfg.authProfiles)) {
-      writeAuthProfileStore(dir, cfg.authProfiles);
+      await writeAuthProfileStore(dir, cfg.authProfiles);
       return true;
     }
     return false;
@@ -532,24 +532,24 @@ function syncAuthProfileStore(
   // not the profile store — so the store would normally be cleared here. On a
   // shared broker-token pod it instead holds the anthropic:default broker token,
   // so preserve it.
-  if (preserveAuthProfileStore || readAuthProfileStore(dir) === null) return false;
-  deleteAuthProfileStore(dir);
+  if (preserveAuthProfileStore || await readAuthProfileStore(dir) === null) return false;
+  await deleteAuthProfileStore(dir);
   return true;
 }
 
-export function applyByotState(
+export async function applyByotState(
   slug: string,
   input: ByotInput | null,
   agentsDir: string = AGENTS_DIR,
   opts: { preserveAuthProfileStore?: boolean } = {},
-): boolean {
+): Promise<boolean> {
   const dir = agentDirForSlug(slug, agentsDir);
   const filePath = (f: string) => path.join(dir, f);
   const markerPath = filePath(BYOT_MARKER);
   const preserve = opts.preserveAuthProfileStore ?? false;
 
   if (!input) {
-    return removeManagedByotState(slug, dir, markerPath, filePath, preserve);
+    return await removeManagedByotState(slug, dir, markerPath, filePath, preserve);
   }
 
   if (!fs.existsSync(dir)) {
@@ -558,7 +558,7 @@ export function applyByotState(
   }
 
   let changed = writeDesiredByotFiles(desiredByotFiles(input), filePath);
-  changed = syncAuthProfileStore(dir, input, preserve) || changed;
+  changed = await syncAuthProfileStore(dir, input, preserve) || changed;
 
   if (!fs.existsSync(markerPath)) {
     writeAtomic(markerPath, JSON.stringify({ managedSince: new Date().toISOString() }) + "\n");

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 
-import { readAuthProfileStore } from "./auth-profile-sqlite.js";
+import { readAuthProfileStore } from "./auth-profile-store.js";
 import { AGENTS_DIR } from "./config.js";
 import { createGatewayRpc } from "./gateway-rpc.js";
 import {
@@ -301,12 +301,12 @@ export function platformBrokerProfileTargets(
   );
 }
 
-export function missingPlatformBrokerProfileTargets(
+export async function missingPlatformBrokerProfileTargets(
   agentDir: string,
   agentId: string,
   surfaces: PlatformBrokerProfileSurfaces,
-): AuthProfileApiKeyTarget[] {
-  const profiles = asRecord(asRecord(readAuthProfileStore(agentDir)).profiles);
+): Promise<AuthProfileApiKeyTarget[]> {
+  const profiles = asRecord(asRecord(await readAuthProfileStore(agentDir)).profiles);
   return desiredPlatformBrokerProfiles(agentId, surfaces)
     .filter((desire) => !profileRefMatches(profiles[desire.profileId], desire))
     .map((desire) => profileTarget(agentId, desire));
@@ -479,11 +479,11 @@ interface AppliedAgentMaterializations {
   deferralReason?: string;
 }
 
-function prepareAgentMaterialization(
+async function prepareAgentMaterialization(
   agentId: string,
   agentsDir: string,
   opts: BrokerProfileSweepOptions,
-): AgentMaterializeOutcome {
+): Promise<AgentMaterializeOutcome> {
   const agentHome = path.join(agentsDir, agentId, "agent");
   const catalogWrote = opts.openRouter
     ? upsertOpenRouterBrokerCatalog(agentHome, opts.openRouter)
@@ -495,18 +495,18 @@ function prepareAgentMaterialization(
     agentId,
     catalogWrote,
     openAiWrote,
-    missingProfiles: missingPlatformBrokerProfileTargets(agentHome, agentId, {
+    missingProfiles: await missingPlatformBrokerProfileTargets(agentHome, agentId, {
       openRouter: opts.openRouter !== undefined,
       openAi: opts.openAi !== undefined,
     }),
   };
 }
 
-function prepareAgentMaterializations(
+async function prepareAgentMaterializations(
   agentIds: string[],
   agentsDir: string,
   opts: BrokerProfileSweepOptions,
-): PreparedAgentMaterializations {
+): Promise<PreparedAgentMaterializations> {
   const agents: AgentMaterializeOutcome[] = [];
   const deferred: string[] = [];
   let deferralReason: string | undefined;
@@ -520,7 +520,7 @@ function prepareAgentMaterializations(
       continue;
     }
     try {
-      agents.push(prepareAgentMaterialization(agentId, agentsDir, { ...opts, agentsDir }));
+      agents.push(await prepareAgentMaterialization(agentId, agentsDir, { ...opts, agentsDir }));
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       opts.logFn?.(
@@ -650,7 +650,7 @@ export async function materializeBrokerProfilesForAgents(
   opts: BrokerProfileSweepOptions = {},
 ): Promise<BrokerProfileSweepResult> {
   const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-  const prepared = prepareAgentMaterializations(agentIds, agentsDir, opts);
+  const prepared = await prepareAgentMaterializations(agentIds, agentsDir, opts);
   const applied = await applyAgentMaterializations(prepared.agents, opts);
   const materialized = reportAgentMaterializations(
     prepared.agents,

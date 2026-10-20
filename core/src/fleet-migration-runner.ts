@@ -799,6 +799,7 @@ async function tryRollback(
       deps.log(`[migration-runner] ⚠ rollback warn: ${step.action} failed: ${msg}`);
     }
   }
+  if (failures.length > 0) return { rolledBack: false, error: failures.join("; ") };
   if (transports.quiesceStarted) {
     const unreleased = await releaseSource(state, deps, migrationId, transports);
     if (unreleased.length > 0) return { rolledBack: false, error: [...failures, ...unreleased].join("; ") };

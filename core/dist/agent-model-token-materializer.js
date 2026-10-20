@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { readAuthProfileStore } from "./auth-profile-sqlite.js";
+import { readAuthProfileStore } from "./auth-profile-store.js";
 import { AGENTS_DIR } from "./config.js";
 import { createGatewayRpc } from "./gateway-rpc.js";
 import { OpenClawSecretsApplyError, applyOpenClawSecretsPlan, authProfileApiKeyTarget, buildOpenClawSecretsPlan, } from "./openclaw-secrets-apply.js";
@@ -174,8 +174,8 @@ function profileTarget(agentId, desire) {
 export function platformBrokerProfileTargets(agentId, surfaces) {
     return desiredPlatformBrokerProfiles(agentId, surfaces).map((desire) => profileTarget(agentId, desire));
 }
-export function missingPlatformBrokerProfileTargets(agentDir, agentId, surfaces) {
-    const profiles = asRecord(asRecord(readAuthProfileStore(agentDir)).profiles);
+export async function missingPlatformBrokerProfileTargets(agentDir, agentId, surfaces) {
+    const profiles = asRecord(asRecord(await readAuthProfileStore(agentDir)).profiles);
     return desiredPlatformBrokerProfiles(agentId, surfaces)
         .filter((desire) => !profileRefMatches(profiles[desire.profileId], desire))
         .map((desire) => profileTarget(agentId, desire));
@@ -280,7 +280,7 @@ function catalogState(configured, wrote) {
         return "unconfigured";
     return wrote ? "written" : "ok";
 }
-function prepareAgentMaterialization(agentId, agentsDir, opts) {
+async function prepareAgentMaterialization(agentId, agentsDir, opts) {
     const agentHome = path.join(agentsDir, agentId, "agent");
     const catalogWrote = opts.openRouter
         ? upsertOpenRouterBrokerCatalog(agentHome, opts.openRouter)
@@ -292,13 +292,13 @@ function prepareAgentMaterialization(agentId, agentsDir, opts) {
         agentId,
         catalogWrote,
         openAiWrote,
-        missingProfiles: missingPlatformBrokerProfileTargets(agentHome, agentId, {
+        missingProfiles: await missingPlatformBrokerProfileTargets(agentHome, agentId, {
             openRouter: opts.openRouter !== undefined,
             openAi: opts.openAi !== undefined,
         }),
     };
 }
-function prepareAgentMaterializations(agentIds, agentsDir, opts) {
+async function prepareAgentMaterializations(agentIds, agentsDir, opts) {
     const agents = [];
     const deferred = [];
     let deferralReason;
@@ -310,7 +310,7 @@ function prepareAgentMaterializations(agentIds, agentsDir, opts) {
             continue;
         }
         try {
-            agents.push(prepareAgentMaterialization(agentId, agentsDir, { ...opts, agentsDir }));
+            agents.push(await prepareAgentMaterialization(agentId, agentsDir, { ...opts, agentsDir }));
         }
         catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
@@ -416,7 +416,7 @@ function reportAgentMaterializations(agents, appliedAgentIds, opts) {
  */
 export async function materializeBrokerProfilesForAgents(agentIds, opts = {}) {
     const agentsDir = opts.agentsDir ?? AGENTS_DIR;
-    const prepared = prepareAgentMaterializations(agentIds, agentsDir, opts);
+    const prepared = await prepareAgentMaterializations(agentIds, agentsDir, opts);
     const applied = await applyAgentMaterializations(prepared.agents, opts);
     const materialized = reportAgentMaterializations(prepared.agents, applied.appliedAgentIds, opts);
     const deferralReason = prepared.deferralReason ?? applied.deferralReason;

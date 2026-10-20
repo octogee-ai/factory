@@ -1,3 +1,4 @@
+import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { sourceTransferRsyncArgs } from "./source-transfer-rsync.js";
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -15,8 +16,11 @@ export async function prepareSourceTransferStage(phase: string, scratch: string,
  if (!sources.length) throw new Error('source export is empty');
  await admitSourceTree(root, request.slug, sources);
  await validateSourceConfigFiles(root);
- const manifest = await exportActivationManifestWithSecret(path.join(root, 'openclaw.json'), root, request.slug);
  const stores = await findPortableAgentStores(sources);
+ if (stores.some(store => readPostgresAgentAnchor(path.join(store.sourceAgentDir, 'openclaw-agent.sqlite')))) {
+  throw new Error('PostgreSQL agent handoff requires a live source Gateway with agents.detach; retained-pod SQLite recovery cannot move it');
+ }
+ const manifest = await exportActivationManifestWithSecret(path.join(root, 'openclaw.json'), root, request.slug);
  if (stores.length > SOURCE_TRANSFER_LIMITS.maxStores) throw new Error('source exceeds store limit');
  const configPath = path.join(scratch, 'openclaw.json');
  const exportRoot = path.join(scratch, 'snapshots');

@@ -238,3 +238,14 @@ describe("renderVmRuntimeBundle", () => {
     expect(readSecret).toHaveBeenCalledWith("gateway-auth-token-b-x", "token");
   });
 });
+
+it("gives a native Gateway only its own PostgreSQL credential", async () => {
+  const withStore = structuredClone(manifests) as any[];
+  const deployment = withStore.find(item => item.kind === "Deployment");
+  const gateway = deployment.spec.template.spec.containers.find((item: any) => item.name === "gateway");
+  gateway.env.push({ name: "OPENCLAW_AGENT_STORE_DSN", valueFrom: { secretKeyRef: { name: "gateway-auth-token-b-x", key: "agent-store-dsn" } } });
+  const bundle = await render({ manifests: withStore, readSecret: async (name, key) => key === "agent-store-dsn" ? "postgresql://scoped-fixture" : secrets[`${name}/${key}`]! });
+  expect(bundle.containers.find(item => item.name === "gateway")?.env.OPENCLAW_AGENT_STORE_DSN).toBe("postgresql://scoped-fixture");
+  gateway.env.at(-1).valueFrom.secretKeyRef.name = "gateway-auth-token-other-builder";
+  await expect(render({ manifests: withStore })).rejects.toThrow("not permitted in a tenant VM");
+});

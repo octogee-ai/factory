@@ -357,6 +357,7 @@ export interface GatewayRpcClient {
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
   agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
+  agentsDetach(params: { agentId: string }): Promise<GatewayAgentsDeleteResult>;
   isGatewayUp(timeoutMs?: number): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -1081,6 +1082,14 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     agentsCreate: (params) => callAgentsCreate(call, params),
 
     agentsDelete: (params) => callAgentsDelete(call, params),
+    agentsDetach: async (params) => {
+      const payload = await callOkPayload(call, "agents.detach", params);
+      if (payload.agentId !== params.agentId || (payload.purgeFailed !== undefined && payload.purgeFailed !== false) ||
+          payload.failed !== undefined && (!Array.isArray(payload.failed) || payload.failed.length > 0)) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "agents.detach did not confirm completed store-preserving cleanup");
+      }
+      return payload as GatewayAgentsDeleteResult;
+    },
 
     async secretsReload() {
       return parseSecretsReloadPayload(await call("secrets.reload", {}));

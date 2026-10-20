@@ -88,6 +88,7 @@ import {
   resolveOpenClawStateDir,
 } from "./fleet-http-migration.js";
 import { OpenclawWireError, type ConfigGetResult, type GatewayRpcClient } from "./gateway-rpc.js";
+import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import {
   cloneProjectRepo,
   cloneWorkspaceRepo,
@@ -171,7 +172,6 @@ import {
   readActivationManifest,
   removeActivationManifest,
 } from "./migration-activation-manifest.js";
-import { discardUnusableAgentStores } from "./unusable-agent-store.js";
 import { assertNotHeld, type HeldPathOptions, matchUnder, PROC_ROOT } from "./held-files.js";
 import {
   exportActivationManifestWithSecret,
@@ -305,14 +305,28 @@ function invalidateConfigCache(ctx: BrokerCtx): void {
   ctx.configCache.hash = "";
 }
 
-async function deleteAgentsAndInvalidateCache(
+async function releaseAgentsAndInvalidateCache(
   ctx: BrokerCtx,
   agentIds: readonly string[],
   logPrefix: string,
+  options: { purgeStore?: boolean } = {},
 ): Promise<void> {
   if (agentIds.length === 0) return;
+  const database = fs.existsSync(OPENCLAW_CONFIG)
+    ? (readOpenClawConfig() as { database?: { engine?: string; families?: { agent?: { engine?: string } } } }).database : undefined;
+  const postgres = (database?.families?.agent?.engine ?? database?.engine) === "postgres";
+  const failures: unknown[] = [];
   try {
-    await deleteRosterAgents(agentIds, { rpc: ctx.rpc, log: ctx.log, logPrefix });
+    for (const agentId of agentIds) {
+      try {
+        const file = path.join(resolveOpenClawStateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
+        await deleteRosterAgents([agentId], {
+          rpc: ctx.rpc, log: ctx.log, logPrefix,
+          preserveStore: !options.purgeStore && (postgres || readPostgresAgentAnchor(file) !== null),
+        });
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, failures.map(error => error instanceof Error ? error.message : String(error)).join("; "));
   } finally {
     // Each delete rewrites the roster and prunes bindings, so any cached
     // snapshot — and its base hash — is stale the moment the first one lands.
@@ -322,7 +336,7 @@ async function deleteAgentsAndInvalidateCache(
 
 function agentStateRelease(ctx: BrokerCtx, logPrefix: string): AgentStateRelease {
   return {
-    releaseAgents: (agentIds) => deleteAgentsAndInvalidateCache(ctx, agentIds, logPrefix),
+    releaseAgents: (agentIds) => releaseAgentsAndInvalidateCache(ctx, agentIds, logPrefix),
     procRoot: ctx.procRoot,
   };
 }
@@ -334,20 +348,13 @@ async function deleteDepartingCustomerAgents(
 ): Promise<void> {
   if (slugs.length === 0) return;
   const current = await freshRosterConfig(ctx);
-  await deleteAgentsAndInvalidateCache(
+  await releaseAgentsAndInvalidateCache(
     ctx,
     slugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
     logPrefix,
   );
 }
 
-/**
- * Every agent the mount does not want, in one pass: the evicted slugs' agents
- * plus the admitted Builder's OWN superseded ones — a project agent retired
- * since the last mount. Both leave by `agents.delete`, because 2026.7.2 refuses
- * a config write that drops roster entries, so neither can be nulled out of the
- * roster patch that follows.
- */
 async function deleteSupersededCustomerAgents(
   ctx: BrokerCtx,
   input: {
@@ -355,17 +362,21 @@ async function deleteSupersededCustomerAgents(
     evictionSlugs: readonly string[];
     keepAgentIds: readonly string[];
     logPrefix: string;
+    purpose: "reconcile" | "import";
   },
 ): Promise<void> {
   const current = await freshRosterConfig(ctx);
   const keep = new Set(input.keepAgentIds);
-  await deleteAgentsAndInvalidateCache(
+  await releaseAgentsAndInvalidateCache(
     ctx,
-    [
-      ...input.evictionSlugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
-      ...customerAgentIdsInRoster(current, input.slug).filter((agentId) => !keep.has(agentId)),
-    ],
+    input.evictionSlugs.flatMap((slug) => customerAgentIdsInRoster(current, slug)),
     input.logPrefix,
+  );
+  await releaseAgentsAndInvalidateCache(
+    ctx,
+    customerAgentIdsInRoster(current, input.slug).filter((agentId) => !keep.has(agentId)),
+    input.logPrefix,
+    { purgeStore: input.purpose === "reconcile" },
   );
 }
 
@@ -409,6 +420,7 @@ async function reconcileCustomerRosterAgents(
     evictionSlugs,
     keepAgentIds,
     logPrefix,
+    purpose: "reconcile",
   });
   await ensureCustomerRosterAgents(ctx, agentEntries, logPrefix);
 }
@@ -1267,7 +1279,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   };
   const logPrefix = `[project-agents:${snapshot.slug}]`;
   const initial = configuredBuilderProjectAgentPatch(current, patchInput);
-  await deleteAgentsAndInvalidateCache(ctx, initial.retiredAgentIds, logPrefix);
+  await releaseAgentsAndInvalidateCache(ctx, initial.retiredAgentIds, logPrefix, { purgeStore: true });
   await ensureCustomerRosterAgents(ctx, projectAgentEntries, logPrefix);
   const agentIds = agentIdsFromEntries(projectAgentEntries);
   await Promise.all(agentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })));
@@ -1614,21 +1626,12 @@ async function activateImportedCustomer(
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
-  // The rsync brings whatever store the source pod had. One openclaw cannot
-  // open takes down the whole target gateway the moment activation registers
-  // the agent, which then blocks the very account health-check below — so
-  // clear it here, while the import still owns the state.
-  for (const discarded of discardUnusableAgentStores({ agentsDir: AGENTS_DIR, logFn: ctx.log, procRoot: ctx.procRoot })
-    .discarded) {
-    ctx.log(
-      `[import:${slug}] discarded imported ${discarded.agentId} store (schema ${discarded.schemaVersion})`,
-    );
-  }
   await deleteSupersededCustomerAgents(ctx, {
     slug,
     evictionSlugs: [],
     keepAgentIds: activationManifestAgentIds(safeManifest),
     logPrefix: `[import:${slug}]`,
+    purpose: "import",
   });
   await ensureCustomerRosterAgents(ctx, [
     safeManifest.agent,
@@ -1750,7 +1753,7 @@ async function settleActivatedImport(
         },
       );
     }
-    await removeActivationManifest(OPENCLAW_DIR, slug).catch(() => undefined);
+    await removeActivationManifest(OPENCLAW_DIR, slug);
     ctx.log(
       `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
     );
@@ -1827,12 +1830,14 @@ async function removeImportedCustomerBySlug(
   const wasMounted =
     fs.existsSync(path.join(CUSTOMERS_DIR, slug)) ||
     listLocalCoachWiredSlugs(CUSTOMERS_DIR, (s) => s === slug).includes(slug);
-  if (!wasMounted) return { wasMounted: false, steps: [] };
+  if (!wasMounted && !isConfiguredGatewayBuilder(slug)) return { wasMounted: false, steps: [] };
   if (isConfiguredGatewayBuilder(slug)) {
     await stopRetainedConfiguredBuilderAccounts(ctx, slug);
+    await releaseAgentsAndInvalidateCache(ctx, agentIdsForMigration(slug).filter(agentId => !isSafeDefaultAgentPortableStatePath(`agents/${agentId}`)), `[remove:${slug}]`);
     clearMountedMarker(CUSTOMERS_DIR, slug);
     clearMigratingInPin(CUSTOMERS_DIR, slug);
     ctx.configRemovedForEviction.delete(slug);
+    await removeActivationManifest(OPENCLAW_DIR, slug);
     dlog(`[remove:${slug}] retained configured Builder overlay during imported cleanup`);
     return { wasMounted: true, steps: [], retained: true };
   }
@@ -1861,6 +1866,7 @@ async function removeImportedCustomerBySlug(
     await fsp.rm(path.join(CUSTOMER_KEYS_DIR, slug), { recursive: true, force: true });
   }
   await removeAgentDirs(agentDirs);
+  await removeActivationManifest(OPENCLAW_DIR, slug);
   return { wasMounted: true, steps: ["config-patch-remove", "delete-dir"] };
 }
 
@@ -2021,7 +2027,14 @@ export function buildBrokeredLifecycleAdapter(
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     schedulerReady: async () => { await ctx.rpc.configGet(); },
-    resumeCustomer: (slug) => setCustomerChannelsRunning(ctx.rpc, slug, true),
+    resumeCustomer: async (slug) => {
+      const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (manifest) await activateImportedCustomer(ctx, slug, undefined);
+      await setCustomerChannelsRunning(ctx.rpc, slug, true);
+    },
     listExportPaths,
     prepareImportDir: (slug, mode) => prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`)),
     prepareKeyImportDir,
@@ -2034,7 +2047,7 @@ export function buildBrokeredLifecycleAdapter(
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
       openClawRuntimeUpdateGuard.run(() =>
         removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch)),
-    releaseAgent: (agentId) => deleteAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`),
+    releaseAgent: (agentId) => releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`),
   };
   return adapter;
 }

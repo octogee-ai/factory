@@ -346,8 +346,8 @@ describe("runMigration — failures", () => {
     expect(result).toMatchObject({ success: false, rolledBack: false });
     expect(result.errorAt?.error).toContain("target also broke");
     expect(events).toContain("report:rollback:unmount-target:failed");
-    expect(events).toContain("assignment:shared-blue:serving");
-    expect(events.some((event) => event.includes("rollback warn"))).toBe(true);
+    expect(events).not.toContain("assignment:shared-blue:serving");
+    expect(client.resume).not.toHaveBeenCalled();
   });
 
   it("preserves pre-quiesce source ownership when held target state prevents import and rollback cleanup", async () => {

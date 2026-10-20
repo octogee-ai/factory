@@ -32,7 +32,7 @@ import {
   deleteAuthProfileStore,
   readAuthProfileStore,
   writeAuthProfileStore,
-} from "@octogee/core/auth-profile-sqlite";
+} from "@octogee/core/auth-profile-store";
 import {
   CLAUDE_CLI_DEFAULT_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
@@ -90,7 +90,7 @@ async function hasReadySubscriptionRuntime(
   uid: string,
   resolved: { gatewayId: string },
 ): Promise<boolean> {
-  return (await subscriptionRuntimeFor(uid, resolved)) === "ready";
+  return await subscriptionRuntimeFor(uid, resolved) === "ready";
 }
 
 async function hasPrivateSubscriptionGateway(gatewayId: string): Promise<boolean> {
@@ -675,38 +675,38 @@ function localOpenclawDir(): string {
   return process.env.OPENCLAW_DIR || "/home/node/.openclaw";
 }
 
-function removeAuthProfile(agentDir: string, profileId: string): void {
-  const store = readAuthProfileStore(agentDir);
+async function removeAuthProfile(agentDir: string, profileId: string): Promise<void> {
+  const store = await readAuthProfileStore(agentDir);
   const profiles = (store as { profiles?: unknown } | null)?.profiles;
   if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) return;
   if (!Object.prototype.hasOwnProperty.call(profiles, profileId)) return;
   const nextProfiles = { ...(profiles as Record<string, unknown>) };
   delete nextProfiles[profileId];
   if (Object.keys(nextProfiles).length === 0) {
-    deleteAuthProfileStore(agentDir);
+    await deleteAuthProfileStore(agentDir);
     return;
   }
-  writeAuthProfileStore(agentDir, { ...(store as Record<string, unknown>), profiles: nextProfiles });
+  await writeAuthProfileStore(agentDir, { ...(store as Record<string, unknown>), profiles: nextProfiles });
 }
 
-function cleanupGeneratedByosubCredentials(provider: ByosubProvider, agentId: string): void {
+async function cleanupGeneratedByosubCredentials(provider: ByosubProvider, agentId: string): Promise<void> {
   const ocDir = localOpenclawDir();
   const agentDir = codexAgentDir(ocDir, agentId);
   if (provider === "openai") {
     fs.rmSync(codexAuthJsonPath(ocDir, agentId), { force: true });
-    removeAuthProfile(agentDir, OPENAI_CODEX_DEFAULT_PROFILE_ID);
+    await removeAuthProfile(agentDir, OPENAI_CODEX_DEFAULT_PROFILE_ID);
     return;
   }
-  removeAuthProfile(agentDir, CLAUDE_CLI_DEFAULT_PROFILE_ID);
+  await removeAuthProfile(agentDir, CLAUDE_CLI_DEFAULT_PROFILE_ID);
   fs.rmSync(claudeCliNativeCredentialsPath(os.homedir()), { force: true });
 }
 
-function cleanupGeneratedByosubCredentialsBestEffort(
+async function cleanupGeneratedByosubCredentialsBestEffort(
   provider: ByosubProvider,
   agentId: string,
-): void {
+): Promise<void> {
   try {
-    cleanupGeneratedByosubCredentials(provider, agentId);
+    await cleanupGeneratedByosubCredentials(provider, agentId);
   } catch (err) {
     logger.warn(
       `[byosub] generated credential cleanup failed provider=${provider} agentId=${agentId}: ${(err as Error).message}`,
@@ -737,7 +737,7 @@ router.post(
       const { clearUserSignal, remainingProvider } = await disconnectProviderFromUserIntegration(uid, provider);
       if (resolved) {
         for (const agentId of resolved.agentIds) {
-          cleanupGeneratedByosubCredentialsBestEffort(provider, agentId);
+          await cleanupGeneratedByosubCredentialsBestEffort(provider, agentId);
         }
       }
       if (resolved && clearUserSignal) triggerUnifiedByosOffSync(req, resolved);

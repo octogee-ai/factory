@@ -33,6 +33,7 @@ RUN GODEBUG=http2client=0 CGO_ENABLED=0 go install \
     && test "$(/go/bin/gitleaks version)" = "${GITLEAKS_VERSION}"
 
 FROM node:26-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4
+COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
 WORKDIR /gateway-edge
 ARG NPM_VERSION=12.1.0
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \

@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { exportAgentStoreSnapshots, findStagedAgentSnapshots } from "./agent-store-snapshot.js";
 import { preflightAgentDatabase } from "./agent-store-preflight.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 
@@ -31,19 +30,22 @@ export async function verifySourceDoctorAgentStores(agentIds: string[], input: {
   const run = input.run ?? runOpenClaw;
   try {
     await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false }, agents: { ownership: "explicit", entries: {} } }), { mode: 0o600 });
-    await exportAgentStoreSnapshots({ run, exportRoot, sources: agentIds.map(agentId => ({
-      cwd: root, path: `agents/${agentId}/agent/openclaw-agent.sqlite`,
-    })) });
-    const snapshots = await findStagedAgentSnapshots(exportRoot);
-    if (snapshots.length !== agentIds.length || snapshots.some(snapshot => !agentIds.includes(snapshot.agentId))) {
-      throw new Error("source Doctor snapshot roster changed");
-    }
-    for (const snapshot of snapshots) {
-      const fit = await preflightAgentDatabase(path.join(snapshot.snapshotDir, "database.sqlite"), snapshot.agentId, run, {
-        env: { PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", OPENCLAW_STATE_DIR: verificationRoot,
-          OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1" },
-      });
-      if (fit !== "exact") throw new Error(`source Doctor left ${snapshot.agentId} incompatible with the installed native runtime`);
+    for (const agentId of agentIds) {
+      const repository = path.join(exportRoot, agentId);
+      await fs.mkdir(repository, { recursive: true, mode: 0o700 });
+      await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false }, agents: { ownership: "explicit", entries: {
+        [agentId]: { agentDir: path.join(root, "agents", agentId, "agent") },
+      } } }), { mode: 0o600 });
+      const options = { env: { PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", OPENCLAW_STATE_DIR: verificationRoot,
+        OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1" } };
+      const result = await run(["backup", "sqlite", "create", "--agent", agentId, "--repository", repository, "--json"], options);
+      const snapshot = JSON.parse(result.stdout);
+      if (result.code !== 0 || snapshot.ok !== true || typeof snapshot.snapshotPath !== "string" || path.dirname(snapshot.snapshotPath) !== repository) {
+        throw new Error(`source Doctor could not snapshot ${agentId}`);
+      }
+      await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false }, agents: { ownership: "explicit", entries: {} } }), { mode: 0o600 });
+      const fit = await preflightAgentDatabase(path.join(snapshot.snapshotPath, "database.sqlite"), agentId, run, options);
+      if (fit !== "exact") throw new Error(`source Doctor left ${agentId} incompatible with the installed native runtime`);
     }
   } finally {
     await fs.rm(verificationRoot, { recursive: true, force: true });

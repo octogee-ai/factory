@@ -11,9 +11,10 @@ export interface AgentDeletionResult {
 }
 
 export interface DeleteRosterAgentsOptions {
-  rpc: Pick<GatewayRpcClient, "agentsDelete">;
+  rpc: Pick<GatewayRpcClient, "agentsDelete"> & Partial<Pick<GatewayRpcClient, "agentsDetach">>;
   log?: (msg: string) => void;
   logPrefix?: string;
+  preserveStore?: boolean;
 }
 
 const AGENT_DELETE_PROGRESS_INTERVAL_MS = 15_000;
@@ -34,57 +35,49 @@ export function schedulerHandoffAgentIds(
   return [...new Set([...handedOver, ...customerAgentIdsInRoster(current, slug)])].sort();
 }
 
-/**
- * openclaw 2026.7.2 refuses any config write whose canonical roster drops
- * entries unless the write carries `allowedAgentRosterRemovals`, which only its
- * own `agents.delete` supplies. Removing a departing agent is therefore an RPC
- * per agent, not a roster patch: it deletes the entry, prunes that agent's
- * bindings and cron jobs, closes its sqlite handles and purges its session-store
- * rows.
- *
- * `deleteFiles: false` is deliberate. A customer coach's workspace IS the
- * customer directory, and whether that directory dies is Octogee's call, not
- * openclaw's: an eviction the reconcile cancels mid-flight retains it for
- * re-admission, and a cleanup job carries an explicit `deleteWorkspace` flag.
- * The lifecycle deletes the agent dir, memory sqlite and customer tree itself,
- * at the point where it knows the customer is really gone.
- */
+async function removeRosterAgent(opts: DeleteRosterAgentsOptions, agentId: string) {
+  if (!opts.preserveStore) return opts.rpc.agentsDelete({ agentId, deleteFiles: false });
+  if (!opts.rpc.agentsDetach) throw new Error("Gateway does not support agents.detach; update OpenClaw before moving PostgreSQL agents");
+  return opts.rpc.agentsDetach({ agentId });
+}
+
 export async function deleteRosterAgents(
   agentIds: readonly string[],
   opts: DeleteRosterAgentsOptions,
 ): Promise<AgentDeletionResult[]> {
   const log = opts.log ?? defaultLog;
   const prefix = opts.logPrefix ? `${opts.logPrefix} ` : "";
+  const method = opts.preserveStore ? "agents.detach" : "agents.delete";
   const results: AgentDeletionResult[] = [];
   const failures: string[] = [];
 
   for (const agentId of agentIds) {
     const startedAt = Date.now();
-    log(`${prefix}agents.delete started agentId=${agentId}`);
+    log(`${prefix}${method} started agentId=${agentId}`);
     const progressTimer = setInterval(() => {
       log(
-        `${prefix}agents.delete pending agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
+        `${prefix}${method} pending agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
       );
     }, AGENT_DELETE_PROGRESS_INTERVAL_MS);
     try {
-      const result = await opts.rpc.agentsDelete({ agentId, deleteFiles: false });
+      const result = await removeRosterAgent(opts, agentId);
       if (result.purgeFailed === true || (result.failed?.length ?? 0) > 0) {
         throw new Error(
           `native cleanup incomplete: purgeFailed=${result.purgeFailed === true} failed=${JSON.stringify(result.failed ?? [])}`,
         );
       }
       log(
-        `${prefix}agents.delete completed agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
+        `${prefix}${method} completed agentId=${agentId} elapsedMs=${Date.now() - startedAt}`,
       );
       results.push({ agentId, status: "deleted" });
     } catch (err) {
       if (isAgentNotFoundRpcError(err)) {
-        log(`${prefix}agents.delete ${agentId} — already absent from the roster`);
+        log(`${prefix}${method} ${agentId} — already absent from the roster`);
         results.push({ agentId, status: "not-found" });
         continue;
       }
       const message = err instanceof Error ? err.message : String(err);
-      log(`⚠ ${prefix}agents.delete ${agentId} failed: ${message}`);
+      log(`⚠ ${prefix}${method} ${agentId} failed: ${message}`);
       failures.push(`${agentId} (${message})`);
     } finally {
       clearInterval(progressTimer);
@@ -92,7 +85,7 @@ export async function deleteRosterAgents(
   }
 
   if (failures.length > 0) {
-    throw new Error(`${prefix}agents.delete failed for ${failures.join("; ")}`);
+    throw new Error(`${prefix}${method} failed for ${failures.join("; ")}`);
   }
   return results;
 }

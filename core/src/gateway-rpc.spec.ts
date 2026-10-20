@@ -1076,6 +1076,19 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("agentsDetach", () => {
+    it("requests non-destructive detach without deletion flags", async () => {
+      let captured: unknown;
+      server.setHandler("agents.detach", params => { captured = params; return { ok: true, payload: { ok: true, agentId: "octogee-alice-coach", purgeFailed: false, failed: [] } }; });
+      await expect(client.agentsDetach({ agentId: "octogee-alice-coach" })).resolves.toMatchObject({ ok: true });
+      expect(captured).toEqual({ agentId: "octogee-alice-coach" });
+    });
+    it.each([{ purgeFailed: true }, { purgeFailed: "false" }, { purgeFailed: null }, { failed: [{}] }, { agentId: "other" }])("refuses unconfirmed detach: %j", async cleanup => {
+      server.setHandler("agents.detach", () => ({ ok: true, payload: { ok: true, agentId: "octogee-alice-coach", ...cleanup } }));
+      await expect(client.agentsDetach({ agentId: "octogee-alice-coach" })).rejects.toMatchObject({ code: "invalid-response" });
+    });
+  });
+
   describe("agentsDelete", () => {
     it.each([
       { purgeFailed: "true" }, { purgeFailed: null }, { purgeFailed: 0 },

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 import { buildMattermostAccounts } from "../lib/openclaw-config-builders.js";
 import {
+  applyAgentStoreDatabasePatch,
   applyAnthropicBaseUrlPatch,
   applyOpenClawBeta5CompatibilityPatch,
   applyPreBootPatches,
@@ -1158,6 +1159,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
       plugins: { entries: {} },
       approvals: { plugin: { enabled: true, mode: "session" } },
     };
+    applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: "builder" });
     const changed = applyPreBootPatches(config, {
       GATEWAY_CLASS: "builder",
       MM_URL: "https://mm.example",
@@ -1362,4 +1364,11 @@ describe("applyTypingModeDefault — typing starts when the message arrives", ()
       expect(config.agents.defaults.typingMode).toBe("instant");
     }
   });
+});
+
+it.each(["shared", "builder"])("selects the shared PostgreSQL agent family for %s while keeping local state SQLite", gatewayClass => {
+  const config: any = {};
+  expect(applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: gatewayClass })).toBe(true);
+  expect(config.database).toEqual({ engine: "sqlite", families: { agent: { engine: "postgres" } }, postgres: { schemaPrefix: "octogee", connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" } } });
+  expect(applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: gatewayClass })).toBe(false);
 });

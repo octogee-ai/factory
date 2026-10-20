@@ -1,14 +1,11 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { assertCarriedAgentSessionsDrained, listSqliteStores } from "./agent-store-carry.js";
-import { preflightAgentDatabase } from "./agent-store-preflight.js";
-import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
+import { listSqliteStores } from "./agent-store-carry.js";
 import { assertNotHeld, matchFiles, sqliteFamily } from "./held-files.js";
-import { runOpenClaw, type OpenClawCommand, type OpenClawCommandResult } from "./openclaw-cli.js";
 import { exportCodexStoreSnapshots, isCodexDatabase } from "./codex-store-snapshot.js";
+import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 
 export const AGENT_STORE_BASENAME = "openclaw-agent.sqlite";
 export const AGENT_SNAPSHOT_DIRNAME = ".octogee-snapshot";
@@ -23,12 +20,6 @@ export interface PortableAgentStore {
   agentId: string;
   agentDir: string;
   sourceAgentDir: string;
-}
-
-interface SnapshotCommandContext {
-  run?: OpenClawCommand;
-  env?: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
 }
 
 function posixRelative(from: string, to: string): string {
@@ -65,7 +56,7 @@ export async function findPortableAgentStores(
   return [...byAgent.values()].sort((left, right) => left.agentId.localeCompare(right.agentId));
 }
 
-const SNAPSHOT_CLI_CONCURRENCY = 4;
+const ANCHOR_CONCURRENCY = 4;
 
 async function mapConcurrently<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -81,7 +72,7 @@ async function mapConcurrently<T, R>(items: readonly T[], work: (item: T) => Pro
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(SNAPSHOT_CLI_CONCURRENCY, items.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(ANCHOR_CONCURRENCY, items.length) }, worker));
   const errors = [...failures.entries()].sort(([left], [right]) => left - right).map(([, error]) => error);
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) {
@@ -90,69 +81,44 @@ async function mapConcurrently<T, R>(items: readonly T[], work: (item: T) => Pro
   return results;
 }
 
-function parseOkJson(label: string, result: OpenClawCommandResult): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`OpenClaw ${label} returned invalid JSON (exit ${result.code})`);
-  }
-  const record = (parsed ?? {}) as Record<string, unknown>;
-  if (result.code !== 0 || record.ok !== true) {
-    const error = record.error as { message?: unknown } | undefined;
-    const message = typeof error?.message === "string" ? error.message : `exit ${result.code}`;
-    throw new Error(`OpenClaw ${label} failed: ${message}`);
-  }
-  return record;
-}
-
-async function withPrivateCommandRoot<T>(
-  store: PortableAgentStore,
-  work: (env: NodeJS.ProcessEnv) => Promise<T>,
-): Promise<T> {
-  const privateRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octogee-store-snapshot-")));
-  try {
-    const configPath = path.join(privateRoot, "openclaw.json");
-    await fs.writeFile(configPath, JSON.stringify({
-      plugins: { enabled: false },
-      agents: { ownership: "explicit", entries: { [store.agentId]: { agentDir: store.sourceAgentDir } } },
-    }), { mode: 0o600 });
-    return await work({
-      PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1",
-      OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1",
-    });
-  } finally {
-    await fs.rm(privateRoot, { recursive: true, force: true });
-  }
-}
-
 export async function exportAgentStoreSnapshots(
-  input: Pick<SnapshotCommandContext, "run" | "signal"> & {
+  input: {
+    signal?: AbortSignal;
     sources: ReadonlyArray<{ cwd: string; path: string }>;
     exportRoot: string;
     log?: (message: string) => void;
+    detachAgent?: (agentId: string) => Promise<void>;
   },
 ): Promise<Array<{ cwd: string; path: string }>> {
-  const run = input.run ?? runOpenClaw;
   const stores = await findPortableAgentStores(input.sources);
   if (stores.length === 0) return exportCodexStoreSnapshots(input);
-  const carried = await mapConcurrently(stores, (store) => withPrivateCommandRoot(store, async (env) => {
+  const carried = await mapConcurrently(stores, async (store) => {
+    const file = path.join(store.sourceAgentDir, AGENT_STORE_BASENAME);
+    const anchor = readPostgresAgentAnchor(file);
     input.signal?.throwIfAborted();
-    const repositoryRelative = path.posix.join(store.agentDir, AGENT_SNAPSHOT_DIRNAME);
-    const repository = path.join(input.exportRoot, ...repositoryRelative.split("/"));
-    await fs.mkdir(repository, { recursive: true, mode: 0o700 });
-    const result = parseOkJson(
-      `snapshot of ${store.agentId}`,
-      await run(
-        ["backup", "sqlite", "create", "--agent", store.agentId, "--repository", repository, "--json"],
-        { env, signal: input.signal },
-      ),
-    );
-    if (typeof result.snapshotPath !== "string" || path.dirname(result.snapshotPath) !== repository) {
-      throw new Error(`OpenClaw snapshot of ${store.agentId} was not published in ${repository}`);
+    if (!anchor) throw new Error("SQLite agent handoff is unsupported after the PostgreSQL cutover");
+    if (!input.detachAgent) throw new Error(`PostgreSQL agent ${store.agentId} must be detached before handoff`);
+    await input.detachAgent(store.agentId);
+    for (const suffix of ["-wal", "-journal"]) {
+      const sidecar = await fs.stat(file + suffix).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (sidecar && sidecar.size > 0) throw new Error(`PostgreSQL agent ${store.agentId} anchor is not closed`);
     }
-    return { cwd: input.exportRoot, path: repositoryRelative };
-  }));
+    const relative = path.posix.join(store.agentDir, AGENT_SNAPSHOT_DIRNAME);
+    const directory = path.join(input.exportRoot, relative, "postgres-anchor");
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const artifact = path.join(directory, SNAPSHOT_ARTIFACT_BASENAME);
+    await fs.copyFile(file, artifact, fs.constants.COPYFILE_EXCL);
+    await fs.chmod(artifact, 0o600);
+    await fs.writeFile(path.join(directory, SNAPSHOT_MANIFEST_BASENAME), JSON.stringify({
+      schemaVersion: 1,
+      database: { role: "agent", agentId: store.agentId, engine: "postgres", ...anchor },
+      artifact: { path: SNAPSHOT_ARTIFACT_BASENAME, sha256: await sha256OfFile(artifact), sizeBytes: (await fs.stat(artifact)).size },
+    }), { mode: 0o600 });
+    return { cwd: input.exportRoot, path: relative };
+  });
   return [...carried, ...await exportCodexStoreSnapshots(input)];
 }
 
@@ -232,7 +198,7 @@ async function sha256OfFile(file: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function landRepairableAgentSnapshot(snapshot: StagedAgentSnapshot, restoredPath: string): Promise<void> {
+async function landAgentAnchor(snapshot: StagedAgentSnapshot, restoredPath: string): Promise<void> {
   const mismatch = () => new Error(`carried snapshot of ${snapshot.agentId} does not match its manifest`);
   let manifest: unknown;
   try {
@@ -263,16 +229,14 @@ export interface PreparedAgentStores {
 }
 
 export async function prepareAgentStoreSnapshots(
-  input: SnapshotCommandContext & {
+  input: {
+    signal?: AbortSignal;
     stageDir: string;
     importDir: string;
     migrationId: string;
-    requireDrained: boolean;
     log?: (message: string) => void;
   },
 ): Promise<PreparedAgentStores> {
-  const run = input.run ?? runOpenClaw;
-  const env = input.env ?? process.env;
   const snapshots = await findStagedAgentSnapshots(input.stageDir);
   if (snapshots.length === 0) return { landingRoot: null, stores: [] };
   const importRoot = path.join(input.importDir, AGENT_IMPORT_DIRNAME);
@@ -280,34 +244,23 @@ export async function prepareAgentStoreSnapshots(
   await fs.mkdir(importRoot, { recursive: true, mode: 0o700 });
   await fs.rm(landingRoot, { recursive: true, force: true });
   await fs.mkdir(landingRoot, { mode: 0o700 });
-  const landed = await mapConcurrently(snapshots, async (snapshot) => {
+  const stores = await mapConcurrently(snapshots, async (snapshot) => {
     const restoredDir = path.join(landingRoot, ...snapshot.agentDir.split("/"));
     await fs.mkdir(restoredDir, { recursive: true, mode: 0o700 });
     const restoredPath = path.join(restoredDir, AGENT_STORE_BASENAME);
     const artifact = path.join(snapshot.snapshotDir, SNAPSHOT_ARTIFACT_BASENAME);
-    const fit = await preflightAgentDatabase(artifact, snapshot.agentId, run, { env, signal: input.signal });
-    if (fit === "exact") {
-      parseOkJson(
-        `restore of ${snapshot.agentId}`,
-        await run(
-          ["backup", "sqlite", "restore", snapshot.snapshotDir, "--target", restoredPath, "--json"],
-          { env, signal: input.signal },
-        ),
-      );
-    } else {
-      await landRepairableAgentSnapshot(snapshot, restoredPath);
-    }
+    const anchor = readPostgresAgentAnchor(artifact);
+    input.signal?.throwIfAborted();
+    if (!anchor) throw new Error("SQLite agent handoff is unsupported after the PostgreSQL cutover");
+    await landAgentAnchor(snapshot, restoredPath);
     await fs.rm(path.dirname(snapshot.snapshotDir), { recursive: true, force: true });
     const store: PreparedAgentStore = {
       agentId: snapshot.agentId,
       restoredPath,
       destinationPath: path.join(input.importDir, ...snapshot.agentDir.split("/"), AGENT_STORE_BASENAME),
     };
-    return { store, requiresUpgrade: fit !== "exact" };
+    return store;
   });
-  const stores = landed.map((item) => item.store);
-  if (landed.some((item) => item.requiresUpgrade)) await upgradeStagedAgentStores(landingRoot, { signal: input.signal, log: input.log });
-  if (input.requireDrained) await assertCarriedAgentSessionsDrained(landingRoot);
   input.log?.(`[agent-store-snapshot] restored ${stores.length} carried agent database(s)`);
   return { landingRoot, stores };
 }

@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import { DatabaseSync } from "node:sqlite";
+import { readPostgresAgentAnchor, writeAgentStore } from "./agent-postgres.js";
 import { buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, CLAUDE_CLI_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
-import { deleteAuthProfileStore, readAuthProfileState, readAuthProfileStore, SHARED_MAIN_AGENT_ID, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
+import { deleteAuthProfileStore, readAuthProfileState, readAuthProfileStore, SHARED_MAIN_AGENT_ID, writeAuthProfileStore, } from "./auth-profile-store.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
 import { agentModelTokenProfileEntry, openAiBrokerProfileEntry, openRouterBrokerProfileEntry, } from "./agent-model-token-materializer.js";
 /**
@@ -61,8 +62,8 @@ const SUBSCRIPTION_PROFILE_IDS = {
     openai: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     anthropic: CLAUDE_CLI_DEFAULT_PROFILE_ID,
 };
-export function removeSubscriptionProfiles(agentDir, providers) {
-    const store = readAuthProfileStore(agentDir);
+export async function removeSubscriptionProfiles(agentDir, providers) {
+    const store = await readAuthProfileStore(agentDir);
     const profiles = store?.profiles;
     if (!profiles || typeof profiles !== "object" || Array.isArray(profiles))
         return false;
@@ -78,10 +79,10 @@ export function removeSubscriptionProfiles(agentDir, providers) {
     if (!removed)
         return false;
     if (Object.keys(next).length === 0) {
-        deleteAuthProfileStore(agentDir);
+        await deleteAuthProfileStore(agentDir);
     }
     else {
-        writeAuthProfileStore(agentDir, { ...store, profiles: next });
+        await writeAuthProfileStore(agentDir, { ...store, profiles: next });
     }
     return true;
 }
@@ -142,8 +143,8 @@ function removeDirIfPresent(targetPath) {
     fs.rmSync(targetPath, { recursive: true, force: true });
     return true;
 }
-function scrubOauthProfiles(agentDir, agentId) {
-    const store = readAuthProfileStore(agentDir);
+async function scrubOauthProfiles(agentDir, agentId) {
+    const store = await readAuthProfileStore(agentDir);
     const current = store && typeof store === "object" && !Array.isArray(store)
         ? store
         : {};
@@ -157,7 +158,7 @@ function scrubOauthProfiles(agentDir, agentId) {
         fs.chmodSync(path.join(agentDir, "openclaw-agent.sqlite"), 0o600);
         return false;
     }
-    writeAuthProfileStore(agentDir, {
+    await writeAuthProfileStore(agentDir, {
         ...current,
         profiles,
     });
@@ -324,10 +325,28 @@ function resetPersistedSessions(persisted) {
     return resetCount;
 }
 const SESSION_SCRUB_BUSY_TIMEOUT_MS = 30_000;
-function scrubUnsafeSqliteSessions(openclawDir, agentId, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
+async function scrubUnsafeAgentSessions(openclawDir, agentId, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) {
     const dbPath = path.join(openclawDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
     if (!fs.existsSync(dbPath))
         return 0;
+    const anchor = readPostgresAgentAnchor(dbPath);
+    if (anchor)
+        return writeAgentStore(anchor, async (client, schema) => {
+            const { rows } = await client.query(`SELECT session_key, entry_json FROM ${schema}.session_nodes FOR UPDATE`);
+            let scrubbed = 0;
+            for (const row of rows) {
+                const entry = typeof row.entry_json === "string" ? JSON.parse(row.entry_json) : row.entry_json;
+                if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+                    throw new Error(`customer oauth purge: ${dbPath} session ${String(row.session_key)} is not an object`);
+                }
+                if (!sessionUsesCustomerOauthRuntime(entry, directRuntimeModelRefs, allowedModelRefs, allowedProviderIds) ||
+                    !clearSessionRuntimeState(entry))
+                    continue;
+                await client.query(`UPDATE ${schema}.session_nodes SET entry_json = $1 WHERE session_key = $2`, [JSON.stringify(entry), row.session_key]);
+                scrubbed++;
+            }
+            return scrubbed;
+        });
     const db = new DatabaseSync(dbPath);
     try {
         db.exec(`PRAGMA busy_timeout = ${SESSION_SCRUB_BUSY_TIMEOUT_MS};`);
@@ -384,12 +403,12 @@ function purgeNativeCredentialArtifacts(homeDir, agentIds, affectedAgentIds) {
         agentIds.forEach((agentId) => affectedAgentIds.add(agentId));
     return removedFiles;
 }
-function purgeAgentOauthRuntime(opts, agentId, runtime) {
+async function purgeAgentOauthRuntime(opts, agentId, runtime) {
     const persistedSessions = readPersistedSessions(opts.openclawDir, agentId);
     const unsafePersistedSession = Object.values(persistedSessions?.sessions ?? {}).some((session) => sessionUsesCustomerOauthRuntime(session, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds));
     if (unsafePersistedSession)
         runtime.affectedAgentIds.add(agentId);
-    let resetSessions = scrubUnsafeSqliteSessions(opts.openclawDir, agentId, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds);
+    let resetSessions = await scrubUnsafeAgentSessions(opts.openclawDir, agentId, runtime.directRuntimeModelRefs, runtime.allowedModelRefs, runtime.allowedProviderIds);
     let removedFiles = 0;
     const authJson = codexAuthJsonPath(opts.openclawDir, agentId);
     for (const candidate of [authJson, `${authJson}.tmp`, `${authJson}.promote.tmp`]) {
@@ -404,7 +423,7 @@ function purgeAgentOauthRuntime(opts, agentId, runtime) {
     if (removedDirectories > 0)
         runtime.affectedAgentIds.add(agentId);
     const agentDir = codexAgentDir(opts.openclawDir, agentId);
-    const scrubbedProfileStores = scrubOauthProfiles(agentDir, agentId) ? 1 : 0;
+    const scrubbedProfileStores = await scrubOauthProfiles(agentDir, agentId) ? 1 : 0;
     if (scrubbedProfileStores > 0)
         runtime.affectedAgentIds.add(agentId);
     if (projectAgentModelsJson(agentDir, opts.modelProviders ?? {})) {
@@ -415,7 +434,7 @@ function purgeAgentOauthRuntime(opts, agentId, runtime) {
     }
     return { removedFiles, removedDirectories, scrubbedProfileStores, resetSessions };
 }
-export function purgeCustomerOauthRuntimeArtifacts(opts) {
+export async function purgeCustomerOauthRuntimeArtifacts(opts) {
     const agentIds = Array.from(new Set(opts.agentIds));
     for (const agentId of agentIds) {
         if (!isSafeAgentId(agentId)) {
@@ -432,7 +451,7 @@ export function purgeCustomerOauthRuntimeArtifacts(opts) {
     const allowedProviderIds = new Set(opts.allowedProviderIds ?? []);
     removedFiles += purgeNativeCredentialArtifacts(opts.homeDir, agentIds, affectedAgentIds);
     for (const agentId of agentIds) {
-        const result = purgeAgentOauthRuntime(opts, agentId, {
+        const result = await purgeAgentOauthRuntime(opts, agentId, {
             directRuntimeModelRefs,
             allowedModelRefs,
             allowedProviderIds,
@@ -453,7 +472,7 @@ export function purgeCustomerOauthRuntimeArtifacts(opts) {
 }
 // codexAuthProfilesPath retired in 2026.6 — auth-profiles is now a SQLite
 // row in {agentDir}/openclaw-agent.sqlite (upstream PR #89102). Use
-// readAuthProfileStore / writeAuthProfileStore from auth-profile-sqlite.ts.
+// readAuthProfileStore / writeAuthProfileStore from auth-profile-store.ts.
 /**
  * Reads the codex auth-state payload as text — preferring the SQLite
  * auth_profile_state row (openclaw v2026.6.5+) and falling back to the
@@ -463,8 +482,8 @@ export function purgeCustomerOauthRuntimeArtifacts(opts) {
  * Keeps the text-in / health-out contract of `deriveCodexAuthHealth`
  * unchanged.
  */
-export function readCodexAuthStateText(openclawDir, agentId) {
-    const stateRow = readAuthProfileState(codexAgentDir(openclawDir, agentId));
+export async function readCodexAuthStateText(openclawDir, agentId) {
+    const stateRow = await readAuthProfileState(codexAgentDir(openclawDir, agentId));
     if (stateRow !== null)
         return JSON.stringify(stateRow);
     try {
@@ -515,29 +534,29 @@ function hasUsableCodexDefaultProfile(store) {
         typeof fields.refresh === "string" &&
         fields.refresh.length > 0);
 }
-function alignCodexProfileProvider(agentDir, store, onAligned) {
+async function alignCodexProfileProvider(agentDir, store, onAligned) {
     if (!hasUsableCodexDefaultProfile(store))
         return;
     const profile = profileStoreProfiles(store)[OPENAI_CODEX_DEFAULT_PROFILE_ID];
     if (profile.provider === "openai")
         return;
     profile.provider = "openai";
-    writeAuthProfileStore(agentDir, store);
+    await writeAuthProfileStore(agentDir, store);
     onAligned();
 }
-function writeMergedAuthProfileStore(agentDir, next) {
+async function writeMergedAuthProfileStore(agentDir, next) {
     const nextProfiles = profileStoreProfiles(next);
     if (!nextProfiles) {
-        writeAuthProfileStore(agentDir, next);
+        await writeAuthProfileStore(agentDir, next);
         return;
     }
-    const existingProfiles = profileStoreProfiles(readAuthProfileStore(agentDir));
-    writeAuthProfileStore(agentDir, {
+    const existingProfiles = profileStoreProfiles(await readAuthProfileStore(agentDir));
+    await writeAuthProfileStore(agentDir, {
         ...next,
         profiles: { ...(existingProfiles ?? {}), ...nextProfiles },
     });
 }
-function restoreClaudeCliCredential(opts) {
+async function restoreClaudeCliCredential(opts) {
     const nativeTarget = opts.nativeHomeDir
         ? claudeCliNativeCredentialsPath(opts.nativeHomeDir)
         : undefined;
@@ -552,7 +571,7 @@ function restoreClaudeCliCredential(opts) {
             fs.writeFileSync(nativeTmp, nativeJson, { mode: 0o600 });
             fs.chmodSync(nativeTmp, 0o600);
         }
-        writeMergedAuthProfileStore(opts.agentDir, buildClaudeCliAuthProfilesStore(opts.payload, Date.now()));
+        await writeMergedAuthProfileStore(opts.agentDir, buildClaudeCliAuthProfilesStore(opts.payload, Date.now()));
         if (nativeTarget && nativeTmp) {
             fs.renameSync(nativeTmp, nativeTarget);
             fs.chmodSync(nativeTarget, 0o600);
@@ -565,8 +584,8 @@ function restoreClaudeCliCredential(opts) {
         throw err;
     }
 }
-function restoreCodexCredential(payload, agentDir) {
-    writeMergedAuthProfileStore(agentDir, buildCodexAuthProfilesStore(payload));
+async function restoreCodexCredential(payload, agentDir) {
+    await writeMergedAuthProfileStore(agentDir, buildCodexAuthProfilesStore(payload));
 }
 export function removeStaleCodexAuthJson(openclawDir, agentId) {
     const authJson = codexAuthJsonPath(openclawDir, agentId);
@@ -576,15 +595,15 @@ export function removeStaleCodexAuthJson(openclawDir, agentId) {
     }
     return removed;
 }
-function planCodexRestore(item, agentDir, log) {
-    const store = readAuthProfileStore(agentDir);
+async function planCodexRestore(item, agentDir, log) {
+    const store = await readAuthProfileStore(agentDir);
     const usableCodexProfilePresent = hasUsableCodexDefaultProfile(store);
-    alignCodexProfileProvider(agentDir, store, () => {
+    await alignCodexProfileProvider(agentDir, store, () => {
         log(`byosub: aligned ${item.agentId} ChatGPT credential with the OpenAI runtime provider`);
     });
     const action = shouldRestoreCodexCredential({
         usableCodexProfilePresent,
-        authStateText: readCodexAuthStateText(item.openclawDir, item.agentId),
+        authStateText: await readCodexAuthStateText(item.openclawDir, item.agentId),
         profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
         now: Date.now(),
     });
@@ -602,7 +621,7 @@ export async function restoreByosubCredentials(opts) {
             if (removeStaleCodexAuthJson(item.openclawDir, item.agentId)) {
                 log(`byosub: removed the stale codex-home auth.json for ${item.agentId} (OpenClaw reads only its auth store)`);
             }
-            ({ action: codexAction } = planCodexRestore(item, agentDir, log));
+            ({ action: codexAction } = await planCodexRestore(item, agentDir, log));
             if (codexAction === "skip") {
                 skipped++;
                 log(`byosub: ${item.agentId} healthy on-disk credential — conservative skip (openclaw owns it; not clobbering)`);
@@ -612,7 +631,7 @@ export async function restoreByosubCredentials(opts) {
         try {
             const payload = await opts.fetchSecret(item.secretName);
             if (item.provider === "anthropic") {
-                const { nativeRestored } = restoreClaudeCliCredential({
+                const { nativeRestored } = await restoreClaudeCliCredential({
                     agentDir,
                     payload,
                     ...(opts.claudeCliNativeHomeDir
@@ -623,7 +642,7 @@ export async function restoreByosubCredentials(opts) {
                 log(`byosub: restored claude-cli credential for ${item.agentId}${nativeRestored ? " (native Claude CLI credential restored)" : ""}`);
                 continue;
             }
-            restoreCodexCredential(payload, agentDir);
+            await restoreCodexCredential(payload, agentDir);
             restored++;
             log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
         }

@@ -137,6 +137,36 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
+## PostgreSQL agent handoff
+
+The current source is `05c8dcdebb93fcd1edc4b65f32c2618631cef72b`, the existing
+`ac2ff7bf` overlay plus the non-destructive `agents.detach` owner. Upstream
+[PR #178755](https://github.com/openclaw/openclaw/pull/178755) contributes this
+capability independently. Remove this overlay addition once the selected upstream
+base supplies equivalent durable detach and its regression tests pass. Existing
+`agents.delete` semantics cannot implement a state-preserving Gateway move.
+
+The exact native build, sequential maintained packers, SDK contracts, package
+integrity and actual Linux full-plugin installer passed. Installed Parallel and
+Codex sources and all three native hooks matched; offline UID 1000 smoke passed.
+The root archive is 120341910 bytes, SHA256
+`1ed67d45f7f9f6e32c9b5cf54a4cc31e4cc02f983776fe8fdf1e13bd9392d6dc`.
+Its object is `openclaw-fork-1ed67d45.tgz`. Mattermost is byte-identical to the
+existing `openclaw-mattermost-74cca5fd.tgz`, SHA256
+`74cca5fdd7c77472e6794b83cb3816aa0f019175503d2de0bf19e93bcdb59654`.
+Exact-generation downloads of root `1792529380141155` and Mattermost
+`1792520298183836` match those complete hashes.
+Hosted islands were regenerated from the same clean source; the only changed
+native inputs are the detach schema and its three protocol registry exports.
+The inherited startup-JavaScript warning remains 317.8 KiB against 317.5 KiB.
+
+A synthetic PostgreSQL 16 proof on this installed runtime used Octogee's scoped
+non-superuser credentials for Shared → Builder → Shared. Namespace ownership
+transfer passed native catalog admission; store UUID, session ID, transcripts,
+auth and indexed memory survived. Detached sources refused writes before and
+after restart, and a neighboring Shared agent stayed usable. No live model
+inference, environment deployment or active-active ownership was exercised.
+
 ## October 20 refresh on frozen main 04789278
 
 The operator selected upstream main
@@ -469,6 +499,7 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 
 | Retained boundary | Concrete gap without it; condition for removal |
 | --- | --- |
+| Non-destructive agent handoff | Native `agents.delete` purges sessions even with `deleteFiles: false`. Retain durable `agents.detach` until the selected upstream supplies its store-preserving drain/recovery contract; contribution: [#178755](https://github.com/openclaw/openclaw/pull/178755). |
 | Channel-wide Mattermost memory | Native default thread sessions do not share agent memory across a room's threads. The operator-selected channel scope keeps one existing native session per channel while independently authorizing reply/archive roots. Keep it until native channel configuration covers this product behavior; do not merge or delete older thread histories. |
 | Requester, reviewer and execution-time authority | A native approval role alone does not bind another member's action to the current tenant/requester/run. The exact upstream control accepted an unauthorized other-UID review; the retained boundary rejects it. Remove when native public contracts carry and enforce the same current authority across tool and Codex execution. |
 | Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing exposes equivalent independent grant sources. |

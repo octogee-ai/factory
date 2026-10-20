@@ -260,6 +260,9 @@ export interface GatewayRpcClient {
     cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
     agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
     agentsDelete(params: GatewayAgentsDeleteParams): Promise<GatewayAgentsDeleteResult>;
+    agentsDetach(params: {
+        agentId: string;
+    }): Promise<GatewayAgentsDeleteResult>;
     isGatewayUp(timeoutMs?: number): Promise<boolean>;
     close(): Promise<void>;
 }

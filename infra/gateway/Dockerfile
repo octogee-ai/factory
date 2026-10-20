@@ -128,6 +128,7 @@ RUN node /octogee/infra/gateway/verify-extension-bundles.mjs /octogee/extensions
 # extension TypeScript sources out of the deliverable image. COPY transfers the
 # verified post-prune filesystem state without the builder stage's lower layers.
 FROM ${OPENCLAW_BASE_IMAGE} AS gateway-runtime
+COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

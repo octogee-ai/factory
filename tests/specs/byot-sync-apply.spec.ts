@@ -62,7 +62,7 @@ describe("applyByotState — agent-dir guard", () => {
   test("refuses to write when the agent dir does not exist (no orphan dirs)", async () => {
     const { applyByotState } = await loadModule();
     const slug = "no-agent-yet";
-    const changed = applyByotState(slug, { slug, provider: "anthropic" });
+    const changed = await applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(false);
     expect(fs.existsSync(agentDirFor(slug))).toBe(false);
     expect(fs.existsSync(authDbPath(slug))).toBe(false);
@@ -70,7 +70,7 @@ describe("applyByotState — agent-dir guard", () => {
 
   test("disable on a slug with no agent dir is a quiet no-op (no false 'changed')", async () => {
     const { applyByotState } = await loadModule();
-    expect(applyByotState("no-agent-yet", null)).toBe(false);
+    expect(await applyByotState("no-agent-yet", null)).toBe(false);
   });
 });
 
@@ -80,7 +80,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    const changed = applyByotState(slug, { slug, provider: "anthropic" });
+    const changed = await applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(true);
 
     expect(fs.existsSync(authDbPath(slug))).toBe(true);
@@ -92,8 +92,8 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
-    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
+    expect(await applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
+    expect(await applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
   });
 
   test("stored payload has the expected SecretRef shape", async () => {
@@ -101,7 +101,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
 
     const stored = authProfilesStored(slug) as {
       profiles: Record<string, { type: string; provider: string; keyRef: object }>;
@@ -120,7 +120,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     const raw = JSON.stringify(authProfilesStored(slug));
     expect(raw).not.toContain("sk-ant-");
     expect(raw).not.toMatch(/"key"\s*:/);
@@ -131,7 +131,7 @@ describe("applyByotState — enabled write path", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     expect(fs.existsSync(path.join(agentDirFor(slug), "auth-profiles.json"))).toBe(
       false,
     );
@@ -147,12 +147,12 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     const modelsPath = path.join(agentDirFor(slug), "models.json");
     expect(authProfilesStored(slug)).not.toBeNull();
     expect(fs.existsSync(modelsPath)).toBe(false);
 
-    const changed = applyByotState(slug, {
+    const changed = await applyByotState(slug, {
       slug,
       provider: "openai-compatible",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -176,11 +176,11 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
+    await applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
     const modelsPath = path.join(agentDirFor(slug), "models.json");
     expect(fs.existsSync(modelsPath)).toBe(true);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     expect(fs.existsSync(modelsPath)).toBe(false);
     expect(authProfilesStored(slug)).not.toBeNull();
   });
@@ -190,10 +190,10 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "openai", model: "openai/gpt-4o" });
+    await applyByotState(slug, { slug, provider: "openai", model: "openai/gpt-4o" });
     expect(authProfilesStored(slug)).not.toBeNull();
 
-    applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
+    await applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
     expect(authProfilesStored(slug)).toBeNull();
     expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(true);
   });
@@ -203,10 +203,10 @@ describe("applyByotState — provider switch reconciliation (Phase 2)", () => {
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
+    await applyByotState(slug, { slug, provider: "openai-compatible", baseUrl: "https://x/v1", model: "a/b" });
     expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(true);
 
-    applyByotState(slug, null);
+    await applyByotState(slug, null);
     expect(authProfilesStored(slug)).toBeNull();
     expect(fs.existsSync(path.join(agentDirFor(slug), "models.json"))).toBe(false);
   });
@@ -217,10 +217,10 @@ describe("applyByotState — disabled remove path", () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     expect(authProfilesStored(slug)).not.toBeNull();
 
-    expect(applyByotState(slug, null)).toBe(true);
+    expect(await applyByotState(slug, null)).toBe(true);
     expect(authProfilesStored(slug)).toBeNull();
   });
 
@@ -228,7 +228,7 @@ describe("applyByotState — disabled remove path", () => {
     const { applyByotState } = await loadModule();
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
-    expect(applyByotState(slug, null)).toBe(false);
+    expect(await applyByotState(slug, null)).toBe(false);
   });
 });
 
@@ -248,7 +248,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
     writeAuthProfileStore(dir, openclawCacheBody);
     expect(fs.existsSync(markerPath(slug))).toBe(false);
 
-    expect(applyByotState(slug, null)).toBe(false);
+    expect(await applyByotState(slug, null)).toBe(false);
     expect(authProfilesStored(slug)).toEqual(openclawCacheBody);
   });
 
@@ -257,7 +257,7 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
+    expect(await applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
     expect(fs.existsSync(markerPath(slug))).toBe(true);
 
     const markerContent = JSON.parse(fs.readFileSync(markerPath(slug), "utf8"));
@@ -269,12 +269,12 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     const firstMarker = fs.readFileSync(markerPath(slug), "utf8");
 
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
+    expect(await applyByotState(slug, { slug, provider: "anthropic" })).toBe(false);
     const secondMarker = fs.readFileSync(markerPath(slug), "utf8");
     expect(secondMarker).toBe(firstMarker);
   });
@@ -284,11 +284,11 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     expect(authProfilesStored(slug)).not.toBeNull();
     expect(fs.existsSync(markerPath(slug))).toBe(true);
 
-    expect(applyByotState(slug, null)).toBe(true);
+    expect(await applyByotState(slug, null)).toBe(true);
     expect(authProfilesStored(slug)).toBeNull();
     expect(fs.existsSync(markerPath(slug))).toBe(false);
   });
@@ -298,12 +298,12 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
-    applyByotState(slug, null);
+    await applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, null);
     expect(authProfilesStored(slug)).toBeNull();
     expect(fs.existsSync(markerPath(slug))).toBe(false);
 
-    expect(applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
+    expect(await applyByotState(slug, { slug, provider: "anthropic" })).toBe(true);
     expect(authProfilesStored(slug)).not.toBeNull();
     expect(fs.existsSync(markerPath(slug))).toBe(true);
   });
@@ -313,16 +313,16 @@ describe("applyByotState — `.byot-managed` marker (auth-profile collision guar
     const slug = "smile-wring-011b";
     mkAgentDir(slug);
 
-    applyByotState(slug, { slug, provider: "anthropic" });
+    await applyByotState(slug, { slug, provider: "anthropic" });
     fs.unlinkSync(markerPath(slug));
     expect(authProfilesStored(slug)).not.toBeNull();
     expect(fs.existsSync(markerPath(slug))).toBe(false);
 
-    const changed = applyByotState(slug, { slug, provider: "anthropic" });
+    const changed = await applyByotState(slug, { slug, provider: "anthropic" });
     expect(changed).toBe(false);
     expect(fs.existsSync(markerPath(slug))).toBe(true);
 
-    expect(applyByotState(slug, null)).toBe(true);
+    expect(await applyByotState(slug, null)).toBe(true);
     expect(authProfilesStored(slug)).toBeNull();
     expect(fs.existsSync(markerPath(slug))).toBe(false);
   });

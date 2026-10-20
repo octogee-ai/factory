@@ -4,7 +4,7 @@ const runtimeLogger = createServiceLogger("byosub-syncback-runner");
 
 import * as fs from "fs";
 import { parseAgentId } from "../../shared/types/identity.js";
-import { readAuthProfileStore, sharedAuthStoreUsable } from "../lib/auth-profile-sqlite.js";
+import { readAuthProfileStore, sharedAuthStoreUsable } from "../lib/auth-profile-store.js";
 import {
   agentIdsFromConfig,
   codexAgentDir,
@@ -41,16 +41,16 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
     const sharedDir = sharedAuthAgentDir(OPENCLAW_DIR);
     return agentIds
       .filter((agentId) => parseAgentId(agentId).kind === "coach")
-      .map((agentId) => ({ agentId, readCredential: () => codexCredentialIn(sharedDir) }));
+      .map((agentId) => ({ agentId, readCredential: async () => await codexCredentialIn(sharedDir) }));
   }
   return agentIds.map((agentId) => ({
     agentId,
-    readCredential: () => codexCredentialIn(codexAgentDir(OPENCLAW_DIR, agentId)),
+    readCredential: async () => await codexCredentialIn(codexAgentDir(OPENCLAW_DIR, agentId)),
   }));
 }
 
-function codexCredentialIn(agentDir: string): string | null {
-  const store = readAuthProfileStore(agentDir);
+async function codexCredentialIn(agentDir: string): Promise<string | null> {
+  const store = await readAuthProfileStore(agentDir);
   return store === null ? null : buildCodexAuthJsonFromStore(JSON.stringify(store));
 }
 

@@ -5,7 +5,7 @@ import { catalogEntryForModelRef, OPENAI_PLATFORM_PROVIDER_ID, OPENROUTER_PLATFO
 import { DEFAULT_FREE_TIER_MODEL_REF } from "@octogee/shared/types/platform-config";
 import { buildModelCredentialConfigForProvider, claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS, } from "./model-credential-materializer.js";
 import { AGENTS_DIR, log } from "./config.js";
-import { deleteAuthProfileStore, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-sqlite.js";
+import { deleteAuthProfileStore, readAuthProfileStore, writeAuthProfileStore, } from "./auth-profile-store.js";
 function agentIdForSlug(slug) {
     return `octogee-${slug}-coach`;
 }
@@ -13,7 +13,7 @@ function agentDirForSlug(slug, agentsDir = AGENTS_DIR) {
     return path.join(agentsDir, agentIdForSlug(slug), "agent");
 }
 // auth-profiles moved to SQLite in openclaw v2026.6.1+ (PR #89102) — we
-// write that row directly via auth-profile-sqlite. models.json stayed as a
+// write that row directly via auth-profile-store. models.json stayed as a
 // file, so it's the only entry in this list.
 const BYOT_FILES = ["models.json"];
 const BYOT_MARKER = ".byot-managed";
@@ -321,7 +321,7 @@ function removeIfExists(target) {
     fs.rmSync(target);
     return true;
 }
-function removeManagedByotState(slug, dir, markerPath, filePath, preserveAuthProfileStore) {
+async function removeManagedByotState(slug, dir, markerPath, filePath, preserveAuthProfileStore) {
     if (!fs.existsSync(markerPath))
         return false;
     let changed = false;
@@ -330,8 +330,8 @@ function removeManagedByotState(slug, dir, markerPath, filePath, preserveAuthPro
     // On a shared (per-agent broker-token) pod the auth-profile store holds the
     // anthropic:default broker token (+ any byosub OAuth) that the materializer owns;
     // tearing down a customer's local BYOT files must NOT delete it.
-    if (!preserveAuthProfileStore && readAuthProfileStore(dir) !== null) {
-        deleteAuthProfileStore(dir);
+    if (!preserveAuthProfileStore && await readAuthProfileStore(dir) !== null) {
+        await deleteAuthProfileStore(dir);
         changed = true;
     }
     changed = removeIfExists(markerPath) || changed;
@@ -361,14 +361,14 @@ function writeDesiredByotFiles(desired, filePath) {
     }
     return changed;
 }
-function syncAuthProfileStore(dir, input, preserveAuthProfileStore) {
+async function syncAuthProfileStore(dir, input, preserveAuthProfileStore) {
     if (isModelCredentialOauthProvider(input.provider))
         return false;
     const cfg = buildModelCredentialConfigForProvider(input);
     if (cfg.authProfiles) {
-        const before = readAuthProfileStore(dir);
+        const before = await readAuthProfileStore(dir);
         if (JSON.stringify(before) !== JSON.stringify(cfg.authProfiles)) {
-            writeAuthProfileStore(dir, cfg.authProfiles);
+            await writeAuthProfileStore(dir, cfg.authProfiles);
             return true;
         }
         return false;
@@ -377,25 +377,25 @@ function syncAuthProfileStore(dir, input, preserveAuthProfileStore) {
     // not the profile store — so the store would normally be cleared here. On a
     // shared broker-token pod it instead holds the anthropic:default broker token,
     // so preserve it.
-    if (preserveAuthProfileStore || readAuthProfileStore(dir) === null)
+    if (preserveAuthProfileStore || await readAuthProfileStore(dir) === null)
         return false;
-    deleteAuthProfileStore(dir);
+    await deleteAuthProfileStore(dir);
     return true;
 }
-export function applyByotState(slug, input, agentsDir = AGENTS_DIR, opts = {}) {
+export async function applyByotState(slug, input, agentsDir = AGENTS_DIR, opts = {}) {
     const dir = agentDirForSlug(slug, agentsDir);
     const filePath = (f) => path.join(dir, f);
     const markerPath = filePath(BYOT_MARKER);
     const preserve = opts.preserveAuthProfileStore ?? false;
     if (!input) {
-        return removeManagedByotState(slug, dir, markerPath, filePath, preserve);
+        return await removeManagedByotState(slug, dir, markerPath, filePath, preserve);
     }
     if (!fs.existsSync(dir)) {
         log(`⚠ [byot-sync] ${slug}: agent dir missing (provisioning incomplete?) — skipping BYOT write`);
         return false;
     }
     let changed = writeDesiredByotFiles(desiredByotFiles(input), filePath);
-    changed = syncAuthProfileStore(dir, input, preserve) || changed;
+    changed = await syncAuthProfileStore(dir, input, preserve) || changed;
     if (!fs.existsSync(markerPath)) {
         writeAtomic(markerPath, JSON.stringify({ managedSince: new Date().toISOString() }) + "\n");
     }

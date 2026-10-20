@@ -24,7 +24,7 @@ export declare function codexStagingHomeDir(openclawDir: string, agentId: string
 export declare function codexStagingAuthJsonPath(openclawDir: string, agentId: string): string;
 export declare function codexAgentDir(openclawDir: string, agentId: string): string;
 export declare function sharedAuthAgentDir(openclawDir: string): string;
-export declare function removeSubscriptionProfiles(agentDir: string, providers: readonly ByosubProvider[]): boolean;
+export declare function removeSubscriptionProfiles(agentDir: string, providers: readonly ByosubProvider[]): Promise<boolean>;
 export declare function codexAuthStatePath(openclawDir: string, agentId: string): string;
 export interface CustomerOauthRuntimePurgeResult {
     removedFiles: number;
@@ -43,7 +43,7 @@ interface CustomerOauthRuntimePurgeOptions {
     allowedProviderIds?: readonly string[];
     modelProviders?: Record<string, unknown>;
 }
-export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRuntimePurgeOptions): CustomerOauthRuntimePurgeResult;
+export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRuntimePurgeOptions): Promise<CustomerOauthRuntimePurgeResult>;
 /**
  * Reads the codex auth-state payload as text — preferring the SQLite
  * auth_profile_state row (openclaw v2026.6.5+) and falling back to the
@@ -53,7 +53,7 @@ export declare function purgeCustomerOauthRuntimeArtifacts(opts: CustomerOauthRu
  * Keeps the text-in / health-out contract of `deriveCodexAuthHealth`
  * unchanged.
  */
-export declare function readCodexAuthStateText(openclawDir: string, agentId: string): string | null;
+export declare function readCodexAuthStateText(openclawDir: string, agentId: string): Promise<string | null>;
 export declare function shouldRestoreCodexCredential(opts: {
     usableCodexProfilePresent: boolean;
     authStateText: string | null;

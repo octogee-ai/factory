@@ -299,6 +299,7 @@ builderBalloon:
       ephemeral-storage: 9Gi
 
 networkPolicy:
+  agentStorePostgresCidr: ""
   enforceDefaultDeny: false
   nodeLocalDnsCidr: 169.254.20.10/32
   controlPlaneCidr: ""

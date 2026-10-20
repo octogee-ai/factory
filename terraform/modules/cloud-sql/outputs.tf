@@ -29,3 +29,7 @@ output "gitea_password" {
   value       = random_password.gitea.result
   sensitive   = true
 }
+
+output "agent_store_db_name" {
+  value = google_sql_database.agent_store.name
+}

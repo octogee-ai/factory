@@ -625,6 +625,14 @@ export function createGatewayRpc(opts = {}) {
         },
         agentsCreate: (params) => callAgentsCreate(call, params),
         agentsDelete: (params) => callAgentsDelete(call, params),
+        agentsDetach: async (params) => {
+            const payload = await callOkPayload(call, "agents.detach", params);
+            if (payload.agentId !== params.agentId || (payload.purgeFailed !== undefined && payload.purgeFailed !== false) ||
+                payload.failed !== undefined && (!Array.isArray(payload.failed) || payload.failed.length > 0)) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "agents.detach did not confirm completed store-preserving cleanup");
+            }
+            return payload;
+        },
         async secretsReload() {
             return parseSecretsReloadPayload(await call("secrets.reload", {}));
         },

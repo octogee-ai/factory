@@ -160,6 +160,11 @@ spec:
             # gateway-edge) so they agree on the token without any in-pod
             # generation. Init seeds the PVC and the template that envsubst's
             # OPENCLAW_GATEWAY_TOKEN into openclaw.json reads it from this env.
+            - name: OPENCLAW_AGENT_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: agent-store-dsn
             - name: OPENCLAW_GATEWAY_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -388,6 +393,11 @@ spec:
             # container env block for the rationale). Pinned via the chart
             # so kubectl-set-env side-channels can't drift the value out
             # from under helm again.
+            - name: OPENCLAW_AGENT_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: agent-store-dsn
             - name: OPENCLAW_GATEWAY_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -605,6 +615,11 @@ spec:
             # init container env block for the rationale). chat-proxy is
             # folded into this container and needs the same token openclaw
             # uses for its in-pod RPC.
+            - name: OPENCLAW_AGENT_STORE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-auth-token-{{ .Values.gatewayId }}
+                  key: agent-store-dsn
             - name: OPENCLAW_GATEWAY_TOKEN
               valueFrom:
                 secretKeyRef:

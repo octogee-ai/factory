@@ -2000,7 +2000,7 @@ describe("manual disposable runtime return", () => {
     { label: "another gateway readiness failure", rolledBack: false, steps: [], error: "source gateway run-bob is not migration-ready (desiredStatus=running)", expected: 409 },
     { label: "unknown failure without rollback", rolledBack: false, steps: [], expected: 409 },
     { label: "source quiesce without rollback", rolledBack: false, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "failed" }], expected: 409 },
-    { label: "legacy source restored after target cleanup fails", rolledBack: true, steps: [], expected: 202, runFailedReturn: true },
+    { label: "source stays fenced after target cleanup fails", rolledBack: false, steps: [], expected: 409, runFailedReturn: true },
   ])("safely handles return retry after $label", async ({ rolledBack, steps, expected, error = "checkpoint failed", ...scenario }) => {
     const targetGatewayId = "run-alice";
     const operationId = `builder-return-${targetGatewayId}-g3`;

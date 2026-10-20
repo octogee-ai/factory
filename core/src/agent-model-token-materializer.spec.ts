@@ -148,20 +148,20 @@ describe("missingPlatformBrokerProfileTargets", () => {
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
-  it("reports every profile when the store is empty", () => {
+  it("reports every profile when the store is empty", async () => {
     expect(
-      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", ALL_SURFACES),
+      (await missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", ALL_SURFACES)),
     ).toHaveLength(3);
   });
 
-  it("reports every profile when openclaw has not created the store at all", () => {
+  it("reports every profile when openclaw has not created the store at all", async () => {
     const fresh = path.join(agentDir, "never-booted");
     expect(
-      missingPlatformBrokerProfileTargets(fresh, "octogee-alice-coach", ALL_SURFACES),
+      (await missingPlatformBrokerProfileTargets(fresh, "octogee-alice-coach", ALL_SURFACES)),
     ).toHaveLength(3);
   });
 
-  it("settles on an applied keyRef without requiring a plaintext key", () => {
+  it("settles on an applied keyRef without requiring a plaintext key", async () => {
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
@@ -174,14 +174,14 @@ describe("missingPlatformBrokerProfileTargets", () => {
     });
 
     expect(
-      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+      (await missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
         openRouter: false,
         openAi: false,
-      }),
+      })),
     ).toEqual([]);
   });
 
-  it("still reports a profile pinned to another agent's broker token", () => {
+  it("still reports a profile pinned to another agent's broker token", async () => {
     writeAuthProfileStore(agentDir, {
       profiles: {
         "anthropic:default": {
@@ -193,14 +193,14 @@ describe("missingPlatformBrokerProfileTargets", () => {
     });
 
     expect(
-      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+      (await missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
         openRouter: false,
         openAi: false,
-      }),
+      })),
     ).toHaveLength(1);
   });
 
-  it("leaves a byosub OAuth primary alone — it is not one of ours to assert", () => {
+  it("leaves a byosub OAuth primary alone — it is not one of ours to assert", async () => {
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
@@ -209,10 +209,10 @@ describe("missingPlatformBrokerProfileTargets", () => {
     });
 
     expect(
-      missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
+      (await missingPlatformBrokerProfileTargets(agentDir, "octogee-alice-coach", {
         openRouter: false,
         openAi: false,
-      }).map((target) => target.path),
+      })).map((target) => target.path),
     ).toEqual(["profiles.anthropic:default.key"]);
   });
 });
@@ -756,11 +756,11 @@ describe("model-readiness before openclaw can accept the plan", () => {
     expect(retry.deferred).toEqual([]);
     expect(retry.materialized).toBe(1);
     expect(
-      missingPlatformBrokerProfileTargets(
+      (await missingPlatformBrokerProfileTargets(
         path.join(agentsDir, "octogee-alice-coach", "agent"),
         "octogee-alice-coach",
         { openRouter: true, openAi: false },
-      ),
+      )),
     ).toEqual([]);
   });
 });

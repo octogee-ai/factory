@@ -38,6 +38,16 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            - name: OPENCLAW_AGENT_STORE_ADMIN_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-store-postgres
+                  key: admin-dsn
+            - name: OPENCLAW_AGENT_STORE_CLIENT_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-store-postgres
+                  key: client-dsn
             - name: LOG_LEVEL
               value: {{ (.Values.global).logLevel | default "info" | quote }}
             - name: K8S_NAMESPACE

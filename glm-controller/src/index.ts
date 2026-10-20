@@ -1,3 +1,5 @@
+import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
+import { createAgentStoreCredentialProvisioner, assertNoBuilderAgentStores } from "@octogee/core/agent-store-credentials";
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
 import { createBuilderHomeMigrator } from "./builder-home-migration.js";
 import { createBuilderHomeProvider } from "./lib/builder-home-provider.js";
@@ -2621,6 +2623,19 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     randomTokenHex: defaultRandomTokenHex,
     log,
   });
+  const provisionAgentStoreCredentials = createAgentStoreCredentialProvisioner(
+    requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store credential provisioning requires the controller-only administration URL"),
+    requireEnv("OPENCLAW_AGENT_STORE_CLIENT_DSN", "all Gateways require a reachable agent-store database endpoint"),
+  );
+  const { ensureGatewayAuthSecret, ensureGatewayCredentials } = createGatewayCredentialEnsurers({
+    auth: authSecretEnsurer,
+    readGateway: async (gatewayId) => {
+      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      return projectGatewayDesiredRootForGateway(snapshot.exists ? snapshot.data() : undefined, gatewayId);
+    },
+    provisionAgentStore: provisionAgentStoreCredentials,
+    runKubectl,
+  });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,
     log,
@@ -2659,7 +2674,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       : createHelmSubprocessRunner({
           runHelm: spawnHelm,
           log,
-          ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
+          ensureAuthSecret: ensureGatewayCredentials,
           ensureServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
           runKubectl,
         });
@@ -2682,7 +2697,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
         caCert: readFileSync(process.env.GATEWAY_VM_KUBERNETES_CA_PATH ?? "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "utf8"),
       },
       routesConfigMap: process.env.GATEWAY_VM_ROUTES_CONFIGMAP ?? "octogee-vm-routes",
-      ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
+      ensureAuthSecret: ensureGatewayCredentials,
       readDesiredStatus: async (gatewayId) => {
         const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
         return projectGatewayDesiredRootForGateway(snap.exists ? snap.data() : undefined, gatewayId)?.desiredStatus ?? null;
@@ -2756,6 +2771,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
     runRuntimeRecovery: convergeGateways.runExclusive,
+    ensureGatewayCredentials,
   });
 
   const deps: ControllerDeps = {
@@ -2771,7 +2787,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     convergeGateways,
     reconcileSafetyRefreshMs: RECONCILE_SAFETY_REFRESH_MS_DEFAULT,
     chartFingerprint,
-    ensureGatewayAuthSecret: authSecretEnsurer.ensureAuthSecret,
+    ensureGatewayAuthSecret,
     startDisruptionObserver: () => startDisruptionObserver({
       db,
       runKubectl,
@@ -2921,6 +2937,7 @@ function createMigrationClientBuilder(
   db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
+  ensureGatewayCredentials?: AuthSecretEnsurer["ensureAuthSecret"],
 ) {
   return (resolveSync: (gatewayId: string) => string, retainedSource?: RetainedSourceContext) => {
     return createMigrationClient({
@@ -2931,7 +2948,12 @@ function createMigrationClientBuilder(
         db, namespace: NAMESPACE, privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
         resolveGatewayUrl: resolveSync, resolveGatewayVm: transportId => readGatewayVmAddress(db, transportId), log: logFn,
       }),
-      transferState: createRsyncMigrationTransfer({
+      transferState: async (request) => {
+        if (request.mode === "final") {
+          if (!ensureGatewayCredentials) throw new Error("Final agent-store transfer requires Gateway credential provisioning");
+          await ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId: request.toGatewayId });
+        }
+        return createRsyncMigrationTransfer({
         ...(retainedSource ? {retainedSource: retainedSourceRunner(db,retainedSource)} : {}),
         db,
         namespace: NAMESPACE,
@@ -2940,7 +2962,8 @@ function createMigrationClientBuilder(
         resolveGatewayUrl: resolveSync,
         resolveGatewayVm: (transportId) => readGatewayVmAddress(db, transportId),
         log: logFn,
-      }),
+      })(request);
+      },
     });
   };
 }
@@ -3121,6 +3144,7 @@ async function buildHandlers(
     ) => Promise<T>;
     chartFingerprint: string;
     runRuntimeRecovery: (work: () => Promise<void>) => Promise<void>;
+    ensureGatewayCredentials: AuthSecretEnsurer["ensureAuthSecret"];
   },
 ): Promise<OperationHandlers> {
   const { privateKey, modelKeySourceIssuer } = fleetOps;
@@ -3253,6 +3277,7 @@ async function buildHandlers(
       db,
       privateKey,
       logFn,
+      fleetOps.ensureGatewayCredentials,
     ),
     resolveSourcePlacement: async (uid, currentGatewayId) => {
       const source = await resolveSourceRevisionFromFirestore(db, uid, currentGatewayId);
@@ -3849,8 +3874,10 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         return Date.parse(expiresAt) + 60_000 > now ? [artifactIds[index]] : [];
       });
     },
-    cloudErase: (cleanup, currentOperationId) =>
-      nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup),
+    cloudErase: async (cleanup, currentOperationId) => {
+      await assertNoBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account-deletion verification requires the PostgreSQL agent-store administration URL"), cleanup);
+      return nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup);
+    },
     verifyErasure: async (cleanup, currentOperationId) => {
       const remaining = await verifyCustomerFirestoreErasure(
         db,

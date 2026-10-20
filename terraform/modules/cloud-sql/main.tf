@@ -79,3 +79,9 @@ resource "google_sql_user" "gitea" {
   password = random_password.gitea.result
   project  = var.project_id
 }
+
+resource "google_sql_database" "agent_store" {
+  name     = var.agent_store_db_name
+  instance = google_sql_database_instance.main.name
+  project  = var.project_id
+}

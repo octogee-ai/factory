@@ -1,4 +1,5 @@
 FROM node:26-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1
+COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
 ARG NPM_VERSION=12.1.0
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
     && npm_root="$(npm root --global)" \

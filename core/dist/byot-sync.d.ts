@@ -86,5 +86,5 @@ export declare function deriveDesiredByotState(userData: {
 export declare function platformCoachModelInputForUser(slug: string, userData: Parameters<typeof deriveDesiredByotState>[0]): CoachModelInput | null;
 export declare function applyByotState(slug: string, input: ByotInput | null, agentsDir?: string, opts?: {
     preserveAuthProfileStore?: boolean;
-}): boolean;
+}): Promise<boolean>;
 export {};

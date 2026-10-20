@@ -142,7 +142,7 @@ describe("codexHomeDir / codexAuthJsonPath (shared codex-home path atom)", () =>
 });
 
 describe("purgeCustomerOauthRuntimeArtifacts", () => {
-  it("removes every customer native OAuth artifact and resets owned sessions while preserving unrelated state", () => {
+  it("removes every customer native OAuth artifact and resets owned sessions while preserving unrelated state", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
@@ -184,11 +184,11 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     });
 
     expect(
-      purgeCustomerOauthRuntimeArtifacts({
+      (await purgeCustomerOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
-      }),
+      })),
     ).toEqual({
       removedFiles: 5,
       removedDirectories: 1,
@@ -214,36 +214,32 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     });
   });
 
-  it("is idempotent and rejects unsafe agent paths before touching disk", () => {
+  it("is idempotent and rejects unsafe agent paths before touching disk", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
     seedAgent(oc, agentId);
     const options = { openclawDir: oc, homeDir: home, agentIds: [agentId] };
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toEqual({
+    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toEqual({
       removedFiles: 0,
       removedDirectories: 0,
       scrubbedProfileStores: 1,
       resetSessions: 0,
       affectedAgentIds: [agentId],
     });
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toEqual({
+    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toEqual({
       removedFiles: 0,
       removedDirectories: 0,
       scrubbedProfileStores: 0,
       resetSessions: 0,
       affectedAgentIds: [],
     });
-    expect(() =>
-      purgeCustomerOauthRuntimeArtifacts({
-        openclawDir: oc,
-        homeDir: home,
-        agentIds: ["../../victim"],
-      }),
-    ).toThrow("unsafe agent id");
+    await expect(purgeCustomerOauthRuntimeArtifacts({
+      openclawDir: oc, homeDir: home, agentIds: ["../../victim"],
+    })).rejects.toThrow("unsafe agent id");
   });
 
-  it("resets a session override that references an arbitrary Codex/Claude runtime model id", () => {
+  it("resets a session override that references an arbitrary Codex/Claude runtime model id", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
@@ -264,12 +260,12 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     );
 
     expect(
-      purgeCustomerOauthRuntimeArtifacts({
+      (await purgeCustomerOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
         directRuntimeModelRefs: ["anthropic/arbitrary-direct-runtime"],
-      }),
+      })),
     ).toEqual({
       removedFiles: 0,
       removedDirectories: 0,
@@ -279,7 +275,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     });
   });
 
-  it("preserves catalog sessions and resets a stale non-catalog provider/model session", () => {
+  it("preserves catalog sessions and resets a stale non-catalog provider/model session", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-a-coach";
@@ -317,7 +313,7 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
         },
       }),
     );
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toMatchObject({
+    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toMatchObject({
       resetSessions: 0,
       affectedAgentIds: [],
     });
@@ -331,14 +327,14 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
         },
       }),
     );
-    expect(purgeCustomerOauthRuntimeArtifacts(options)).toMatchObject({
+    expect((await purgeCustomerOauthRuntimeArtifacts(options))).toMatchObject({
       resetSessions: 1,
       affectedAgentIds: [agentId],
     });
     expect(JSON.parse(fs.readFileSync(sessionsPath, "utf8"))).toEqual({});
   });
 
-  it("scrubs unsafe SQLite session routing in place without deleting history or safe sessions", () => {
+  it("scrubs unsafe SQLite session routing in place without deleting history or safe sessions", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-alice-coach";
@@ -389,14 +385,14 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     db.close();
 
     expect(
-      purgeCustomerOauthRuntimeArtifacts({
+      (await purgeCustomerOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
         resetSessionStores: false,
         allowedModelRefs: ["anthropic/claude-sonnet-4-6"],
         allowedProviderIds: ["anthropic"],
-      }),
+      })),
     ).toMatchObject({ resetSessions: 1, affectedAgentIds: [] });
 
     const verified = new DatabaseSync(dbPath, { readOnly: true });
@@ -440,20 +436,20 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     `], { stdio: ["ignore", "pipe", "inherit"] });
     await new Promise((resolve) => writer.stdout!.once("data", resolve));
 
-    const result = purgeCustomerOauthRuntimeArtifacts({
+    const result = (await purgeCustomerOauthRuntimeArtifacts({
       openclawDir: oc,
       homeDir: home,
       agentIds: [agentId],
       resetSessionStores: false,
       allowedModelRefs: ["anthropic/claude-sonnet-4-6"],
       allowedProviderIds: ["anthropic"],
-    });
+    }));
     await new Promise((resolve) => writer.once("close", resolve));
 
     expect(result).toMatchObject({ resetSessions: 1 });
   });
 
-  it("exact-projects bound auth profiles and per-agent model providers", () => {
+  it("exact-projects bound auth profiles and per-agent model providers", async () => {
     const oc = mkTmp();
     const home = mkTmp();
     const agentId = "octogee-alice-coach";
@@ -486,12 +482,12 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     };
 
     expect(
-      purgeCustomerOauthRuntimeArtifacts({
+      (await purgeCustomerOauthRuntimeArtifacts({
         openclawDir: oc,
         homeDir: home,
         agentIds: [agentId],
         modelProviders,
-      }),
+      })),
     ).toMatchObject({ scrubbedProfileStores: 1, affectedAgentIds: [agentId] });
     expect(readAuthProfileStore(agentDir)).toEqual({
       version: 7,
@@ -1035,22 +1031,22 @@ describe("readCodexAuthStateText — SQLite state row preferred, JSON file fallb
     db.close();
   }
 
-  it("returns null when no SQLite row and no legacy JSON file exists", () => {
+  it("returns null when no SQLite row and no legacy JSON file exists", async () => {
     const oc = mkTmp();
     fs.mkdirSync(path.join(oc, "agents", "octogee-a-coach", "agent"), { recursive: true });
-    expect(readCodexAuthStateText(oc, "octogee-a-coach")).toBeNull();
+    expect((await readCodexAuthStateText(oc, "octogee-a-coach"))).toBeNull();
   });
 
-  it("returns the legacy JSON file when SQLite has no state row (mixed-build slot or pre-migration)", () => {
+  it("returns the legacy JSON file when SQLite has no state row (mixed-build slot or pre-migration)", async () => {
     const oc = mkTmp();
     const agentDir = codexAgentDir(oc, "octogee-a-coach");
     fs.mkdirSync(agentDir, { recursive: true });
     const json = JSON.stringify({ version: 1, usageStats: {} });
     fs.writeFileSync(codexAuthStatePath(oc, "octogee-a-coach"), json);
-    expect(readCodexAuthStateText(oc, "octogee-a-coach")).toBe(json);
+    expect((await readCodexAuthStateText(oc, "octogee-a-coach"))).toBe(json);
   });
 
-  it("returns the SQLite state row (re-stringified) when present — even if a stale JSON file is also on disk", () => {
+  it("returns the SQLite state row (re-stringified) when present — even if a stale JSON file is also on disk", async () => {
     const oc = mkTmp();
     const agentDir = codexAgentDir(oc, "octogee-a-coach");
     const sqlitePayload = {
@@ -1062,7 +1058,7 @@ describe("readCodexAuthStateText — SQLite state row preferred, JSON file fallb
     seedSqliteState(agentDir, sqlitePayload);
     // Stale legacy file — must NOT shadow the live SQLite state.
     fs.writeFileSync(codexAuthStatePath(oc, "octogee-a-coach"), JSON.stringify({ stale: true }));
-    const got = readCodexAuthStateText(oc, "octogee-a-coach");
+    const got = (await readCodexAuthStateText(oc, "octogee-a-coach"));
     expect(JSON.parse(got ?? "null")).toEqual(sqlitePayload);
   });
 });

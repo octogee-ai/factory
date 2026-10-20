@@ -124,7 +124,7 @@ interface HarnessOptions {
   targetArtifact?: GatewayArtifact | null;
 }
 
-const SAME_OPENCLAW = "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)";
+const SAME_OPENCLAW = `OpenClaw 2026.7.2-beta.7 (${"a".repeat(40)})`;
 const SAME_OPENCLAW_VERSION = "2026.7.2-beta.7";
 
 function targetArtifact(version = SAME_OPENCLAW_VERSION): GatewayArtifact {
@@ -221,15 +221,6 @@ function mkDeps(options: HarnessOptions = {}) {
   return { deps, ctx, client, events, steps, persisted };
 }
 
-const CONTEXT_CUSTODY = {
-  uid: "uid-alice", slug: "alice", returnOperationId: "prior-return", migrationId: "prior-scheduler",
-  sourceGatewayId: "prior-native", sharedGatewayId: "gw-blue", instanceName: "native", instanceId: "123",
-  zone: "us-central1-a", homeDiskId: "456", homeDiskSource: "disk/home", completedAt: 1000, cutoverCommittedAt: 900,
-};
-const CONTEXT_ARCHIVE = { archiveId: "mig-op-1", uid: "uid-alice", slug: "alice",
-  agentIds: ["octogee-alice-coach"], contextSha256: "a".repeat(64), custody: CONTEXT_CUSTODY };
-const RETAIN_CONTEXT = { mode: "retain-native" as const, archiveId: "mig-op-1", custody: CONTEXT_CUSTODY };
-
 function mockNativeReturn(checkpointRequested = false) {
   return {
     checkpointRequested,
@@ -244,36 +235,13 @@ function mockNativeReturn(checkpointRequested = false) {
   };
 }
 
-describe("retained native agent context transfer", () => {
-  it.each([false, true])("selects before pre-sync and acknowledges the verified final receipt before source cleanup (durable=%s)", async durable => {
+describe("PostgreSQL agent context transfer", () => {
+  it.each([false, true])("uses the current store without selecting an archived context (durable=%s)", async durable => {
     const h = mkDeps({ durable });
-    const order: string[] = [];
-    h.deps.prepareNativeAgentContextTransfer = vi.fn(async input => {
-      order.push(`select:${input.mode}`);
-      return input.mode === "keys" ? null : RETAIN_CONTEXT;
-    });
-    const receipt = { migrationId: "mig-op-1", slug: "alice", imported: true, sharedAgentContext: CONTEXT_ARCHIVE };
-    h.client.transferState = vi.fn(async request => { order.push(`transfer:${request.mode}`); return receipt; });
-    h.deps.acknowledgeNativeAgentContextTransfer = vi.fn(async () => { order.push("ack"); });
-    h.client.unmount = vi.fn(async request => { order.push(`unmount:${request.gatewayId}`); return { ...receipt, unmounted: true }; });
-    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx);
-    expect(result).toMatchObject({ success: true });
-    expect(h.client.transferState).toHaveBeenCalledWith(expect.objectContaining({ mode: "pre", agentContext: RETAIN_CONTEXT }));
-    expect(h.client.transferState).toHaveBeenCalledWith(expect.objectContaining({ mode: "final", agentContext: RETAIN_CONTEXT }));
-    expect(h.deps.prepareNativeAgentContextTransfer).toHaveBeenCalledWith(expect.objectContaining({ uid: "uid-alice", slug: "alice", operationId: "op-1", claimedStartedAt: 4000, migrationId: "mig-op-1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", mode: "pre" }));
-    expect(h.deps.acknowledgeNativeAgentContextTransfer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final" }), RETAIN_CONTEXT, receipt);
-    expect(order.indexOf("select:pre")).toBeLessThan(order.indexOf("transfer:pre"));
-    expect(order.indexOf("ack")).toBeLessThan(order.indexOf("unmount:gw-blue"));
-  });
-
-  it("refuses cutover and source cleanup when final receipt acknowledgment fails", async () => {
-    const h = mkDeps();
-    h.deps.prepareNativeAgentContextTransfer = vi.fn(async input => input.mode === "keys" ? null : RETAIN_CONTEXT);
-    h.deps.acknowledgeNativeAgentContextTransfer = vi.fn(async () => { throw new Error("archive receipt mismatch"); });
-    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx);
-    expect(result).toMatchObject({ success: false, error: expect.stringContaining("archive receipt mismatch") });
-    expect(h.deps.commitCutover).not.toHaveBeenCalled();
-    expect(h.client.unmount).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: true });
+    expect(h.client.transferState).toHaveBeenCalledWith(expect.objectContaining({ mode: "final" }));
+    expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
+    expect(h.deps.acknowledgeNativeAgentContextTransfer).not.toHaveBeenCalled();
   });
 });
 
@@ -507,57 +475,26 @@ describe("native computer return", () => {
     return native;
   }
 
-  it.each([true, false])("stages only the archived Shared context before checkpoint and finishes under assigned restore custody (archive=%s)", async hasArchive => {
+  it("hands off the current PostgreSQL store before checkpoint and cutover", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);
     const order: string[] = [];
-    const policy = { mode: "restore-shared" as const, archive: CONTEXT_ARCHIVE };
-    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
-    h.deps.prepareNativeAgentContextTransfer = vi.fn(async () => hasArchive ? policy : null);
     h.client.transferState = vi.fn(async request => {
-      order.push("archive-stage");
-      expect(request).toMatchObject({ mode: "final", stageOnly: true, includeActivationManifest: false, agentContext: policy });
-      return { migrationId: "mig-op-1", slug: "alice", imported: false, sharedAgentContextStage: stage };
-    });
-    h.deps.acknowledgeNativeSharedContextStage = vi.fn(async () => { order.push("stage-ack"); });
-    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => hasArchive ? { stage, completed: false } : null);
-    h.deps.acknowledgeNativeSharedContextRestore = vi.fn(async () => { order.push("restore-ack"); targetState = "serving"; });
-    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
-    let fenced = false;
-    h.ctx.withCustomerRestoreFence = vi.fn(async (_scope, work) => { fenced = true; await work(); fenced = false; });
-    vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, gatewayId: "gw-green" });
-    h.client.restoreTarget = vi.fn(async () => { throw new Error("fresh activation before archive installation would accept customer turns"); });
-    let targetState: "quiescing" | "serving" = "serving";
-    h.client.finishAgentContextRestore = vi.fn(async request => {
-      expect(fenced).toBe(true);
-      expect(targetState).toBe("quiescing");
-      expect(h.client.restoreTarget).not.toHaveBeenCalled();
-      order.push("archive-finish"); expect(request.stage).toEqual(stage);
-      return { migrationId: request.migrationId, slug: request.slug, imported: true, sharedAgentContext: CONTEXT_ARCHIVE };
+      order.push("store-handoff");
+      expect(request).toMatchObject({ mode: "final", includeActivationManifest: true });
+      expect(request.agentContext).toBeUndefined();
+      expect(request.stageOnly).toBeUndefined();
+      return { migrationId: "mig-op-1", slug: "alice", imported: true };
     });
     native.requestCheckpoint.mockImplementation(async () => { order.push("request-checkpoint"); });
-    native.awaitCheckpoint.mockImplementation(async () => {
-      await new Promise(resolve => setImmediate(resolve));
-      if (hasArchive) expect(h.client.finishAgentContextRestore).toHaveBeenCalledOnce();
-      order.push("checkpoint");
-    });
-    native.park.mockImplementation(async () => { order.push("park"); return { parked: "suspended" }; });
     vi.mocked(h.deps.commitCutover).mockImplementation(async commit => {
-      if (hasArchive) { expect(commit.nativeSharedContextHold).toMatchObject({ operationId: "op-1", claimedStartedAt: 4000, migrationId: "mig-op-1", stage }); targetState = "quiescing"; }
-      else expect(commit.nativeSharedContextHold).toBeUndefined();
-      order.push("cutover"); vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
+      order.push("cutover");
+      expect(commit.nativeSharedContextHold).toBeUndefined();
     });
-    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx);
-    expect(result).toMatchObject({ success: true });
-    expect(h.deps.prepareNativeAgentContextTransfer).toHaveBeenCalledWith(expect.objectContaining({ mode: "final", uid: "uid-alice", claimedStartedAt: 4000, fromGatewayId: "gw-blue", toGatewayId: "gw-green" }));
-    if (hasArchive) {
-      expect(h.client.transferState).toHaveBeenCalledOnce();
-      expect(order).toEqual(["archive-stage", "stage-ack", "request-checkpoint", "cutover", "archive-finish", "restore-ack", "checkpoint", "park"]);
-    } else {
-      expect(h.client.transferState).not.toHaveBeenCalled();
-      expect(h.client.finishAgentContextRestore).not.toHaveBeenCalled();
-      expect(order).toEqual(["request-checkpoint", "cutover", "checkpoint", "park"]);
-    }
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: true });
+    expect(order).toEqual(["store-handoff", "request-checkpoint", "cutover"]);
+    expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
+    expect(h.deps.prepareNativeSharedContextRestore).not.toHaveBeenCalled();
   });
 
   it("unmounts the customer on the live Builder after its writer hold is released and before suspending it", async () => {
@@ -580,112 +517,41 @@ describe("native computer return", () => {
     expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("source gw-blue suspended for reuse");
   });
 
-  it("retains the source without stopping it when the checkpoint fails after cutover", async () => {
+  it("retains the native home when its checkpoint fails after the store cutover", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);
-    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
-    h.deps.prepareNativeAgentContextTransfer = vi.fn(async () => ({ mode: "restore-shared", archive: CONTEXT_ARCHIVE }));
-    h.client.transferState = vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: false, sharedAgentContextStage: stage }));
-    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => ({ stage, completed: false }));
-    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
-    h.ctx.withCustomerRestoreFence = vi.fn(async (_scope, work) => work());
-    vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, gatewayId: "gw-green" });
-    vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
-      vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
-    });
-    native.awaitCheckpoint.mockRejectedValue(new Error("native computer checkpoint timeout; source retained"));
-    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx);
-    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("checkpoint timeout; source retained") });
-    expect(classifyOperationFailure(result.error)).toBe("transient");
-    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
-    expect(h.client.finishAgentContextRestore).toHaveBeenCalledOnce();
-    expect(h.deps.acknowledgeNativeSharedContextRestore).toHaveBeenCalledOnce();
-    expect(native.release).not.toHaveBeenCalled();
-    expect(native.releaseWriterHold).not.toHaveBeenCalled();
-    expect(native.park).not.toHaveBeenCalled();
-    expect(h.client.abortImport).not.toHaveBeenCalled();
-    expect(h.client.resume).not.toHaveBeenCalled();
-    expect(h.client.unmount).not.toHaveBeenCalled();
-    expect(h.client.verifyTarget).not.toHaveBeenCalled();
-    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
-    expect(h.steps.filter(step => step.status === "failed").map(step => step.name)).toEqual(["checkpoint-native-computer"]);
-  });
-
-  it("reports both failures when the checkpoint and the Shared restore fail together after cutover", async () => {
-    const h = mkDeps({ sourceGatewayId: "gw-green" });
-    const native = nativeReturn(h);
-    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
-    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => ({ stage, completed: false }));
-    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
-    h.ctx.withCustomerRestoreFence = vi.fn(async (_scope, work) => work());
-    h.client.finishAgentContextRestore = vi.fn(async () => { throw new Error("rsync import session not found"); });
     native.awaitCheckpoint.mockRejectedValue(new Error("checkpoint upload failed"));
-    const request = mkOp({ startedAt: 4000, cutoverCommittedAt: 3000, input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" } });
-    const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
-    expect(result).toMatchObject({ success: false, rolledBack: false });
-    expect(result.error).toContain("checkpoint upload failed");
-    expect(result.error).toContain("rsync import session not found");
-    expect(native.release).not.toHaveBeenCalled();
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false, rolledBack: false, error: expect.stringContaining("checkpoint upload failed"),
+    });
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+    expect(native.park).not.toHaveBeenCalled();
+    expect(native.releaseWriterHold).not.toHaveBeenCalled();
+    expect(h.client.resume).not.toHaveBeenCalled();
   });
 
-  it.each(["checkpoint-claim", "stage-ack"])("aborts private archive staging and preserves the source when %s fails", async scenario => {
+  it("detaches an imported target before resuming the source after a failed native checkpoint claim", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);
-    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
-    h.deps.prepareNativeAgentContextTransfer = vi.fn(async () => ({ mode: "restore-shared", archive: CONTEXT_ARCHIVE }));
-    h.client.transferState = vi.fn(async () => ({ migrationId: "mig-op-1", slug: "alice", imported: false, sharedAgentContextStage: stage }));
-    if (scenario === "checkpoint-claim") native.requestCheckpoint.mockRejectedValue(new Error("native computer has another checkpoint request"));
-    else h.deps.acknowledgeNativeSharedContextStage = vi.fn(async () => { throw new Error("stage claim changed"); });
-    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: false, rolledBack: true });
-    expect(h.client.abortImport).toHaveBeenCalledExactlyOnceWith({ migrationId: "mig-op-1", slug: "alice", gatewayId: "gw-green", mode: "final" });
+    const order: string[] = [];
+    native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim failed"));
+    h.client.unmount = vi.fn(async request => { order.push("detach-target"); return { ...request, unmounted: true }; });
+    h.client.resume = vi.fn(async () => { order.push("adopt-source"); });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true });
+    expect(order).toEqual(["detach-target", "adopt-source"]);
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
-    expect(h.client.finishAgentContextRestore).not.toHaveBeenCalled();
-    expect(h.client.unmount).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("recovers an archived return after cutover without replaying source transfer or overwriting an acknowledged restore (completed=%s)", async completed => {
-    const h = mkDeps({ sourceGatewayId: "gw-green" });
+  it("keeps the source fenced when native rollback cannot confirm target detach", async () => {
+    const h = mkDeps();
     const native = nativeReturn(h);
-    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
-    const checkpoint = { name: "20261011T120000Z.tar.gz", generation: "123", coverage: "builder-home-v2" as const, writerProtocol: 3 as const, size: 100, sha256: "c".repeat(64), instanceId: CONTEXT_ARCHIVE.custody.instanceId, completedAt: 120 };
-    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => ({ stage, completed, checkpoint }));
-    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
-    h.ctx.assertCustomerRestoreSettled = vi.fn().mockRejectedValueOnce(new PendingCustomerRestoreError("op-1")).mockResolvedValue(undefined);
-    h.ctx.withCustomerRestoreFence = vi.fn(async (_input, work) => work());
-    vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, gatewayId: "gw-green" });
-    const request = mkOp({ startedAt: 4000, cutoverCommittedAt: 3000, input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" } });
-    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: true });
-    expect(h.client.transferState).not.toHaveBeenCalled();
-    expect(native.requestCheckpoint).not.toHaveBeenCalled();
-    expect(native.awaitCheckpoint).toHaveBeenCalledOnce();
-    expect(h.ctx.withCustomerRestoreFence).toHaveBeenCalledWith(expect.objectContaining({ resume: true }), expect.any(Function));
-    if (completed) {
-      expect(h.client.restoreTarget).not.toHaveBeenCalled();
-      expect(h.client.finishAgentContextRestore).not.toHaveBeenCalled();
-      expect(h.deps.acknowledgeNativeSharedContextRestore).not.toHaveBeenCalled();
-    } else {
-      expect(h.client.restoreTarget).not.toHaveBeenCalled();
-      expect(h.client.finishAgentContextRestore).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sharedAgentContextRecovery: { checkpoint } }));
-      expect(h.deps.acknowledgeNativeSharedContextRestore).toHaveBeenCalledOnce();
-    }
-    expect(native.park).toHaveBeenCalledExactlyOnceWith({ mode: "suspend" });
-  });
-
-  it("retains the checkpoint and closed restore fence while archive finish is pending", async () => {
-    const h = mkDeps({ sourceGatewayId: "gw-green" });
-    const native = nativeReturn(h);
-    const stage = { migrationId: "mig-op-1", slug: "alice", toGatewayId: "gw-green", targetName: "shared-target", targetIp: "10.0.0.1", targetVm: false, targetCertificateSha256: "a".repeat(64), archive: CONTEXT_ARCHIVE };
-    h.deps.prepareNativeSharedContextRestore = vi.fn(async () => ({ stage, completed: false }));
-    h.ctx.assertActiveClaim = vi.fn(async () => undefined);
-    h.ctx.withCustomerRestoreFence = vi.fn(async (_input, work) => work());
-    vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, gatewayId: "gw-green" });
-    h.client.finishAgentContextRestore = vi.fn(async () => { throw new Error("archive target session missing"); });
-    const request = mkOp({ startedAt: 4000, cutoverCommittedAt: 3000, input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" } });
-    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("archive target session missing") });
-    expect(native.release).not.toHaveBeenCalled();
-    expect(h.client.transferState).not.toHaveBeenCalled();
-    expect(h.client.unmount).not.toHaveBeenCalled();
-    expect(h.deps.acknowledgeNativeSharedContextRestore).not.toHaveBeenCalled();
+    native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim failed"));
+    h.client.unmount = vi.fn(async () => { throw new Error("target detach unavailable"); });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false, rolledBack: false, error: expect.stringContaining("target detach unavailable"),
+    });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
   });
 
   describe("checkpoint release readiness", () => {
@@ -941,9 +807,9 @@ describe("native computer return", () => {
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.every((line) => line.endsWith(" op=op-1") && line.match(/ op=/gu)?.length === 1)).toBe(true);
     expect(h.client.restoreTarget).not.toHaveBeenCalled();
-    expect(h.client.transferState).not.toHaveBeenCalled();
-    expect(h.deps.readGatewayOpenclawVersion).not.toHaveBeenCalled();
-    expect(h.deps.readGatewayReleaseArtifact).not.toHaveBeenCalled();
+    expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final", includeActivationManifest: true }));
+    expect(h.deps.readGatewayOpenclawVersion).toHaveBeenCalledWith("gw-blue");
+    expect(h.deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
   });
 
   describe("interrupted Shared mount recovery", () => {
@@ -1234,7 +1100,7 @@ describe("native computer return", () => {
     expect(events.indexOf("request-checkpoint")).toBeLessThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
     expect(events.indexOf("native-checkpoint")).toBeGreaterThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
     expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("park"));
-    expect(client.transferState).not.toHaveBeenCalled();
+    expect(client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final", includeActivationManifest: true }));
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).toHaveBeenCalledTimes(requested ? 0 : 1);
     expect(native.release).not.toHaveBeenCalled();
@@ -1291,7 +1157,7 @@ describe("native computer return", () => {
     expect(result).toMatchObject({ success: false, rolledBack: true, error: "native computer has another checkpoint request" });
     expect(native.awaitCheckpoint).not.toHaveBeenCalled();
     expect(deps.commitCutover).not.toHaveBeenCalled();
-    expect(client.unmount).not.toHaveBeenCalled();
+    expect(client.unmount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "gw-green" }));
     expect(native.release).toHaveBeenCalledOnce();
     expect(deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
   });
@@ -1335,7 +1201,7 @@ describe("native computer return", () => {
       ]);
       expect(vi.mocked(h.client.scheduler).mock.calls[1][0]).toMatchObject({ migrationId: handoffId, agentIds: ["octogee-alice-coach"], snapshot });
       expect(h.steps.filter((step) => step.status === "done").map((step) => step.name)).toEqual([
-        "wait-for-active-work", "quiesce-source", "flush-source", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer",
+        "wait-for-active-work", "quiesce-source", "flush-source", "transfer-agent-store", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer",
         "release-native-writers", "retire-source-scheduler", "unmount-source", "park-native-computer", "activate-scheduler", "verify-target",
       ]);
       expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");
@@ -1875,36 +1741,19 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
   });
 });
 
-describe("migrate-customer — state transfer across OpenClaw identities", () => {
-  const CROSS_VERSION = { "gw-blue": "OpenClaw 2026.7.1 (aaaaaaaa)", "gw-green": "2026.7.2-beta.7" };
-  it.each([false, true])("transfers and verifies across versions with durable=%s", async (durable) => {
-    const { deps, ctx, client } = mkDeps({ durable, openclawVersions: CROSS_VERSION });
-    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
-    expect(result.success).toBe(true);
-    expect(result.output).toMatchObject({ stateMigration: { strategy: "migrate-state" } });
-    expect(client.transferState).toHaveBeenCalled();
-    expect(client.verifyTarget).toHaveBeenCalled();
-  });
-
-  it.each([false, true])("transfers across source builds with durable=%s", async (durable) => {
-    const { deps, ctx, client } = mkDeps({ durable,
-      targetArtifact: { ...targetArtifact(), openclawSourceSha: "b".repeat(40) },
-    });
-    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
-    expect(result.success).toBe(true);
-    expect(client.transferState).toHaveBeenCalled();
-    expect(client.verifyTarget).toHaveBeenCalled();
-  });
-
-  it.each([false, true])("does not require OpenClaw metadata with durable=%s", async (durable) => {
-    const { deps, ctx, client } = mkDeps({ durable,
-      openclawVersions: { "gw-blue": null, "gw-green": null },
-      targetArtifact: { ...targetArtifact(), imageTag: `deadbee@sha256:${"b".repeat(64)}`, openclawSourceSha: undefined, profileImages: undefined },
-    });
-    const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
-    expect(result.success).toBe(true);
-    expect(client.transferState).toHaveBeenCalled();
-    expect(client.verifyTarget).toHaveBeenCalled();
+describe("PostgreSQL handoff build identity", () => {
+  it.each([false, true])("refuses different or unreported OpenClaw builds before touching state (durable=%s)", async durable => {
+    for (const options of [
+      { targetArtifact: { ...targetArtifact(), openclawSourceSha: "b".repeat(40) } },
+      { openclawVersions: { "gw-blue": null, "gw-green": null }, targetArtifact: targetArtifact() },
+      { openclawVersions: { "gw-blue": "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)", "gw-green": SAME_OPENCLAW } },
+    ]) {
+      const { deps, ctx, client } = mkDeps({ durable, ...options });
+      expect(await createMigrateCustomerHandler(deps)(mkOp({}), ctx)).toMatchObject({ success: false, error: expect.stringContaining("same fully identified OpenClaw build") });
+      expect(client.transferState).not.toHaveBeenCalled();
+      expect(client.quiesce).not.toHaveBeenCalled();
+      expect(deps.setAssignmentState).not.toHaveBeenCalled();
+    }
   });
 });
 

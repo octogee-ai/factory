@@ -41,3 +41,8 @@ variable "create_users" {
   type        = bool
   default     = true
 }
+
+variable "agent_store_db_name" {
+  description = "Database for the environment's shared PostgreSQL agent stores"
+  type        = string
+}

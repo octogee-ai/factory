@@ -58,7 +58,7 @@ export const SHARED_MAIN_AGENT_ID = "main";
 const SHARED_STORE_STATE_KEY = "authProfiles.store";
 const SHARED_STATE_STATE_KEY = "authProfiles.state";
 const SHARED_STORE_OWNERSHIP_KEY = "auth.sharedStore";
-function sharedStateDbPath(agentDir) {
+export function sharedStateDbPath(agentDir) {
     const resolved = path.resolve(agentDir);
     const agentIdDir = path.dirname(resolved);
     const agentsDir = path.dirname(agentIdDir);

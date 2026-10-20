@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -92,6 +93,20 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
   };
 }
 
+function seedLocalAgentDatabase(file: string, state: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("CREATE TABLE fixture_state(value TEXT)");
+    db.prepare("INSERT INTO fixture_state VALUES (?)").run(state);
+  } finally { db.close(); }
+}
+
+function readLocalAgentFixtureState(file: string): unknown {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return db.prepare("SELECT value FROM fixture_state").get()?.value; }
+  finally { db.close(); }
+}
+
 async function procRootHolding(tempRoot: string, files: readonly string[]): Promise<string> {
   const procRoot = path.join(tempRoot, "proc");
   await fs.mkdir(path.join(procRoot, "92", "fd"), { recursive: true });
@@ -180,6 +195,7 @@ async function withRuntimeMock(fn: (runtime: RuntimeMock) => Promise<void>): Pro
       ...actual,
       OPENCLAW_DIR: tempRoot,
       OPENCLAW_CONFIG: path.join(tempRoot, "openclaw.json"),
+      readOpenClawConfig: () => JSON.parse(fsSync.readFileSync(path.join(tempRoot, "openclaw.json"), "utf8")),
       AGENTS_DIR: agentsDir,
       CUSTOMERS_DIR: path.join(tempRoot, "customers"),
       CUSTOMER_KEYS_DIR: path.join(tempRoot, "customer-keys"),
@@ -359,7 +375,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const database = path.join(agentDir, "openclaw-agent.sqlite");
       const customerFile = path.join(tempRoot, "customers", "alice", "notes.md");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(database, "retained state");
+      seedLocalAgentDatabase(database, "retained state");
       await fs.mkdir(path.dirname(customerFile), { recursive: true });
       await fs.writeFile(customerFile, "notes");
       const { buildBrokeredLifecycleAdapter } = await import(
@@ -376,7 +392,7 @@ describe("customer lifecycle config patch agent directories", () => {
       });
 
       await expect(adapter.prepareImportDir("alice", "pre")).rejects.toThrow("native cleanup incomplete");
-      expect(await fs.readFile(database, "utf8")).toBe("retained state");
+      expect(readLocalAgentFixtureState(database)).toBe("retained state");
       expect(await fs.readFile(customerFile, "utf8")).toBe("notes");
 
       await adapter.prepareImportDir("alice", "pre");
@@ -390,7 +406,7 @@ describe("customer lifecycle config patch agent directories", () => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;
       const database = path.join(agentsDir, "octogee-alice-coach", "agent", "openclaw-agent.sqlite");
       await fs.mkdir(path.dirname(database), { recursive: true });
-      await fs.writeFile(database, "retained state");
+      seedLocalAgentDatabase(database, "retained state");
       const procRoot = await procRootHolding(tempRoot, [database]);
       const { OpenclawWireError } = await import("../lib/gateway-rpc.js");
       const agentsDelete = vi.fn()
@@ -400,7 +416,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(brokerSnapshot), rpc: { agentsDelete } as unknown as GatewayRpcClient, log: vi.fn(), procRoot });
       await expect(adapter.prepareImportDir("alice", "pre")).rejects.toThrow("native cleanup incomplete");
       await expect(adapter.prepareImportDir("alice", "pre")).rejects.toThrow("agent database files are still held open");
-      expect(await fs.readFile(database, "utf8")).toBe("retained state");
+      expect(readLocalAgentFixtureState(database)).toBe("retained state");
       expect(agentsDelete).toHaveBeenCalledTimes(2);
     });
   });
@@ -412,7 +428,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const database = path.join(agentDir, "openclaw-agent.sqlite");
       const customerFile = path.join(tempRoot, "customers", "alice", "notes.md");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(database, "live");
+      seedLocalAgentDatabase(database, "live");
       await fs.mkdir(path.dirname(customerFile), { recursive: true });
       await fs.writeFile(customerFile, "notes");
       const { buildBrokeredLifecycleAdapter } = await import(
@@ -440,7 +456,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
       const customerDir = path.join(tempRoot, "customers", "alice");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(path.join(agentDir, "openclaw-agent.sqlite"), "released");
+      seedLocalAgentDatabase(path.join(agentDir, "openclaw-agent.sqlite"), "released");
       await fs.mkdir(customerDir, { recursive: true });
       const residue = await seedDepartedCustomerResidue(tempRoot);
       const { buildBrokeredLifecycleAdapter } = await import(
@@ -550,7 +566,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const database = path.join(agentDir, "openclaw-agent.sqlite");
       const customerDir = path.join(tempRoot, "customers", "alice");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(database, "still open");
+      seedLocalAgentDatabase(database, "still open");
       await fs.mkdir(customerDir, { recursive: true });
       const residue = await seedDepartedCustomerResidue(tempRoot);
       const { buildBrokeredLifecycleAdapter } = await import(
@@ -577,7 +593,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
       const database = path.join(agentDir, "openclaw-agent.sqlite");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(database, "pooled reader");
+      seedLocalAgentDatabase(database, "pooled reader");
       await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
@@ -629,7 +645,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
       const database = path.join(agentDir, "openclaw-agent.sqlite");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(database, "pooled reader");
+      seedLocalAgentDatabase(database, "pooled reader");
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
@@ -657,7 +673,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
       const database = path.join(agentDir, "openclaw-agent.sqlite");
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(database, "writer");
+      seedLocalAgentDatabase(database, "writer");
       await fs.mkdir(path.join(tempRoot, "customers", "alice"), { recursive: true });
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
@@ -902,6 +918,10 @@ describe("customer lifecycle config patch agent directories", () => {
       await fs.writeFile(customerKey, "private-key");
       await fs.writeFile(path.join(customerDir, ".system", ".mounted"), "");
       await fs.writeFile(path.join(customerDir, ".system", ".migrating-in"), "");
+      await fs.writeFile(path.join(tempRoot, "openclaw.json"), JSON.stringify({
+        agents: { list: [{ id: "octogee-unmatched-route" }, { id: "octogee-alice-coach" }] },
+        database: { engine: "sqlite", families: { agent: { engine: "postgres" } } },
+      }));
       const residue = await seedDepartedCustomerResidue(tempRoot);
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
@@ -911,6 +931,7 @@ describe("customer lifecycle config patch agent directories", () => {
         agentId,
         removedBindings: 0,
       }));
+      const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
       const channelsStop = vi.fn(async () => {
         if (state !== "stopped") throw new Error("channel stop unavailable");
         return { ok: true as const };
@@ -923,6 +944,7 @@ describe("customer lifecycle config patch agent directories", () => {
             hash: "cfg-hash",
           })),
           agentsDelete,
+          agentsDetach,
           channelsStatus: vi.fn(async () => ({
             channelAccounts: {
               mattermost: [{ accountId: "alice-coach", running: true }],
@@ -945,6 +967,7 @@ describe("customer lifecycle config patch agent directories", () => {
       });
 
       expect(agentsDelete).not.toHaveBeenCalled();
+      expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-alice-coach" });
       expect(channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });
       expect(applyConfigPatch).not.toHaveBeenCalled();
       expect(fsSync.existsSync(customerDir)).toBe(true);

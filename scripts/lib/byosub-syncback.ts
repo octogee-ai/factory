@@ -28,7 +28,7 @@ export function decideSyncBack(
 
 export interface SyncBackTarget {
   agentId: string;
-  readCredential: () => string | null;
+  readCredential: () => string | null | Promise<string | null>;
 }
 
 export interface SyncBackResult {
@@ -51,7 +51,7 @@ export async function syncBackSweep(opts: {
   let observed = 0;
   let failed = 0;
   for (const t of opts.targets) {
-    const credential = t.readCredential();
+    const credential = await t.readCredential();
     const cur = fingerprintCredential(credential);
     const d = decideSyncBack(prev.get(t.agentId) ?? null, cur);
     if (!d.changed || !cur || credential === null) continue;

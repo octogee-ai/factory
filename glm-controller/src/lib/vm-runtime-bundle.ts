@@ -157,7 +157,7 @@ async function renderEnv(
     }
     const secret = entry.valueFrom?.secretKeyRef;
     if (secret) {
-      const allowed = secret.name === `gateway-auth-token-${input.gatewayId}` && secret.key === "token"
+      const allowed = secret.name === `gateway-auth-token-${input.gatewayId}` && ["token", "agent-store-dsn"].includes(secret.key)
         || ["octogee-fleet-controller", "agent-control-router", "byot-sync-internal"].includes(secret.name) && secret.key === "public-key";
       if (!allowed) throw new Error(`env ${entry.name}: secret ${secret.name}/${secret.key} is not permitted in a tenant VM`);
       out[entry.name] = await input.readSecret(secret.name, secret.key);

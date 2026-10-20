@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
@@ -416,8 +417,16 @@ export async function writeActivationManifest(
 ): Promise<{ cwd: string; path: string }> {
   const relPath = activationManifestTarPath(manifest.slug);
   const fullPath = path.join(rootDir, relPath);
-  await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  await fs.writeFile(fullPath, `${JSON.stringify(manifest)}\n`, "utf-8");
+  await fs.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o700 });
+  const temporary = `${fullPath}.${randomUUID()}.tmp`;
+  try {
+    const file = await fs.open(temporary, "wx", 0o600);
+    try { await file.writeFile(`${JSON.stringify(manifest)}\n`, "utf-8"); await file.sync(); }
+    finally { await file.close(); }
+    await fs.rename(temporary, fullPath);
+    const directory = await fs.open(path.dirname(fullPath), "r");
+    try { await directory.sync(); } finally { await directory.close(); }
+  } finally { await fs.rm(temporary, { force: true }); }
   return { cwd: rootDir, path: relPath };
 }
 

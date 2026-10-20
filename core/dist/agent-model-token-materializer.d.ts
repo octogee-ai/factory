@@ -89,7 +89,7 @@ export interface PlatformBrokerProfileSurfaces {
     openAi: boolean;
 }
 export declare function platformBrokerProfileTargets(agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
-export declare function missingPlatformBrokerProfileTargets(agentDir: string, agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
+export declare function missingPlatformBrokerProfileTargets(agentDir: string, agentId: string, surfaces: PlatformBrokerProfileSurfaces): Promise<AuthProfileApiKeyTarget[]>;
 export declare function upsertOpenRouterBrokerModel(agentDir: string, input: OpenRouterBrokerModelInput): boolean;
 export declare function upsertOpenRouterBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function upsertOpenAiBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;

@@ -249,6 +249,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     log: vi.fn(),
     uidForSlug: vi.fn(async () => "uid-chris"),
     resumeCustomer: vi.fn(async () => undefined),
+    exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
     quiesceCustomer: vi.fn(async () => ({ drained: true, runningCount: 0 })),
     listExportPaths: vi.fn(async () => [
       { cwd: "/tmp/state", path: "agents/octogee-chris-coach" },
@@ -3040,7 +3041,7 @@ describe("queued-rsync migration control handlers", () => {
   });
 });
 
-describe("agent sqlite stores across an rsync carry", () => {
+describe("PostgreSQL agent anchors across an rsync carry", () => {
   const CARRIED_STORE = path.join(
     "agents",
     "octogee-chris-coach",
@@ -3071,6 +3072,10 @@ describe("agent sqlite stores across an rsync carry", () => {
     const db = new DatabaseSync(dbPath);
     db.exec("PRAGMA journal_mode=WAL");
     db.exec("CREATE TABLE transcript_events(body TEXT); CREATE TABLE session_nodes(status TEXT)");
+    if (!rel.includes("codex-home")) {
+      db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
+      db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run("1514f000-4540-4f4e-92a1-831adeac3d5b", "octogee_agent_fixture");
+    }
     seed(db);
     db.close();
     return dbPath;
@@ -3143,7 +3148,8 @@ describe("agent sqlite stores across an rsync carry", () => {
       listExportPaths: vi.fn(async () => [
         { cwd: stateDir, path: path.join("agents", "octogee-chris-coach") },
       ]),
-      exportOpenClawActivationManifest: vi.fn(async () => null as never),
+      releaseAgent: vi.fn(async () => undefined),
+      exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
     });
     return {
       handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw(), ...(options.log ? { log: options.log } : {}) })),
@@ -3153,30 +3159,27 @@ describe("agent sqlite stores across an rsync carry", () => {
     };
   }
 
-  it("carries an OpenClaw snapshot of each agent database and never the live files", async () => {
+  it("carries a detached PostgreSQL anchor and never the live files", async () => {
     const stateDir = await mkTempRoot();
     const dbPath = await writeStore(stateDir, CARRIED_STORE, () => {});
     const live = new DatabaseSync(dbPath);
     live.prepare("INSERT INTO transcript_events VALUES (?)").run("newest");
+    live.close();
     const runOpenClaw = fakeOpenClaw();
     let snapshotCarried = false;
     spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
       const snapshotSource = args.find((arg) => arg.endsWith(`/./${SNAPSHOT_REPOSITORY}`));
       snapshotCarried = snapshotSource !== undefined &&
-        fsSync.existsSync(path.join(snapshotSource.replace("/./", "/"), "snap-1", "database.sqlite"));
+        fsSync.existsSync(path.join(snapshotSource.replace("/./", "/"), "postgres-anchor", "database.sqlite"));
       return mkFakeChild({ exitCode: 0 });
     });
     const { handler, req } = pushRsync(stateDir, "mig-carry-snapshot", { runOpenClaw });
     const { res, getStatus } = mkResponse();
 
     await handler(req, res, vi.fn());
-    live.close();
 
     expect(getStatus()).toBe(200);
-    expect(runOpenClaw).toHaveBeenCalledWith(
-      ["backup", "sqlite", "create", "--agent", "octogee-chris-coach", "--repository", expect.stringMatching(new RegExp(`${SNAPSHOT_REPOSITORY}$`)), "--json"],
-      expect.any(Object),
-    );
+    expect(runOpenClaw).not.toHaveBeenCalled();
     expect(snapshotCarried).toBe(true);
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(args).toEqual(expect.arrayContaining([
@@ -3218,10 +3221,11 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(spawnMock.mock.calls[0]![1]).toContain("--exclude=/agents/*/agent/codex-home/*.sqlite");
   });
 
-  it("fails the push instead of carrying a store OpenClaw cannot snapshot", async () => {
+  it("refuses a SQLite agent after the PostgreSQL cutover", async () => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
     await writeStore(stateDir, "agents/octogee-chris-coach/agent/codex-home/goals_1.sqlite", () => {});
+    const sqlite = new DatabaseSync(path.join(stateDir, CARRIED_STORE)); sqlite.exec("DROP TABLE openclaw_engine_anchor"); sqlite.close();
     const { handler, req } = pushRsync(stateDir, "mig-carry-bad", {
       runOpenClaw: fakeOpenClaw({ failSnapshot: "database disk image is malformed" }),
     });
@@ -3232,7 +3236,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({
       error: "push-rsync-state failed",
-      message: "OpenClaw snapshot of octogee-chris-coach failed: database disk image is malformed",
+      message: "SQLite agent handoff is unsupported after the PostgreSQL cutover",
     });
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -3394,7 +3398,11 @@ describe("agent sqlite stores across an rsync carry", () => {
 
   async function stageSnapshot(stageDir: string, seed: (db: DatabaseSync) => void): Promise<void> {
     await writeStore(stageDir, path.join(STAGED_SNAPSHOT, "database.sqlite"), seed);
-    await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), "{}");
+    const bytes = await fs.readFile(path.join(stageDir, STAGED_SNAPSHOT, "database.sqlite"));
+    await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), JSON.stringify({ schemaVersion: 1,
+      database: { role: "agent", agentId: "octogee-chris-coach", engine: "postgres", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" },
+      artifact: { path: "database.sqlite", sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") },
+    }));
   }
 
   it.each(["pre", "final"] as const)("imports required state while omitting legacy Codex temporary helpers (%s)", async mode => {
@@ -3477,7 +3485,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
   });
 
-  it("verifies, restores and lands the carried snapshot before activating", async () => {
+  it("verifies and lands the PostgreSQL anchor before activating", async () => {
     const importDir = await mkTempRoot();
     const landedAtActivation: boolean[] = [];
     const { deps, stageDir } = await prepareImport({
@@ -3498,11 +3506,7 @@ describe("agent sqlite stores across an rsync carry", () => {
 
     expect(getStatus()).toBe(200);
     const run = deps.runOpenClaw as ReturnType<typeof fakeOpenClaw>;
-    expect(run.mock.calls.map(([args]) => args.slice(0, 2).join(" "))).toEqual([
-      "database preflight-agent",
-      "backup sqlite",
-    ]);
-    expect(run.mock.calls.slice(1).map(([args]) => args[2])).toEqual(["restore"]);
+    expect(run).not.toHaveBeenCalled();
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
     expect((await fs.stat(path.join(importDir, CARRIED_STORE))).mode & 0o777).toBe(0o600);
     expect(landedAtActivation).toEqual([true]);
@@ -3736,7 +3740,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     const body: PushRsyncStateRequestBody = { migrationId: "memory-return", slug: "chris", rpcPhase: "push-rsync-state", mode: "final",
       targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM, transferUser: "migration", transferKey: "b".repeat(64),
       agentContext: policy, includeActivationManifest: false };
-    const adapter = mkAdapter({ isBuilderGateway: () => true, listExportPaths: async () => [
+    const adapter = mkAdapter({ isBuilderGateway: () => true, releaseAgent: vi.fn(async () => undefined), listExportPaths: async () => [
       { cwd: input.stateDir, path: "agents/octogee-chris-coach" }, { cwd: input.stateDir, path: "customers/chris" },
     ] });
     const exported = mkResponse();
@@ -3776,7 +3780,7 @@ describe("agent sqlite stores across an rsync carry", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
     vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
     vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const adapter = mkAdapter({ isBuilderGateway: () => true, listExportPaths: vi.fn(async () => [
+    const adapter = mkAdapter({ isBuilderGateway: () => true, releaseAgent: vi.fn(async () => undefined), listExportPaths: vi.fn(async () => [
       { cwd: input.stateDir, path: "agents/octogee-chris-coach" },
       ...["customers/chris", "git-metadata/chris", "customer-keys/chris", "customers/someone-else"].map(relative => ({ cwd: input.stateDir, path: relative })),
     ]) });
@@ -3797,7 +3801,8 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(args).not.toContain(`${input.stateDir}/./customer-keys/chris`);
     expect(args).not.toContain(`${input.stateDir}/./customers/someone-else`);
     expect(rowCount(input.destinationPath)).toBe(2);
-    expect(runOpenClaw).toHaveBeenCalledWith(expect.arrayContaining(["--agent", "octogee-chris-coach"]), expect.anything());
+    expect(runOpenClaw).not.toHaveBeenCalled();
+    expect(adapter.releaseAgent).toHaveBeenCalledWith("octogee-chris-coach");
   });
 
   it("stages Shared context without pre-cutover broker admission and activates only after exact owner assignment", async () => {
@@ -4664,23 +4669,12 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(fsSync.existsSync(previous)).toBe(true);
   });
 
-  it("rejects a final running claim before overwriting or activating the target", async () => {
-    const importDir = await mkTempRoot();
-    const { deps, stageDir } = await prepareImport({ migrationId: "mig-running", importDir, daemon: mkFakeChild() });
-    await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO session_nodes VALUES ('running')"));
-    const response = await finishImport(deps, "mig-running");
-    expect(response.getStatus()).toBe(500);
-    expect(response.getBody()).toMatchObject({ message: expect.stringContaining("running sessions") });
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
-  });
-
-  it("does not deliver or activate state when offline upgrade fails", async () => {
+  it("refuses a SQLite import instead of invoking offline upgrade", async () => {
     const importDir = await mkTempRoot();
     const { deps, stageDir } = await prepareImport({ migrationId: "mig-schema-failure", importDir, daemon: mkFakeChild() });
     await stageSnapshot(stageDir, () => {});
     const artifact = path.join(stageDir, STAGED_SNAPSHOT, "database.sqlite");
+    const sqlite = new DatabaseSync(artifact); sqlite.exec("DROP TABLE openclaw_engine_anchor"); sqlite.close();
     const bytes = await fs.readFile(artifact);
     await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), JSON.stringify({
       schemaVersion: 1,
@@ -4691,11 +4685,10 @@ describe("agent sqlite stores across an rsync carry", () => {
       schema: "openclaw.agent-schema-preflight.v1", databasePath: artifact, agentId: "octogee-chris-coach",
       foundVersion: 23, targetVersion: 24, status: "incompatible",
     }) }));
-    upgradeStoresMock.mockRejectedValueOnce(new Error("schema upgrade failed"));
     const { getStatus, getBody } = await finishImport(deps, "mig-schema-failure");
     expect(getStatus()).toBe(500);
-    expect(getBody()).toMatchObject({ message: "schema upgrade failed" });
-    expect(upgradeStoresMock).toHaveBeenCalledOnce();
+    expect(getBody()).toMatchObject({ message: "SQLite agent handoff is unsupported after the PostgreSQL cutover" });
+    expect(upgradeStoresMock).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();

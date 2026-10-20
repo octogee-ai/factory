@@ -15,7 +15,7 @@ import {
   isSafeAgentId,
   readCodexAuthStateText,
 } from "@octogee/core/byosub-restore";
-import { readAuthProfileStore } from "@octogee/core/auth-profile-sqlite";
+import { readAuthProfileStore } from "@octogee/core/auth-profile-store";
 import {
   CLAUDE_CLI_DEFAULT_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
@@ -36,9 +36,9 @@ export interface ByosubHealthDeps {
   resolveUserGateway: (uid: string) => Promise<ByosubGatewayAssignment | null>;
   localGatewayId: () => string | null;
   isMounted: (slug: string) => boolean;
-  readStorePresent: (agentId: string, profileId: string) => boolean;
-  readProfileExpiresAt: (agentId: string, profileId: string) => number | null;
-  readAuthStateText: (agentId: string) => string | null;
+  readStorePresent: (agentId: string, profileId: string) => boolean | Promise<boolean>;
+  readProfileExpiresAt: (agentId: string, profileId: string) => number | null | Promise<number | null>;
+  readAuthStateText: (agentId: string) => string | null | Promise<string | null>;
   now: () => number;
 }
 
@@ -109,12 +109,12 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
           deriveByosubHealth({
             mountedHere,
             refProvider,
-            storePresent: deps.readStorePresent(agentId, profileId),
+            storePresent: await deps.readStorePresent(agentId, profileId),
             profileExpiresAt:
               profileId === CLAUDE_CLI_DEFAULT_PROFILE_ID
-                ? deps.readProfileExpiresAt(agentId, profileId)
+                ? await deps.readProfileExpiresAt(agentId, profileId)
                 : null,
-            authStateText: deps.readAuthStateText(agentId),
+            authStateText: await deps.readAuthStateText(agentId),
             profileId,
             now: deps.now(),
           }),
@@ -130,8 +130,8 @@ export function createByosubHealthRouter(deps: ByosubHealthDeps): Router {
 const CUSTOMERS_DIR = process.env.CUSTOMERS_DIR ?? "/home/node/.openclaw/customers";
 const OPENCLAW_DIR = process.env.OPENCLAW_DIR ?? path.dirname(CUSTOMERS_DIR);
 
-function profileRecord(agentId: string, profileId: string): Record<string, unknown> | null {
-  const store = readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId));
+async function profileRecord(agentId: string, profileId: string): Promise<Record<string, unknown> | null> {
+  const store = await readAuthProfileStore(codexAgentDir(OPENCLAW_DIR, agentId));
   const profiles = (store as { profiles?: unknown } | null)?.profiles;
   if (!profiles || typeof profiles !== "object") return null;
   const profile = (profiles as Record<string, unknown>)[profileId];
@@ -144,11 +144,11 @@ const byosubHealthRouter = createByosubHealthRouter({
   resolveUserGateway: resolveByosubUserGateway,
   localGatewayId: () => process.env.GATEWAY_ID?.trim() || null,
   isMounted: (slug) => fs.existsSync(path.join(CUSTOMERS_DIR, slug)),
-  readStorePresent: (agentId, profileId) => {
-    return profileRecord(agentId, profileId) !== null;
+  readStorePresent: async (agentId, profileId) => {
+    return await profileRecord(agentId, profileId) !== null;
   },
-  readProfileExpiresAt: (agentId, profileId) => {
-    const expires = profileRecord(agentId, profileId)?.expires;
+  readProfileExpiresAt: async (agentId, profileId) => {
+    const expires = (await profileRecord(agentId, profileId))?.expires;
     return typeof expires === "number" && Number.isFinite(expires) ? expires : null;
   },
   // null (empty OR unreadable state) maps to healthy-by-design: this endpoint's
@@ -156,7 +156,7 @@ const byosubHealthRouter = createByosubHealthRouter({
   // read once storePresent is true. A corrupt-but-present store reading healthy is
   // the boundary of store-presence scope — the deferred 1-token probe is what would
   // catch it.
-  readAuthStateText: (agentId) => readCodexAuthStateText(OPENCLAW_DIR, agentId),
+  readAuthStateText: async (agentId) => await readCodexAuthStateText(OPENCLAW_DIR, agentId),
   now: () => Date.now(),
 });
 

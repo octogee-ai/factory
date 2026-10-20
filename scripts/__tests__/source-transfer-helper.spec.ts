@@ -86,3 +86,18 @@ it('plans and finishes owned state with a genuine activation manifest and option
  expect(await fs.readFile(path.join(scratch, 'rsync.pass'), 'utf8')).toBe(`${request.transferKey}\n`);
  expect((await fs.stat(path.join(scratch, 'rsync.pass'))).mode & 0o777).toBe(0o600);
 });
+
+it('refuses PostgreSQL anchors in the read-only retained-pod SQLite helper', async () => {
+ const state = await root();
+ const scratch = await fs.mkdtemp('/tmp/octogee-source-transfer-'); roots.push(scratch);
+ const agentDir = path.join(state, 'agents/octogee-alice-coach/agent');
+ await fs.mkdir(agentDir, { recursive: true });
+ const db = new DatabaseSync(path.join(agentDir, 'openclaw-agent.sqlite'));
+ db.exec('CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)');
+ db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run('1514f000-4540-4f4e-92a1-831adeac3d5b', 'octogee_agent_fixture'); db.close();
+ await fs.writeFile(path.join(state, 'applied-fingerprints.json'), JSON.stringify({ alice: 'applied' }));
+ await fs.writeFile(path.join(state, 'openclaw.json'), JSON.stringify({ agents: { list: [{ id: 'octogee-alice-coach' }] }, channels: { mattermost: { accounts: { 'alice-coach': { botToken: 'synthetic-token' } } } }, bindings: [] }));
+ await fs.writeFile(path.join(scratch, 'request.json'), JSON.stringify(request));
+ await expect(prepareSourceTransferStage('plan', scratch, request.executionId, request.sourcePodUid, state)).rejects.toThrow('requires a live source Gateway with agents.detach');
+ await expect(fs.stat(path.join(scratch, 'plan.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});

@@ -4,8 +4,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { agentIdsFromConfig } from "../lib/byosub-restore.js";
-import { discardUnusableAgentStores } from "../lib/unusable-agent-store.js";
-import { AGENTS_DIR } from "../lib/config.js";
 import {
   materializeBrokerProfilesForAgents,
   applyOpenClawSecretsPlan,
@@ -606,6 +604,7 @@ export function applyPreBootPatches(
 ): boolean {
   const builderGateway = env.GATEWAY_CLASS?.trim() === "builder";
   return [
+    applyAgentStoreDatabasePatch(config, env),
     applyOpenClawBeta5CompatibilityPatch(config, logFn),
     builderGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
@@ -618,6 +617,26 @@ export function applyPreBootPatches(
     applyMemorySearchSchemaPatch(config, logFn),
     applyTypingModeDefault(config, logFn),
   ].some(Boolean);
+}
+
+export function applyAgentStoreDatabasePatch(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
+  const current = isPlainObject(config.database) ? config.database : {};
+  const families = isPlainObject(current.families) ? current.families : {};
+  const postgres = isPlainObject(current.postgres) ? current.postgres : {};
+  const next = {
+    ...current,
+    engine: current.engine ?? "sqlite",
+    families: { ...families, agent: { engine: "postgres" } },
+    postgres: {
+      ...postgres,
+      connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" },
+      schemaPrefix: "octogee",
+    },
+  };
+  if (valueEqual(current, next)) return false;
+  config.database = next;
+  return true;
 }
 
 const PROTO_POLLUTION_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -777,16 +796,6 @@ async function main(): Promise<void> {
     log("openclaw.json patched (env / stale-key cleanup)");
   } else {
     log("no changes needed");
-  }
-
-  // A store openclaw cannot open refuses the whole gateway, not just its agent,
-  // so clear those before startup — and before the broker sweep below, which
-  // needs a store openclaw owns to write into.
-  const sweep = discardUnusableAgentStores({ agentsDir: AGENTS_DIR, logFn: log });
-  if (sweep.discarded.length > 0) {
-    log(
-      `discarded ${sweep.discarded.length} unusable agent store(s); openclaw will create current ones`,
-    );
   }
 
   await materializeBrokerProfilesBeforeBoot(config, process.env, (agentIds) =>

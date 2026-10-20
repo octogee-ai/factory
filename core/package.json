@@ -413,6 +413,18 @@
     "./agent-store-inventory": {
       "types": "./dist/agent-store-inventory.d.ts",
       "default": "./dist/agent-store-inventory.js"
+    },
+    "./auth-profile-store": {
+      "types": "./dist/auth-profile-store.d.ts",
+      "default": "./dist/auth-profile-store.js"
+    },
+    "./agent-store-credentials": {
+      "types": "./dist/agent-store-credentials.d.ts",
+      "default": "./dist/agent-store-credentials.js"
+    },
+    "./agent-postgres": {
+      "types": "./dist/agent-postgres.d.ts",
+      "default": "./dist/agent-postgres.js"
     }
   },
   "typesVersions": {
@@ -701,6 +713,15 @@
       ],
       "agent-store-inventory": [
         "dist/agent-store-inventory.d.ts"
+      ],
+      "auth-profile-store": [
+        "dist/auth-profile-store.d.ts"
+      ],
+      "agent-store-credentials": [
+        "dist/agent-store-credentials.d.ts"
+      ],
+      "agent-postgres": [
+        "dist/agent-postgres.d.ts"
       ]
     }
   },
@@ -717,6 +738,7 @@
     "express": "^5.3.0",
     "firebase-admin": "^14.5.0",
     "google-auth-library": "^11.3.0",
+    "pg": "^8.23.1",
     "unique-names-generator": "^4.7.1",
     "ws": "^8.22.0"
   },
@@ -730,6 +752,7 @@
   "devDependencies": {
     "@octogee/shared": "file:../shared",
     "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.2",
     "supertest": "^7.3.1",
