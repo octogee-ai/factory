@@ -499,18 +499,46 @@ describe("customer lifecycle config patch agent directories", () => {
   );
 
   it.each(["broker", "prod"] as const)(
-    "keeps a customer's Git state and token expiry records when only a partial workspace dir is removed before a clone (%s)",
+    "keeps a customer's Git state and token expiry records when only a partial workspace is removed before a clone (%s)",
     async (adapterKind) => {
       await withRuntimeMock(async ({ tempRoot }) => {
         const customerDir = path.join(tempRoot, "customers", "alice");
-        await fs.mkdir(customerDir, { recursive: true });
+        await fs.mkdir(path.join(customerDir, "memory"), { recursive: true });
+        await fs.writeFile(path.join(customerDir, "SOUL.md"), "partial");
         const residue = await seedDepartedCustomerResidue(tempRoot);
         const adapter = await buildAdapter(adapterKind);
 
-        await adapter.deleteCustomerDir("alice");
+        await adapter.removePartialWorkspace("alice");
 
-        expect(fsSync.existsSync(customerDir)).toBe(false);
+        expect(fsSync.readdirSync(customerDir)).toEqual([]);
         expect([...residue.departed, ...residue.kept].filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["broker", "prod"] as const)(
+    "keeps the project storage under a partial workspace and never tries to remove it (%s)",
+    async (adapterKind) => {
+      await withRuntimeMock(async ({ tempRoot }) => {
+        const customerDir = path.join(tempRoot, "customers", "alice");
+        const projects = path.join(customerDir, "projects");
+        const projectFile = path.join(projects, "site", "index.html");
+        await fs.mkdir(path.dirname(projectFile), { recursive: true });
+        await fs.writeFile(projectFile, "<h1>work</h1>");
+        await fs.mkdir(path.join(customerDir, "memory"), { recursive: true });
+        await fs.writeFile(path.join(customerDir, "memory", "today.md"), "partial");
+        await fs.writeFile(path.join(customerDir, "SOUL.md"), "partial");
+        await fs.chmod(projects, 0o500);
+        const adapter = await buildAdapter(adapterKind);
+
+        try {
+          await adapter.removePartialWorkspace("alice");
+        } finally {
+          await fs.chmod(projects, 0o700);
+        }
+
+        expect(fsSync.readdirSync(customerDir)).toEqual(["projects"]);
+        expect(fsSync.readFileSync(projectFile, "utf8")).toBe("<h1>work</h1>");
       });
     },
   );

@@ -108,8 +108,8 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
       record("writeCustomerTemplateFiles");
       state.disk.templatesWritten = true;
     },
-    deleteCustomerDir: async () => {
-      record("deleteCustomerDir");
+    removePartialWorkspace: async () => {
+      record("removePartialWorkspace");
       state.disk.customerDir = false;
       state.disk.workspaceGitDir = false;
       state.disk.gitRemote = false;
@@ -785,9 +785,9 @@ describe("addCustomerToGateway — restore from Gitea (post pod loss)", () => {
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.steps).toContain("clone-workspace-repo");
-    expect(state.calls).toContain("deleteCustomerDir");
+    expect(state.calls).toContain("removePartialWorkspace");
     expect(state.calls).not.toContain("deleteDepartedCustomerState");
-    expect(state.calls.indexOf("deleteCustomerDir")).toBeLessThan(
+    expect(state.calls.indexOf("removePartialWorkspace")).toBeLessThan(
       state.calls.indexOf("cloneWorkspaceRepo"),
     );
   });
@@ -1190,7 +1190,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     expect(state.calls).toContain("waitForAccountHealthy");
     expect(state.calls).toContain("onMounted");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("removePartialWorkspace");
     expect(state.calls).not.toContain("cloneWorkspaceRepo");
   });
 
@@ -1363,7 +1363,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     const result = await addCustomerToGateway(adapter, "uid-test");
 
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("removePartialWorkspace");
     expect(state.calls).not.toContain("initWorkspaceRepoFromExistingDir");
     expect(state.disk.sshKey).toBe(true);
     expect(result.steps).toContain("clone-workspace-repo");
@@ -1968,7 +1968,7 @@ describe("removeCustomerFromGateway", () => {
     expect(result.steps).toEqual(["config-patch-remove", "delete-dir", "release-gitea-key"]);
     expect(state.calls).toContain("applyRemoveCustomerConfigPatch");
     expect(state.calls).toContain("deleteDepartedCustomerState");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("removePartialWorkspace");
     expect(state.calls).toContain("onUnmounted");
     expect(state.writes).toEqual([]);
   });
@@ -2613,7 +2613,7 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     );
 
     expect(state.calls).toContain("cloneWorkspaceRepo");
-    expect(state.calls).not.toContain("deleteCustomerDir");
+    expect(state.calls).not.toContain("removePartialWorkspace");
     expect(result.steps).toContain("clone-workspace-repo");
   });
 
@@ -2730,7 +2730,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     repoHasCommits: false,
     ensureCustomerDirectories: false,
     writeCustomerTemplateFiles: false,
-    deleteCustomerDir: false,
+    removePartialWorkspace: false,
     deleteDepartedCustomerState: false,
     hasCustomerSshKey: false,
     generateCustomerSshKey: false,

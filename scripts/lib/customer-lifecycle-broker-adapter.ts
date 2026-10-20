@@ -100,6 +100,7 @@ import {
   projectCheckoutMatchesSource,
   readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
+  removePartialWorkspace,
   setRepoSshCommand,
 } from "./git.js";
 import { seedDeferredProjectWorkspace } from "./deferred-project-workspace.js";
@@ -1951,7 +1952,7 @@ export function buildBrokeredLifecycleAdapter(
     hasGitRemote: (slug) => customerRepositoryHasCanonicalRemote(path.join(CUSTOMERS_DIR, slug)),
     ensureCustomerDirectories,
     writeCustomerTemplateFiles,
-    deleteCustomerDir: (slug) => fsp.rm(path.join(CUSTOMERS_DIR, slug), { recursive: true, force: true }),
+    removePartialWorkspace,
     deleteDepartedCustomerState: (slug) => removeDepartedCustomerFileState(slug, { log: opts.log }),
     cloneWorkspaceRepo,
     initWorkspaceRepoFromExistingDir: (customerCtx) => initWorkspaceRepo(customerCtx.customerDir, customerCtx.slug),

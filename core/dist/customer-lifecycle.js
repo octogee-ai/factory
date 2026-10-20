@@ -510,8 +510,8 @@ async function recoverMissingWorkspaceRemote(adapter, uid, ctx) {
 async function cloneExistingWorkspaceRepo(adapter, snapshot, ctx) {
     const { slug, repoUrl } = snapshot;
     if (adapter.hasCustomerDir(slug) && !adapter.hasWorkspaceGitDir(slug)) {
-        adapter.log(`[add:${slug}] removing partial workspace dir before clone`);
-        await adapter.deleteCustomerDir(slug);
+        adapter.log(`[add:${slug}] removing partial workspace before clone; projects stay`);
+        await adapter.removePartialWorkspace(slug);
     }
     const cloned = await adapter.cloneWorkspaceRepo(slug, repoUrl);
     if (!cloned) {

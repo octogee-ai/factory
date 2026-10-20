@@ -272,7 +272,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     customerCoachWiredInOpenclawConfig: vi.fn(() => true),
     customerMountMarked: vi.fn(() => true),
     applyRemoveCustomerConfigPatch: vi.fn(async () => {}),
-    deleteCustomerDir: vi.fn(async () => {}),
+    removePartialWorkspace: vi.fn(async () => {}),
     deleteDepartedCustomerState: vi.fn(async () => {}),
     loadUserSnapshot: vi.fn(async () => ({
       uid: "uid-chris",
@@ -4738,7 +4738,7 @@ describe("Git metadata across migration imports", () => {
       expect(result.adapter.activateImportedCustomer).not.toHaveBeenCalled();
       expect(result.adapter.writeMountMarker).not.toHaveBeenCalled();
       expect(result.adapter.onMounted).not.toHaveBeenCalled();
-      expect(result.adapter.deleteCustomerDir).not.toHaveBeenCalled();
+      expect(result.adapter.removePartialWorkspace).not.toHaveBeenCalled();
       expect(result.adapter.deleteDepartedCustomerState).not.toHaveBeenCalled();
       expect(result.adapter.onUnmounted).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(importDir, customerFile), "utf8")).toBe("destination draft");

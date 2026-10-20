@@ -2234,7 +2234,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
       uidForSlug: vi.fn(async () => null),
       applyRemoveCustomerConfigPatch: vi.fn(async () => undefined),
       hasCustomerDir: vi.fn(() => true),
-      deleteCustomerDir: vi.fn(async () => undefined),
+      removePartialWorkspace: vi.fn(async () => undefined),
       deleteDepartedCustomerState: vi.fn(async () => undefined),
       readLocalCustomerPubKey: vi.fn(() => null),
       ...overrides,
@@ -2294,7 +2294,7 @@ describe("evictLocalCustomer — complete local teardown", () => {
       undefined,
     );
     expect(a.deleteDepartedCustomerState).toHaveBeenCalledWith("departed");
-    expect(a.deleteCustomerDir).not.toHaveBeenCalled();
+    expect(a.removePartialWorkspace).not.toHaveBeenCalled();
     expect(onUnmounted).toHaveBeenCalledWith("departed");
     expect(onLocalStateRemoved).toHaveBeenCalledWith("departed");
   });

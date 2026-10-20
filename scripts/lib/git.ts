@@ -827,6 +827,50 @@ function restoreEmptiedWorkspaceTree(dest: string, slug: string): boolean | null
   return true;
 }
 
+const WORKSPACE_PROJECTS_ENTRY = "projects";
+
+export async function removePartialWorkspace(slug: string): Promise<void> {
+  const dir = path.join(CUSTOMERS_DIR, slug);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  for (const entry of entries) {
+    if (entry.name === WORKSPACE_PROJECTS_ENTRY && entry.isDirectory()) continue;
+    await fs.promises.rm(path.join(dir, entry.name), { recursive: true, force: true });
+  }
+}
+
+function cloneWorkspaceIntoNewDir(dest: string, slug: string, remote: string, sshKey: string): boolean {
+  if (gitExec(path.dirname(dest), ["clone", remote, slug], sshKey) !== null) return true;
+  log(`⚠ [git] Clone failed for ${slug}`);
+  fs.rmSync(dest, { recursive: true, force: true });
+  return false;
+}
+
+function cloneWorkspaceIntoExistingDir(dest: string, slug: string, remote: string, sshKey: string): boolean {
+  const staging = path.join(dest, `.workspace-clone-${randomUUID()}`);
+  try {
+    if (gitExec(dest, ["clone", remote, path.basename(staging)], sshKey) === null) {
+      log(`⚠ [git] Clone failed for ${slug}`);
+      return false;
+    }
+    const entries = fs.readdirSync(staging).filter((entry) => entry !== ".git");
+    const collision = entries.find((entry) => fs.existsSync(path.join(dest, entry)));
+    if (collision) {
+      log(`⚠ [git] Clone for ${slug} would overwrite existing workspace entry ${collision}`);
+      return false;
+    }
+    for (const entry of [...entries, ".git"]) fs.renameSync(path.join(staging, entry), path.join(dest, entry));
+    return true;
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promise<boolean> {
   const dest = path.join(CUSTOMERS_DIR, slug);
 
@@ -856,12 +900,11 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
     return false;
   }
 
-  const result = gitExec(path.dirname(dest), ["clone", sshRemoteUrl(org, repoName), slug], sshKey);
-  if (result === null) {
-    log(`⚠ [git] Clone failed for ${slug}`);
-    try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
-    return false;
-  }
+  const remote = sshRemoteUrl(org, repoName);
+  const cloned = fs.existsSync(dest)
+    ? cloneWorkspaceIntoExistingDir(dest, slug, remote, sshKey)
+    : cloneWorkspaceIntoNewDir(dest, slug, remote, sshKey);
+  if (!cloned) return false;
 
   gitExec(dest, ["config", "user.email", `${slug}@octogee.com`]);
   gitExec(dest, ["config", "user.name", `Octo (${slug})`]);

@@ -169,7 +169,7 @@ export interface CustomerLifecycleAdapter {
   hasGitRemote: (slug: string) => boolean;
   ensureCustomerDirectories: (slug: string) => void;
   writeCustomerTemplateFiles: (ctx: CustomerContext) => Promise<void>;
-  deleteCustomerDir: (slug: string) => Promise<void>;
+  removePartialWorkspace: (slug: string) => Promise<void>;
   deleteDepartedCustomerState: (slug: string) => Promise<void>;
 
   cloneWorkspaceRepo: (slug: string, repoUrl: string) => Promise<boolean>;
@@ -1098,8 +1098,8 @@ async function cloneExistingWorkspaceRepo(
 ): Promise<AddCustomerStep[]> {
   const { slug, repoUrl } = snapshot;
   if (adapter.hasCustomerDir(slug) && !adapter.hasWorkspaceGitDir(slug)) {
-    adapter.log(`[add:${slug}] removing partial workspace dir before clone`);
-    await adapter.deleteCustomerDir(slug);
+    adapter.log(`[add:${slug}] removing partial workspace before clone; projects stay`);
+    await adapter.removePartialWorkspace(slug);
   }
   const cloned = await adapter.cloneWorkspaceRepo(slug, repoUrl);
   if (!cloned) {
