@@ -1,6 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { BuilderHomeLocation, BuilderHomeMigrationDeps, BuilderHomeOwner } from "../builder-home-migration.js";
 import type { ComputeRequest, GatewayVmClient } from "./compute-vm.js";
+import { PARKED_STATUSES, STOPPED_STATUSES } from "../vm-computer-lifecycle.js";
 import type { CopyHomeDisk } from "./compute-home-copy.js";
 
 interface ComputeHomeResource {
@@ -53,16 +54,24 @@ class BuilderHomeProvider {
     if (!/^\d+$/u.test(value.id ?? "") || !Number.isSafeInteger(sizeGb) || sizeGb < 10 || !["pd-balanced", "pd-ssd"].includes(diskType ?? "")) throw new Error("home disk identity or capacity is incomplete");
     return { projectId: this.deps.projectId, zone: match[2], name: match[3], id: value.id!, sizeGb, diskType: diskType as CopyHomeDisk["diskType"], source: `projects/${this.deps.projectId}/zones/${match[2]}/disks/${match[3]}`, ...(value.users ? { users: value.users } : {}), ...(value.labels?.["octogee-owner-uid"] ? { ownerUid: value.labels["octogee-owner-uid"] } : {}) };
   }
-  async ownedComputer(uid: string) {
+  async ownedComputer(uid: string, accepted: ReadonlySet<string> = STOPPED_STATUSES) {
     const computer = await this.deps.vm.findByLabels({ "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": this.deps.environment, purpose: "octogee-computer" });
-    if (computer && (computer.metadata["octogee-owner-uid"] !== uid || !computer.instanceId || !["STOPPED", "TERMINATED"].includes(computer.status))) throw new Error("home migration requires a verified stopped owner computer");
+    if (computer && (computer.metadata["octogee-owner-uid"] !== uid || !computer.instanceId || !accepted.has(computer.status))) throw new Error("home migration requires a verified stopped owner computer");
     return computer;
+  }
+  async stoppedOwnedComputer(uid: string) {
+    const computer = await this.ownedComputer(uid, PARKED_STATUSES);
+    if (computer?.status !== "SUSPENDED") return computer;
+    await this.deps.journal("stop-suspended-builder-computer", uid, () => this.deps.vm.stop(computer.name, computer.zone));
+    const stopped = await this.ownedComputer(uid);
+    if (stopped?.instanceId !== computer.instanceId) throw new Error("suspended owner computer changed while stopping for home migration");
+    return stopped;
   }
   async nativeInventory(uid: string, selected?: CopyHomeDisk): Promise<BuilderHomeLocation> {
     if (!selected) throw new Error("native home identity is missing");
     const observed = await this.disk(selected.source);
     if (observed.id !== selected.id) throw new Error("primary native home disk changed");
-    const computer = await this.ownedComputer(uid);
+    const computer = await this.ownedComputer(uid, PARKED_STATUSES);
     return { runtime: "gce-vm", disk: observed, layout: "portable", ...(computer ? { computer: { name: computer.name, zone: computer.zone, id: computer.instanceId! } } : {}) };
   }
   async legacySource(uid: string, recorded: LegacyComputer) {
@@ -115,7 +124,7 @@ class BuilderHomeProvider {
     assertNativeHome(source);
     const observed = await this.disk(source.disk.source);
     if (observed.id !== source.disk.id) throw new Error("source home disk changed");
-    const computer = await this.ownedComputer(uid);
+    const computer = await this.stoppedOwnedComputer(uid);
     if (source.computer && (!computer || computer.instanceId !== source.computer.id || computer.name !== source.computer.name || computer.zone !== source.computer.zone)) throw new Error("source computer identity changed");
     if (observed.users?.some(user => !computer || !user.endsWith(`/zones/${computer.zone}/instances/${computer.name}`))) throw new Error("source home is attached to another computer");
   }
@@ -133,7 +142,7 @@ class BuilderHomeProvider {
   async adoptNative(uid: string, target: CopyHomeDisk): Promise<boolean> {
     const current = await this.disk(target.source);
     if (current.id !== target.id) throw new Error("verified home target changed");
-    const computer = await this.ownedComputer(uid);
+    const computer = await this.stoppedOwnedComputer(uid);
     if (!computer) {
       if (current.users?.length) throw new Error("home target is attached elsewhere");
       return true;
@@ -163,7 +172,7 @@ class BuilderHomeProvider {
     return observed;
   }
   async detachForRemoval(uid: string, source: BuilderHomeLocation, observed: ObservedHomeDisk): Promise<void> {
-    const computer = await this.ownedComputer(uid);
+    const computer = await this.stoppedOwnedComputer(uid);
     if (!computer || !source.computer || computer.instanceId !== source.computer.id || observed.users!.length !== 1 || !observed.users![0].endsWith(`/zones/${computer.zone}/instances/${computer.name}`)) throw new Error("retained home is attached to an unverified computer");
     const url = `${this.base}/zones/${computer.zone}/instances/${computer.name}`;
     const instance = await this.compute(url, "GET");
@@ -194,6 +203,6 @@ export function createBuilderHomeProvider(deps: HomeProviderDeps): Pick<BuilderH
     inventory: provider.inventory.bind(provider), verifyStopped: provider.verifyStopped.bind(provider),
     adopt: provider.adopt.bind(provider), removeStoppedHome: provider.removeStoppedHome.bind(provider),
     remainingOwnerHomes: provider.remainingOwnerHomes.bind(provider),
-    nativeZone: async uid => (await provider.ownedComputer(uid))?.zone ?? null,
+    nativeZone: async uid => (await provider.ownedComputer(uid, PARKED_STATUSES))?.zone ?? null,
   };
 }

@@ -961,9 +961,9 @@ function builderRuntimeRetirementContext(uid, lease, gatewaysById, operationsByI
     };
 }
 function builderRuntimeLifecycle(leaseStatus, retirement) {
-    // Terminal leases surface on Fleet only while their disposable teardown is
-    // unfinished; completed history lives on the customer's placement receipts.
-    const teardownLingers = retirement.target !== undefined && !retirement.complete;
+    const targetRetained = leaseStatus === "parked" && !retirement.started && !retirement.failed &&
+        projectDesiredStatus(retirement.target) === "paused";
+    const teardownLingers = retirement.target !== undefined && !retirement.complete && !targetRetained;
     const visible = LIVE_BUILDER_RUNTIME_STATUSES.has(leaseStatus) ||
         ((leaseStatus === "parked" || leaseStatus === "failed") && teardownLingers);
     if (!visible)

@@ -827,6 +827,21 @@ describe("suspend parking", () => {
     expect(h.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
   });
 
+  it("releases the owner's parked-computer record when the same gateway resumes its suspended computer", async () => {
+    const parked = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", gatewayId: "b-x", parkedAt: 1, checkpoint: { outcome: "fresh", requestedAt: null, completedAt: null } };
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, status: "SUSPENDED", internalIp: null, stopReason: "idle" } },
+      "users/UidA": { provisioning: { computer: parked } },
+    }, {
+      describe: vi.fn(async () => running).mockResolvedValueOnce(suspended),
+      resume: vi.fn(async () => ({ fellBackToStandard: false })),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(readPath(h.docs["users/UidA"], "provisioning.computer")).toBeUndefined();
+  });
+
   it("stops a suspended computer before rebinding it so the guest boots into the new gateway", async () => {
     let current: GatewayVmDescription = suspendedElsewhere;
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {

@@ -576,6 +576,24 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
     });
   });
 
+  it("omits a parked lease whose computer gateway is retained paused", () => {
+    const targetGatewayId = "alice-m-12345678";
+    expect(projectBuilderRuntime(
+      user({
+        leaseId: "lease-1",
+        generation: 1,
+        status: "parked",
+        requestedAt: now - 300_000,
+        activeAt: now - 240_000,
+        sourceGatewayId: "shared-blue",
+        targetGatewayId,
+      }),
+      new Map([[targetGatewayId, { gatewayId: targetGatewayId, desiredStatus: "paused" }]]),
+      new Map(),
+      now,
+    )).toBeNull();
+  });
+
   it("omits a parked lease after its disposable teardown succeeds", () => {
     const targetGatewayId = "run-alice-12345678";
     const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;

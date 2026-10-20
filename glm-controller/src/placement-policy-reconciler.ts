@@ -96,7 +96,7 @@ import {
   type ContinuousPlacementOwnedGateway,
 } from "@octogee/shared/types/orchestrator-placement";
 import type { SizingTier } from "@octogee/shared/types/sizing";
-import type { BuilderTierName } from "@octogee/shared/types/billing-tiers";
+import { BUILDER_TIERS, type BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import {
   advanceActivationLeaseFirestore,
   requestTierTransitionFirestore,
@@ -205,6 +205,8 @@ export function placementKubernetesStatus(
 
 export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway {
   runtime?: GatewayRuntime;
+  builderSlug?: string | null;
+  sizingTier?: SizingTier | null;
   kubernetesStatus?: PlacementPolicyKubernetesStatus;
   serving?: boolean;
   runtimeStatus?: string;
@@ -273,6 +275,7 @@ export interface AllocateDisposableGatewayInput {
   sourceAssignmentEpoch: number;
   entitlementTier: BuilderTierName;
   sizingTier: SizingTier;
+  parkedGateway?: { gatewayId: string; generation: number };
 }
 
 export interface TierTransitionInput {
@@ -297,6 +300,7 @@ export interface CompleteActivationLeaseInput {
   leaseId: string;
   generation: number;
   targetGatewayId: string;
+  parked?: true;
 }
 
 export interface FailActivationLeaseInput {
@@ -806,16 +810,83 @@ function projectSharedGatewayPlacement(
   }
 }
 
+function entitledComputerSizing(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+): SizingTier | null {
+  if (!accountAllowsInteractiveAccess(user.data)) return null;
+  const tier = resolveBuilderTier(user.data, new Date(context.deps.now()));
+  const config = tier ? BUILDER_TIERS[tier] : null;
+  return config?.computer?.runtime === "gce-vm" ? config.instance : null;
+}
+
+function ownedPausedDisposableGateway(gateway: PlacementPolicyGateway, uid: string): boolean {
+  return gateway.desiredStatus === "paused" &&
+    gateway.gatewayClass === "builder" &&
+    gateway.disposable === true &&
+    gateway.ownerUid === uid &&
+    gateway.allocation?.claimedByUid === uid;
+}
+
+function ownedParkedComputer(gateway: PlacementPolicyGateway, uid: string): boolean {
+  return ownedPausedDisposableGateway(gateway, uid) && gateway.runtime === "gce-vm";
+}
+
+function parkedComputerGateway(
+  gateway: PlacementPolicyGateway,
+  uid: string,
+  builderSlug: string,
+  sizingTier: SizingTier | null,
+): boolean {
+  return sizingTier !== null &&
+    ownedParkedComputer(gateway, uid) &&
+    gateway.builderSlug === builderSlug &&
+    gateway.sizingTier === sizingTier;
+}
+
+async function retireObsoleteParkedComputers(
+  context: PlacementPolicyReconcileContext,
+  user: PlacementPolicyUser,
+  builderSlug: string,
+  lease: BuilderActivationLease,
+  keptSizing: SizingTier | null,
+): Promise<boolean> {
+  const obsolete = context.state.gateways.filter((gateway) =>
+    ownedPausedDisposableGateway(gateway, user.uid) &&
+    !parkedComputerGateway(gateway, user.uid, builderSlug, keptSizing));
+  for (const gateway of obsolete) {
+    const retired = await context.deps.retireOwnedGateway({
+      uid: user.uid,
+      builderSlug,
+      gatewayId: gateway.gatewayId,
+      generation: gateway.allocation!.generation,
+    });
+    if (!retired) {
+      blockPlacement(context, {
+        uid: user.uid,
+        lease,
+        code: "parked-gateway-retirement-fence",
+        reason: `parked gateway ${gateway.gatewayId} did not satisfy retirement fences`,
+      });
+      return false;
+    }
+    context.result.retired += 1;
+  }
+  return true;
+}
+
 async function retireUnentitledOwnedGateways(
   context: PlacementPolicyReconcileContext,
   user: PlacementPolicyUser,
   builderSlug: string,
 ): Promise<void> {
+  const keptSizing = entitledComputerSizing(context, user);
   const ownedGateways = context.state.gateways.filter(
     (gateway) => gateway.ownerUid === user.uid &&
       gateway.disposable === true &&
       gateway.gatewayClass !== "shared" &&
-      gateway.desiredStatus !== "retired",
+      gateway.desiredStatus !== "retired" &&
+      !parkedComputerGateway(gateway, user.uid, builderSlug, keptSizing),
   );
   for (const gateway of ownedGateways) {
     const generation = gateway.allocation?.generation;
@@ -1307,6 +1378,21 @@ async function reconcileRequestedActivation(
     });
     return;
   }
+  const keptSizing = entitledComputerSizing(context, user) === sizingTier ? sizingTier : null;
+  if (!await retireObsoleteParkedComputers(context, user, builderSlug, lease, keptSizing)) return;
+  const parked = context.state.gateways.filter(
+    (gateway) => parkedComputerGateway(gateway, user.uid, builderSlug, keptSizing),
+  );
+  if (parked.length > 1) {
+    blockPlacement(context, {
+      uid: user.uid,
+      lease,
+      code: "parked-gateway-ambiguous",
+      reason: `${parked.length} parked gateways match ${sizingTier}: ${parked.map((gateway) => gateway.gatewayId).join(", ")}`,
+    });
+    return;
+  }
+  const parkedGateway = parked[0];
   await context.deps.allocateDisposableGateway({
     uid: user.uid,
     builderSlug,
@@ -1316,6 +1402,9 @@ async function reconcileRequestedActivation(
     sourceAssignmentEpoch,
     entitlementTier,
     sizingTier,
+    ...(parkedGateway
+      ? { parkedGateway: { gatewayId: parkedGateway.gatewayId, generation: parkedGateway.allocation!.generation } }
+      : {}),
   });
 }
 
@@ -1835,6 +1924,17 @@ function blockTerminalReturnOperation(
   });
 }
 
+function returnedComputerStaysParked(
+  input: ActivationTargetContext,
+  operation: PlacementPolicyMigration | undefined,
+): boolean {
+  const { context, user, builderSlug, lease, target } = input;
+  return operation?.status === "succeeded" &&
+    lease.raw.returnReason !== "source-unavailable" &&
+    millis(lease.raw.operatorTerminateRequestedAt) === null &&
+    parkedComputerGateway(target, user.uid, builderSlug, entitledComputerSizing(context, user));
+}
+
 async function completeReturnedLease(
   input: ActivationTargetContext,
 ): Promise<void> {
@@ -1852,6 +1952,16 @@ async function completeReturnedLease(
       leaseId: lease.leaseId,
       generation: lease.generation,
       targetGatewayId,
+    });
+    return;
+  }
+  if (returnedComputerStaysParked(input, operation)) {
+    await context.deps.completeActivationLease({
+      uid: user.uid,
+      leaseId: lease.leaseId,
+      generation: lease.generation,
+      targetGatewayId,
+      parked: true,
     });
     return;
   }
@@ -2584,12 +2694,10 @@ async function readCompletedReturnSnapshots(
   const refs = userDocuments.flatMap((doc) => {
     const userData = doc.data() as Record<string, unknown>;
     const lease = builderActivationLease(userData);
-    const completedReturn = [
-      lease?.status === "active",
-      Boolean(lease?.targetGatewayId),
-      sharedGatewayIds.includes(currentGatewayId(userData) ?? ""),
-    ].every(Boolean);
-    if (!completedReturn || !lease?.targetGatewayId) return [];
+    const onShared = sharedGatewayIds.includes(currentGatewayId(userData) ?? "");
+    const returnMayHaveSucceeded = lease?.status === "returning" ||
+      (lease?.status === "active" && onShared);
+    if (!returnMayHaveSucceeded || !lease?.targetGatewayId) return [];
     return [
       db.collection(GLM_OPERATIONS_COLLECTION)
         .doc(builderReturnOperationId(lease.targetGatewayId, lease.generation)),
@@ -2992,6 +3100,8 @@ function placementGatewayFromDocument(input: {
     gatewayId: doc.id,
     gatewayClass: root.gatewayClass,
     ownerUid: root.ownerUid,
+    builderSlug: root.builderSlug,
+    sizingTier: root.sizingTier,
     desiredStatus: root.desiredStatus,
     disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
     allocation: root.allocation ?? null,
@@ -4146,7 +4256,10 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     allocateDisposableGateway: async (request) => {
       if (await refreshRequestedAllocationFirestore(input, request)) return null;
       if (input.prepareBuilderHome && !await input.prepareBuilderHome(request)) return null;
-      return allocateDisposableGatewayFirestore(input, request);
+      return allocateDisposableGatewayFirestore({
+        ...input,
+        retireParkedGateway: (parked) => retireOwnedGatewayFirestore(input, parked),
+      }, request);
     },
     advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
     requestTierTransition: (request) => requestTierTransitionFirestore(input, request),

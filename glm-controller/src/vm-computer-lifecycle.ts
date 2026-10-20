@@ -32,8 +32,8 @@ import { selectRetainedBootImage, type RetainedBootImage } from "./lib/retained-
 import { claimWarmPoolMember } from "./vm-warm-pool.js";
 import { occupiedComputerZones, spreadZones } from "./vm-placement.js";
 
-const STOPPED_STATUSES = new Set(["TERMINATED", "STOPPED"]);
-const PARKED_STATUSES = new Set([...STOPPED_STATUSES, "SUSPENDED"]);
+export const STOPPED_STATUSES: ReadonlySet<string> = new Set(["TERMINATED", "STOPPED"]);
+export const PARKED_STATUSES: ReadonlySet<string> = new Set([...STOPPED_STATUSES, "SUSPENDED"]);
 const TRANSITIONAL_STATUSES = new Set(["STOPPING", "SUSPENDING"]);
 const COWBOY_STOP_REASONS = new Set<GatewayVmStopReason>(["idle", "operator"]);
 

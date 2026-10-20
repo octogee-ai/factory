@@ -239,7 +239,11 @@ function claimableGatewayRetirementRoot(
       `gateway ${gatewayId} already has a retirement claim`,
     );
   }
-  if (projected.liveRelease != null && projected.desiredRelease !== projected.liveRelease) {
+  if (
+    projected.desiredStatus !== "paused" &&
+    projected.liveRelease != null &&
+    projected.desiredRelease !== projected.liveRelease
+  ) {
     throw new GatewayRetirementConflictError(
       `gateway ${gatewayId} desired release is not converged to live`,
     );
