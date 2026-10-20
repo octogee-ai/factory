@@ -6,8 +6,13 @@ import { SQLITE_CARRY_EXCLUDE_ARGS } from './agent-store-carry.js';
 import type { TransferSource } from './source-transfer-plan.js';
 import { CODEX_STORE_EXCLUDE_ARGS, CODEX_TEMP_EXCLUDE_ARG } from './codex-store-snapshot.js';
 
+const GIT_METADATA_LOCK_FILTER_ARGS = [
+ '--filter=H /git-metadata/*/workspace.git/**.lock',
+ '--filter=H /git-metadata/*/projects/*.git/**.lock',
+];
+
 export function sourceTransferRsyncArgs(sources: TransferSource[], passwordFile: string, destination: string, mode?: string): string[] {
- return ['-a', '--relative', ...(mode === 'final' ? ['--delete-delay'] : []), '--ignore-missing-args', '--compress', '--compress-choice=zstd', '--checksum-choice=xxh128', ...LIVE_AGENT_STORE_EXCLUDE_ARGS, ...CODEX_STORE_EXCLUDE_ARGS, CODEX_TEMP_EXCLUDE_ARG, ...SQLITE_CARRY_EXCLUDE_ARGS, ...sources.flatMap(deferredProjectPlaceholderExcludes), '--password-file', passwordFile, ...sources.map(source => `${path.resolve(source.cwd)}/./${source.path.split(path.sep).join('/')}`), destination];
+ return ['-a', '--relative', ...(mode === 'final' ? ['--delete-delay'] : []), '--ignore-missing-args', '--compress', '--compress-choice=zstd', '--checksum-choice=xxh128', ...LIVE_AGENT_STORE_EXCLUDE_ARGS, ...CODEX_STORE_EXCLUDE_ARGS, CODEX_TEMP_EXCLUDE_ARG, ...SQLITE_CARRY_EXCLUDE_ARGS, ...GIT_METADATA_LOCK_FILTER_ARGS, ...sources.flatMap(deferredProjectPlaceholderExcludes), '--password-file', passwordFile, ...sources.map(source => `${path.resolve(source.cwd)}/./${source.path.split(path.sep).join('/')}`), destination];
 }
 
 function deferredProjectPlaceholderExcludes(source: TransferSource): string[] {

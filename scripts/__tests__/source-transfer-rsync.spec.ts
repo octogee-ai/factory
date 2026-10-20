@@ -101,3 +101,58 @@ describe("deferred project workspace transfer", () => {
       .toBe(fs.readFileSync(path.join(source, relative, "AGENTS.md"), "utf8"));
   });
 });
+
+describe("customer Git metadata transfer", () => {
+  it.each([
+    ["customers/alice", "git-metadata/alice/workspace.git"],
+    ["customers/alice/projects/octogee", "git-metadata/alice/projects/octogee.git"],
+  ])("omits transient locks from %s while retaining staged Git state", (worktreeRelative, metadataRelative) => {
+    const worktree = path.join(source, worktreeRelative);
+    const metadata = path.join(source, metadataRelative);
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.mkdirSync(path.dirname(metadata), { recursive: true });
+    execFileSync("git", ["init", "-q", "--initial-branch=main", `--separate-git-dir=${metadata}`, worktree]);
+    fs.writeFileSync(path.join(worktree, "notes.md"), "committed\n");
+    execFileSync("git", ["-C", worktree, "add", "notes.md"]);
+    execFileSync("git", ["-C", worktree, "-c", "user.name=Test", "-c", "user.email=test@octogee.test", "commit", "-qm", "baseline"]);
+    fs.writeFileSync(path.join(worktree, "notes.md"), "staged\n");
+    execFileSync("git", ["-C", worktree, "add", "notes.md"]);
+    fs.writeFileSync(path.join(worktree, "notes.md"), "unstaged\n");
+    fs.writeFileSync(path.join(worktree, "package.lock"), "customer lock\n");
+    const locks = ["index.lock", "config.lock", "packed-refs.lock", "refs/heads/main.lock"];
+    for (const lock of locks) fs.writeFileSync(path.join(metadata, lock), "Git transaction\n");
+    const index = fs.readFileSync(path.join(metadata, "index"));
+    const head = fs.readFileSync(path.join(metadata, "refs/heads/main"));
+    const staged = execFileSync("git", [`--git-dir=${metadata}`, "ls-files", "--stage"], { encoding: "utf8" });
+    const sources = [
+      { cwd: source, path: "customers/alice" },
+      { cwd: source, path: "git-metadata/alice" },
+    ];
+    const copy = (mode: "pre" | "final") => {
+      fs.mkdirSync(stage, { recursive: true });
+      const args = sourceTransferRsyncArgs(sources, "/unused/local-transfer-password", stage, mode);
+      execFileSync("rsync", [
+        "-a", "--relative", ...(mode === "final" ? ["--delete-delay"] : []),
+        ...args.filter(arg => arg.startsWith("--exclude=") || arg.startsWith("--filter=")),
+        ...sources.map(entry => entry.path), `${stage}/`,
+      ], { cwd: source });
+    };
+
+    copy("pre");
+    for (const lock of locks) expect(fs.existsSync(path.join(stage, metadataRelative, lock))).toBe(false);
+    fs.writeFileSync(path.join(stage, metadataRelative, "index.lock"), "previously staged lock\n");
+    fs.rmSync(path.join(metadata, "index.lock"));
+    copy("final");
+    installStage();
+
+    const imported = path.join(target, metadataRelative);
+    for (const lock of locks) expect(fs.existsSync(path.join(imported, lock))).toBe(false);
+    expect(fs.readFileSync(path.join(imported, "index"))).toEqual(index);
+    expect(fs.readFileSync(path.join(imported, "refs/heads/main"))).toEqual(head);
+    expect(execFileSync("git", [`--git-dir=${imported}`, "ls-files", "--stage"], { encoding: "utf8" })).toBe(staged);
+    expect(execFileSync("git", [`--git-dir=${imported}`, "show", ":notes.md"], { encoding: "utf8" })).toBe("staged\n");
+    expect(fs.readFileSync(path.join(target, worktreeRelative, "notes.md"), "utf8")).toBe("unstaged\n");
+    expect(fs.readFileSync(path.join(target, worktreeRelative, "package.lock"), "utf8")).toBe("customer lock\n");
+    expect(fs.existsSync(path.join(metadata, "refs/heads/main.lock"))).toBe(true);
+  });
+});
