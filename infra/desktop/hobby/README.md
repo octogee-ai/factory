@@ -134,13 +134,11 @@ Omarchy image family on GCE with `n2-standard-2` and `n2-standard-4` respectivel
 Browser, computer, CLI, and the OpenClaw Dashboard are available on every tier.
 The coach attaches to the same visible Chromium profile as the Builder.
 
-Hobby's home is a 30-GiB balanced persistent disk (`standard-rwo`) mounted by
-one pod (`ReadWriteOncePod`). Recreate rolls and CSI mount exclusivity protect
-Chromium's profile when removing stale hostname locks. Pause, Spot replacement, and idle retirement keep the owner PVC. Cowboy
-creates it outside disposable Helm releases and reuses it for the Builder
-slug on the next Hobby allocation; account erasure deletes it. Zonal attachment
-constrains replacement nodes to the original zone. This disk is separate from the plan's GCS-backed
-storage allowance.
+Hobby's home is ephemeral (`emptyDir`); production Hobby Builders have no
+persistent volume. Workspace and project text come back from Gitea, conversation
+from Mattermost, and agent state from the migration's agent-state transfer.
+Recreate rolls keep one desktop session per Builder. The benchmark above used a
+PVC only to measure persistence; it is not the production layout.
 
 Existing runtime stamps retain their substrate; this change does not migrate
 an existing Hobby VM's home into GKE. VM manifest rendering explicitly selects

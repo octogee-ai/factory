@@ -3,7 +3,6 @@ import { homeCopyStartupScript } from "./home-copy-worker.js";
 
 export interface CopyHomeDisk {
   projectId: string; zone: string; name: string; id: string; sizeGb: number;
-  claim?: { name: string; uid: string; volumeName: string };
   source: string; diskType: "pd-balanced" | "pd-ssd";
 }
 export interface HomeCopyInput {
@@ -11,13 +10,12 @@ export interface HomeCopyInput {
   ownerUid: string;
   source: CopyHomeDisk;
   sourceLayout: "flat" | "portable";
-  targetFilesystem: "ext4" | "btrfs";
   targetZone: string;
   desiredGiB: number;
   subnetwork: string;
 }
 export type HomeCopyProgress = { status: "pending" } | { status: "copying"; usedBytes: number } |
-  { status: "ready"; usedBytes: number; filesystem: "ext4" | "btrfs"; proof: Record<string, string> };
+  { status: "ready"; usedBytes: number; filesystem: "btrfs"; proof: Record<string, string> };
 export class HomeCopyFailure extends Error {}
 
 export function homeCopyCapacity(input: { desiredGiB: number; sourceGiB: number; usedBytes: number }): number {
@@ -38,7 +36,7 @@ export function readHomeCopyProgress(serial: string, operationId: string): HomeC
     if (match[1] === "FAILED") throw new HomeCopyFailure(`home copy failed: ${String(data.error)}`);
     if (!Number.isSafeInteger(data.usedBytes) || data.usedBytes < 0) throw new Error("invalid home copy usage proof");
     if (match[1] === "PROBE") { progress = { status: "copying", usedBytes: data.usedBytes }; continue; }
-    if (!["ext4", "btrfs"].includes(data.filesystem) || !data.proof || !["volumes/data", "desktop-home"].every(key => typeof data.proof[key] === "string" && /^[a-f0-9]{64}$/u.test(data.proof[key]))) throw new Error("invalid home copy verification proof");
+    if (data.filesystem !== "btrfs" || !data.proof || !["volumes/data", "desktop-home"].every(key => typeof data.proof[key] === "string" && /^[a-f0-9]{64}$/u.test(data.proof[key]))) throw new Error("invalid home copy verification proof");
     progress = { status: "ready", usedBytes: data.usedBytes, filesystem: data.filesystem, proof: data.proof };
   }
   return progress;
@@ -52,13 +50,7 @@ interface ComputeResource {
   disks?: Array<{ boot?: boolean; source?: string; deviceName?: string; autoDelete?: boolean }>;
 }
 
-export interface ClusterHomeTarget {
-  ensure(input: HomeCopyInput, sizeGb: number): Promise<CopyHomeDisk | null>;
-  read(input: HomeCopyInput): Promise<CopyHomeDisk | null>;
-  remove(input: HomeCopyInput): Promise<boolean>;
-}
 interface HomeCopyDeps {
-  clusterTarget?: ClusterHomeTarget;
   request: ComputeRequest;
   projectId: string;
   journal: <T>(what: string, input: HomeCopyInput, action: () => Promise<T>) => Promise<T>;
@@ -140,7 +132,8 @@ class HomeCopyClient {
       return null;
     }
     this.verify(helper, input);
-    if (helper.metadata?.items?.find(item => item.key === "startup-script")?.value !== startup || helper.disks?.find(disk => disk.deviceName === "octogee-source")?.source !== clone.selfLink) throw new Error("home copy helper configuration changed");
+    if (helper.disks?.find(disk => disk.deviceName === "octogee-source")?.source !== clone.selfLink) throw new Error("home copy helper configuration changed");
+    if (helper.metadata?.items?.find(item => item.key === "startup-script")?.value !== startup) throw new HomeCopyFailure("home copy helper runs an outdated worker script; source retained");
     return helper;
   }
   async progress(input: HomeCopyInput, helper: ComputeResource): Promise<HomeCopyProgress> {
@@ -152,12 +145,7 @@ class HomeCopyClient {
     if (progress.status !== "ready" && ["STOPPED", "TERMINATED"].includes(helper.status ?? "")) throw new HomeCopyFailure("home copy helper stopped before verification; source retained");
     return progress;
   }
-  get clusterTarget(): ClusterHomeTarget {
-    if (!this.deps.clusterTarget) throw new Error("CSI home target provider is required");
-    return this.deps.clusterTarget;
-  }
   async readTarget(input: HomeCopyInput): Promise<CopyHomeDisk | null> {
-    if (input.targetFilesystem === "ext4") return this.clusterTarget.read(input);
     const name = `${input.operationId}-home`;
     const target = await this.read(`${this.base}/zones/${input.targetZone}/disks/${name}`);
     if (!target) return null;
@@ -166,7 +154,6 @@ class HomeCopyClient {
     return { projectId: this.deps.projectId, zone: input.targetZone, name, id: target.id!, sizeGb: Number(target.sizeGb), diskType: "pd-balanced", source: `projects/${this.deps.projectId}/zones/${input.targetZone}/disks/${name}` };
   }
   async ensureTarget(input: HomeCopyInput, sizeGb: number): Promise<CopyHomeDisk | null> {
-    if (input.targetFilesystem === "ext4") return this.clusterTarget.ensure(input, sizeGb);
     const target = await this.readTarget(input);
     if (target) return target;
     const zone = `${this.base}/zones/${input.targetZone}`;
@@ -188,7 +175,6 @@ class HomeCopyClient {
       return { progress: { status: "copying", usedBytes: progress.usedBytes } };
     }
     if (relativeComputeSource(attached.source) !== target.source || attached.autoDelete !== false) throw new Error("home copy target attachment differs");
-    if (progress.status === "ready" && progress.filesystem !== input.targetFilesystem) throw new Error("home copy target filesystem differs");
     return { progress, target };
   }
   async advance(input: HomeCopyInput): Promise<{ progress: HomeCopyProgress; target?: CopyHomeDisk }> {
@@ -240,7 +226,6 @@ class HomeCopyClient {
   }
   async abort(input: HomeCopyInput): Promise<boolean> {
     if (!await this.cleanup(input)) return false;
-    if (input.targetFilesystem === "ext4") return this.clusterTarget.remove(input);
     const target = await this.readTarget(input);
     if (!target) return true;
     const url = `https://compute.googleapis.com/compute/v1/${target.source}`;

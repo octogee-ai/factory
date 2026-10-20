@@ -596,7 +596,7 @@ describe("helm/octogee-gateway/ — single-instance rendering", () => {
     expect(gw).not.toMatch(/openclaw-device-auth/);
     expect(edge).toMatch(/name:\s*OPENCLAW_GATEWAY_DEVICE_TOKEN_PATH\s*\n\s*value:\s*"\/var\/run\/octogee\/openclaw-device-auth\/token"/);
     expect(edge).toMatch(/name:\s*openclaw-device-auth\s*\n\s*mountPath:\s*\/var\/run\/octogee\/openclaw-device-auth/);
-    expect(dep).toMatch(/name:\s*openclaw-device-auth\s*\n\s*emptyDir:\s*\{\}/);
+    expect(dep).toMatch(/name:\s*openclaw-device-auth\s*\n\s*emptyDir:\s*\n\s*medium:\s*Memory\s*\n\s*sizeLimit:\s*16Mi/);
   });
 
   it("Builder profile does not wire the SiteAPI deploy-broker hop", () => {
@@ -1186,7 +1186,7 @@ describe("helm/octogee-gateway/ — gateway container required env", () => {
       for (const container of podSpec.containers.filter((c) => c.name !== "gateway")) {
         expect(container.volumeMounts?.some((m) => m.name === "secret-resolver")).toBe(false);
       }
-      expect(podSpec.volumes).toContainEqual({ name: "secret-resolver", emptyDir: {} });
+      expect(podSpec.volumes).toContainEqual({ name: "secret-resolver", emptyDir: { medium: "Memory", sizeLimit: "16Mi" } });
     },
   );
 
@@ -1504,14 +1504,16 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
 });
 
 describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
-  it.each(["s", "m", "l"])("preserves all X11 surfaces and the owner home on retained cluster runtime at tier %s", (sizingTier) => {
+  it.each(["s", "m", "l"])("renders all X11 surfaces on ephemeral home and project storage at tier %s", (sizingTier) => {
     const out = helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", ownerUid: "UidA", builderSlug: "builder", sizingTier, rollStrategy: "surge", "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" });
     const dep = parseDocument(findDoc(out, "Deployment", "octogee-gateway-hobby")!).toJSON();
     const pod = dep.spec.template.spec;
     expect(dep.spec.strategy).toEqual({ type: "Recreate" });
     expect(pod.runtimeClassName).toBe("gvisor");
-    expect(pod.volumes).toContainEqual({ name: "data", persistentVolumeClaim: { claimName: "octogee-builder-builder-home" } });
-    expect(findDoc(out, "PersistentVolumeClaim", "octogee-builder-builder-home")).toBeNull();
+    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "4Gi" } });
+    expect(pod.volumes).toContainEqual({ name: "project-materializations", emptyDir: { sizeLimit: "2Gi" } });
+    expect(pod.volumes.filter((entry: any) => entry.persistentVolumeClaim)).toEqual([]);
+    expect(pod.nodeSelector).toEqual({ "cloud.google.com/compute-class": "octogee-gateway" });
     for (const name of ["gateway", "gateway-edge"]) {
       const container = pod.containers.find((entry: any) => entry.name === name);
       expect(container.env).toEqual(expect.arrayContaining([
@@ -1529,7 +1531,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     const out = helmTemplate("octogee-gw-omarchy", { gatewayId: "omarchy", gatewayClass: "builder", sizingTier: "s", computerDesktop: "omarchy" });
     const pod = parseDocument(findDoc(out, "Deployment", "octogee-gateway-omarchy")!).toJSON().spec.template.spec;
     expect(findDoc(out, "PersistentVolumeClaim", "octogee-gateway-omarchy-data")).toBeNull();
-    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: {} });
+    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "4Gi" } });
     expect(pod.volumes.map((entry: any) => entry.name)).not.toContain("desktop-runtime");
   });
 

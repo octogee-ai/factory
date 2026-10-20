@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { parseAllDocuments } from "yaml";
 import { TIER_PRESETS, SIZING_TIERS } from "../../shared/types/sizing.js";
+import { BUILDER_TIERS } from "../../shared/types/billing-tiers.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CHART_PATH = path.join(REPO_ROOT, "helm/octogee-gateway");
@@ -213,5 +214,35 @@ describe("Builder ephemeral storage admission", () => {
     const sidecars = pod.containers.filter((container: any) => container.name !== "gateway");
     const totalWithAutopilotDefaults = Number(request.replace("Gi", "")) + sidecars.reduce((total: number, container: any) => total + Number((container.resources.requests["ephemeral-storage"] ?? "1Gi").replace("Gi", "")), 0);
     expect(totalWithAutopilotDefaults).toBeLessThanOrEqual(10);
+  });
+});
+
+describe("Builder working-set partition", () => {
+  const hobbyHomeGiB = BUILDER_TIERS.hobby.computer!.homeSizeGiB;
+
+  it("defaults the chart's Builder home size to the Hobby tier constant", () => {
+    const values = parseAllDocuments(fs.readFileSync(path.join(CHART_PATH, "values.yaml"), "utf-8"))[0].toJS();
+    expect(values.builderHomeSizeGiB).toBe(hobbyHomeGiB);
+  });
+
+  it.each(["x11", "omarchy"])("bounds every disk-backed %s emptyDir and spends exactly the gateway's ephemeral limit", (computerDesktop) => {
+    const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop, builderHomeSizeGiB: String(hobbyHomeGiB) }))
+      .map((document) => document.toJS())
+      .find((document) => document?.kind === "Deployment");
+    const pod = deployment.spec.template.spec;
+    const diskBacked = pod.volumes.filter((volume: any) => volume.emptyDir && volume.emptyDir.medium !== "Memory");
+    expect(pod.volumes.filter((volume: any) => volume.emptyDir?.medium === "Memory" && !volume.emptyDir.sizeLimit)).toEqual([]);
+    expect(diskBacked.filter((volume: any) => !volume.emptyDir.sizeLimit).map((volume: any) => volume.name)).toEqual([]);
+    expect(pod.volumes.find((volume: any) => volume.name === "data").emptyDir).toEqual({ sizeLimit: `${hobbyHomeGiB}Gi` });
+    const gateway = pod.containers.find((container: any) => container.name === "gateway");
+    const boundedGiB = diskBacked.reduce((total: number, volume: any) => total + Number(volume.emptyDir.sizeLimit.replace("Gi", "")), 0);
+    expect(`${boundedGiB}Gi`).toBe(gateway.resources.limits["ephemeral-storage"]);
+  });
+
+  it("leaves a shared gateway's data volume unbounded", () => {
+    const deployment = parseAllDocuments(helmTemplate())
+      .map((document) => document.toJS())
+      .find((document) => document?.kind === "Deployment");
+    expect(deployment.spec.template.spec.volumes.find((volume: any) => volume.name === "data")).toEqual({ name: "data", emptyDir: {} });
   });
 });

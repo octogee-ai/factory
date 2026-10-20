@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   buildUpgradeArgs,
   createHelmSubprocessRunner,
@@ -1999,16 +2000,16 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
   });
 });
 
- it("preserves the cluster owner home through a Hobby tier upgrade", async () => {
-   const ensureHobbyHome = vi.fn(async () => ({ name: "home-copy-second-home", zone: "us-central1-c" }));
-   const { runHelm } = mockSubprocess([{ stdout: "ok" }, { stdout: "ok" }, { stdout: "ok" }]);
-   const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), ensureHobbyHome });
-   const opts = { namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder" as const, ownerUid: "UidA", builderSlug: "builder", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" };
-   await runner.upsertInstance({ ...opts, sizingTier: "s" });
-   expect(ensureHobbyHome).toHaveBeenCalledWith({ namespace: "octogee", ownerUid: "UidA", builderSlug: "builder", sizeGiB: 10 });
-   expect(ensureHobbyHome.mock.invocationCallOrder[0]).toBeLessThan(runHelm.mock.invocationCallOrder[0]);
-   await runner.upsertInstance({ ...opts, sizingTier: "m" });
-   expect(ensureHobbyHome).toHaveBeenLastCalledWith({ namespace: "octogee", ownerUid: "UidA", builderSlug: "builder", sizeGiB: 50 });
-   expect(ensureHobbyHome).toHaveBeenCalledTimes(2);
-   expect(runHelm.mock.calls.filter(([args])=>args.includes("upgrade")).every(([args])=>args.includes("builderHomeClaimName=home-copy-second-home") && args.includes("builderHomeZone=us-central1-c"))).toBe(true);
+ it("renders a cluster Builder without creating or selecting a home claim", async () => {
+   const runKubectl = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+   const { runHelm } = mockSubprocess([{ stdout: "ok" }, { stdout: "ok" }]);
+   const runner = createHelmSubprocessRunner({ runHelm: withPreflightStatusNotFound(runHelm), log: vi.fn(), runKubectl });
+   await runner.upsertInstance({ namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder", ownerUid: "UidA", builderSlug: "builder", sizingTier: "s", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" });
+   expect(runKubectl.mock.calls.flat(2)).not.toContain("pvc");
+   const upgrade = runHelm.mock.calls.map(([args]) => args).find(args => args.includes("upgrade"))!;
+   expect(upgrade.filter(arg => arg.startsWith("builderHome"))).toEqual([`builderHomeSizeGiB=${BUILDER_TIERS.hobby.computer!.homeSizeGiB}`]);
+ });
+ it("leaves the Builder home size to the chart for shared gateways", async () => {
+   const args = buildUpgradeArgs({ release: "octogee-gw-shared-0", chartPath: "/c", namespace: "octogee", gatewayId: "shared-0", gatewayClass: "shared", imageRepository: REPO, imageTag: "abc", upgradeTimeout: "10m" });
+   expect(args.some(arg => arg.startsWith("builderHome"))).toBe(false);
  });

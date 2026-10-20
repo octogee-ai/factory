@@ -1,7 +1,6 @@
 export interface HomeCopyWorkerInput {
   operationId: string;
   sourceLayout: "flat" | "portable";
-  targetFilesystem: "ext4" | "btrfs";
 }
 
 export function homeCopyStartupScript(input: HomeCopyWorkerInput): string {
@@ -91,7 +90,7 @@ try:
     target_device = device('octogee-target')
     target.mkdir(parents=True, exist_ok=True)
     probe = subprocess.run(['blkid', '-p', '-s', 'TYPE', '-o', 'value', target_device], capture_output=True, text=True)
-    filesystem = config['targetFilesystem']
+    filesystem = 'btrfs'
     if probe.returncode == 2:
         run('mkfs.' + filesystem, '-q', target_device)
     elif probe.returncode != 0 or probe.stdout.strip() != filesystem:
@@ -118,9 +117,6 @@ try:
                 old.rename(new)
     layout = target / '.octogee-home-layout.json'
     layout.write_text(json.dumps({'version': 1, 'agent': 'volumes/data', 'desktop': 'desktop-home'}))
-    if filesystem == 'ext4':
-        os.chown(target, 1000, 1000)
-        os.chmod(target, 0o2770)
     for name in ['.octogee-native-seeded']:
         if (source / name).is_file(): run('cp', '-a', str(source / name), str(target / name))
     proof = {relative: tree_hash(target / relative) for relative in ['volumes/data', 'desktop-home']}

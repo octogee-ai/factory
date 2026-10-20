@@ -14,19 +14,20 @@ describe("verified home copy", () => {
     expect(readHomeCopyProgress(probe, operationId)).toEqual({ status: "copying", usedBytes: 123 });
     expect(readHomeCopyProgress(`2026-10-08T20:05:47Z helper google_metadata_script_runner[889]: Metadata key("startup-script"), command("/bin/bash"): ${probe}`, operationId)).toEqual({ status: "copying", usedBytes: 123 });
     expect(readHomeCopyProgress(probe, "copy-other")).toEqual({ status: "pending" });
-    const receipt = { operationId, usedBytes: 123, filesystem: "ext4", proof: { "volumes/data": "a".repeat(64), "desktop-home": "b".repeat(64) } };
-    expect(readHomeCopyProgress(`${probe}\nOCTOGEE_HOME_COPY_READY:${JSON.stringify(receipt)}`, operationId)).toMatchObject({ status: "ready", filesystem: "ext4", usedBytes: 123 });
+    const receipt = { operationId, usedBytes: 123, filesystem: "btrfs", proof: { "volumes/data": "a".repeat(64), "desktop-home": "b".repeat(64) } };
+    expect(readHomeCopyProgress(`${probe}\nOCTOGEE_HOME_COPY_READY:${JSON.stringify(receipt)}`, operationId)).toMatchObject({ status: "ready", filesystem: "btrfs", usedBytes: 123 });
+    expect(() => readHomeCopyProgress(`OCTOGEE_HOME_COPY_READY:${JSON.stringify({ ...receipt, filesystem: "ext4" })}`, operationId)).toThrow(/proof/);
     expect(() => readHomeCopyProgress(`OCTOGEE_HOME_COPY_READY:${JSON.stringify({ ...receipt, proof: {} })}`, operationId)).toThrow(/proof/);
     expect(() => readHomeCopyProgress(`OCTOGEE_HOME_COPY_FAILED:${JSON.stringify({ operationId, error: "disk full" })}`, operationId)).toThrow(/disk full/);
   });
 });
 
-import { createHomeCopyClient, type HomeCopyInput } from "../lib/compute-home-copy.js";
+import { createHomeCopyClient, HomeCopyFailure, type HomeCopyInput } from "../lib/compute-home-copy.js";
 import { homeCopyStartupScript } from "../lib/home-copy-worker.js";
 import { vi } from "vitest";
 
-function copyFixture(clusterTarget?: import("../lib/compute-home-copy.js").ClusterHomeTarget) {
-  const input: HomeCopyInput = { operationId: "home-copy-test", ownerUid: "alice", source: { projectId: "octogee", zone: "us-central1-a", name: "home-original", id: "100", sizeGb: 50, diskType: "pd-balanced", source: "projects/octogee/zones/us-central1-a/disks/home-original" }, sourceLayout: "portable", targetFilesystem: "ext4", targetZone: "us-central1-a", desiredGiB: 10, subnetwork: "private-subnet" };
+function copyFixture() {
+  const input: HomeCopyInput = { operationId: "home-copy-test", ownerUid: "alice", source: { projectId: "octogee", zone: "us-central1-a", name: "home-original", id: "100", sizeGb: 50, diskType: "pd-balanced", source: "projects/octogee/zones/us-central1-a/disks/home-original" }, sourceLayout: "portable", targetZone: "us-central1-a", desiredGiB: 10, subnetwork: "private-subnet" };
   const base = "https://compute.googleapis.com/compute/v1/projects/octogee";
   const zone = `${base}/zones/us-central1-a`;
   const labels = { "octogee-owner-uid": "alice", "octogee-operation": input.operationId, purpose: "octogee-home-copy" };
@@ -38,7 +39,7 @@ function copyFixture(clusterTarget?: import("../lib/compute-home-copy.js").Clust
   };
   const request = vi.fn(async ({url}: any) => ({status: Object.hasOwn(data,url) ? 200 : 404,data:data[url]??{}}));
   const journal=vi.fn(async (_what: string,_input: HomeCopyInput,action:()=>Promise<any>)=>action());
-  const client=createHomeCopyClient({request,projectId:"octogee",journal,clusterTarget});
+  const client=createHomeCopyClient({request,projectId:"octogee",journal});
   return {input,data,zone,base,request,client,journal};
 }
 it("waits for the helper to run before requesting serial output",async()=>{
@@ -46,6 +47,19 @@ it("waits for the helper to run before requesting serial output",async()=>{
   expect(await h.client.advance(h.input)).toEqual({progress:{status:"pending"}});
   expect(h.request.mock.calls.some(([call])=>call.url.includes("serialPort"))).toBe(false);
   expect(h.journal).not.toHaveBeenCalled();
+});
+it("fails a helper running an outdated worker script so the copy is cleaned and retried",async()=>{
+  const h=copyFixture();
+  h.data[`${h.zone}/instances/home-copy-test`].metadata.items[0].value="#!/bin/bash\nold worker";
+  await expect(h.client.advance(h.input)).rejects.toBeInstanceOf(HomeCopyFailure);
+  expect(h.journal).not.toHaveBeenCalled();
+});
+it("refuses a helper whose source attachment changed",async()=>{
+  const h=copyFixture();
+  h.data[`${h.zone}/instances/home-copy-test`].disks[0].source="another-clone";
+  const failure=await h.client.advance(h.input).catch((error:unknown)=>error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).not.toBeInstanceOf(HomeCopyFailure);
 });
 it("refuses snapshot reuse after the source disk identity changes",async()=>{
   const h=copyFixture();h.data[`${h.zone}/disks/home-original`].id="999";
@@ -82,7 +96,7 @@ it("reports a worker setup failure before any disk can be formatted",()=>{
  const root=mkdtempSync(path.join(tmpdir(),"home-copy-setup-"));
  try {
   writeFileSync(path.join(root,"apt-get"),"#!/bin/sh\nexit 23\n",{mode:0o755});
-  const run=spawnSync("/bin/bash",["-s"],{input:homeCopyStartupScript({operationId:"copy-setup",sourceLayout:"portable",targetFilesystem:"ext4"}),encoding:"utf8",env:{...process.env,PATH:`${root}:/usr/bin:/bin`}});
+  const run=spawnSync("/bin/bash",["-s"],{input:homeCopyStartupScript({operationId:"copy-setup",sourceLayout:"portable"}),encoding:"utf8",env:{...process.env,PATH:`${root}:/usr/bin:/bin`}});
   expect(run.status).toBe(23);
   expect(()=>readHomeCopyProgress(run.stdout+run.stderr,"copy-setup")).toThrow(/setup failed/);
  } finally {rmSync(root,{recursive:true,force:true});}
@@ -119,26 +133,4 @@ with tempfile.TemporaryDirectory(prefix='home-sockets-', dir='/tmp') as base:
 `;
   const run = spawnSync("python3", ["-", config], { input: program, encoding: "utf8" });
   expect(run.stderr).toBe(""); expect(run.status).toBe(0);
-});
-
-it("copies into a CSI-owned disk and cleans only its claim on abort", async () => {
-  const target={projectId:"octogee",zone:"us-central1-a",name:"pvc-123",id:"104",sizeGb:10,diskType:"pd-balanced" as const,source:"projects/octogee/zones/us-central1-a/disks/pvc-123",claim:{name:"home-copy-test-home",uid:"claim-1",volumeName:"pvc-123"}};
-  const clusterTarget={ensure:vi.fn(async()=>target),read:vi.fn(async()=>target),remove:vi.fn(async()=>true)};
-  const h=copyFixture(clusterTarget);
-  const helper=h.data[`${h.zone}/instances/home-copy-test`];
-  helper.status="RUNNING";
-  h.data[`${h.zone}/instances/home-copy-test/serialPort?port=1`]={contents:'OCTOGEE_HOME_COPY_PROBE:{"operationId":"home-copy-test","usedBytes":123}'};
-  h.data[`${h.zone}/disks/pvc-123`]={id:"104",sizeGb:"10",status:"READY",users:[]};
-  h.request.mockImplementation(async ({url,method}:any)=>({status:method!=="GET"||Object.hasOwn(h.data,url)?200:404,data:h.data[url]??{}}));
-  expect((await h.client.advance(h.input)).progress.status).toBe("copying");
-  expect(clusterTarget.ensure).toHaveBeenCalledWith(h.input,10);
-  expect(h.request).toHaveBeenCalledWith(expect.objectContaining({method:"POST",url:`${h.zone}/instances/home-copy-test/attachDisk`,body:expect.objectContaining({source:target.source,autoDelete:false})}));
-  helper.disks=[{boot:true,autoDelete:true},{deviceName:"octogee-source",source:`${h.zone}/disks/home-copy-test-source`,autoDelete:false},{deviceName:"octogee-target",source:`https://www.googleapis.com/compute/v1/${target.source}`,autoDelete:false}];
-  expect(await h.client.sweep(h.input)).toBe(false);
-  delete h.data[`${h.zone}/instances/home-copy-test`];delete h.data[`${h.zone}/disks/home-copy-test-source`];delete h.data[`${h.base}/global/snapshots/home-copy-test-source`];
-  expect(await h.client.release(h.input)).toBe(true);
-  expect(await h.client.abort(h.input)).toBe(true);
-  expect(clusterTarget.remove).toHaveBeenCalledWith(h.input);
-  expect(h.request.mock.calls.some(([call])=>call.method==="DELETE"&&call.url.endsWith("/disks/pvc-123"))).toBe(false);
-  expect(h.request.mock.calls.some(([call])=>call.method==="POST"&&call.url.endsWith("/disks"))).toBe(false);
 });

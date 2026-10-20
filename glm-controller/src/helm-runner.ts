@@ -13,7 +13,6 @@ import {
 } from "@octogee/core/deployment-environment";
 import type { GatewayServiceAccountIdentity } from "./gateway-service-account-ensurer.js";
 import type { KubectlSubprocess } from "./fleet-ingress.js";
-import type { HobbyHomePlacement } from "./hobby-home.js";
 
 export interface HelmRunner {
 
@@ -124,8 +123,6 @@ export interface HelmSubprocessRunnerDeps {
     annotations?: Record<string, string>;
   }) => Promise<void>;
 
-  ensureHobbyHome?: (input: { namespace: string; ownerUid: string; builderSlug: string; sizeGiB: number }) => Promise<HobbyHomePlacement | void>;
-  ensureHobbyProjects?: (input: { namespace: string; ownerUid: string; builderSlug: string }) => Promise<void>;
   runKubectl?: KubectlSubprocess;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
@@ -421,6 +418,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const HELM_SET = "--set";
+const BUILDER_HOME_SIZE_GIB = requiredHobbyHomeSizeGiB();
+
+function requiredHobbyHomeSizeGiB(): number {
+  const computer = BUILDER_TIERS.hobby.computer;
+  if (!computer) throw new Error("Hobby tier has no computer policy for the Builder home");
+  return computer.homeSizeGiB;
+}
 const HELM_SET_STRING = "--set-string";
 const HELM_SET_JSON = "--set-json";
 
@@ -568,6 +572,7 @@ function appendOptionalJsonArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
 
 function appendOptionalNumberArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
+  if (opts.gatewayClass === "builder") args.push(HELM_SET, `builderHomeSizeGiB=${BUILDER_HOME_SIZE_GIB}`);
 }
 
 function appendOptionalFileArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
@@ -760,17 +765,6 @@ const hist = await deps.runHelm([
   return `rolled back ${release} to revision ${target}`;
 }
 
-async function ensureBuilderHome(deps: HelmSubprocessRunnerDeps, opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<HobbyHomePlacement | void> {
-  if (!deps.ensureHobbyHome || opts.gatewayClass !== "builder") return;
-  if (!opts.ownerUid || !opts.builderSlug) throw new Error(`Hobby gateway ${opts.gatewayId} requires its owner and Builder slug`);
-  const tier = Object.values(BUILDER_TIERS).find(tier => tier.instance === (opts.sizingTier ?? "s"));
-  if (!tier?.computer) throw new Error("Builder home has no tier policy");
-  const identity = { namespace: opts.namespace, ownerUid: opts.ownerUid, builderSlug: opts.builderSlug };
-  const home = await deps.ensureHobbyHome({ ...identity, sizeGiB: tier.computer.homeSizeGiB });
-  await deps.ensureHobbyProjects?.(identity);
-  return home;
-}
-
 export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): HelmRunner {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
   const uninstallTimeout = deps.uninstallTimeout ?? "5m";
@@ -822,10 +816,6 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
           annotations: opts.serviceAccount?.annotations,
         });
       };
-
-      const home = await ensureBuilderHome(deps, opts);
-      if (home) args.push("--set-string", `builderHomeClaimName=${home.name}`);
-      if (home?.zone) args.push("--set-string", `builderHomeZone=${home.zone}`);
 
       await ensureServiceAccount();
 

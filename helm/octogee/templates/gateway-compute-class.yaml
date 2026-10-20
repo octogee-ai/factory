@@ -1,37 +1,34 @@
 {{- if .Values.gatewayFleet.computeClass.enabled }}
 {{- $zones := .Values.gatewayFleet.computeClass.zones }}
-{{- $root := . }}
 {{- $base := required "gatewayFleet.computeClass.name is required" .Values.gatewayFleet.computeClass.name }}
-{{- range $zone := prepend $zones "" }}
 ---
 apiVersion: cloud.google.com/v1
 kind: ComputeClass
 metadata:
-  name: {{ if $zone }}{{ printf "%s-%s" $base $zone }}{{ else }}{{ $base }}{{ end }}
+  name: {{ $base }}
   labels:
-    {{- include "octogee.labels" $root | nindent 4 }}
+    {{- include "octogee.labels" . | nindent 4 }}
 spec:
   autopilot:
     enabled: true
   priorities:
-    {{- if $root.Values.gatewayFleet.computeClass.preferSpot }}
+    {{- if .Values.gatewayFleet.computeClass.preferSpot }}
     - podFamily: general-purpose
       spot: true
       location:
         zones:
-          {{- toYaml (ternary (list $zone) $zones (ne $zone "")) | nindent 10 }}
+          {{- toYaml $zones | nindent 10 }}
         locationPolicy: ANY
     {{- end }}
     - podFamily: general-purpose
       spot: false
       location:
         zones:
-          {{- toYaml (ternary (list $zone) $zones (ne $zone "")) | nindent 10 }}
+          {{- toYaml $zones | nindent 10 }}
         locationPolicy: ANY
   activeMigration:
     optimizeRulePriority: true
   nodePoolAutoCreation:
     enabled: true
   whenUnsatisfiable: DoNotScaleUp
-{{- end }}
 {{- end }}

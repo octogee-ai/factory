@@ -28,7 +28,8 @@ ownerUid: ""
 # openclaw.json from that builder's Gitea system_config repo before OpenClaw
 # starts.
 builderSlug: ""
-builderHomeClaimName: ""
+# Builder home emptyDir size; Cowboy sets it from BUILDER_TIERS.hobby.computer.homeSizeGiB.
+builderHomeSizeGiB: 4
 
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
@@ -69,11 +70,10 @@ replicas: 1
 
 # Roll strategy — "recreate" (default) or "surge" (RollingUpdate maxSurge=1 /
 # maxUnavailable=0: new pod Ready before the old one dies). Cowboy passes
-# surge for shared releases and recreate for the exclusive Hobby home.
+# surge for shared releases; Hobby X11 Builders always recreate.
 rollStrategy: recreate
 
 computeClass: octogee-gateway
-builderHomeZone: ""
 computerDesktop: auto
 
 # Pod-termination durable-flush budget. Kubernetes runs this hook before SIGTERM and

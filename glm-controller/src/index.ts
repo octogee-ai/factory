@@ -1,12 +1,10 @@
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
-import { createBuilderHomeMigrator, type BuilderHomeOwner } from "./builder-home-migration.js";
+import { createBuilderHomeMigrator } from "./builder-home-migration.js";
 import { createBuilderHomeProvider } from "./lib/builder-home-provider.js";
 import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation, type NormalFleetMutationDb } from "@octogee/core/normal-fleet-mutation";
-import { createHobbyHomeEnsurer, createHobbyProjectEnsurer } from "./hobby-home.js";
-import { deleteBuilderClaims } from "./lib/builder-claim-erasure.js";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
@@ -233,7 +231,7 @@ import {
   verifyCustomerFirestoreErasure,
 } from "./lib/customer-ops/customer-firestore-erasure.js";
 import { resolveDefaultStorageBucket } from "./gcp-project.js";
-import { deleteBuilderComputerHome } from "./lib/customer-ops/computer-home.js";
+import { deleteComputerHomeObjects } from "./lib/customer-ops/computer-home.js";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import {
   readAssignedSlugsForGateway,
@@ -1259,8 +1257,7 @@ async function upsertGateway(
     sizingTier: gateway.sizingTier,
     vmSpec: BUILDER_VM_SPEC,
     assertStorage: gateway.gatewayClass === "builder" && replicas > 0
-      ? (runtime) => assertBuilderRuntimeStorage({ db, runtime, ownerUid: gateway.ownerUid,
-          builderSlug: gateway.builderSlug, namespace: NAMESPACE, runKubectl: spawnKubectl })
+      ? (runtime) => assertBuilderRuntimeStorage({ db, runtime, ownerUid: gateway.ownerUid })
       : undefined,
     log,
   });
@@ -2615,28 +2612,6 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       : createHelmSubprocessRunner({
           runHelm: spawnHelm,
           log,
-          ensureHobbyHome: createHobbyHomeEnsurer({
-            runKubectl, log,
-            resolveHomeClaim: async uid => {
-              const owner = (await db.collection("users").doc(uid).get()).data() as BuilderHomeOwner | undefined;
-              const storage = owner?.provisioning?.homeStorage;
-              if (!storage) return undefined;
-              if (storage.runtime !== "cluster" || !storage.claim) throw new Error("Builder home is not a migrated cluster claim");
-              return storage.claim;
-            },
-            journalExpand: (input, action) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-              actor: "cowboy", forced: false, what: "expand-builder-home-pvc", why: "Apply the Builder tier home allowance", target: { namespace: input.namespace, name: input.name, ownerUid: input.ownerUid }, preActionStatus: { sizeGiB: input.fromGiB }, mutation: { sizeGiB: input.toGiB }, action,
-            }),
-            journalCreate: (manifest, action) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-              actor: "cowboy", forced: false, what: "create-hobby-home", why: "Persist the Builder computer home across allocations", target: manifest.metadata as Record<string, unknown>, preActionStatus: { exists: false }, mutation: manifest.spec as Record<string, unknown>, action,
-            }),
-          }),
-          ensureHobbyProjects: createHobbyProjectEnsurer({
-            runKubectl, log,
-            journalCreate: (manifest, action) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-              actor: "cowboy", forced: false, what: "create-builder-project-pvc", why: "Keep the project working set separate from home and retain pending remote saves", target: manifest.metadata as Record<string, unknown>, preActionStatus: { exists: false }, mutation: manifest.spec as Record<string, unknown>, action,
-            }),
-          }),
           ensureAuthSecret: authSecretEnsurer.ensureAuthSecret,
           ensureServiceAccount: serviceAccountEnsurer.ensureServiceAccount,
           runKubectl,
@@ -4067,11 +4042,11 @@ function createBuilderHomeServices(db: Firestore, log: (message: string) => void
   const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
     actor: "cowboy", forced: false, what, why: "Migrate the Builder home without removing its verified source", target: { ownerUid: uid }, preActionStatus: {}, mutation: { action: what }, action,
   });
-  const provider = createBuilderHomeProvider({ db, projectId: gatewayComputeProjectId(), namespace: NAMESPACE, environment: COMPUTER_ENVIRONMENT,
-    request: homeCopyRequest, vm: createGatewayComputeClient(log), kubectl: spawnKubectl, journal: homeJournal });
+  const provider = createBuilderHomeProvider({ db, projectId: gatewayComputeProjectId(), environment: COMPUTER_ENVIRONMENT,
+    request: homeCopyRequest, vm: createGatewayComputeClient(log), journal: homeJournal });
   return {
     provider,
-    copy: createHomeCopyClient({ request: homeCopyRequest, projectId: gatewayComputeProjectId(), clusterTarget: provider.clusterTarget, journal: (what, input, action) => homeJournal(what, input.ownerUid, action) }),
+    copy: createHomeCopyClient({ request: homeCopyRequest, projectId: gatewayComputeProjectId(), journal: (what, input, action) => homeJournal(what, input.ownerUid, action) }),
   };
 }
 
@@ -4116,15 +4091,7 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
     deleteAuthUser: (uid: string) => deleteAuthUserTolerantOfMissing(uid, getAuth()),
-    deleteComputerHome: (uid: string, slug: string) => deleteBuilderComputerHome({
-      bucket: getStorage().bucket(), uid, slug,
-      deleteHobbyHome: (ownerUid, builderSlug) => deleteBuilderClaims({ namespace: NAMESPACE, uid: ownerUid, slug: builderSlug }, {
-        runKubectl: spawnKubectl,
-        journalDelete: (target, action) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-          actor: "cowboy", forced: false, what: "erase-builder-claim", why: "Erase the verified owner's retained storage", target, preActionStatus: { exists: true }, mutation: { delete: true }, action,
-        }),
-      }),
-    }),
+    deleteComputerHome: (_uid: string, slug: string) => deleteComputerHomeObjects(getStorage().bucket(), slug),
     ...(BUILDER_VM_SPEC
       ? {
           deleteComputer: async (uid: string) => {

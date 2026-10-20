@@ -48,7 +48,7 @@ function homeErasureQueue(provisioning: NonNullable<BuilderHomeOwner["provisioni
     const homes: BuilderHomeLocation[] = [...(provisioning.homeStorage?.retained ?? [])];
     if (provisioning.homeStorage?.disk) homes.push(provisioning.homeStorage);
     if (migration?.source) homes.push(migration.source);
-    if (migration?.target && ["adopting", "complete"].includes(migration.phase)) homes.push({ runtime: migration.copy.targetFilesystem === "ext4" ? "cluster" : "gce-vm", layout: "portable", disk: migration.target, ...(migration.target.claim ? { claim: migration.target.claim } : {}) });
+    if (migration?.target && ["adopting", "complete"].includes(migration.phase)) homes.push({ runtime: "gce-vm", layout: "portable", disk: migration.target });
     const unique = new Map<string, BuilderHomeLocation>();
     for (const home of homes) if (!unique.has(home.disk.id)) unique.set(home.disk.id, home);
     return [...unique.values()];

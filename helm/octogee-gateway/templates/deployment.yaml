@@ -4,9 +4,6 @@
 {{- $preset := index .Values.tiers $tier -}}
 {{- $gatewayClass := include "octogee-gateway.gatewayClass" . -}}
 {{- $computeClass := required "computeClass is required for owner-bound gateways" .Values.computeClass -}}
-{{- if and (eq $gatewayClass "builder") .Values.builderHomeZone -}}
-{{- $computeClass = printf "%s-%s" $computeClass .Values.builderHomeZone -}}
-{{- end -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
 {{- $hobbyComputer := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
@@ -708,26 +705,22 @@ spec:
         {{- if eq $gatewayClass "builder" }}
         - name: builder-cache
           emptyDir:
-            sizeLimit: 4Gi
+            sizeLimit: 2Gi
         - name: project-materializations
-          {{- if $hobbyComputer }}
-          persistentVolumeClaim:
-            claimName: octogee-builder-{{ .Values.builderSlug }}-projects
-          {{- else }}
           emptyDir:
-            sizeLimit: 4Gi
-          {{- end }}
-        {{- end }}
+            sizeLimit: 2Gi
         - name: data
-          {{- if $hobbyComputer }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.builderHomeClaimName | default (printf "octogee-builder-%s-home" (required "builderSlug is required for Hobby home" .Values.builderSlug)) | quote }}
-          {{- else }}
+          emptyDir:
+            sizeLimit: {{ printf "%dGi" (int (required "builderHomeSizeGiB is required for Builder gateways" .Values.builderHomeSizeGiB)) }}
+        {{- else }}
+        - name: data
           emptyDir: {}
-          {{- end }}
+        {{- end }}
         {{- if $hobbyComputer }}
         - name: desktop-node-identity
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
         - name: desktop-runtime
           emptyDir:
             medium: Memory
@@ -738,7 +731,9 @@ spec:
             sizeLimit: 256Mi
         {{- end }}
         - name: secret-resolver
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
@@ -771,7 +766,9 @@ spec:
                   audience: octogee-api-sidecar-broker
                   expirationSeconds: 3600
         - name: openclaw-device-auth
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
         - name: k8s-api-token
           projected:
             sources:

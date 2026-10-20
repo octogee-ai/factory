@@ -707,9 +707,9 @@ describe("gateway convergence pass outcomes", () => {
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
 
-  it("keeps a rejected storage preflight from poisoning later fleet reconciliation", async () => {
+  it("converges a cluster Builder despite retained GCE computer state", async () => {
     const roots = {
-      blocked: durableRoot({ gatewayId: "blocked", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
+      hobby: durableRoot({ gatewayId: "hobby", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
       healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
     };
     const runtimes: Record<string, Record<string, unknown>> = {};
@@ -722,12 +722,9 @@ describe("gateway convergence pass outcomes", () => {
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      helm.upsertInstance.mockClear();
-      await expect(runGatewayConvergencePass(deps)).rejects.toThrow("Retained GCE computer state requires an explicit storage migration");
-      expect(runtimes.blocked).toBeUndefined();
-      expect(helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "healthy" }));
-    }
+    await runGatewayConvergencePass(deps);
+    expect(runtimes.hobby).toMatchObject({ runtime: "cluster" });
+    expect(helm.upsertInstance.mock.calls.map(([opts]: any) => opts.gatewayId).sort()).toEqual(["healthy", "hobby"]);
   });
 
   it("holds same-release stale Helm intent until native restore acknowledges customer custody", async () => {

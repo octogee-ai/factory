@@ -7,10 +7,9 @@ import type { AllocateDisposableGatewayInput } from "./placement-policy-reconcil
 import { HomeCopyFailure, homeCopyCapacity, type CopyHomeDisk, type HomeCopyInput, type HomeCopyProgress } from "./lib/compute-home-copy.js";
 
 export interface BuilderHomeLocation {
-  runtime: "cluster" | "gce-vm";
+  runtime: "gce-vm";
   disk: CopyHomeDisk;
   layout: "flat" | "portable";
-  claim?: { name: string; uid: string; volumeName: string };
   computer?: { name: string; id: string; zone: string };
 }
 export interface BuilderHomeMigration {
@@ -50,14 +49,14 @@ export interface BuilderHomeMigrationDeps {
   subnetwork: string;
   nativeZones: readonly string[];
   nativeZone: (uid: string) => Promise<string | null>;
-  inventory: (uid: string, slug: string, owner: BuilderHomeOwner) => Promise<BuilderHomeLocation | null>;
+  inventory: (uid: string, owner: BuilderHomeOwner) => Promise<BuilderHomeLocation | null>;
   verifyStopped: (uid: string, source: BuilderHomeLocation) => Promise<void>;
   copy: {
     advance(input: HomeCopyInput): Promise<{ progress: HomeCopyProgress; target?: CopyHomeDisk }>;
     release(input: HomeCopyInput): Promise<boolean>;
     abort(input: HomeCopyInput): Promise<boolean>;
   };
-  adopt: (input: { uid: string; slug: string; source: BuilderHomeLocation; target: CopyHomeDisk; runtime: "cluster" | "gce-vm"; operationId: string }) => Promise<boolean>;
+  adopt: (input: { uid: string; target: CopyHomeDisk }) => Promise<boolean>;
   removeStoppedHome: (uid: string, source: BuilderHomeLocation) => Promise<boolean>;
   log: (message: string) => void;
 }
@@ -69,6 +68,13 @@ export function assertHomeMigrationAuthority(owner: BuilderHomeOwner, request: A
       openclaw?.gatewayId !== request.sourceGatewayId || lease?.leaseId !== request.leaseId || lease.generation !== request.generation ||
       lease.status !== "requested" || lease.targetGatewayId !== undefined || lease.sourceAssignmentEpoch !== request.sourceAssignmentEpoch ||
       lease.entitlementTier !== request.entitlementTier || lease.sizingTier !== request.sizingTier) throw new Error("home migration activation authority changed");
+}
+
+function assertNativeCopy(state: BuilderHomeMigration): void {
+  const legacy = state as { copy: { targetFilesystem?: string }; target?: { claim?: unknown }; proof?: { filesystem?: string } };
+  if (legacy.copy.targetFilesystem === "ext4" || legacy.target?.claim !== undefined || legacy.proof?.filesystem !== "btrfs") {
+    throw new Error("home migration targets a cluster home; retired cluster home records need operator cleanup");
+  }
 }
 
 class HomeMigration {
@@ -115,7 +121,6 @@ class HomeMigration {
     });
   }
   private async targetZone(source: BuilderHomeLocation): Promise<string> {
-    if (this.policy.runtime === "cluster") return source.disk.zone;
     const existing = await this.deps.nativeZone(this.request.uid);
     if (existing) return existing;
     const selected = this.deps.nativeZones.includes(source.disk.zone) ? source.disk.zone : this.deps.nativeZones[0];
@@ -128,7 +133,7 @@ class HomeMigration {
     const id = `home-copy-${this.deps.environment}-${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
     const state: BuilderHomeMigration = { id, tier: this.request.entitlementTier, source, startedAt: this.deps.now(), phase: "copying", attempt: 1, copy: {
       operationId: id, ownerUid: this.request.uid, source: source.disk, sourceLayout: source.layout,
-      targetZone: await this.targetZone(source), targetFilesystem: this.policy.runtime === "cluster" ? "ext4" : "btrfs",
+      targetZone: await this.targetZone(source),
       desiredGiB: this.policy.homeSizeGiB, subnetwork: this.deps.subnetwork,
     } };
     await this.transaction((owner, tx) => {
@@ -140,7 +145,6 @@ class HomeMigration {
   }
   private alreadyFits(state: BuilderHomeMigration | undefined, source: BuilderHomeLocation): boolean {
     if (state && state.phase !== "complete") return false;
-    if (source.runtime !== this.policy.runtime) return false;
     if (source.disk.sizeGb <= this.policy.homeSizeGiB) return true;
     return state?.target?.id === source.disk.id && this.deps.now() - (state.completedAt ?? 0) < 24 * 60 * 60_000;
   }
@@ -162,7 +166,7 @@ class HomeMigration {
     return this.copy(next, source);
   }
   private retainLargerHome(progress: HomeCopyProgress, source: BuilderHomeLocation): boolean {
-    return progress.status !== "pending" && source.runtime === this.policy.runtime && homeCopyCapacity({
+    return progress.status !== "pending" && homeCopyCapacity({
       desiredGiB: this.policy.homeSizeGiB, sourceGiB: source.disk.sizeGb, usedBytes: progress.usedBytes,
     }) >= source.disk.sizeGb;
   }
@@ -194,28 +198,29 @@ class HomeMigration {
   private async adopt(state: BuilderHomeMigration): Promise<boolean> {
     const { target, proof } = state;
     if (!target || !proof) throw new Error("home migration has no verified target");
+    assertNativeCopy(state);
     await this.readOwner();
-    const runtime = state.copy.targetFilesystem === "ext4" ? "cluster" : "gce-vm";
-    if (!await this.deps.adopt({ uid: this.request.uid, slug: this.request.builderSlug, source: state.source, target, runtime, operationId: state.id })) return false;
+    if (!await this.deps.adopt({ uid: this.request.uid, target })) return false;
     const fields = {
       "provisioning.homeCapacity": { desiredGiB: this.policy.homeSizeGiB, allocatedGiB: target.sizeGb, usedBytes: proof.usedBytes,
         status: target.sizeGb > this.policy.homeSizeGiB ? "shrink-pending" : "ready", diskId: target.id },
-      ...(runtime === "gce-vm" ? { "provisioning.homeDisk": target } : {}),
+      "provisioning.homeDisk": target,
     };
     await this.transaction((owner, tx) => {
       if (owner.provisioning?.homeMigration?.id !== state.id) throw new Error("home migration operation changed before activation");
       tx.update(this.ownerRef, { ...fields,
         "provisioning.homeMigration": { ...state, phase: "complete", completedAt: this.deps.now() },
-        "provisioning.homeStorage": { runtime, disk: target, ...(target.claim ? { claim: target.claim } : {}), layout: "portable", retained: [...(owner.provisioning.homeStorage?.retained ?? []), state.source] },
+        "provisioning.homeStorage": { runtime: "gce-vm", disk: target, layout: "portable", retained: [...(owner.provisioning.homeStorage?.retained ?? []), state.source] },
       });
     });
-    this.deps.log(`[home-migration] ${this.request.uid}: verified ${runtime} home ${target.id} (${target.sizeGb} GiB); previous home retained`);
-    return runtime === this.policy.runtime;
+    this.deps.log(`[home-migration] ${this.request.uid}: verified native home ${target.id} (${target.sizeGb} GiB); previous home retained`);
+    return true;
   }
   async reconcile(): Promise<boolean> {
+    if (BUILDER_TIERS[this.request.entitlementTier].computer?.runtime === "cluster") return true;
     const owner = await this.readOwner();
     await this.removeExpiredHome(owner.provisioning?.homeStorage);
-    const source = await this.deps.inventory(this.request.uid, this.request.builderSlug, owner);
+    const source = await this.deps.inventory(this.request.uid, owner);
     if (!source) return true;
     let state = owner.provisioning?.homeMigration;
     if (this.alreadyFits(state, source)) return true;
