@@ -4208,18 +4208,20 @@ describe("agent sqlite stores across an rsync carry", () => {
     migrationTempRoots.push(path.dirname(stageDir));
   });
 
-  it("rejects a pre-copy that carries agent snapshots", async () => {
+  it("discards agent snapshots an older source carried in a pre-copy and continues file-only", async () => {
     const importDir = await mkTempRoot();
-    const migrationId = "mig-pre-snapshot-rejected";
+    const migrationId = "mig-pre-snapshot-discarded";
     const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre" });
     await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
     const result = await finishImport(deps, migrationId, "pre");
 
-    expect(result.getStatus()).toBe(400);
-    expect(result.getBody()).toMatchObject({ message: "pre-copy carried agent snapshots: octogee-chris-coach" });
+    expect(result.getStatus()).toBe(200);
     expect(deps.runOpenClaw).not.toHaveBeenCalled();
-    expect(spawnMock.mock.calls).toHaveLength(1);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("discarded agent snapshots an older source carried in its pre-copy: octogee-chris-coach"));
+    await expect(fs.access(path.join(stageDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
+    await expect(fs.access(path.join(importDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
   });
 
   it("replaces an occupied database on a held Builder target without calling its unreleased OpenClaw", async () => {

@@ -1856,6 +1856,16 @@ async function validateStagedGitMetadata(stageDir: string, slug: string): Promis
   return unsafeEntry === null ? null : `unsafe Git metadata: ${path.join(metadataPath, unsafeEntry)}`;
 }
 
+async function discardPreCopyAgentSnapshots(
+  stageDir: string,
+  log: (message: string, fields?: LogContext) => void,
+): Promise<void> {
+  const snapshots = await findStagedAgentSnapshots(stageDir);
+  if (snapshots.length === 0) return;
+  for (const snapshot of snapshots) await fs.rm(path.dirname(snapshot.snapshotDir), { recursive: true, force: true });
+  log(`[migration-rsync] discarded agent snapshots an older source carried in its pre-copy: ${snapshots.map((snapshot) => snapshot.agentId).join(", ")}`);
+}
+
 async function validateStagedRsyncImport(
   session: RSyncImportSession,
   slug: string,
@@ -1884,12 +1894,7 @@ async function validateStagedRsyncImport(
   if (liveStores.length > 0) {
     return `carried live agent database files instead of snapshots: ${liveStores.join(", ")}`;
   }
-  if (mode === "pre") {
-    const snapshots = await findStagedAgentSnapshots(session.stageDir);
-    if (snapshots.length > 0) {
-      return `pre-copy carried agent snapshots: ${snapshots.map((snapshot) => snapshot.agentId).join(", ")}`;
-    }
-  }
+  if (mode === "pre") await discardPreCopyAgentSnapshots(session.stageDir, log);
   await omitRawCodexDatabases(session.stageDir, log);
   const staged = (await listSqliteStores(session.stageDir)).filter((store) => !isAgentSnapshotArtifact(store) &&
     !isCodexDatabase(path.relative(session.stageDir, store).split(path.sep).join("/")));
