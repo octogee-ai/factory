@@ -766,17 +766,59 @@ async function reloadRuntimeSecretsIfChanged(
   ctx: BrokerCtx,
   logPrefix: string,
   ledger: SecretMaterialLedger,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!ledger.changed) {
     ctx.log(`${logPrefix} secrets.reload skipped — no secret material changed`);
     return;
   }
-  ctx.log(`${logPrefix} secrets.reload — ${ledger.reasons.join("; ")}`);
-  await reloadRuntimeSecrets(ctx, logPrefix);
+  const precedingWrites = ledger.reasons.join("; ");
+  ctx.log(`${logPrefix} secrets.reload — ${precedingWrites}`);
+  await reloadRuntimeSecrets(ctx, logPrefix, { precedingWrites, signal });
 }
 
-async function reloadRuntimeSecrets(ctx: BrokerCtx, logPrefix: string): Promise<void> {
-  const result = await ctx.rpc.secretsReload();
+function isSecretsReloadUnavailable(error: unknown): boolean {
+  if (!(error instanceof OpenclawWireError) || error.code !== "rpc-error") return false;
+  const details = error.details as { serverCode?: unknown } | undefined;
+  return details?.serverCode === "UNAVAILABLE";
+}
+
+async function secretsReloadAfterSupersession(
+  ctx: BrokerCtx,
+  logPrefix: string,
+  opts: { precedingWrites?: string; signal?: AbortSignal },
+): Promise<Awaited<ReturnType<GatewayRpcClient["secretsReload"]>>> {
+  try {
+    return await ctx.rpc.secretsReload();
+  } catch (error) {
+    if (!isSecretsReloadUnavailable(error)) throw error;
+    ctx.log(
+      `${logPrefix} ⚠ secrets.reload refused (${String(error)}); waiting for the newer config write to apply, then reloading once more`,
+    );
+  }
+  await waitForAppliedConfigRevision(ctx.rpc, "", {
+    signal: opts.signal,
+    logPrefix,
+    acceptSupersedingRevision: true,
+  });
+  try {
+    return await ctx.rpc.secretsReload();
+  } catch (error) {
+    if (!isSecretsReloadUnavailable(error)) throw error;
+    throw new Error(
+      `${logPrefix} secrets.reload was refused twice after: ${opts.precedingWrites ?? "an unrecorded config write"} ` +
+        `(${String(error)}; the gateway log names the superseding write)`,
+      { cause: error },
+    );
+  }
+}
+
+async function reloadRuntimeSecrets(
+  ctx: BrokerCtx,
+  logPrefix: string,
+  opts: { precedingWrites?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+  const result = await secretsReloadAfterSupersession(ctx, logPrefix, opts);
   const warningCount = result.warningCount ?? 0;
   if (result.ok !== true) {
     throw new Error(`${logPrefix} secrets.reload did not acknowledge success`);
@@ -939,6 +981,34 @@ function mountMattermostAccountsPatch(
   };
 }
 
+function buildCoachAgentEntry(
+  snapshot: UserSnapshot,
+  coach: {
+    agentId: string;
+    identity: ReturnType<typeof resolveCoachIdentity>;
+    customerMmUserId: string | null | undefined;
+    builderGateway: boolean;
+    modelSelection: BuilderAgentModelDefault | null;
+  },
+): ReturnType<typeof buildCustomerAgent> {
+  const agentEntry = buildCustomerAgent({
+    uid: snapshot.uid,
+    slug: snapshot.slug,
+    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
+    agentDir: path.join(AGENTS_DIR, coach.agentId, "agent"),
+    coach: { name: coach.identity.name, emoji: coach.identity.emoji, model: DEFAULT_COACH.model },
+    customerMmUserId: coach.customerMmUserId,
+    default: coach.builderGateway,
+    hostCode: coach.builderGateway ? "builder-full" : "customer-restricted",
+    ...(platformOpenAiEmbeddingsEnabled()
+      ? { memorySearch: platformOpenAiEmbeddingMemorySearch(coach.agentId) }
+      : {}),
+  });
+  if (coach.modelSelection) agentEntry.model = coach.modelSelection;
+  agentEntry.tools = initialCoachTools(snapshot, agentEntry.tools);
+  return agentEntry;
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -970,24 +1040,15 @@ async function applyAddCustomerConfigPatch(
   const accountId = `${snapshot.slug}-coach`;
   const accountEntry = await requiredCoachMattermostAccount(ctx, snapshot.slug, accountsMap[accountId]);
   const agentId = `octogee-${snapshot.slug}-coach`;
-  const agentDir = path.join(AGENTS_DIR, agentId, "agent");
   const coachModelSelection = initialCoachModelSelection(snapshot);
   const coachModelDefaults = platformModelDefaults(coachModelSelection);
-  const agentEntry = buildCustomerAgent({
-    uid: snapshot.uid,
-    slug: snapshot.slug,
-    customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
-    agentDir,
-    coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
+  const agentEntry = buildCoachAgentEntry(snapshot, {
+    agentId,
+    identity,
     customerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot),
-    default: builderGateway,
-    hostCode: builderGateway ? "builder-full" : "customer-restricted",
-    ...(platformOpenAiEmbeddingsEnabled()
-      ? { memorySearch: platformOpenAiEmbeddingMemorySearch(agentId) }
-      : {}),
+    builderGateway,
+    modelSelection: coachModelSelection,
   });
-  if (coachModelSelection) agentEntry.model = coachModelSelection;
-  agentEntry.tools = initialCoachTools(snapshot, agentEntry.tools);
   const projectAgentEntries = buildCustomerProjectAgents(snapshot, projectAgents, identity,
     brokerCustomerMattermostUserId(brokerSnapshot, snapshot), builderGateway);
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
@@ -1116,7 +1177,7 @@ async function applyAddCustomerConfigPatch(
   );
   await settleProjectAgentActivations(ctx, {
     snapshot, projectAgents, channels: snapshot.channels, baseline: routingActivationBaseline,
-    secretMaterial,
+    secretMaterial, signal: callOpts?.signal,
     activate: () => activateMattermostRoutingAfterConfigPatch(ctx.rpc, OPENCLAW_DIR, ctx.log, {
       accountIds: affectedAccountIds,
       baseline: routingActivationBaseline,
@@ -1145,11 +1206,12 @@ async function settleProjectAgentActivations(
     channels: UserSnapshot["channels"];
     baseline: Readonly<Record<string, number>>;
     secretMaterial: SecretMaterialLedger;
+    signal?: AbortSignal;
     activate(): Promise<void>;
   },
 ): Promise<void> {
   const errors: unknown[] = [];
-  await reloadRuntimeSecretsIfChanged(ctx, `[add:${input.snapshot.slug}]`, input.secretMaterial);
+  await reloadRuntimeSecretsIfChanged(ctx, `[add:${input.snapshot.slug}]`, input.secretMaterial, input.signal);
   if (ctx.pendingRuntimeSecrets.get(input.snapshot.slug) === input.secretMaterial) {
     ctx.pendingRuntimeSecrets.delete(input.snapshot.slug);
   }
@@ -1237,7 +1299,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   const removedSecrets = await updateMattermostAccountSecrets(OPENCLAW_DIR, { remove: [...new Set([...projectSecrets.remove, ...retiredAccountIds])] });
   secretMaterial.noteIf(removedSecrets.changed, "Mattermost account secrets file changed");
   await settleProjectAgentActivations(ctx, {
-    snapshot, projectAgents, channels: brokerSnapshot.channels, baseline, secretMaterial,
+    snapshot, projectAgents, channels: brokerSnapshot.channels, baseline, secretMaterial, signal: options.signal,
     activate: async () => {
       if (pendingAccountIds.length === 0) return;
       markMattermostRoutingActivationPending(OPENCLAW_DIR, logPrefix, pendingAccountIds, baseline);
@@ -1658,7 +1720,7 @@ async function settleActivatedImport(
   const { slug, patch, secretMaterial, signal, configuredBuilderRouting } = input;
   try {
     await waitForAppliedConfigRevision(ctx.rpc, slug, { signal });
-    await reloadRuntimeSecretsIfChanged(ctx, `[import:${slug}]`, secretMaterial);
+    await reloadRuntimeSecretsIfChanged(ctx, `[import:${slug}]`, secretMaterial, signal);
     if (ctx.pendingRuntimeSecrets.get(slug) === secretMaterial) ctx.pendingRuntimeSecrets.delete(slug);
     if (configuredBuilderRouting && patch.configNoop === true) {
       await activateMattermostRoutingAfterConfigPatch(

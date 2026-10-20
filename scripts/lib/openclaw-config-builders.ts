@@ -435,11 +435,11 @@ export function isSafeDefaultAgentPortableStatePath(relativePath: string): boole
       : relativePath === item.relativePath);
 }
 
-export function buildSafeDefaultAgent(): Record<string, unknown> {
-  return {
+export function buildSafeDefaultAgent(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+  const agent: Record<string, unknown> = {
     id: SAFE_DEFAULT_AGENT_ID,
     name: "Unmatched Mattermost route",
-    workspace: `${process.env.OPENCLAW_DIR || "/home/node/.openclaw"}/workspace-${SAFE_DEFAULT_AGENT_ID}`,
+    workspace: `${env.OPENCLAW_DIR || "/home/node/.openclaw"}/workspace-${SAFE_DEFAULT_AGENT_ID}`,
     heartbeat: { every: "0m" },
     tools: {
       profile: "minimal",
@@ -449,6 +449,8 @@ export function buildSafeDefaultAgent(): Record<string, unknown> {
       toolsBySender: {},
     },
   };
+  applyComputerBrowserAgentPolicy(agent, env);
+  return agent;
 }
 
 function prepareGatewayAgentEntry(agent: unknown): unknown {

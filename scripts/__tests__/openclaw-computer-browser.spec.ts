@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
-import { gatewayAgentRoster } from "../lib/openclaw-config-builders.js";
+import { buildSafeDefaultAgent, gatewayAgentRoster, SAFE_DEFAULT_AGENT_ID } from "../lib/openclaw-config-builders.js";
 import { applyPreBootPatches } from "../entrypoints/pre-boot-config.js";
 import { withBuilderClaim } from "./helpers/builder-claim.js";
 
@@ -12,6 +12,15 @@ const template = (): Record<string, any> => JSON.parse(readFileSync(
 
 describe("computer browser runtime", () => {
   afterEach(() => vi.unstubAllEnvs());
+
+  it("builds the neutral anchor with the desktop denial the computer pass gives it", () => {
+    const { id: _id, ...anchor } = buildSafeDefaultAgent(vmEnv);
+    const config = template();
+    config.agents.entries = { [SAFE_DEFAULT_AGENT_ID]: structuredClone(anchor) };
+    applyOpenClawComputerBrowserConfig(config, vmEnv);
+    expect(config.agents.entries[SAFE_DEFAULT_AGENT_ID]).toEqual(anchor);
+    expect(anchor.tools).toMatchObject({ deny: expect.arrayContaining(["browser", "computer", "nodes"]) });
+  });
 
   it("enables Hobby's GKE X11 desktop with the same owner-only browser policy", () => {
     const config = template();

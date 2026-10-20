@@ -905,6 +905,70 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
+  it("re-reads the applied revision and reloads once more when a newer config write supersedes secrets.reload", async () => {
+    const log = vi.fn();
+    const superseded = new OpenclawWireError("rpc-error", "secrets.reload failed", { serverCode: "UNAVAILABLE" });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] },
+      })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn()
+        .mockRejectedValueOnce(superseded)
+        .mockResolvedValueOnce({ ok: true, warningCount: 0 }),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log });
+
+    const activation = await adapter.activateImportedCustomer("tester10");
+
+    expect(activation.verificationPending).toBeUndefined();
+    expect(rpc.secretsReload).toHaveBeenCalledTimes(2);
+    const configReads = vi.mocked(rpc.configGet).mock.invocationCallOrder;
+    const reloads = vi.mocked(rpc.secretsReload).mock.invocationCallOrder;
+    expect(configReads.some((order) => order > reloads[0] && order < reloads[1])).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("[import:tester10] secrets.reload complete"));
+  });
+
+  it("names the config write that preceded a secrets.reload superseded twice", async () => {
+    const superseded = new OpenclawWireError("rpc-error", "secrets.reload failed", { serverCode: "UNAVAILABLE" });
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] },
+      })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn().mockRejectedValue(superseded),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    const activation = await adapter.activateImportedCustomer("tester10");
+
+    expect(rpc.secretsReload).toHaveBeenCalledTimes(2);
+    expect(activation.verificationPending).toMatch(
+      /secrets\.reload was refused twice after: .*activation config patch changed the config/,
+    );
+  });
+
+  it("does not retry a secrets.reload that failed for a reason other than gateway unavailability", async () => {
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] },
+      })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn().mockRejectedValue(
+        new OpenclawWireError("rpc-error", "invalid secrets.reload params", { serverCode: "INVALID_REQUEST" }),
+      ),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    const activation = await adapter.activateImportedCustomer("tester10");
+
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
+    expect(activation.verificationPending).toBe("invalid secrets.reload params");
+  });
+
   it("fails a committed activation when the migration itself was cancelled", async () => {
     const controller = new AbortController();
     const cancelled = new Error("migration cancelled");
@@ -1139,6 +1203,34 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
             agent: expect.objectContaining({ id: SAFE_DEFAULT_AGENT_ID }),
           },
         }),
+      );
+    } finally {
+      clearBuilderClaim();
+    }
+  });
+
+  it("anchors a Builder computer's activation to the neutral agent with its desktop tools denied", async () => {
+    stubBuilderClaim("tester10");
+    vi.stubEnv("GATEWAY_CLASS", "builder");
+    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
+    try {
+      const rpc = {
+        channelsStatus: vi.fn(async () => ({
+          channelAccounts: {
+            mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
+          },
+        })),
+        configGet: vi.fn(async () => configSnapshot({})),
+        agentsCreate: rosterRpc().agentsCreate,
+        secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+      } as unknown as GatewayRpcClient;
+      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn() });
+
+      await adapter.activateImportedCustomer("tester10", {});
+
+      const [, options] = mocks.applyOpenClawActivationManifest.mock.calls.at(-1)!;
+      expect(options.authInheritanceAnchor.agent.tools.deny).toEqual(
+        expect.arrayContaining(["browser", "computer", "nodes", "file-transfer", "ollama"]),
       );
     } finally {
       clearBuilderClaim();
@@ -2536,6 +2628,31 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [{
       projectId: "orbit", activationId: "activation-1", tokenHash: expect.any(String), channelIds: ["orbit-general"],
     }]);
+  });
+
+  it("stops the superseded secrets.reload wait and skips the second reload when the add mount is cancelled", async () => {
+    const snapshot = aliceSnapshot({
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", activationId: "activation-1", status: "provisioning" }],
+      channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+    });
+    const controller = new AbortController();
+    const cancelled = new Error("mount deadline exceeded");
+    const rpc = mkGatewayRpc({
+      ...rosterRpc({}),
+      secretsReload: vi.fn(async () => {
+        controller.abort(cancelled);
+        throw new OpenclawWireError("rpc-error", "secrets.reload failed", { serverCode: "UNAVAILABLE" });
+      }),
+    });
+    const adapter = buildBrokeredLifecycleAdapter({
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn(),
+    });
+
+    await expect(adapter.applyAddCustomerConfigPatch(
+      snapshot, { _coachPersonalToken: "pat-1" }, { signal: controller.signal },
+    )).rejects.toBe(cancelled);
+
+    expect(rpc.secretsReload).toHaveBeenCalledOnce();
   });
 
   it("reports a connected project even when another routing activation failed", async () => {
