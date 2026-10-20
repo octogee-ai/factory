@@ -1827,6 +1827,70 @@ describe("configured Builder surge release", () => {
     }
   });
 
+  it.each([
+    ["running after a return", { role: "normal", mode: "permitted", phase: "running" }, true],
+    ["released by an earlier activation", { role: "normal", mode: "permitted", phase: "running", terminalTarget: { migrationId: "activation-0", slug: "chris", targetPodUid: "target-pod" } }, true],
+    ["released by this activation", { role: "normal", mode: "permitted", phase: "running", terminalTarget: { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" } }, false],
+    ["held fresh boot", { role: "normal", mode: "held", phase: "held" }, false],
+    ["reserved held target", { role: "target", mode: "held", phase: "held", migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" }, false],
+    ["permitted held-path target", { role: "target", mode: "permitted", phase: "running", migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" }, false],
+  ] as const)("classifies a Builder target as live only when its OpenClaw already runs outside this migration: %s", async (_label, gate, expected) => {
+    const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
+    const processGate = {
+      status: vi.fn(async () => ({ version: 1, podUid: "target-pod", ...gate })),
+    } as unknown as SurgeOpenClawProcessSupervisorClient;
+    const wiring = createBuilderSurgeGateWiring({
+      adapter: {} as CustomerLifecycleAdapter, processGate,
+      surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayReady: async () => undefined, log: () => undefined,
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+    });
+    await expect(wiring.surgeTargetLive(request)).resolves.toBe(expected);
+  });
+
+  it.each([
+    ["admitted", {}, null],
+    ["still starting", { phase: "starting" }, "not running for a live import (phase starting)"],
+    ["another pod", { podUid: "other-pod" }, "not a live permitted OpenClaw on this pod"],
+    ["held", { mode: "held", phase: "held" }, "not a live permitted OpenClaw on this pod"],
+    ["readiness held", { readinessReleased: false }, "requires released readiness"],
+    ["overlay missing", { overlayPresent: false }, "requires its retained overlay"],
+    ["customer mounted", { mounted: true }, "already mounts its customer"],
+  ] as const)("admits a live Builder import only for a running, Ready, unmounted retained overlay: %s", async (_label, variant, expected) => {
+    vi.stubEnv("GATEWAY_BUILDER_SLUG", "chris");
+    try {
+      const { readinessReleased = true, overlayPresent = true, mounted = false, ...gate } = variant as Record<string, unknown>;
+      const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "target-pod" };
+      const processGate = {
+        status: vi.fn(async () => ({ version: 1, podUid: "target-pod", role: "normal", mode: "permitted", phase: "running", ...gate })),
+      } as unknown as SurgeOpenClawProcessSupervisorClient;
+      const adapter = {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug: string) => slug === "chris",
+        configuredBuilderOverlayPresent: () => overlayPresent,
+        listLocalCustomerSlugs: () => ["chris"],
+        hasCustomerAgentRuntime: () => true,
+        hasCustomerDir: () => true,
+        hasWorkspaceGitDir: () => true,
+        hasGitRemote: () => true,
+        customerMountMarked: () => mounted,
+      } as unknown as CustomerLifecycleAdapter;
+      const wiring = createBuilderSurgeGateWiring({
+        adapter, processGate,
+        surgeReadiness: { released: vi.fn(async () => readinessReleased) } as unknown as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined, log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      });
+      if (expected === null) {
+        await expect(wiring.admitLiveSurgeTarget(request)).resolves.toBeUndefined();
+      } else {
+        await expect(wiring.admitLiveSurgeTarget(request)).rejects.toThrow(expected);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["unassigned", "assigned", "assignment-read-failed"])(
     "rolls back a released Builder only before canonical assignment: %s",
     async (assignment) => {

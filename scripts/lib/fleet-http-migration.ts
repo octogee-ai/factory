@@ -8,7 +8,10 @@ import { isDeepStrictEqual } from "node:util";
 import { archivedSharedAgentExportPaths, archiveNativeSharedAgentContext, assertNativeAgentContextTransfer, assertRetainedNativeAgentContext } from "./native-shared-agent-context.js";
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
 import { updateVoiceMigration, type VoiceMigrationInput } from './voice-migration.js';
-import { clearMigrationStaging, prepareMigrationStaging, type MigrationStagingIdentity } from "./migration-staging.js";
+import {
+  clearMigrationStaging, prepareMigrationStaging, readLiveImportAdmission, writeLiveImportAdmission,
+  type LiveImportAdmission, type MigrationStagingIdentity,
+} from "./migration-staging.js";
 import { sourceTransferRsyncArgs } from "./source-transfer-rsync.js";
 import { deferredProjectPlaceholderPaths } from "./deferred-project-workspace.js";
 import { sourcesForPushMode } from "./source-transfer-plan.js";
@@ -170,6 +173,9 @@ surgeTargetOpenClawHeld?: (input: {
   slug: string;
   targetPodUid: string;
 }) => Promise<boolean>;
+surgeTargetLive?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<boolean>;
+admitLiveSurgeTarget?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<void>;
+liveSurgeTargetAssigned?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<boolean>;
 unreserveSurgeTarget?: (input: {
   migrationId: string;
   slug: string;
@@ -194,11 +200,11 @@ async function releaseAgentForImport(
   agentId: string,
   log: (message: string, fields?: LogContext) => void,
 ): Promise<void> {
-  if (activation) {
+  if (activation && !activation.live) {
     if (!deps.surgeTargetOpenClawHeld) {
       throw new Error(`cannot replace agent ${agentId}'s database: Builder target has no process gate status`);
     }
-    if (await deps.surgeTargetOpenClawHeld(activation)) {
+    if (await deps.surgeTargetOpenClawHeld(activation.request)) {
       log(`[migration-rsync] OpenClaw is held for this boot; replacing ${agentId}'s database offline`);
       return;
     }
@@ -1622,12 +1628,14 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
     preparingRsyncImport = true;
     const port = rsyncPortFromDeps(deps);
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
-    let activation: ReturnType<typeof configuredBuilderActivationRequest> = null;
+    let activation: ConfiguredBuilderActivation | null = null;
     try {
       const agentContext = await validateAgentContextTransfer(deps, body, "target", mode, true);
-      activation = configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
-      if (activation) {
-        await deps.reserveSurgeTarget!(activation);
+      activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
+      if (activation?.live) {
+        await admitLiveConfiguredBuilderImport(deps, activation);
+      } else if (activation) {
+        await deps.reserveSurgeTarget!(activation.request);
       } else if (configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
         await deps.reserveSurgeTarget?.({ migrationId: body.migrationId, slug: body.slug });
       }
@@ -1686,8 +1694,8 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       res.status(200).json(response);
     } catch (err) {
       await stopRsyncSession(rsyncImportSessions.get(key)).catch(() => undefined);
-      if (activation) {
-        await deps.unreserveSurgeTarget!(activation).catch((error: unknown) => {
+      if (activation && !activation.live) {
+        await deps.unreserveSurgeTarget!(activation.request).catch((error: unknown) => {
           log(`[migration-rsync] failed to cancel Builder preparation migrationId=${body.migrationId} slug=${body.slug}: ${String(error)}`);
         });
       }
@@ -1913,35 +1921,92 @@ async function validateStagedRsyncImport(
 }
 
 interface ConfiguredBuilderActivation {
-  migrationId: string;
-  slug: string;
-  targetPodUid: string;
+  request: { migrationId: string; slug: string; targetPodUid: string };
+  live: boolean;
 }
 
-function configuredBuilderActivationRequest(
+async function configuredBuilderActivationRequest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody,
   mode: MigrationTransferMode,
   configTransferMode: MigrationConfigTransferMode,
-): ConfiguredBuilderActivation | null {
+): Promise<ConfiguredBuilderActivation | null> {
   if (mode === "keys" || configTransferMode !== ACTIVATION_MANIFEST_TRANSFER ||
     deps.adapter.isBuilderGateway?.() !== true) return null;
   if (deps.adapter.isConfiguredBuilderCustomer?.(body.slug) !== true) {
     throw new Error("import does not match the configured Builder");
   }
   const targetPodUid = process.env.POD_UID?.trim();
-  if (!targetPodUid || !deps.reserveSurgeTarget || !deps.releaseSurgeReadiness || !deps.unreserveSurgeTarget) {
+  if (!targetPodUid || !deps.reserveSurgeTarget || !deps.releaseSurgeReadiness || !deps.unreserveSurgeTarget ||
+    !deps.surgeTargetLive || !deps.admitLiveSurgeTarget || !deps.liveSurgeTargetAssigned) {
     throw new Error("configured Builder activation requires its pod-bound process gate");
   }
-  return { migrationId: body.migrationId, slug: body.slug, targetPodUid };
+  const request = { migrationId: body.migrationId, slug: body.slug, targetPodUid };
+  return { request, live: await deps.surgeTargetLive(request) };
+}
+
+function liveImportAdmission(deps: MigrationHandlerDeps, activation: ConfiguredBuilderActivation): Promise<LiveImportAdmission | null> {
+  return readLiveImportAdmission(os.tmpdir(), stagingIdentity(deps, activation.request, ACTIVATION_MANIFEST_TRANSFER));
+}
+
+function recordLiveImportAdmission(
+  deps: MigrationHandlerDeps,
+  activation: ConfiguredBuilderActivation,
+  decision: LiveImportAdmission,
+): Promise<void> {
+  return writeLiveImportAdmission(os.tmpdir(), stagingIdentity(deps, activation.request, ACTIVATION_MANIFEST_TRANSFER), decision);
+}
+
+async function admitLiveConfiguredBuilderImport(
+  deps: MigrationHandlerDeps,
+  activation: ConfiguredBuilderActivation,
+): Promise<void> {
+  try {
+    if (deps.adapter.customerMountMarked?.(activation.request.slug) !== false) {
+      throw new Error("live Builder import requires the configured customer to be unmounted");
+    }
+    await deps.admitLiveSurgeTarget!(activation.request);
+  } catch (error) {
+    if (await liveImportAdmission(deps, activation) !== "admitted") await recordLiveImportAdmission(deps, activation, "refused");
+    throw error;
+  }
+  await recordLiveImportAdmission(deps, activation, "admitted");
+  (deps.log ?? provisionerLog)(
+    `[migration-rsync] importing into live Builder OpenClaw migrationId=${activation.request.migrationId} slug=${activation.request.slug}`,
+  );
+}
+
+async function activateBuilderCoach(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  signal: AbortSignal,
+  loadStrategy: MigrationLoadStrategy,
+): Promise<void> {
+  const verificationPending = await activateImportedCustomerForMigration({
+    deps,
+    slug,
+    mode: "final",
+    loadStrategy,
+    signal,
+  });
+  signal.throwIfAborted();
+  if (verificationPending) {
+    throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
+  }
 }
 
 async function activateConfiguredBuilderImport(
   deps: MigrationHandlerDeps,
-  request: NonNullable<ReturnType<typeof configuredBuilderActivationRequest>>,
+  activation: ConfiguredBuilderActivation,
   signal: AbortSignal,
   loadStrategy: MigrationLoadStrategy,
 ): Promise<void> {
+  if (activation.live) {
+    signal.throwIfAborted();
+    await activateBuilderCoach(deps, activation.request.slug, signal, loadStrategy);
+    return;
+  }
+  const { request } = activation;
   let cancellation: Promise<void> | null = null;
   let cancellationFailure: Error | null = null;
   const cancel = (): void => {
@@ -1958,17 +2023,7 @@ async function activateConfiguredBuilderImport(
       targetPodUid: request.targetPodUid,
     });
     signal.throwIfAborted();
-    const verificationPending = await activateImportedCustomerForMigration({
-      deps,
-      slug: request.slug,
-      mode: "final",
-      loadStrategy,
-      signal,
-    });
-    signal.throwIfAborted();
-    if (verificationPending) {
-      throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
-    }
+    await activateBuilderCoach(deps, request.slug, signal, loadStrategy);
   } catch (error) {
     (deps.log ?? provisionerLog)(
       `[migration-rsync] Builder activation failed migrationId=${request.migrationId} slug=${request.slug}: ` +
@@ -2058,7 +2113,7 @@ async function activateFinishedRsyncImport(input: {
     return undefined;
   }
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
-    const activation = configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
+    const activation = await configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
     let verificationPending: string | undefined;
     if (activation) {
       await activateConfiguredBuilderImport(deps, activation, signal, loadStrategy);
@@ -2120,13 +2175,15 @@ type RetainedAgentContextTransfer = Extract<NativeAgentContextTransfer, { mode: 
 async function retainedImportPolicy(input: StagedImportInput): Promise<RetainedAgentContextTransfer | undefined> {
   const retained = input.session.agentContext?.mode === "retain-native" ? input.session.agentContext : undefined;
   if (!retained) return undefined;
-  if (!input.activation || !await input.deps.surgeTargetOpenClawHeld?.(input.activation)) throw new Error("retained native import requires its held OpenClaw process gate");
+  if (!input.activation || !input.activation.live && !await input.deps.surgeTargetOpenClawHeld?.(input.activation.request)) {
+    throw new Error("retained native import requires its held or live Builder OpenClaw process gate");
+  }
   await assertRetainedNativeAgentContext(input.session.importDir, input.slug);
   return retained;
 }
 
 function deferImportedAgentState(input: StagedImportInput, retained: RetainedAgentContextTransfer | undefined): boolean {
-  return !!retained || input.mode === "pre" && !input.activation;
+  return !!retained || input.mode === "pre" && (!input.activation || input.activation.live);
 }
 
 async function archiveRetainedImport(input: StagedImportInput, prepared: PreparedAgentStores, retained: RetainedAgentContextTransfer): Promise<NativeSharedAgentContextArchive> {
@@ -2182,15 +2239,15 @@ async function finishTargetPreparation(
   configTransferMode: MigrationConfigTransferMode,
   signal: AbortSignal,
 ): Promise<void> {
-  const activation = configuredBuilderActivationRequest(deps, body, "pre", configTransferMode);
+  const activation = await configuredBuilderActivationRequest(deps, body, "pre", configTransferMode);
   const placeholders = new Set(activation ? deferredProjectPlaceholderPaths(session.stageDir, body.slug) : []);
   const sourceEntries = (await listRelativeEntries(session.stageDir)).filter(entry =>
     (entry.startsWith(`customers/${body.slug}/`) || entry.startsWith(`${GIT_METADATA_DIR}/${body.slug}/`)) &&
     !placeholders.has(entry));
   await fs.writeFile(path.join(path.dirname(session.stageDir), "source-entries.json"), JSON.stringify(sourceEntries), { mode: 0o600 });
-  if (!activation) return;
+  if (!activation || activation.live) return;
   if (!deps.prepareSurgeTarget) throw new Error("Builder target preparation is unavailable");
-  await deps.prepareSurgeTarget(activation, signal);
+  await deps.prepareSurgeTarget(activation.request, signal);
 }
 
 function validateSharedRestoreCertificate(session: RSyncImportSession, body: FinishRsyncImportRequestBody, res: Response): boolean {
@@ -2399,7 +2456,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         session,
         slug: body.slug,
         mode,
-        activation: configuredBuilderActivationRequest(deps, body, mode, configTransferMode),
+        activation: await configuredBuilderActivationRequest(deps, body, mode, configTransferMode),
         signal: controller.signal,
         log,
       });
@@ -2464,12 +2521,13 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     await stopRsyncSession(rsyncImportSessions.get(key));
     await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, configTransferMode));
-    let activation: ReturnType<typeof configuredBuilderActivationRequest> = null;
+    let activation: ConfiguredBuilderActivation | null = null;
     try {
-      activation = configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
-      if (activation) {
-        const state = await deps.unreserveSurgeTarget!(activation);
-        if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
+      activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
+      if (activation && !await releaseAbortedBuilderImport(deps, activation)) {
+        log(`[migration-rsync] abort-import left the live Builder untouched: import was never admitted migrationId=${body.migrationId} slug=${body.slug}`);
+        res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
+        return;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2485,6 +2543,42 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
     log(`🟢 [migration-rsync] abort-import migrationId=${body.migrationId} slug=${body.slug}`);
     res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
   });
+}
+
+async function releaseAbortedBuilderImport(deps: MigrationHandlerDeps, activation: ConfiguredBuilderActivation): Promise<boolean> {
+  if (!activation.live) {
+    const state = await deps.unreserveSurgeTarget!(activation.request);
+    if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
+    return true;
+  }
+  if (await liveImportAdmission(deps, activation) !== "admitted") return false;
+  const remove = deps.adapter.removeImportedCustomerBySlug;
+  if (!remove) throw new Error("live Builder import cannot be returned without imported-customer removal");
+  await assertLiveBuilderUnassigned(deps, activation);
+  const { slug } = activation.request;
+  await removeCustomerWithSystemConfigWatchPaused({ deps, slug, remove: () => remove(slug) });
+  return true;
+}
+
+async function assertLiveBuilderUnassigned(deps: MigrationHandlerDeps, activation: ConfiguredBuilderActivation): Promise<void> {
+  if (await deps.liveSurgeTargetAssigned!(activation.request)) {
+    throw new Error("cannot remove a live Builder customer that its assignment serves");
+  }
+}
+
+async function releaseUnmountedBuilderTarget(
+  deps: MigrationHandlerDeps,
+  activation: ConfiguredBuilderActivation | null,
+): Promise<boolean> {
+  if (!activation) return true;
+  if (!activation.live) {
+    await deps.unreserveSurgeTarget!(activation.request);
+    return true;
+  }
+  const admission = await liveImportAdmission(deps, activation);
+  if (admission === "refused") return false;
+  await assertLiveBuilderUnassigned(deps, activation);
+  return true;
 }
 
 function configuredBuilderVerifyChecks(
@@ -2747,8 +2841,12 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
-      const activation = configuredBuilderActivationRequest(deps, body, "final", ACTIVATION_MANIFEST_TRANSFER);
-      if (activation) await deps.unreserveSurgeTarget!(activation);
+      const activation = await configuredBuilderActivationRequest(deps, body, "final", ACTIVATION_MANIFEST_TRANSFER);
+      if (!await releaseUnmountedBuilderTarget(deps, activation)) {
+        log(`[migration-http] unmount left the live Builder untouched: import was never admitted migrationId=${body.migrationId} slug=${body.slug}`);
+        res.status(200).json({ migrationId: body.migrationId, slug: body.slug, unmounted: false } satisfies UnmountResponse);
+        return;
+      }
       await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, ACTIVATION_MANIFEST_TRANSFER));
       await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, BUILDER_SYSTEM_CONFIG_TRANSFER));
       if (deps.adapter.removeImportedCustomerBySlug) {

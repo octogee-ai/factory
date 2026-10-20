@@ -42,6 +42,7 @@ import {
   type MigrationHandlerDeps,
 } from "../lib/fleet-http-migration.js";
 import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
+import { liveImportAdmissionPath } from "../lib/migration-staging.js";
 import {
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   SIGNATURE_HEADER,
@@ -304,6 +305,11 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
       certificatePem: TARGET_CERTIFICATE_PEM,
       close: async () => undefined,
     })),
+    surgeTargetLive: vi.fn(async () => false),
+    admitLiveSurgeTarget: vi.fn(async () => {
+      throw new Error("held Builder target was admitted as live");
+    }),
+    liveSurgeTargetAssigned: vi.fn(async () => false),
     ...overrides,
   };
 }
@@ -313,10 +319,18 @@ beforeEach(() => {
   upgradeStoresMock.mockReset().mockResolvedValue(undefined);
 });
 
+const liveAdmissionRecords: Array<{ migrationId: string; slug: string; instanceId: string }> = [];
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   for (const root of migrationTempRoots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
+  }
+  for (const record of liveAdmissionRecords.splice(0)) {
+    await fs.rm(liveImportAdmissionPath(os.tmpdir(), {
+      gatewayId: GATEWAY_ID, instanceId: record.instanceId, migrationId: record.migrationId, slug: record.slug,
+      configTransferMode: "activation-manifest",
+    }), { force: true });
   }
 });
 
@@ -4298,6 +4312,295 @@ describe("agent sqlite stores across an rsync carry", () => {
     expect(getStatus()).toBe(200);
     expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
     expect(rowCount(previous)).toBe(1);
+  });
+
+  function liveBuilderTargetImport(): {
+    adapter: Partial<CustomerLifecycleAdapter>;
+    deps: Partial<MigrationHandlerDeps>;
+  } {
+    vi.stubEnv("POD_UID", "builder-pod");
+    const permitted = (message: string) => vi.fn(async () => { throw new Error(message); });
+    return {
+      adapter: {
+        isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: (slug) => slug === "chris",
+        customerMountMarked: vi.fn(() => false),
+        releaseAgent: vi.fn(async () => undefined),
+        removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: true, steps: [], retained: true })),
+        clearMountMarker: vi.fn(),
+        clearCustomerMigratingIn: vi.fn(),
+      },
+      deps: {
+        reserveSurgeTarget: permitted("cannot hydrate a permitted surge OpenClaw process gate"),
+        prepareSurgeTarget: permitted("Builder preparation requires its reserved OpenClaw process to remain held"),
+        releaseSurgeReadiness: permitted("configured Builder target is not reserved by this migration"),
+        unreserveSurgeTarget: permitted("cannot unreserve a permitted surge OpenClaw process gate"),
+        surgeTargetOpenClawHeld: permitted("configured Builder target is not reserved by this migration"),
+        surgeTargetLive: vi.fn(async (request) => {
+          liveAdmissionRecords.push({ ...request, instanceId: process.env.POD_UID ?? "" });
+          return true;
+        }),
+        admitLiveSurgeTarget: vi.fn(async () => undefined),
+        pauseSystemConfigWatch: vi.fn(async () => undefined),
+        migrationRsyncPort: 30873,
+        waitForRsyncReady: vi.fn(async () => undefined),
+      },
+    };
+  }
+
+  async function restartedMigrationHandlers(): Promise<typeof import("../lib/fleet-http-migration.js")> {
+    vi.resetModules();
+    return import("../lib/fleet-http-migration.js");
+  }
+
+  function expectNoHeldGateCalls(deps: MigrationHandlerDeps): void {
+    expect(deps.reserveSurgeTarget).not.toHaveBeenCalled();
+    expect(deps.prepareSurgeTarget).not.toHaveBeenCalled();
+    expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+    expect(deps.unreserveSurgeTarget).not.toHaveBeenCalled();
+    expect(deps.surgeTargetOpenClawHeld).not.toHaveBeenCalled();
+  }
+
+  it("pre-copies files into a live Builder without reserving, preparing, or touching its agent databases", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
+    const target = liveBuilderTargetImport();
+    const migrationId = "mig-live-builder-pre";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre",
+      adapter: target.adapter, deps: { ...target.deps, procRoot } });
+    await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
+    await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-coach", "agent", "memory.md"), "shared-memory");
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId, "pre");
+
+    expect(result.getStatus()).toBe(200);
+    expect(deps.admitLiveSurgeTarget).toHaveBeenCalledExactlyOnceWith({ migrationId, slug: "chris", targetPodUid: "builder-pod" });
+    expectNoHeldGateCalls(deps);
+    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    const copy = spawnMock.mock.calls.find(([command, args]) => command === "/usr/bin/rsync" && args[0] === "-a");
+    expect(copy![1]).toContain("--exclude=/agents/");
+    expect(rowCount(previous)).toBe(1);
+    migrationTempRoots.push(path.dirname(stageDir));
+  });
+
+  it.each(["ready", "verification-pending"] as const)(
+    "activates a live Builder by releasing each carried agent through its running OpenClaw: %s",
+    async (outcome) => {
+      const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+      const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
+      await fs.writeFile(`${previous}-wal`, "native wal");
+      const target = liveBuilderTargetImport();
+      const migrationId = `mig-live-builder-${outcome}`;
+      const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+        adapter: {
+          ...target.adapter,
+          activateImportedCustomer: vi.fn(async () => {
+            expect(rowCount(previous)).toBe(2);
+            return { appliedFingerprint: "fp-chris", ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}) };
+          }),
+        },
+        deps: { ...target.deps, procRoot } });
+      await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+      spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+      const result = await finishImport(deps, migrationId);
+
+      expectNoHeldGateCalls(deps);
+      expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
+      expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
+      expect(rowCount(previous)).toBe(2);
+      if (outcome === "ready") {
+        expect(result.getStatus()).toBe(200);
+        expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+        expect(deps.adapter.onMounted).toHaveBeenCalledWith("chris");
+      } else {
+        expect(result.getStatus()).toBe(500);
+        expect(result.getBody()).toMatchObject({ message: "Builder Coach activation verification failed: Coach disconnected" });
+        expect(deps.adapter.onMounted).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("archives Shared agents into a live retained-native Builder without holding its OpenClaw", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native'), ('native')"));
+    const target = liveBuilderTargetImport();
+    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
+    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
+    const migrationId = "mig-live-retained-native";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: retainedContext,
+      adapter: target.adapter, deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId, "final", retainedContext);
+
+    expect(result.getStatus()).toBe(200);
+    expectNoHeldGateCalls(deps);
+    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
+    expect(rowCount(previous)).toBe(2);
+    expect(result.getBody()).toMatchObject({ sharedAgentContext: { archiveId: retainedContext.archiveId } });
+    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+  });
+
+  async function prepareLiveImport(deps: MigrationHandlerDeps, migrationId: string): Promise<number> {
+    const body: PrepareRsyncImportRequestBody = {
+      migrationId, slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
+      transferUser: "migration", transferKey: "c".repeat(64),
+    };
+    const response = mkResponse();
+    await createPrepareRsyncImportHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+    return response.getStatus();
+  }
+
+  async function abortLiveImport(deps: MigrationHandlerDeps, migrationId: string): Promise<number> {
+    const body: AbortRsyncImportRequestBody = { migrationId, slug: "chris", mode: "final", rpcPhase: "abort-rsync-import" };
+    const response = mkResponse();
+    await createAbortRsyncImportHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+    return response.getStatus();
+  }
+
+  async function unmountLiveImport(deps: MigrationHandlerDeps, migrationId: string): Promise<ReturnType<typeof mkResponse>> {
+    const body: UnmountRequestBody = { migrationId, slug: "chris" };
+    const response = mkResponse();
+    await createUnmountHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+    return response;
+  }
+
+  function mountedLiveBuilderDeps(): MigrationHandlerDeps {
+    const target = liveBuilderTargetImport();
+    return mkDeps({ ...target.deps, adapter: mkAdapter({ ...target.adapter, customerMountMarked: vi.fn(() => true) }) });
+  }
+
+  it("refuses a live Builder import when the configured customer is still mounted", async () => {
+    const deps = mountedLiveBuilderDeps();
+    expect(await prepareLiveImport(deps, "mig-live-builder-mounted")).toBe(500);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(deps.admitLiveSurgeTarget).not.toHaveBeenCalled();
+    expect(deps.adapter.prepareImportDir).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("requires the configured customer to be unmounted"), { status: "failed" });
+    expectNoHeldGateCalls(deps);
+  });
+
+  it("leaves a serving Builder untouched when aborting a live import it refused to admit", async () => {
+    const deps = mountedLiveBuilderDeps();
+    expect(await prepareLiveImport(deps, "mig-live-refused-abort")).toBe(500);
+    expect(await abortLiveImport(deps, "mig-live-refused-abort")).toBe(200);
+    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expect(deps.adapter.clearMountMarker).not.toHaveBeenCalled();
+    expect(deps.adapter.clearCustomerMigratingIn).not.toHaveBeenCalled();
+    expect(deps.adapter.onUnmounted).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("import was never admitted migrationId=mig-live-refused-abort"));
+    expectNoHeldGateCalls(deps);
+  });
+
+  it("leaves a serving Builder mounted when rolling back a live import it refused to admit", async () => {
+    const deps = mountedLiveBuilderDeps();
+    expect(await prepareLiveImport(deps, "mig-live-refused-unmount")).toBe(500);
+    const response = await unmountLiveImport(deps, "mig-live-refused-unmount");
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual({ migrationId: "mig-live-refused-unmount", slug: "chris", unmounted: false });
+    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expectNoHeldGateCalls(deps);
+  });
+
+  it("returns an admitted live Builder import like a Builder return on abort, leaving its OpenClaw permitted", async () => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    expect(await prepareLiveImport(deps, "mig-live-builder-abort")).toBe(200);
+    expect(await abortLiveImport(deps, "mig-live-builder-abort")).toBe(200);
+    expectNoHeldGateCalls(deps);
+    expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledWith({ migrationId: "mig-live-builder-abort", slug: "chris", targetPodUid: "builder-pod" });
+    expect(deps.pauseSystemConfigWatch).toHaveBeenCalledWith("chris");
+    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledExactlyOnceWith("chris");
+    expect(deps.adapter.onUnmounted).toHaveBeenCalledWith("chris");
+  });
+
+  it.each(["abort", "unmount"] as const)("refuses to %s an admitted live Builder import once its assignment serves it", async (call) => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter), liveSurgeTargetAssigned: vi.fn(async () => true) });
+    const migrationId = `mig-live-builder-served-${call}`;
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    expect(await prepareLiveImport(deps, migrationId)).toBe(200);
+    const status = call === "abort" ? await abortLiveImport(deps, migrationId) : (await unmountLiveImport(deps, migrationId)).getStatus();
+    expect(status).toBe(500);
+    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expectNoHeldGateCalls(deps);
+    await abortLiveImport({ ...deps, liveSurgeTargetAssigned: vi.fn(async () => false) }, migrationId);
+  });
+
+  it("rolls back an admitted live Builder import on unmount without unreserving its permitted OpenClaw", async () => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    expect(await prepareLiveImport(deps, "mig-live-builder-unmount")).toBe(200);
+    const response = await unmountLiveImport(deps, "mig-live-builder-unmount");
+    expect(response.getStatus()).toBe(200);
+    expectNoHeldGateCalls(deps);
+    expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledOnce();
+    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledExactlyOnceWith("chris");
+    expect(await abortLiveImport(deps, "mig-live-builder-unmount")).toBe(200);
+  });
+
+  async function unmountAfterRestart(deps: MigrationHandlerDeps, migrationId: string): Promise<ReturnType<typeof mkResponse>> {
+    const restarted = await restartedMigrationHandlers();
+    const body: UnmountRequestBody = { migrationId, slug: "chris" };
+    const response = mkResponse();
+    await restarted.createUnmountHandler(deps)(mkRequest(body, {
+      signature: signForPod(body.migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+    return response;
+  }
+
+  it("leaves a serving Builder mounted when a restarted gateway rolls back a live import it refused", async () => {
+    const deps = mountedLiveBuilderDeps();
+    expect(await prepareLiveImport(deps, "mig-live-refused-restart")).toBe(500);
+    const response = await unmountAfterRestart(deps, "mig-live-refused-restart");
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual({ migrationId: "mig-live-refused-restart", slug: "chris", unmounted: false });
+    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+  });
+
+  it("returns an admitted live Builder import when a restarted gateway rolls it back", async () => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    expect(await prepareLiveImport(deps, "mig-live-admitted-restart")).toBe(200);
+    const response = await unmountAfterRestart(deps, "mig-live-admitted-restart");
+    expect(response.getStatus()).toBe(200);
+    expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledOnce();
+    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledExactlyOnceWith("chris");
+    expect(await abortLiveImport(deps, "mig-live-admitted-restart")).toBe(200);
+  });
+
+  it("returns a live Builder that imported nothing on its own return unmount", async () => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter) });
+    const response = await unmountLiveImport(deps, "mig-builder-return");
+    expect(response.getStatus()).toBe(200);
+    expectNoHeldGateCalls(deps);
+    expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledExactlyOnceWith({
+      migrationId: "mig-builder-return", slug: "chris", targetPodUid: "builder-pod",
+    });
+    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledExactlyOnceWith("chris");
+  });
+
+  it("refuses to unmount a serving live Builder that recorded no import for the migration", async () => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({ ...target.deps, adapter: mkAdapter(target.adapter), liveSurgeTargetAssigned: vi.fn(async () => true) });
+    const response = await unmountLiveImport(deps, "mig-live-unrecorded-serving");
+    expect(response.getStatus()).toBe(500);
+    expect(deps.adapter.removeImportedCustomerBySlug).not.toHaveBeenCalled();
+    expectNoHeldGateCalls(deps);
   });
 
   it("refuses to replace a Builder target's database without its process gate status", async () => {

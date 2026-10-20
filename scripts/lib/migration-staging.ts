@@ -31,3 +31,42 @@ export async function prepareMigrationStaging(root: string, identity: MigrationS
 export async function clearMigrationStaging(root: string, identity: MigrationStagingIdentity): Promise<void> {
   await fs.rm(migrationStagingDirectory(root, identity), { recursive: true, force: true });
 }
+
+export type LiveImportAdmission = "admitted" | "refused";
+
+const LIVE_IMPORT_ADMISSIONS: readonly LiveImportAdmission[] = ["admitted", "refused"];
+
+export function liveImportAdmissionPath(root: string, identity: MigrationStagingIdentity): string {
+  return `${migrationStagingDirectory(root, identity)}.live-admission.json`;
+}
+
+export async function readLiveImportAdmission(
+  root: string,
+  identity: MigrationStagingIdentity,
+): Promise<LiveImportAdmission | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(liveImportAdmissionPath(root, identity), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const record = JSON.parse(raw) as { migrationId?: unknown; slug?: unknown; decision?: unknown };
+  if (record.migrationId !== identity.migrationId || record.slug !== identity.slug ||
+    !(LIVE_IMPORT_ADMISSIONS as readonly unknown[]).includes(record.decision)) {
+    throw new Error("live import admission record does not match its migration");
+  }
+  return record.decision as LiveImportAdmission;
+}
+
+export async function writeLiveImportAdmission(
+  root: string,
+  identity: MigrationStagingIdentity,
+  decision: LiveImportAdmission,
+): Promise<void> {
+  const file = liveImportAdmissionPath(root, identity);
+  const temporary = `${file}.${process.pid}.tmp`;
+  const record = { migrationId: identity.migrationId, slug: identity.slug, decision, recordedAt: Date.now() };
+  await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600, flush: true });
+  await fs.rename(temporary, file);
+}

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { clearMigrationStaging, migrationStagingDirectory, prepareMigrationStaging } from "../lib/migration-staging.js";
+import { clearMigrationStaging, liveImportAdmissionPath, migrationStagingDirectory, prepareMigrationStaging, readLiveImportAdmission, writeLiveImportAdmission } from "../lib/migration-staging.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
@@ -27,5 +27,21 @@ describe("migration staging", () => {
     const base = await root();
     await fs.symlink(base, migrationStagingDirectory(base, identity));
     await expect(prepareMigrationStaging(base, identity)).rejects.toThrow();
+  });
+  it("keeps a live import admission decision past staging cleanup", async () => {
+    const base = await root();
+    expect(await readLiveImportAdmission(base, identity)).toBeNull();
+    await prepareMigrationStaging(base, identity);
+    await writeLiveImportAdmission(base, identity, "refused");
+    await clearMigrationStaging(base, identity);
+    expect(await readLiveImportAdmission(base, identity)).toBe("refused");
+    await writeLiveImportAdmission(base, identity, "admitted");
+    expect(await readLiveImportAdmission(base, identity)).toBe("admitted");
+  });
+  it("rejects a live import admission recorded for another migration", async () => {
+    const base = await root();
+    await writeLiveImportAdmission(base, { ...identity, migrationId: "migration-2" }, "admitted");
+    await fs.rename(liveImportAdmissionPath(base, { ...identity, migrationId: "migration-2" }), liveImportAdmissionPath(base, identity));
+    await expect(readLiveImportAdmission(base, identity)).rejects.toThrow("does not match its migration");
   });
 });

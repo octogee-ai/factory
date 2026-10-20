@@ -2161,6 +2161,9 @@ interface BuilderSurgeGateWiring {
   }) => Promise<SurgeOpenClawProcessGateState>;
   selfReleaseReserved: () => Promise<boolean>;
   surgeTargetOpenClawHeld: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
+  surgeTargetLive: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
+  admitLiveSurgeTarget: (input: BuilderSurgeTargetRequest) => Promise<void>;
+  liveSurgeTargetAssigned: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
   releaseSurgeReadiness: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
   selfRelease: (targetPodUid: string) => Promise<void>;
   selfReleaseLoopSettled: () => Promise<boolean>;
@@ -2401,6 +2404,57 @@ function reservedTargetOpenClawHeld(
   return true;
 }
 
+function liveBuilderTarget(
+  state: SurgeOpenClawProcessGateState,
+  request: BuilderSurgeTargetRequest,
+): boolean {
+  return state.role === "normal" && state.mode === "permitted" && !releasedBuilderTargetMatches(state, request);
+}
+
+async function admitLiveBuilderTarget(input: {
+  adapter: CustomerLifecycleAdapter;
+  processGate: SurgeOpenClawProcessSupervisorClient;
+  surgeReadiness: SurgeReadinessGate;
+  request: BuilderSurgeTargetRequest;
+}): Promise<void> {
+  const { adapter, request } = input;
+  const state = await input.processGate.status();
+  if (state.podUid !== request.targetPodUid || !liveBuilderTarget(state, request)) {
+    throw new Error("configured Builder target is not a live permitted OpenClaw on this pod");
+  }
+  if (state.phase !== "running") {
+    throw new Error(`configured Builder OpenClaw is not running for a live import (phase ${state.phase})`);
+  }
+  if (!(await input.surgeReadiness.released())) {
+    throw new Error("configured Builder live import requires released readiness");
+  }
+  if (configuredBuilderSlug(adapter) !== request.slug) {
+    throw new Error("configured Builder live import requires its retained overlay");
+  }
+  if (configuredBuilderMountProven(adapter)) {
+    throw new Error("configured Builder live import target already mounts its customer");
+  }
+}
+
+function liveBuilderTargetOperations(input: {
+  adapter: CustomerLifecycleAdapter;
+  processGate: SurgeOpenClawProcessSupervisorClient | null;
+  surgeReadiness: SurgeReadinessGate;
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>;
+}): Pick<BuilderSurgeGateWiring, "surgeTargetLive" | "admitLiveSurgeTarget" | "liveSurgeTargetAssigned"> {
+  const requireGate = (): SurgeOpenClawProcessSupervisorClient => {
+    if (!input.processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
+    return input.processGate;
+  };
+  return {
+    surgeTargetLive: async (request) => liveBuilderTarget(await requireGate().status(), request),
+    admitLiveSurgeTarget: async (request) => admitLiveBuilderTarget({
+      adapter: input.adapter, processGate: requireGate(), surgeReadiness: input.surgeReadiness, request,
+    }),
+    liveSurgeTargetAssigned: (request) => input.configuredBuilderAssigned(request.slug),
+  };
+}
+
 type PreparedBuilderTarget = BuilderSurgeTargetRequest & { inputs: string };
 
 async function builderPreparationInputs(adapter: CustomerLifecycleAdapter, openclawDir: string, slug: string) {
@@ -2607,13 +2661,12 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
       return reservedTargetOpenClawHeld(await processGate.status(), request);
     },
+    ...liveBuilderTargetOperations({ adapter, processGate, surgeReadiness, configuredBuilderAssigned }),
     async unreserveSurgeTarget(request) {
       preparedTarget = null;
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
       return runCancellation(() => unreserveConfiguredBuilderTarget({
-        activeRelease, configuredBuilderAssigned,
-        processGate,
-        request,
+        activeRelease, configuredBuilderAssigned, processGate, request,
         waitForActiveProvisioningDrain,
       }));
     },
@@ -2922,6 +2975,9 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     prepareSurgeTarget: surgeGate.prepareSurgeTarget,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
     surgeTargetOpenClawHeld: surgeGate.surgeTargetOpenClawHeld,
+    surgeTargetLive: surgeGate.surgeTargetLive,
+    admitLiveSurgeTarget: surgeGate.admitLiveSurgeTarget,
+    liveSurgeTargetAssigned: surgeGate.liveSurgeTargetAssigned,
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
     unreserveSurgeTarget: surgeGate.unreserveSurgeTarget,
   };
