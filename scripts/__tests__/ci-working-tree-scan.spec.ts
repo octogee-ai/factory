@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
@@ -8,6 +8,17 @@ import { scanWorkingTree } from '../ci/working-tree-scan.mjs';
 
 const gitleaks = execFileSync('/usr/bin/which', ['gitleaks'], { encoding: 'utf8' }).trim();
 const config = resolve(import.meta.dirname, '../../.gitleaks.toml');
+it.each(['tests/new.spec.ts', 'app/src/__tests__/new.spec.ts', 'templates/brain-context/NEW.md'])('scans new credentials in %s', file => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-secret-boundary-'));
+  try {
+    const target = join(root, file);
+    mkdirSync(resolve(target, '..'), { recursive: true });
+    const key = 'ghp_' + createHash('sha256').update('synthetic public-readiness test').digest('hex').slice(0, 36);
+    writeFileSync(target, `const token = "${key}";\n`);
+    const result = spawnSync(gitleaks, ['dir', '.', `--config=${config}`, '--redact', '--exit-code=1'], { cwd: root, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 function fixture(run: (root: string, git: (...args: string[]) => void) => void) {
   const root = mkdtempSync(join(tmpdir(), 'ci-secret-fixture-'));
   const git = (...args: string[]) => { execFileSync('/usr/bin/git', args, { cwd: root, stdio: 'pipe' }); };

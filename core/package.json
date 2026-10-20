@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Octogee shared runtime \u2014 consumers depend on its built interface, never its source.",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "files": [
     "dist"

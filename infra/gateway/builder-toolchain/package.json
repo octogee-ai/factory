@@ -3,7 +3,7 @@
   "version": "1.0.1",
   "private": true,
   "description": "Pinned post-readiness developer tool payload for Builder gateways",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.296",
     "@openai/codex": "0.162.1",
