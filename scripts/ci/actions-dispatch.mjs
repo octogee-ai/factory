@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+const githubExecutable = () => execFileSync("/usr/bin/which", ["gh"], { encoding: "utf8" }).trim();
+
 const repository = "octogee-ai/octogee";
 const names = { "build-main.yml": "Build main", "deploy.yml": "Deploy platform", "ship-test.yml": "Ship TEST" };
 const api = async (method, endpoint, body) => {
   const args = ["api", "--method", method, endpoint];
   if (body) args.push("--input", "-");
-  const output = execFileSync("gh", args, {
+  const output = execFileSync(githubExecutable(), args, {
     encoding: "utf8", ...(body ? { input: JSON.stringify(body) } : {}),
   }).trim();
   return output ? JSON.parse(output) : undefined;
@@ -14,7 +16,7 @@ const api = async (method, endpoint, body) => {
 
 export async function dispatchWorkflow(workflow, inputs, {
   request = api,
-  watch = run => execFileSync("gh", ["run", "watch", String(run), "--repo", repository, "--exit-status"], { stdio: "inherit" }),
+  watch = run => execFileSync(githubExecutable(), ["run", "watch", String(run), "--repo", repository, "--exit-status"], { stdio: "inherit" }),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, id = randomUUID,
 } = {}) {
   if (!names[workflow]) throw new Error(`Unknown workflow: ${workflow}`);

@@ -33,7 +33,10 @@ const temporary = mkdtempSync(join(tmpdir(), 'octogee-main-'));
 const env = { ...process.env, AR_REPO: repository, AR_REPOSITORY: repository, GCP_PROJECT: project, SOURCE_SHA: sha, SHORT_SHA: sha.slice(0, 7), OCTOGEE_SOURCE_COMMIT: sha, CI_REPO_ROOT: process.cwd(), RUNNER_TEMP: temporary, BASE_SHA: '', RUN_PLATFORM: 'true', RUN_GATEWAY: 'true', RUN_SITE: 'true', DESKTOP_IMAGE_ARTIFACT: '', CI_OUTPUT_FILE: join(temporary, 'output') };
 const lookup = ref => {
   try { return run('bash', ['.github/actions/release-digest-manifest/resolve-tag-digest.sh', repository, project, ref]); }
-  catch (error) { if (error.status === 3) return null; throw error; }
+  catch (error) {
+    if (error.status === 3) { return null; }
+    throw error;
+  }
 };
 const request = (url, options = {}) => fetch(url, { ...options, headers: { Authorization: `Bearer ${run('gcloud', ['auth', 'print-access-token'])}`, 'Content-Type': 'application/json' } });
 const builder = `octogee-${process.pid}`;
