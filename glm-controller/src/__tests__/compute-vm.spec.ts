@@ -292,6 +292,25 @@ describe("createGatewayVmClient lifecycle", () => {
     ]);
   });
 
+  it("suspend and resume post the lifecycle verb and wait for the operation", async () => {
+    const { request, calls } = fakeCompute((call) => {
+      if (call.method === "POST") return { status: 200, data: { name: `op-${call.url.split("/").pop()}`, status: "RUNNING" } };
+      if (call.url.includes("/operations/op-")) return { status: 200, data: { name: call.url.split("/").pop(), status: "DONE" } };
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    });
+    const { client } = clientWith(request);
+
+    await client.suspend(input.instanceName, "us-west1-b");
+    expect(await client.resume(input.instanceName, "us-west1-b")).toEqual({ fellBackToStandard: false });
+
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      `POST ${BASE}/zones/us-west1-b/instances/${input.instanceName}/suspend`,
+      `GET ${BASE}/zones/us-west1-b/operations/op-suspend`,
+      `POST ${BASE}/zones/us-west1-b/instances/${input.instanceName}/resume`,
+      `GET ${BASE}/zones/us-west1-b/operations/op-resume`,
+    ]);
+  });
+
   it("delete is idempotent on 404 and reports whether anything was deleted", async () => {
     const present = fakeCompute((call) => {
       if (call.method === "DELETE") return { status: 200, data: { name: "op-del", status: "DONE" } };
@@ -340,6 +359,39 @@ describe("createGatewayVmClient lifecycle", () => {
       return new Error(`unexpected ${call.method} ${call.url}`);
     });
     await expect(clientWith(other.request).client.start(input.instanceName, "us-west1-b")).rejects.toThrow(/QUOTA_EXCEEDED/);
+    expect(other.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  it("resume stops and restarts when Spot capacity is exhausted on resume, and only then", async () => {
+    const posts: Call[] = [];
+    const exhausted = { status: "DONE", error: { errors: [{ code: "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS", message: "no spot" }] } };
+    const { request } = fakeCompute((call) => {
+      if (call.method === "POST") {
+        posts.push(call);
+        return { status: 200, data: { name: `op-${posts.length}`, status: "RUNNING" } };
+      }
+      if (call.url.endsWith("/operations/op-1") || call.url.endsWith("/operations/op-3")) {
+        return { status: 200, data: { name: call.url.split("/").pop(), ...exhausted } };
+      }
+      if (call.url.includes("/operations/op-")) return { status: 200, data: { name: call.url.split("/").pop(), status: "DONE" } };
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    });
+    const { client, log } = clientWith(request);
+
+    const result = await client.resume(input.instanceName, "us-west1-b");
+
+    expect(result).toEqual({ fellBackToStandard: true });
+    expect(posts.map((c) => c.url.split("/").pop())).toEqual(["resume", "stop", "start", "setScheduling", "start"]);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/spot capacity exhausted .* on resume; stopping and restarting/));
+
+    const other = fakeCompute((call) => {
+      if (call.method === "POST") return { status: 200, data: { name: "op-q", status: "RUNNING" } };
+      if (call.url.endsWith("/operations/op-q")) {
+        return { status: 200, data: { name: "op-q", status: "DONE", error: { errors: [{ code: "QUOTA_EXCEEDED", message: "cpus" }] } } };
+      }
+      return new Error(`unexpected ${call.method} ${call.url}`);
+    });
+    await expect(clientWith(other.request).client.resume(input.instanceName, "us-west1-b")).rejects.toThrow(/QUOTA_EXCEEDED/);
     expect(other.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 

@@ -13,5 +13,5 @@ export function nativeReturnSourceIdentity(runtime: DocumentData | undefined, ro
 export async function nativeReturnSourceStopped(vm: Pick<GatewayVmClient, "describe">,
   identity: NonNullable<ReturnType<typeof nativeReturnSourceIdentity>>): Promise<boolean> {
   const current = await vm.describe(identity.instanceName, identity.zone);
-  return current === null || current.instanceId === identity.instanceId && ["TERMINATED", "STOPPED"].includes(current.status);
+  return current === null || current.instanceId === identity.instanceId && ["TERMINATED", "STOPPED", "SUSPENDED"].includes(current.status);
 }

@@ -98,6 +98,8 @@ export interface GatewayVmClient {
   setLabels(instanceName: string, zone: string, input: { fingerprint: string; labels: Record<string, string> }): Promise<GuardedWriteOutcome>;
   stop(instanceName: string, zone: string): Promise<void>;
   start(instanceName: string, zone: string): Promise<StartGatewayVmResult>;
+  suspend(instanceName: string, zone: string): Promise<void>;
+  resume(instanceName: string, zone: string): Promise<StartGatewayVmResult>;
   delete(instanceName: string, zone: string): Promise<boolean>;
   lastPreemptedAt(instanceName: string, zone: string): Promise<number | null>;
   readBootImage(instanceName: string, zone: string): Promise<ComputeImageRef>;
@@ -575,25 +577,19 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     };
   }
 
-  async function lifecycle(action: "stop" | "start", instanceName: string, zone: string): Promise<void> {
-    const res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/${action}`, method: "POST" });
+  async function instanceAction(action: string, instanceName: string, zone: string, body?: unknown): Promise<void> {
+    const res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/${action}`, method: "POST", ...(body === undefined ? {} : { body }) });
     await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `${action} ${instanceName}`);
   }
 
+  const lifecycle = (action: "stop" | "start" | "suspend" | "resume", instanceName: string, zone: string) => instanceAction(action, instanceName, zone);
+
   async function setServiceAccount(instanceName: string, zone: string, email: string): Promise<void> {
-    const res = await deps.request({
-      url: `${base}/zones/${zone}/instances/${instanceName}/setServiceAccount`,
-      method: "POST",
-      body: { email, scopes: [...GATEWAY_VM_ACCESS_SCOPES] },
-    });
-    await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setServiceAccount ${instanceName}`);
+    await instanceAction("setServiceAccount", instanceName, zone, { email, scopes: [...GATEWAY_VM_ACCESS_SCOPES] });
   }
 
   async function setMachineType(instanceName: string, zone: string, machineType: string): Promise<void> {
-    const action = async () => {
-      const res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/setMachineType`, method: "POST", body: { machineType: `zones/${zone}/machineTypes/${machineType}` } });
-      await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setMachineType ${instanceName}`);
-    };
+    const action = () => instanceAction("setMachineType", instanceName, zone, { machineType: `zones/${zone}/machineTypes/${machineType}` });
     if (deps.journalMachineType) await deps.journalMachineType({ instanceName, zone, machineType }, action);
     else await action();
   }
@@ -606,14 +602,21 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
       if (!isZoneExhausted(err)) throw err;
     }
     deps.log(`[gateway-vm] ${instanceName}: spot capacity exhausted in ${zone}; restarting on-demand`);
-    const res = await deps.request({
-      url: `${base}/zones/${zone}/instances/${instanceName}/setScheduling`,
-      method: "POST",
-      body: schedulingFor("STANDARD"),
-    });
-    await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `setScheduling ${instanceName}`);
+    await instanceAction("setScheduling", instanceName, zone, schedulingFor("STANDARD"));
     await lifecycle("start", instanceName, zone);
     return { fellBackToStandard: true };
+  }
+
+  async function resume(instanceName: string, zone: string): Promise<StartGatewayVmResult> {
+    try {
+      await lifecycle("resume", instanceName, zone);
+      return { fellBackToStandard: false };
+    } catch (err) {
+      if (!isZoneExhausted(err)) throw err;
+    }
+    deps.log(`[gateway-vm] ${instanceName}: spot capacity exhausted in ${zone} on resume; stopping and restarting`);
+    await lifecycle("stop", instanceName, zone);
+    return start(instanceName, zone);
   }
 
   async function remove(instanceName: string, zone: string): Promise<boolean> {
@@ -647,6 +650,8 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     setLabels: (name, zone, input) => guardedWrite(name, zone, "setLabels", { labelFingerprint: input.fingerprint, labels: input.labels }),
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
     start,
+    suspend: (instanceName, zone) => lifecycle("suspend", instanceName, zone),
+    resume,
     delete: remove, lastPreemptedAt: (instanceName, zone) => readLastPreemptedAt(deps.request, base, instanceName, zone),
     readImage: (name, project = deps.projectId) => readImageRef(deps.request, name, project),
     readBootImage: (name, zone) => readBootImage(deps.request, base, name, zone), readFamilyImage: (family, project = deps.projectId) => readFamilyImage(deps.request, family, project),

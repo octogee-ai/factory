@@ -37,7 +37,7 @@ function stoppedComputerMatches(
     current.gatewayId === gatewayId &&
     current.labels["octogee-owner-uid"] === (root.ownerUid as string).toLowerCase() &&
     current.metadata["octogee-owner-uid"] === root.ownerUid &&
-    (current.status === "TERMINATED" || current.status === "STOPPED");
+    ["TERMINATED", "STOPPED", "SUSPENDED"].includes(current.status);
 }
 
 export async function pausedNativeRetirementSourceFencedOff(

@@ -33,13 +33,13 @@ function harness() {
 }
 
 describe("native computer return checkpoint", () => {
-  it.each([null, "TERMINATED", "STOPPED", "STOPPING", "RUNNING"])("requires positive Compute evidence for a lost source (%s)", async (status) => {
+  it.each([null, "TERMINATED", "STOPPED", "SUSPENDED", "STOPPING", "RUNNING"])("requires positive Compute evidence for a lost source (%s)", async (status) => {
     const h = harness();
     h.root.desiredStatus = "paused";
     const vm = h.deps.vm as { describe: ReturnType<typeof vi.fn> };
     vm.describe.mockResolvedValue(status === null ? null : { status, instanceId: "computer-id" });
     const native = (await prepareNativeComputerReturn(h.deps, input))!;
-    expect(await native.isSourceFencedOff()).toBe(status === null || status === "TERMINATED" || status === "STOPPED");
+    expect(await native.isSourceFencedOff()).toBe(status === null || status === "TERMINATED" || status === "STOPPED" || status === "SUSPENDED");
     expect(vm.describe).toHaveBeenCalledWith("computer", "us-central1-a");
   });
 

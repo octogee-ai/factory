@@ -76,7 +76,12 @@ describe("paused native retirement telemetry", () => {
     expect(h.describeComputer).not.toHaveBeenCalled();
   });
 
-  it.each(["RUNNING", "STOPPING", "SUSPENDED"])("rejects Compute status %s", async (status) => {
+  it.each(["TERMINATED", "STOPPED", "SUSPENDED"])("accepts parked Compute status %s", async (status) => {
+    const h = fixture(); h.current().status = status;
+    expect(await h.check()).toBe(true);
+  });
+
+  it.each(["RUNNING", "STOPPING", "SUSPENDING"])("rejects Compute status %s", async (status) => {
     const h = fixture(); h.current().status = status;
     expect(await h.check()).toBe(false);
   });
