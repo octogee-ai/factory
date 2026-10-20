@@ -128,7 +128,7 @@ describe("operationNeedsDurableRestartResume", () => {
     expect(operationNeedsDurableRestartResume({ kind: 'restart-gateway', input: { gatewayId: 'shared-1' } })).toBe(false);
   });
   it("resumes an interrupted automatic Builder return rather than reaping its coordinated handoff", () => {
-    const op = { id: "builder-return-native", kind: "migrate-customer", origin: "automatic", input: {
+    const op = { id: "builder-return-native-g1", kind: "migrate-customer", origin: "automatic", input: {
       source: "builder-activation-lease", fromGatewayId: "native", toGatewayId: "shared-0",
     } };
     expect(operationNeedsDurableRestartResume(op)).toBe(true);
@@ -737,7 +737,7 @@ describe("buildOperationCompletionUpdate", () => {
   it("keeps an automatic Builder return retryable beyond the cap for a transient cause", () => {
     const update = buildOperationCompletionUpdate({
       op: {
-        id: "builder-return-run-alice",
+        id: "builder-return-run-alice-g1",
         kind: "migrate-customer",
         origin: "automatic",
         input: {
@@ -764,7 +764,7 @@ describe("buildOperationCompletionUpdate", () => {
   it("fails a Builder return after the migration-ready precondition exhausts its retry budget", () => {
     const update = buildOperationCompletionUpdate({
       op: {
-        id: "builder-return-run-alice",
+        id: "builder-return-run-alice-g1",
         kind: "migrate-customer",
         origin: "automatic",
         input: {
@@ -853,7 +853,7 @@ describe("buildOperationCompletionUpdate", () => {
     }));
     const update = buildOperationCompletionUpdate({
       op: {
-        id: "builder-return-run-alice",
+        id: "builder-return-run-alice-g1",
         kind: "migrate-customer",
         origin: "automatic",
         input: { source: "builder-activation-lease", fromGatewayId: "run-alice" },
@@ -872,7 +872,7 @@ describe("buildOperationCompletionUpdate", () => {
   it("still terminalizes a validation failure for an automatic Builder return", () => {
     const update = buildOperationCompletionUpdate({
       op: {
-        id: "builder-return-run-alice",
+        id: "builder-return-run-alice-g1",
         kind: "migrate-customer",
         origin: "automatic",
         input: {
@@ -907,7 +907,7 @@ describe("buildOperationCompletionUpdate", () => {
     const rsyncReset = "push-rsync-state: 500 rsync code=12 errno=104 Connection reset";
     const preempted = `target computer octogee-pool-44847785 was preempted: ${rsyncReset}`;
     const activation = (attempts: number, customerMigrationV2?: unknown) => ({
-      id: "builder-activate-b-ceckert-s-b1ffafcf",
+      id: "builder-activate-b-ceckert-s-b1ffafcf-g1",
       kind: "migrate-customer",
       origin: "automatic",
       input: { source: "builder-activation-lease", fromGatewayId: "shared-0", toGatewayId: "b-ceckert-s-b1ffafcf" },

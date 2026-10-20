@@ -790,8 +790,8 @@ describe("gateway operation queue — automatic retry with backoff", () => {
       { attempt: 3, startedAt: 5, completedAt: 6, error: "fetch failed", classification: "transient", steps: [] },
     ];
     const { db, store } = createFakeGlmOperationsDb({
-      "builder-return-run-alice": baseOp({
-        id: "builder-return-run-alice",
+      "builder-return-run-alice-g1": baseOp({
+        id: "builder-return-run-alice-g1",
         kind: "migrate-customer",
         origin: "automatic",
         createdAt: 1,
@@ -809,10 +809,10 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     await drainPendingOperationsOnce(deps);
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(store.get("builder-return-run-alice")?.status).toBe("pending");
-    expect(store.get("builder-return-run-alice")?.attempts).toBe(4);
-    expect(store.get("builder-return-run-alice")?.nextAttemptAt).toBe(1_000_000 + 480_000);
-    expect((store.get("builder-return-run-alice")?.attemptHistory as unknown[]).length).toBe(4);
+    expect(store.get("builder-return-run-alice-g1")?.status).toBe("pending");
+    expect(store.get("builder-return-run-alice-g1")?.attempts).toBe(4);
+    expect(store.get("builder-return-run-alice-g1")?.nextAttemptAt).toBe(1_000_000 + 480_000);
+    expect((store.get("builder-return-run-alice-g1")?.attemptHistory as unknown[]).length).toBe(4);
   });
 });
 

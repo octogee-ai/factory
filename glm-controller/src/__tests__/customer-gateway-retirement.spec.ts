@@ -144,7 +144,7 @@ describe("owned customer gateway retirement", () => {
 
   it("atomically erases both owned recovery artifacts before losing the owned gateway", async () => {
     const operationId = "placement-retire-owner-builder-alice";
-    const recoveryId = "builder-recover-builder-alice";
+    const recoveryId = "builder-recover-builder-alice-g1";
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded"), [recoveryId]: recoveryOperation() };
     const receipts = { [recoveryId]: recoveryOperation() };
@@ -164,7 +164,7 @@ describe("owned customer gateway retirement", () => {
 
   it.each(["children", "commit"])("retries %s failure without losing the recovery privacy cleanup path", async (failure) => {
     const operationId = "placement-retire-owner-builder-alice";
-    const recoveryId = "builder-recover-builder-alice";
+    const recoveryId = "builder-recover-builder-alice-g1";
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded"), [recoveryId]: recoveryOperation() };
     const receipts = { [recoveryId]: recoveryOperation() };
@@ -200,7 +200,7 @@ describe("owned customer gateway retirement", () => {
       { leaseId: "new-incarnation" }, { generation: 2 },
     ]) {
       const operationId = "placement-retire-owner-builder-alice";
-      const recoveryId = "builder-recover-builder-alice";
+      const recoveryId = "builder-recover-builder-alice-g1";
       const roots = { "builder-alice": recoveredRoot(operationId) };
       const recovery = recoveryOperation();
       recovery.input = { ...recovery.input, ...change };
@@ -220,7 +220,7 @@ describe("owned customer gateway retirement", () => {
 
   it("revalidates recovery ownership after child cleanup before any parent deletion", async () => {
     const operationId = "placement-retire-owner-builder-alice";
-    const recoveryId = "builder-recover-builder-alice";
+    const recoveryId = "builder-recover-builder-alice-g1";
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded") };
     const receipts = { [recoveryId]: recoveryOperation() };
@@ -243,7 +243,7 @@ describe("owned customer gateway retirement", () => {
 
   it("keeps a newly appearing recovery artifact discoverable until its children are cleaned", async () => {
     const operationId = "placement-retire-owner-builder-alice";
-    const recoveryId = "builder-recover-builder-alice";
+    const recoveryId = "builder-recover-builder-alice-g1";
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded") };
     const receipts: Record<string, Record<string, unknown>> = {};
@@ -350,7 +350,7 @@ describe("owned customer gateway retirement", () => {
 
   it.each(["runtime", "assignment", "customer", "handoff"])("keeps both roots when %s state appears during child cleanup", async (remaining) => {
     const operationId = "placement-retire-owner-builder-alice";
-    const roots = { "builder-alice": retiredRoot(operationId) };
+    const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations: Record<string, Record<string, unknown>> = { [operationId]: retirementOperation("succeeded") };
     const users: Record<string, Record<string, unknown>> = {};
     const runtimes: Record<string, Record<string, unknown>> = {};
@@ -369,7 +369,7 @@ describe("owned customer gateway retirement", () => {
         subcollections["gateways/builder-alice/assignments"] = ["uid-2"];
       }
       if (remaining === "customer") users["uid-2"] = {};
-      if (remaining === "handoff") operations["builder-return-builder-alice"] = {
+      if (remaining === "handoff") operations["builder-return-builder-alice-g1"] = {
         status: "failed", schedulerHandoffReleased: false,
         schedulerHandoff: { migrationId: "move-1", fromGatewayId: "builder-alice", toGatewayId: "shared-new", uid: "uid-1", slug: "alice" },
       };
@@ -470,20 +470,46 @@ describe("owned customer gateway retirement", () => {
     expect(deleted).toEqual([]);
   });
 
-  it.each(["builder-activate", "builder-return"])("waits for %s handoff release after retirement succeeds", async (prefix) => {
+  it("refuses to finish a disposable retirement whose allocation lost its generation", async () => {
     const operationId = "placement-retire-owner-builder-alice";
+    const root = recoveredRoot(operationId);
+    root.allocation = { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1" };
+    const { db, deleted } = harness({ "builder-alice": root }, { [operationId]: retirementOperation("succeeded") });
+    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+      .rejects.toThrow(/allocation has no generation/);
+    expect(deleted).toEqual([]);
+  });
+
+  it("ignores a previous generation's handoff once the gateway carries a new allocation", async () => {
+    const operationId = "placement-retire-owner-builder-alice";
+    const root = recoveredRoot(operationId);
+    root.allocation = { ...root.allocation!, generation: 2 };
     const operations = {
       [operationId]: retirementOperation("succeeded"),
-      [`${prefix}-builder-alice`]: {
+      "builder-return-builder-alice-g1": {
         status: "failed", schedulerHandoffReleased: false,
         schedulerHandoff: { migrationId: "move-1", fromGatewayId: "builder-alice", toGatewayId: "shared-new", uid: "uid-1", slug: "alice" },
       },
     };
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, operations);
+    const { db } = harness({ "builder-alice": root }, operations);
+    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+      .resolves.toBe("retired");
+  });
+
+  it.each(["builder-activate", "builder-return"])("waits for %s handoff release after retirement succeeds", async (prefix) => {
+    const operationId = "placement-retire-owner-builder-alice";
+    const operations = {
+      [operationId]: retirementOperation("succeeded"),
+      [`${prefix}-builder-alice-g1`]: {
+        status: "failed", schedulerHandoffReleased: false,
+        schedulerHandoff: { migrationId: "move-1", fromGatewayId: "builder-alice", toGatewayId: "shared-new", uid: "uid-1", slug: "alice" },
+      },
+    };
+    const { db, deleted } = harness({ "builder-alice": recoveredRoot(operationId) }, operations);
     const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retirement-pending");
     expect(deleted).toEqual([]);
-    operations[`${prefix}-builder-alice`].schedulerHandoffReleased = true;
+    operations[`${prefix}-builder-alice-g1`].schedulerHandoffReleased = true;
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retired");
   });
 
@@ -494,7 +520,7 @@ describe("owned customer gateway retirement", () => {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
-        allocation: { kind: "disposable-builder" },
+        allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
       },
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
@@ -519,7 +545,7 @@ describe("owned customer gateway retirement", () => {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
-        allocation: { kind: "disposable-builder" },
+        allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
       },
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
@@ -543,7 +569,7 @@ describe("owned customer gateway retirement", () => {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
-        allocation: { kind: "disposable-builder" },
+        allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
       },
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
@@ -572,7 +598,7 @@ describe("owned customer gateway retirement", () => {
           desiredStatus: "retired",
           retirementVersion: 1,
           retirementClaim: { operationId, version: 1, phase: "claimed" },
-          allocation: { kind: "disposable-builder" },
+          allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
         },
       },
       { [operationId]: { ...retirementOperation("succeeded"), origin: "automatic" } },
@@ -602,7 +628,7 @@ describe("owned customer gateway retirement", () => {
           desiredStatus: "retired",
           retirementVersion: 1,
           retirementClaim: { operationId, version: 1, phase: "claimed" },
-          allocation: { kind: "disposable-builder" },
+          allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
         },
       },
       { [operationId]: retirementOperation("succeeded") },

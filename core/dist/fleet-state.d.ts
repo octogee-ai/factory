@@ -44,6 +44,7 @@ export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps,
 export declare function clearRetiredBuilderActivationPreparation(deps: FleetStateDeps, params: {
     uid: string;
     targetGatewayId: string;
+    generation: number;
     retirementOperationId: string;
 }): Promise<boolean>;
 export interface FleetStateDocRef {

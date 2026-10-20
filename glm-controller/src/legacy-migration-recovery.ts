@@ -1,3 +1,4 @@
+import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { GLM_OPERATIONS_COLLECTION, readSchedulerMigrationIdentity, type Operation, type SchedulerHandoffState } from "@octogee/shared/types/glm";
@@ -42,7 +43,7 @@ function failedActivationHeldSource(operation: Partial<Operation>): boolean {
 export function builderActivationSourceRecoveryPending(operation: Partial<Operation>): boolean {
   const input = operation.input;
   return operation.kind === "migrate-customer" && input?.source === "builder-activation-lease" &&
-    operation.id === `builder-activate-${input.toGatewayId}` &&
+    isBuilderActivateOperationIdFor(operation.id, input.toGatewayId) &&
     typeof input.fromGatewayId === "string" && input.fromGatewayId.startsWith("shared-") &&
     operation.schedulerHandoff?.stageAfterCutover === true && operation.customerMigrationV2 === undefined &&
     operation.cutoverCommittedAt === undefined && operation.rolledBack !== true &&

@@ -223,12 +223,12 @@ describe("runStuckOpReaperTick", () => {
 
   it.each(["quiescing", "acknowledged"])("requeues an interrupted disposable activation before releasing or retiring its source: %s", async (phase) => {
     const target = "alice-s-12345678";
-    const op: FakeOpDoc = { id: `builder-activate-${target}`, data: {
+    const op: FakeOpDoc = { id: `builder-activate-${target}-g2`, data: {
       kind: "migrate-customer", status: "running", startedAt: NOW - 1_000, attempts: 0,
       steps: [{ name: "quiesce-source", status: "done" }],
       input: { uid: "alice", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: target, source: "builder-activation-lease" },
       schedulerHandoffReleased: true,
-      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: target, migrationId: `mig-builder-activate-${target}:scheduler:1:claim:${NOW - 1_000}`, stageAfterCutover: true },
+      schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: target, migrationId: `mig-builder-activate-${target}-g2:scheduler:1:claim:${NOW - 1_000}`, stageAfterCutover: true },
     } };
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 4, state: "quiescing", updatedByOperationId: op.id };
     const marker = { state: "moving", operationId: op.id, startedAt: 100 };
@@ -251,7 +251,7 @@ describe("runStuckOpReaperTick", () => {
     { held: true, retry: true, legacyQueued: true, steps: [{ name: "keys-sync-state", status: "done" }, { name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }] },
   ])("admits a terminally failed disposable activation to source recovery only when its source was held: held=$held retry=$retry legacyQueued=$legacyQueued", async ({ held, retry, legacyQueued, steps }) => {
     const target = "alice-s-12345678";
-    const id = `builder-activate-${target}`;
+    const id = `builder-activate-${target}-g2`;
     const op: FakeOpDoc = { id, data: {
       kind: "migrate-customer", status: "failed", startedAt: NOW - 5_000, completedAt: NOW - 1_000, attempts: 1,
       error: "target import refused", steps,
@@ -388,7 +388,7 @@ describe("runStuckOpReaperTick", () => {
   });
   it("preserves an ID-less persisted automatic Builder return for restart recovery", async () => {
     const ops: FakeOpDoc[] = [{
-      id: "builder-return-builder-alice",
+      id: "builder-return-builder-alice-g1",
       data: {
         kind: "migrate-customer", origin: "automatic", status: "running",
         startedAt: NOW - 60 * 60_000,
@@ -1002,7 +1002,7 @@ describe("recoverControllerOrphanedOperations", () => {
 
   it("leaves a level-triggered Builder return to the resume sweep", async () => {
     const op: FakeOpDoc = {
-      id: "builder-return-builder-alice",
+      id: "builder-return-builder-alice-g1",
       data: {
         kind: "migrate-customer", origin: "automatic", status: "running",
         startedAt: BOOTED_AT - 60_000,

@@ -1,5 +1,10 @@
 import type { DocumentReference, DocumentSnapshot, Firestore, QueryDocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import { claimGatewayRetirementAtomic } from "@octogee/core/gateway-retirement-claim";
+import {
+  builderActivateOperationId,
+  builderRecoverOperationId,
+  builderReturnOperationId,
+} from "@octogee/core/builder-activation-lease";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_OPERATIONS_COLLECTION,
@@ -96,14 +101,28 @@ function automaticRetirementOperation(
   };
 }
 
+function disposableAllocationGeneration(gatewayId: string, root: Record<string, unknown> | undefined): number | null {
+  const allocation = root?.allocation as { kind?: unknown; generation?: unknown } | undefined;
+  if (allocation?.kind !== "disposable-builder") return null;
+  if (!Number.isSafeInteger(allocation.generation) || (allocation.generation as number) < 1) {
+    throw new Error(`owned gateway ${gatewayId} disposable allocation has no generation`);
+  }
+  return allocation.generation as number;
+}
+
 async function finishCompletedGatewayRetirement(
   input: OwnedGatewayRetirementInput,
   doc: QueryDocumentSnapshot,
 ): Promise<boolean> {
   const expectedClaim = retirementClaim(doc.id, doc.data());
   const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(expectedClaim.operationId);
-  const recoveryRefs = [GLM_OPERATIONS_COLLECTION, DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION]
-    .map((collection) => input.db.collection(collection).doc(`builder-recover-${doc.id}`));
+  const generation = disposableAllocationGeneration(doc.id, doc.data());
+  const recoveryRefs = generation === null ? [] : [GLM_OPERATIONS_COLLECTION, DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION]
+    .map((collection) => input.db.collection(collection).doc(builderRecoverOperationId(doc.id, generation)));
+  const handoffOperationIds = generation === null ? [] : [
+    builderActivateOperationId(doc.id, generation),
+    builderReturnOperationId(doc.id, generation),
+  ];
   const canFinish = async (transaction: Transaction): Promise<DocumentReference[] | null> => {
     const rootSnap = await transaction.get(doc.ref);
     const root = rootSnap.data();
@@ -119,8 +138,8 @@ async function finishCompletedGatewayRetirement(
       transaction.get(input.db.collection("glmGateways").doc(doc.id)),
       transaction.get(doc.ref.collection("assignments")),
       transaction.get(input.db.collection("users").where("provisioning.openclaw.gatewayId", "==", doc.id)),
-      ...["builder-activate", "builder-return"].map((prefix) =>
-        transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`${prefix}-${doc.id}`))),
+      ...handoffOperationIds.map((operationId) =>
+        transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId))),
     ]);
     if (runtime.exists || !assignments.empty || !users.empty ||
       handoffs.some((snapshot) => schedulerHandoffAwaitingRelease({ ...snapshot.data(), id: snapshot.id }))) return null;

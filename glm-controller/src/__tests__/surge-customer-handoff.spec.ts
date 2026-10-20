@@ -1175,7 +1175,7 @@ describe("surge customer handoff", () => {
   });
 
   it("does not reopen a terminal migration's source gate before native recovery", async () => {
-    const owner = "builder-activate-alice-s-12345678";
+    const owner = "builder-activate-alice-s-12345678-g1";
     const h = harness({ assignments: [assignment("u1", "alice", { state: "quiescing", updatedByOperationId: owner })],
       ownerOperations: { [owner]: { status: "failed", sourceRecoveryPending: true } },
     });

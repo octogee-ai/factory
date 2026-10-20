@@ -1,3 +1,4 @@
+import { isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
@@ -239,8 +240,7 @@ function isLevelTriggeredBuilderReturn(op: OperationCompletionInput["op"]): bool
   return op.kind === MIGRATE_CUSTOMER_KIND &&
     op.origin === "automatic" &&
     op.input?.source === "builder-activation-lease" &&
-    typeof fromGatewayId === "string" &&
-    op.id === `builder-return-${fromGatewayId}`;
+    isBuilderReturnOperationIdFor(op.id, fromGatewayId);
 }
 
 export function computerPreemptionError(role: "source" | "target", instanceName: string, cause: string): string {

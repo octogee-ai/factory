@@ -413,7 +413,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
     "projects a %s teardown receipt as %s",
     (operationStatus, lifecycle, error) => {
       const targetGatewayId = "run-alice-12345678";
-      const operationId = `placement-retire-uid-alice-${targetGatewayId}`;
+      const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
       const projected = projectBuilderRuntime(
         user({
           leaseId: "lease-1",
@@ -447,8 +447,8 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
 
   it("keeps a failed activation visible after its target cleanup is retired", () => {
     const targetGatewayId = "run-alice-12345678";
-    const activationOperationId = `builder-activate-${targetGatewayId}`;
-    const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const activationOperationId = `builder-activate-${targetGatewayId}-g1`;
+    const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
     const projected = projectBuilderRuntime(
       user({
         leaseId: "lease-1",
@@ -509,7 +509,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
 
   it("omits a failed activation once its cleanup succeeded or its runtime record is gone", () => {
     const targetGatewayId = "alice-xs-12345678";
-    const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const cleanupOperationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
     const failedLease = {
       leaseId: "lease-1",
       generation: 1,
@@ -550,7 +550,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
 
   it("keeps a parked lease visible until its disposable teardown completes", () => {
     const targetGatewayId = "run-alice-12345678";
-    const operationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
     expect(projectBuilderRuntime(
       user({
         leaseId: "lease-1",
@@ -578,7 +578,7 @@ describe("projectBuilderRuntime — disposable lifecycle visibility", () => {
 
   it("omits a parked lease after its disposable teardown succeeds", () => {
     const targetGatewayId = "run-alice-12345678";
-    const operationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const operationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
     expect(projectBuilderRuntime(
       user({
         leaseId: "lease-1",
@@ -927,7 +927,7 @@ function durableGatewayRoot(
 describe("fleet gateway projection", () => {
   it("keeps disposable retirement intent and Builder lifecycle in the Fleet response", async () => {
     const targetGatewayId = "run-alice-12345678";
-    const retirementOperationId = `placement-retire-uid-alice-${targetGatewayId}`;
+    const retirementOperationId = `placement-retire-uid-alice-${targetGatewayId}-g1`;
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {
@@ -1029,8 +1029,8 @@ describe("fleet gateway projection", () => {
 
   it("keeps a failed activation target in Fleet until its cleanup operation succeeds", async () => {
     const targetGatewayId = "run-alice-failed";
-    const activationOperationId = "builder-activate-run-alice-failed";
-    const cleanupOperationId = "placement-retire-uid-alice-run-alice-failed";
+    const activationOperationId = "builder-activate-run-alice-failed-g1";
+    const cleanupOperationId = "placement-retire-uid-alice-run-alice-failed-g1";
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {
@@ -1118,8 +1118,8 @@ describe("fleet gateway projection", () => {
 
   it("offers retry only after the retired target has an explicit zero-pod proof", async () => {
     const targetGatewayId = "run-alice-clean";
-    const activationOperationId = "builder-activate-run-alice-clean";
-    const cleanupOperationId = "placement-retire-uid-alice-run-alice-clean";
+    const activationOperationId = "builder-activate-run-alice-clean-g1";
+    const cleanupOperationId = "placement-retire-uid-alice-run-alice-clean-g1";
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {
@@ -1205,7 +1205,7 @@ describe("fleet gateway projection", () => {
 
   it("keeps a failed runtime on Fleet only while its cleanup is unfinished", async () => {
     const targetGatewayId = "run-alice-cleaning";
-    const cleanupOperationId = "placement-retire-uid-alice-run-alice-cleaning";
+    const cleanupOperationId = "placement-retire-uid-alice-run-alice-cleaning-g1";
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {
@@ -1279,7 +1279,7 @@ describe("fleet gateway projection", () => {
 
   it("keeps an old disposable visible after a new lease replaces the user target", async () => {
     const oldGatewayId = "run-alice-old";
-    const cleanupOperationId = "placement-retire-uid-alice-run-alice-old";
+    const cleanupOperationId = "placement-retire-uid-alice-run-alice-old-g1";
     const { app } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {
@@ -1923,7 +1923,7 @@ describe("manual disposable runtime return", () => {
     { label: "legacy source restored after target cleanup fails", rolledBack: true, steps: [], expected: 202, runFailedReturn: true },
   ])("safely handles return retry after $label", async ({ rolledBack, steps, expected, error = "checkpoint failed", ...scenario }) => {
     const targetGatewayId = "run-alice";
-    const operationId = `builder-return-${targetGatewayId}`;
+    const operationId = `builder-return-${targetGatewayId}-g3`;
     if ("runFailedReturn" in scenario) {
       const journal: ReportedStep[] = [];
       const assignments: string[] = [];
@@ -2051,7 +2051,7 @@ describe("manual disposable runtime return", () => {
 
   it("refuses to rearm a manual migration as a Builder return", async () => {
     const targetGatewayId = "run-alice";
-    const operationId = `builder-return-${targetGatewayId}`;
+    const operationId = `builder-return-${targetGatewayId}-g3`;
     const { app, state } = mkAdminFleetRouteApp({
       config: { defaultGatewayId: "shared-blue" },
       users: {

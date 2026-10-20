@@ -73,6 +73,13 @@ import {
   readSharedGatewayPoolConfig,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
+  builderActivateOperationId,
+  builderRecoverOperationId,
+  builderReturnOperationId,
+  isBuilderReturnOperationIdFor,
+  placementRetireOperationId,
+} from "@octogee/core/builder-activation-lease";
+import {
   clearRetiredBuilderActivationPreparation,
   commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
@@ -332,7 +339,7 @@ export interface RetireOwnedGatewayInput {
   builderSlug: string;
   gatewayId: string;
   leaseId?: string;
-  generation?: number;
+  generation: number;
   telemetryFenceOperationId?: string;
   telemetryFenceStatus?: "succeeded" | "terminal-failure";
   authoritativeGatewayId?: string;
@@ -386,6 +393,7 @@ export interface PlacementPolicyReconcilerDeps {
 export interface DeleteRetiredDisposableGatewayInput {
   gatewayId: string;
   ownerUid: string;
+  generation: number;
 }
 
 export interface PlacementPolicyReconcileResult {
@@ -467,9 +475,12 @@ const TERMINAL_LEASE_OPERATION_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 export function leaseJournalOperationIds(userData: Record<string, unknown>): string[] {
-  const targetGatewayId = builderActivationLease(userData)?.targetGatewayId;
-  if (!targetGatewayId) return [];
-  return [`builder-activate-${targetGatewayId}`, `builder-return-${targetGatewayId}`];
+  const lease = builderActivationLease(userData);
+  if (!lease?.targetGatewayId) return [];
+  return [
+    builderActivateOperationId(lease.targetGatewayId, lease.generation),
+    builderReturnOperationId(lease.targetGatewayId, lease.generation),
+  ];
 }
 
 function builderActivationLease(data: Record<string, unknown>): BuilderActivationLease | null {
@@ -807,10 +818,20 @@ async function retireUnentitledOwnedGateways(
       gateway.desiredStatus !== "retired",
   );
   for (const gateway of ownedGateways) {
+    const generation = gateway.allocation?.generation;
+    if (generation === undefined) {
+      blockPlacement(context, {
+        uid: user.uid,
+        code: "disposable-retirement-fence",
+        reason: `gateway ${gateway.gatewayId} has no disposable allocation generation`,
+      });
+      continue;
+    }
     const retired = await context.deps.retireOwnedGateway({
       uid: user.uid,
       builderSlug,
       gatewayId: gateway.gatewayId,
+      generation,
     });
     if (retired) context.result.retired += 1;
     else {
@@ -1350,7 +1371,7 @@ async function advanceReadyProvisioningTarget(
   input: ActivationTargetContext,
 ): Promise<void> {
   const { context, user, builderSlug, current, lease, target } = input;
-  const operationId = `builder-activate-${lease.targetGatewayId!}`;
+  const operationId = builderActivateOperationId(lease.targetGatewayId!, lease.generation);
   const active = context.migrations.get(user.uid);
   if (active) {
     if (!activationMigrationMatches(active, {
@@ -1440,7 +1461,7 @@ async function reconcileProvisioningActivation(
       leaseId: lease.leaseId,
       generation: lease.generation,
       targetGatewayId: target.gatewayId,
-      operationId: `placement-retire-${user.uid}-${target.gatewayId}`,
+      operationId: placementRetireOperationId(user.uid, target.gatewayId, lease.generation),
       message: "disposable gateway retired before activation cutover completed",
     });
     return;
@@ -1523,7 +1544,7 @@ async function cleanupFailedActivation(
   input: ActivationTargetContext,
 ): Promise<boolean> {
   const { context, user, builderSlug, current, lease, target } = input;
-  const operationId = `builder-activate-${target.gatewayId}`;
+  const operationId = builderActivateOperationId(target.gatewayId, lease.generation);
   const operation = context.operations.get(operationId);
   if (!operation || (operation.status !== "failed" && operation.status !== ROLLED_BACK_STATUS)) {
     return false;
@@ -1580,7 +1601,7 @@ async function queueLeaseReturn(
   const active = context.migrations.get(user.uid);
   if (active) {
     if (!activationMigrationMatches(active, {
-      id: `builder-return-${targetGatewayId}`,
+      id: builderReturnOperationId(targetGatewayId, lease.generation),
       uid: user.uid,
       builderSlug,
       fromGatewayId: targetGatewayId,
@@ -1621,7 +1642,7 @@ async function queueLeaseReturn(
     fromGatewayId: targetGatewayId,
     toGatewayId: sharedGatewayId,
     source: BUILDER_ACTIVATION_LEASE_SOURCE,
-    operationId: `builder-return-${targetGatewayId}`,
+    operationId: builderReturnOperationId(targetGatewayId, lease.generation),
   });
   projectSharedGatewayPlacement(context, sharedGatewayId);
   context.result.enqueued += 1;
@@ -1637,7 +1658,7 @@ async function queueLeaseReturn(
 
 function completedReturnMigration(input: ActivationTargetContext): PlacementPolicyMigration | null {
   const { context, user, builderSlug, current, lease, target } = input;
-  const operationId = `builder-return-${lease.targetGatewayId!}`;
+  const operationId = builderReturnOperationId(lease.targetGatewayId!, lease.generation);
   const operation = context.operations.get(operationId);
   if (
     !isSharedPoolGateway(context, current) ||
@@ -1746,7 +1767,7 @@ async function reconcileReturnMigrationOnTarget(
   const { context, user, builderSlug, current, lease } = input;
   const targetGatewayId = lease.targetGatewayId!;
   if (current !== targetGatewayId) return false;
-  const operationId = `builder-return-${targetGatewayId}`;
+  const operationId = builderReturnOperationId(targetGatewayId, lease.generation);
   const returnOperation = context.operations.get(operationId);
   if (
     (returnOperation?.status === "failed" ||
@@ -1819,7 +1840,8 @@ async function completeReturnedLease(
 ): Promise<void> {
   const { context, user, builderSlug, lease, target } = input;
   const targetGatewayId = lease.targetGatewayId!;
-  const operation = context.operations.get(`builder-return-${targetGatewayId}`);
+  const returnOperationId = builderReturnOperationId(targetGatewayId, lease.generation);
+  const operation = context.operations.get(returnOperationId);
   if (operation?.status === "pending" || operation?.status === "running") {
     context.result.adopted += 1;
     return;
@@ -1873,7 +1895,7 @@ async function completeReturnedLease(
     ...(operatorTermination
       ? {}
       : {
-          telemetryFenceOperationId: `builder-return-${targetGatewayId}`,
+          telemetryFenceOperationId: returnOperationId,
           telemetryFenceStatus: "succeeded" as const,
         }),
     authoritativeGatewayId: sharedAuthorityGatewayId(
@@ -2459,12 +2481,14 @@ async function reconcileDisposableTombstones(
       gateway.disposable &&
       gateway.desiredStatus === "retired" &&
       gateway.ownerUid !== null &&
+      gateway.allocation?.generation !== undefined &&
       !liveTargets.has(gateway.gatewayId))
     .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
   for (const gateway of candidates) {
     const deleted = await context.deps.deleteRetiredDisposableGateway({
       gatewayId: gateway.gatewayId,
       ownerUid: gateway.ownerUid!,
+      generation: gateway.allocation!.generation,
     });
     if (deleted) {
       context.result.swept += 1;
@@ -2568,7 +2592,7 @@ async function readCompletedReturnSnapshots(
     if (!completedReturn || !lease?.targetGatewayId) return [];
     return [
       db.collection(GLM_OPERATIONS_COLLECTION)
-        .doc(`builder-return-${lease.targetGatewayId}`),
+        .doc(builderReturnOperationId(lease.targetGatewayId, lease.generation)),
     ];
   });
   return refs.length === 0 ? [] : db.getAll(...refs);
@@ -3249,7 +3273,7 @@ function sharedRevisionPreflightReturnRetryable(data: Record<string, unknown>, o
     data.origin === "automatic",
     data.createdBy === PLACEMENT_POLICY_ACTOR,
     original?.source === BUILDER_ACTIVATION_LEASE_SOURCE,
-    operationId === `builder-return-${original?.fromGatewayId}`,
+    isBuilderReturnOperationIdFor(operationId, original?.fromGatewayId),
     nonEmptyString(original?.toGatewayId) !== null,
     data.gatewayId === original?.toGatewayId,
     data.inputUid === original?.uid,
@@ -3619,7 +3643,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
   input: FirestorePlacementPolicyInput,
   request: RecoverUnreachableDisposableGatewayInput,
 ): Promise<{ recovered: boolean; operationId: string }> {
-  const operationId = `builder-recover-${request.gatewayId}`;
+  const operationId = builderRecoverOperationId(request.gatewayId, request.generation);
   const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
   const userRef = input.db.collection("users").doc(request.uid);
   const assignmentRef = input.db
@@ -3780,6 +3804,7 @@ function retirementAllocationMatches(
   return root.ownerUid === request.uid &&
     root.gatewayClass !== "shared" &&
     allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND &&
+    allocation.generation === request.generation &&
     allocationIdentityMatches;
 }
 
@@ -3867,7 +3892,7 @@ async function retireOwnedGatewayFirestore(
   input: FirestorePlacementPolicyInput,
   request: RetireOwnedGatewayInput,
 ): Promise<boolean> {
-  const operationId = `placement-retire-${request.uid}-${request.gatewayId}`;
+  const operationId = placementRetireOperationId(request.uid, request.gatewayId, request.generation);
   const now = input.now();
   let telemetryObservedAfter: number | undefined;
   if (request.telemetryFenceOperationId !== undefined) {
@@ -4002,6 +4027,7 @@ function retiredDisposableGatewayVerdict(input: {
     root?.desiredStatus === "retired",
     root?.ownerUid === request.ownerUid,
     root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
+    root?.allocation?.generation === request.generation,
     input.claimOperationId === input.operationId,
     operation !== undefined,
     operation?.kind === "retire-gateway",
@@ -4030,13 +4056,14 @@ async function deleteRetiredDisposableGatewayFirestore(
   input: FirestorePlacementPolicyInput,
   request: DeleteRetiredDisposableGatewayInput,
 ): Promise<boolean> {
-  const operationId = `placement-retire-${request.ownerUid}-${request.gatewayId}`;
+  const operationId = placementRetireOperationId(request.ownerUid, request.gatewayId, request.generation);
   const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
   const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
   const ownerRef = input.db.collection("users").doc(request.ownerUid);
+  const recoverOperationId = builderRecoverOperationId(request.gatewayId, request.generation);
   const handoffOperationRefs = [
-    `builder-activate-${request.gatewayId}`,
-    `builder-return-${request.gatewayId}`,
+    builderActivateOperationId(request.gatewayId, request.generation),
+    builderReturnOperationId(request.gatewayId, request.generation),
   ].map((id) => input.db.collection(GLM_OPERATIONS_COLLECTION).doc(id));
   let unreleasedHandoffOperationId: string | null = null;
   const verdict = await input.db.runTransaction(async (transaction): Promise<RetiredDisposableGatewayVerdict> => {
@@ -4091,13 +4118,13 @@ async function deleteRetiredDisposableGatewayFirestore(
     db: input.db as unknown as FleetStateFirestore,
     serverTimestamp: () => FieldValue.serverTimestamp(),
     deleteField: () => FieldValue.delete(),
-  }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, retirementOperationId: operationId });
+  }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, generation: request.generation, retirementOperationId: operationId });
   if (preparationCleared) input.log(`[placement-policy] cleared failed preparation for retired target ${request.gatewayId}`);
   await Promise.all([
-    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(`builder-recover-${request.gatewayId}`).delete(),
+    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(recoverOperationId).delete(),
     input.db
       .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
-      .doc(`builder-recover-${request.gatewayId}`)
+      .doc(recoverOperationId)
       .delete(),
   ]);
   await input.db.recursiveDelete(gatewayRef);

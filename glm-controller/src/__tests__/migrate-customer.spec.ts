@@ -277,7 +277,7 @@ describe("abandoned Shared migration recovery", () => {
   it.each(["success", "resume-failure", "authority-failure", "ownership-changed", "never-quiesced"])("restores a pre-cutover Builder activation through the existing source-only worker: %s", async (scenario) => {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     const target = "alice-s-12345678";
-    const id = `builder-activate-${target}`;
+    const id = `builder-activate-${target}-g1`;
     const request = mkOp({ id, status: "running", startedAt: 4_000, attempts: 1,
       input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
       schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
@@ -2290,7 +2290,7 @@ describe("migrate-customer — preempted computers", () => {
   }
 
   const activation = () => mkOp({
-    id: "builder-activate-gw-green",
+    id: "builder-activate-gw-green-g1",
     startedAt: 7_000,
     firstStartedAt: 6_000,
     input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" },
@@ -2338,7 +2338,7 @@ describe("migrate-customer — preempted computers", () => {
     const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
 
     expect(result.error).toBe(rsyncReset);
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403 op=builder-activate-gw-green$/u));
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403 op=builder-activate-gw-green-g1$/u));
   });
 });
 

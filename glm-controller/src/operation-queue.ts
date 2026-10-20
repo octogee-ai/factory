@@ -1,3 +1,4 @@
+import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
 
 const ACCOUNT_SUSPENSION_KIND = "suspend-customer";
@@ -145,8 +146,7 @@ function rolloutWaitsForBuilderActivation(rollout: OperationRef, activation: Ope
   return rollout.kind === "rollout" &&
     activation.kind === "migrate-customer" &&
     activation.input?.source === "builder-activation-lease" &&
-    typeof target === "string" &&
-    activation.id === `builder-activate-${target}` &&
+    isBuilderActivateOperationIdFor(activation.id, target) &&
     typeof activation.cutoverCommittedAt !== "number" &&
     rollout.input?.gatewayId === target;
 }

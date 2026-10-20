@@ -18,7 +18,7 @@ import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import { requestBuilderActivationLease } from "./builder-activation-lease.js";
+import { builderReturnOperationId, placementRetireOperationId, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
 import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfenced, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError, } from "./gateway-release-append.js";
@@ -558,6 +558,17 @@ function addOperationId(ids, value) {
     if (typeof value === "string" && value.length > 0)
         ids.add(value);
 }
+function leasePlacementRetireOperationId(uid, targetGatewayId, generation) {
+    return Number.isSafeInteger(generation) && generation > 0
+        ? placementRetireOperationId(uid, targetGatewayId, generation)
+        : null;
+}
+function disposableRuntimeRetireOperationId(gateway, gatewayId) {
+    const runtime = projectDisposableRuntime(gateway);
+    return runtime && runtime.generation > 0
+        ? placementRetireOperationId(runtime.ownerUid, gatewayId, runtime.generation)
+        : null;
+}
 function fleetProjectionOperationIds(userDocs, gatewaysById) {
     const ids = new Set();
     for (const userDoc of userDocs) {
@@ -573,8 +584,8 @@ function fleetProjectionOperationIds(userDocs, gatewaysById) {
         const retirementClaim = isPlainRecord(target?.retirementClaim)
             ? target.retirementClaim
             : null;
-        ids.add(asStringOrNull(retirementClaim?.operationId) ??
-            `placement-retire-${userDoc.id}-${targetGatewayId}`);
+        addOperationId(ids, asStringOrNull(retirementClaim?.operationId) ??
+            leasePlacementRetireOperationId(userDoc.id, targetGatewayId, resolved.lease.generation));
     }
     for (const [gatewayId, gateway] of gatewaysById) {
         if (projectDesiredStatus(gateway) !== "retired" ||
@@ -584,8 +595,8 @@ function fleetProjectionOperationIds(userDocs, gatewaysById) {
         const retirementClaim = isPlainRecord(gateway.retirementClaim)
             ? gateway.retirementClaim
             : null;
-        ids.add(asStringOrNull(retirementClaim?.operationId) ??
-            `placement-retire-${asStringOrNull(gateway.ownerUid) ?? "unknown"}-${gatewayId}`);
+        addOperationId(ids, asStringOrNull(retirementClaim?.operationId) ??
+            disposableRuntimeRetireOperationId(gateway, gatewayId));
     }
     return [...ids].sort();
 }
@@ -936,7 +947,7 @@ function builderRuntimeRetirementContext(uid, lease, gatewaysById, operationsByI
     if (targetGatewayId) {
         operationId =
             asStringOrNull(retirementClaim?.operationId) ??
-                `placement-retire-${uid}-${targetGatewayId}`;
+                leasePlacementRetireOperationId(uid, targetGatewayId, lease.generation);
     }
     const operation = operationId ? operationsById.get(operationId) : undefined;
     return {
@@ -2893,7 +2904,9 @@ function retryableBuilderReturnLease(data, operationId) {
         lease.status !== "returning" ||
         !targetGatewayId ||
         asStringOrNull(resolved?.openclaw.gatewayId) !== targetGatewayId ||
-        returnOperationId !== `builder-return-${targetGatewayId}` ||
+        !Number.isSafeInteger(lease.generation) ||
+        lease.generation < 1 ||
+        returnOperationId !== builderReturnOperationId(targetGatewayId, lease.generation) ||
         operationId !== returnOperationId) {
         return null;
     }
@@ -3151,8 +3164,8 @@ export function addAdminFleetRoutes(router, deps) {
                     ? gateway.retirementClaim
                     : null;
                 const operationId = asStringOrNull(retirementClaim?.operationId) ??
-                    `placement-retire-${asStringOrNull(gateway.ownerUid) ?? "unknown"}-${gatewayId}`;
-                const cleanupStatus = operationsById.get(operationId)?.status;
+                    disposableRuntimeRetireOperationId(gateway, gatewayId);
+                const cleanupStatus = operationId ? operationsById.get(operationId)?.status : undefined;
                 if (projectDesiredStatus(gateway) === "retired" &&
                     projectDisposableRuntime(gateway) !== null &&
                     cleanupStatus !== "succeeded") {

@@ -234,7 +234,7 @@ describe("findSerialConflict — shared migration/release-roll scope", () => {
 describe("decideOperationClaim", () => {
   it("finishes a Builder activation retry before rolling its held target", () => {
     const activation = {
-      id: "builder-activate-builder-a", kind: "migrate-customer", status: "pending",
+      id: "builder-activate-builder-a-g1", kind: "migrate-customer", status: "pending",
       createdAt: 1, queuedAt: 3, nextAttemptAt: 15_000,
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
     };
@@ -258,7 +258,7 @@ describe("decideOperationClaim", () => {
       op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId } },
       now: 10_000, runningOpsSameKind: [],
       pendingOpsSameKind: [{
-        id: "builder-activate-builder-a", kind: "migrate-customer", createdAt: 1,
+        id: "builder-activate-builder-a-g1", kind: "migrate-customer", createdAt: 1,
         queuedAt: 3, nextAttemptAt: 15_000,
         input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
       }],
@@ -267,7 +267,7 @@ describe("decideOperationClaim", () => {
 
   it("does not let activation bypass an already running rollout", () => {
     expect(decideOperationClaim({
-      op: { id: "builder-activate-builder-a", kind: "migrate-customer", status: "pending", createdAt: 1,
+      op: { id: "builder-activate-builder-a-g1", kind: "migrate-customer", status: "pending", createdAt: 1,
         queuedAt: 3, input: { toGatewayId: "builder-a", source: "builder-activation-lease" } },
       now: 10_000, runningOpsSameKind: [{ id: "roll", kind: "rollout", input: { gatewayId: "builder-a" } }],
       pendingOpsSameKind: [],
@@ -279,7 +279,7 @@ describe("decideOperationClaim", () => {
       op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId: "builder-a" } },
       now: 10_000, runningOpsSameKind: [],
       pendingOpsSameKind: [{
-        id: "builder-activate-builder-a", kind: "migrate-customer", createdAt: 1, cutoverCommittedAt: 9_000,
+        id: "builder-activate-builder-a-g1", kind: "migrate-customer", createdAt: 1, cutoverCommittedAt: 9_000,
         input: { fromGatewayId: "shared-a", toGatewayId: "builder-a", source: "builder-activation-lease" },
       }],
     })).toEqual({ outcome: "claim" });

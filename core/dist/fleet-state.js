@@ -7,6 +7,7 @@ import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 import { customerMigrationV2GatewayRootFenceEqual, customerMigrationV2GatewayRootFenceMatches, } from "./customer-migration-v2.js";
 import { slugFromAssignedUser } from "./assigned-roster.js";
+import { builderActivateOperationId } from "./builder-activation-lease.js";
 import { gatewayAuthorizationFromRootDocument } from "./gateway-live-release.js";
 const MIGRATE_CUSTOMER_OPERATION_KIND = "migrate-customer";
 const WORKSPACE_MIGRATION_MARKER_PATH = "provisioning.openclaw.migration";
@@ -55,8 +56,11 @@ export function builderActivationRecoveryTargetMatches(params) {
     const lease = recordOrEmpty(openclaw.activationLease);
     const root = recordOrEmpty(params.targetRoot);
     const allocation = recordOrEmpty(root.allocation);
+    const generationValid = Number.isSafeInteger(lease.generation) && Number(lease.generation) > 0;
     return [
-        params.operationId === `builder-activate-${input.toGatewayId}`,
+        params.operationId === (generationValid && typeof input.toGatewayId === "string" && input.toGatewayId !== ""
+            ? builderActivateOperationId(input.toGatewayId, lease.generation)
+            : null),
         input.source === "builder-activation-lease",
         root.gatewayClass === "builder", root.gatewayId === input.toGatewayId, root.ownerUid === input.uid,
         allocation.kind === "disposable-builder", allocation.claimedByUid === input.uid,
@@ -184,7 +188,7 @@ export async function clearWorkspaceMigrationPreparation(deps, params) {
     });
 }
 export async function clearRetiredBuilderActivationPreparation(deps, params) {
-    const operationId = `builder-activate-${params.targetGatewayId}`;
+    const operationId = builderActivateOperationId(params.targetGatewayId, params.generation);
     return deps.db.runTransaction(async (txn) => {
         const userRef = deps.db.collection("users").doc(params.uid);
         const [userSnapshot, operationSnapshot, targetRootSnapshot, retirementSnapshot, targetAssignment] = await Promise.all([
