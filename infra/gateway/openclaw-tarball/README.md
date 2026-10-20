@@ -137,7 +137,57 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay
+## October 20 overlay
+
+The operator selected refreshed upstream main
+`2d03d5632a69d04181844f85b05d5509240dcc14` for independent local
+qualification, not as a full upstream CI clearance. The clean overlaid source is
+`10f31e19e8a7b5d882c7078c1701bc8a7d3daa9b` (2026.10.5).
+Upstream #163685 now owns queued channel delivery, so its duplicate delivery
+owner is removed. The terminal-reply observer and the other justified Octogee
+boundaries below remain. Fixes from still-open #177823 and #177968
+retain superseded config-write recovery and cross-filesystem native capture.
+
+Shared schema **29**, agent schema **31**, and protocol **4** are native.
+The credential cutover and backup custody stay upstream-owned. Historical cron
+fixtures now model the actual schema-28 predecessor rather than changing current
+schema or weakening credential-pair admission.
+
+Sequentially packed root archive: **120293931 bytes**, SHA256
+`de55b39e3591b273ad19c816f20d3e1e0c3e7b985ba3cde55d0b5f2cea635ac8`.
+Mattermost: **1251616 bytes**, SHA256
+`74ec55a2bd9e080775442940c42347e61797271e478aa100ae64085ee6ddf062`.
+The write-once objects are
+`gs://octogee-openclaw-fork/openclaw-fork-de55b39e.tgz#1792503788356454` and
+`gs://octogee-openclaw-fork/openclaw-mattermost-74ec55a2.tgz#1792503776188007`.
+Exact-generation readbacks match both complete hashes, sizes and original bytes.
+Fork branch `ceckert/openclaw:codex/openclaw-main-oct20` reads back at the exact
+native commit above. Build main follows the normal Octogee merge path; publication
+does not deploy. No deployment, desktop OS build or fleet change is included.
+
+Production core/UI/extension types, native build, exact-source Voice/Activity
+contracts and package integrity passed. The native build still reports startup
+JavaScript at 318.5 KiB against its 317.5 KiB budget; no limit was raised.
+An initial Matrix custody test failed during isolated state maintenance; its
+upstream-only single-test control passed, which does not establish attribution
+or erase the initial failure. The full affected six-file host rerun passed
+63 tests, including all 18 delivery-custody cases. Affected Octogee UI consumers
+passed 184 tests; artifact/base contracts passed 54 tests. App and gateway-edge
+types passed. ARM64 and AMD64 installed companions/native hooks, ordinary
+Memory/Skills workers, and all four architecture-by-gateway-class materialized
+config plus isolated Doctor comparisons passed offline. AMD64 ran under ARM64
+host emulation. All 623 captured config/runtime inputs remain byte-identical.
+The local AMD64 Gateway image passed its runtime-image gate and disconnected
+unprivileged installed-package/worker smoke. These checks do not establish live
+provider, full Gateway boot or desktop acceptance.
+
+Independent Astra review through the official app-bundled Codex client completed
+all five frozen-source passes with zero actionable P0–P2 findings. The reviewer
+assessed supplied patch chunks; unchanged implementations and runtime behavior
+were not independently verified in its empty sandbox. This is scoped review,
+not full upstream CI or live acceptance.
+
+## Previous published overlay (October 19)
 
 The October 19 recut selects upstream
 `954a610f5d0fd1e5c542e7a7ed4206ad1484bb02` (2026.10.5). Its native dependency
