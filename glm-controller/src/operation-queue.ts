@@ -1,11 +1,12 @@
 import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
+import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 
 const ACCOUNT_SUSPENSION_KIND = "suspend-customer";
 
 export const SERIALLY_EXCLUSIVE_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "rollout",
-  "migrate-customer",
+  MIGRATE_CUSTOMER_KIND,
   ACCOUNT_SUSPENSION_KIND,
 ]);
 
@@ -85,7 +86,7 @@ function migrationWaitingOn(input: OperationRef["input"]): string | null {
 
 const WAITING_ON_DESCRIPTIONS: Readonly<Record<string, (input: OperationRef["input"]) => string | null>> = {
   rollout: rolloutWaitingOn,
-  "migrate-customer": migrationWaitingOn,
+  [MIGRATE_CUSTOMER_KIND]: migrationWaitingOn,
   [ACCOUNT_SUSPENSION_KIND]: () => "another account suspension",
 };
 
@@ -136,7 +137,7 @@ export function compareOperationQueueOrder(
 
 function isBackingOffReleasedOperation(pending: PendingOperationRef, now: number): boolean {
   return (pending.kind === ACCOUNT_SUSPENSION_KIND ||
-    pending.kind === "migrate-customer" && pending.queuedAt !== undefined) &&
+    pending.kind === MIGRATE_CUSTOMER_KIND && pending.queuedAt !== undefined) &&
     typeof pending.nextAttemptAt === "number" &&
     pending.nextAttemptAt > now;
 }
@@ -144,11 +145,30 @@ function isBackingOffReleasedOperation(pending: PendingOperationRef, now: number
 function rolloutWaitsForBuilderActivation(rollout: OperationRef, activation: OperationRef): boolean {
   const target = inputString(activation.input, "toGatewayId");
   return rollout.kind === "rollout" &&
-    activation.kind === "migrate-customer" &&
+    activation.kind === MIGRATE_CUSTOMER_KIND &&
     activation.input?.source === "builder-activation-lease" &&
     isBuilderActivateOperationIdFor(activation.id, target) &&
     typeof activation.cutoverCommittedAt !== "number" &&
     rollout.input?.gatewayId === target;
+}
+
+function isPendingBuilderActivation(operation: OperationRef): boolean {
+  return operation.kind === MIGRATE_CUSTOMER_KIND &&
+    operation.input?.source === "builder-activation-lease" &&
+    isBuilderActivateOperationIdFor(operation.id, inputString(operation.input, "toGatewayId")) &&
+    operation.customerMigrationV2 === undefined &&
+    typeof operation.cutoverCommittedAt !== "number";
+}
+
+function placementMoveYieldsToBuilderActivation(move: OperationRef, activation: OperationRef): boolean {
+  const source = inputString(activation.input, "fromGatewayId");
+  return isPendingBuilderActivation(activation) &&
+    move.kind === MIGRATE_CUSTOMER_KIND &&
+    move.input?.source === "continuous-placement-policy" &&
+    move.customerMigrationV2 === undefined &&
+    typeof move.cutoverCommittedAt !== "number" &&
+    source !== undefined &&
+    inputString(move.input, "fromGatewayId") === source;
 }
 
 function findOlderPendingSameScope(
@@ -161,6 +181,7 @@ function findOlderPendingSameScope(
       (pending) =>
         pending.id !== candidate.id &&
         !rolloutWaitsForBuilderActivation(pending, candidate) &&
+        !placementMoveYieldsToBuilderActivation(pending, candidate) &&
         !isBackingOffReleasedOperation(pending, now) &&
         operationsConflict(candidate, pending) &&
         compareOperationQueueOrder(pending, candidate) < 0,
@@ -187,7 +208,8 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
-  const activation = pendingOpsSameKind.find((pending) => rolloutWaitsForBuilderActivation(op, pending));
+  const activation = pendingOpsSameKind.find((pending) =>
+    rolloutWaitsForBuilderActivation(op, pending) || placementMoveYieldsToBuilderActivation(op, pending));
   if (activation) return { outcome: "queue", waitingOn: describeWaitingOn(activation) };
   const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };

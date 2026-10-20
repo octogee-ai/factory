@@ -9,7 +9,7 @@ import type {
 import { isReapedOperationError } from "./stuck-op-reaper.js";
 import { sourceRecoveryForwardRetryable } from "./legacy-migration-recovery.js";
 import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { createHash } from "node:crypto";
 
 import {
@@ -116,6 +116,7 @@ import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
 import {
   classifyOperationFailure,
   isGatewayStartupUnavailable,
+  OPERATION_JOURNAL_RETENTION_MS,
 } from "./operation-retry.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
@@ -265,6 +266,18 @@ export interface EnqueuePlacementMigrationInput {
   sharedDrain?: { pairedTargetGatewayId: string | null };
 }
 
+export interface SupersedePendingSharedDrainMoveInput {
+  operationId: string;
+  uid: string;
+  builderSlug: string;
+  fromGatewayId: string;
+  toGatewayId: string;
+  leaseId: string;
+  generation: number;
+  targetGatewayId: string;
+  activationOperationId: string;
+}
+
 export class SharedDrainSupersededError extends Error {
   constructor(readonly fromGatewayId: string, reason: string) {
     super(`shared drain of ${fromGatewayId} no longer authorizes this migration: ${reason}`);
@@ -395,6 +408,7 @@ export interface PlacementPolicyReconcilerDeps {
     userData: Record<string, unknown>;
   }): Promise<BuilderRuntimeActivity>;
   enqueueMigration(input: EnqueuePlacementMigrationInput): Promise<string>;
+  supersedePendingSharedDrainMove(input: SupersedePendingSharedDrainMoveInput): Promise<boolean>;
   retireOwnedGateway(input: RetireOwnedGatewayInput): Promise<boolean>;
   deleteRetiredDisposableGateway(
     input: DeleteRetiredDisposableGatewayInput,
@@ -1470,6 +1484,48 @@ async function cleanupUnauthorizedProvisioningTarget(
   return true;
 }
 
+function pendingMoveOffDrainingSharedSlot(
+  context: PlacementPolicyReconcileContext,
+  operation: PlacementPolicyMigration,
+  current: string | null,
+  builderSlug: string,
+): boolean {
+  return operation.status === "pending" &&
+    operation.source === CONTINUOUS_PLACEMENT_POLICY_SOURCE &&
+    operation.builderSlug === builderSlug &&
+    current !== null &&
+    operation.fromGatewayId === current &&
+    isSharedPoolGateway(context, current) &&
+    context.gateways.get(current)?.desiredStatus === "draining";
+}
+
+async function supersedeDrainMoveForActivation(
+  input: ActivationTargetContext,
+  operation: PlacementPolicyMigration,
+  activationOperationId: string,
+): Promise<boolean> {
+  const { context, user, builderSlug, current, lease, target } = input;
+  if (!pendingMoveOffDrainingSharedSlot(context, operation, current, builderSlug)) return false;
+  const superseded = await context.deps.supersedePendingSharedDrainMove({
+    operationId: operation.id,
+    uid: user.uid,
+    builderSlug,
+    fromGatewayId: operation.fromGatewayId,
+    toGatewayId: operation.toGatewayId,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId: target.gatewayId,
+    activationOperationId,
+  });
+  if (!superseded) return false;
+  context.migrations.delete(user.uid);
+  context.deps.log(
+    `[placement-policy] superseded pending drain move ${operation.id} uid=${user.uid} ` +
+    `lease=${lease.leaseId} generation=${lease.generation} for activation ${activationOperationId}`,
+  );
+  return true;
+}
+
 export function standbyClaimFailedOperationId(gatewayId: string, generation: number): string {
   return `standby-claim-failed-${gatewayId}-g${generation}`;
 }
@@ -1513,7 +1569,7 @@ async function advanceReadyProvisioningTarget(
   const { context, user, builderSlug, current, lease, target } = input;
   const operationId = builderActivateOperationId(lease.targetGatewayId!, lease.generation);
   const active = context.migrations.get(user.uid);
-  if (active) {
+  if (active && !await supersedeDrainMoveForActivation(input, active, operationId)) {
     if (!activationMigrationMatches(active, {
       id: operationId,
       uid: user.uid,
@@ -3670,6 +3726,112 @@ async function assertSharedDrainAuthority(
   }
 }
 
+function sharedDrainMoveNeverClaimed(data: Record<string, unknown>): boolean {
+  const history = data.attemptHistory;
+  return [
+    data.status === "pending",
+    data.startedAt === null,
+    data.firstStartedAt === undefined,
+    data.attempts === undefined,
+    data.resumeCount === undefined,
+    history === undefined || (Array.isArray(history) && history.length === 0),
+    Array.isArray(data.steps) && data.steps.length === 0,
+    data.cutoverCommittedAt === undefined,
+    data.customerMigrationV2 === undefined,
+    data.cancellationRequestedAt === undefined,
+    data.sourceTransferExecution === undefined,
+    data.schedulerHandoff === undefined,
+  ].every(Boolean);
+}
+
+function neverClaimedSharedDrainMove(
+  data: Record<string, unknown> | undefined,
+  request: SupersedePendingSharedDrainMoveInput,
+): boolean {
+  if (data === undefined) return false;
+  const operationInput = record(data.input);
+  return [
+    data.kind === MIGRATE_CUSTOMER_KIND,
+    data.origin === "automatic",
+    data.createdBy === PLACEMENT_POLICY_ACTOR,
+    sharedDrainMoveNeverClaimed(data),
+    operationInput?.uid === request.uid,
+    operationInput?.builderSlug === request.builderSlug,
+    operationInput?.fromGatewayId === request.fromGatewayId,
+    operationInput?.toGatewayId === request.toGatewayId,
+    operationInput?.source === CONTINUOUS_PLACEMENT_POLICY_SOURCE,
+  ].every(Boolean);
+}
+
+function supersedingActivationLeaseHolds(
+  userData: Record<string, unknown> | undefined,
+  request: SupersedePendingSharedDrainMoveInput,
+): boolean {
+  const lease = builderActivationLease(userData ?? {});
+  return currentGatewayId(userData ?? {}) === request.fromGatewayId &&
+    lease?.leaseId === request.leaseId &&
+    lease.generation === request.generation &&
+    lease.status === "provisioning" &&
+    lease.targetGatewayId === request.targetGatewayId;
+}
+
+export async function supersedePendingSharedDrainMove(
+  input: FirestorePlacementPolicyInput,
+  request: SupersedePendingSharedDrainMoveInput,
+): Promise<boolean> {
+  const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(request.operationId);
+  const userRef = input.db.collection("users").doc(request.uid);
+  const sourceRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId);
+  return input.db.runTransaction(async (transaction) => {
+    const [operation, user, source] = await Promise.all([
+      transaction.get(operationRef),
+      transaction.get(userRef),
+      transaction.get(sourceRef),
+    ]);
+    if (
+      !neverClaimedSharedDrainMove(operation.data(), request) ||
+      !supersedingActivationLeaseHolds(user.data(), request) ||
+      source.data()?.desiredStatus !== "draining"
+    ) {
+      return false;
+    }
+    const now = input.now();
+    transaction.update(operationRef, {
+      status: "failed",
+      completedAt: now,
+      expireAt: Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS),
+      rolledBack: false,
+      error: `superseded before claim by Builder activation lease ${request.leaseId} ` +
+        `generation ${request.generation} (operation ${request.activationOperationId})`,
+      supersededBy: {
+        kind: "builder-activation",
+        leaseId: request.leaseId,
+        generation: request.generation,
+        targetGatewayId: request.targetGatewayId,
+        operationId: request.activationOperationId,
+        at: now,
+      },
+      waitingOn: FieldValue.delete(),
+      nextAttemptAt: FieldValue.delete(),
+      queuedAt: FieldValue.delete(),
+    });
+    return true;
+  });
+}
+
+function supersededSharedDrainMoveCanRearm(
+  data: Record<string, unknown>,
+  request: EnqueuePlacementMigrationInput,
+): boolean {
+  return request.sharedDrain !== undefined &&
+    data.status === "failed" &&
+    record(data.supersededBy)?.kind === "builder-activation" &&
+    data.startedAt === null &&
+    data.attempts === undefined &&
+    data.cutoverCommittedAt === undefined &&
+    data.customerMigrationV2 === undefined;
+}
+
 export async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
@@ -3734,6 +3896,10 @@ export async function enqueuePlacementMigration(
       throw new Error(`migration operation ${ref.id} does not match activation demand`);
     }
     if (placementMigrationIsNonTerminal(data)) return;
+    if (supersededSharedDrainMoveCanRearm(data, request)) {
+      transaction.update(ref, { ...rearmedPlacementMigrationPatch(), supersededBy: FieldValue.delete() });
+      return;
+    }
     if (data.sourceRuntimeRecovery !== undefined) {
       await assertRepairedSourcePlacementAuthority(input, transaction, request, data);
       await applyTerminalPlacementRearm({ transaction, ref }); return;
@@ -4348,6 +4514,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
       recoverUnreachableDisposableGatewayFirestore(input, request),
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
     enqueueMigration: (request) => enqueuePlacementMigration(input, request),
+    supersedePendingSharedDrainMove: (request) => supersedePendingSharedDrainMove(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
     deleteRetiredDisposableGateway: (request) =>
       deleteRetiredDisposableGatewayFirestore(input, request),

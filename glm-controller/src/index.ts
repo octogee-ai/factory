@@ -11,6 +11,7 @@ import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/ga
 import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/retained-source-transfer.js';
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
+import { fleetOperationLockResources } from "@octogee/core/fleet-operation-lock";
 import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 import { operationScopedLog } from "./operation-log-scope.js";
 import { prepareNativeAgentContextTransfer, acknowledgeNativeAgentContextTransfer, acknowledgeNativeSharedContextStage, prepareNativeSharedContextRestore, acknowledgeNativeSharedContextRestore } from "./lib/native-agent-context-transfer.js";
@@ -1915,6 +1916,34 @@ export async function drainPendingOperationsOnce(deps: ControllerDeps): Promise<
   }
 }
 
+export async function claimOperationsUnblockedByCutover(
+  cutOver: Operation,
+  deps: ControllerDeps,
+): Promise<void> {
+  const released = fleetOperationLockResources(cutOver);
+  if (released.size === 0) return;
+  const snap = await deps.db
+    .collection(GLM_OPERATIONS_COLLECTION)
+    .where("status", "==", "pending")
+    .get();
+  const unblocked = snap.docs
+    .flatMap((doc) => {
+      const data = doc.data();
+      if (isOperationAuditRow(data)) return [];
+      const op = { ...(data as Operation), id: doc.id };
+      const resources = fleetOperationLockResources(op);
+      return [...resources].some((resource) => released.has(resource)) ? [{ op, ref: doc.ref }] : [];
+    })
+    .sort((a, b) => compareOperationQueueOrder(a.op, b.op));
+  for (const { op, ref } of unblocked) {
+    void processOperation(op, ref, deps).catch((err) => {
+      deps.log(
+        `[glm-controller] ⚠ post-cutover claim failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+}
+
 export function startOperationQueueDrain(
   deps: ControllerDeps,
   intervalMs: number = OPERATION_QUEUE_DRAIN_MS_DEFAULT,
@@ -2041,6 +2070,11 @@ async function runClaimedOperation(
           throw new Error("cutover record operation is no longer owned by this attempt");
         }
         txn.update(ref, { cutoverCommittedAt: at, lastProgressAt: Date.now() });
+      });
+      void claimOperationsUnblockedByCutover(op, deps).catch((err) => {
+        deps.log(
+          `[glm-controller] ⚠ post-cutover queue scan failed op=${op.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       });
     },
     persistCustomerMigrationV2: async (state) => {
