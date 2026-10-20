@@ -3339,6 +3339,14 @@ async function resolveRollbackRelease(args: {
       },
     };
   }
+  if (gateway.gatewayClass === "shared") {
+    return {
+      error: {
+        status: 409,
+        body: { error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: args.gatewayId },
+      },
+    };
+  }
   if (gateway.standby != null) {
     return {
       error: {

@@ -4,7 +4,11 @@ import type { Firestore } from "firebase-admin/firestore";
 import { FieldValue } from "firebase-admin/firestore";
 import request from "supertest";
 
-import { addAdminFleetRoutes, ERR_STANDBY_RIDES_PLATFORM_RELEASE } from "./admin-fleet-router.js";
+import {
+  addAdminFleetRoutes,
+  ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE,
+  ERR_STANDBY_RIDES_PLATFORM_RELEASE,
+} from "./admin-fleet-router.js";
 import { readSharedSourceRecoveryAuthority } from './shared-source-recovery.js';
 import type {
   CentralReleaseAuthority,
@@ -964,6 +968,8 @@ describe("admin target resolution", () => {
 });
 
 describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from release n's payload", () => {
+  const builderGateway = { gatewayClass: "builder", imageProfile: "builder", profile: "builder", ownerUid: "uid-builder", builderSlug: "builder", sizingTier: "s" };
+
   it.each([
     { fence: { sourceGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
     { fence: { sourceGatewayId: "source", targetGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
@@ -971,7 +977,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     { fence: false, mirror: "gamma" },
     { fence: {}, mirror: "gamma" },
   ])("rejects rollback append with retained source fence $fence after operation failure", async ({ fence, mirror }) => {
-    const seed = seedNewSchemaGateway("gamma", sharedPayload());
+    const seed = seedNewSchemaGateway("gamma", sharedPayload(), builderGateway);
     seed["gateways/gamma"].latestRelease = 2;
     seed["gateways/gamma"].desiredRelease = 2;
     seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
@@ -996,7 +1002,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
 
   it("cuts release 3 whose payload equals release 1, never mutating history", async () => {
     // Seed gateway at release 2 (tag deadbee), with release 1 = abc1234 retained.
-    const seed = seedNewSchemaGateway("gamma", sharedPayload({ imageTag: "deadbee" }));
+    const seed = seedNewSchemaGateway("gamma", sharedPayload({ imageTag: "deadbee" }), builderGateway);
     seed["gateways/gamma"].latestRelease = 2;
     seed["gateways/gamma"].desiredRelease = 2;
     seed[`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
@@ -1067,14 +1073,41 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     expect(opsIn(store, "rollout")).toHaveLength(0);
   });
 
+  it("rejects rolling back a shared-pool slot because shared slots ride the platform release", async () => {
+    const seed = seedNewSchemaGateway("shared-0", sharedPayload({ imageTag: "deadbee" }), {
+      gatewayClass: "shared",
+    });
+    seed["gateways/shared-0"].latestRelease = 2;
+    seed["gateways/shared-0"].desiredRelease = 2;
+    seed[`gateways/shared-0/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
+      gatewayId: "shared-0", release: 2, sourceRelease: null, note: null,
+      payloadHash: releasePayloadHash(sharedPayload({ imageTag: "deadbee" })),
+      payload: sharedPayload({ imageTag: "deadbee" }),
+    };
+    seed[`gateways/shared-0/${GATEWAY_RELEASES_SUBCOLLECTION}/1`] = {
+      gatewayId: "shared-0", release: 1, sourceRelease: null, note: null,
+      payloadHash: releasePayloadHash(sharedPayload({ imageTag: "abc1234" })),
+      payload: sharedPayload({ imageTag: "abc1234" }),
+    };
+    const { app, store } = mkApp(seed);
+
+    const res = await request(app).post("/gateways/shared-0/releases/1/rollback").send({}).expect(409);
+
+    expect(res.body).toEqual({ error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: "shared-0" });
+    expect(store.get("gateways/shared-0")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
+    expect(store.has(`gateways/shared-0/${GATEWAY_RELEASES_SUBCOLLECTION}/3`)).toBe(false);
+    expect(opsIn(store, "rollout")).toHaveLength(0);
+  });
+
   it("rejects rolling back to the payload the gateway is already on (no-op)", async () => {
-    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload()));
+    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload(), builderGateway));
     const res = await request(app).post("/gateways/gamma/releases/1/rollback").send({});
     expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no-op rollback/);
   });
 
   it("404s for an unknown release number", async () => {
-    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload()));
+    const { app } = mkApp(seedNewSchemaGateway("gamma", sharedPayload(), builderGateway));
     const res = await request(app).post("/gateways/gamma/releases/9/rollback").send({});
     expect(res.status).toBe(404);
   });
