@@ -202,8 +202,12 @@ function auditGithubActionReference(
   errors: string[],
   managedReferences: DependencyReferenceIdentity[],
 ): void {
-  if (!/^(?:\.github\/workflows\/[^/]+\.ya?ml|action\.ya?ml)$/.test(reference.path)) return;
-  const matchingUpdates = actionUpdates.filter(({ directory }) => directory === "/");
+  const rootManifest = /^(?:\.github\/workflows\/[^/]+\.ya?ml|action\.ya?ml)$/.test(reference.path);
+  const manifestDirectory = `/${path.posix.dirname(reference.path)}`;
+  const matchingUpdates = actionUpdates.filter(({ directory }) =>
+    directory === "/" ? rootManifest :
+      directory === manifestDirectory && /\.ya?ml$/.test(reference.path),
+  );
   if (matchingUpdates.length > 1) {
     errors.push(`${reference.path}: duplicate Dependabot GitHub Actions entries`);
   }
