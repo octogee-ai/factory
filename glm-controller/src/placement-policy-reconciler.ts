@@ -21,6 +21,8 @@ import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import {
   GATEWAY_UNREACHABLE_AFTER_MS,
   GATEWAYS_COLLECTION,
+  parseConfiguredBuilderReport,
+  type ConfiguredBuilderReport,
 } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
@@ -34,6 +36,7 @@ import {
   GATEWAY_RELEASES_SUBCOLLECTION,
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   isGatewayRuntimeDoc,
+  type GatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
   customerRuntimeMutationFenced,
@@ -105,6 +108,7 @@ import {
   completeActivationLeaseFirestore,
   failActivationLeaseFirestore,
   readBuilderActivityFirestore,
+  type BuilderStandbyClaimPolicy,
 } from "./disposable-gateway-lifecycle.js";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-pool-replacements.js";
@@ -222,6 +226,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   recoveryGraceUntil?: number;
   mountedCustomers?: readonly string[];
   standby?: boolean;
+  configuredBuilder?: ConfiguredBuilderReport | null;
 }
 
 export const SHARED_GATEWAY_RECOVERY_GRACE_MS = GATEWAY_UNREACHABLE_AFTER_MS;
@@ -311,6 +316,7 @@ export interface FailActivationLeaseInput {
   targetGatewayId: string;
   operationId: string;
   message: string;
+  code?: "standby-claim-failed";
 }
 
 export interface RecoverUnreachableDisposableGatewayInput {
@@ -1304,7 +1310,7 @@ async function cleanupUnreachableProvisioningTarget(
   input: ActivationTargetContext,
 ): Promise<boolean> {
   const { context, user, builderSlug, current, lease, target } = input;
-  if (target.desiredStatus === "running" && disposableTargetActivationReady(target)) return false;
+  if (target.desiredStatus === "running" && provisioningTargetActivationReady(target, lease)) return false;
   if (target.desiredStatus !== "running" && target.desiredStatus !== "paused") return false;
   if (!isSharedPoolGateway(context, current)) {
     blockPlacement(context, {
@@ -1409,13 +1415,11 @@ async function reconcileRequestedActivation(
   });
 }
 
-async function cleanupUnauthorizedProvisioningTarget(
+async function retireProvisioningTarget(
   input: ActivationTargetContext,
+  blocked: { code: string; reason: string },
 ): Promise<boolean> {
   const { context, user, builderSlug, lease, target } = input;
-  const authorized = accountAllowsInteractiveAccess(user.data) &&
-    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
-  if (authorized) return false;
   const retired = target.ready
     ? await context.deps.retireOwnedGateway({
         uid: user.uid,
@@ -1437,15 +1441,24 @@ async function cleanupUnauthorizedProvisioningTarget(
         target,
       ));
   if (!retired) {
-    blockPlacement(context, {
-      uid: user.uid,
-      lease,
-      code: "provisioning-authorization-cleanup-pending",
-      reason: `target ${target.gatewayId} is awaiting safe cleanup after authorization ended`,
-    });
-    return true;
+    blockPlacement(context, { uid: user.uid, lease, ...blocked });
+    return false;
   }
   if (target.ready) context.result.retired += 1;
+  return true;
+}
+
+async function cleanupUnauthorizedProvisioningTarget(
+  input: ActivationTargetContext,
+): Promise<boolean> {
+  const { context, user, lease, target } = input;
+  const authorized = accountAllowsInteractiveAccess(user.data) &&
+    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+  if (authorized) return false;
+  if (!await retireProvisioningTarget(input, {
+    code: "provisioning-authorization-cleanup-pending",
+    reason: `target ${target.gatewayId} is awaiting safe cleanup after authorization ended`,
+  })) return true;
   await context.deps.failActivationLease({
     uid: user.uid,
     leaseId: lease.leaseId,
@@ -1455,6 +1468,43 @@ async function cleanupUnauthorizedProvisioningTarget(
     message: "Builder authorization ended before activation cutover",
   });
   return true;
+}
+
+export function standbyClaimFailedOperationId(gatewayId: string, generation: number): string {
+  return `standby-claim-failed-${gatewayId}-g${generation}`;
+}
+
+async function cleanupFailedStandbyClaim(input: ActivationTargetContext): Promise<boolean> {
+  const { context, user, lease, target } = input;
+  const report = target.configuredBuilder;
+  if (report?.state !== "claim-failed" || report.generation !== lease.generation) return false;
+  context.deps.log(
+    `[placement-policy] ${target.gatewayId} could not apply ${user.uid}'s claim generation=${lease.generation}: ${report.error}`,
+  );
+  if (!await retireProvisioningTarget(input, {
+    code: "standby-claim-cleanup-pending",
+    reason: `target ${target.gatewayId} is awaiting safe cleanup after its claim failed`,
+  })) return true;
+  await context.deps.failActivationLease({
+    uid: user.uid,
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    targetGatewayId: target.gatewayId,
+    operationId: standbyClaimFailedOperationId(target.gatewayId, lease.generation),
+    message: `standby claim failed: ${report.error}`,
+    code: "standby-claim-failed",
+  });
+  return true;
+}
+
+function targetClaimedForLease(target: PlacementPolicyGateway, lease: BuilderActivationLease): boolean {
+  const report = target.configuredBuilder;
+  if (report?.state !== "claimed") return false;
+  return report.generation === lease.generation || (target.runtime === "gce-vm" && report.generation === null);
+}
+
+function provisioningTargetActivationReady(target: PlacementPolicyGateway, lease: BuilderActivationLease): boolean {
+  return disposableTargetActivationReady(target) && targetClaimedForLease(target, lease);
 }
 
 async function advanceReadyProvisioningTarget(
@@ -1558,6 +1608,7 @@ async function reconcileProvisioningActivation(
   }
   const targetInput = { context, user, builderSlug, current, lease, target };
   if (await cleanupUnauthorizedProvisioningTarget(targetInput)) return;
+  if (await cleanupFailedStandbyClaim(targetInput)) return;
   if (
     await cleanupUnreachableProvisioningTarget({
       context,
@@ -1579,7 +1630,7 @@ async function reconcileProvisioningActivation(
     });
     return;
   }
-  if (!disposableTargetActivationReady(target)) return;
+  if (!provisioningTargetActivationReady(target, lease)) return;
   await advanceReadyProvisioningTarget(targetInput);
 }
 
@@ -2663,6 +2714,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
+  builderStandbyPool: BuilderStandbyClaimPolicy;
   prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
@@ -3069,6 +3121,10 @@ function gatewayRuntimeObservation(value: Record<string, unknown> | undefined) {
   };
 }
 
+function runtimeConfiguredBuilder(runtime: GatewayRuntimeDoc | null): ConfiguredBuilderReport | null {
+  return runtime ? parseConfiguredBuilderReport(runtime.heartbeat.configuredBuilder) : null;
+}
+
 function placementGatewayFromDocument(input: {
   doc: QueryDocumentSnapshot;
   runtimes: ReadonlyMap<string, Record<string, unknown>>;
@@ -3106,6 +3162,7 @@ function placementGatewayFromDocument(input: {
     desiredStatus: root.desiredStatus,
     disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
     standby: root.standby != null,
+    configuredBuilder: runtimeConfiguredBuilder(runtime),
     allocation: root.allocation ?? null,
     ready: runtimeReady,
     ...gatewayRuntimeObservation(runtimeData),

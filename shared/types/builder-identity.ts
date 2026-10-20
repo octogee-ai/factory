@@ -73,6 +73,7 @@ export interface BuilderClaimRecord {
   leaseId: string | null;
   generation: number | null;
   claimedAt: number;
+  adoptionPending: boolean;
   overlayAppliedAt: number | null;
 }
 
@@ -84,6 +85,7 @@ export function parseBuilderClaimRecord(value: unknown): BuilderClaimRecord | nu
   if (!isRecord(value) || value.schemaVersion !== 1 || !isValidGatewayId(value.gatewayId)) return null;
   if (!claimedIdentityFields(value) || !isTimestamp(value.claimedAt)) return null;
   if (value.overlayAppliedAt !== null && !isTimestamp(value.overlayAppliedAt)) return null;
+  if (value.adoptionPending !== undefined && typeof value.adoptionPending !== "boolean") return null;
   return {
     schemaVersion: 1,
     gatewayId: value.gatewayId,
@@ -92,6 +94,7 @@ export function parseBuilderClaimRecord(value: unknown): BuilderClaimRecord | nu
     leaseId: value.leaseId as string | null,
     generation: value.generation as number | null,
     claimedAt: value.claimedAt,
+    adoptionPending: value.adoptionPending === true,
     overlayAppliedAt: value.overlayAppliedAt as number | null,
   };
 }
@@ -105,8 +108,13 @@ export function builderClaimFromIdentity(identity: ClaimedBuilderIdentity, claim
     leaseId: identity.leaseId,
     generation: identity.generation,
     claimedAt,
+    adoptionPending: false,
     overlayAppliedAt: null,
   };
+}
+
+export function standbyClaimFromIdentity(identity: ClaimedBuilderIdentity, claimedAt: number): BuilderClaimRecord {
+  return { ...builderClaimFromIdentity(identity, claimedAt), adoptionPending: true };
 }
 
 export function sameBuilderOwner(

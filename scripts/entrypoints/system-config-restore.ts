@@ -1,8 +1,13 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("system-config-restore");
-import { restoreSystemConfigForSlug } from "../lib/system-config.js";
+import { discardInterruptedClaimAdoption, restoreSystemConfigForSlug } from "../lib/system-config.js";
 import { pathToFileURL } from "node:url";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import {
+  DEFAULT_OPENCLAW_DIR,
+  builderClaimSlug,
+  markBuilderClaimAdopted,
+  readBuilderClaimFromEnv,
+} from "@octogee/shared/server/builder-claim";
 
 const log = runtimeLogger.info;
 
@@ -48,12 +53,23 @@ export async function runSystemConfigRestore(
     return plan;
   }
 
-  const result = await (opts.restore ?? restoreSystemConfigForSlug)(plan.slug, { log: logger });
+  const env = opts.env ?? process.env;
+  const openclawDir = env.OPENCLAW_DIR?.trim() || DEFAULT_OPENCLAW_DIR;
+  const claim = readBuilderClaimFromEnv(env);
+  if (claim?.adoptionPending) {
+    logger(`[system_config] resuming ${plan.slug}'s interrupted standby claim: discarding the standby system_config`);
+    discardInterruptedClaimAdoption(openclawDir, claim.generation);
+  }
+  const result = await (opts.restore ?? restoreSystemConfigForSlug)(plan.slug, { log: logger, openclawDir });
   if (result.skipped) {
     throw new Error(`durable system_config restore failed: ${result.skipped}`);
   }
   if (!result.restored || !result.configPath) {
     throw new Error("durable system_config restore did not produce an active config path");
+  }
+  if (claim?.adoptionPending) {
+    markBuilderClaimAdopted(openclawDir, claim.gatewayId);
+    logger(`[system_config] ${plan.slug}'s standby claim adopted its durable system_config on boot`);
   }
   return plan;
 }

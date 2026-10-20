@@ -63,6 +63,8 @@ import {
   writeMigratingInPin,
 } from "../lib/local-coach-wired.js";
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
+import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
+import { builderClaimFromIdentity, markBuilderClaimOverlayApplied, writeBuilderClaim } from "@octogee/shared/server/builder-claim";
 
 const tmpDirs: string[] = [];
 
@@ -1950,6 +1952,48 @@ describe("configured Builder surge release", () => {
     });
 
     await expect(wiring.selfReleaseHoldReason()).rejects.toThrow("assignment roster unavailable: HTTP 502");
+  });
+
+  it("admits a claimed standby live only once its claim overlay is stamped", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-claimed-standby-"));
+    tmpDirs.push(openclawDir);
+    vi.stubEnv("OPENCLAW_DIR", openclawDir);
+    vi.stubEnv("GATEWAY_ID", "standby-s-0a1b2c3d");
+    vi.stubEnv("GATEWAY_CLASS", "builder");
+    try {
+      writeBuilderClaim(openclawDir, builderClaimFromIdentity({
+        gatewayId: "standby-s-0a1b2c3d", state: "claimed", ownerUid: "uid-chris", builderSlug: "chris",
+        leaseId: "lease-1", generation: 2,
+      }, 1));
+      const brokered = buildBrokeredLifecycleAdapter({
+        client: {} as never, rpc: {} as never, log: () => undefined, isBuilderGateway: () => true,
+      });
+      const adapter = {
+        ...brokered,
+        listLocalCustomerSlugs: () => [],
+        customerMountMarked: () => false,
+      } as CustomerLifecycleAdapter;
+      const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "standby-pod" };
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate: {
+          status: vi.fn(async () => ({ version: 1, podUid: "standby-pod", role: "normal", mode: "permitted", phase: "running" })),
+        } as unknown as SurgeOpenClawProcessSupervisorClient,
+        surgeReadiness: { released: vi.fn(async () => true) } as unknown as SurgeReadinessGate,
+        waitForGatewayReady: async () => undefined, log: () => undefined,
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      });
+
+      expect(brokered.isConfiguredBuilderCustomer?.("chris")).toBe(true);
+      await expect(wiring.surgeTargetLive(request)).resolves.toBe(true);
+      await expect(wiring.admitLiveSurgeTarget(request)).rejects.toThrow("requires its retained overlay");
+
+      markBuilderClaimOverlayApplied(openclawDir, "standby-s-0a1b2c3d", 2);
+      await expect(wiring.admitLiveSurgeTarget(request)).resolves.toBeUndefined();
+      expect(brokered.configuredBuilderOverlayPresent?.("bob")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each(["unassigned", "assigned", "assignment-read-failed"])(

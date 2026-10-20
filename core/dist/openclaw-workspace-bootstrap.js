@@ -14,7 +14,12 @@ function enabled(env) {
 function files(env) {
     if (!env.OPENCLAW_DIR || !env.GATEWAY_ID)
         throw new Error("Workspace identity initialization requires gateway and state directory");
-    return { boot: path.join(env.OPENCLAW_DIR, "workspace-identity-boot"), ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"), journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json") };
+    return {
+        boot: path.join(env.OPENCLAW_DIR, "workspace-identity-boot"),
+        ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"),
+        journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"),
+        owner: path.join(env.OPENCLAW_DIR, "workspace-identity-owner"),
+    };
 }
 function atomicWrite(file, value) {
     const temp = `${file}.${randomUUID()}.tmp`;
@@ -34,6 +39,15 @@ export function workspaceIdentityReady(env = process.env) {
     const state = files(env);
     return fs.existsSync(state.boot) && fs.existsSync(state.ready)
         && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
+}
+export function workspaceOwnerClaimed(env = process.env) {
+    return builderClaimOwnerUid(env) !== null;
+}
+export function workspaceOwnerIdentityReady(env, ownerUid) {
+    if (!enabled(env))
+        return true;
+    const owner = files(env).owner;
+    return fs.existsSync(owner) && fs.readFileSync(owner, "utf8") === ownerUid;
 }
 export function assertWorkspaceIdentityReady(env = process.env) {
     if (!workspaceIdentityReady(env)) {
@@ -75,7 +89,7 @@ function recordOwnerJournal(journalPath, ownerUid) {
 export async function bootstrapWorkspaceIdentities(args) {
     const env = args.env ?? process.env;
     if (!enabled(env))
-        return;
+        return "complete";
     const state = files(env);
     const ownerUid = builderClaimOwnerUid(env);
     if (!ownerUid && env[BUILDER_STANDBY_BOOT_ENV] !== "1") {
@@ -106,4 +120,8 @@ export async function bootstrapWorkspaceIdentities(args) {
     if (fs.readFileSync(state.boot, "utf8") !== boot)
         throw new Error("Workspace identity boot changed during initialization");
     atomicWrite(state.ready, boot);
+    if (!ownerUid)
+        return "awaiting-owner";
+    atomicWrite(state.owner, ownerUid);
+    return "complete";
 }

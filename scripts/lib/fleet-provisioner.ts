@@ -374,6 +374,7 @@ export interface StartFleetOptions {
    * assigned roster for this gateway identity. */
   readDesiredSlugs?: () => Promise<string[]>;
   subscribeDesiredChanges?: (wake: () => void) => () => void;
+  configuredBuilderReport?: () => FleetStateResponse["configuredBuilder"];
   /** Desired-customer source: slug → config fingerprint + mount lane (see
    *  snapshot-fingerprint.ts). When provided, it drives the desired roster (its keys), lets
    *  the reconcile re-ensure an already-mounted customer whose fingerprint drifted — the
@@ -2927,7 +2928,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       startedAt: PROCESS_STARTED_AT_MS,
       customers: getMountObservedSlugs(adapter),
       migratingIn: adapter.listMigratingInSlugs?.() ?? [],
-      configuredBuilder: configuredBuilderReport(),
+      configuredBuilder: (opts.configuredBuilderReport ?? configuredBuilderReport)(),
     }),
   }));
 

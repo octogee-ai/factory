@@ -213,8 +213,20 @@ async function releaseAgentForImport(
   if (!deps.adapter.releaseAgent) {
     throw new Error(`cannot replace agent ${agentId}'s database: this gateway cannot release agents`);
   }
-  await deps.adapter.releaseAgent(agentId);
+  if (!activation?.live) {
+    await deps.adapter.releaseAgent(agentId);
+    return;
+  }
+  try {
+    await deps.adapter.releaseAgent(agentId);
+  } catch (error) {
+    if (!(error instanceof Error) || !NATIVE_CLEANUP_INCOMPLETE.test(error.message)) throw error;
+    log(`[migration-rsync] releasing ${agentId} left its native cleanup pending; resuming the deletion before replacing its database`);
+    await deps.adapter.releaseAgent(agentId);
+  }
 }
+
+const NATIVE_CLEANUP_INCOMPLETE = /native cleanup incomplete/;
 
 async function pauseSystemConfigWatchForBuilder(
   deps: MigrationHandlerDeps,

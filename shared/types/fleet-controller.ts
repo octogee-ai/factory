@@ -127,16 +127,52 @@ export interface FleetStateResponse {
 
 export type ConfiguredBuilderReport =
   | { state: "standby" }
-  | { state: "claimed"; generation: number | null };
+  | { state: "claiming"; generation: number }
+  | { state: "claimed"; generation: number | null }
+  | { state: "claim-failed"; generation: number; error: string };
+
+function isGeneration(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function hasOnlyFields(value: object, fields: readonly string[]): boolean {
+  return Object.keys(value).every((key) => fields.includes(key));
+}
+
+type ReportFields = { state?: unknown; generation?: unknown; error?: unknown };
+
+function parseClaimingReport(report: ReportFields): ConfiguredBuilderReport | null {
+  return hasOnlyFields(report, ["state", "generation"]) && isGeneration(report.generation)
+    ? { state: "claiming", generation: report.generation }
+    : null;
+}
+
+function parseClaimFailedReport(report: ReportFields): ConfiguredBuilderReport | null {
+  const valid = hasOnlyFields(report, ["state", "generation", "error"]) && isGeneration(report.generation) &&
+    typeof report.error === "string" && report.error.length > 0;
+  return valid ? { state: "claim-failed", generation: report.generation as number, error: report.error as string } : null;
+}
+
+function parseClaimedReport(report: ReportFields): ConfiguredBuilderReport | null {
+  if (!hasOnlyFields(report, ["state", "generation"])) return null;
+  const generation = report.generation;
+  return generation === null || isGeneration(generation) ? { state: "claimed", generation } : null;
+}
+
+const REPORT_PARSERS: Record<string, (report: ReportFields) => ConfiguredBuilderReport | null> = {
+  standby: (report) => hasOnlyFields(report, ["state"]) ? { state: "standby" } : null,
+  claiming: parseClaimingReport,
+  claimed: parseClaimedReport,
+  "claim-failed": parseClaimFailedReport,
+};
 
 export function parseConfiguredBuilderReport(value: unknown): ConfiguredBuilderReport | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const report = value as { state?: unknown; generation?: unknown };
-  if (report.state === "standby" && Object.keys(report).length === 1) return { state: "standby" };
-  if (report.state !== "claimed") return null;
-  const generation = report.generation;
-  if (generation !== null && !(Number.isSafeInteger(generation) && (generation as number) > 0)) return null;
-  return { state: "claimed", generation: generation as number | null };
+  const report = value as ReportFields;
+  const parse = typeof report.state === "string" && Object.prototype.hasOwnProperty.call(REPORT_PARSERS, report.state)
+    ? REPORT_PARSERS[report.state]
+    : undefined;
+  return parse ? parse(report) : null;
 }
 
 export const FLEET_STATE_PATH = "/fleet-state";

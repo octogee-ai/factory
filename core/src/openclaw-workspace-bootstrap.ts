@@ -20,7 +20,12 @@ function enabled(env: NodeJS.ProcessEnv): boolean {
 
 function files(env: NodeJS.ProcessEnv) {
   if (!env.OPENCLAW_DIR || !env.GATEWAY_ID) throw new Error("Workspace identity initialization requires gateway and state directory");
-  return { boot: path.join(env.OPENCLAW_DIR, "workspace-identity-boot"), ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"), journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json") };
+  return {
+    boot: path.join(env.OPENCLAW_DIR, "workspace-identity-boot"),
+    ready: path.join(env.OPENCLAW_DIR, "workspace-identity-ready"),
+    journal: path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"),
+    owner: path.join(env.OPENCLAW_DIR, "workspace-identity-owner"),
+  };
 }
 
 function atomicWrite(file: string, value: string): void {
@@ -41,6 +46,16 @@ export function workspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): bo
   const state = files(env);
   return fs.existsSync(state.boot) && fs.existsSync(state.ready)
     && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
+}
+
+export function workspaceOwnerClaimed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return builderClaimOwnerUid(env) !== null;
+}
+
+export function workspaceOwnerIdentityReady(env: NodeJS.ProcessEnv, ownerUid: string): boolean {
+  if (!enabled(env)) return true;
+  const owner = files(env).owner;
+  return fs.existsSync(owner) && fs.readFileSync(owner, "utf8") === ownerUid;
 }
 
 export function assertWorkspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): void {
@@ -80,9 +95,9 @@ function recordOwnerJournal(journalPath: string, ownerUid: string): void {
 export async function bootstrapWorkspaceIdentities(args: {
   request: NativeRequest; env?: NodeJS.ProcessEnv;
   createProfile?: (uid: string, env: NodeJS.ProcessEnv) => Promise<void>;
-}): Promise<void> {
+}): Promise<"complete" | "awaiting-owner"> {
   const env = args.env ?? process.env;
-  if (!enabled(env)) return;
+  if (!enabled(env)) return "complete";
   const state = files(env);
   const ownerUid = builderClaimOwnerUid(env);
   if (!ownerUid && env[BUILDER_STANDBY_BOOT_ENV] !== "1") {
@@ -110,4 +125,7 @@ export async function bootstrapWorkspaceIdentities(args: {
   }
   if (fs.readFileSync(state.boot, "utf8") !== boot) throw new Error("Workspace identity boot changed during initialization");
   atomicWrite(state.ready, boot);
+  if (!ownerUid) return "awaiting-owner";
+  atomicWrite(state.owner, ownerUid);
+  return "complete";
 }

@@ -128,6 +128,10 @@ BUILDER_CLAIMED=0
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ] && [ "${OCTOGEE_BUILDER_STANDBY_BOOT:-0}" != 1 ]; then
   BUILDER_CLAIMED=1
 fi
+BUILDER_OVERLAY_GATE=""
+if [ "${OCTOGEE_BUILDER_STANDBY_BOOT:-0}" = 1 ]; then
+  BUILDER_OVERLAY_GATE="$TSX /octogee/scripts/entrypoints/builder-claim.ts await-overlay"
+fi
 
 if [ "$BUILDER_CLAIMED" = 1 ]; then
   log "Pre-boot: removing empty Builder project placeholders..."
@@ -401,6 +405,10 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
     || log "⚠ configured Builder agent runtime directories failed to initialize (exit $?); the OpenClaw supervisor re-runs this before every start"
 fi
 
+if [ "$BUILDER_CLAIMED" = 1 ]; then
+  "$TSX" /octogee/scripts/entrypoints/builder-claim.ts mark-overlay-applied
+fi
+
 CUSTOMER_CRON_QUARANTINE=/octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "shared" ] && [ -f "$CUSTOMER_CRON_QUARANTINE" ]; then
   log "Pre-boot: quarantining unsafe persisted customer cron jobs..."
@@ -413,14 +421,12 @@ fi
 # entrypoint must not gate the auxiliary runners on OpenClaw health — the fleet
 # controller is what hydrates and releases a held pod.
 if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
-  if [ "$BUILDER_CLAIMED" = 1 ]; then
-    supervise_runner github-cli-auth 5000 "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
-  fi
+  # shellcheck disable=SC2086
+  supervise_runner github-cli-auth 5000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
   log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
-  if [ "$BUILDER_CLAIMED" = 1 ]; then
-    supervise_runner builder-runtime-state-snapshotter 5000 "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
-  fi
+  # shellcheck disable=SC2086
+  supervise_runner builder-runtime-state-snapshotter 5000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
 else
   "$TSX" /octogee/scripts/entrypoints/prepare-openclaw-sqlite-journals.ts
   "$TSX" /octogee/scripts/entrypoints/openclaw-boot-sentinel.ts before-start
@@ -452,14 +458,16 @@ fi
 # writes, and standard-image gateways mount customers from tenant-bound
 # octogee-api broker reads rather than local Firestore credentials.
 supervise_runner fleet-controller 5000 "$TSX" /octogee/scripts/entrypoints/fleet-controller.ts
-if [ "$BUILDER_CLAIMED" = 1 ]; then
-  supervise_runner builder-toolchain-hydrator 30000 "$TSX" /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  # shellcheck disable=SC2086
+  supervise_runner builder-toolchain-hydrator 30000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts
 fi
 log "In-gateway project code runners disabled: previews and publishing use the isolated build service"
 log "site-build-api disabled: site publishing runs through trusted CI/CD, not the gateway pod"
 supervise_runner byosub-syncback 30000 "$TSX" /octogee/scripts/entrypoints/byosub-syncback-runner.ts
-if [ "$BUILDER_CLAIMED" = 1 ]; then
-  supervise_runner system-config-watch 5000 "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
+if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
+  # shellcheck disable=SC2086
+  supervise_runner system-config-watch 5000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/system-config-watch.ts
 fi
 
 # ── Runner metrics exporter (all profiles) ──────────────────────────────────

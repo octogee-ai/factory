@@ -402,6 +402,7 @@ const BUILDER_VM_SPEC = process.env.GATEWAY_VM_SPEC_JSON ? parseGatewayVmSpec(pr
 const BUILDER_VM_WARM_POOL = parseVmWarmPoolConfig(process.env);
 const BUILDER_STANDBY_POOL = parseBuilderStandbyPoolConfig(process.env);
 const BUILDER_STANDBY_POOL_RECONCILE_MS = 30_000;
+const builderStandbyPoolWake: { current: () => void } = { current: () => undefined };
 const VM_WARM_POOL_RECONCILE_MS = 60_000;
 const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker", "octogee-npm-cache-proxy"] as const;
 const vmGatewayRuntimeRef: { current?: VmGatewayRuntime } = {};
@@ -2407,6 +2408,10 @@ function startControllerBackgroundTasks({
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       db,
+      builderStandbyPool: {
+        maxAgeMs: BUILDER_STANDBY_POOL.maxAgeMs,
+        wake: () => builderStandbyPoolWake.current(),
+      },
       prepareBuilderHome,
       informer,
       namespace: NAMESPACE,
@@ -2831,18 +2836,18 @@ async function main(): Promise<void> {
   log(
     `[glm-controller] builder standby pool size=${BUILDER_STANDBY_POOL.size} maxAgeMs=${BUILDER_STANDBY_POOL.maxAgeMs}`,
   );
-  stoppers.push(
-    startBuilderStandbyPool({
-      db,
-      config: BUILDER_STANDBY_POOL,
-      platformArtifact,
-      namespace: NAMESPACE,
-      controllerStartedAt,
-      ensureAuthSecret: deps.ensureGatewayAuthSecret,
-      log,
-      now: () => Date.now(),
-    }, BUILDER_STANDBY_POOL_RECONCILE_MS),
-  );
+  const builderStandbyPool = startBuilderStandbyPool({
+    db,
+    config: BUILDER_STANDBY_POOL,
+    platformArtifact,
+    namespace: NAMESPACE,
+    controllerStartedAt,
+    ensureAuthSecret: deps.ensureGatewayAuthSecret,
+    log,
+    now: () => Date.now(),
+  }, BUILDER_STANDBY_POOL_RECONCILE_MS);
+  builderStandbyPoolWake.current = builderStandbyPool.wake;
+  stoppers.push(builderStandbyPool.stop);
   if (BUILDER_VM_SPEC) {
     const builderImage = platformArtifact.profileImages?.builder;
     if (!builderImage) throw new Error("warm Builder computers require the platform's pinned Builder image");

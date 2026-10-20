@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities, workspaceIdentityReady } from "./openclaw-workspace-bootstrap.js";
+import { assertWorkspaceIdentityReady, beginWorkspaceIdentityBoot, bootstrapWorkspaceIdentities, workspaceIdentityReady, workspaceOwnerIdentityReady } from "./openclaw-workspace-bootstrap.js";
 
 const dirs: string[] = [];
 function writeClaim(dir: string, ownerUid: string, gatewayId = "b-alice"): void {
@@ -140,6 +140,37 @@ describe("native workspace identity initialization", () => {
     expect(profiles.map(profile => profile.role)).toEqual(["service", "service"]);
     expect(fs.existsSync(path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"))).toBe(false);
     expect(workspaceIdentityReady(standbyEnv)).toBe(true);
+  });
+
+  it("waits for the owner on an unclaimed standby and admits the owner once the claim lands", async () => {
+    const { env, profiles, args } = fixture();
+    fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
+    const standbyEnv = { ...env, OCTOGEE_BUILDER_STANDBY_BOOT: "1" };
+
+    await expect(bootstrapWorkspaceIdentities({ ...args, env: standbyEnv })).resolves.toBe("awaiting-owner");
+    expect(workspaceOwnerIdentityReady(standbyEnv, "alice")).toBe(false);
+
+    writeClaim(env.OPENCLAW_DIR, "alice");
+    await expect(bootstrapWorkspaceIdentities({ ...args, env: standbyEnv })).resolves.toBe("complete");
+
+    expect(profiles.map(profile => [profile.emails[0], profile.role])).toEqual([
+      ["svc:gateway-edge", "service"], ["svc:octogee-provisioner", "service"], ["alice", "admin"],
+    ]);
+    expect(JSON.parse(fs.readFileSync(path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"), "utf8")))
+      .toEqual({ ownerUid: "alice" });
+    expect(workspaceOwnerIdentityReady(standbyEnv, "alice")).toBe(true);
+    expect(workspaceOwnerIdentityReady(standbyEnv, "bob")).toBe(false);
+    expect(workspaceIdentityReady(standbyEnv)).toBe(true);
+  });
+
+  it("marks the owner identity ready only after the owner is admin", async () => {
+    const { env, args, request } = fixture();
+    request.mockImplementation(async (method: string) => {
+      if (method === "users.setRole") throw new Error("role write refused");
+      return { profiles: [] };
+    });
+    await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow();
+    expect(workspaceOwnerIdentityReady(env, "alice")).toBe(false);
   });
 
   it("forces a preexisting owner to admin and does nothing on shared gateways", async () => {

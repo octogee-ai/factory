@@ -7,10 +7,17 @@ import { GithubCliAuthError, type GithubCliAuthResult } from "../lib/github-cli-
 const repoRoot = path.resolve(__dirname, "../..");
 
 describe("Builder GitHub credentials", () => {
-  it("starts supervised GitHub auth convergence only on claimed Builder gateways", () => {
+  it("starts supervised GitHub auth convergence on every Builder boot behind the standby overlay gate", () => {
     const entrypoint = readFileSync(path.join(repoRoot, "infra/gateway/entrypoint.sh"), "utf8");
 
-    expect(entrypoint).toMatch(/if \[ "\$GATEWAY_CLASS_EFFECTIVE" = "builder" \]; then\n {2}if \[ "\$BUILDER_CLAIMED" = 1 \]; then\n {4}supervise_runner github-cli-auth /);
+    expect(entrypoint).toMatch(/if \[ "\$GATEWAY_CLASS_EFFECTIVE" = "builder" \]; then\n(?: {2}#[^\n]*\n)* {2}supervise_runner github-cli-auth 5000 \$BUILDER_OVERLAY_GATE "\$TSX" \/octogee\/scripts\/entrypoints\/github-cli-auth-hydrate\.ts\n/);
+    expect(entrypoint).toContain([
+      'BUILDER_OVERLAY_GATE=""',
+      'if [ "${OCTOGEE_BUILDER_STANDBY_BOOT:-0}" = 1 ]; then',
+      '  BUILDER_OVERLAY_GATE="$TSX /octogee/scripts/entrypoints/builder-claim.ts await-overlay"',
+      "fi",
+    ].join("\n"));
+    expect(entrypoint.indexOf('BUILDER_OVERLAY_GATE=""')).toBeLessThan(entrypoint.indexOf("supervise_runner github-cli-auth"));
     expect(entrypoint.indexOf("github-cli-auth-hydrate.ts")).toBeLessThan(entrypoint.indexOf("supervise_runner surge-openclaw-supervisor"));
   });
 

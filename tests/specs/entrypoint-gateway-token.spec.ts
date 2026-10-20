@@ -140,17 +140,22 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
 });
 
 
+const AWAIT_OVERLAY_GATE = "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-claim.ts await-overlay";
+
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
+  const gateStart = src.indexOf('BUILDER_OVERLAY_GATE=""');
+  const gateEnd = src.indexOf("\nfi\n", gateStart);
   const start = src.indexOf("# ── In-pod runners:");
   const end = src.indexOf("# ── Runner metrics exporter", start);
-  if (start < 0 || end < 0) {
-    throw new Error("could not locate runner startup block in entrypoint.sh");
+  if (gateStart < 0 || gateEnd < 0 || start < 0 || end < 0) {
+    throw new Error("could not locate overlay gate or runner startup block in entrypoint.sh");
   }
   return [
     "supervise_runner() {",
-    "  echo \"$1\" >> \"$RUNNER_MARKER\"",
+    "  echo \"$*\" >> \"$RUNNER_MARKER\"",
     "}",
+    src.slice(gateStart, gateEnd + "\nfi\n".length),
     src.slice(start, end),
   ].join("\n");
 }
@@ -162,6 +167,7 @@ function runRunnerBlock(
   status: number | null;
   stderr: string;
   runners: string[];
+  commands: Map<string, string>;
 } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "entrypoint-runners-"));
   try {
@@ -183,10 +189,15 @@ function runRunnerBlock(
       encoding: "utf8",
       env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });
-    const runners = fs.existsSync(marker)
+    const calls = fs.existsSync(marker)
       ? fs.readFileSync(marker, "utf8").trim().split("\n").filter(Boolean)
       : [];
-    return { status: r.status, stderr: r.stderr, runners };
+    const commands = new Map<string, string>();
+    for (const call of calls) {
+      const [name, , ...command] = call.split(" ");
+      commands.set(name, command.join(" "));
+    }
+    return { status: r.status, stderr: r.stderr, runners: [...commands.keys()], commands };
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -206,13 +217,32 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
     expect(result.stderr).toMatch(/site-build-api disabled/);
   });
 
-  it("starts the controller but no customer runners on an unclaimed standby Builder", () => {
+  it("starts claimed Builder customer runners immediately, without the overlay gate", () => {
+    const result = runRunnerBlock("builder");
+    expect(result.status).toBe(0);
+    expect(result.commands.get("system-config-watch")).toBe(
+      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/system-config-watch.ts",
+    );
+    expect(result.commands.get("builder-toolchain-hydrator")).toBe(
+      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts",
+    );
+  });
+
+  it("starts customer runners on an unclaimed standby Builder behind the await-overlay gate", () => {
     const result = runRunnerBlock("builder", { standby: true });
     expect(result.status).toBe(0);
-    expect(result.runners).toContain("fleet-controller");
-    expect(result.runners).toContain("byosub-syncback");
-    expect(result.runners).not.toContain("system-config-watch");
-    expect(result.runners).not.toContain("builder-toolchain-hydrator");
+    expect(result.commands.get("system-config-watch")).toBe(
+      `${AWAIT_OVERLAY_GATE} /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/system-config-watch.ts`,
+    );
+    expect(result.commands.get("builder-toolchain-hydrator")).toBe(
+      `${AWAIT_OVERLAY_GATE} /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts`,
+    );
+    expect(result.commands.get("fleet-controller")).toBe(
+      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/fleet-controller.ts",
+    );
+    expect(result.commands.get("byosub-syncback")).toBe(
+      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/byosub-syncback-runner.ts",
+    );
   });
 
   it("does not start optional Builder tool hydration on shared gateways", () => {

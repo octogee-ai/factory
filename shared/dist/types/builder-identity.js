@@ -52,6 +52,8 @@ export function parseBuilderClaimRecord(value) {
         return null;
     if (value.overlayAppliedAt !== null && !isTimestamp(value.overlayAppliedAt))
         return null;
+    if (value.adoptionPending !== undefined && typeof value.adoptionPending !== "boolean")
+        return null;
     return {
         schemaVersion: 1,
         gatewayId: value.gatewayId,
@@ -60,6 +62,7 @@ export function parseBuilderClaimRecord(value) {
         leaseId: value.leaseId,
         generation: value.generation,
         claimedAt: value.claimedAt,
+        adoptionPending: value.adoptionPending === true,
         overlayAppliedAt: value.overlayAppliedAt,
     };
 }
@@ -72,8 +75,12 @@ export function builderClaimFromIdentity(identity, claimedAt) {
         leaseId: identity.leaseId,
         generation: identity.generation,
         claimedAt,
+        adoptionPending: false,
         overlayAppliedAt: null,
     };
+}
+export function standbyClaimFromIdentity(identity, claimedAt) {
+    return { ...builderClaimFromIdentity(identity, claimedAt), adoptionPending: true };
 }
 export function sameBuilderOwner(left, right) {
     return left.gatewayId === right.gatewayId && left.ownerUid === right.ownerUid &&

@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import {
+  acquireSystemConfigMutationLease,
   acquireSystemConfigSyncLeaseSync,
 } from "@octogee/core/system-config-mutation-lease";
 
@@ -974,14 +975,15 @@ function repositoryHasHead(slug: string, repoDir: string): boolean {
 function recoverRestoredSystemConfig(
   slug: string,
   openclawDir: string,
+  repoDir: string,
   env: NodeJS.ProcessEnv,
   opts: SystemConfigRestoreOptions,
 ): SystemConfigRecoveryResult {
   return (opts.recover ?? recoverSystemConfigHead)({
     slug,
     openclawDir,
-    repoDir: systemConfigDir(openclawDir),
-    configPath: systemConfigPath(openclawDir),
+    repoDir,
+    configPath: path.join(repoDir, OPENCLAW_CONFIG_FILENAME),
     env,
     validateConfig: opts.validateConfig ?? acceptRuntimeManagedConfig,
   });
@@ -1105,7 +1107,18 @@ export async function restoreSystemConfigForSlug(
   }
 
   const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
-  const repoDir = systemConfigDir(openclawDir);
+  const result = await restoreSystemConfigCheckout(slug, systemConfigDir(openclawDir), openclawDir, opts, log);
+  if (result.restored) log(`[system_config] active openclaw.json is ${slug}/${systemConfigRepoName()}/openclaw.json`);
+  return result;
+}
+
+async function restoreSystemConfigCheckout(
+  slug: string,
+  repoDir: string,
+  openclawDir: string,
+  opts: SystemConfigRestoreOptions,
+  log: (msg: string) => void,
+): Promise<SystemConfigRestoreResult> {
   const env = opts.env ?? process.env;
   const templatePath = opts.templatePath ?? defaultSystemConfigTemplatePath(env);
 
@@ -1114,11 +1127,11 @@ export async function restoreSystemConfigForSlug(
     return { skipped: "checkout-unavailable", seeded: false, restored: false };
   }
 
-  const configPath = systemConfigPath(openclawDir);
+  const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
   let seeded = false;
   if (!fs.existsSync(configPath)) {
     if (repositoryHasHead(slug, repoDir)) {
-      const recovery = recoverRestoredSystemConfig(slug, openclawDir, env, opts);
+      const recovery = recoverRestoredSystemConfig(slug, openclawDir, repoDir, env, opts);
       if (recovery.outcome === "unavailable") {
         return { skipped: "accepted-head-unavailable", seeded: false, restored: false };
       }
@@ -1127,19 +1140,114 @@ export async function restoreSystemConfigForSlug(
     }
   }
   try {
-    await reconcileSystemConfigSchema(openclawDir, env);
+    await reconcileTrackedOpenClawConfig(configPath, openclawDir, env);
   } catch (error) {
     log(`[system_config] schema reconciliation deferred to accepted-head recovery: ${error instanceof Error ? error.message : String(error)}`);
-    const recovery = recoverRestoredSystemConfig(slug, openclawDir, env, opts);
+    const recovery = recoverRestoredSystemConfig(slug, openclawDir, repoDir, env, opts);
     if (recovery.outcome === "unavailable") {
       return { skipped: "accepted-head-unavailable", seeded: false, restored: false };
     }
-    await reconcileSystemConfigSchema(openclawDir, env);
+    await reconcileTrackedOpenClawConfig(configPath, openclawDir, env);
   }
   if (env.GATEWAY_CLASS === "builder") ensureBuilderRosterAtPath(configPath, slug, log);
   reconcilePlatformInvariantsAtPath(configPath, env);
-  log(`[system_config] active openclaw.json is ${slug}/${systemConfigRepoName()}/openclaw.json`);
   return { seeded, restored: true, configPath };
+}
+
+export interface SystemConfigClaimAdoption extends SystemConfigRestoreOptions {
+  generation: number;
+  compose(configPath: string): Promise<void>;
+  acquireLease?: typeof acquireSystemConfigMutationLease;
+}
+
+const PLUGIN_RUNTIME_ROOTS = ["npm", "extensions"] as const;
+const CLAIM_LEASE_RETRY_DELAYS_MS = [250, 750, 1_500, 2_500, 3_000] as const;
+
+export function systemConfigClaimDir(openclawDir: string, generation: number): string {
+  return path.join(openclawDir, `system_config.claim-${generation}`);
+}
+
+export function discardInterruptedClaimAdoption(openclawDir: string, generation: number | null): void {
+  fs.rmSync(systemConfigDir(openclawDir), { recursive: true, force: true });
+  if (generation !== null) fs.rmSync(systemConfigClaimDir(openclawDir, generation), { recursive: true, force: true });
+}
+
+function assertNoTrackedPluginRuntimeRoots(slug: string, checkoutDir: string): void {
+  const tracked = gitExec(checkoutDir, ["ls-files", "--", ...PLUGIN_RUNTIME_ROOTS.flatMap((root) => [root, `${root}/**`])]);
+  if (tracked === null) throw new Error(`[system_config] cannot list ${slug}'s tracked system_config paths`);
+  if (tracked.trim() !== "") {
+    throw new Error(`[system_config] tracked system_config path conflicts with OpenClaw runtime root: ${tracked.trim().split("\n")[0]}`);
+  }
+}
+
+async function acquireClaimLease(
+  openclawDir: string,
+  acquireLease: typeof acquireSystemConfigMutationLease,
+): Promise<{ release(): Promise<void> }> {
+  let acquired = await acquireLease({ openclawDir });
+  for (const delayMs of CLAIM_LEASE_RETRY_DELAYS_MS) {
+    if (acquired.ok || acquired.code !== "writer-lock-busy") break;
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    acquired = await acquireLease({ openclawDir });
+  }
+  if (!acquired.ok) throw new Error(`[system_config] claim adoption cannot take the config mutation lease: ${acquired.code}`);
+  return acquired.lease;
+}
+
+function moveCheckoutIntoActiveDir(checkoutDir: string, repoDir: string): string {
+  for (const entry of fs.readdirSync(checkoutDir)) {
+    if (entry === ".git" || entry === OPENCLAW_CONFIG_FILENAME) continue;
+    const target = path.join(repoDir, entry);
+    if (fs.lstatSync(target, { throwIfNoEntry: false })) {
+      throw new Error(`[system_config] claim checkout entry ${entry} collides with ${target}`);
+    }
+    fs.renameSync(path.join(checkoutDir, entry), target);
+  }
+  fs.renameSync(path.join(checkoutDir, ".git"), path.join(repoDir, ".git"));
+  const exclude = path.join(repoDir, ".git", "info", "exclude");
+  fs.mkdirSync(path.dirname(exclude), { recursive: true });
+  const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
+  const lines = new Set(existing.split("\n"));
+  const missing = PLUGIN_RUNTIME_ROOTS.map((root) => `/${root}`).filter((line) => !lines.has(line));
+  if (missing.length > 0) {
+    fs.writeFileSync(exclude, `${existing}${existing === "" || existing.endsWith("\n") ? "" : "\n"}${missing.join("\n")}\n`);
+  }
+  const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
+  fs.chmodSync(path.join(checkoutDir, OPENCLAW_CONFIG_FILENAME), 0o600);
+  fs.renameSync(path.join(checkoutDir, OPENCLAW_CONFIG_FILENAME), configPath);
+  fs.rmdirSync(checkoutDir);
+  return configPath;
+}
+
+export async function adoptSystemConfigCheckout(
+  slug: string,
+  opts: SystemConfigClaimAdoption,
+): Promise<{ configPath: string }> {
+  const log = opts.log ?? defaultLog;
+  if (!isValidUsername(slug)) throw new Error(`[system_config] invalid Builder slug ${slug}`);
+  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
+  const repoDir = systemConfigDir(openclawDir);
+  if (fs.existsSync(path.join(repoDir, ".git"))) {
+    throw new Error(`[system_config] ${repoDir} already holds a durable checkout; a claim adopts only a standby`);
+  }
+  const checkoutDir = systemConfigClaimDir(openclawDir, opts.generation);
+  if (fs.existsSync(checkoutDir)) {
+    throw new Error(`[system_config] claim checkout ${checkoutDir} already exists from an earlier attempt`);
+  }
+  const restored = await restoreSystemConfigCheckout(slug, checkoutDir, openclawDir, opts, log);
+  if (!restored.restored || !restored.configPath) {
+    throw new Error(`[system_config] ${slug}'s durable system_config is unavailable: ${restored.skipped ?? "not restored"}`);
+  }
+  await opts.compose(restored.configPath);
+  assertNoTrackedPluginRuntimeRoots(slug, checkoutDir);
+  const lease = await acquireClaimLease(openclawDir, opts.acquireLease ?? acquireSystemConfigMutationLease);
+  try {
+    const configPath = moveCheckoutIntoActiveDir(checkoutDir, repoDir);
+    log(`[system_config] claim adopted ${slug}/${systemConfigRepoName()} as the active openclaw.json in one write`);
+    return { configPath };
+  } finally {
+    await lease.release();
+  }
 }
 
 export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {

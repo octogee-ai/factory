@@ -110,7 +110,6 @@ import {
   releaseGiteaUserKey,
 } from "./gitea-admin-broker-client.js";
 import {
-  hasReadableOpenclawConfig,
   hasMountedMarker,
   clearMountedMarker,
   clearMigratingInPin,
@@ -202,7 +201,7 @@ import {
   stopStaleMattermostRoutingAccounts,
 } from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
-import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { builderClaimOverlaySlug, builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
 
@@ -1889,7 +1888,7 @@ export function buildBrokeredLifecycleAdapter(
     configuredBuilderOverlayPresent: (slug) =>
       Boolean(opts.isBuilderGateway?.()) &&
       isConfiguredGatewayBuilder(slug) &&
-      hasReadableOpenclawConfig(OPENCLAW_CONFIG),
+      builderClaimOverlaySlug() === slug,
     materializeBrokerProfiles: async (slug) => {
       const agentId = `octogee-${slug}-coach`;
       await fsp.mkdir(path.join(AGENTS_DIR, agentId, "agent"), { recursive: true });

@@ -72,8 +72,15 @@ export interface FleetStateResponse {
 export type ConfiguredBuilderReport = {
     state: "standby";
 } | {
+    state: "claiming";
+    generation: number;
+} | {
     state: "claimed";
     generation: number | null;
+} | {
+    state: "claim-failed";
+    generation: number;
+    error: string;
 };
 export declare function parseConfiguredBuilderReport(value: unknown): ConfiguredBuilderReport | null;
 export declare const FLEET_STATE_PATH = "/fleet-state";

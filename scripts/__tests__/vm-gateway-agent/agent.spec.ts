@@ -510,7 +510,7 @@ describe("convergeOnce", () => {
     expect(claim?.mode).toBe(0o600);
     expect(JSON.parse(claim!.content)).toEqual({
       schemaVersion: 1, gatewayId: "b-x", ownerUid: "uid-bob", builderSlug: "bob",
-      leaseId: null, generation: null, claimedAt: 1_000, overlayAppliedAt: null,
+      leaseId: null, generation: null, claimedAt: 1_000, adoptionPending: false, overlayAppliedAt: null,
     });
     expect(h.chowns).toEqual(expect.arrayContaining(["/srv/octogee/volumes/data/.openclaw", "/srv/octogee/volumes/data/.openclaw/builder-claim.json"]));
     const initStart = docker.log.indexOf("POST /containers/octogee-fix-perms/start");

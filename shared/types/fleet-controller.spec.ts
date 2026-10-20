@@ -24,12 +24,17 @@ describe("fleet-controller migration budgets", () => {
 });
 
 describe("configured Builder report", () => {
-  it("parses the standby and claimed states and nothing else", () => {
+  it("parses the standby, claiming, claimed and claim-failed states and nothing else", () => {
     expect(parseConfiguredBuilderReport({ state: "standby" })).toEqual({ state: "standby" });
     expect(parseConfiguredBuilderReport({ state: "claimed", generation: 3 })).toEqual({ state: "claimed", generation: 3 });
     expect(parseConfiguredBuilderReport({ state: "claimed", generation: null })).toEqual({ state: "claimed", generation: null });
+    expect(parseConfiguredBuilderReport({ state: "claiming", generation: 4 })).toEqual({ state: "claiming", generation: 4 });
+    expect(parseConfiguredBuilderReport({ state: "claim-failed", generation: 4, error: "clone failed" }))
+      .toEqual({ state: "claim-failed", generation: 4, error: "clone failed" });
     for (const value of [null, "standby", { state: "standby", slug: "alice" }, { state: "claimed", generation: 0 },
-      { state: "claimed" }, { state: "claiming", generation: 1 }]) {
+      { state: "claimed" }, { state: "claiming", generation: null }, { state: "claiming" },
+      { state: "claim-failed", generation: 4 }, { state: "claim-failed", generation: 4, error: "" },
+      { state: "claim-failed", generation: null, error: "x" }]) {
       expect(parseConfiguredBuilderReport(value)).toBeNull();
     }
   });

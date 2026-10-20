@@ -51,6 +51,14 @@ import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mu
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
+import { BUILDER_STANDBY_BOOT_ENV } from "../../shared/types/builder-identity.js";
+import {
+  applyBuilderClaim,
+  createApplyBuilderClaimDeps,
+  createBuilderClaimRuntime,
+} from "../lib/builder-claim.js";
+
+const BUILDER_CLAIM_SAFETY_POLL_MS = 15_000;
 
 export interface FleetControllerEntrypointConfig {
   builderSlug: string;
@@ -211,6 +219,12 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
   };
 }
 
+export function createClaimAwareRequestedFlush(
+  input: Omit<FleetControllerRequestedFlushDeps, "builderSlug"> & { builderSlug: () => string },
+): ReturnType<typeof createFleetControllerRequestedFlush> {
+  return (request) => createFleetControllerRequestedFlush({ ...input, builderSlug: input.builderSlug() })(request);
+}
+
 export function createAssignedCustomerReader(
   brokerClient: Pick<FleetBrokerClient, "assignedUsers" | "assignmentRoster">,
   seedSnapshot: Parameters<typeof desiredCustomers>[2],
@@ -305,12 +319,53 @@ async function main(): Promise<void> {
   }
   const builder = isBuilderGateway();
   const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
+  let builderSlug = entrypointConfig.builderSlug;
+  let stopClaimedBuilderServices: (() => void) | undefined;
+  const startClaimedBuilderServices = (slug: string): void => {
+    const runtimeHealthPublisher = createSystemConfigStatusPublisher({
+      openclawDir: OPENCLAW_DIR,
+      refreshRuntimeHealth: () => refreshSystemConfigRuntimeHealth({
+        openclawDir: OPENCLAW_DIR,
+        env: process.env,
+        probeOpenClaw: () => probeOpenClawHealth(process.env.OPENCLAW_HEALTH_URL),
+      }),
+      publish: (status) => brokerClient.recordSystemConfigStatus(status),
+      log,
+    });
+    void runtimeHealthPublisher.publishNow();
+    const stopProjectAutosave = builder
+      ? startProjectAutosave({ save: () => persistBuilderProjects(slug), log })
+      : undefined;
+    stopClaimedBuilderServices = () => {
+      stopProjectAutosave?.();
+      runtimeHealthPublisher.close();
+    };
+  };
   const adapter = buildBrokeredLifecycleAdapter({
     client: brokerClient,
     rpc,
     log,
     isBuilderGateway,
     projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
+  });
+  const claimRuntime = createBuilderClaimRuntime({
+    env: process.env,
+    openclawDir: OPENCLAW_DIR,
+    gatewayId: entrypointConfig.gatewayId,
+    standbyBoot: builder && process.env[BUILDER_STANDBY_BOOT_ENV] === "1",
+    readIdentity: () => brokerClient.builderIdentity(),
+    apply: (identity) => applyBuilderClaim(identity, createApplyBuilderClaimDeps({
+      env: process.env,
+      openclawDir: OPENCLAW_DIR,
+      gatewayId: entrypointConfig.gatewayId,
+      rpc,
+      log,
+    })),
+    onApplied: (claim) => {
+      builderSlug = claim.builderSlug;
+      startClaimedBuilderServices(claim.builderSlug);
+    },
+    log,
   });
   const fleetHandle = await startFleetController({
     rpc,
@@ -325,7 +380,11 @@ async function main(): Promise<void> {
     projectBlobHydrator: builder ? createBrokeredProjectBlobHydrator(brokerClient) : undefined,
     platformState: !builder,
     localReconcile: true,
-    subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
+    subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(() => {
+      claimRuntime.poke();
+      wake();
+    }, log),
+    configuredBuilderReport: () => claimRuntime.report(),
     readDesiredCustomers: createAssignedCustomerReader(
       brokerClient,
       adapter.seedUserSnapshotForMigration,
@@ -337,10 +396,10 @@ async function main(): Promise<void> {
       brokerClient.acknowledgeRuntimeReset(uid, operationId, generation),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
-    flushLocalState: createFleetControllerRequestedFlush({
+    flushLocalState: createClaimAwareRequestedFlush({
       gatewayId: entrypointConfig.gatewayId,
       gatewayClass: GATEWAY_CLASS,
-      builderSlug: entrypointConfig.builderSlug,
+      builderSlug: () => builderSlug,
       builder,
       flushFiles: (slug) => flushCustomerFiles(slug, { persistProjects: builder ? persistBuilderProjects : undefined }),
       syncBlobs: builder
@@ -361,19 +420,9 @@ async function main(): Promise<void> {
   // Durable-config runtime health: refresh + broker publish, replacing the
   // retired status server (the probes moved to :3003/health and OpenClaw's own
   // :18789; GATEWAY-SIMPLE-ROLL-SPEC).
-  const runtimeHealthPublisher = entrypointConfig.builderSlug
-    ? createSystemConfigStatusPublisher({
-        openclawDir: OPENCLAW_DIR,
-        refreshRuntimeHealth: () => refreshSystemConfigRuntimeHealth({
-          openclawDir: OPENCLAW_DIR,
-          env: process.env,
-          probeOpenClaw: () => probeOpenClawHealth(process.env.OPENCLAW_HEALTH_URL),
-        }),
-        publish: (status) => brokerClient.recordSystemConfigStatus(status),
-        log,
-      })
-    : null;
-  void runtimeHealthPublisher?.publishNow();
+  if (builderSlug) startClaimedBuilderServices(builderSlug);
+  claimRuntime.poke();
+  const claimPollTimer = setInterval(() => claimRuntime.poke(), BUILDER_CLAIM_SAFETY_POLL_MS);
 
   const blobSyncTimer = startBlobSyncLoop({
     syncBlobs: () => blobSyncAllWithOptions({
@@ -381,9 +430,6 @@ async function main(): Promise<void> {
     }),
     log,
   }, BLOB_SYNC_INTERVAL_MS);
-  const stopProjectAutosave = builder && entrypointConfig.builderSlug
-    ? startProjectAutosave({ save: () => persistBuilderProjects(entrypointConfig.builderSlug), log })
-    : undefined;
   const usageTimer = builder
     ? null
     : startUsageEventTailer({
@@ -400,8 +446,8 @@ async function main(): Promise<void> {
       });
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
-    stopProjectAutosave?.();
-    runtimeHealthPublisher?.close();
+    stopClaimedBuilderServices?.();
+    clearInterval(claimPollTimer);
     clearInterval(blobSyncTimer);
     if (usageTimer) clearInterval(usageTimer);
     try { await fleetHandle.stop(); } catch {}

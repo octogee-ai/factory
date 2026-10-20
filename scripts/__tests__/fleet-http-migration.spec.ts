@@ -4424,6 +4424,44 @@ describe("agent sqlite stores across an rsync carry", () => {
     },
   );
 
+  it("resumes a live release that left native cleanup pending before swapping the agent database", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
+    const target = liveBuilderTargetImport();
+    const releaseAgent = vi.fn(async () => undefined)
+      .mockRejectedValueOnce(new Error("[release:octogee-chris-coach] agents.delete failed for octogee-chris-coach (native cleanup incomplete: purgeFailed=true failed=[])"));
+    const migrationId = "mig-live-builder-pending-cleanup";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: { ...target.adapter, releaseAgent }, deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId);
+
+    expect(result.getStatus()).toBe(200);
+    expect(releaseAgent.mock.calls).toEqual([["octogee-chris-coach"], ["octogee-chris-coach"]]);
+    expect(rowCount(previous)).toBe(2);
+    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
+  });
+
+  it("does not resume a live release that failed for another reason", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
+    const target = liveBuilderTargetImport();
+    const releaseAgent = vi.fn(async () => { throw new Error("config mutation lock timed out"); });
+    const migrationId = "mig-live-builder-release-refused";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: { ...target.adapter, releaseAgent }, deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId);
+
+    expect(result.getStatus()).toBe(500);
+    expect(releaseAgent).toHaveBeenCalledOnce();
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+  });
+
   it("archives Shared agents into a live retained-native Builder without holding its OpenClaw", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native'), ('native')"));

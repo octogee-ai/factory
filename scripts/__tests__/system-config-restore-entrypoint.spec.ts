@@ -41,6 +41,6 @@ describe("system-config-restore entrypoint planning", () => {
       log: () => {},
       restore,
     })).rejects.toThrow(/checkout-unavailable/);
-    expect(restore).toHaveBeenCalledWith("alice", { log: expect.any(Function) });
+    expect(restore).toHaveBeenCalledWith("alice", { log: expect.any(Function), openclawDir: expect.any(String) });
   });
 });

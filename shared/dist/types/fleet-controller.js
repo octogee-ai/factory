@@ -27,18 +27,42 @@ export const MIGRATING_IN_PIN_TTL_MS = MIGRATION_IMPORT_FINISH_TIMEOUT_MS +
     MIGRATION_VERIFY_TIMEOUT_MS +
     60_000;
 export const SIGNATURE_HEADER = "X-Fleet-Controller-Signature";
+function isGeneration(value) {
+    return Number.isSafeInteger(value) && value > 0;
+}
+function hasOnlyFields(value, fields) {
+    return Object.keys(value).every((key) => fields.includes(key));
+}
+function parseClaimingReport(report) {
+    return hasOnlyFields(report, ["state", "generation"]) && isGeneration(report.generation)
+        ? { state: "claiming", generation: report.generation }
+        : null;
+}
+function parseClaimFailedReport(report) {
+    const valid = hasOnlyFields(report, ["state", "generation", "error"]) && isGeneration(report.generation) &&
+        typeof report.error === "string" && report.error.length > 0;
+    return valid ? { state: "claim-failed", generation: report.generation, error: report.error } : null;
+}
+function parseClaimedReport(report) {
+    if (!hasOnlyFields(report, ["state", "generation"]))
+        return null;
+    const generation = report.generation;
+    return generation === null || isGeneration(generation) ? { state: "claimed", generation } : null;
+}
+const REPORT_PARSERS = {
+    standby: (report) => hasOnlyFields(report, ["state"]) ? { state: "standby" } : null,
+    claiming: parseClaimingReport,
+    claimed: parseClaimedReport,
+    "claim-failed": parseClaimFailedReport,
+};
 export function parseConfiguredBuilderReport(value) {
     if (value === null || typeof value !== "object" || Array.isArray(value))
         return null;
     const report = value;
-    if (report.state === "standby" && Object.keys(report).length === 1)
-        return { state: "standby" };
-    if (report.state !== "claimed")
-        return null;
-    const generation = report.generation;
-    if (generation !== null && !(Number.isSafeInteger(generation) && generation > 0))
-        return null;
-    return { state: "claimed", generation: generation };
+    const parse = typeof report.state === "string" && Object.prototype.hasOwnProperty.call(REPORT_PARSERS, report.state)
+        ? REPORT_PARSERS[report.state]
+        : undefined;
+    return parse ? parse(report) : null;
 }
 export const FLEET_STATE_PATH = "/fleet-state";
 export const OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL = "openclaw-dashboard-bridge";
