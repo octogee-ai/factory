@@ -20,6 +20,8 @@ const emulatorDirectories: Partial<Record<JobKey, string>> = {
 };
 
 export const NODE_MINIMUMS: Record<number, string> = { 22: "22.0.0", 24: "24.12.0" };
+const DEFAULT_NODE_VERSION = 24;
+const packageNodeVersion = (directory: string) => UNIT_PACKAGES.find(pkg => pkg.dir === directory)?.nodeVersion ?? DEFAULT_NODE_VERSION;
 
 export function nodeVersionCheck(nodeVersion: number): string {
   const minimum = NODE_MINIMUMS[nodeVersion];
@@ -28,15 +30,48 @@ export function nodeVersionCheck(nodeVersion: number): string {
 }
 
 export const CHECK_LANES = ["units-1", "units-2", "units-3", "emulators", "quality"] as const;
-const unitNames: readonly string[] = [...UNIT_PACKAGES.map(pkg => pkg.name), JOBS.desktopPackage];
+const UNIT_LANES = CHECK_LANES.filter(lane => lane.startsWith("units-"));
+const unitNames: ReadonlySet<string> = new Set([...UNIT_PACKAGES.map(pkg => pkg.name), JOBS.app, JOBS.desktopPackage]);
+
+const MEASURED_CHECK_SECONDS: Partial<Record<JobKey, number>> = {
+  [JOBS.app]: 540,
+  [JOBS.scripts]: 157,
+  [JOBS.gatewayEdge]: 103,
+  [JOBS.octogeeApi]: 93,
+  [JOBS.desktopPackage]: 90,
+  [JOBS.tests]: 72,
+  [JOBS.glmController]: 39,
+  [JOBS.site]: 36,
+  [JOBS.core]: 27,
+  [JOBS.functions]: 10,
+  [JOBS.shared]: 6,
+  [JOBS.desktop]: 6,
+};
+
+export function checkSeconds(name: string): number {
+  return MEASURED_CHECK_SECONDS[name as JobKey] ?? 5;
+}
+
+function unitLaneAssignments(jobs: CheckJob[]): Map<string, string> {
+  const units = jobs.filter(job => unitNames.has(job.name))
+    .sort((a, b) => checkSeconds(b.name) - checkSeconds(a.name) || (a.name < b.name ? -1 : 1));
+  const loads = UNIT_LANES.map(lane => ({ lane, seconds: 0 }));
+  const assignments = new Map<string, string>();
+  for (const job of units) {
+    const lightest = loads.reduce((min, load) => load.seconds < min.seconds ? load : min);
+    lightest.seconds += checkSeconds(job.name);
+    assignments.set(job.name, lightest.lane);
+  }
+  return assignments;
+}
 
 export function selectCheckLane(jobs: CheckJob[], lane = "all"): CheckJob[] {
   if (lane === "all") return jobs;
   if (!CHECK_LANES.some(value => value === lane)) throw new Error(`Unknown CI lane: ${lane}`);
+  const units = unitLaneAssignments(jobs);
   return jobs.filter(job => {
-    if (job.name === JOBS.app) return lane === "units-3";
-    const unit = unitNames.indexOf(job.name);
-    if (unit !== -1) return lane === `units-${unit % 3 + 1}`;
+    const unit = units.get(job.name);
+    if (unit) return lane === unit;
     const emulator = job.name === JOBS.firestoreRules || job.name.endsWith("-emulator");
     return lane === (emulator ? "emulators" : "quality");
   });
@@ -54,12 +89,10 @@ export function dependencyInstaller(): (job: CheckJob, install: (directory: stri
   };
 }
 
-const CONCURRENT_UNIT_LANES = 4;
-
-export function vitestOptions(script: string, emulated: boolean, cpus = availableParallelism()): string {
+export function vitestOptions(script: string, emulated: boolean, concurrentLanes = 1, cpus = availableParallelism()): string {
   if (!script.includes("vitest") || script.includes("emulators:exec")) return "";
   if (emulated) return " -- --testTimeout=60000 --hookTimeout=60000 --maxWorkers=2";
-  return ` -- --maxWorkers=${Math.max(1, Math.floor(cpus / CONCURRENT_UNIT_LANES))}`;
+  return ` -- --maxWorkers=${Math.max(1, Math.floor(cpus / concurrentLanes))}`;
 }
 
 function installsFor(directory: string): string[] {
@@ -73,17 +106,17 @@ function installsFor(directory: string): string[] {
 function testJob(name: JobKey): CheckJob {
   const pkg = UNIT_PACKAGES.find(value => value.name === name);
   if (pkg) return {
-    name, directory: pkg.dir, nodeVersion: pkg.nodeVersion ?? 22,
+    name, directory: pkg.dir, nodeVersion: packageNodeVersion(pkg.dir),
     matchGatewayImageNpm: pkg.matchGatewayImageNpm,
     installs: installsFor(pkg.dir),
     commands: [...(name === JOBS.site ? ["npx playwright install chromium"] : []), pkg.typecheck, "npm test"],
   };
   const directory = emulatorDirectories[name];
-  if (directory) return { name, directory, nodeVersion: 22, installs: installsFor(directory), commands: ["npm run test:emulator"] };
-  if (name === JOBS.app) return { name, directory: "app", nodeVersion: 24, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
-  if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: 24, installs: ["firestore-rules-tests"], commands: ["npm test"] };
+  if (directory) return { name, directory, nodeVersion: packageNodeVersion(directory), installs: installsFor(directory), commands: ["npm run test:emulator"] };
+  if (name === JOBS.app) return { name, directory: "app", nodeVersion: DEFAULT_NODE_VERSION, installs: installsFor("app"), commands: ["npm run typecheck", "npm test"] };
+  if (name === JOBS.firestoreRules) return { name, directory: "firestore-rules-tests", nodeVersion: DEFAULT_NODE_VERSION, installs: ["firestore-rules-tests"], commands: ["npm test"] };
   if (name === JOBS.desktopPackage) return {
-    name, directory: "desktop", nodeVersion: 22, installs: ["desktop"],
+    name, directory: "desktop", nodeVersion: DEFAULT_NODE_VERSION, installs: ["desktop"],
     commands: ["npm run build", "CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --linux --publish never", "bash ../scripts/ci/verify-linux-package.sh"],
   };
   throw new Error(`No portable CI implementation for ${name}`);
@@ -95,7 +128,7 @@ export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = 
   if (group === "tests") return result;
   for (const name of ["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]) {
     if (name === "cargo-audit" && !paths.some(path => path.startsWith("artifact-worker/renderer/") || path.startsWith("scripts/ci/") || path.startsWith("ci/"))) continue;
-    result.push({ name, directory: ".", nodeVersion: 22, installs: name === "eslint" || name === "knip" ? ["."] : [], commands: [`bash scripts/ci/quality.sh ${name}`] });
+    result.push({ name, directory: ".", nodeVersion: DEFAULT_NODE_VERSION, installs: name === "eslint" || name === "knip" ? ["."] : [], commands: [`bash scripts/ci/quality.sh ${name}`] });
   }
   return result;
 }

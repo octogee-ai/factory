@@ -9,6 +9,8 @@ const args = process.argv.slice(2);
 const value = (name: string) => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 const group = value("group") ?? "all";
 if (!["all", "tests", "quality"].includes(group)) throw new Error("--group must be all, tests, or quality");
+const concurrentLanes = Number(value("concurrent-lanes") ?? 1);
+if (!Number.isInteger(concurrentLanes) || concurrentLanes < 1) throw new Error("--concurrent-lanes must be a positive integer");
 const git = (...argv: string[]) => execFileSync("/usr/bin/git", argv, { cwd: root, encoding: "utf8" }).trim();
 const head = git("rev-parse", "--verify", `${value("head") ?? "HEAD"}^{commit}`);
 const base = git("rev-parse", "--verify", `${value("base") ?? "origin/main"}^{commit}`);
@@ -37,7 +39,7 @@ if (args.includes("--plan")) {
     prepare(job, directory => run("npm ci --no-audit --no-fund", resolve(root, directory)));
     for (const command of job.commands) {
       const script = command === "npm test" ? JSON.parse(readFileSync(resolve(root, job.directory, "package.json"), "utf8")).scripts?.test : "";
-      const options = vitestOptions(script, process.env.CI_EMULATED === "true");
+      const options = vitestOptions(script, process.env.CI_EMULATED === "true", concurrentLanes);
       run(command + options, resolve(root, job.directory));
     }
   });

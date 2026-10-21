@@ -12,7 +12,7 @@ function fakeNode(version: string): string {
   return `${bin}:${process.env.PATH}`;
 }
 import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
-import { CHECK_LANES, checkPlan, executeChecks, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
+import { CHECK_LANES, checkPlan, checkSeconds, executeChecks, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
 
 describe("portable Linux PR checks", () => {
   it("runs every registered test on a global change, leaving installer construction out of default CI", () => {
@@ -20,17 +20,18 @@ describe("portable Linux PR checks", () => {
     expect(plan.map(job => job.name).sort()).toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
     for (const pkg of UNIT_PACKAGES) {
       expect(plan.find(job => job.name === pkg.name)).toMatchObject({
-        directory: pkg.dir, nodeVersion: pkg.nodeVersion ?? 22,
+        directory: pkg.dir, nodeVersion: pkg.nodeVersion ?? 24,
       });
     }
     expect(plan.find(job => job.name === "desktop-package")).toBeUndefined();
     expect(plan.find(job => job.name === "app")?.commands).toContain("npm test");
   });
 
-  it("runs the Firebase 13 client packages on Node 24 and keeps Cloud Functions on its Node 22 runtime", () => {
-    const plan = checkPlan(["package-lock.json"], "tests");
-    for (const name of ["app", "site", "firestore-rules"]) expect(plan.find(job => job.name === name)?.nodeVersion).toBe(24);
-    expect(plan.find(job => job.name === "functions-emulator")?.nodeVersion).toBe(22);
+  it("runs every check on Node 24 except Cloud Functions, which stays on its Node 22 runtime", () => {
+    const plan = checkPlan(["package-lock.json", "artifact-worker/renderer/Cargo.lock"], "all", true);
+    const node22 = plan.filter(job => job.nodeVersion === 22).map(job => job.name).sort();
+    expect(node22).toEqual(["functions", "functions-emulator"]);
+    expect(plan.filter(job => job.nodeVersion !== 22).every(job => job.nodeVersion === 24)).toBe(true);
   });
 
   it("rejects a Node 24 toolchain older than Firebase 13's 24.12 floor", () => {
@@ -85,6 +86,23 @@ describe("portable Linux PR checks", () => {
     expect(selectCheckLane(jobs, "quality").map(job => job.name)).toEqual(checkPlan([path], "quality").map(job => job.name));
   });
 
+  const unitLanes = CHECK_LANES.filter(lane => lane.startsWith("units-"));
+  const laneSeconds = (jobs: ReturnType<typeof checkPlan>) =>
+    unitLanes.map(lane => selectCheckLane(jobs, lane).reduce((sum, job) => sum + checkSeconds(job.name), 0));
+
+  it("balances a full run's unit lanes by measured check time", () => {
+    const jobs = checkPlan(["package-lock.json"], "tests").filter(job => unitLanes.some(lane => selectCheckLane([job], lane).length));
+    const weights = jobs.map(job => checkSeconds(job.name));
+    const evenShare = weights.reduce((sum, value) => sum + value, 0) / unitLanes.length;
+    expect(Math.max(...laneSeconds(jobs))).toBeLessThanOrEqual(Math.max(Math.max(...weights), evenShare) * 1.1);
+  });
+
+  it("spreads a partial plan's unit checks across separate lanes", () => {
+    const jobs = checkPlan(["glm-controller/src/index.ts"], "tests");
+    const occupied = unitLanes.filter(lane => selectCheckLane(jobs, lane).length > 0);
+    expect(occupied).toHaveLength(2);
+  });
+
   it("rejects an unknown lane instead of returning a green empty plan", () => {
     expect(() => selectCheckLane(checkPlan(["package-lock.json"]), "typo")).toThrow("Unknown CI lane");
   });
@@ -112,11 +130,11 @@ describe("portable Linux PR checks", () => {
     expect(vitestOptions(script, true)).toBe("");
   });
 
-  it("gives each concurrent unit lane a quarter of the machine and retains emulation timeouts", () => {
-    expect(vitestOptions("vitest run", false, 8)).toBe(" -- --maxWorkers=2");
-    expect(vitestOptions("vitest run", false, 24)).toBe(" -- --maxWorkers=6");
-    expect(vitestOptions("vitest run", false, 2)).toBe(" -- --maxWorkers=1");
-    expect(vitestOptions("vitest run", true, 8)).toContain("--testTimeout=60000 --hookTimeout=60000 --maxWorkers=2");
-    expect(vitestOptions("node --test", false, 8)).toBe("");
+  it("gives a lane the whole runner unless lanes share the host, and retains emulation timeouts", () => {
+    expect(vitestOptions("vitest run", false, 1, 4)).toBe(" -- --maxWorkers=4");
+    expect(vitestOptions("vitest run", false, 4, 24)).toBe(" -- --maxWorkers=6");
+    expect(vitestOptions("vitest run", false, 4, 2)).toBe(" -- --maxWorkers=1");
+    expect(vitestOptions("vitest run", true, 1, 8)).toContain("--testTimeout=60000 --hookTimeout=60000 --maxWorkers=2");
+    expect(vitestOptions("node --test", false, 1, 8)).toBe("");
   });
 });
