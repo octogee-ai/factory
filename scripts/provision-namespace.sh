@@ -66,6 +66,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 # shellcheck source=scripts/lib/deployment-target.sh
 source "$SCRIPT_DIR/lib/deployment-target.sh"
+source "$SCRIPT_DIR/lib/agent-store-postgres-secret.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -255,6 +256,10 @@ kubectl config use-context "$K8S_CONTEXT" >/dev/null
 [[ "$(kubectl config current-context)" == "$K8S_CONTEXT" ]] || fail "Wrong kubectl context"
 ok "kubectl context: $K8S_CONTEXT"
 
+if ! $DESTROY_ONLY; then
+  AGENT_STORE_POSTGRES_CIDR="$(require_agent_store_postgres_secrets "$FIREBASE_PROJECT" "agent-store-postgres-$NAMESPACE")"
+fi
+
 # ── Confirm if not --yes ───────────────────────────────────────────────────
 if ! $YES && ! $DESTROY_ONLY; then
   echo ""
@@ -406,6 +411,7 @@ sed -e "s|__NAMESPACE__|$NAMESPACE|g" \
     -e "s|__AR_REPOSITORY__|$TARGET_AR_REPOSITORY|g" \
     -e "s|__CLOUD_SQL_CONNECTION__|$TARGET_CLOUD_SQL_CONNECTION|g" \
     -e "s|__KMS_KEY_NAME__|$TARGET_KMS_KEY_NAME|g" \
+    -e "s|__AGENT_STORE_POSTGRES_CIDR__|$AGENT_STORE_POSTGRES_CIDR|g" \
     -e "s|__CLUSTER_PROJECT__|$TARGET_CLUSTER_PROJECT|g" \
     "$VALUES_TPL" > "$VALUES_OUT"
 ok "Rendered: $VALUES_OUT"

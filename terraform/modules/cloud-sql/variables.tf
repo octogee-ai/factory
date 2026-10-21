@@ -14,12 +14,6 @@ variable "instance_name" {
   default     = "octogee-pg"
 }
 
-variable "tier" {
-  description = "Cloud SQL machine tier"
-  type        = string
-  default     = "db-f1-micro"
-}
-
 variable "mattermost_db_name" {
   description = "Database name for Mattermost"
   type        = string
@@ -28,12 +22,6 @@ variable "mattermost_db_name" {
 variable "gitea_db_name" {
   description = "Database name for Gitea"
   type        = string
-}
-
-variable "database_version" {
-  description = "Cloud SQL database version"
-  type        = string
-  default     = "POSTGRES_16"
 }
 
 variable "create_users" {

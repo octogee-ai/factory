@@ -42,3 +42,9 @@ variable "gitea_db_password_secret_id" {
   type        = string
   default     = "gitea-db-password"
 }
+
+variable "agent_store_enabled" {
+  description = "Manage agent-store DSN secret containers; versions are provisioned outside Terraform"
+  type        = bool
+  default     = false
+}

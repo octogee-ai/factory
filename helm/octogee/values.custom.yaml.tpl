@@ -128,3 +128,6 @@ opsAgent:
   loggingProjectId: __CLUSTER_PROJECT__
   loggingResourceName: projects/__CLUSTER_PROJECT__/locations/global/buckets/ops-agent-test/views/ops-agent
   appUrl: https://app-test.octogee.com
+
+networkPolicy:
+  agentStorePostgresCidr: "__AGENT_STORE_POSTGRES_CIDR__"

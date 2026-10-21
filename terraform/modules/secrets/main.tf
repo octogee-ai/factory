@@ -87,3 +87,21 @@ resource "google_secret_manager_secret_version" "cloudsql_connection" {
   secret      = google_secret_manager_secret.cloudsql_connection.id
   secret_data = var.cloudsql_connection_name
 }
+
+resource "google_secret_manager_secret" "agent_store" {
+  for_each  = var.agent_store_enabled ? toset(["admin-dsn", "client-dsn"]) : toset([])
+  secret_id = "agent-store-postgres-${each.key}"
+  project   = var.project_id
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

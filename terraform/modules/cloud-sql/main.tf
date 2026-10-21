@@ -1,6 +1,6 @@
 # ── Cloud SQL Module ─────────────────────────────────────────────────────────
 # Manages Cloud SQL users, databases, and grants on the shared octogee-pg instance.
-# The instance itself already exists — import it, don't recreate.
+# The shared instance is managed only by the production environment.
 
 terraform {
   required_providers {
@@ -15,36 +15,21 @@ terraform {
   }
 }
 
-# ── Data: existing Cloud SQL instance (imported) ────────────────────────────
-# nosemgrep: gcp-sql-database-require-ssl
-resource "google_sql_database_instance" "main" {
-  name             = var.instance_name
-  project          = var.project_id
-  region           = var.region
-  database_version = var.database_version
-
-  # Settings are imported from existing instance — do not modify here
-  # unless intentionally changing instance config.
-  settings {
-    tier = var.tier
-  }
-
-  lifecycle {
-    prevent_destroy = true
-    ignore_changes  = [settings]
-  }
+data "google_sql_database_instance" "main" {
+  name    = var.instance_name
+  project = var.project_id
 }
 
 # ── Databases ───────────────────────────────────────────────────────────────
 resource "google_sql_database" "mattermost" {
   name     = var.mattermost_db_name
-  instance = google_sql_database_instance.main.name
+  instance = data.google_sql_database_instance.main.name
   project  = var.project_id
 }
 
 resource "google_sql_database" "gitea" {
   name     = var.gitea_db_name
-  instance = google_sql_database_instance.main.name
+  instance = data.google_sql_database_instance.main.name
   project  = var.project_id
 }
 
@@ -67,7 +52,7 @@ resource "random_password" "gitea" {
 resource "google_sql_user" "mattermost" {
   count    = var.create_users ? 1 : 0
   name     = "mattermost"
-  instance = google_sql_database_instance.main.name
+  instance = data.google_sql_database_instance.main.name
   password = random_password.mattermost.result
   project  = var.project_id
 }
@@ -75,13 +60,13 @@ resource "google_sql_user" "mattermost" {
 resource "google_sql_user" "gitea" {
   count    = var.create_users ? 1 : 0
   name     = "gitea"
-  instance = google_sql_database_instance.main.name
+  instance = data.google_sql_database_instance.main.name
   password = random_password.gitea.result
   project  = var.project_id
 }
 
 resource "google_sql_database" "agent_store" {
   name     = var.agent_store_db_name
-  instance = google_sql_database_instance.main.name
+  instance = data.google_sql_database_instance.main.name
   project  = var.project_id
 }

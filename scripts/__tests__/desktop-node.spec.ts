@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -19,10 +19,11 @@ function launch({ keyboard = true, bus = true, busFailures = 0, existing, identi
   mkdirSync(runtime);
   if (existing) {
     mkdirSync(join(root, ".openclaw"));
+    chmodSync(join(root, ".openclaw"), 0o755);
     writeFileSync(join(root, ".openclaw/openclaw.json"), JSON.stringify(existing));
   }
   writeFileSync(join(runtime, "wayland-1"), "");
-  for (const name of ["mkdir", "ls", "grep", "head", "cat", "rm"]) {
+  for (const name of ["mkdir", "chmod", "ls", "grep", "head", "cat", "rm", "stat"]) {
     const executable = spawnSync("/bin/sh", ["-c", `command -v ${name}`], { encoding: "utf8" });
     if (executable.status !== 0) throw new Error(`Missing test dependency: ${name}`);
     symlinkSync(executable.stdout.trim(), join(bin, name));
@@ -37,7 +38,8 @@ function launch({ keyboard = true, bus = true, busFailures = 0, existing, identi
   const capturedPath = join(root, 'captured-identity.json');
   const stoppedPath = join(root, 'stopped');
   writeFileSync(identityPath, JSON.stringify({ deviceId: 'stale' }));
-  stub("openclaw", `if [ "$1" = "doctor" ] && ${doctorFails}; then
+  stub("openclaw", `if [ "$(stat ${process.platform === "darwin" ? "-f %Lp" : "-c %a"} "$HOME/.openclaw")" != 700 ]; then echo "OpenClaw client root is not private before invocation" >&2; exit 91; fi
+if [ "$1" = "doctor" ] && ${doctorFails}; then
   echo "desktop driver unavailable" >&2
   exit 23
 fi
@@ -61,8 +63,8 @@ fi`);
 remaining="$(cat "${root}/bus-failures")"
 if [ "$remaining" -gt 0 ]; then echo $((remaining - 1)) > "${root}/bus-failures"; exit 1; fi`);
   }
-  const result = spawnSync("/bin/bash", [resolve(__dirname, "../../infra/gateway/desktop-node.sh")], {
-    encoding: "utf8", timeout: 2000,
+  const result = spawnSync("/bin/bash", ["-c", 'umask 022; exec /bin/bash "$1"', "desktop-node-test", resolve(__dirname, "../../infra/gateway/desktop-node.sh")], {
+    encoding: "utf8", timeout: 15_000,
     env: { PATH: bin, HOME: root, XDG_RUNTIME_DIR: runtime, OCTOGEE_DESKTOP_NODE_NAME: "test-desktop", OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: identityPath, OPENCLAW_GATEWAY_PASSWORD: "fixture" },
   });
   const configPath = join(root, ".openclaw/openclaw.json");
@@ -70,6 +72,7 @@ if [ "$remaining" -gt 0 ]; then echo $((remaining - 1)) > "${root}/bus-failures"
   return {
     ...result,
     config: existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : null,
+    stateMode: existsSync(configPath) ? statSync(join(root, ".openclaw")).mode & 0o7777 : null,
     busCalls: existsSync(busCallsPath) ? readFileSync(busCallsPath, "utf8").trim().split("\n") : [],
     runtime,
     identity,
@@ -97,6 +100,7 @@ it.each([undefined, { plugins: { entries: { "cua-computer": { enabled: true } } 
   "configures desktop streaming and removes browser advertising on every boot: %j", (existing) => {
     const result = launch({ existing });
     expect(result.status).toBe(0);
+    expect(result.stateMode).toBe(0o700);
     expect(result.config.nodeHost.browserProxy.enabled).toBe(false);
     expect(result.config.desktop.host).toEqual({
       enabled: true, managed: false, port: 5901,

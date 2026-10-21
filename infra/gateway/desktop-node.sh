@@ -37,6 +37,7 @@ fi
 export HOME="${HOME:-/home/node}"
 state="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 mkdir -p "$state"
+chmod 00700 "$state"
 node --input-type=module - "$state/openclaw.json" <<'JS'
 import fs from "node:fs";
 const file = process.argv[2];

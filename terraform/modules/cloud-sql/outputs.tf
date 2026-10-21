@@ -1,11 +1,11 @@
 output "instance_connection_name" {
   description = "Cloud SQL instance connection name (project:region:instance)"
-  value       = google_sql_database_instance.main.connection_name
+  value       = data.google_sql_database_instance.main.connection_name
 }
 
 output "instance_name" {
   description = "Cloud SQL instance name"
-  value       = google_sql_database_instance.main.name
+  value       = data.google_sql_database_instance.main.name
 }
 
 output "mattermost_db_name" {

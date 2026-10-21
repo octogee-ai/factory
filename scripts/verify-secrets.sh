@@ -85,6 +85,7 @@ esac
 #   helm/octogee/charts/gateway-edge/values.yaml
 #   helm/octogee/charts/gateway-edge/templates/cronjob-trial-expiry.yaml
 REQUIRED_SECRETS=(
+  "agent-store-postgres"
   "octogee-anthropic"       # setup/legacy only; gateway pods do not mount it
   "octogee-openrouter"      # llm-broker + dedicated Ops Agent
   "gateway-model-key-issuer" # glm-controller ↔ octogee-api model broker token issuer
@@ -107,6 +108,8 @@ FIX_SUFFIX="--env=${ENV}"
 [[ "$ENV" == "custom" ]] && FIX_SUFFIX="--env=custom --namespace=${CUSTOM_NS}"
 
 REQUIRED_KEYS=(
+  "agent-store-postgres:admin-dsn:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
+  "agent-store-postgres:client-dsn:./scripts/setup-secrets.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_token:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_token_id:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
   "mattermost-gateway:admin_token_fingerprint:./scripts/setup-mattermost.sh ${FIX_SUFFIX}"
