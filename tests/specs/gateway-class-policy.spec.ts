@@ -159,6 +159,29 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   return runPolicyWithDir(gatewayClass, config).config;
 }
 
+it("leaves PostgreSQL pointer files to the native SecretRef materializer", () => {
+  const agentId = "octogee-acme-coach";
+  const result = runPolicyWithDir("shared", { agents: { list: [{ id: agentId }] } }, (dir) => {
+    const agentDir = path.join(dir, "agents", agentId, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
+      "92c817cc-770f-466d-b4a6-4e9b02998363", "postgres", "octogee_agent_92c817cc770f466d",
+    );
+    db.close();
+  });
+  const db = new DatabaseSync(path.join(result.dir, "agents", agentId, "agent/openclaw-agent.sqlite"), { readOnly: true });
+  try {
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+      { name: "openclaw_engine_anchor" },
+    ]);
+    expect(db.prepare("SELECT store_id FROM openclaw_engine_anchor").get()).toEqual({
+      store_id: "92c817cc-770f-466d-b4a6-4e9b02998363",
+    });
+  } finally { db.close(); }
+});
+
 it.each(["shared", "builder"])("preserves only the scoped PostgreSQL connection ref through %s policy", (gatewayClass) => {
   const connection = { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
   const database = { engine: "sqlite", families: { agent: { engine: "postgres" } }, postgres: { schemaPrefix: "octogee", connection } };

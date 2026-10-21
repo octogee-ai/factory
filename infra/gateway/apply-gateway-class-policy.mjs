@@ -1077,6 +1077,9 @@ function scrubAgentOauthProfiles(agentDir, agentId) {
   if (!fs.existsSync(dbPath)) return false;
   const db = new DatabaseSync(dbPath);
   try {
+    if (db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'openclaw_engine_anchor'",
+    ).get()) return false;
     db.exec("PRAGMA busy_timeout = 30000;");
     db.exec(`
       CREATE TABLE IF NOT EXISTS auth_profile_store (

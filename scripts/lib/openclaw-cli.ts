@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 
-export interface OpenClawCommandResult { code: number; stdout: string }
+export interface OpenClawCommandResult { code: number; stdout: string; stderr?: string }
 export interface OpenClawCommandOptions { env: NodeJS.ProcessEnv; signal?: AbortSignal }
 export type OpenClawCommand = (
   args: string[],
@@ -12,11 +12,11 @@ export const runOpenClaw: OpenClawCommand = (args, options) =>
     execFile("/usr/local/bin/openclaw", args, {
       ...options, timeout: 180_000, maxBuffer: 2 * 1024 * 1024,
       cwd: options.env.OPENCLAW_STATE_DIR,
-    }, (error, stdout) => {
+    }, (error, stdout, stderr) => {
       if (error && (error.killed || typeof error.code !== "number")) {
         reject(new Error(`OpenClaw ${args[0]} command failed (${error.code ?? error.signal ?? "unknown"})`));
       } else {
-        resolve({ code: (error?.code as number | undefined) ?? 0, stdout });
+        resolve({ code: (error?.code as number | undefined) ?? 0, stdout, stderr });
       }
     });
   });
