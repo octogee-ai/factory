@@ -145,16 +145,6 @@ RUN set -e; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/parallel-plugin' | grep -q .; \
     ! find /opt/openclaw-runtime-deps/npm -type d -path '*/node_modules/@openclaw/codex' | grep -q .
 
-FROM gateway-core-system AS gateway-core-runtime
-
-COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
-COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
-COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/parallel /usr/local/lib/node_modules/openclaw/dist/extensions/parallel
-RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
-    && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
-    && openclaw --version
-COPY --from=openclaw-core-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps
-
 FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer
 
 COPY infra/gateway/verify-codex-native-hook-runtime.mjs /tmp/verify-codex-native-hook-runtime.mjs
@@ -193,7 +183,16 @@ COPY --from=openclaw-installer /usr/local/lib/node_modules/openclaw /usr/local/l
 COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost /usr/local/lib/node_modules/openclaw/dist/extensions/mattermost
 COPY --from=openclaw-core-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/parallel /usr/local/lib/node_modules/openclaw/dist/extensions/parallel
 COPY --from=openclaw-full-plugin-installer /usr/local/lib/node_modules/openclaw/dist/extensions/codex /usr/local/lib/node_modules/openclaw/dist/extensions/codex
+COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps
 RUN test "$(node -p "require('/usr/local/lib/node_modules/openclaw/package.json').bin.openclaw")" = "openclaw.mjs" \
     && ln -s ../lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw \
-    && openclaw --version
-COPY --from=openclaw-full-plugin-installer --chown=node:node /opt/openclaw-runtime-deps /opt/openclaw-runtime-deps
+    && openclaw --version \
+    && test -d /opt/openclaw-runtime-deps/npm \
+    && for plugin in mattermost parallel codex; do \
+      test -f "/usr/local/lib/node_modules/openclaw/dist/extensions/$plugin/package.json" \
+        || { echo "Missing bundled OpenClaw plugin: $plugin" >&2; exit 1; }; \
+    done \
+    && for package in mattermost parallel-plugin codex; do \
+      test -z "$(find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/$package" -print -quit)" \
+        || { echo "Duplicate external runtime package: $package" >&2; exit 1; }; \
+    done

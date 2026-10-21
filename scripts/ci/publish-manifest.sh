@@ -31,17 +31,7 @@ if [ -n "$BASE_SHA" ]; then
   fi
 fi
 
-OPENCLAW_OBJECT="$(node -e '
-  const current = require("./infra/gateway/openclaw-tarball/current.json");
-  if (typeof current.openclawObject !== "string" || current.openclawObject.length === 0) {
-    throw new Error("missing current OpenClaw object");
-  }
-  process.stdout.write(current.openclawObject);
-')"
-OPENCLAW_TARBALL="$RUNNER_TEMP/openclaw-fork.tgz"
-gcloud storage cp \
-  "gs://octogee-openclaw-fork/${OPENCLAW_OBJECT}" \
-  "$OPENCLAW_TARBALL"
+OPENCLAW_TARBALL="${OPENCLAW_TARBALL:?pinned OpenClaw tarball required}"
 OPENCLAW_RUNTIME_VERSION="$(
   tar -xzOf "$OPENCLAW_TARBALL" package/package.json \
     | node -e 'const fs = require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(0, "utf8")).version)'

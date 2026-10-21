@@ -71,7 +71,7 @@ describe("gateway base image", () => {
     const builderConfig = readRepoFile("infra/gateway/openclaw.builder.template.json");
 
     expect(base).toMatch(/^FROM node:\d+\.\d+\.\d+-bookworm-slim@sha256:[0-9a-f]{64} AS gateway-core-system$/mu);
-    expect(base).toContain("FROM gateway-core-system AS gateway-core-runtime");
+    expect(base).not.toContain("gateway-core-runtime");
     expect(builderBase).toContain("ARG GATEWAY_BASE_IMAGE");
     expect(builderBase).toContain("FROM ${GATEWAY_BASE_IMAGE}");
     expect(builderBase).toContain("infra/gateway/builder-toolchain/package.json /octogee/toolchain/package.json");
@@ -166,9 +166,9 @@ describe("gateway base image", () => {
       "COPY --from=openclaw-installer /usr/local/bin/openclaw /usr/local/bin/openclaw",
     );
     expect(base.match(/ln -s \.\.\/lib\/node_modules\/openclaw\/openclaw\.mjs \/usr\/local\/bin\/openclaw/g))
-      .toHaveLength(2);
+      .toHaveLength(1);
     expect(base.match(/require\('\/usr\/local\/lib\/node_modules\/openclaw\/package\.json'\)\.bin\.openclaw/g))
-      .toHaveLength(2);
+      .toHaveLength(1);
   });
 
   it("pins gitleaks in gateway-edge for fail-closed agent import scanning", () => {
@@ -274,9 +274,8 @@ describe("gateway base image", () => {
       .toContain("npm cache clean --force");
   });
 
-  it("copies only staged OpenClaw runtime outputs into the shipped stage", () => {
+  it("copies only staged OpenClaw runtime outputs into the shipped stage and verifies them at build time", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
-    const cloudbuild = readRepoFile("cloudbuild-base.yaml");
     const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM gateway-system AS gateway-runtime"));
 
     expect(dockerfile).toContain("FROM gateway-core-system AS openclaw-installer");
@@ -294,11 +293,14 @@ describe("gateway base image", () => {
     );
     expect(runtimeStage).not.toContain("openclaw-tarball/");
     expect(runtimeStage).not.toContain("/home/node/.openclaw");
-    expect(cloudbuild).toContain('test -d /opt/openclaw-runtime-deps/npm');
-    expect(cloudbuild).toContain('openclaw/dist/extensions/mattermost/package.json');
-    expect(cloudbuild).toContain('node_modules/@openclaw/parallel-plugin');
-    expect(cloudbuild).toContain('openclaw/dist/extensions/codex/package.json');
-    expect(cloudbuild).toContain('! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"');
+    const verification = runInstructionContaining(runtimeStage, "openclaw --version");
+    expect(runtimeStage.indexOf(verification)).toBeGreaterThan(runtimeStage.indexOf("/opt/openclaw-runtime-deps /opt/openclaw-runtime-deps"));
+    expect(runtimeStage.trimEnd().endsWith(verification.trimEnd())).toBe(true);
+    expect(verification).toContain("test -d /opt/openclaw-runtime-deps/npm");
+    expect(verification).toContain("for plugin in mattermost parallel codex");
+    expect(verification).toContain('/usr/local/lib/node_modules/openclaw/dist/extensions/$plugin/package.json');
+    expect(verification).toContain("for package in mattermost parallel-plugin codex");
+    expect(verification).toContain('find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/$package" -print -quit');
   });
 
   it("does not retain package-manager caches in runtime install layers", () => {
@@ -354,10 +356,6 @@ describe("gateway base image", () => {
 
   it("bundles exact-source Codex with plugin-local dependencies and verifies native bundled trust", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
-    const coreStage = dockerfile.slice(
-      dockerfile.indexOf("FROM gateway-core-system AS gateway-core-runtime"),
-      dockerfile.indexOf("FROM openclaw-core-plugin-installer AS openclaw-full-plugin-installer"),
-    );
 
     expect(dockerfile).toContain('"$OPENCLAW_ROOT/package.json"');
     expect(dockerfile).toContain('test -f "$OC_VENDOR/openclaw-codex.tgz"');
@@ -387,7 +385,6 @@ describe("gateway base image", () => {
     expect(dockerfile).not.toContain('CODEX_SPEC=');
     expect(dockerfile).not.toContain('npm view');
     expect(dockerfile).not.toContain('npm-pack:$VENDORED_CODEX');
-    expect(coreStage).not.toContain('dist/extensions/codex');
     expect(dockerfile).not.toContain("OPENCLAW_COMPATIBILITY_HOST_VERSION");
   });
 

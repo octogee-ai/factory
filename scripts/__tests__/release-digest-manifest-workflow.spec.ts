@@ -11,6 +11,11 @@ describe("Build main digest manifest", () => {
 
   });
 
+  it("reads OpenClaw provenance from the run's pinned tarball instead of fetching it again", () => {
+    expect(writer).toContain('OPENCLAW_TARBALL="${OPENCLAW_TARBALL:?');
+    expect(writer).not.toContain("gcloud storage");
+  });
+
   it("serializes the writer by source SHA and gives downstream consumers a verified OCI digest pin", () => {
     expect(writer).toContain("manifest_digest=");
     expect(writer).toContain("release-digest-manifest@${manifest_digest}");
