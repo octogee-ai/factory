@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
+async function releaseGeneration(request, url, label) {
+  let result;
+  try { result = await request(url, { method: 'DELETE' }); }
+  catch { result = await request(url, { method: 'DELETE' }); }
+  if (![204, 404].includes(result.status)) throw new Error(`${label} release failed: ${result.status}`);
+}
+
 export async function withBuildPin(sha, request, run, { canRelease = () => true } = {}) {
   const object = encodeURIComponent(`main-pins/${sha}/${randomUUID()}.json`);
   console.log(`Local main pin: gs://octogee-ci-state/${decodeURIComponent(object)}`);
@@ -9,8 +16,7 @@ export async function withBuildPin(sha, request, run, { canRelease = () => true 
   const { generation } = await created.json();
   const release = async () => {
     if (canRelease()) {
-      const result = await request(`https://storage.googleapis.com/storage/v1/b/octogee-ci-state/o/${object}?ifGenerationMatch=${generation}`, { method: 'DELETE' });
-      if (result.status !== 204) throw new Error(`Build pin release failed: ${result.status}`);
+      await releaseGeneration(request, `https://storage.googleapis.com/storage/v1/b/octogee-ci-state/o/${object}?ifGenerationMatch=${generation}`, 'Build pin');
     } else console.error(`Build pin retained: ${decodeURIComponent(object)}; verify every submitted child is terminal before operator recovery`);
   };
   return Promise.resolve().then(run).then(async value => { await release(); return value; }, async error => { await release(); throw error; });
@@ -33,8 +39,7 @@ export async function withBuildLock(sha, request, run, { now = Date.now, sleep =
   }
   const release = async () => {
     if (canRelease()) {
-      const result = await request(`${url}?ifGenerationMatch=${generation}`, { method: 'DELETE' });
-      if (result.status !== 204) throw new Error(`Build lock release failed: ${result.status}`);
+      await releaseGeneration(request, `${url}?ifGenerationMatch=${generation}`, 'Build lock');
     } else console.error(`Build lock retained: gs://octogee-ci-state/main/${sha}.json; verify all child builds are terminal before removing it`);
   };
   return run().then(async value => { await release(); return value; }, async error => { await release(); throw error; });

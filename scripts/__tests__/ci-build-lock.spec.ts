@@ -47,3 +47,24 @@ it('retains local operator intent when a submitted child may still be writing', 
   await expect(withBuildPin('a'.repeat(40), request, async () => { throw new Error('lost child'); }, { canRelease: () => false })).rejects.toThrow('lost child');
   expect(request).toHaveBeenCalledOnce();
 });
+
+it.each([withBuildLock, withBuildPin])('keeps the work failure after a lost generation-delete response', async owner => {
+  const request = vi.fn()
+    .mockResolvedValueOnce({ status: 200, json: async () => ({ generation: '42' }) })
+    .mockRejectedValueOnce(new TypeError('fetch failed: write EPIPE'))
+    .mockResolvedValueOnce({ status: 404 });
+  await expect(owner('a'.repeat(40), request, async () => { throw new Error('acceptance capacity exhausted'); }))
+    .rejects.toThrow('acceptance capacity exhausted');
+  expect(request.mock.calls.slice(1)).toEqual([
+    [expect.stringContaining('ifGenerationMatch=42'), { method: 'DELETE' }],
+    [expect.stringContaining('ifGenerationMatch=42'), { method: 'DELETE' }],
+  ]);
+});
+
+it('never deletes a replacement lock when its generation no longer matches', async () => {
+  const request = vi.fn()
+    .mockResolvedValueOnce({ status: 200, json: async () => ({ generation: '42' }) })
+    .mockResolvedValueOnce({ status: 412 });
+  await expect(withBuildLock('a'.repeat(40), request, async () => 'digest')).rejects.toThrow('412');
+  expect(request).toHaveBeenCalledTimes(2);
+});

@@ -146,7 +146,7 @@ if [[ "$STOP_START" == 1 ]]; then
   marker="$(vssh 'cat ~/persist-marker')"
   gcloud compute instances stop "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null
   t_start=$(date +%s)
-  gcloud compute instances start "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null
+  start_instance_with_capacity_retry "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null
   IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
   wait_ssh 300
   t_back=$(date +%s)
