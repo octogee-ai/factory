@@ -742,7 +742,7 @@ describe("configured Builder surge release", () => {
     expect(readDesiredCustomers).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves a prelaunch-attached Builder stale so the reconcile loop runs its deferred runtime reconciliation", async () => {
+  it.each([false, true])("reconciles project accounts before Builder secret readiness and holds failures (reconcile fails: %s)", async (reconcileFails) => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
@@ -752,10 +752,13 @@ describe("configured Builder surge release", () => {
       adapter.recordAppliedFingerprint = (slug, fingerprint) => {
         applied.set(slug, fingerprint);
       };
-      adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => ({
-        elapsedMs: 0,
-        appliedFingerprint: "fp-restored",
-      }));
+      let projectsReconciled = false;
+      adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => {
+        events.push("projects");
+        if (reconcileFails) throw new Error("project reconciliation failed");
+        projectsReconciled = true;
+        return { elapsedMs: 0, appliedFingerprint: "fp-restored" };
+      });
       const processGate = {
         status: vi.fn(async () => ({
           version: 1 as const,
@@ -767,14 +770,16 @@ describe("configured Builder surge release", () => {
         permitNormal: vi.fn(async () => {
           events.push("permit");
         }),
-        holdNormal: vi.fn(),
+        holdNormal: vi.fn(async () => { events.push("hold"); }),
       } as unknown as SurgeOpenClawProcessSupervisorClient;
       const log = vi.fn();
       const wiring = createBuilderSurgeGateWiring({
         adapter,
         processGate,
-        surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        surgeReadiness: { release: vi.fn(async () => { events.push("release"); }) } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => { events.push("health"); },
         waitForGatewayReady: async () => {
+          if (!projectsReconciled) throw new Error("archived Mattermost account secret reference was not found");
           events.push("ready");
         },
         log,
@@ -783,14 +788,22 @@ describe("configured Builder surge release", () => {
       });
 
       await expect(wiring.selfReleaseHoldReason()).resolves.toBeNull();
+      if (reconcileFails) {
+        await expect(wiring.selfRelease("target-pod")).rejects.toThrow("project reconciliation failed");
+        expect(events).toEqual(["permit", "health", "projects", "hold"]);
+        expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
+        return;
+      }
       await wiring.selfRelease("target-pod");
 
-      expect(events).toEqual(["permit", "ready"]);
+      expect(events).toEqual(["permit", "health", "projects", "ready", "release"]);
       expect(log).toHaveBeenCalledWith(
         "[surge-handoff] canonical assignment present and no migration in flight; " +
         "permitting OpenClaw and releasing readiness slug=ceckert-test",
       );
-      expect(adapter.reconcileConfiguredBuilderProjectAgents).not.toHaveBeenCalled();
+      expect(adapter.reconcileConfiguredBuilderProjectAgents).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ uid: "uid-builder", slug: "ceckert-test" }),
+      );
       expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
       const pending = new Map<string, string>();
       const desired = new Map([["ceckert-test", "fp-restored"]]);
@@ -879,6 +892,7 @@ describe("configured Builder surge release", () => {
         adapter,
         processGate,
         surgeReadiness,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => {
           events.push("ready");
         },
@@ -1013,6 +1027,7 @@ describe("configured Builder surge release", () => {
         adapter,
         processGate,
         surgeReadiness,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => {
           events.push("ready");
         },
@@ -1263,6 +1278,7 @@ describe("configured Builder surge release", () => {
         adapter,
         processGate,
         surgeReadiness,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: counter.provisioning,
@@ -1428,6 +1444,7 @@ describe("configured Builder surge release", () => {
         adapter,
         processGate,
         surgeReadiness,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: counter.provisioning,
@@ -1545,6 +1562,7 @@ describe("configured Builder surge release", () => {
         } as unknown as CustomerLifecycleAdapter,
         processGate,
         surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: counter.provisioning,
@@ -1645,6 +1663,7 @@ describe("configured Builder surge release", () => {
         } as unknown as CustomerLifecycleAdapter,
         processGate,
         surgeReadiness,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => {
           verificationStarted();
           await verificationBlocked;
@@ -1722,6 +1741,7 @@ describe("configured Builder surge release", () => {
       const wiring = createBuilderSurgeGateWiring({
         adapter, processGate,
         surgeReadiness: {} as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: createProvisioningCounter().provisioning,
@@ -1784,6 +1804,7 @@ describe("configured Builder surge release", () => {
         adapter: {} as CustomerLifecycleAdapter,
         processGate,
         surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: counter.provisioning,
@@ -1828,6 +1849,7 @@ describe("configured Builder surge release", () => {
     const wiring = createBuilderSurgeGateWiring({
       adapter: {} as CustomerLifecycleAdapter, processGate,
       surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => undefined, log: () => undefined,
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     });
@@ -1853,6 +1875,7 @@ describe("configured Builder surge release", () => {
     const wiring = createBuilderSurgeGateWiring({
       adapter: {} as CustomerLifecycleAdapter, processGate,
       surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => undefined, log: () => undefined,
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     });
@@ -1889,6 +1912,7 @@ describe("configured Builder surge release", () => {
       const wiring = createBuilderSurgeGateWiring({
         adapter, processGate,
         surgeReadiness: { released: vi.fn(async () => readinessReleased) } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined, log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
       });
@@ -1922,6 +1946,7 @@ describe("configured Builder surge release", () => {
       } as unknown as CustomerLifecycleAdapter,
       processGate,
       surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => undefined,
       log: () => undefined,
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
@@ -1943,6 +1968,7 @@ describe("configured Builder surge release", () => {
         status: async () => ({ version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" }),
       } as unknown as SurgeOpenClawProcessSupervisorClient,
       surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => undefined,
       log: () => undefined,
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
@@ -1980,6 +2006,7 @@ describe("configured Builder surge release", () => {
           status: vi.fn(async () => ({ version: 1, podUid: "standby-pod", role: "normal", mode: "permitted", phase: "running" })),
         } as unknown as SurgeOpenClawProcessSupervisorClient,
         surgeReadiness: { released: vi.fn(async () => true) } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined, log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
       });
@@ -2018,6 +2045,7 @@ describe("configured Builder surge release", () => {
       const wiring = createBuilderSurgeGateWiring({
         adapter: {} as CustomerLifecycleAdapter, processGate,
         surgeReadiness: {} as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined, log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         waitForActiveProvisioningDrain: async () => { events.push("drain"); },
@@ -2126,6 +2154,7 @@ describe("configured Builder surge release", () => {
         adapter,
         processGate,
         surgeReadiness,
+        waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => undefined,
         log: () => undefined,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },

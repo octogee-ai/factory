@@ -508,6 +508,7 @@ describe("surge OpenClaw process supervisor", () => {
       provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
       configuredBuilderAssigned: async () => true,
       attachConfiguredBuilderBeforeOpenClaw: attach,
+      waitForGatewayHealthy: async () => undefined,
       waitForGatewayReady: async () => {
         expect(await client.status()).toMatchObject({ mode: "permitted", phase: "running" });
       },

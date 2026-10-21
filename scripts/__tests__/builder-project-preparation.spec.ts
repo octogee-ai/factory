@@ -60,6 +60,7 @@ function wiring(failGitCommand?: string) {
   const request = { migrationId: "activation-test", slug, targetPodUid: "target-pod" };
   const processGate = { status: async () => ({ version: 1, podUid: request.targetPodUid, role: "target", mode: "held", phase: "held", ...request }) };
   return { adapter, request, gitCalls, gate: createBuilderSurgeGateWiring({ adapter, processGate: processGate as never,
+    waitForGatewayHealthy: async () => undefined,
     surgeReadiness: {} as never, waitForGatewayReady: async () => undefined, log: vi.fn(), openclawDir: paths.root,
     provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     attachConfiguredBuilderBeforeOpenClaw: async () => slug,

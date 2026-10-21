@@ -2314,6 +2314,7 @@ async function selfReleaseConfiguredBuilder(input: {
   surgeReadiness: SurgeReadinessGate;
   targetPodUid: string;
   waitForActiveProvisioningDrain: () => Promise<void>;
+  waitForGatewayHealthy: () => Promise<void>;
   waitForGatewayReady: () => Promise<void>;
 }): Promise<void> {
   const {
@@ -2326,6 +2327,7 @@ async function selfReleaseConfiguredBuilder(input: {
     surgeReadiness,
     targetPodUid,
     waitForActiveProvisioningDrain,
+    waitForGatewayHealthy,
     waitForGatewayReady,
   } = input;
   if (!processGate) {
@@ -2357,6 +2359,13 @@ async function selfReleaseConfiguredBuilder(input: {
     await attachConfiguredBuilderWithProvisioning({ adapter, attachConfigured, log, provisioning });
     await waitForActiveProvisioningDrain();
     await processGate.permitNormal();
+    await waitForGatewayHealthy();
+    if (adapter.reconcileConfiguredBuilderProjectAgents) {
+      const uid = await adapter.uidForSlug(slug);
+      const snapshot = uid ? await adapter.loadUserSnapshot(uid) : null;
+      if (!snapshot) throw new Error(`configured Builder snapshot is unavailable after OpenClaw start: ${slug}`);
+      await adapter.reconcileConfiguredBuilderProjectAgents(snapshot);
+    }
     await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
     await surgeReadiness.release({ targetPodUid });
   } catch (error) {
@@ -2389,6 +2398,7 @@ interface BuilderSurgeGateWiringOptions {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
+  waitForGatewayHealthy: () => Promise<void>;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
   provisioning: ProvisioningCounter;
@@ -2717,6 +2727,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
         surgeReadiness,
         targetPodUid,
         waitForActiveProvisioningDrain,
+        waitForGatewayHealthy: input.waitForGatewayHealthy,
         waitForGatewayReady,
       });
     },
@@ -2971,6 +2982,10 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     adapter: wrappedAdapter,
     processGate: builderProcessGate,
     surgeReadiness,
+    waitForGatewayHealthy: () => waitForOpenClawHealthz({
+      probeHealthz,
+      timeoutMs: BUILDER_POST_START_HEALTH_TIMEOUT_MS,
+    }),
     waitForGatewayReady: () => waitForOpenClawUp(BUILDER_POST_START_HEALTH_TIMEOUT_MS),
     log: opts.log,
     provisioning: runtime,

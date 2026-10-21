@@ -69,6 +69,7 @@ async function preparationFixture() {
   const ready = vi.fn(async () => undefined);
   const wiring = createBuilderSurgeGateWiring({
     openclawDir: root, adapter, processGate,
+    waitForGatewayHealthy: async () => undefined,
     surgeReadiness: {} as SurgeReadinessGate, waitForGatewayReady: ready,
     log: vi.fn(), provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
     attachConfiguredBuilderBeforeOpenClaw: attach,
