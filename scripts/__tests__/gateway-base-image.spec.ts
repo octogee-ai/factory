@@ -128,7 +128,7 @@ describe("gateway base image", () => {
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
 
     expect(packageJson.dependencies).toEqual({
-      "@anthropic-ai/claude-code": "2.1.296",
+      "@anthropic-ai/claude-code": "2.1.300",
       "@openai/codex": "0.162.1",
       "@sparticuz/chromium": "153.0.0",
       "firebase-tools": "15.33.0",
@@ -138,14 +138,14 @@ describe("gateway base image", () => {
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
-      "@anthropic-ai/claude-code@2.1.296": true,
+      "@anthropic-ai/claude-code@2.1.300": true,
       "esbuild@0.28.2": true,
       "pnpm@12.13.0": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
-      version: "2.1.296",
+      version: "2.1.300",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@openai/codex"]).toMatchObject({

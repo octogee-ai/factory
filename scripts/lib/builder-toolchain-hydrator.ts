@@ -133,7 +133,7 @@ const DEPENDENCY_PACKAGES: Record<BuilderToolchainCommand, string> = {
   chromium: "@sparticuz/chromium",
 };
 const ALLOWED_INSTALL_SCRIPTS = {
-  "@anthropic-ai/claude-code@2.1.296": true,
+  "@anthropic-ai/claude-code@2.1.300": true,
   "esbuild@0.28.2": true,
   "pnpm@12.13.0": true,
   "protobufjs@7.6.6": true,
