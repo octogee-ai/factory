@@ -1,4 +1,5 @@
-ARG OPENCLAW_BASE_IMAGE=openclaw:local
+ARG OPENCLAW_BASE_IMAGE=octogee-gateway-base
+ARG RUNTIME_BASE_IMAGE=${OPENCLAW_BASE_IMAGE}
 FROM ${OPENCLAW_BASE_IMAGE} AS gateway-build
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -127,7 +128,7 @@ RUN node /octogee/infra/gateway/verify-extension-bundles.mjs /octogee/extensions
 # Keep full devDependency installs, compiler inputs, npm caches, and deleted
 # extension TypeScript sources out of the deliverable image. COPY transfers the
 # verified post-prune filesystem state without the builder stage's lower layers.
-FROM ${OPENCLAW_BASE_IMAGE} AS gateway-runtime
+FROM ${RUNTIME_BASE_IMAGE} AS gateway-runtime
 COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

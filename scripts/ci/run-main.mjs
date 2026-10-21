@@ -1,12 +1,13 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainBuild } from './main-build.mjs';
 import { withBuildLock } from './build-lock.mjs';
 import { publishSourceArchive } from './source-archive.mjs';
 import { buildImage, buildSummary, builderBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
+import { buildGatewayImages } from './gateway-bake.mjs';
 import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../.github/actions/openclaw-base-key/base-key.mjs';
 
 const project = 'octogee';
@@ -46,20 +47,11 @@ async function build(plan) {
   if (process.env.GITHUB_ACTIONS === 'true') await execute('docker', ['buildx', 'prune', '--all', '--force']);
 }
 const summary = [];
-const ensureImage = async (image, base = '') => summary.push(await ensureRegistryImage(image, { repository, sha, base, force }, {
+const ensureImage = async image => summary.push(await ensureRegistryImage(image, { repository, sha, force }, {
   exists: async ref => Boolean(lookup(ref)),
   script: async (file, args) => run('bash', [file, ...args]),
   build,
 }));
-async function ensureBase(image, tag, plan, prepare = async () => {}) {
-  const started = Date.now();
-  const found = Boolean(lookup(`${repository}/${image}:${tag}`));
-  if (!found) {
-    await prepare();
-    await build({ ...plan, tag: `${repository}/${image}:${tag}`, cache: `${repository}/cache/${image}:buildcache` });
-  }
-  summary.push({ image, tag, result: found ? 'found' : 'built', seconds: Math.round((Date.now() - started) / 1000) });
-}
 let pinned;
 const openclawObjects = () => pinned ??= (() => {
   const current = JSON.parse(readFileSync('infra/gateway/openclaw-tarball/current.json', 'utf8'));
@@ -74,21 +66,23 @@ const openclawTarballs = () => downloaded ??= (async () => {
 })();
 async function gateway() {
   const base = openclawBaseKey({ objects: openclawObjects(), recipeFiles: gatewayBaseRecipe() }).tag;
-  await ensureBase('octogee-gateway-base', base, { dockerfile: 'infra/gateway/Dockerfile.base', target: 'gateway-runtime' }, openclawTarballs);
   const hash = value => createHash('sha256').update(value).digest('hex');
   const recipeHash = hash(builderBaseRecipe().map(file => `${hash(readFileSync(file))}  ${file}\n`).join('')).slice(0, 12);
-  const builderBase = `${base}-builder-${recipeHash}`;
-  await ensureBase('octogee-gateway-builder-base', builderBase, {
-    dockerfile: 'infra/gateway/Dockerfile.builder-base',
-    buildArgs: {
-      GATEWAY_BASE_IMAGE: `${repository}/octogee-gateway-base:${base}`,
-      BUILDER_TOOLCHAIN_LOCK_SHA256: hash(readFileSync('infra/gateway/builder-toolchain/package-lock.json')),
-      BUILDER_TOOL_GROUPS_SHA256: hash(readFileSync('infra/gateway/builder-toolchain/groups.json')),
+  const toolchain = {
+    lockSha256: hash(readFileSync('infra/gateway/builder-toolchain/package-lock.json')),
+    groupsSha256: hash(readFileSync('infra/gateway/builder-toolchain/groups.json')),
+  };
+  summary.push(...await buildGatewayImages({ repository, sha, base, builderBase: `${base}-builder-${recipeHash}`, toolchain, force }, {
+    exists: async ref => Boolean(lookup(ref)),
+    script: async (file, args) => run('bash', [file, ...args]),
+    prepareBase: openclawTarballs,
+    bake: async plan => {
+      const file = join(temporary, 'gateway-bake.json');
+      writeFileSync(file, JSON.stringify(plan));
+      await execute('docker', ['buildx', 'bake', `--file=${file}`]);
+      if (process.env.GITHUB_ACTIONS === 'true') await execute('docker', ['buildx', 'prune', '--all', '--force']);
     },
-  });
-  await ensureImage('gateway-edge');
-  await ensureImage('octogee-gateway', base);
-  await ensureImage('octogee-gateway-builder', builderBase);
+  }));
 }
 async function platform() {
   for (const image of ['glm-controller', 'artifact-worker', 'octogee-api', 'octogee-project-runner']) await ensureImage(image);

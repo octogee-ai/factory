@@ -1,4 +1,4 @@
-ARG GATEWAY_BASE_IMAGE
+ARG GATEWAY_BASE_IMAGE=octogee-gateway-base
 FROM ${GATEWAY_BASE_IMAGE} AS builder-base-inputs
 
 USER node

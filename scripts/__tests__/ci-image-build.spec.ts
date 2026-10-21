@@ -16,38 +16,27 @@ describe("runner image builds", () => {
     expect(plan.tag).toBe(`${repository}/octogee-project-runner:${sha.slice(0, 7)}`);
   });
 
-  it("binds the Builder image to its base, profile, source revision and size budget", () => {
-    const plan = imagePlan("octogee-gateway-builder", { repository, sha, base: `${base}-builder-123456789abc` });
-    expect(plan.buildArgs).toMatchObject({
-      OPENCLAW_BASE_IMAGE: `${repository}/octogee-gateway-builder-base:${base}-builder-123456789abc`,
-      IMAGE_PROFILE: "builder",
-      BUILD_SHA: sha.slice(0, 7),
-    });
-    expect(plan.labels).toEqual({ "org.opencontainers.image.revision": sha });
-    expect(plan.maxCompressedBytes).toBe(3100000000);
-  });
-
-  it.each(["", "latest", "inputs-invalid"])("rejects a mutable or invalid gateway base: %s", invalid => {
-    expect(() => imagePlan("octogee-gateway", { repository, sha, base: invalid })).toThrow("base");
-  });
-
-  it("pushes with registry caching and verifies size before returning", async () => {
+  it("pushes with registry caching", async () => {
     const run = vi.fn(async () => {});
     const exists = vi.fn(async () => true);
-    const plan = imagePlan("octogee-gateway-builder", { repository, sha, base: `${base}-builder-123456789abc` });
+    const plan = imagePlan("octogee-api", { repository, sha });
     await buildImage(plan, { run, exists });
+    expect(run).toHaveBeenCalledOnce();
     expect(run.mock.calls[0][0]).toBe("docker");
     expect(run.mock.calls[0][1]).toEqual(expect.arrayContaining([
-      "buildx", "build", "--platform=linux/amd64", "--push",
-      `--cache-from=type=registry,ref=${repository}/cache/octogee-gateway-builder:buildcache`,
+      "buildx", "build", "--platform=linux/amd64", "--push", `--label=org.opencontainers.image.revision=${sha}`,
+      `--cache-from=type=registry,ref=${repository}/cache/octogee-api:buildcache`,
     ]));
-    expect(run.mock.calls.at(-1)).toEqual(["bash", [
-      "scripts/lib/assert-artifact-image-size.sh", plan.tag, "3100000000", "octogee",
-    ]]);
+  });
+
+  it("leaves the gateway family to the gateway bake", () => {
+    for (const image of ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"]) {
+      expect(() => imagePlan(image, { repository, sha })).toThrow(`Unknown image: ${image}`);
+    }
   });
 
   it("allows a confirmed cache miss but propagates registry failures", async () => {
-    const plan = imagePlan("gateway-edge", { repository, sha });
+    const plan = imagePlan("glm-controller", { repository, sha });
     const run = vi.fn(async () => {});
     await buildImage(plan, { run, exists: async () => false });
     expect(run.mock.calls[0][1].some((arg: string) => arg.startsWith("--cache-from"))).toBe(false);
@@ -58,14 +47,13 @@ describe("runner image builds", () => {
 
   it("never checks or publishes a dependent artifact after a build failure", async () => {
     const run = vi.fn(async () => { throw new Error("build failed"); });
-    const plan = imagePlan("octogee-gateway-builder", { repository, sha, base: `${base}-builder-123456789abc` });
+    const plan = imagePlan("octogee-api", { repository, sha });
     await expect(buildImage(plan, { run, exists: async () => false })).rejects.toThrow("build failed");
     expect(run).toHaveBeenCalledOnce();
   });
 });
 
 describe("image reuse", () => {
-  const builderBase = `${base}-builder-123456789abc`;
   const harness = ({ existing = [] as string[], check = "fingerprint=f1\nexists=false\n" } = {}) => {
     const calls: string[][] = [];
     let clock = 0;
@@ -84,32 +72,31 @@ describe("image reuse", () => {
       },
     };
   };
-  const sizeChecks = (calls: string[][]) => calls.filter(call => call.includes("scripts/lib/assert-artifact-image-size.sh"));
 
-  it("asserts the Builder size budget exactly once when it builds", async () => {
+  it("records the fingerprint and publishes the full-SHA tag after it builds", async () => {
     const { calls, deps } = harness();
-    const row = await ensureImage("octogee-gateway-builder", { repository, sha, base: builderBase }, deps);
-    expect(sizeChecks(calls)).toHaveLength(1);
-    expect(calls).toContainEqual(["scripts/lib/image-fingerprint-reuse.sh", "record", "octogee-gateway-builder", repository, sha.slice(0, 7), "f1"]);
-    expect(calls.at(-1)).toEqual(["scripts/lib/publish-full-sha-image-tag.sh", "octogee-gateway-builder", repository, sha, "octogee"]);
-    expect(row).toEqual({ image: "octogee-gateway-builder", tag: sha.slice(0, 7), result: "built", seconds: 90 });
+    const row = await ensureImage("octogee-api", { repository, sha }, deps);
+    expect(calls.filter(call => call[0] === "docker")).toHaveLength(1);
+    expect(calls).toContainEqual(["scripts/lib/image-fingerprint-reuse.sh", "record", "octogee-api", repository, sha.slice(0, 7), "f1"]);
+    expect(calls.at(-1)).toEqual(["scripts/lib/publish-full-sha-image-tag.sh", "octogee-api", repository, sha, "octogee"]);
+    expect(row).toEqual({ image: "octogee-api", tag: sha.slice(0, 7), result: "built", seconds: 90 });
   });
 
   it.each([
-    ["full-SHA tag", { existing: [`${repository}/octogee-gateway-builder:${sha}`] }],
-    ["short tag", { existing: [`${repository}/octogee-gateway-builder:${sha.slice(0, 7)}`] }],
-    ["fingerprint", { check: "fingerprint=f1\nexists=true\n" }],
-  ])("reuses the Builder by %s without rebuilding or re-checking its size", async (via, state) => {
+    ["full-SHA tag", { existing: [`${repository}/octogee-api:${sha}`] }, 0],
+    ["short tag", { existing: [`${repository}/octogee-api:${sha.slice(0, 7)}`] }, 1],
+    ["fingerprint", { check: "fingerprint=f1\nexists=true\n" }, 1],
+  ])("reuses by %s without rebuilding", async (via, state, fullShaPublishes) => {
     const { calls, deps } = harness(state);
-    const row = await ensureImage("octogee-gateway-builder", { repository, sha, base: builderBase }, deps);
-    expect(calls.some(call => call[0] === "docker")).toBe(false);
-    expect(sizeChecks(calls)).toHaveLength(0);
+    const row = await ensureImage("octogee-api", { repository, sha }, deps);
+    expect(calls.some(call => call[0] === "docker" || call[1] === "record")).toBe(false);
+    expect(calls.filter(call => call[0] === "scripts/lib/publish-full-sha-image-tag.sh")).toHaveLength(fullShaPublishes);
     expect(row.result).toBe(`reused (${via})`);
   });
 
   it("rebuilds when forced even though a reusable image exists", async () => {
-    const { calls, deps } = harness({ existing: [`${repository}/gateway-edge:${sha.slice(0, 7)}`], check: "fingerprint=f1\nexists=true\n" });
-    const row = await ensureImage("gateway-edge", { repository, sha, force: true }, deps);
+    const { calls, deps } = harness({ existing: [`${repository}/glm-controller:${sha.slice(0, 7)}`], check: "fingerprint=f1\nexists=true\n" });
+    const row = await ensureImage("glm-controller", { repository, sha, force: true }, deps);
     expect(row.result).toBe("built");
     expect(calls.some(call => call[1] === "check" || call[1] === "record")).toBe(false);
   });

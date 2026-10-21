@@ -317,7 +317,7 @@ describe("gateway base image", () => {
 
   it("copies pruned gateway runtime trees out of the build stage", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
-    const runtimeStageMarker = "FROM ${OPENCLAW_BASE_IMAGE} AS gateway-runtime";
+    const runtimeStageMarker = "FROM ${RUNTIME_BASE_IMAGE} AS gateway-runtime";
     const runtimeStage = dockerfile.slice(dockerfile.indexOf(runtimeStageMarker));
     const runtimeInstructions = runtimeStage
       .split("\n")
