@@ -1636,6 +1636,28 @@ describe("migrate-customer — input validation", () => {
 });
 
 describe("migrate-customer — legacy data-plane migration (shared class)", () => {
+  it.each([true, false])("clears a failed idle probe only after target cleanup (%s)", async (cleanupConfirmed) => {
+    const h = mkDeps();
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
+    vi.mocked(h.client.quiesce).mockRejectedValueOnce(new Error("agent startup inspection failed"));
+    if (!cleanupConfirmed) vi.mocked(h.client.unmount).mockRejectedValue(new Error("target cleanup unknown"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result.success).toBe(false);
+    expect(h.client.flushGateway).not.toHaveBeenCalled();
+    if (cleanupConfirmed) expect(h.deps.clearMigrationPreparation).toHaveBeenCalledWith({ uid: "uid-alice", sourceGatewayId: "gw-blue", operationId: "op-1", sourceAssignmentMode: "assigned", sourceRelease: 1, sourceEpoch: 4 });
+    else expect(h.deps.clearMigrationPreparation).not.toHaveBeenCalled();
+  });
+
+  it("clears preparation when key transfer fails before source quiescence", async () => {
+    const h = mkDeps();
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
+    vi.mocked(h.client.transferState).mockRejectedValueOnce(new Error("key transfer failed"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledWith({ uid: "uid-alice", sourceGatewayId: "gw-blue", operationId: "op-1", sourceAssignmentMode: "assigned", sourceRelease: 1, sourceEpoch: 4 });
+  });
+
   it.each([true, false])("clears failed preparation only after target unmount is confirmed (%s)", async (cleanupConfirmed) => {
     const h = mkDeps();
     h.deps.clearMigrationPreparation = vi.fn(async () => undefined);

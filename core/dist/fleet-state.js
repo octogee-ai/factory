@@ -184,12 +184,12 @@ export async function clearWorkspaceMigrationPreparation(deps, params) {
         const input = recordOrEmpty(operation.input);
         const exact = [
             userSnapshot.exists, operationSnapshot.exists,
-            marker?.state === "preparing", marker?.phase === "preparing", marker?.operationId === params.operationId,
+            marker?.state === "preparing", marker?.operationId === params.operationId,
             openclaw.gatewayId === params.sourceGatewayId,
             input.uid === params.uid, input.fromGatewayId === params.sourceGatewayId,
             typeof input.toGatewayId === "string", input.toGatewayId !== params.sourceGatewayId,
             await preparationSourceMatches(deps, txn, params, sourceSnapshot),
-            preparationStepsMatch(operation, "done"),
+            preparationCleanupMatches(operation, marker?.phase),
         ].every(Boolean);
         if (!exact)
             throw new Error("workspace preparation cleanup authority changed");
@@ -198,6 +198,25 @@ export async function clearWorkspaceMigrationPreparation(deps, params) {
             throw new Error("workspace preparation target assignment remains");
         clearWorkspaceMigrationMarker(txn, deps, params.uid);
     });
+}
+function preparationCleanupMatches(operation, phase) {
+    if (phase === "preparing" && preparationStepsMatch(operation, "done"))
+        return true;
+    if (operation.kind !== MIGRATE_CUSTOMER_OPERATION_KIND ||
+        !["running", "failed"].includes(String(operation.status)) ||
+        operation.cutoverCommittedAt !== undefined || operation.customerMigrationV2 !== undefined ||
+        operation.cancellationRequestedAt !== undefined || !Array.isArray(operation.steps))
+        return false;
+    if (phase !== "preparing" && phase !== "waiting")
+        return false;
+    const expected = phase === "preparing" ? [["keys-sync-state", "failed"]] : [
+        ["keys-sync-state", "done"], ["pre-sync-state", "done"], ["target-scheduler-ready", "done"],
+        ["wait-for-active-work", "failed"], ["rollback:unmount-target", "done"],
+    ];
+    return isDeepStrictEqual(operation.steps.map(value => {
+        const step = recordOrEmpty(value);
+        return [step.name, step.status];
+    }), expected);
 }
 export async function clearRetiredBuilderActivationPreparation(deps, params) {
     const operationId = builderActivateOperationId(params.targetGatewayId, params.generation);

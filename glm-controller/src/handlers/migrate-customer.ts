@@ -1890,11 +1890,13 @@ async function executeMigration(
     }),
   });
   let targetUnmountConfirmed = false;
+  let preparationFailed = false;
   const destinationContext: OperationContext = {
     ...ctx,
     reportStep: async (step) => {
       await ctx.reportStep(step);
       if (step.name === "rollback:unmount-target" && step.status === "done") targetUnmountConfirmed = true;
+      if (["keys-sync-state", "pre-sync-state", "wait-for-active-work"].includes(step.name) && step.status === "failed") preparationFailed = true;
       await progress.report(step.name, step.status);
     },
   };
@@ -1932,7 +1934,7 @@ async function executeMigration(
       recordSchedulesStaged: () => persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() }),
     },
   );
-  if (result.rolledBack && result.finalPhase === "keys-synced" && targetUnmountConfirmed) {
+  if (preparationFailed && (result.finalPhase === "initial" || result.rolledBack && targetUnmountConfirmed)) {
     await deps.clearMigrationPreparation?.({
       uid: prepared.uid,
       sourceGatewayId: prepared.user.currentGatewayId,
