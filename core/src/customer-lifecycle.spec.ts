@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { provisionCoachAutomation } from "./gateway-rpc.js";
 import {
   addCustomerToGateway,
   cloneMissingProjects,
@@ -91,6 +92,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     loadUserSnapshot: async () => state.user,
 
     setProvisioningStatus: async (_uid, status) => write("provisioning.openclaw.status", status),
+    provisionCoachAutomation: async () => record("provisionCoachAutomation"),
     setRepoUrl: async (_uid, repoUrl) => write("provisioning.git.repoUrl", repoUrl),
     setMattermostFields: async (_uid, fields) => write("mattermost.*", fields),
     setAgentIds: async (_uid, agentIds) =>
@@ -352,6 +354,57 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     expect(state.calls).toContain("waitForAccountHealthy");
     expect(state.writes).toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
     expect(state.writes.some((write) => write.field.includes("greeting"))).toBe(false);
+  });
+
+  it("provisions coach monitoring after readiness and before durable completion", async () => {
+    await addCustomerToGateway(makeAdapter(state), "uid-test");
+    const provisioned = state.calls.indexOf("provisionCoachAutomation");
+    expect(provisioned).toBeGreaterThan(state.calls.indexOf("waitForAccountHealthy"));
+    expect(provisioned).toBeLessThan(state.calls.lastIndexOf("write:provisioning.openclaw.status"));
+  });
+
+  it("uses the created Mattermost owner for initial monitoring even while the snapshot is stale", async () => {
+    const adapter = makeAdapter(state);
+    const ownerId = "a".repeat(26);
+    const cronAdd = vi.fn(async () => ({ id: "initial-monitor" }));
+    adapter.provisionMattermostUser = async () => ({ "mattermost.userId": ownerId });
+    adapter.provisionCoachAutomation = async (customer) => {
+      await provisionCoachAutomation({ cronAdd }, customer);
+    };
+    await addCustomerToGateway(adapter, "uid-test");
+    expect(cronAdd).toHaveBeenCalledWith(expect.objectContaining({
+      delivery: { mode: "announce", channel: "mattermost", accountId: "test-coach", to: `user:${ownerId}` },
+    }));
+  });
+
+  it("refuses a missing created Mattermost owner before monitoring or completion", async () => {
+    const adapter = makeAdapter(state);
+    adapter.provisionMattermostUser = async () => ({});
+    adapter.provisionCoachAutomation = vi.fn(async () => {});
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("has no Mattermost owner");
+    expect(adapter.provisionCoachAutomation).not.toHaveBeenCalled();
+    expect(state.writes).not.toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
+  });
+
+  it("keeps failed monitor provisioning pending and retries before completing", async () => {
+    const adapter = makeAdapter(state);
+    const provision = vi.fn().mockRejectedValueOnce(new Error("cron unavailable")).mockResolvedValue(undefined);
+    adapter.provisionCoachAutomation = provision;
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("cron unavailable");
+    expect(state.writes).not.toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
+    state.user = snap({ status: "provisioning", mattermostUserId: "mm-user" });
+    await addCustomerToGateway(adapter, "uid-test");
+    expect(provision).toHaveBeenCalledTimes(2);
+    expect(state.writes).toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
+  });
+
+  it("does not recreate deleted monitoring during a completed customer reconcile", async () => {
+    state.user = mountedSnapshot({ agentIds: ["octogee-test-coach"] });
+    state.disk = mountedDisk();
+    const adapter = makeAdapter(state);
+    adapter.provisionCoachAutomation = vi.fn(async () => {});
+    await addCustomerToGateway(adapter, "uid-test");
+    expect(adapter.provisionCoachAutomation).not.toHaveBeenCalled();
   });
 
   it("runs the full first-time flow and writes Firestore in canonical order", async () => {
@@ -2721,6 +2774,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     log: false,
     loadUserSnapshot: false,
     setProvisioningStatus: false,
+    provisionCoachAutomation: false,
     setRepoUrl: false,
     setMattermostFields: false,
     setAgentIds: false,

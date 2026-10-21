@@ -563,6 +563,7 @@ export class AgentImportService {
     const adapted = adaptedArtifacts(input.artifacts, doctor);
     const config = planAgentImportConfig(adapted.artifacts, {
       doctorOutcome: adapted.outcome,
+      sourceHeartbeat: input.artifacts.portableAgent.heartbeat,
       workspacePolicy: input.workspacePolicy,
     });
     const comparison = await this.deps.compareWorkspaces(
@@ -575,7 +576,7 @@ export class AgentImportService {
       source: input.source,
       destinationHead: destination.head,
       workspaceDigest: input.inspected.workspaceDigest,
-      artifacts: adapted.artifacts,
+      artifacts: input.artifacts,
       comparison,
       workspacePolicy: input.workspacePolicy,
     });
@@ -608,7 +609,7 @@ export class AgentImportService {
         source: input.source,
         destinationHead: destination.head,
         approvalHash: hash,
-        artifacts: adapted.artifacts,
+        artifacts: input.artifacts,
         config,
         workspacePolicy: input.workspacePolicy,
       });
@@ -770,7 +771,9 @@ export class AgentImportService {
       : checkpoint.warnings;
     return this.update(checkpoint, {
       status: "verifying",
-      configOutcome: configured.outcome,
+      configOutcome: configured.outcome === "unchanged"
+        ? plan.config.effectiveOutcome
+        : configured.outcome,
       previousRuntime: configured.previous,
       warnings,
     });

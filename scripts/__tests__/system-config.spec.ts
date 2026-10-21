@@ -334,7 +334,7 @@ describe("system_config restore", () => {
       agentDir: expect.stringMatching(/octogee-robert-coach\/agent$/),
       model: "platform-openrouter/openai/gpt-5.6-luna",
     });
-    expect(seeded.agents.entries["octogee-unmatched-route"]).toMatchObject({ heartbeat: { every: "0m" } });
+    expect(seeded.agents.entries["octogee-unmatched-route"]).not.toHaveProperty("heartbeat");
     expect(seeded.agents.defaults.authInheritance).toEqual({ agentId: "octogee-unmatched-route" });
     expect(seeded.agents.defaults.systemAgent).toEqual({ agentId: "octogee-robert-coach" });
     expect(() => assertPlatformInvariants(seeded, env)).not.toThrow();
@@ -352,7 +352,7 @@ describe("system_config restore", () => {
         entries: {
           main: {},
           "octogee-robert-proj-golf-coach": { workspace: "/customers/robert/projects/golf", model: "house" },
-          "octogee-unmatched-route": { name: "Unmatched Mattermost route", heartbeat: { every: "0m" } },
+          "octogee-unmatched-route": { name: "Unmatched Mattermost route" },
           "octogee-robert-coach": { workspace: "/customers/robert", model: { primary: "house", fallbacks: [] } },
         },
       },

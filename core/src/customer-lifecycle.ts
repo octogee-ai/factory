@@ -160,6 +160,7 @@ export interface CustomerLifecycleAdapter {
   seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;
 
   setProvisioningStatus: (uid: string, status: "provisioning" | "complete") => Promise<void>;
+  provisionCoachAutomation: (customer: Pick<UserSnapshot, "slug" | "mattermostUserId">) => Promise<void>;
   setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;
   setMattermostFields: (uid: string, fields: MmUpdate) => Promise<void>;
   setAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
@@ -884,7 +885,7 @@ async function addCustomerToGatewayInner(
   adapter.log(
     `✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms`,
   );
-  steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
+  steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer, mm.mmUpdate)));
 
   markStep("community-membership");
   steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
@@ -1388,8 +1389,16 @@ async function markCompleteIfNeeded(
   uid: string,
   snapshot: UserSnapshot,
   newCustomer: boolean,
+  mmUpdate: MmUpdate | null,
 ): Promise<AddCustomerStep[]> {
   if (!newCustomer && snapshot.agentIds.length > 0) return [];
+  if (newCustomer) {
+    const mattermostUserId = mmUpdate ? mmUpdate["mattermost.userId"] : snapshot.mattermostUserId;
+    if (mattermostUserId !== null && typeof mattermostUserId !== "string") {
+      throw new Error(`Initial coach monitoring for ${snapshot.slug} has no Mattermost owner`);
+    }
+    await adapter.provisionCoachAutomation({ slug: snapshot.slug, mattermostUserId });
+  }
   const coachAgentId = `octogee-${snapshot.slug}-coach`;
   await adapter.setAgentIds(uid, [coachAgentId]);
   await adapter.setProvisioningStatus(uid, "complete");

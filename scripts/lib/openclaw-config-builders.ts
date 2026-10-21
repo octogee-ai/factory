@@ -128,7 +128,6 @@ export function buildCustomerAgent(
     agentDir: c.agentDir,
     model: c.coach.model,
     identity: { name: c.coach.name, emoji: c.coach.emoji },
-    heartbeat: { every: "60m", target: "last", lightContext: true },
     // A Builder gateway coach inherits the gateway-level tools of the Builder
     // template; only a shared-gateway coach carries the customer lockdown.
     ...(c.hostCode === "builder-full" ? {} : { tools: workspaceCoachTools() }),
@@ -440,7 +439,6 @@ export function buildSafeDefaultAgent(env: NodeJS.ProcessEnv = process.env): Rec
     id: SAFE_DEFAULT_AGENT_ID,
     name: "Unmatched Mattermost route",
     workspace: `${env.OPENCLAW_DIR || "/home/node/.openclaw"}/workspace-${SAFE_DEFAULT_AGENT_ID}`,
-    heartbeat: { every: "0m" },
     tools: {
       profile: "minimal",
       alsoAllow: [],

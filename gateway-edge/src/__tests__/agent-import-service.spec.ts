@@ -45,7 +45,7 @@ function artifacts() {
         name: "Moof",
         persona: "Jack's trusty sidekick.",
         identity: { emoji: "🐮" },
-        heartbeat: { every: "30m", lightContext: true },
+        timeoutSeconds: 300,
         model: "anthropic/claude-sonnet",
       }],
     },
@@ -54,7 +54,7 @@ function artifacts() {
 }
 
 function openClawRuntimeHarness(initialConfig: Record<string, unknown> = {
-  agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] },
+  agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 600 }] },
 }) {
   const config = structuredClone(initialConfig);
   let revision = 0;
@@ -181,6 +181,39 @@ function harness(overrides: Partial<AgentImportServiceDeps> = {}) {
 }
 
 describe("AgentImportService preview", () => {
+  it("keeps retired heartbeat visible after Doctor migration without importing temporary schedules", async () => {
+    const original = buildAgentImportConfigArtifacts({
+      agents: { list: [{ id: "moof", heartbeat: { every: "30m", lightContext: true } }] },
+    }, "moof");
+    const h = harness({
+      runDoctor: vi.fn(async () => ({
+        outcome: "migrated", doctorVersion: "2026.10.5", changedPaths: ["agents.list"], diagnostics: [],
+        repairedCandidate: { agents: { entries: { moof: {} } } },
+      })),
+    });
+    const preview = await h.service.previewGithub({
+      uid: "uid-jack", slug: "jack", gatewayId: "shared-1", owner: "jack", repo: "moof", branch: "main",
+      artifacts: original,
+    });
+    expect(preview.doctor.outcome).toBe("migrated");
+    expect(preview.config.runtimePatch).toEqual({});
+    expect(preview.config.effectiveOutcome).toBe("safe_baseline");
+    expect(preview.config.decisions).toContainEqual(expect.objectContaining({
+      path: "heartbeat.every", disposition: "manual_review",
+      reason: expect.stringMatching(/native Doctor.*Automations.*not transfer schedules/),
+    }));
+    expect(h.plans.get(preview.id)?.artifacts).toEqual(original);
+    const completed = await h.service.apply({ uid: "uid-jack", importId: preview.id, approvalHash: preview.approvalHash });
+    expect(completed.configOutcome).toBe("safe_baseline");
+    expect(completed.warnings).not.toContain("config_delta_rejected");
+    const patches = vi.mocked(h.deps.invokeOpenClaw).mock.calls.filter(([method]) => method === "config.patch");
+    expect(patches).toHaveLength(1);
+    expect(JSON.parse(String(patches[0][1].raw))).toEqual({
+      agents: { list: [{ id: "octogee-jack-coach", skipBootstrap: true }] },
+    });
+    expect(h.deps.invokeOpenClaw).not.toHaveBeenCalledWith("cron.migration", expect.anything());
+  });
+
   it("uses the authorized workspace ownership policy for preview and apply", async () => {
     const compareWorkspaces = vi.fn(async () => ({
       conflicts: [],
@@ -556,7 +589,7 @@ describe("AgentImportService apply and rollback", () => {
     const before = {
       agents: { list: [
         { id: "other", name: "Other", apiKey: "__OPENCLAW_REDACTED__", tools: { profile: "full" } },
-        { id: "octogee-jack-coach", name: "Octo", tools: { profile: "safe" }, heartbeat: { every: "60m", jitter: "5m" } },
+        { id: "octogee-jack-coach", name: "Octo", tools: { profile: "safe" }, timeoutSeconds: 600, thinkingDefault: "medium" },
       ] },
     };
     const runtime = openClawRuntimeHarness(before);
@@ -571,7 +604,7 @@ describe("AgentImportService apply and rollback", () => {
 
     expect(invokeOpenClaw).toHaveBeenNthCalledWith(6, "config.patch", {
       raw: JSON.stringify({
-        agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] },
+        agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 300 }] },
       }),
       baseHash: "config-1",
     });
@@ -581,7 +614,7 @@ describe("AgentImportService apply and rollback", () => {
         {
           ...before.agents.list[1],
           skipBootstrap: true,
-          heartbeat: { every: "30m", jitter: "5m", lightContext: true },
+          timeoutSeconds: 300, thinkingDefault: "medium",
         },
       ] },
     });
@@ -598,7 +631,7 @@ describe("AgentImportService apply and rollback", () => {
           "octogee-jack-coach": {
             name: "Octo",
             tools: { profile: "safe" },
-            heartbeat: { every: "60m", jitter: "5m" },
+            timeoutSeconds: 600, thinkingDefault: "medium",
           },
         },
       },
@@ -622,7 +655,7 @@ describe("AgentImportService apply and rollback", () => {
       raw: JSON.stringify({
         agents: {
           entries: {
-            "octogee-jack-coach": { heartbeat: { every: "30m", lightContext: true } },
+            "octogee-jack-coach": { timeoutSeconds: 300 },
           },
         },
       }),
@@ -635,7 +668,7 @@ describe("AgentImportService apply and rollback", () => {
           "octogee-jack-coach": {
             ...before.agents.entries["octogee-jack-coach"],
             skipBootstrap: true,
-            heartbeat: { every: "30m", jitter: "5m", lightContext: true },
+            timeoutSeconds: 300, thinkingDefault: "medium",
           },
         },
       },
@@ -647,7 +680,7 @@ describe("AgentImportService apply and rollback", () => {
       hash: "before",
       config: { agents: { list: [
         { name: "Legacy", apiKey: "__OPENCLAW_REDACTED__" },
-        { id: "octogee-jack-coach", heartbeat: { every: "60m" } },
+        { id: "octogee-jack-coach", timeoutSeconds: 600 },
       ] } },
     });
     const h = harness({ invokeOpenClaw });
@@ -705,12 +738,12 @@ describe("AgentImportService apply and rollback", () => {
     });
     expect(h.deps.invokeOpenClaw).toHaveBeenNthCalledWith(6, "config.patch", {
       raw: JSON.stringify({
-        agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "30m", lightContext: true } }] },
+        agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 300 }] },
       }),
       baseHash: "config-1",
     });
     const runtimeCheckpointCall = vi.mocked(h.deps.putRecord).mock.calls.findIndex(([record]) =>
-      record.previousRuntime?.heartbeat !== undefined
+      record.previousRuntime?.timeoutSeconds !== undefined
     );
     expect(vi.mocked(h.deps.putRecord).mock.invocationCallOrder[runtimeCheckpointCall])
       .toBeLessThan(vi.mocked(h.deps.invokeOpenClaw).mock.invocationCallOrder[5]);
@@ -726,20 +759,20 @@ describe("AgentImportService apply and rollback", () => {
     const invokeOpenClaw = vi.fn()
       .mockResolvedValueOnce({
         hash: "config-before",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+        config: { agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 600 }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "config-platform",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockResolvedValueOnce({ status: "ok" })
       .mockResolvedValueOnce({
         hash: "config-optional-before",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockRejectedValueOnce(new Error("config patch rejected"))
@@ -747,14 +780,14 @@ describe("AgentImportService apply and rollback", () => {
         hash: "config-rollback",
         config: { agents: { list: [{
           id: "octogee-jack-coach", skipBootstrap: true,
-          heartbeat: { every: "30m", lightContext: true },
+          timeoutSeconds: 300,
         }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "config-restored",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockResolvedValueOnce({ status: "ok" });
@@ -775,7 +808,7 @@ describe("AgentImportService apply and rollback", () => {
     expect(completed.warnings).toContain("config_delta_rejected");
     expect(invokeOpenClaw).toHaveBeenNthCalledWith(8, "config.patch", expect.objectContaining({
       raw: JSON.stringify({
-        agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m", lightContext: null } }] },
+        agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 600 }] },
       }),
     }));
   });
@@ -784,20 +817,20 @@ describe("AgentImportService apply and rollback", () => {
     const invokeOpenClaw = vi.fn()
       .mockResolvedValueOnce({
         hash: "config-before",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+        config: { agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 600 }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "config-platform",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockResolvedValueOnce({ status: "ok" })
       .mockResolvedValueOnce({
         hash: "config-optional-before",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockRejectedValueOnce(new Error("config patch rejected"))
@@ -805,7 +838,7 @@ describe("AgentImportService apply and rollback", () => {
         hash: "config-rollback",
         config: { agents: { list: [{
           id: "octogee-jack-coach", skipBootstrap: true,
-          heartbeat: { every: "30m", lightContext: true },
+          timeoutSeconds: 300,
         }] } },
       })
       .mockResolvedValueOnce({ ok: true })
@@ -813,7 +846,7 @@ describe("AgentImportService apply and rollback", () => {
         hash: "config-still-wrong",
         config: { agents: { list: [{
           id: "octogee-jack-coach", skipBootstrap: true,
-          heartbeat: { every: "30m", lightContext: true },
+          timeoutSeconds: 300,
         }] } },
       });
     const h = harness({ invokeOpenClaw });
@@ -836,27 +869,27 @@ describe("AgentImportService apply and rollback", () => {
     const invokeOpenClaw = vi.fn()
       .mockResolvedValueOnce({
         hash: "before",
-        config: { agents: { list: [{ id: "octogee-jack-coach", heartbeat: { every: "60m" } }] } },
+        config: { agents: { list: [{ id: "octogee-jack-coach", timeoutSeconds: 600 }] } },
       })
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
         hash: "platform",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockResolvedValueOnce({ status: "ok" })
       .mockResolvedValueOnce({
         hash: "optional-before",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "60m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 600,
         }] } },
       })
       .mockRejectedValueOnce(new Error("base hash mismatch"))
       .mockResolvedValueOnce({
         hash: "concurrent",
         config: { agents: { list: [{
-          id: "octogee-jack-coach", skipBootstrap: true, heartbeat: { every: "45m" },
+          id: "octogee-jack-coach", skipBootstrap: true, timeoutSeconds: 450,
         }] } },
       });
     const h = harness({ invokeOpenClaw });
@@ -922,7 +955,7 @@ describe("AgentImportService apply and rollback", () => {
       agents: { list: [{
         id: "octogee-jack-coach",
         skipBootstrap: true,
-        heartbeat: { every: "30m", lightContext: true },
+        timeoutSeconds: 300,
       }] },
     }).invokeOpenClaw;
 

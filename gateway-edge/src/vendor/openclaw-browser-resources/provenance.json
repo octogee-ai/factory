@@ -1,7 +1,7 @@
 {
-  "source": "127953fd7dacfbfb6438dce323dedad6b05a9f20",
+  "source": "b74ff0c433d355260925bda948f61ff4982ab657",
   "inputs": {
-    "sha256": "433963fe418b2268d7a9f2d268fa42953a8bfec5890a3b557e7f10a35a99830a",
+    "sha256": "3db5a8ac480a5d9455f097638aec6811263dcb5472309f1c4b84ad57f2832f13",
     "files": [
       "octogee/app/openclaw-browser/entry.ts",
       "octogee/app/openclaw-browser/media.ts",
@@ -11,8 +11,9 @@
       "octogee/app/openclaw-islands/i18n.ts",
       "octogee/app/openclaw-islands/inline-css.mjs",
       "octogee/app/openclaw-islands/licenses.mjs",
-      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.14/LICENSE",
-      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.14/provenance.json",
+      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.16/LICENSE",
+      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.16/provenance.json",
+      "octogee/app/openclaw-islands/mermaid-assets.mjs",
       "octogee/app/openclaw-islands/provenance.mjs",
       "octogee/app/openclaw-islands/solid-runtime.mjs",
       "octogee/app/openclaw-tool-icons/entry.ts",

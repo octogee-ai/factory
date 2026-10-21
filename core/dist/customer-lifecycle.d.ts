@@ -127,6 +127,7 @@ export interface CustomerLifecycleAdapter {
     }) => Promise<UserSnapshot | null>;
     seedUserSnapshotForMigration?: (snapshot: FleetBrokerUserSnapshot) => void;
     setProvisioningStatus: (uid: string, status: "provisioning" | "complete") => Promise<void>;
+    provisionCoachAutomation: (customer: Pick<UserSnapshot, "slug" | "mattermostUserId">) => Promise<void>;
     setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;
     setMattermostFields: (uid: string, fields: MmUpdate) => Promise<void>;
     setAgentIds: (uid: string, agentIds: string[]) => Promise<void>;

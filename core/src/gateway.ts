@@ -36,7 +36,6 @@ type GatewayAuthConfig = NonNullable<GatewayConfig["auth"]>;
 
 const MIN_AGENT_CONCURRENCY = 8;
 const MIN_SUBAGENT_RUN_TIMEOUT_SECONDS = 900;
-const DEFAULT_HEARTBEAT = { every: "60m", target: "last", lightContext: true };
 
 function ensureAgents(config: OpenClawConfig): AgentConfig {
   config.agents ??= {};
@@ -100,24 +99,13 @@ function ensureCoachWorkspaceFs(agent: OpenClawAgentConfig): boolean {
   return true;
 }
 
-function ensureCoachHeartbeat(agent: OpenClawAgentConfig): boolean {
-  if (agent.heartbeat != null) return false;
-
-  agent.heartbeat = { ...DEFAULT_HEARTBEAT };
-  log(`${agent.id} → heartbeat default (every=60m, target=last, lightContext=true)`);
-  return true;
-}
-
 function applyCoachAgentDefaults(agent: OpenClawAgentConfig): boolean {
   if (!isCoachAgent(agent)) return false;
 
-  const changed = [
-    ensureCoachWorkspaceFs(agent),
-    ensureCoachHeartbeat(agent),
-  ].some(Boolean);
+  const changed = ensureCoachWorkspaceFs(agent);
 
   if (changed) {
-    log(`Gateway defaults: ${agent.id} → fs.workspaceOnly=true, heartbeat defaulted`);
+    log(`Gateway defaults: ${agent.id} → fs.workspaceOnly=true`);
   }
   return changed;
 }

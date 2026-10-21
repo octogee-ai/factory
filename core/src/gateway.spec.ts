@@ -101,9 +101,9 @@ describe("applyGatewayDefaults", () => {
       windowMs: 60000,
       lockoutMs: 300000,
     });
+    expect(config.agents?.list?.[0]).not.toHaveProperty("heartbeat");
     expect(config.agents?.list?.[0]).toMatchObject({
       model: "old-model",
-      heartbeat: { every: "60m", target: "last", lightContext: true },
       tools: { fs: { workspaceOnly: true }, deny: ["exec", "process", "other"] },
     });
   });

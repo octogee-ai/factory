@@ -20,6 +20,14 @@ describe("buildUserOperationalFields", () => {
         { status: "complete", slug: "octogeedemo", agentIds: ["octogee-octogeedemo-coach"] },
         { "mattermost.teamId": "team-1" },
       ),
+    ).not.toHaveProperty("provisioning.openclaw.status");
+
+    expect(
+      buildUserOperationalFields(
+        ctx,
+        { status: "complete", slug: "octogeedemo", agentIds: ["octogee-octogeedemo-coach"] },
+        { "mattermost.teamId": "team-1" },
+      ),
     ).toMatchObject({
       workspaceId: "octogeedemo",
       tier: "trial",

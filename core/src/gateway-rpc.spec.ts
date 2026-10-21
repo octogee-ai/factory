@@ -7,10 +7,12 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   OpenclawWireError,
   createGatewayRpc,
+  provisionCoachAutomation,
   isAgentAlreadyExistsRpcError,
   isAgentDeletionPendingRpcError,
   isAgentNotFoundRpcError,
   type ConnectTrace,
+  type CronAddSpec,
   type GatewayRpcClient,
 } from "./gateway-rpc.js";
 import type { DeviceIdentity } from "./gateway-device-identity.js";
@@ -1005,6 +1007,37 @@ describe("gateway-rpc", () => {
 
       expect(captured).toEqual(job);
       expect(result.id).toBe("job-abc");
+    });
+
+    it.each([true, false])("accepts native declaration convergence (created: %s)", async (created) => {
+      server.setHandler("cron.add", () => ({
+        ok: true,
+        payload: { created, updated: false, job: { id: "coach-monitor", agentId: "octogee-test-coach" } },
+      }));
+      await expect(client.cronAdd({
+        name: "Proactive check",
+        declarationKey: "octogee:coach-monitor:octogee-test-coach",
+        agentId: "octogee-test-coach",
+        enabled: true,
+        idleOnly: true,
+        schedule: { kind: "every", everyMs: 1_800_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Review your automation scratch checklist.", skipIfScratchEmpty: true },
+        delivery: { mode: "announce", target: "owner" },
+      })).resolves.toMatchObject({ id: "coach-monitor", created });
+    });
+
+    it.each([{ created: true, job: {} }, { created: false, job: "invalid" }])("rejects malformed native declaration result %#", async (payload) => {
+      server.setHandler("cron.add", () => ({ ok: true, payload }));
+      await expect(client.cronAdd({
+        name: "Proactive check",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 1_800_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Review the checklist." },
+      })).rejects.toMatchObject({ code: "invalid-response" });
     });
 
     it("throws OpenclawWireError('invalid-response') if the server returns a non-object payload", async () => {
@@ -2149,5 +2182,46 @@ await new Promise((r) => setTimeout(r, 50));
 
     expect(crashes).toEqual([]);
     await client.close();
+  });
+});
+
+describe("initial coach automation", () => {
+  it("uses the upstream proactive job contract through the existing scheduler", async () => {
+    const cronAdd = vi.fn(async (_job: CronAddSpec) => ({ id: "monitor" }));
+    await provisionCoachAutomation({ cronAdd }, { slug: "test", mattermostUserId: "a".repeat(26) });
+    expect(cronAdd).toHaveBeenCalledWith({
+      declarationKey: "octogee:coach-monitor:octogee-test-coach",
+      name: "Proactive check (octogee-test-coach)",
+      agentId: "octogee-test-coach",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 1_800_000 },
+      sessionTarget: "session:agent:octogee-test-coach:main",
+      sessionKey: "agent:octogee-test-coach:main",
+      wakeMode: "now",
+      idleOnly: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Review your automation scratch checklist and relevant session context. Do not infer or repeat old tasks from prior conversations. Take useful action only when needed. Use NO_REPLY when there is nothing to tell the user.",
+        skipIfScratchEmpty: true,
+      },
+      delivery: { mode: "announce", channel: "mattermost", accountId: "test-coach", to: `user:${"a".repeat(26)}` },
+    });
+  });
+
+  it("binds each coach job to that customer's account and direct user target", async () => {
+    const cronAdd = vi.fn(async (_job: CronAddSpec) => ({ id: "monitor" }));
+    await provisionCoachAutomation({ cronAdd }, { slug: "alice", mattermostUserId: "a".repeat(26) });
+    await provisionCoachAutomation({ cronAdd }, { slug: "bob", mattermostUserId: "b".repeat(26) });
+    expect(cronAdd.mock.calls.map(([job]) => job.delivery)).toEqual([
+      { mode: "announce", channel: "mattermost", accountId: "alice-coach", to: `user:${"a".repeat(26)}` },
+      { mode: "announce", channel: "mattermost", accountId: "bob-coach", to: `user:${"b".repeat(26)}` },
+    ]);
+  });
+
+  it("refuses initial monitoring without a canonical customer destination", () => {
+    const cronAdd = vi.fn();
+    expect(() => provisionCoachAutomation({ cronAdd }, { slug: "alice", mattermostUserId: null }))
+      .toThrow("requires its customer's Mattermost user ID");
+    expect(cronAdd).not.toHaveBeenCalled();
   });
 });

@@ -22,12 +22,10 @@ function agentId(scope: AutomationScope): string { return `octogee-${scope.slug}
 function accountId(scope: AutomationScope): string { return `${scope.slug}-coach`; }
 function sessionAgent(value: unknown): string | null { return typeof value === "string" ? /^agent:([^:]+):.+$/.exec(value)?.[1] ?? null : null; }
 
-function projectedJob(job: AutomationRecord, scope: AutomationScope): boolean {
-  const agent = agentId(scope), payload = automationRecord(job.payload);
-  if (job.effectiveAgentId !== agent || (job.agentId !== undefined && job.agentId !== agent)) return false;
-  if (job.declarationKey === `heartbeat:${agent}`) return payload?.kind === "heartbeat";
-  if (job.declarationKey === `skill-collection-review:${agent}`) return payload?.kind === "agentTurn";
-  return job.declarationKey === "memory-core:memory-dreaming-promotion" && payload?.kind === "agentTurn" && payload.message === "__openclaw_memory_core_short_term_promotion_dream__" && payload.lightContext === true;
+function tenantAgentJob(job: AutomationRecord, scope: AutomationScope): boolean {
+  return job.agentId === agentId(scope) && job.effectiveAgentId === agentId(scope) &&
+    automationRecord(job.payload)?.kind === "agentTurn" &&
+    sessionAgent(job.sessionKey) === agentId(scope) && executionScoped(job, scope);
 }
 function protectedPayload(job: AutomationRecord): boolean {
   const payload = automationRecord(job.payload), schedule = automationRecord(job.schedule);
@@ -44,7 +42,7 @@ function ownsJob(job: AutomationRecord, scope: AutomationScope): boolean {
   if (protectedPayload(job)) return false;
   if (job.owner === undefined) {
     const policy = automationRecord(job.scheduledToolPolicy);
-    return (job.scheduledToolPolicy === undefined || (policy?.version === 1 && policy.mode === "trusted")) && projectedJob(job, scope);
+    return (job.scheduledToolPolicy === undefined || (policy?.version === 1 && policy.mode === "trusted")) && tenantAgentJob(job, scope);
   }
   const owner = automationRecord(job.owner);
   if (!owner || owner.agentId !== agentId(scope) || owner.accountId !== accountId(scope) ||
@@ -124,7 +122,8 @@ function scopedPage(rows: AutomationRecord[], params: AutomationRecord): Automat
 function executionScoped(job: AutomationRecord, scope: AutomationScope): boolean {
   if (job.effectiveAgentId !== agentId(scope)) return false;
   if (job.sessionKey !== undefined && sessionAgent(job.sessionKey) !== agentId(scope)) return false;
-  return job.sessionTarget === "isolated" || job.sessionTarget === "main";
+  return job.sessionTarget === "isolated" || job.sessionTarget === "main" ||
+    (sessionAgent(job.sessionKey) === agentId(scope) && job.sessionTarget === `session:${job.sessionKey}`);
 }
 function jobCapabilities(job: AutomationRecord, scope: AutomationScope): HostedAutomationJobCapabilities {
   return { history: executionScoped(job, scope) };

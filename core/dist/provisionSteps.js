@@ -91,7 +91,6 @@ export function registerCoachAgent(ctx, config) {
                 name: CREW_IDENTITY.coach.name,
                 emoji: CREW_IDENTITY.coach.emoji,
             },
-            heartbeat: { every: "60m", target: "last", lightContext: true },
             tools: { fs: { workspaceOnly: true } },
         };
         config.agents.list.push(agentEntry);

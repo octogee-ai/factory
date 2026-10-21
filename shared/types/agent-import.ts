@@ -283,10 +283,42 @@ function doctorValue(
   return OMIT_DOCTOR_VALUE;
 }
 
+function sourceAgentEntries(config: JsonObject): Array<{ agent: JsonObject; path: string }> {
+  const agents = record(config.agents);
+  if (agents?.entries !== undefined) {
+    const entries = record(agents.entries);
+    if (!entries || agents.list !== undefined) {
+      throw new AgentImportConfigError("invalid_source_config", "agents.entries must be a keyed object without agents.list");
+    }
+    return Object.entries(entries).map(([id, value]) => {
+      const entry = record(value);
+      if (!entry || Object.prototype.hasOwnProperty.call(entry, "id")) {
+        throw new AgentImportConfigError("invalid_source_config", "keyed agent entries must use their key as the agent id");
+      }
+      return { agent: { ...entry, id }, path: `agents.entries.${id}` };
+    });
+  }
+  return Array.isArray(agents?.list) ? agents.list.flatMap((value, index) => {
+    const agent = record(value);
+    return agent ? [{ agent, path: `agents.list[${index}]` }] : [];
+  }) : [];
+}
+
+export function listAgentImportSourceAgents(source: unknown): Array<{ id: string; name: string }> {
+  const config = record(source);
+  if (!config) throw new AgentImportConfigError("invalid_source_config", "openclaw.json must contain an object");
+  return sourceAgentEntries(config).flatMap(({ agent }) => {
+    const id = trimmedString(agent.id, 160);
+    return id ? [{ id, name: trimmedString(agent.name, 80) ?? id }] : [];
+  });
+}
+
 function doctorCandidate(config: JsonObject, agent: JsonObject): JsonObject {
   const defaults = record(record(config.agents)?.defaults);
   const budget = { remaining: 5_000 };
-  const sanitizedAgent = doctorValue(agent, "", 0, budget);
+  const keyed = record(record(config.agents)?.entries) !== null;
+  const { id, ...entry } = agent;
+  const sanitizedAgent = doctorValue(keyed ? entry : agent, "", 0, budget);
   const sanitizedDefaults = defaults ? doctorValue(defaults, "", 0, budget) : undefined;
   const sourceOpenClawVersion = trimmedString(record(config.meta)?.lastTouchedVersion, 100);
   return compact({
@@ -295,7 +327,9 @@ function doctorCandidate(config: JsonObject, agent: JsonObject): JsonObject {
       defaults: record(sanitizedDefaults) && Object.keys(sanitizedDefaults as JsonObject).length > 0
         ? sanitizedDefaults as JsonObject
         : undefined,
-      list: [sanitizedAgent as JsonObject],
+      ...(keyed
+        ? { entries: { [String(id)]: sanitizedAgent as JsonObject } }
+        : { list: [sanitizedAgent as JsonObject] }),
     }),
   });
 }
@@ -375,14 +409,7 @@ export function buildAgentImportConfigArtifacts(
 ): AgentImportConfigArtifacts {
   const config = record(source);
   if (!config) throw new AgentImportConfigError("invalid_source_config", "openclaw.json must contain an object");
-  const list = record(config.agents)?.list;
-  if (!Array.isArray(list)) {
-    throw new AgentImportConfigError("source_agent_not_found", "openclaw.json has no agents.list");
-  }
-  const matches = list.flatMap((entry, index) => {
-    const agent = record(entry);
-    return agent?.id === selectedAgentId ? [{ agent, index }] : [];
-  });
+  const matches = sourceAgentEntries(config).filter(({ agent }) => agent.id === selectedAgentId);
   if (matches.length === 0) {
     throw new AgentImportConfigError("source_agent_not_found", `source agent ${selectedAgentId} was not found`);
   }
@@ -392,7 +419,7 @@ export function buildAgentImportConfigArtifacts(
   const selected = matches[0];
   const portable = portableAgent(config, selected.agent);
   const inventory: AgentImportConfigInventoryEntry[] = [];
-  inventoryEntries(config, "", `agents.list[${selected.index}]`, inventory);
+  inventoryEntries(config, "", selected.path, inventory);
   const boundedInventory = inventory.length <= 500
     ? inventory
     : [
@@ -571,10 +598,8 @@ export function validateAgentImportConfigArtifacts(value: unknown): AgentImportC
   const portable = validatePortable(artifacts.portableAgent);
   const inventory = validateInventory(artifacts.configInventory);
   const candidate = record(artifacts.doctorCandidate);
-  const candidateList = record(candidate?.agents)?.list;
-  const candidateAgent = Array.isArray(candidateList) && candidateList.length === 1
-    ? record(candidateList[0])
-    : null;
+  const candidateAgents = candidate ? sourceAgentEntries(candidate) : [];
+  const candidateAgent = candidateAgents.length === 1 ? candidateAgents[0].agent : null;
   if (!candidate || !candidateAgent || candidateAgent.id !== portable.sourceAgentId) {
     throw new AgentImportConfigError("invalid_config_artifact", "doctorCandidate must contain only the selected agent");
   }
@@ -596,7 +621,6 @@ export function validateAgentImportConfigArtifacts(value: unknown): AgentImportC
 
 function runtimeEntries(portable: AgentImportPortableAgent): Array<[string, unknown]> {
   const entries: Array<[string, unknown]> = [
-    ["heartbeat", portable.heartbeat],
     ["bootstrapMaxChars", portable.bootstrapMaxChars],
     ["bootstrapTotalMaxChars", portable.bootstrapTotalMaxChars],
     ["thinkingDefault", portable.thinkingDefault],
@@ -614,7 +638,11 @@ function runtimeDecisionPaths(path: string, value: unknown): string[] {
   );
 }
 
-function plannedRuntime(portable: AgentImportPortableAgent, doctorSafe: boolean): {
+function plannedRuntime(
+  portable: AgentImportPortableAgent,
+  doctorSafe: boolean,
+  sourceHeartbeat: AgentImportPortableAgent["heartbeat"],
+): {
   runtimePatch: JsonObject;
   decisions: AgentImportConfigDecision[];
 } {
@@ -628,6 +656,13 @@ function plannedRuntime(portable: AgentImportPortableAgent, doctorSafe: boolean)
       : "current OpenClaw could not validate the source config";
     if (doctorSafe) runtimePatch[path] = structuredClone(value);
     decisions.push(...paths.map((decisionPath) => ({ path: decisionPath, disposition, reason })));
+  }
+  if (sourceHeartbeat) {
+    decisions.push(...runtimeDecisionPaths("heartbeat", sourceHeartbeat).map((path) => ({
+      path,
+      disposition: "manual_review" as const,
+      reason: "Legacy heartbeat settings belong to native Doctor and ordinary Automations; this workspace import does not transfer schedules. Recreate the schedule through the Octogee agent.",
+    })));
   }
   return { runtimePatch, decisions };
 }
@@ -689,6 +724,7 @@ export function planAgentImportConfig(
   input: AgentImportConfigArtifacts,
   options: {
     doctorOutcome: AgentImportDoctorOutcome;
+    sourceHeartbeat?: AgentImportPortableAgent["heartbeat"];
     workspacePolicy: AgentImportWorkspacePolicy;
   },
 ): AgentImportConfigPlan {
@@ -700,7 +736,8 @@ export function planAgentImportConfig(
     persona: portable.persona,
     emoji: portable.identity?.emoji,
   });
-  const planned = plannedRuntime(portable, doctorSafe);
+  const sourceHeartbeat = options.sourceHeartbeat ?? portable.heartbeat;
+  const planned = plannedRuntime(portable, doctorSafe, sourceHeartbeat);
   planned.decisions.push({
     path: "skipBootstrap",
     disposition: "apply",
@@ -718,7 +755,7 @@ export function planAgentImportConfig(
   return {
     analyzer: "octogee-policy-v1",
     doctorOutcome: options.doctorOutcome,
-    effectiveOutcome: agentImportConfigOutcome(portable, planned.runtimePatch),
+    effectiveOutcome: agentImportConfigOutcome(portable, planned.runtimePatch, Boolean(sourceHeartbeat)),
     identity,
     workspaceRuntimePatch: {
       skipBootstrap: !options.workspacePolicy.preserveConvergedContextFiles,
@@ -732,9 +769,10 @@ export function planAgentImportConfig(
 function agentImportConfigOutcome(
   portable: AgentImportPortableAgent,
   runtimePatch: JsonObject,
+  hasLegacyHeartbeat: boolean,
 ): AgentImportConfigPlan["effectiveOutcome"] {
   if (Object.keys(runtimePatch).length > 0) return "applied";
-  return runtimeEntries(portable).length === 0 ? "unchanged" : "safe_baseline";
+  return !hasLegacyHeartbeat && runtimeEntries(portable).length === 0 ? "unchanged" : "safe_baseline";
 }
 
 const ARCHIVE_METADATA = new Set([

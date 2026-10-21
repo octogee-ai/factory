@@ -72,15 +72,15 @@ describe("buildCustomerAgent", () => {
     expect(agent).not.toHaveProperty("mattermost");
   });
 
-  it("preserves the stable agent shape (id, name, workspace, agentDir, model, heartbeat, tools)", () => {
+  it("preserves the stable agent shape without retired heartbeat config", () => {
     const agent = buildCustomerAgent(mkCustomer());
+    expect(agent).not.toHaveProperty("heartbeat");
     expect(agent).toMatchObject({
       id: "octogee-chris-builds-a3f2-coach",
       name: "Octo (chris-builds-a3f2)",
       workspace: "/home/node/.openclaw/customers/chris-builds-a3f2",
       agentDir: "/home/node/.openclaw/agents/octogee-chris-builds-a3f2-coach/agent",
       model: "platform-openrouter/z-ai/glm-5.2",
-      heartbeat: { every: "60m", target: "last", lightContext: true },
       tools: { fs: { workspaceOnly: true } },
     });
   });

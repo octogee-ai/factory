@@ -617,11 +617,13 @@ export function createGatewayRpc(opts = {}) {
             if (!payload || typeof payload !== "object") {
                 throw new OpenclawWireError(INVALID_RESPONSE, "cron.add returned non-object payload");
             }
-            const p = payload;
-            if (typeof p.id !== "string" || p.id.length === 0) {
+            const result = payload;
+            const job = typeof result.created === "boolean" ? result.job : payload;
+            const id = job && typeof job === "object" ? job.id : undefined;
+            if (typeof id !== "string" || id.length === 0) {
                 throw new OpenclawWireError(INVALID_RESPONSE, "cron.add payload missing string `id`");
             }
-            return payload;
+            return { ...payload, id };
         },
         agentsCreate: (params) => callAgentsCreate(call, params),
         agentsDelete: (params) => callAgentsDelete(call, params),
@@ -831,4 +833,32 @@ async function openAndConnect(params) {
         throw err;
     }
     return ws;
+}
+export function provisionCoachAutomation(rpc, customer) {
+    if (!customer.mattermostUserId || !/^[a-z0-9]{26}$/u.test(customer.mattermostUserId)) {
+        throw new Error(`Coach automation for ${customer.slug} requires its customer's Mattermost user ID`);
+    }
+    const agentId = `octogee-${customer.slug}-coach`;
+    return rpc.cronAdd({
+        declarationKey: `octogee:coach-monitor:${agentId}`,
+        name: `Proactive check (${agentId})`,
+        agentId,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
+        sessionTarget: `session:agent:${agentId}:main`,
+        sessionKey: `agent:${agentId}:main`,
+        wakeMode: "now",
+        idleOnly: true,
+        payload: {
+            kind: "agentTurn",
+            message: "Review your automation scratch checklist and relevant session context. Do not infer or repeat old tasks from prior conversations. Take useful action only when needed. Use NO_REPLY when there is nothing to tell the user.",
+            skipIfScratchEmpty: true,
+        },
+        delivery: {
+            mode: "announce",
+            channel: "mattermost",
+            accountId: `${customer.slug}-coach`,
+            to: `user:${customer.mattermostUserId}`,
+        },
+    });
 }

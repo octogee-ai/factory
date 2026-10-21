@@ -16,9 +16,11 @@ function job(extra: Record<string, unknown> = {}) {
     delivery: { mode: "none" }, state: { nextRunAtMs: 1000 }, ...extra };
 }
 const nativeJobs = [
-  job({ id: "heartbeat", owner: undefined, name: `heartbeat-${AGENT}`, declarationKey: `heartbeat:${AGENT}`, payload: { kind: "heartbeat" }, sessionTarget: "main", wakeMode: "next-heartbeat" }),
-  job({ id: "dreaming", owner: undefined, agentId: undefined, name: "Memory Dreaming Promotion", declarationKey: "memory-core:memory-dreaming-promotion", schedule: { kind: "cron", expr: "0 3 * * *", staggerMs: 0 }, payload: { kind: "agentTurn", message: "__openclaw_memory_core_short_term_promotion_dream__", lightContext: true } }),
-  job({ id: "skills", owner: undefined, enabled: false, declarationKey: `skill-collection-review:${AGENT}`, schedule: { kind: "every", everyMs: 604_800_000, anchorMs: 17 }, payload: { kind: "agentTurn", message: "Review the skill collection.", toolsAllow: ["read"] }, wakeMode: "next-heartbeat" }),
+  job({ id: "proactive", owner: undefined, declarationKey: `octogee:coach-monitor:${AGENT}`,
+    name: `Proactive check (${AGENT})`, sessionKey: `agent:${AGENT}:main`, sessionTarget: `session:agent:${AGENT}:main`,
+    schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 17 }, wakeMode: "now", idleOnly: true,
+    payload: { kind: "agentTurn", message: "Review your automation scratch checklist and relevant session context. Do not infer or repeat old tasks from prior conversations. Take useful action only when needed. Use NO_REPLY when there is nothing to tell the user.", skipIfScratchEmpty: true },
+    delivery: { mode: "announce", target: "owner" } }),
 ];
 function page(jobs: Record<string, unknown>[], params: Record<string, unknown> = {}, revision = "snapshot-a") {
   const offset = Number(params.offset ?? 0), limit = Number(params.limit ?? 200);
@@ -65,13 +67,36 @@ describe("native Automations locality broker", () => {
     expect((await rpc(app, "cron.list")).status).toBe({ forbidden: 403, not_found: 404, coach_channel_not_ready: 409, unauthenticated: 401 }[kind]);
     expect(invoke).not.toHaveBeenCalled();
   });
-  it("returns all three native projected job shapes unchanged, with actual cadence and native metadata", async () => {
+  it("returns an ordinary native proactive job unchanged, with actual cadence and owner delivery", async () => {
     const { app } = appForTest({ jobs: nativeJobs });
     const response = await rpc(app, "cron.list", { includeDisabled: true, limit: 20 });
     expect(response.status).toBe(200);
-    expect(response.body.result).toMatchObject({ jobs: JSON.parse(JSON.stringify(nativeJobs)), total: 3, offset: 0, limit: 20, hasMore: false, nextOffset: null });
+    expect(response.body.result).toMatchObject({ jobs: JSON.parse(JSON.stringify(nativeJobs)), total: 1, offset: 0, limit: 20, hasMore: false, nextOffset: null });
     expect(response.body.result.snapshotRevision).toEqual(expect.any(String));
-    expect(response.body.result.hostedCapabilities.heartbeat).toEqual({ history: true });
+    expect(response.body.result.hostedCapabilities.proactive).toEqual({ history: true });
+  });
+  it("keeps Doctor-converted ordinary jobs visible without declaration or display-name fingerprints", async () => {
+    const converted = { ...nativeJobs[0], declarationKey: undefined, name: "My renamed daily check" };
+    const { app } = appForTest({ jobs: [converted] });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([JSON.parse(JSON.stringify(converted))]);
+    expect((await rpc(app, "cron.get", { id: "proactive" })).body.result).toEqual(JSON.parse(JSON.stringify(converted)));
+    expect((await rpc(app, "cron.status")).body.result.jobs).toBe(1);
+    expect((await rpc(app, "cron.runs", { id: "proactive" })).status).toBe(200);
+  });
+  it.each([
+    { label: "missing explicit agent", agentId: undefined },
+    { label: "foreign explicit agent", agentId: "octogee-bob-coach" },
+    { label: "foreign effective agent", effectiveAgentId: "octogee-bob-coach" },
+    { label: "missing session", sessionKey: undefined },
+    { label: "foreign session", sessionKey: "agent:octogee-bob-coach:main" },
+    { label: "foreign session target", sessionTarget: "session:agent:octogee-bob-coach:main" },
+    { label: "conflicting scoped session target", sessionTarget: `session:agent:${AGENT}:other` },
+  ])("hides ordinary ownerless jobs with $label despite matching name and declaration", async ({ label: _label, ...fields }) => {
+    const { app, invoke } = appForTest({ jobs: [{ ...nativeJobs[0], ...fields }] });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([]);
+    expect((await rpc(app, "cron.get", { id: "proactive" })).status).toBe(404);
+    expect((await rpc(app, "cron.runs", { id: "proactive" })).status).toBe(404);
+    expect(invoke.mock.calls.filter(([method]) => method !== "cron.list")).toEqual([]);
   });
   it("enforces stamped owner and account independently of execution agent before pagination", async () => {
     const foreign = job({ id: "foreign", owner: { agentId: "octogee-bob-coach", accountId: "bob-coach" } });
@@ -113,6 +138,16 @@ describe("native Automations locality broker", () => {
   });
   it("never attributes arbitrary ownerless jobs or foreign-stamped system jobs by their execution target", async () => {
     const { app } = appForTest({ jobs: [job({ owner: undefined }), { ...nativeJobs[0], owner: { agentId: "octogee-bob-coach" } }] });
+    expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([]);
+  });
+  it("does not infer tenant ownership from retired projection keys or a native dreaming fingerprint", async () => {
+    const rows = [
+      job({ id: "legacy-heartbeat", owner: undefined, declarationKey: `heartbeat:${AGENT}`, payload: { kind: "heartbeat" } }),
+      job({ id: "retired-skills", owner: undefined, declarationKey: `skill-collection-review:${AGENT}` }),
+      job({ id: "implicit-dreaming", owner: undefined, agentId: undefined, declarationKey: "memory-core:memory-dreaming-promotion",
+        payload: { kind: "agentTurn", message: "__openclaw_memory_core_short_term_promotion_dream__", lightContext: true } }),
+    ];
+    const { app } = appForTest({ jobs: rows });
     expect((await rpc(app, "cron.list")).body.result.jobs).toEqual([]);
   });
   it.each([

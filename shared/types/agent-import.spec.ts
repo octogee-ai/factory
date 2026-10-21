@@ -51,6 +51,23 @@ function sourceConfig(): Record<string, unknown> {
 }
 
 describe("agent import config artifacts", () => {
+  it("accepts current keyed agent entries and keeps the selected Doctor candidate canonical", () => {
+    const artifacts = buildAgentImportConfigArtifacts({
+      agents: { defaults: { timeoutSeconds: 120 }, entries: {
+        moof: { name: "Moof", timeoutSeconds: 300 },
+        other: { name: "Other" },
+      } },
+    }, "moof");
+    expect(artifacts.portableAgent).toMatchObject({ sourceAgentId: "moof", name: "Moof", timeoutSeconds: 300 });
+    expect(artifacts.doctorCandidate).toEqual({
+      agents: { defaults: { timeoutSeconds: 120 }, entries: { moof: { name: "Moof", timeoutSeconds: 300 } } },
+    });
+    expect(artifacts.configInventory).toContainEqual(expect.objectContaining({
+      path: "agents.entries.moof.timeoutSeconds", classification: "customer", sourceAgent: true,
+    }));
+    expect(validateAgentImportConfigArtifacts(artifacts)).toEqual(artifacts);
+  });
+
   it("selects one agent, emits only portable values, and inventories unsafe paths without values", () => {
     const artifacts = buildAgentImportConfigArtifacts(sourceConfig(), "moof");
 
@@ -229,7 +246,7 @@ describe("agent import config artifacts", () => {
       reason: "field is not in the portable allowlist",
     });
     expect(plan.decisions).toContainEqual(expect.objectContaining({ path: "identity.name", disposition: "apply" }));
-    expect(plan.decisions).toContainEqual(expect.objectContaining({ path: "heartbeat.every", disposition: "apply" }));
+    expect(plan.decisions).toContainEqual(expect.objectContaining({ path: "heartbeat.every", disposition: "manual_review" }));
   });
 
   it("strips common camelCase credential fields from Doctor input", () => {
@@ -260,6 +277,29 @@ describe("agent import config artifacts", () => {
 });
 
 describe("agent import config plan", () => {
+  it.each(["migrated", "unchanged", "unsupported", "failed"] as const)(
+    "retains legacy schedule evidence for manual review without patching heartbeat (%s)",
+    (doctorOutcome) => {
+      const artifacts = buildAgentImportConfigArtifacts({
+        agents: { list: [{ id: "moof", heartbeat: { every: "30m", lightContext: true } }] },
+      }, "moof");
+      const plan = planAgentImportConfig(artifacts, {
+        doctorOutcome,
+        workspacePolicy: { preserveConvergedContextFiles: false },
+      });
+      expect(artifacts.portableAgent.heartbeat).toEqual({ every: "30m", lightContext: true });
+      expect(artifacts.doctorCandidate).toMatchObject({
+        agents: { list: [{ heartbeat: { every: "30m" } }] },
+      });
+      expect(plan.runtimePatch).not.toHaveProperty("heartbeat");
+      expect(plan.effectiveOutcome).toBe("safe_baseline");
+      expect(plan.decisions).toContainEqual(expect.objectContaining({
+        path: "heartbeat.every", disposition: "manual_review",
+        reason: expect.stringMatching(/native Doctor.*Automations.*not transfer schedules/),
+      }));
+    },
+  );
+
   it("applies doctor-validated customer fields, routes models to reauth, and drops unsafe inventory", () => {
     const artifacts = buildAgentImportConfigArtifacts(sourceConfig(), "moof");
     const plan = planAgentImportConfig(artifacts, {
@@ -273,7 +313,6 @@ describe("agent import config plan", () => {
       emoji: "🐮",
     });
     expect(plan.runtimePatch).toMatchObject({
-      heartbeat: { every: "30m", lightContext: false },
       timeoutSeconds: 300,
     });
     expect(plan.workspaceRuntimePatch).toEqual({ skipBootstrap: true });

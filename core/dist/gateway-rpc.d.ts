@@ -110,6 +110,8 @@ export interface GatewayToolsCatalogResult {
 export interface CronAddSpec {
     name: string;
     description?: string;
+    declarationKey?: string;
+    idleOnly?: boolean;
     enabled: boolean;
     deleteAfterRun?: boolean;
     agentId?: string;
@@ -137,10 +139,12 @@ export interface CronAddSpec {
         thinking?: string;
         timeoutSeconds?: number;
         lightContext?: boolean;
+        skipIfScratchEmpty?: boolean;
         toolsAllow?: string[];
     };
     delivery?: {
         mode: "none" | "announce" | "webhook";
+        target?: "owner";
         channel?: string;
         accountId?: string;
         to?: string;
@@ -267,3 +271,7 @@ export interface GatewayRpcClient {
     close(): Promise<void>;
 }
 export declare function createGatewayRpc(opts?: GatewayRpcClientOptions): GatewayRpcClient;
+export declare function provisionCoachAutomation(rpc: Pick<GatewayRpcClient, "cronAdd">, customer: {
+    slug: string;
+    mattermostUserId: string | null;
+}): Promise<CronAddResult>;

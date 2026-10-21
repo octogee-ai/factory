@@ -137,7 +137,130 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## PostgreSQL agent handoff and local recovery
+## Current overlay: October 21 frozen main 304cf4f6
+
+The operator selected latest upstream main at the start of this refresh,
+`304cf4f678c9cb09bc28d3c0652f363f8991ef9f`, for independent qualification.
+It remains frozen. The final clean overlay is `b74ff0c433d355260925bda948f61ff4982ab657`, published
+from `codex/octogee-refresh-304cf4f6` in the OpenClaw fork. Both package objects
+and hosted islands come from that exact built source, version 2026.10.5.
+The recut starts from current merged Octogee main `42264cac9f82b8a1c2e676adae45fd44eab054e2`
+and its published overlay `127953fd7dacfbfb6438dce323dedad6b05a9f20`.
+Primary checkouts and unrelated work were preserved.
+
+The selected upstream [push CI run](https://github.com/openclaw/openclaw/actions/runs/39669784384)
+completed successfully, but only `security-fast` ran; build and test jobs were
+skipped. The inspected successful scheduled [full run](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+qualifies `d8612ec864bb4c872616cfda5340c53803655f5f`, not the selected source.
+Its skips include Node 24 compatibility, PR fail-fast/check-plan,
+Android/iOS screenshots, alternate shared SDK, iOS release E2E and evidence.
+Neither an older green SHA nor a later moving tip was substituted.
+
+### Native adoption and retained boundaries
+
+Octogee adopts upstream's retirement of heartbeat configuration. Fresh coaches
+receive the native 30-minute proactive `agentTurn` cron job through public
+`cron.add`, with the native prompt, idle-only admission and empty-scratch
+suppression. The declaration key makes incomplete provisioning retries converge;
+completed customer reconciliation does not recreate a job the customer deleted.
+The actual created Mattermost owner supplies the destination even when a reload
+returns a stale snapshot. Explicit account plus `user:<id>` DM addressing keeps
+delivery tenant-bound; the native global owner resolver cannot select a customer
+on a shared gateway. This adapter requires no new OpenClaw seam or scheduler.
+
+Both gateway templates, generated agents, safe defaults and the disabled Ops
+config stop emitting retired heartbeat keys. Existing gateway schedules remain
+under native Doctor/cron custody. Workspace import's temporary Doctor database
+is not a schedule transfer: portable heartbeat evidence receives existing
+`manual_review` disposition rather than being falsely reported applied or
+written into runtime config. The importer now reads canonical keyed
+`agents.entries` through its shared roster reader. Automations admits native
+jobs through actual agent/session facts instead of heartbeat, skill-review or
+memory-dreaming content fingerprints; foreign and ambiguous jobs remain hidden.
+
+The overlay drops the duplicate cron-active helper and obsolete scratch-delete
+assertion in favor of native owners. Native async-store composition, current
+session-sharing authorization and target-record contracts, creator/recipient
+preparation and broader cross-filesystem plugin-capture tests are adopted.
+Hosted islands use the canonical connection-error owner, embed the native activity
+atlas and preserve native Mermaid opaque-frame/classic-script isolation with
+exact built external assets. Solid rc.16 license provenance follows its exact
+published source commit; packaged MIT-License.txt notices remain mandatory.
+Reset reply threading stays in the existing threading owner. The snapshot
+sanitizer retains its native operation-scoped offline SQL classification after
+extraction; no T1 allowance, ratchet budget or database schema is relaxed.
+Canonical state schema **30**, agent schema **31** and protocol **4** are used.
+
+The retained-boundary table in the previous assessment still supplies removal
+conditions. This recut specifically rechecked:
+
+- October 20 strict-stop: selected upstream still lacks the retained-startup
+  preparation join condition. A retained cleanup owner with `starting` state
+  must make strict stop refuse success until preparation actually settles.
+- Channel-derived sharing versus independent explicit grants, authoritative
+  empty-membership revocation and live requester/reviewer/Codex authorization.
+- Identical/queued reload recovery, expired and superseded admission, held-root
+  and plugin-capture cleanup, host recovery after worker retirement, and memory
+  shadow creation-descriptor retirement.
+- Non-destructive detach, durable cron migration custody, checkpoint restore,
+  private snapshot sanitization and source/file custody. Native current-schema
+  refusal tests preserve both surviving tables and exact source bytes.
+- Scoped final-reply/plugin-instance observation, tenant-brokered voice, hosted
+  identities and desktop requester boundaries. These remain product/security
+  integrations; native Talk, Browser, Computer, storage and migration owners
+  continue to own their behavior.
+
+Contribution status is distinct from retention: detach #178755, auth startup
+#178970, local checkpoint #178973, reload #177823 and #167431 remain open.
+#177968 is closed unmerged; its broader native capture owner/tests are adopted
+where equivalent. No merge outside this frozen base is claimed included.
+
+### Artifacts and qualification
+
+Both objects are in `gs://octogee-openclaw-fork/`. Generation-specific
+downloads match the full SHA256, size and original bytes.
+
+| Package | Object and generation | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-04167f5c.tgz#1792618024417980` | 122092142 | `04167f5cd7be9f63c9ba440ef0fbe4520412cc6957aacc8120c04d47d1e81163` |
+| mattermost | `openclaw-mattermost-48879970.tgz#1792618087297709` | 1251558 | `48879970eb9d8c941b5aba5763bf07fc00768b38951d33a5bb78aaf35494aaf3` |
+
+The pinned pnpm 12.12.1 frozen install and full `pnpm build` passed. Installed
+build metadata equals clean source HEAD. Production core/UI/extension types,
+changed-scope lint/format, channel metadata, native line growth and worker
+ratchets passed. Boundary tests cover the retained cases above; one Mac-only
+cross-filesystem case skips because no distinct writable filesystem is present.
+Aggregate `pnpm check` is not claimed: its max-lines suppression gate rejects
+three UI files byte-identical to the selected upstream. No suppression or
+budget was relaxed. Startup JS warns at 318.1 KiB against 318.0 KiB.
+
+Sequential packers, Voice/Activity contracts, upstream tarball integrity and
+isolated strict npm installation passed. Installed build-info matches the clean
+source, all 873 Mattermost archive files match installed bytes, and the CLI runs.
+The actual Linux AMD64 full-plugin installer passed CUA artifact validation,
+native registry/bundled trust, Parallel's 9-file match, Codex's 186-file match and
+three native-hook imports. The initial builder restart was a failed attempt;
+only the completed resumed target is passing evidence.
+
+The complete Gateway image identity, runtime gate and installed Shared/Builder
+config/Doctor comparisons are recorded separately in the refresh PR. Local
+AMD64 qualification runs under ARM64-host emulation. It does not identify an
+immutable main release image; that family follows the maintained main build.
+
+Octogee heartbeat provisioning/defaults, RPC response handling, import planning,
+import service/UI, tenant automation access, base-image/preboot and refreshed
+island consumers passed their focused tests and production typechecks.
+The actual provisioner DTO passes this source's native cron schema, with
+negative controls for retired/unknown fields. PR CI qualifies the committed
+Octogee change separately. This is local build/package/config proof; provider
+execution, live Gateway startup, historical migration and live acceptance are
+not established. Merge produces an immutable main image family under the
+maintained GitHub Actions build workflow. This refresh deploys no environment,
+mutates no fleet and constructs no desktop image. Current main has retired
+`cloudbuild-base.yaml`; current Dockerfiles, package pins and Actions inputs
+are the maintained build path.
+
+## Previous published PostgreSQL handoff and local recovery
 
 The common source is `127953fd7dacfbfb6438dce323dedad6b05a9f20`.
 Shared, Builder and native computer images consume this same pin. It retains
@@ -209,7 +332,7 @@ regenerated from the same clean, built source; native UI inputs are unchanged.
 Octogee retains its assignment, drain and native admission checks without
 requiring equal OpenClaw commit hashes between Gateways.
 
-## October 20 refresh on frozen main 04789278
+## Previous October 20 refresh on frozen main 04789278
 
 The operator selected upstream main
 `04789278f8b0cd4cac95386ef91a37ece34082c5` for independent qualification.

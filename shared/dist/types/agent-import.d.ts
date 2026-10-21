@@ -80,10 +80,15 @@ export declare class AgentImportConfigError extends Error {
     readonly code: string;
     constructor(code: string, message: string);
 }
+export declare function listAgentImportSourceAgents(source: unknown): Array<{
+    id: string;
+    name: string;
+}>;
 export declare function buildAgentImportConfigArtifacts(source: unknown, selectedAgentId: string): AgentImportConfigArtifacts;
 export declare function validateAgentImportConfigArtifacts(value: unknown): AgentImportConfigArtifacts;
 export declare function planAgentImportConfig(input: AgentImportConfigArtifacts, options: {
     doctorOutcome: AgentImportDoctorOutcome;
+    sourceHeartbeat?: AgentImportPortableAgent["heartbeat"];
     workspacePolicy: AgentImportWorkspacePolicy;
 }): AgentImportConfigPlan;
 export declare function classifyAgentImportArchivePath(path: string): "git" | "metadata" | "workspace" | null;

@@ -363,7 +363,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     throwIfAborted(signal, uid);
     markStep("finalize");
     adapter.log(`✅ [add:${slug}] coach attach complete in ${Date.now() - attachStartedAt}ms`);
-    steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer)));
+    steps.push(...(await markCompleteIfNeeded(adapter, uid, snapshot, newCustomer, mm.mmUpdate)));
     markStep("community-membership");
     steps.push(...(await reconcileCommunityMembershipIfSupported(adapter, ctx)));
     throwIfAborted(signal, uid);
@@ -713,9 +713,16 @@ async function verifyChannelReady(adapter, slug, verifyTimeoutMs) {
     adapter.log(`[add:${slug}] ✅ verify: channel ready (running+connected) in ${elapsed}ms`);
     await adapter.materializeBrokerProfiles?.(slug);
 }
-async function markCompleteIfNeeded(adapter, uid, snapshot, newCustomer) {
+async function markCompleteIfNeeded(adapter, uid, snapshot, newCustomer, mmUpdate) {
     if (!newCustomer && snapshot.agentIds.length > 0)
         return [];
+    if (newCustomer) {
+        const mattermostUserId = mmUpdate ? mmUpdate["mattermost.userId"] : snapshot.mattermostUserId;
+        if (mattermostUserId !== null && typeof mattermostUserId !== "string") {
+            throw new Error(`Initial coach monitoring for ${snapshot.slug} has no Mattermost owner`);
+        }
+        await adapter.provisionCoachAutomation({ slug: snapshot.slug, mattermostUserId });
+    }
     const coachAgentId = `octogee-${snapshot.slug}-coach`;
     await adapter.setAgentIds(uid, [coachAgentId]);
     await adapter.setProvisioningStatus(uid, "complete");

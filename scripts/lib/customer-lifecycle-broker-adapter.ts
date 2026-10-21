@@ -87,7 +87,7 @@ import {
   customerCoachAgentId,
   resolveOpenClawStateDir,
 } from "./fleet-http-migration.js";
-import { OpenclawWireError, type ConfigGetResult, type GatewayRpcClient } from "./gateway-rpc.js";
+import { OpenclawWireError, provisionCoachAutomation, type ConfigGetResult, type GatewayRpcClient } from "./gateway-rpc.js";
 import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import {
   cloneProjectRepo,
@@ -1934,6 +1934,9 @@ export function buildBrokeredLifecycleAdapter(
     },
     seedUserSnapshotForMigration: (snapshot) => {
       cacheSnapshot(ctx, snapshot);
+    },
+    provisionCoachAutomation: async (snapshot) => {
+      await provisionCoachAutomation(ctx.rpc, snapshot);
     },
     setProvisioningStatus: async (uid, status) => {
       await opts.client.setProvisioningStatus(uid, status);

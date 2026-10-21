@@ -78,9 +78,6 @@
       "compaction": {
         "mode": "safeguard"
       },
-      "heartbeat": {
-        "every": "30m"
-      },
       "maxConcurrent": 8,
       "subagents": {
         "maxConcurrent": 8,
