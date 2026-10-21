@@ -1741,18 +1741,18 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
   });
 });
 
-describe("PostgreSQL handoff build identity", () => {
-  it.each([false, true])("refuses different or unreported OpenClaw builds before touching state (durable=%s)", async durable => {
+describe("PostgreSQL handoff schema admission", () => {
+  it.each([false, true])("hands off across build identities using native store admission (durable=%s)", async durable => {
     for (const options of [
       { targetArtifact: { ...targetArtifact(), openclawSourceSha: "b".repeat(40) } },
+      { targetArtifact: targetArtifact("2026.8.1") },
       { openclawVersions: { "gw-blue": null, "gw-green": null }, targetArtifact: targetArtifact() },
       { openclawVersions: { "gw-blue": "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)", "gw-green": SAME_OPENCLAW } },
     ]) {
       const { deps, ctx, client } = mkDeps({ durable, ...options });
-      expect(await createMigrateCustomerHandler(deps)(mkOp({}), ctx)).toMatchObject({ success: false, error: expect.stringContaining("same fully identified OpenClaw build") });
-      expect(client.transferState).not.toHaveBeenCalled();
-      expect(client.quiesce).not.toHaveBeenCalled();
-      expect(deps.setAssignmentState).not.toHaveBeenCalled();
+      expect(await createMigrateCustomerHandler(deps)(mkOp({}), ctx)).toMatchObject({ success: true, rolledBack: false });
+      expect(client.transferState).toHaveBeenCalled();
+      expect(client.quiesce).toHaveBeenCalled();
     }
   });
 });

@@ -119,6 +119,6 @@ describe("builder runtime-state routes for a VM gateway", () => {
       .send({ gatewayId: "b-x", revisionId: "b-x", slug: "mama" });
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toBe("signed:customers/mama/runtime-state/allocations/b-x-g2/openclaw.sqlite");
+    expect(res.body.url).toBe("signed:customers/mama/runtime-state/allocations/b-x-g2/checkpoint.tar.gz");
   });
 });

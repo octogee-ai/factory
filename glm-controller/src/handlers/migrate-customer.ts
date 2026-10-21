@@ -1964,17 +1964,11 @@ async function decideCustomerStateMigration(
       `${targets.toRelease ?? "unknown"}`,
     );
   }
-  const decision = decideRollStateMigration({
+  return decideRollStateMigration({
     sourceOpenclawVersion,
     targetOpenclawVersion: openclawVersionFromGatewayImageTag(targetArtifact.imageTag),
     targetOpenclawSourceSha: targetArtifact.openclawSourceSha,
   });
-  if (!decision.sourceOpenclawSourceSha || decision.sourceOpenclawSourceSha.length !== 40 ||
-      decision.sourceOpenclawSourceSha !== decision.targetOpenclawSourceSha ||
-      !decision.sourceOpenclawVersion || decision.sourceOpenclawVersion !== decision.targetOpenclawVersion) {
-    throw new Error("PostgreSQL agent handoff requires the same fully identified OpenClaw build on both Gateways; align their runtime pins before moving state");
-  }
-  return { ...decision, reason: "handoff existing PostgreSQL agent stores between the same OpenClaw build" };
 }
 
 function withStateMigration(

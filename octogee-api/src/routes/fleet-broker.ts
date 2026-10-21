@@ -296,7 +296,7 @@ interface FleetBrokerRouteDeps {
 const BLOB_SIGNED_URL_TTL_MS = 10 * 60 * 1000;
 const BLOB_SYNC_MAX_SIZE = 100 * 1024 * 1024;
 const BUILDER_RUNTIME_STATE_MAX_SIZE = 64 * 1024 * 1024;
-const BUILDER_RUNTIME_STATE_CONTENT_TYPE = "application/vnd.sqlite3";
+const BUILDER_RUNTIME_STATE_CONTENT_TYPE = "application/gzip";
 const BUILDER_RUNTIME_STATE_MINUTE_RETENTION_MS = 10 * 60_000;
 const BUILDER_RUNTIME_STATE_HOUR_RETENTION_MS = 24 * 60 * 60_000;
 const BUILDER_RUNTIME_STATE_DAY_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -822,10 +822,10 @@ function gcsPathForBuilderRuntimeStateRoot(slug: string): string {
 }
 
 function gcsPathForBuilderRuntimeState(scope: BuilderRuntimeStateScope): string {
-  return `${gcsPathForBuilderRuntimeStateRoot(scope.slug)}/allocations/${scope.gatewayId}-g${scope.generation}/openclaw.sqlite`;
+  return `${gcsPathForBuilderRuntimeStateRoot(scope.slug)}/allocations/${scope.gatewayId}-g${scope.generation}/checkpoint.tar.gz`;
 }
 
-const ALLOCATION_RUNTIME_STATE_PATH = /^allocations\/[^/]+-g([1-9]\d*)\/openclaw\.sqlite$/u;
+const ALLOCATION_RUNTIME_STATE_PATH = /^allocations\/[^/]+-g([1-9]\d*)\/checkpoint\.tar\.gz$/u;
 
 function allocationRuntimeStateGeneration(runtimeStatePrefix: string, gcsPath: string): number | null {
   if (!gcsPath.startsWith(`${runtimeStatePrefix}/`)) return null;
@@ -875,7 +875,7 @@ function runtimeStateRecoveryObjectPath(
     padUtcPart(date.getUTCHours()),
     padUtcPart(date.getUTCMinutes()),
   );
-  return `${gcsPathForBuilderRuntimeStateRoot(slug)}/recovery/${tier}/${timestamp}.sqlite`;
+  return `${gcsPathForBuilderRuntimeStateRoot(slug)}/recovery/${tier}/${timestamp}.tar.gz`;
 }
 
 function runtimeStateRecoveryTimestampMatch(
@@ -894,7 +894,7 @@ function runtimeStateRecoveryTimestamp(
   const relative = gcsPath.startsWith(`${runtimeStatePrefix}/`)
     ? gcsPath.slice(runtimeStatePrefix.length + 1)
     : "";
-  const match = /^recovery\/(minute|hour|day)\/(.+)\.sqlite$/u.exec(relative);
+  const match = /^recovery\/(minute|hour|day)\/(.+)\.tar\.gz$/u.exec(relative);
   if (!match) return null;
   const tier = match[1] as BuilderRuntimeStateRecoveryTier;
   const timestampValue = match[2] ?? "";

@@ -137,35 +137,73 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## PostgreSQL agent handoff
+## PostgreSQL agent handoff and local recovery
 
-The current source is `05c8dcdebb93fcd1edc4b65f32c2618631cef72b`, the existing
-`ac2ff7bf` overlay plus the non-destructive `agents.detach` owner. Upstream
-[PR #178755](https://github.com/openclaw/openclaw/pull/178755) contributes this
-capability independently. Remove this overlay addition once the selected upstream
-base supplies equivalent durable detach and its regression tests pass. Existing
-`agents.delete` semantics cannot implement a state-preserving Gateway move.
+The common source is `ceb00e7f866e90b8d86637de135fc4d4bffa9f6a`. It retains the
+non-destructive `agents.detach` owner from `05c8dcde` and adds the native auth
+startup correction and local Gateway checkpoint command. Shared, Builder and
+native computer images consume this same pin.
 
-The exact native build, sequential maintained packers, SDK contracts, package
-integrity and actual Linux full-plugin installer passed. Installed Parallel and
-Codex sources and all three native hooks matched; offline UID 1000 smoke passed.
-The root archive is 120341910 bytes, SHA256
-`1ed67d45f7f9f6e32c9b5cf54a4cc31e4cc02f983776fe8fdf1e13bd9392d6dc`.
-Its object is `openclaw-fork-1ed67d45.tgz`. Mattermost is byte-identical to the
-existing `openclaw-mattermost-74cca5fd.tgz`, SHA256
+These changes are contributed independently upstream:
+[detach #178755](https://github.com/openclaw/openclaw/pull/178755),
+[auth startup #178970](https://github.com/openclaw/openclaw/pull/178970), and
+[local checkpoint draft #178973](https://github.com/openclaw/openclaw/pull/178973).
+The checkpoint's public storage/CLI design is under discussion in
+[proposal #178971](https://github.com/openclaw/openclaw/issues/178971). Remove each
+overlay addition when the selected upstream supplies equivalent behavior and
+its boundary regressions pass.
+
+The startup fix supplies the existing deletion-journal fact at auth-field
+publication. It preserves the native guard, including a deletion arriving
+during startup. Five focused regressions and a real PostgreSQL auth-reader
+proof passed; the upstream automated re-review accepted that proof.
+
+Local checkpoints use native capture/restore and matched-client receipt owners
+to preserve Gateway-global SQLite, device identity/pairing credentials and
+configured PostgreSQL anchors. PostgreSQL history stays in its store; provider
+SecretRefs stay external. Restore requires offline custody, original configured
+paths and fresh database targets. A non-observing configuration reader preserves
+those fresh targets until publication. The native restore owner creates missing
+private parent directories under custody before preparing any image. The existing
+global snapshot sanitizer excludes pending outbound delivery intent, preventing a checkpoint from
+replaying messages acknowledged after capture. Ordinary full-backup behavior
+is unchanged.
+
+The exact source passed the full guarded native build, core types, focused lint,
+formatting, changed-source line caps and 21 selected native owner cases. The
+independent P0/P1 reviews covered the checkpoint and native owner context and the
+final cold-parent correction, with no unresolved findings. Aggregate `pnpm check`
+remains unclaimed because of the inherited UI suppression ratchet described below.
+The upstream-only cold-root checkpoint proof and core types passed. The maintained
+sequential packers, voice/activity SDK contracts and native package integrity check
+passed.
+
+The root archive is 120335883 bytes, SHA256
+`5f8229eee0dc8e55b03998dce2e982203ab3e0a7146686d94fbaea5d889289e8`,
+object `openclaw-fork-5f8229ee.tgz`. Mattermost remains byte-identical to
+`openclaw-mattermost-74cca5fd.tgz`, SHA256
 `74cca5fdd7c77472e6794b83cb3816aa0f019175503d2de0bf19e93bcdb59654`.
-Exact-generation downloads of root `1792529380141155` and Mattermost
-`1792520298183836` match those complete hashes.
-Hosted islands were regenerated from the same clean source; the only changed
-native inputs are the detach schema and its three protocol registry exports.
-The inherited startup-JavaScript warning remains 317.8 KiB against 317.5 KiB.
+Octogee's packer vendors workspace packages through `file:vendor/` paths;
+the checker's optional bundled-workspace layout mode does not apply.
 
-A synthetic PostgreSQL 16 proof on this installed runtime used Octogee's scoped
-non-superuser credentials for Shared → Builder → Shared. Namespace ownership
-transfer passed native catalog admission; store UUID, session ID, transcripts,
-auth and indexed memory survived. Detached sources refused writes before and
-after restart, and a neighboring Shared agent stayed usable. No live model
-inference, environment deployment or active-active ownership was exercised.
+The root generation is `1792557183089609`; the reused Mattermost generation is
+`1792520298183836`. Both complete hashes were verified by generation-specific
+readback. The actual Linux full-plugin installer passed registry/trust,
+source-match and all three native Codex hook checks. Its installed public CLI,
+offline as UID1000, passed capture, restore into a completely empty state root at
+the original path, recapture and existing-target refusal. That installed pair
+proof initializes no PostgreSQL anchors; the separate native cold-root proof
+covers anchor, device and global-history identity and acknowledged-delivery
+exclusion. Three existing native schema-admission cases also passed against real
+PostgreSQL16; they do not qualify universal cross-version compatibility.
+
+Hosted islands and browser resources were regenerated from the same clean,
+built source; the generator found no changes to native UI inputs. The earlier
+detach runtime passed the synthetic PostgreSQL Shared → Builder → Shared proof
+with store UUID, session, transcripts, auth and indexed memory intact. Live
+handoff and replacement recovery are verified during rollout. Octogee's handoff
+keeps its assignment, drain and native admission checks; it does not require equal
+OpenClaw commit hashes between Gateways.
 
 ## October 20 refresh on frozen main 04789278
 
