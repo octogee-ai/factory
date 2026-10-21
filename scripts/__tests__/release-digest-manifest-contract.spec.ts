@@ -115,7 +115,7 @@ describe("release digest manifest — generator/authority contract", () => {
     const resolved = await authority().resolveManifest(sourceSha);
 
     // No entry the release workflow cannot build: a surface image with no
-    // cloudbuild config can never appear in a manifest, so demanding one makes
+    // build definition can never appear in a manifest, so demanding one makes
     // every cut unsatisfiable.
     expect(Object.keys(resolved.surfaces.gateway).sort()).toEqual([
       "gateway-edge",

@@ -1,14 +1,10 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 
 const helper = resolve(import.meta.dirname, "../lib/assert-artifact-image-size.sh");
-const buildConfig = readFileSync(
-  resolve(import.meta.dirname, "../../cloudbuild-operator-final.yaml"),
-  "utf8",
-);
 const temporaryDirectories: string[] = [];
 
 function runCheck(imageSize: string, maximumBytes = "3100000000") {
@@ -81,12 +77,5 @@ describe("Builder compressed image budget", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("1875172316 / 3100000000 bytes");
-  });
-
-  it("runs the budget against the pushed Builder image", () => {
-    expect(buildConfig).toContain('_MAX_COMPRESSED_IMAGE_BYTES: "3100000000"');
-    expect(buildConfig).toContain('_PROFILE_IMAGE: "octogee-gateway-builder"');
-    expect(buildConfig).toContain("scripts/lib/assert-artifact-image-size.sh");
-    expect(buildConfig).toContain('${_PROFILE_IMAGE}:${_IMAGE_TAG}');
   });
 });

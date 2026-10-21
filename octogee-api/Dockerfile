@@ -1,4 +1,4 @@
-# Build context: repo root (see octogee-api/cloudbuild.yaml).
+# Build context: repo root.
 #
 # octogee-api compiles gateway-edge/src/* in addition to its own src/ —
 # the cluster route handlers physically live in gateway-edge/src/routes/

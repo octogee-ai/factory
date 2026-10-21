@@ -27,17 +27,13 @@ the no-transformation requirement applies to freshly authored platform defaults.
 
 ## Build
 
-The gateway image is built via Cloud Build:
+Build main (`.github/workflows/build-main.yml`, running `scripts/ci/main.mjs`)
+builds the gateway image with its immutable input-keyed OpenClaw base, reusing
+the base when its artifacts are unchanged. To build committed main from the
+operator host:
 
 ```bash
-# Build gateway image (uses pre-built OpenClaw base from Artifact Registry)
-gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_IMAGE_TAG=$(git rev-parse --short HEAD) \
-  --project=octogee
-
-# Ensure the current OpenClaw base exists in the shared registry.
-# This reuses the immutable input-keyed image when the artifacts are unchanged.
-gh workflow run gateway-base-rebuild.yml --ref main -f environment=test
+npm run ci:build
 ```
 
 ## Deploy

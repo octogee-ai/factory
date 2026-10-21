@@ -8,8 +8,8 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
     && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 
 # Helm is PINNED to one version across every path that runs `helm upgrade`
-# against the cluster — CI's azure/setup-helm (.github/workflows/build-and-deploy.yml)
-# and the operator toolkit (infra/gateway/Dockerfile.operator-toolkit) — so the
+# against the cluster — CI's toolchain (ci/install-tools.sh) and the Builder
+# toolchain (infra/gateway/builder-toolchain/groups.json) — so the
 # umbrella upgrade and Cowboy's per-gateway upgrades share identical
 # server-side-apply semantics. helm-runner.ts relies on v4's `--server-side=true
 # --force-conflicts` string-flag syntax + `--take-ownership` (adopts leftover

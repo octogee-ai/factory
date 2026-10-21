@@ -127,45 +127,15 @@ describe("directory dependency repository contract", () => {
     expectBefore(gateway, "COPY --chown=node:node scripts/.npmrc", "RUN npm install --no-audit --no-fund");
   });
 
-  it("re-includes every packed interface in Docker and Cloud Build upload contexts", () => {
-    for (const ignoreFile of [".dockerignore", ".gcloudignore"]) {
-      const lines = fs
-        .readFileSync(path.join(root, ignoreFile), "utf8")
-        .split("\n")
-        .map((line) => line.trim());
-      for (const source of ["core", "shared", "test-helpers"]) {
-        expect(lines).toContain(`!${source}/dist/`);
-        expect(lines).toContain(`!${source}/dist/**`);
-      }
-    }
-  });
-
-  it("uploads every packed interface to Cloud Build", () => {
-    const gcloudignore = fs.readFileSync(path.join(root, ".gcloudignore"), "utf8");
-
+  it("re-includes every packed interface in the Docker build context", () => {
+    const lines = fs
+      .readFileSync(path.join(root, ".dockerignore"), "utf8")
+      .split("\n")
+      .map((line) => line.trim());
     for (const source of ["core", "shared", "test-helpers"]) {
-      expect(gcloudignore).toContain(`!${source}/dist/**`);
+      expect(lines).toContain(`!${source}/dist/`);
+      expect(lines).toContain(`!${source}/dist/**`);
     }
-  });
-
-  it("excludes local environment secrets from Cloud Build uploads", () => {
-    const lines = fs
-      .readFileSync(path.join(root, ".gcloudignore"), "utf8")
-      .split("\n")
-      .map((line) => line.trim());
-
-    expect(lines).toContain(".env*");
-    expect(lines).toContain("**/.env*");
-    expect(lines).toContain("**/secrets");
-  });
-
-  it("keeps the Helm charts required by the controller image in Cloud Build uploads", () => {
-    const lines = fs
-      .readFileSync(path.join(root, ".gcloudignore"), "utf8")
-      .split("\n")
-      .map((line) => line.trim());
-
-    expect(lines).not.toContain("helm/");
   });
 
   it("retires tarball transport and its maintenance commands", () => {

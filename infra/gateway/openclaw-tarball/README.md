@@ -114,7 +114,7 @@ Never overwrite an object or use retired `*-main.tgz` names. If an object
 already exists, verify its complete hash before reuse; an eight-character
 name is not proof. Read back published generations and hashes. Set
 `upstreamRef`, `sourceSha`, `openclawObject` and `mattermostObject` in
-`current.json`, and mirror the names in root `cloudbuild-base.yaml`. Push the
+`current.json`. Push the
 exact overlay branch; use `--force-with-lease` only when rewriting a previously
 published branch.
 

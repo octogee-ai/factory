@@ -35,18 +35,3 @@ describe("Builder boot base", () => {
     expect(dockerfile).toMatch(/USER\s+node\s*$/m);
   });
 });
-
-describe.each([
-  "cloudbuild-operator-final.yaml",
-  "cloudbuild-operator-final-extra.yaml",
-])("%s Builder base selection", (file) => {
-  const source = read(file);
-
-  it("selects the Builder base while preserving the shipped image", () => {
-    expect(source).toContain('_BUILDER_BASE_IMAGE: "octogee-gateway-builder-base"');
-    expect(source).toContain("_BUILDER_BASE_TAG:");
-    expect(source).not.toContain("_OPERATOR_BASE_IMAGE");
-    expect(source).not.toContain("_OPERATOR_BASE_TAG");
-    expect(source).toContain('_PROFILE_IMAGE: "octogee-gateway-builder"');
-  });
-});

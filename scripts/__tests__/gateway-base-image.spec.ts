@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { gatewayBakePlan } from "../ci/gateway-bake.mjs";
 
 const repoRoot = path.resolve("..");
 
@@ -54,6 +55,22 @@ function advertisedGatewayBasePackages(): string[] {
     .split(",")
     .map((packageName) => packageName.trim())
     .filter((packageName) => packageName !== "etc.");
+}
+
+function gatewayImageArgs(): Record<string, Record<string, string>> {
+  const base = `inputs-${"b".repeat(64)}`;
+  const { target } = gatewayBakePlan({
+    repository: "us-central1-docker.pkg.dev/octogee/octogee",
+    sha: "a".repeat(40),
+    base,
+    builderBase: `${base}-builder-${"c".repeat(12)}`,
+    toolchain: { lockSha256: "d".repeat(64), groupsSha256: "e".repeat(64) },
+    build: { base: false, builderBase: false, images: ["octogee-gateway", "octogee-gateway-builder"] },
+  });
+  return {
+    "octogee-gateway": target["octogee-gateway"].args,
+    "octogee-gateway-builder": target["octogee-gateway-builder"].args,
+  };
 }
 
 function runInstructionContaining(dockerfile: string, needle: string): string {
@@ -189,12 +206,6 @@ describe("gateway base image", () => {
     expect([...installed].sort()).toEqual(expect.arrayContaining(advertised));
   });
 
-  it("keeps Chromium in the operator gateway base image", () => {
-    const installed = installedAptPackages("infra/gateway/Dockerfile.operator-base");
-
-    expect(installed.has("chromium")).toBe(true);
-  });
-
   it("ships discovery binaries and disables runtime tool downloads", () => {
     const installed = installedAptPackages("infra/gateway/Dockerfile.base");
     const baseDockerfile = readRepoFile("infra/gateway/Dockerfile.base");
@@ -217,7 +228,6 @@ describe("gateway base image", () => {
 
   it("leaves preinstalled Claude and Codex binaries intact for the standard image", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
-    const standardBuild = readRepoFile("cloudbuild.yaml");
     const wrapperInstruction = runInstructionContaining(
       dockerfile,
       "ENABLE_BUILDER_TOOLCHAIN_WRAPPER",
@@ -225,9 +235,9 @@ describe("gateway base image", () => {
     const disabledArm = wrapperInstruction.match(/false\)([\s\S]*?);;/u)?.[1];
 
     expect(dockerfile).toContain("ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false");
-    expect(standardBuild).not.toContain(
-      "--build-arg=ENABLE_BUILDER_TOOLCHAIN_WRAPPER=true",
-    );
+    for (const args of Object.values(gatewayImageArgs())) {
+      expect(args).not.toHaveProperty("ENABLE_BUILDER_TOOLCHAIN_WRAPPER");
+    }
     expect(disabledArm).toContain("test -x /usr/local/bin/claude");
     expect(disabledArm).toContain("test -x /usr/local/bin/codex");
     expect(disabledArm).not.toContain("rm -f");
@@ -242,14 +252,6 @@ describe("gateway base image", () => {
     );
     const enabledArm = wrapperInstruction.match(/true\)([\s\S]*?);;/u)?.[1];
 
-    for (const filePath of [
-      "cloudbuild-operator-final.yaml",
-      "cloudbuild-operator-final-extra.yaml",
-    ]) {
-      expect(readRepoFile(filePath)).not.toContain(
-        "--build-arg=ENABLE_BUILDER_TOOLCHAIN_WRAPPER=true",
-      );
-    }
     expect(enabledArm).toContain(
       "rm -f /usr/local/bin/claude /usr/local/bin/codex /usr/bin/chromium",
     );
@@ -334,9 +336,6 @@ describe("gateway base image", () => {
 
   it("gates each final image on its required OpenClaw runtime plugin set", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
-    const standardBuild = readRepoFile("cloudbuild.yaml");
-    const builderBuild = readRepoFile("cloudbuild-operator-final.yaml");
-    const extraBuilderBuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
 
     expect(dockerfile).toContain(
       "COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps",
@@ -344,13 +343,8 @@ describe("gateway base image", () => {
     expect(dockerfile).toContain(
       '/usr/local/bin/verify-openclaw-runtime-deps "$OPENCLAW_RUNTIME_PLUGINS"',
     );
-    expect(standardBuild).toContain(
-      "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex",
-    );
-    for (const build of [builderBuild, extraBuilderBuild]) {
-      expect(build).toContain(
-        "--build-arg=OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex",
-      );
+    for (const args of Object.values(gatewayImageArgs())) {
+      expect(args.OPENCLAW_RUNTIME_PLUGINS).toBe("mattermost,parallel-plugin,codex");
     }
   });
 
@@ -389,11 +383,9 @@ describe("gateway base image", () => {
   });
 
   it("proves the final Builder image retains its boot-critical payloads", () => {
-    const cloudbuild = readRepoFile("cloudbuild-operator-final.yaml");
     const dockerfile = readRepoFile("infra/gateway/Dockerfile");
     const gate = readRepoFile("infra/gateway/verify-runtime-image.sh");
 
-    expect(cloudbuild).toContain("--build-arg=IMAGE_PROFILE=builder");
     expect(dockerfile).toContain('RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE"');
     expect(gate).toContain('! staged_plugin parallel-plugin');
     expect(gate).toContain('openclaw/dist/extensions/parallel/package.json');
@@ -408,33 +400,5 @@ describe("gateway base image", () => {
     expect(gate).toContain('test ! -e "$global_root/@sparticuz/chromium"');
     expect(gate).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
     expect(gate).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
-
-    const extraCloudbuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
-    expect(extraCloudbuild).toContain('openclaw/dist/extensions/parallel/package.json');
-    expect(extraCloudbuild).toContain(
-      '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/parallel-plugin"',
-    );
-    expect(extraCloudbuild).toContain('openclaw/dist/extensions/codex/package.json');
-    expect(extraCloudbuild).toContain(
-      '! find /opt/openclaw-runtime-deps/npm -type d -path "*/node_modules/@openclaw/codex"',
-    );
-    expect(extraCloudbuild).toContain('test -e "$$(npm root -g)/@anthropic-ai/claude-code"');
-    expect(extraCloudbuild).toContain('test -e "$$(npm root -g)/@openai/codex"');
-    expect(extraCloudbuild).toContain("test -x /usr/local/bin/claude");
-    expect(extraCloudbuild).toContain("test -x /usr/local/bin/codex");
-    expect(extraCloudbuild).toContain("test -x /usr/bin/chromium");
-    expect(extraCloudbuild).toContain('test ! -e "$$(npm root -g)/@sparticuz/chromium"');
-    expect(extraCloudbuild).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
-    expect(extraCloudbuild).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
-  });
-
-  it("validates the extra Builder candidate against the current Mattermost schema", () => {
-    const cloudbuild = readRepoFile("cloudbuild-operator-final-extra.yaml");
-
-    expect(cloudbuild).toContain(
-      String.raw`\"replyToModeByChatType\":{\"direct\":\"all\"}`,
-    );
-    expect(cloudbuild).not.toContain("threadSessionScope");
-    expect(cloudbuild).toContain("openclaw config validate");
   });
 });

@@ -1,4 +1,4 @@
-# Build context: repo root (see gateway-edge/cloudbuild.yaml). gateway-edge
+# Build context: repo root. gateway-edge
 # consumes packed internal directory dependencies — no sibling source is compiled.
 #
 # WORKDIR must be /gateway-edge (not /app) so that tsc's emit paths — which

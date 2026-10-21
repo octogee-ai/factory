@@ -504,21 +504,6 @@ function scanLiteralImages(
   }
 }
 
-function scanCloudBuildImages(
-  relativePath: string,
-  lines: string[],
-  sink: Pick<DependencyInventory, "references" | "exclusions">,
-  imageIndex: Counter,
-): void {
-  for (const line of lines) {
-    if (!line.trimStart().startsWith("-")) continue;
-    const builder = yamlScalar(line, "name");
-    if (!builder) continue;
-    pushImage(sink, "container-image", relativePath, `image:${imageIndex.value}`, builder);
-    imageIndex.value += 1;
-  }
-}
-
 function scanValuesImages(
   relativePath: string,
   lines: string[],
@@ -549,9 +534,6 @@ function scanYaml(root: string, files: string[], references: DependencyReference
     const imageIndex = { value: 0 };
     scanGithubActions(relativePath, lines, references);
     scanLiteralImages(relativePath, lines, sink, imageIndex);
-    if (path.basename(file).startsWith("cloudbuild")) {
-      scanCloudBuildImages(relativePath, lines, sink, imageIndex);
-    }
     if (path.basename(file).startsWith("values")) scanValuesImages(relativePath, lines, sink);
   }
 }
