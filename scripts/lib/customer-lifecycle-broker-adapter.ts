@@ -1278,8 +1278,7 @@ async function reconcileConfiguredBuilderProjectAgents(
     activationProjectIds: projectAgents.filter((agent) => agent.status === "provisioning" && agent.activationId).map((agent) => agent.projectId),
   };
   const logPrefix = `[project-agents:${snapshot.slug}]`;
-  const initial = configuredBuilderProjectAgentPatch(current, patchInput);
-  await releaseAgentsAndInvalidateCache(ctx, initial.retiredAgentIds, logPrefix, { purgeStore: true });
+  const { retiredAgentIds } = configuredBuilderProjectAgentPatch(current, patchInput);
   await ensureCustomerRosterAgents(ctx, projectAgentEntries, logPrefix);
   const agentIds = agentIdsFromEntries(projectAgentEntries);
   await Promise.all(agentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })));
@@ -1310,6 +1309,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   for (const accountId of retiredAccountIds) await ctx.rpc.channelsStop({ channel: "mattermost", accountId });
   const removedSecrets = await updateMattermostAccountSecrets(OPENCLAW_DIR, { remove: [...new Set([...projectSecrets.remove, ...retiredAccountIds])] });
   secretMaterial.noteIf(removedSecrets.changed, "Mattermost account secrets file changed");
+  await releaseAgentsAndInvalidateCache(ctx, retiredAgentIds, logPrefix, { purgeStore: true });
   await settleProjectAgentActivations(ctx, {
     snapshot, projectAgents, channels: brokerSnapshot.channels, baseline, secretMaterial, signal: options.signal,
     activate: async () => {

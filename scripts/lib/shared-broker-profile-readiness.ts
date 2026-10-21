@@ -1,6 +1,10 @@
 import * as path from "node:path";
 import { parseAgentId } from "../../shared/types/identity.js";
 import type { DegradedSecretOwner } from "./gateway-rpc.js";
+import { configuredBuilderManagedProjectIds } from "./configured-builder-project-agents.js";
+import { readMattermostAccountSecret } from "./mattermost-account-secrets.js";
+
+const PROJECT_ACCOUNT_OWNER_PREFIX = "mattermost:";
 
 export function unassignedConfiguredAgents(agentIds: string[], assignedSlugs: string[]): Set<string> {
   const assigned = new Set(assignedSlugs);
@@ -21,20 +25,42 @@ function accountAgent(ownerId: string, agentsDir: string, excluded: Set<string>)
   return null;
 }
 
+export async function unmaterializedProjectAccountIds(input: {
+  config: unknown;
+  assignedSlugs: readonly string[];
+  openclawDir: string;
+}): Promise<Set<string>> {
+  const accountIds = new Set<string>();
+  for (const slug of input.assignedSlugs) {
+    for (const projectId of configuredBuilderManagedProjectIds(input.config, slug, [])) {
+      const accountId = `${slug}-proj-${projectId}`;
+      if (await readMattermostAccountSecret(input.openclawDir, accountId) === null) accountIds.add(accountId);
+    }
+  }
+  return accountIds;
+}
+
+function unmaterializedProjectAccountOwner(owner: DegradedSecretOwner, accountIds: ReadonlySet<string> | undefined): boolean {
+  return owner.ownerKind === "account" && owner.ownerId.startsWith(PROJECT_ACCOUNT_OWNER_PREFIX) &&
+    accountIds?.has(owner.ownerId.slice(PROJECT_ACCOUNT_OWNER_PREFIX.length)) === true;
+}
+
 export function stagedSecretWarningsOnly(input: {
   warningCount: number;
   owners: DegradedSecretOwner[];
   excluded: Set<string>;
   agentsDir: string;
+  unmaterializedProjectAccountIds?: ReadonlySet<string>;
 }): boolean {
   if (!Number.isSafeInteger(input.warningCount) || input.warningCount <= 0 ||
       input.owners.length !== input.warningCount) return false;
   const identities = new Set<string>();
   for (const owner of input.owners) {
-    if (owner.state !== "unavailable" || owner.reason !== "secret provider failed") return false;
     const identity = JSON.stringify([owner.ownerKind, owner.ownerId]);
     if (identities.has(identity)) return false;
     identities.add(identity);
+    if (unmaterializedProjectAccountOwner(owner, input.unmaterializedProjectAccountIds)) continue;
+    if (owner.state !== "unavailable" || owner.reason !== "secret provider failed") return false;
     let agent: string | null = null;
     if (owner.ownerKind === "account") agent = accountAgent(owner.ownerId, input.agentsDir, input.excluded);
     if (owner.ownerKind === "capability" && owner.ownerId.startsWith("memory-provider:")) {

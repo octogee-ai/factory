@@ -34,6 +34,7 @@ import { _resetBrokerProfileLogStateForTests, createReconcileConvergenceHooks, f
 import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { clearBuilderClaim, stubBuilderClaim, withBuilderClaim } from "./helpers/builder-claim.js";
+import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -2842,6 +2843,56 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     expect(rpc.secretsReload).not.toHaveBeenCalled();
     secretMocks.updateMattermostAccountSecrets.mockResolvedValue({ changed: true });
     patchMocks.applyConfigPatch.mockImplementation(async () => ({ mode: "rpc", attempts: 1 }));
+  });
+
+  it("removes a retired project account from config and secrets before deleting its agent", async () => {
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [], channels: [] });
+    const retiredAgentId = "octogee-alice-proj-old-coach";
+    const retiredAccountId = "alice-proj-old";
+    let config: Record<string, any> = {
+      agents: { entries: {
+        "octogee-alice-coach": { model: "owner-model" },
+        [retiredAgentId]: { workspace: path.join(testRuntime.dir, "customers/alice/projects/old") },
+      } },
+      channels: { mattermost: { accounts: {
+        "alice-coach": { botToken: "owner-coach-token", allowFrom: [ALICE_OWNER_MM_ID] },
+        [retiredAccountId]: { botToken: mattermostAccountSecretRef(retiredAccountId) },
+      } } },
+      bindings: [
+        { agentId: "octogee-alice-coach", match: { channel: "mattermost", accountId: "alice-coach" } },
+        { agentId: retiredAgentId, match: { channel: "mattermost", accountId: retiredAccountId } },
+      ],
+    };
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot(config)),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
+    });
+    let patch: Record<string, any> | undefined;
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      patch = args.buildPatch(config) as Record<string, any>;
+      const accounts = { ...config.channels.mattermost.accounts, ...patch.channels.mattermost.accounts };
+      for (const [accountId, account] of Object.entries(accounts)) if (account === null) delete accounts[accountId];
+      config = { ...config, channels: { mattermost: { accounts } }, bindings: patch.bindings };
+      return { mode: "rpc", attempts: 1 };
+    });
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+
+    await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+
+    expect(patch!.channels.mattermost.accounts[retiredAccountId]).toBeNull();
+    expect(config.channels.mattermost.accounts[retiredAccountId]).toBeUndefined();
+    expect(rpc.agentsDelete).toHaveBeenCalledExactlyOnceWith({ agentId: retiredAgentId, deleteFiles: false });
+    const deletedAt = vi.mocked(rpc.agentsDelete).mock.invocationCallOrder[0]!;
+    expect(patchMocks.applyConfigPatch.mock.invocationCallOrder[0]).toBeLessThan(deletedAt);
+    expect(rpc.channelsStop).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId: retiredAccountId });
+    expect(vi.mocked(rpc.channelsStop).mock.invocationCallOrder[0]).toBeLessThan(deletedAt);
+    const removal = secretMocks.updateMattermostAccountSecrets.mock.calls.findIndex(
+      ([, change]) => (change as { remove?: string[] }).remove?.includes(retiredAccountId),
+    );
+    expect(removal).toBeGreaterThanOrEqual(0);
+    expect(secretMocks.updateMattermostAccountSecrets.mock.invocationCallOrder[removal]).toBeLessThan(deletedAt);
   });
 
   it("routes a new workspace session on a configured Builder without platform projects", async () => {

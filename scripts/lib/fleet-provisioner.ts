@@ -1,5 +1,5 @@
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
-import { unassignedConfiguredAgents, stagedSecretWarningsOnly } from "./shared-broker-profile-readiness.js";
+import { unassignedConfiguredAgents, stagedSecretWarningsOnly, unmaterializedProjectAccountIds } from "./shared-broker-profile-readiness.js";
 import { builderToolchainRoot } from "./builder-storage.js";
 import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
 import express from "express";
@@ -828,20 +828,27 @@ interface BrokerProfileReloadScope {
   agentsDir: string;
   readAssignedSlugs: () => Promise<string[]>;
   assignedSlugs: string[];
+  unmaterializedProjectAccountIds: Set<string>;
   signature: string;
 }
 
 async function readBrokerProfileScope(agentIds: string[], deps: {
   agentsDir?: string;
+  openclawDir?: string;
+  readConfig?: () => unknown;
   readAssignedSlugs?: () => Promise<string[]>;
 }): Promise<BrokerProfileReloadScope | undefined> {
   if (!deps.readAssignedSlugs) return undefined;
   const assignedSlugs = await deps.readAssignedSlugs();
   const agentsDir = deps.agentsDir ?? path.join(OPENCLAW_DIR, "agents");
+  const projectAccountIds = await unmaterializedProjectAccountIds({
+    config: (deps.readConfig ?? readOpenClawConfig)(), assignedSlugs, openclawDir: deps.openclawDir ?? OPENCLAW_DIR,
+  });
   return {
     excluded: unassignedConfiguredAgents(agentIds, assignedSlugs), agentsDir,
     readAssignedSlugs: deps.readAssignedSlugs, assignedSlugs,
-    signature: JSON.stringify([agentsDir, [...agentIds].sort(), [...assignedSlugs].sort()]),
+    unmaterializedProjectAccountIds: projectAccountIds,
+    signature: JSON.stringify([agentsDir, [...agentIds].sort(), [...assignedSlugs].sort(), [...projectAccountIds].sort()]),
   };
 }
 
@@ -855,6 +862,12 @@ async function verifyStagedSecretWarnings(input: {
   if (!stagedSecretWarningsOnly({ warningCount, owners: await rpc.degradedSecretsStatus(), ...scope })) return false;
   const current = (await scope.readAssignedSlugs()).sort();
   return JSON.stringify(current) === JSON.stringify([...scope.assignedSlugs].sort());
+}
+
+function logIsolatedSecretWarnings(log: (msg: string) => void, warningCount: number, scope?: BrokerProfileReloadScope): void {
+  const projectAccounts = [...(scope?.unmaterializedProjectAccountIds ?? [])].sort();
+  const awaitingReconciler = projectAccounts.length > 0 ? ` — project accounts awaiting the reconciler: ${projectAccounts.join(", ")}` : "";
+  log(`[agent-model-token] ${warningCount} staged unassigned secret owner(s) remain isolated${awaitingReconciler}`);
 }
 
 async function reloadBrokerProfileSnapshot(
@@ -872,7 +885,7 @@ async function reloadBrokerProfileSnapshot(
       throw new Error(`secrets.reload returned ok=${String(result.ok)} warnings=${warningCount}`);
     }
     if (scope) settledBrokerProfileScope = scope.signature;
-    if (stagedOnly) log(`[agent-model-token] ${warningCount} staged unassigned secret owners remain isolated`);
+    if (stagedOnly) logIsolatedSecretWarnings(log, warningCount, scope);
     brokerProfileSnapshotReloadPending = false;
     lastBrokerProfileSnapshotReloadError = null;
     log("[agent-model-token] active secret snapshot reloaded after broker profile materialization");
@@ -910,6 +923,7 @@ async function runDeferredBrokerProfileSweep(
   log: (msg: string) => void,
   deps: {
     agentsDir?: string;
+    openclawDir?: string;
     readConfig?: () => unknown;
     readAssignedSlugs?: () => Promise<string[]>;
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
@@ -946,6 +960,7 @@ export function materializeDeferredBrokerProfiles(
   log: (msg: string) => void,
   deps: {
     agentsDir?: string;
+    openclawDir?: string;
     readConfig?: () => unknown;
     readAssignedSlugs?: () => Promise<string[]>;
     secretsApply?: BrokerProfileSweepOptions["secretsApply"];
@@ -1524,9 +1539,12 @@ export function createReconcileConvergenceHooks(input: {
   return { recordApplied, rememberRetry, forgetRetry };
 }
 
+type AssignedSlugReader = () => Promise<string[]>;
+type RosterSourceOptions = Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs" | "db">;
+
 function assignedRosterReader(
-  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs" | "db">,
-): (() => Promise<string[]>) | null {
+  opts: RosterSourceOptions,
+): AssignedSlugReader | null {
   const customers = opts.readDesiredCustomers;
   if (customers) return async () => [...(await customers()).keys()];
   if (opts.readDesiredSlugs) return opts.readDesiredSlugs;
@@ -1534,14 +1552,19 @@ function assignedRosterReader(
   return db ? () => readAssignedSlugsForGateway(db, opts.gatewayId) : null;
 }
 
-function sharedBrokerProfileRoster(opts: StartFleetOptions): (() => Promise<string[]>) | undefined {
-  if (!opts.gatewayId.startsWith("shared-")) return undefined;
-  return assignedRosterReader(opts) ?? undefined;
+export function brokerProfileRoster(
+  opts: RosterSourceOptions,
+): AssignedSlugReader | undefined {
+  if (opts.gatewayId.startsWith("shared-")) return assignedRosterReader(opts) ?? undefined;
+  return async () => {
+    const slug = builderClaimSlug();
+    return slug ? [slug] : [];
+  };
 }
 
 export function createVerifyAttachPending(input: {
   provision: boolean;
-  opts: Pick<StartFleetOptions, "gatewayId" | "readDesiredCustomers" | "readDesiredSlugs" | "db">;
+  opts: RosterSourceOptions;
 }): ((slug: string) => Promise<boolean>) | undefined {
   const readAssigned = input.provision ? assignedRosterReader(input.opts) : null;
   if (!readAssigned) return undefined;
@@ -1556,7 +1579,7 @@ function createDesiredRosterReader(input: {
   desiredLanes: Map<string, MountLane>;
   ensureAllowed: Map<string, boolean>;
   setEnsureFingerprint: (fingerprint: string) => void;
-}): (() => Promise<string[]>) | null {
+}): AssignedSlugReader | null {
   const customerSource = input.customerSource;
   if (customerSource) {
     return async () => {
@@ -2810,7 +2833,7 @@ export async function startFleetController(
   const namespace = resolveK8sNamespace();
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || process.env.GATEWAY_PORT || "18789";
   const dashboardBridgeRequired = process.env.OPENCLAW_DASHBOARD_BRIDGE_REQUIRED === "true";
-  const sharedProfileRoster = sharedBrokerProfileRoster(opts);
+  const sharedProfileRoster = brokerProfileRoster(opts);
   let brokerProfilesSettled = !caps.provision;
 
 const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });

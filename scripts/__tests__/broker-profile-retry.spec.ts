@@ -5,12 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { stagedSecretWarningsOnly, unassignedConfiguredAgents } from "../lib/shared-broker-profile-readiness.js";
 import type { DegradedSecretOwner } from "../lib/gateway-rpc.js";
+import { mattermostAccountSecretRef, updateMattermostAccountSecrets } from "../lib/mattermost-account-secrets.js";
+import { clearBuilderClaim, stubBuilderClaim } from "./helpers/builder-claim.js";
 
 import { DatabaseSync } from "node:sqlite";
 
 import { OpenClawSecretsApplyError } from "@octogee/core/agent-model-token-materializer";
 import {
   _resetBrokerProfileLogStateForTests,
+  brokerProfileRoster,
   materializeDeferredBrokerProfiles,
 } from "../lib/fleet-provisioner.js";
 
@@ -329,6 +332,72 @@ describe("broker profile retry (level-triggered)", () => {
     expect((await scoped()).settled).toBe(false);
     expect((await scoped()).settled).toBe(false);
     expect(apply.mock.calls.flatMap(([plan]) => plan.targets).some((target) => target.agentId === staged)).toBe(true);
+  });
+
+  describe("project accounts the Builder reconciler retires", () => {
+    const retiredAccount = "alice-proj-old";
+    const retiredOwner: DegradedSecretOwner = {
+      ownerKind: "account", ownerId: `mattermost:${retiredAccount}`, state: "unavailable", degradationState: "cold",
+      paths: [`channels.mattermost.accounts.${retiredAccount}.botToken`], reason: "secret reference was not found",
+    };
+    const builderConfig = () => ({
+      agents: { entries: { [AGENT]: { model: "house" } } },
+      channels: { mattermost: { accounts: { [retiredAccount]: { botToken: mattermostAccountSecretRef(retiredAccount) } } } },
+    });
+    let openclawDir: string;
+    let reloadWithWarning: ReturnType<typeof vi.fn>;
+    const scoped = () => materializeDeferredBrokerProfiles((m) => logs.push(m), {
+      agentsDir, openclawDir, readConfig: builderConfig,
+      readAssignedSlugs: async () => ["alice"],
+      secretsApply: { apply },
+      secretsReload: { secretsReload: reloadWithWarning, degradedSecretsStatus: async () => [retiredOwner] },
+    });
+
+    beforeEach(() => {
+      openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-bpr-oc-"));
+      seedAgentStore(agentsDir, AGENT);
+      applyOutcome = "accept";
+      reloadWithWarning = vi.fn(async () => ({ ok: true, warningCount: 1 }));
+    });
+    afterEach(() => {
+      fs.rmSync(openclawDir, { recursive: true, force: true });
+    });
+
+    it("settles once instead of reloading every 20s while a retired project account still names a missing secret", async () => {
+      expect(await scoped()).toEqual({ settled: true, deferred: [] });
+      expect(await scoped()).toEqual({ settled: true, deferred: [] });
+      expect(reloadWithWarning).toHaveBeenCalledOnce();
+      expect(logs.some((m) => m.includes(retiredAccount))).toBe(true);
+    });
+
+    it("keeps the warning blocking once that account's secret is materialized", async () => {
+      await updateMattermostAccountSecrets(openclawDir, { set: { [retiredAccount]: "old-pat" } });
+      expect((await scoped()).settled).toBe(false);
+      expect((await scoped()).settled).toBe(false);
+    });
+
+    it("keeps a project account of an unassigned slug or a foreign owner blocking", () => {
+      const excluded = unassignedConfiguredAgents([AGENT], ["alice"]);
+      const unmaterializedProjectAccountIds = new Set([retiredAccount]);
+      expect(stagedSecretWarningsOnly({ warningCount: 1, owners: [retiredOwner], excluded, agentsDir, unmaterializedProjectAccountIds })).toBe(true);
+      expect(stagedSecretWarningsOnly({ warningCount: 1, owners: [retiredOwner], excluded, agentsDir })).toBe(false);
+      expect(stagedSecretWarningsOnly({ warningCount: 1, owners: [{ ...retiredOwner, ownerId: "mattermost:bravo-proj-old" }], excluded, agentsDir, unmaterializedProjectAccountIds })).toBe(false);
+      expect(stagedSecretWarningsOnly({ warningCount: 1, owners: [{ ...retiredOwner, ownerKind: "route" }], excluded, agentsDir, unmaterializedProjectAccountIds })).toBe(false);
+      expect(stagedSecretWarningsOnly({ warningCount: 2, owners: [retiredOwner, retiredOwner], excluded, agentsDir, unmaterializedProjectAccountIds })).toBe(false);
+    });
+  });
+
+  describe("broker profile roster per gateway class", () => {
+    afterEach(() => clearBuilderClaim());
+
+    it("reads the Shared assignment roster and the Builder's claimed slug, and an empty roster before a claim", async () => {
+      const readDesiredSlugs = async () => ["alice", "bravo"];
+      await expect(brokerProfileRoster({ gatewayId: "shared-a", readDesiredSlugs })!()).resolves.toEqual(["alice", "bravo"]);
+      const builder = brokerProfileRoster({ gatewayId: "alice-s-abc", readDesiredSlugs })!;
+      await expect(builder()).resolves.toEqual([]);
+      stubBuilderClaim("alice");
+      await expect(builder()).resolves.toEqual(["alice"]);
+    });
   });
 
   it("retains strict warning refusal without a Shared assignment reader", async () => {
