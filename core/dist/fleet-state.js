@@ -74,10 +74,22 @@ export function builderActivationRecoveryTargetMatches(params) {
 export async function completeWorkspaceMigrationRecovery(deps, params) {
     await workspaceMigrationRecovery(deps, params, true);
 }
+export function sharedRecoveryTargetCleaned(input, schedulerHandoff) {
+    if (input.recoverSourceOnly !== true || input.source === "builder-activation-lease")
+        return false;
+    const steps = recordOrEmpty(recordOrEmpty(schedulerHandoff).sourceRecovery).steps;
+    if (!Array.isArray(steps))
+        return false;
+    return ["rollback:scheduler-abort", "rollback:unmount-target"].every(name => steps.some(value => {
+        const step = recordOrEmpty(value);
+        return step.name === name && step.status === "done";
+    }));
+}
 function assertRecoveryTarget(params) {
     const matches = params.input.source === "builder-activation-lease"
         ? builderActivationRecoveryTargetMatches(params)
-        : projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared";
+        : sharedRecoveryTargetCleaned(params.input, params.schedulerHandoff) ||
+            projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared";
     if (!matches)
         throw new Error("workspace migration recovery target authority changed");
 }
@@ -128,7 +140,7 @@ async function workspaceMigrationRecovery(deps, params, complete) {
         ]);
         if (target.exists)
             throw new Error("workspace migration recovery target assignment remains");
-        assertRecoveryTarget({ operationId: params.operationId, input, openclaw, sourceEpoch: params.sourceEpoch, targetRoot: targetRoot.data() });
+        assertRecoveryTarget({ operationId: params.operationId, input, openclaw, sourceEpoch: params.sourceEpoch, targetRoot: targetRoot.data(), schedulerHandoff: handoff });
         if (!complete)
             return;
         const completedAt = deps.now ? deps.now().getTime() : Date.now();

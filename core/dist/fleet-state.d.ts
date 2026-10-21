@@ -40,6 +40,7 @@ export declare function builderActivationRecoveryTargetMatches(params: {
     targetRoot: unknown;
 }): boolean;
 export declare function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
+export declare function sharedRecoveryTargetCleaned(input: Record<string, unknown>, schedulerHandoff: unknown): boolean;
 export declare function clearWorkspaceMigrationPreparation(deps: FleetStateDeps, params: WorkspaceMigrationPreparationParams): Promise<void>;
 export declare function clearRetiredBuilderActivationPreparation(deps: FleetStateDeps, params: {
     uid: string;

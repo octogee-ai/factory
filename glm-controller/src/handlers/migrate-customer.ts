@@ -40,7 +40,7 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 import { computerPreemptionError } from "../operation-retry.js";
 import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
-import type { WorkspaceMigrationPreparationParams, WorkspaceMigrationRecoveryParams } from "@octogee/core/fleet-state";
+import { sharedRecoveryTargetCleaned, type WorkspaceMigrationPreparationParams, type WorkspaceMigrationRecoveryParams } from "@octogee/core/fleet-state";
 import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
@@ -1592,6 +1592,12 @@ function ownershipCheckedSourceRecovery(op: Operation, previous: SchedulerHandof
     (previous.toGatewayId.startsWith("shared-") || builderActivationSourceRecoveryPending(op));
 }
 
+async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Operation, previous: SchedulerHandoffState, sharedScope: boolean): Promise<void> {
+  if (sharedScope && sharedRecoveryTargetCleaned(op.input, previous)) return;
+  if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous);
+  if (sharedScope) await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId);
+}
+
 async function resumePreviousSchedulerAttempt(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1609,9 +1615,8 @@ async function resumePreviousSchedulerAttempt(
   }
   const scope = previousAttemptScope(op, previous);
   const recovery = scope.recoveryRequired ? await sharedRecoveryAuthority(deps, op, user, uid) : undefined;
-  if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous);
+  await cleanupPreviousSchedulerTarget(deps, op, previous, scope.sharedScope);
   const url = await deps.resolveGatewayUrl(previous.fromGatewayId);
-  if (scope.sharedScope) await abortSharedTargetLeftovers(deps, op, user.slug, previous.toGatewayId);
   const client = deps.buildClient(() => url);
   if (recovery) await deps.assertMigrationRecoveryAuthority!(recovery);
   if (scope.resumeSourceScheduler) {

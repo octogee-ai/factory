@@ -401,6 +401,28 @@ describe("abandoned Shared migration recovery", () => {
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
     expect(h.steps).toContainEqual(expect.objectContaining({ name: "recover-source", status: "done" }));
   });
+  it("resumes the source without contacting a removed target whose cleanup already completed", async () => {
+    const h = recovery();
+    const request = op();
+    request.input.recoverSourceOnly = true;
+    request.schedulerHandoff = { ...previous, sourceRecovery: { migrationId: previous.migrationId, sourceEpoch: 4, steps: [
+      { name: "quiesce-source", status: "done" },
+      { name: "rollback:scheduler-abort", status: "done" },
+      { name: "rollback:unmount-target", status: "done" },
+    ] } };
+    vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async gatewayId => {
+      if (gatewayId === "shared-green") throw new Error("target gateway was removed");
+      return "http://source";
+    });
+    expect(await createMigrateCustomerHandler(h.deps)(request, h.ctx)).toMatchObject({ success: false, rolledBack: true });
+    expect(h.client.abortImport).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+    expect(h.client.resume).toHaveBeenCalledOnce();
+    expect(h.client.scheduler).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue", phase: "resume" }));
+    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
   it("does not release unrelated voice ingress when the abandoned attempt failed before quiescence", async () => {
     const h = recovery();
     const request = op();

@@ -143,10 +143,21 @@ export async function completeWorkspaceMigrationRecovery(deps: FleetStateDeps, p
   await workspaceMigrationRecovery(deps, params, true);
 }
 
-function assertRecoveryTarget(params: Parameters<typeof builderActivationRecoveryTargetMatches>[0]): void {
+export function sharedRecoveryTargetCleaned(input: Record<string, unknown>, schedulerHandoff: unknown): boolean {
+  if (input.recoverSourceOnly !== true || input.source === "builder-activation-lease") return false;
+  const steps = recordOrEmpty(recordOrEmpty(schedulerHandoff).sourceRecovery).steps;
+  if (!Array.isArray(steps)) return false;
+  return ["rollback:scheduler-abort", "rollback:unmount-target"].every(name => steps.some(value => {
+    const step = recordOrEmpty(value);
+    return step.name === name && step.status === "done";
+  }));
+}
+
+function assertRecoveryTarget(params: Parameters<typeof builderActivationRecoveryTargetMatches>[0] & { schedulerHandoff: unknown }): void {
   const matches = params.input.source === "builder-activation-lease"
     ? builderActivationRecoveryTargetMatches(params)
-    : projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared";
+    : sharedRecoveryTargetCleaned(params.input, params.schedulerHandoff) ||
+      projectGatewayDesiredRootForGateway(params.targetRoot, String(params.input.toGatewayId))?.gatewayClass === "shared";
   if (!matches) throw new Error("workspace migration recovery target authority changed");
 }
 
@@ -199,7 +210,7 @@ async function workspaceMigrationRecovery(
       txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(String(input.toGatewayId))),
     ]);
     if (target.exists) throw new Error("workspace migration recovery target assignment remains");
-    assertRecoveryTarget({ operationId: params.operationId, input, openclaw, sourceEpoch: params.sourceEpoch, targetRoot: targetRoot.data() });
+    assertRecoveryTarget({ operationId: params.operationId, input, openclaw, sourceEpoch: params.sourceEpoch, targetRoot: targetRoot.data(), schedulerHandoff: handoff });
     if (!complete) return;
     const completedAt = deps.now ? deps.now().getTime() : Date.now();
     txn.update(sourceRef, { state: "serving", updatedByOperationId: params.operationId, updatedAt: completedAt });
