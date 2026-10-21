@@ -4238,7 +4238,9 @@ function isEndpointPreflightError(error: string, operationInput: GlmDoc): boolea
   const schedulerIdentityNotReady = [fromGatewayId, toGatewayId].some(
     (gatewayId) => error.startsWith(`/scheduler/${gatewayId}: 500 `),
   ) && error.includes(WORKSPACE_IDENTITIES_NOT_INITIALIZED);
-  return preflightPrefix || schedulerIdentityNotReady;
+  const postgresRuntimeMismatch = error ===
+    "PostgreSQL agent handoff requires the same fully identified OpenClaw build on both Gateways; align their runtime pins before moving state";
+  return preflightPrefix || schedulerIdentityNotReady || postgresRuntimeMismatch;
 }
 
 function rearmableBuilderReturnOperation(input: {
