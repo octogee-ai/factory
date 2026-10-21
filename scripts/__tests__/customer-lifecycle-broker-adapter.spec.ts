@@ -4932,6 +4932,81 @@ describe("durable Shared context eviction hold", () => {
   });
 });
 
+it("waits for runtime publication before detaching a PostgreSQL roster entry", async () => {
+  await withPostgresAgentConfig({}, async () => {
+    let finishPublication!: () => void;
+    const custody = new Promise<void>((resolve) => { finishPublication = resolve; });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { holdUntil: custody });
+    const rpc = mkGatewayRpc({ agentsDetach: vi.fn(async ({ agentId }) => ({ ok: true, agentId })) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const detached = adapter.releaseAgent!("octogee-alice-coach");
+    try {
+      await Promise.resolve();
+      expect(rpc.agentsDetach).not.toHaveBeenCalled();
+    } finally { finishPublication(); await detached; }
+    expect(rpc.agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-alice-coach" });
+  });
+});
+
+it("defers broker-profile reloads until PostgreSQL detach settles", async () => {
+  await withPostgresAgentConfig({}, async () => {
+    let finishDetach!: () => void;
+    const pending = new Promise<{ ok: true; agentId: string }>((resolve) => {
+      finishDetach = () => resolve({ ok: true, agentId: "octogee-alice-coach" });
+    });
+    const rpc = mkGatewayRpc({ agentsDetach: vi.fn(() => pending) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const detached = adapter.releaseAgent!("octogee-alice-coach");
+    const readConfig = vi.fn(() => ({ agents: { entries: {} } }));
+    try {
+      await vi.waitFor(() => expect(rpc.agentsDetach).toHaveBeenCalledOnce());
+      const sweep = await materializeDeferredBrokerProfiles(vi.fn(), { readConfig });
+      expect(sweep).toMatchObject({ settled: false, skipped: true });
+      expect(readConfig).not.toHaveBeenCalled();
+    } finally { finishDetach(); await detached; }
+  });
+});
+
+it("defers broker-profile reloads while import preparation detaches prior agents", async () => {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = testRuntime.dir;
+  try { await withPostgresAgentConfig({}, async () => {
+    const agentId = "octogee-guardprep-coach";
+    const directory = path.join(testRuntime.dir, "agents", agentId, "agent");
+    const procRoot = path.join(testRuntime.dir, "guardprep-proc");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.mkdir(procRoot, { recursive: true });
+    let finishDetach!: () => void;
+    const pending = new Promise<{ ok: true; agentId: string }>((resolve) => {
+      finishDetach = () => resolve({ ok: true, agentId });
+    });
+    const rpc = mkGatewayRpc({ agentsDetach: vi.fn(() => pending) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn(), procRoot });
+    const prepared = adapter.prepareImportDir("guardprep", "default");
+    try {
+      await vi.waitFor(() => expect(rpc.agentsDetach).toHaveBeenCalledOnce());
+      const sweep = await materializeDeferredBrokerProfiles(vi.fn(), { readConfig: () => ({ agents: { entries: {} } }) });
+      expect(sweep).toMatchObject({ settled: false, skipped: true });
+    } finally { finishDetach(); await prepared; await fs.rm(path.dirname(directory), { recursive: true, force: true }); }
+  }); } finally {
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
+});
+
+it("defers broker-profile reloads while rollback resumes a customer", async () => {
+  let finishRead!: () => void;
+  const pending = new Promise<null>((resolve) => { finishRead = () => resolve(null); });
+  mocks.readActivationManifest.mockReturnValueOnce(pending);
+  const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: mkGatewayRpc(), log: vi.fn() });
+  const resumed = adapter.resumeCustomer("guardresume");
+  try {
+    await vi.waitFor(() => expect(mocks.readActivationManifest).toHaveBeenCalledWith(expect.any(String), "guardresume"));
+    const sweep = await materializeDeferredBrokerProfiles(vi.fn(), { readConfig: () => ({ agents: { entries: {} } }) });
+    expect(sweep).toMatchObject({ settled: false, skipped: true });
+  } finally { finishRead(); await resumed; }
+});
+
 it("releases a PostgreSQL roster entry through detach while preserving its anchor", async () => {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = testRuntime.dir;

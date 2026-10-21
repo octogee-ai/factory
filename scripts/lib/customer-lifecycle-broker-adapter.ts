@@ -2030,16 +2030,17 @@ export function buildBrokeredLifecycleAdapter(
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     schedulerReady: async () => { await ctx.rpc.configGet(); },
-    resumeCustomer: async (slug) => {
+    resumeCustomer: (slug) => openClawRuntimeUpdateGuard.run(async () => {
       const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;
       });
       if (manifest) await activateImportedCustomer(ctx, slug, undefined);
       await setCustomerChannelsRunning(ctx.rpc, slug, true);
-    },
+    }),
     listExportPaths,
-    prepareImportDir: (slug, mode) => prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`)),
+    prepareImportDir: (slug, mode) => openClawRuntimeUpdateGuard.run(() =>
+      prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`))),
     prepareKeyImportDir,
     activateImportedCustomer: (slug, callOpts) =>
       openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {
@@ -2050,7 +2051,8 @@ export function buildBrokeredLifecycleAdapter(
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
       openClawRuntimeUpdateGuard.run(() =>
         removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch)),
-    releaseAgent: (agentId) => releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`),
+    releaseAgent: (agentId) => openClawRuntimeUpdateGuard.run(() =>
+      releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`)),
   };
   return adapter;
 }
