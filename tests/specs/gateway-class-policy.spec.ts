@@ -159,6 +159,25 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   return runPolicyWithDir(gatewayClass, config).config;
 }
 
+it.each(["shared", "builder"])("preserves only the scoped PostgreSQL connection ref through %s policy", (gatewayClass) => {
+  const connection = { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
+  const database = { engine: "sqlite", families: { agent: { engine: "postgres" } }, postgres: { schemaPrefix: "octogee", connection } };
+  const out = runPolicy(gatewayClass, {
+    database,
+    secrets: { hostEnvRef: connection },
+  });
+  expect(out.database).toEqual(database);
+  expect(out.secrets.hostEnvRef).toBeUndefined();
+  expect(runPolicy(gatewayClass, out).database).toEqual(database);
+});
+
+it.each(["shared", "builder"])("canonicalizes an imported database SecretRef under %s policy", (gatewayClass) => {
+  const out = runPolicy(gatewayClass, {
+    database: { postgres: { connection: { source: "env", provider: "default", id: "INTERNAL_SERVICE_KEY" } } },
+  });
+  expect(out.database.postgres.connection).toEqual({ source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" });
+});
+
 describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
   it("keeps the boot workflow and project policies identical to the runtime invariants", () => {
     const result = spawnSync("node", ["--input-type=module", "-e", `import { OCTOGEE_WORKFLOW_TOOLS } from ${JSON.stringify(script)}; console.log(JSON.stringify(OCTOGEE_WORKFLOW_TOOLS));`], { encoding: "utf8" });

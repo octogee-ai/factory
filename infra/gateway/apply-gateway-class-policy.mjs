@@ -686,6 +686,13 @@ function agentIdAtSecretRefPath(config, segments) {
   return typeof agent?.id === "string" ? agent.id : null;
 }
 
+function projectAgentStoreSecretRef(config) {
+  const postgres = objectValue(objectValue(config.database)?.postgres);
+  if (postgres) {
+    postgres.connection = { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
+  }
+}
+
 function expectedCustomerSecretRef(config, segments) {
   if (
     segments.length === 5 &&
@@ -758,6 +765,7 @@ function neutralizeUnapprovedCustomerSecretRefs(value, config, segments = []) {
 
 function projectCustomerSecretProviders(config, openclawDir) {
   neutralizeUnapprovedCustomerSecretRefs(config, config);
+  projectAgentStoreSecretRef(config);
   config.secrets ??= {};
   config.secrets.providers = {
     "gcp-secret-manager": {
@@ -1442,6 +1450,7 @@ function sanitizeBuilderSecretReferences(value) {
 
 function projectBuilderSecretProviders(config, openclawDir) {
   sanitizeBuilderSecretReferences(config);
+  projectAgentStoreSecretRef(config);
   config.secrets ??= {};
   const providers = objectValue(config.secrets.providers) ?? {};
   config.secrets.providers = providers;
