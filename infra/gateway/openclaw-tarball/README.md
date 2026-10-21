@@ -139,15 +139,19 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 ## PostgreSQL agent handoff and local recovery
 
-The common source is `b61d3ff1e4e7fc1c6ee6d14a670d269022ec72f2`.
+The common source is `127953fd7dacfbfb6438dce323dedad6b05a9f20`.
 Shared, Builder and native computer images consume this same pin. It retains
 the native auth startup correction and local Gateway checkpoint command and
-fixes the two failures observed during rollout:
+fixes the failures observed during rollout:
 
 - Checkpoint restore no longer compares a prepared SQLite file's device number
   with its containing directory's. gVisor reports different values for them.
   Exact file/path custody checks remain; required atomic hard-link publication
   enforces the filesystem boundary, with no cross-volume copy fallback.
+- The SQLite copy owner admits a byte copy when its clone-only attempt encounters
+  fs-safe's typed no-replace capability refusal. It reuses fs-safe's guarded,
+  non-overwriting copy path, preserving source identity, space admission and
+  post-publication/cleanup refusals. No filesystem policy is disabled.
 - Non-destructive `agents.detach` retains cron jobs and their scheduler hold.
   The existing cron migration owner exports/stages jobs and retires source jobs
   after cutover, or resumes them after source adoption on rollback. Detached
@@ -171,7 +175,10 @@ parents; its non-observing config reader preserves target freshness. The global
 snapshot sanitizer excludes pending outbound delivery intent. Ordinary full
 backup behavior is unchanged.
 
-Both fixes passed fresh independent P0/P1 review. The snapshot fix passed all
+The overlay fixes passed fresh independent P0/P1 review. The copy fix passed
+15 copy-owner, two prepared-volume and 19 restore-consumer cases, core types,
+targeted lint and formatting. One process-visibility case required host access.
+The earlier snapshot and detach fixes retain their qualified proofs below. The snapshot fix passed all
 46 focused publication/restore/checkpoint consumer cases, core types and targeted
 lint. The real installed CLI restored the actual failing five-image checkpoint
 and original PostgreSQL anchor in isolated gVisor, offline as UID1000, while the
@@ -190,14 +197,15 @@ existing-target refusal. This pair proof initializes no PostgreSQL anchors;
 the separate gVisor proof covers an existing anchor. Live handoff and new-pod
 recovery remain rollout verification steps.
 
-The root archive is 120336196 bytes, SHA256
-`02c943a56fb1fb130dc537c5ed6c2cecd667cb9ac5509e3ec7564259d526e2c1`,
-object `openclaw-fork-02c943a5.tgz`, generation `1792593649284137`.
-Mattermost is byte-identical to `openclaw-mattermost-74cca5fd.tgz`, SHA256
-`74cca5fdd7c77472e6794b83cb3816aa0f019175503d2de0bf19e93bcdb59654`,
-generation `1792520298183836`. Complete hashes are checked by generation-specific
-readback. Hosted islands and browser resources were regenerated from the same
-clean, built source; native UI inputs and runtime bundle bytes are unchanged.
+The root archive is 120511752 bytes, SHA256
+`872fcc65f01225e9d8e2a3302307b65da1ad7c326e5268837065ea3dfb23def8`,
+object `openclaw-fork-872fcc65.tgz`, generation `1792602991090858`.
+Mattermost is 1258484 bytes, SHA256
+`b48dcdf91685c9760fc566fc33076e9c2e909f6d3726f6b89140f12ad4178c34`,
+object `openclaw-mattermost-b48dcdf9.tgz`, generation `1792603006360414`.
+Complete hashes are checked by
+generation-specific readback. Hosted islands and browser resources were
+regenerated from the same clean, built source; native UI inputs are unchanged.
 Octogee retains its assignment, drain and native admission checks without
 requiring equal OpenClaw commit hashes between Gateways.
 
