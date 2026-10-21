@@ -1041,6 +1041,15 @@ describe('journaled Shared source schema repair', () => {
     if (stage === 'completion') expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined();
     else expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
   });
+  it('does not rearm a failed migration after an operator parks the Builder', async () => {
+    const h = await sourceHarness(true);
+    const failedId = (h.op.input.sourceRecovery as any).managementRecovery.failures[0].operationId;
+    const request = { ...h.store[`glmOperations/${failedId}`].input, operationId: failedId };
+    h.store['users/source-0'].provisioning.openclaw.managedBy = 'operator';
+    const input = currentPlacement(h), before = structuredClone(h.store);
+    await expect(enqueuePlacementMigration(input, request)).rejects.toThrow('operator-managed');
+    expect(h.store).toEqual(before);
+  });
   it('makes the exact recovered failed placement runnable through normal enqueue and a fresh worker claim', async () => {
     const h = await sourceHarness(true), failedId = (h.op.input.sourceRecovery as any).managementRecovery.failures[0].operationId, prior = structuredClone(h.store[`glmOperations/${failedId}`]);
     await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);

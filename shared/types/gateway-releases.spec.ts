@@ -531,6 +531,16 @@ describe("commitPlacementAtomic", () => {
     expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
   });
 
+  it("fences a stale automatic placement snapshot when the Builder was parked", async () => {
+    const { db, store } = mkDb({
+      "users/u1": { provisioning: { openclaw: { managedBy: "operator" } } },
+      "gateways/default": backfilled(), "glmGateways/default": runtimeDoc(),
+    });
+    await expect(commitPlacementAtomic(db, { uid: "u1", slug: "s1", gatewayId: "default", source: "repair", now: 100, mirrorPatch: mirror, automatic: true }))
+      .resolves.toEqual({ kind: "rejected", reason: "builder-operator-managed" });
+    expect(store.get("gateways/default/assignments/u1")).toBeUndefined();
+  });
+
   it("steady gateway: writes mirror + assignment on the serving gateway (serving, epoch 0)", async () => {
     const { db, store } = mkDb({
       "users/u1": { tier: "trial" },

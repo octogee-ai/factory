@@ -217,7 +217,7 @@ export interface CommitPlacementParams {
     automatic?: boolean;
     validateTarget?: (context: PlacementTargetValidationContext) => Promise<PlacementRejectReason | null>;
 }
-export type PlacementRejectReason = "account-not-interactive" | "restore-in-progress" | "source-transfer-in-progress" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting" | "assigned-elsewhere";
+export type PlacementRejectReason = "builder-operator-managed" | "account-not-interactive" | "restore-in-progress" | "source-transfer-in-progress" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting" | "assigned-elsewhere";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {

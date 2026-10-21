@@ -757,7 +757,7 @@
     "@types/ws": "^8.18.2",
     "supertest": "^7.3.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "peerDependencies": {
     "@octogee/shared": "^1.0.0"

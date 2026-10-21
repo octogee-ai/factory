@@ -30,6 +30,6 @@ export type OnboardingPlacementEligibility = {
     slug: string;
 } | {
     eligible: false;
-    reason: "onboarding-incomplete" | "provisioning-not-started" | "builder-slug-missing" | "account-not-interactive";
+    reason: "onboarding-incomplete" | "provisioning-not-started" | "builder-slug-missing" | "account-not-interactive" | "operator-managed";
 };
 export declare function resolveOnboardingPlacementEligibility(data: Record<string, unknown>): OnboardingPlacementEligibility;

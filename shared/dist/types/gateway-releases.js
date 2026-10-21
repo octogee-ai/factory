@@ -341,6 +341,12 @@ export function customerRuntimeMutationFenced(user) {
     const openclaw = user.provisioning.openclaw;
     return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;
 }
+function placementUserIsOperatorManaged(user, automatic) {
+    if (!automatic || !isPlainRecord(user) || !isPlainRecord(user.provisioning))
+        return false;
+    const openclaw = user.provisioning.openclaw;
+    return isPlainRecord(openclaw) && openclaw.managedBy === "operator";
+}
 export async function commitPlacementAtomic(db, params) {
     const userRef = db.collection("users").doc(params.uid);
     const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
@@ -349,6 +355,9 @@ export async function commitPlacementAtomic(db, params) {
         .doc(params.uid);
     return db.runTransaction(async (txn) => {
         const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
+        if (placementUserIsOperatorManaged(userData, params.automatic)) {
+            return { kind: "rejected", reason: "builder-operator-managed" };
+        }
         if (customerRuntimeMutationFenced(userData)) {
             return { kind: "rejected", reason: customerRestoreFencePresent(userData) ? "restore-in-progress" : "source-transfer-in-progress" };
         }

@@ -41,6 +41,9 @@ export function resolveContinuousBuilderPlacement(input) {
     };
 }
 export function resolveOnboardingPlacementEligibility(data) {
+    const hold = data.provisioning?.openclaw;
+    if (hold?.managedBy === "operator")
+        return { eligible: false, reason: "operator-managed" };
     if (data.onboardingStep !== "complete") {
         return { eligible: false, reason: "onboarding-incomplete" };
     }

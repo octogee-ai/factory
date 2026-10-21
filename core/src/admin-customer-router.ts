@@ -446,6 +446,7 @@ async function filteredCustomerPage(
 }
 
 export interface AdminCustomerPlacementProjection {
+  managedBy: "cowboy" | "operator";
   gatewayId: string | null;
   gatewayProfile: string | null;
 }
@@ -455,6 +456,7 @@ export function projectCustomerPlacement(openclaw: unknown): AdminCustomerPlacem
     ? (openclaw as Record<string, unknown>)
     : {};
   return {
+    managedBy: record.managedBy === "operator" ? "operator" : "cowboy",
     gatewayId: typeof record.gatewayId === "string" ? record.gatewayId : null,
     gatewayProfile: typeof record.gatewayProfile === "string" ? record.gatewayProfile : null,
   };

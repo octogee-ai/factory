@@ -613,6 +613,7 @@ export interface CommitPlacementParams {
 }
 
 export type PlacementRejectReason =
+  | "builder-operator-managed"
   | "account-not-interactive"
   | "restore-in-progress"
   | "source-transfer-in-progress"
@@ -758,6 +759,12 @@ export function customerRuntimeMutationFenced(user: unknown): boolean {
   return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;
 }
 
+function placementUserIsOperatorManaged(user: unknown, automatic: boolean | undefined): boolean {
+  if (!automatic || !isPlainRecord(user) || !isPlainRecord(user.provisioning)) return false;
+  const openclaw = user.provisioning.openclaw;
+  return isPlainRecord(openclaw) && openclaw.managedBy === "operator";
+}
+
 export async function commitPlacementAtomic(
   db: PlacementFirestore,
   params: CommitPlacementParams,
@@ -774,6 +781,9 @@ export async function commitPlacementAtomic(
       userRef,
       params,
     );
+    if (placementUserIsOperatorManaged(userData, params.automatic)) {
+      return { kind: "rejected", reason: "builder-operator-managed" };
+    }
     if (customerRuntimeMutationFenced(userData)) {
       return { kind: "rejected", reason: customerRestoreFencePresent(userData) ? "restore-in-progress" : "source-transfer-in-progress" };
     }

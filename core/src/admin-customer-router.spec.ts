@@ -326,7 +326,7 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
 
     const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
 
-    expect(res.body.placement).toEqual({ gatewayId: "alice-m-1", gatewayProfile: "builder" });
+    expect(res.body.placement).toEqual({ managedBy: "cowboy", gatewayId: "alice-m-1", gatewayProfile: "builder" });
     expect(res.body.computer).toEqual(computer);
   });
 
@@ -335,7 +335,7 @@ describe("GET /api/admin/customer/:uid — placement and parked computer", () =>
 
     const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
 
-    expect(res.body.placement).toEqual({ gatewayId: null, gatewayProfile: null });
+    expect(res.body.placement).toEqual({ managedBy: "cowboy", gatewayId: null, gatewayProfile: null });
     expect(res.body.computer).toBeNull();
   });
 });

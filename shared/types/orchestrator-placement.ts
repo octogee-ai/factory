@@ -80,12 +80,15 @@ export type OnboardingPlacementEligibility =
         | "onboarding-incomplete"
         | "provisioning-not-started"
         | "builder-slug-missing"
-        | "account-not-interactive";
+        | "account-not-interactive"
+        | "operator-managed";
     };
 
 export function resolveOnboardingPlacementEligibility(
   data: Record<string, unknown>,
 ): OnboardingPlacementEligibility {
+  const hold = (data.provisioning as { openclaw?: { managedBy?: unknown } } | undefined)?.openclaw;
+  if (hold?.managedBy === "operator") return { eligible: false, reason: "operator-managed" };
   if (data.onboardingStep !== "complete") {
     return { eligible: false, reason: "onboarding-incomplete" };
   }

@@ -60,6 +60,7 @@ export interface AdminCustomerRouterDeps {
     getWorkspaceMmContext: (uid: string, userDataHint: Record<string, unknown>) => Promise<WorkspaceMmContextLite | null>;
 }
 export interface AdminCustomerPlacementProjection {
+    managedBy: "cowboy" | "operator";
     gatewayId: string | null;
     gatewayProfile: string | null;
 }

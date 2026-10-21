@@ -1747,6 +1747,7 @@ export function projectBuilderRuntime(
   const leaseContext = builderRuntimeLeaseContext(userDoc);
   if (!leaseContext) return null;
   const { data, openclaw, lease, leaseId, generation, leaseStatus } = leaseContext;
+  if (openclaw.managedBy === "operator") return null;
   const retirement = builderRuntimeRetirementContext(
     userDoc.id,
     lease,
@@ -4425,6 +4426,35 @@ async function readPlatformRuntimeConfig(db: Firestore): Promise<PlatformRuntime
   return { disposableGatewayIdleMs: stored };
 }
 
+async function setOperatorParkedBuilderGatewayStatus(db: Firestore, txn: Transaction, gatewayId: string, input: { uid: string; actor: string | undefined; desiredStatus: "paused" | "running" }): Promise<{ dedicated: boolean; error?: string }> {
+  const gatewayRef = db.doc(`gateways/${gatewayId}`);
+  const gateway = (await txn.get(gatewayRef)).data();
+  if (gateway?.gatewayClass !== "builder") return { dedicated: false };
+  if (gateway.ownerUid !== input.uid || gateway.desiredStatus === "retired" || gateway.runtimeRestartFence !== undefined || gateway.retirementClaim != null) {
+    return { dedicated: true, error: "dedicated gateway ownership or runtime outcome must settle before changing parking" };
+  }
+  txn.update(gatewayRef, { desiredStatus: input.desiredStatus, updatedAt: Date.now(), updatedBy: input.actor ?? "unknown" });
+  return { dedicated: true };
+}
+
+async function updateOperatorParkingGateway(db: Firestore, txn: Transaction, input: { gatewayId: string | null; uid: string; actor: string | undefined; park: boolean }): Promise<{ dedicated: boolean; error?: string }> {
+  if (!input.gatewayId) return { dedicated: false };
+  const assignmentRef = db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`);
+  const assignmentSnapshot = await txn.get(assignmentRef);
+  const assignment = parseAssignmentDoc(input.uid, assignmentSnapshot.data());
+  if (assignment && assignment.state !== "serving") return { dedicated: false, error: `customer roster state ${assignment.state} must settle before changing parking` };
+  const gateway = await setOperatorParkedBuilderGatewayStatus(db, txn, input.gatewayId, { ...input, desiredStatus: input.park ? "paused" : "running" });
+  if (gateway.error) return gateway;
+  if (input.park && !gateway.dedicated) txn.delete(assignmentRef);
+  return gateway;
+}
+
+function parkingHasUnsettledAllocation(openclaw: Record<string, unknown>, gatewayId: string | null): boolean {
+  const lease = openclaw.activationLease as Record<string, unknown> | undefined;
+  if (lease?.status === "requested") return true;
+  return typeof lease?.targetGatewayId === "string" && lease.targetGatewayId !== gatewayId && lease.status !== "parked";
+}
+
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(
   router: Router,
@@ -4703,11 +4733,10 @@ router.get(
         res.json({
           gateways,
           builderRuntimes: builderRuntimeViews,
-          disposableCapacity: projectDisposableFleetCapacity(
-            gateways,
-            builderRuntimeViews,
-            parkedBuilders,
-          ),
+          disposableCapacity: {
+            ...projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
+            operatorParkedBuilders: usersSnap.docs.filter((doc) => readUserOpenclaw(doc.data()).managedBy === "operator").length,
+          },
           stats: rollupFleetStats(
             gateways.filter((gateway) => gateway.desiredStatus !== "retired"),
           ),
@@ -6193,6 +6222,65 @@ router.get(
     });
     return doc ? { id: doc.id } : null;
   }
+
+  router.patch("/customers/:uid/placement", async (req, res, next) => {
+    try {
+      const command = (req.body ?? {}) as { managedBy?: unknown; gatewayId?: unknown };
+      const park = command.managedBy === "operator" && command.gatewayId === null;
+      const release = command.managedBy === "cowboy" && command.gatewayId === undefined;
+      if (!park && !release) {
+        res.status(400).json({ error: "choose operator with gatewayId=null to park, or cowboy to release" });
+        return;
+      }
+      const uid = req.params.uid as string;
+      const userRef = db.collection("users").doc(uid);
+      const before = await userRef.get();
+      const outcome = await runAdminFleetMutation({
+        req,
+        what: park ? "park builder" : "release builder to Cowboy",
+        why: ADMIN_FLEET_REQUEST_REASON,
+        target: { uid },
+        preActionStatus: { gatewayId: readUserGatewayId(before.data()) },
+        mutation: { kind: park ? "park-builder" : "place-builder", uid },
+        classifyResult: result => result.status >= 400
+          ? { outcome: "failed", error: String(result.body.error) }
+          : { outcome: "completed" },
+        action: () => db.runTransaction(async txn => {
+          const [user, operations] = await Promise.all([txn.get(userRef), txn.get(inFlightOperationsForUid(db, uid))]);
+          if (!user.exists) return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
+          if (customerRuntimeMutationFenced(user.data())) return { status: 409, body: { error: "customer restore or source transfer is unresolved — cannot change placement", uid } };
+          const inFlight = operations.docs.find(isInFlightCustomerMigration);
+          if (inFlight) return { status: 409, body: { error: "customer migration is pending or running — cannot change placement", operationId: inFlight.id, uid } };
+          const gatewayId = readUserGatewayId(user.data());
+          if (park && parkingHasUnsettledAllocation(readUserOpenclaw(user.data() ?? {}), gatewayId)) {
+            return { status: 409, body: { error: "allocated activation target must settle before parking", uid } };
+          }
+          const gateway = await updateOperatorParkingGateway(db, txn, { gatewayId, uid, actor: (req as ActorRequest).uid, park });
+          if (gateway.error) return { status: 409, body: { error: gateway.error, uid } };
+          if (release) {
+            txn.update(userRef, {
+              "provisioning.openclaw.managedBy": "cowboy",
+              ...(readProvisioningStatus(user.data() ?? {}) === "complete" ? { "provisioning.status": "complete" } : {}),
+            });
+            return { status: 200, body: { uid, managedBy: "cowboy" } };
+          }
+          if (gateway.dedicated) {
+            txn.update(userRef, { "provisioning.openclaw.managedBy": "operator" });
+            return { status: 200, body: { uid, parked: true, gatewayId, managedBy: "operator" } };
+          }
+          txn.update(userRef, {
+            "provisioning.openclaw.managedBy": "operator",
+            "provisioning.openclaw.gatewayId": FieldValue.delete(),
+            "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
+            "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
+            "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
+          });
+          return { status: 200, body: { uid, parked: true, managedBy: "operator" } };
+        }),
+      });
+      res.status(outcome.status).json(outcome.body);
+    } catch (error) { next(error); }
+  });
 
   router.post(
     "/customers/:uid/migrate",

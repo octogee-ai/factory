@@ -34,6 +34,12 @@ describe("onboarding placement eligibility", () => {
     })).toEqual({ eligible: true, slug: "alice" });
   });
 
+  it("keeps an operator-parked Builder out of automatic placement until released", () => {
+    const data = { username: "alice", onboardingStep: "complete", provisioning: { status: "complete", openclaw: { slug: "alice", managedBy: "operator" } } };
+    expect(resolveOnboardingPlacementEligibility(data)).toEqual({ eligible: false, reason: "operator-managed" });
+    expect(resolveOnboardingPlacementEligibility({ ...data, provisioning: { ...data.provisioning, openclaw: { ...data.provisioning.openclaw, managedBy: "cowboy" } } })).toEqual({ eligible: true, slug: "alice" });
+  });
+
   it("rejects incomplete identity, missing canonical identity, and arbitrary provisioning states", () => {
     expect(resolveOnboardingPlacementEligibility({ username: "alice" })).toEqual({
       eligible: false,

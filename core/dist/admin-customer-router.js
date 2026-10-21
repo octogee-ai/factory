@@ -284,6 +284,7 @@ export function projectCustomerPlacement(openclaw) {
         ? openclaw
         : {};
     return {
+        managedBy: record.managedBy === "operator" ? "operator" : "cowboy",
         gatewayId: typeof record.gatewayId === "string" ? record.gatewayId : null,
         gatewayProfile: typeof record.gatewayProfile === "string" ? record.gatewayProfile : null,
     };

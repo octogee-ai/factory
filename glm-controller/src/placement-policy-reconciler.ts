@@ -3832,6 +3832,13 @@ function supersededSharedDrainMoveCanRearm(
     data.customerMigrationV2 === undefined;
 }
 
+async function assertBuilderPlacementNotHeld(db: Firestore, transaction: Transaction, uid: string): Promise<void> {
+  const owner = await transaction.get(db.collection("users").doc(uid));
+  if (record(record(owner.data()?.provisioning)?.openclaw)?.managedBy === "operator") {
+    throw new GatewayRetirementConflictError(`builder ${uid} is operator-managed`);
+  }
+}
+
 export async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
@@ -3858,6 +3865,7 @@ export async function enqueuePlacementMigration(
     inputUid: request.uid,
   };
   await input.db.runTransaction(async (transaction) => {
+    await assertBuilderPlacementNotHeld(input.db, transaction, request.uid);
     const sharedDrain = request.sharedDrain;
     if (sharedDrain) await assertSharedDrainAuthority(input, transaction, { ...request, sharedDrain });
     const existing = await transaction.get(ref);
