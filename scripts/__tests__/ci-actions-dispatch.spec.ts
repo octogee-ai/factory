@@ -1,7 +1,30 @@
 import { expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { awaitRun, dispatchWorkflow, findRunningRun } from "../ci/actions-dispatch.mjs";
 
 const url = (id: number) => `https://github.com/octogee-ai/octogee/actions/runs/${id}`;
+
+it("finds the active build when GitHub's run metadata exceeds one MiB", () => {
+  const directory = mkdtempSync(join(tmpdir(), "octogee-actions-response-"));
+  const sha = "a".repeat(40);
+  try {
+    writeFileSync(join(directory, "gh"), `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({
+      workflow_runs: [{ id: 9, status: "in_progress", display_title: "Build main ${sha} [4]" }],
+      metadata: "x".repeat(2 * 1024 * 1024),
+    }));\n`, { mode: 0o700 });
+    const moduleUrl = new URL("../ci/actions-dispatch.mjs", import.meta.url).href;
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e",
+      `import { findRunningRun } from ${JSON.stringify(moduleUrl)};
+       console.log(await findRunningRun("build-main.yml", ${JSON.stringify(sha)}));`,
+    ], { encoding: "utf8", env: { ...process.env, PATH: `${directory}:${process.env.PATH}` }, stdio: ["ignore", "pipe", "pipe"] });
+    expect(output.trim()).toBe("9");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 function github({ runs = [] as Array<Record<string, unknown>>, conclusion = "success", jobs = [{ name: "build", conclusion: "success" }] } = {}) {
   return vi.fn(async (method: string, endpoint: string) => {
     if (method === "POST") return undefined;

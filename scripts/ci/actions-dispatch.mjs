@@ -9,7 +9,7 @@ const api = async (method, endpoint, body) => {
   const args = ["api", "--method", method, endpoint];
   if (body) args.push("--input", "-");
   const output = execFileSync(githubExecutable(), args, {
-    encoding: "utf8", ...(body ? { input: JSON.stringify(body) } : {}),
+    encoding: "utf8", maxBuffer: 16 * 1024 * 1024, ...(body ? { input: JSON.stringify(body) } : {}),
   }).trim();
   return output ? JSON.parse(output) : undefined;
 };
