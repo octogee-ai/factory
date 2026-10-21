@@ -1,4 +1,7 @@
 import type { AgentStoreGatewayIdentity } from "@octogee/core/agent-store-credentials";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { readGatewayAuthToken, type AuthSecretEnsurer, type KubectlSubprocess } from "./auth-secret-ensurer.js";
 
 type GatewayIdentity = { gatewayClass: "shared" | "builder"; ownerUid: string | null; builderSlug: string | null };
@@ -21,10 +24,18 @@ export function createGatewayCredentialEnsurers(deps: {
       ...(gateway.gatewayClass === "builder" && gateway.ownerUid && gateway.builderSlug
         ? { builder: { uid: gateway.ownerUid, slug: gateway.builderSlug } } : {}),
     });
-    const result = await deps.runKubectl(["patch", "secret", `gateway-auth-token-${input.gatewayId}`, "-n", input.namespace, "--type=merge", "--patch-file=/dev/stdin"], {
-      stdin: JSON.stringify({ data: { "agent-store-dsn": Buffer.from(dsn).toString("base64") } }),
-    });
-    if (result.code !== 0) throw new Error(`Agent-store credential publication failed for ${input.gatewayId} (code=${result.code})`);
+    const directory = await mkdtemp(join(tmpdir(), "octogee-agent-store-secret-"));
+    try {
+      const patchFile = join(directory, "patch.json");
+      await writeFile(patchFile, JSON.stringify([
+        { op: "test", path: "/data/token", value: Buffer.from(token).toString("base64") },
+        { op: "add", path: "/data/agent-store-dsn", value: Buffer.from(dsn).toString("base64") },
+      ]), { mode: 0o600 });
+      const result = await deps.runKubectl(["patch", "secret", `gateway-auth-token-${input.gatewayId}`, "-n", input.namespace, "--type=json", `--patch-file=${patchFile}`]);
+      if (result.code !== 0) throw new Error(`Agent-store credential publication failed for ${input.gatewayId} (code=${result.code})`);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   };
   return { ensureGatewayAuthSecret: deps.auth.ensureAuthSecret, ensureGatewayCredentials };
 }

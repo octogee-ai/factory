@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { access, readFile, stat } from "node:fs/promises";
 import type { KubectlSubprocess } from "../auth-secret-ensurer.js";
 import { createGatewayCredentialEnsurers } from "../gateway-credential-ensurers.js";
 
@@ -21,7 +22,33 @@ describe("Gateway credential provisioning stages", () => {
     h.readGateway.mockResolvedValue({ gatewayClass: "builder", ownerUid: "uid-alice", builderSlug: "alice" });
     await h.stages.ensureGatewayCredentials(request);
     expect(h.provisionAgentStore).toHaveBeenCalledExactlyOnceWith({ gatewayId: request.gatewayId, gatewayClass: "builder", token: "synthetic-token", builder: { uid: "uid-alice", slug: "alice" } });
-    expect(h.runKubectl.mock.calls.at(-1)?.[0]).toEqual(["patch", "secret", "gateway-auth-token-fresh-builder", "-n", "test", "--type=merge", "--patch-file=/dev/stdin"]);
+  });
+
+  it("publishes a token-fenced update through a private file and removes it afterward", async () => {
+    const h = harness();
+    let patchPath = "";
+    let patch: unknown;
+    let mode = 0;
+    let publicationArgs: string[] = [];
+    h.runKubectl.mockImplementation(async args => {
+      if (args[0] === "get") return { code: 0, stdout: Buffer.from("synthetic-token").toString("base64"), stderr: "" };
+      publicationArgs = args;
+      const fileArg = args.find(arg => arg.startsWith("--patch-file="));
+      if (!fileArg) throw new Error("Credential publication requires a private patch file");
+      patchPath = fileArg.slice("--patch-file=".length);
+      patch = JSON.parse(await readFile(patchPath, "utf8"));
+      mode = (await stat(patchPath)).mode & 0o777;
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    h.readGateway.mockResolvedValue({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    await h.stages.ensureGatewayCredentials(request);
+    expect(publicationArgs).toEqual(["patch", "secret", "gateway-auth-token-fresh-builder", "-n", "test", "--type=json", `--patch-file=${patchPath}`]);
+    expect(patch).toEqual([
+      { op: "test", path: "/data/token", value: Buffer.from("synthetic-token").toString("base64") },
+      { op: "add", path: "/data/agent-store-dsn", value: Buffer.from("postgresql://gateway:synthetic@private/agents_test").toString("base64") },
+    ]);
+    expect(mode).toBe(0o600);
+    await expect(access(patchPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses runtime credentials without a durable root", async () => {
@@ -50,5 +77,7 @@ describe("Gateway credential provisioning stages", () => {
     h.readGateway.mockResolvedValue({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
     h.runKubectl.mockResolvedValueOnce({ code: 0, stdout: Buffer.from("synthetic-token").toString("base64"), stderr: "" }).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "denied" });
     await expect(h.stages.ensureGatewayCredentials(request)).rejects.toThrow("publication failed");
+    const fileArg = h.runKubectl.mock.calls.at(-1)![0].find(arg => arg.startsWith("--patch-file="))!;
+    await expect(access(fileArg.slice("--patch-file=".length))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
