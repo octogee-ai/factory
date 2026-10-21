@@ -27,3 +27,38 @@ export function snapshot(root, { sha = 'HEAD', working = false } = {}) {
     throw error;
   }
 }
+
+export function worktreeSource(root, sha) {
+  const temporary = mkdtempSync(join(tmpdir(), 'octogee-worktree-'));
+  const source = join(temporary, 'source');
+  const git = args => execFileSync('/usr/bin/git', args, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    git(['worktree', 'add', '--detach', '--quiet', source, `${sha}^{commit}`]);
+  } catch (error) {
+    rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    source,
+    remove: () => {
+      git(['worktree', 'remove', '--force', source]);
+      rmSync(temporary, { recursive: true, force: true });
+    },
+  };
+}
+
+export function exportSource(root, sha) {
+  const temporary = mkdtempSync(join(tmpdir(), 'octogee-export-'));
+  const source = join(temporary, 'source');
+  try {
+    mkdirSync(source);
+    const archive = join(temporary, 'source.tar');
+    execFileSync('/usr/bin/git', ['archive', '--format=tar', `--output=${archive}`, `${sha}^{commit}`], { cwd: root });
+    execFileSync('/usr/bin/tar', ['-xf', archive, '-C', source]);
+    rmSync(archive);
+    return { source, remove: () => rmSync(temporary, { recursive: true, force: true }) };
+  } catch (error) {
+    rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}

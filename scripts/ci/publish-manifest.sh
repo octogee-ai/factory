@@ -83,8 +83,6 @@ for image in (
 with open(os.environ["INPUT_FILE"], "w") as stream:
     json.dump({
         "sourceSha": os.environ["SOURCE_SHA"],
-        **({"sourceArchive": json.loads(os.environ["SOURCE_ARCHIVE_ARTIFACT"])}
-           if os.environ.get("SOURCE_ARCHIVE_ARTIFACT") else {}),
         **({"desktopImage": json.loads(os.environ["DESKTOP_IMAGE_ARTIFACT"])}
            if os.environ["DESKTOP_IMAGE_ARTIFACT"] else {}),
         "openclawVersion": os.environ["OPENCLAW_RUNTIME_VERSION"],

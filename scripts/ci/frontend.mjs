@@ -76,4 +76,4 @@ function publishSsr() {
   }
 }
 
-if (!process.argv.includes('--validate-only')) publishSsr();
+publishSsr();

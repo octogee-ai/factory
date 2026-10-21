@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const { command } = vi.hoisted(() => ({ command: vi.fn() }));
 vi.mock('node:child_process', () => ({ execFileSync: command }));
-const argv = process.argv;
 
 beforeEach(() => {
   vi.resetModules();
@@ -15,18 +14,8 @@ beforeEach(() => {
   })));
 });
 afterEach(() => {
-  process.argv = argv;
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
-});
-
-it('validates all frontend packages without probing or publishing release-only SSR artifacts', async () => {
-  process.argv = [...argv, '--validate-only'];
-  tools(() => { throw new Error('main has no SSR repository access'); });
-  await import('../ci/frontend.mjs');
-  expect(command.mock.calls.filter(([file, args]) => file === 'npm' && args[0] === 'run')).toHaveLength(3);
-  expect(command.mock.calls.filter(([file]) => ['bash', 'docker'].includes(file))).toEqual([]);
-  expect(command.mock.calls.some(([file, args]) => file === 'gcloud' && args.includes('configure-docker'))).toBe(false);
 });
 
 it('rejects an unknown SSR release environment before building packages', async () => {

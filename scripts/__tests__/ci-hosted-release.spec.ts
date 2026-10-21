@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const { command, dispatch, resolveRelease } = vi.hoisted(() => ({
-  command: vi.fn(), dispatch: vi.fn(), resolveRelease: vi.fn(),
+const { command, dispatch, resolveRelease, findRelease, findRunningRun, awaitRun } = vi.hoisted(() => ({
+  command: vi.fn(), dispatch: vi.fn(), resolveRelease: vi.fn(), findRelease: vi.fn(), findRunningRun: vi.fn(), awaitRun: vi.fn(),
 }));
 vi.mock('node:child_process', () => ({ execFileSync: command }));
-vi.mock('../ci/actions-dispatch.mjs', () => ({ dispatchWorkflow: dispatch }));
-vi.mock('../ci/release-source.mjs', () => ({ resolveRelease, downloadReleaseSource: vi.fn() }));
+vi.mock('../ci/actions-dispatch.mjs', () => ({ dispatchWorkflow: dispatch, findRunningRun, awaitRun }));
+vi.mock('../ci/release-source.mjs', () => ({ resolveRelease, findRelease }));
 const argv = process.argv;
 const sha = 'a'.repeat(40);
 beforeEach(() => {
@@ -47,8 +47,34 @@ it('rejects conflicting environments before hosted Ship TEST', async () => {
   expect(dispatch).not.toHaveBeenCalled();
 });
 
-it('keeps local Ship TEST build-before-deploy and stops after a failed build', async () => {
+const deployCall = (call: unknown[]) => (call[1] as string[])[0] === 'scripts/ci/deploy.mjs';
+const buildCall = (call: unknown[]) => (call[1] as string[])[0] === 'scripts/ci/main.mjs';
+
+it('deploys an existing manifest locally without starting a competing build', async () => {
   process.argv.push('--local');
+  findRelease.mockResolvedValue({ manifest: { sourceSha: sha } });
+  await import('../ci/ship-test.mjs');
+  expect(command.mock.calls.some(buildCall)).toBe(false);
+  expect(command.mock.calls.filter(deployCall)).toHaveLength(1);
+  expect(findRunningRun).not.toHaveBeenCalled();
+});
+
+it('waits for an in-flight Build main run before a local deploy', async () => {
+  process.argv.push('--local');
+  findRelease.mockResolvedValueOnce(null).mockResolvedValueOnce({ manifest: { sourceSha: sha } });
+  findRunningRun.mockResolvedValue(42);
+  awaitRun.mockResolvedValue({ id: 42, url: 'run-42', conclusion: 'success' });
+  await import('../ci/ship-test.mjs');
+  expect(findRunningRun).toHaveBeenCalledWith('build-main.yml', sha);
+  expect(awaitRun).toHaveBeenCalledWith(42);
+  expect(command.mock.calls.some(buildCall)).toBe(false);
+  expect(command.mock.calls.filter(deployCall)).toHaveLength(1);
+});
+
+it('builds locally only without a manifest or in-flight run, and stops after a failed build', async () => {
+  process.argv.push('--local');
+  findRelease.mockResolvedValue(null);
+  findRunningRun.mockResolvedValue(null);
   command.mockImplementationOnce(() => { throw new Error('build failed'); });
   await expect(import('../ci/ship-test.mjs')).rejects.toThrow('build failed');
   expect(command).toHaveBeenCalledOnce();

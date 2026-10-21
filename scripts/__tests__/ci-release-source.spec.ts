@@ -1,13 +1,11 @@
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { expect, it, vi } from 'vitest';
-import { resolveRelease, resolveDesktopRelease, downloadReleaseSource } from '../ci/release-source.mjs';
+import { findRelease, resolveRelease, resolveDesktopRelease } from '../ci/release-source.mjs';
 
 const sha = 'a'.repeat(40);
 const digest = (bytes: Buffer) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-const archive = Buffer.from('committed release source');
-const sourceArchive = { bucket: 'octogee-ci-releases', object: `source/${sha}.tgz`, generation: '123', sha256: digest(archive).slice(7) };
-const manifest = { schemaVersion: 4, sourceSha: sha, repository: 'us-central1-docker.pkg.dev/octogee/octogee', openclawVersion: '2026.7.1', openclawSourceSha: 'b'.repeat(40), sourceArchive,
+const manifest = { schemaVersion: 4, sourceSha: sha, repository: 'us-central1-docker.pkg.dev/octogee/octogee', openclawVersion: '2026.7.1', openclawSourceSha: 'b'.repeat(40),
   surfaces: { gateway: Object.fromEntries(['gateway-edge', 'octogee-gateway', 'octogee-gateway-builder'].map(name => [name, `sha256:${'c'.repeat(64)}`])), platform: Object.fromEntries(['artifact-worker', 'glm-controller', 'octogee-api', 'octogee-ops-agent', 'octogee-project-runner'].map(name => [name, `sha256:${'c'.repeat(64)}`])) } };
 function registry(value: unknown = manifest, filename = 'release-digest-manifest.json') {
   const data = Buffer.from(JSON.stringify(value));
@@ -37,18 +35,10 @@ it('rejects a modified manifest layer even when its enclosing digest is valid', 
 it('rejects a manifest substituted for a different build SHA', async () => {
   await expect(resolveRelease(sha, registry({ ...manifest, sourceSha: 'd'.repeat(40) }).request)).rejects.toThrow();
 });
-it('downloads only the pinned archive generation and verifies its bytes', async () => {
-  const request = vi.fn(async () => new Response(archive));
-  expect(await downloadReleaseSource(manifest, request)).toEqual(archive);
-  expect(request.mock.calls[0][0]).toContain('generation=123');
-});
-it('rejects modified source bytes before deployment can execute them', async () => {
-  await expect(downloadReleaseSource(manifest, async () => new Response('changed'))).rejects.toThrow('source hash mismatch');
-});
-it('rejects an unbuilt source pointer without issuing a download', async () => {
-  const request = vi.fn();
-  await expect(downloadReleaseSource({ ...manifest, sourceArchive: { ...sourceArchive, object: 'source/main.tgz' } }, request)).rejects.toThrow();
-  expect(request).not.toHaveBeenCalled();
+it('reports an absent main build as missing but fails closed on other lookup errors', async () => {
+  await expect(findRelease(sha, async () => new Response('', { status: 404 }))).resolves.toBeNull();
+  await expect(findRelease(sha, async () => new Response('', { status: 403 }))).rejects.toThrow('lookup failed: 403');
+  expect((await findRelease(sha, registry().request))?.manifest).toEqual(manifest);
 });
 
 const build = { manifest, digest: `sha256:${'f'.repeat(64)}` };

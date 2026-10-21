@@ -13,10 +13,32 @@ const api = async (method, endpoint, body) => {
   }).trim();
   return output ? JSON.parse(output) : undefined;
 };
+const watchRun = run => execFileSync(githubExecutable(), ["run", "watch", String(run), "--repo", repository], { stdio: "inherit" });
+
+export async function awaitRun(id, { request = api, watch = watchRun } = {}) {
+  try { await watch(id); }
+  catch (error) { console.error(`Watching run ${id} failed: ${error.message}; reading its conclusion`); }
+  const run = await request("GET", `repos/${repository}/actions/runs/${id}`);
+  const { jobs } = await request("GET", `repos/${repository}/actions/runs/${id}/jobs?per_page=100`);
+  const incomplete = jobs.filter(job => job.conclusion !== "success");
+  return { id, url: run.html_url, conclusion: runConclusion(run, jobs, incomplete), name: run.name, jobs: incomplete.map(job => `${job.name}: ${job.conclusion}`) };
+}
+
+function runConclusion(run, jobs, incomplete) {
+  if (run.conclusion !== "success") return run.conclusion ?? run.status;
+  if (!jobs.length || incomplete.some(job => job.conclusion === "skipped")) return "skipped";
+  return incomplete[0]?.conclusion ?? "success";
+}
+
+export async function findRunningRun(workflow, sha, { request = api } = {}) {
+  if (!names[workflow]) throw new Error(`Unknown workflow: ${workflow}`);
+  const result = await request("GET", `repos/${repository}/actions/workflows/${workflow}/runs?per_page=100`);
+  const run = result.workflow_runs.find(run => run.status === "in_progress" && run.display_title.startsWith(`${names[workflow]} ${sha} [`));
+  return run?.id ?? null;
+}
 
 export async function dispatchWorkflow(workflow, inputs, {
-  request = api,
-  watch = run => execFileSync(githubExecutable(), ["run", "watch", String(run), "--repo", repository, "--exit-status"], { stdio: "inherit" }),
+  request = api, watch = watchRun,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, id = randomUUID,
 } = {}) {
   if (!names[workflow]) throw new Error(`Unknown workflow: ${workflow}`);
@@ -24,15 +46,14 @@ export async function dispatchWorkflow(workflow, inputs, {
   const endpoint = `repos/${repository}/actions/workflows/${workflow}`;
   await request("POST", `${endpoint}/dispatches`, { ref: "main", inputs: { ...inputs, request_id: requestId } });
   const deadline = now() + 120_000;
-  const title = `${names[workflow]} [${requestId}]`;
   while (now() < deadline) {
     const result = await request("GET", `${endpoint}/runs?event=workflow_dispatch&branch=main&per_page=100`);
-    const run = result.workflow_runs.find(run => run.display_title === title);
+    const run = result.workflow_runs.find(run => run.display_title.startsWith(names[workflow]) && run.display_title.endsWith(` [${requestId}]`));
     if (run) {
-      await watch(run.id);
-      const result = await request("GET", `repos/${repository}/actions/runs/${run.id}/jobs?per_page=100`);
-      if (!result.jobs.length || result.jobs.some(job => job.conclusion !== "success")) {
-        throw new Error(`Workflow ${run.id} did not execute every required job; check CI_ACTIONS_ENABLED and the run logs`);
+      const finished = await awaitRun(run.id, { request, watch });
+      if (finished.conclusion !== "success") {
+        const jobs = finished.jobs.length ? ` (${finished.jobs.join(", ")})` : "";
+        throw new Error(`${names[workflow]} run ${finished.url} concluded ${finished.conclusion}${jobs}`);
       }
       return run.id;
     }

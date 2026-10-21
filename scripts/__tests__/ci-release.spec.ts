@@ -5,6 +5,13 @@ const options = releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`,
 function dependencies() {
   return { manifest: vi.fn(async () => ({ sourceSha: options.sha })), lock: vi.fn(async (run: () => Promise<void>) => run()), platform: vi.fn(async () => undefined), site: vi.fn(async () => undefined), desktop: vi.fn(async () => undefined), fleet: vi.fn(async () => undefined) };
 }
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<undefined>((done, fail) => { resolve = () => done(undefined); reject = fail; });
+  return { promise, resolve, reject };
+}
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 it('rejects an unbuilt or substituted SHA before any deployment', async () => {
   const deps = dependencies();
   deps.manifest.mockResolvedValue({ sourceSha: 'b'.repeat(40) });
@@ -17,11 +24,48 @@ it('deploys existing platform/site artifacts and keeps Builder deployment separa
   expect(deps.fleet).not.toHaveBeenCalled();
   expect(deps.desktop.mock.invocationCallOrder[0]).toBeGreaterThan(deps.platform.mock.invocationCallOrder[0]);
 });
-it('runs complete fleet journaling/convergence only for explicit Ship TEST', async () => {
+it('deploys the site while the platform rollout is still running', async () => {
   const deps = dependencies();
-  await deployRelease({ ...options, shipTest: true }, deps);
+  const platform = deferred();
+  deps.platform.mockReturnValue(platform.promise);
+  const release = deployRelease(options, deps);
+  await settle();
+  expect(deps.site).toHaveBeenCalledOnce();
+  expect(deps.desktop).not.toHaveBeenCalled();
+  platform.resolve();
+  await release;
+  expect(deps.desktop).toHaveBeenCalledOnce();
+});
+it('holds the deploy lock until the platform settles after the site fails', async () => {
+  const deps = dependencies();
+  const platform = deferred();
+  deps.platform.mockReturnValue(platform.promise);
+  deps.site.mockRejectedValue(new Error('site failed'));
+  let finished = false;
+  const release = deployRelease({ ...options, shipTest: true }, deps).finally(() => { finished = true; });
+  await settle();
+  expect(finished).toBe(false);
+  platform.resolve();
+  await expect(release).rejects.toThrow('site failed');
+  expect(deps.fleet).not.toHaveBeenCalled();
+});
+it('reports both branch failures when platform and site fail together', async () => {
+  const deps = dependencies();
+  deps.platform.mockRejectedValue(new Error('helm failed'));
+  deps.site.mockRejectedValue(new Error('hosting failed'));
+  await expect(deployRelease(options, deps)).rejects.toThrow(/helm failed.*hosting failed/);
+  expect(deps.desktop).not.toHaveBeenCalled();
+});
+it('runs complete fleet journaling/convergence only for explicit Ship TEST, after every other surface', async () => {
+  const deps = dependencies();
+  const platform = deferred();
+  deps.platform.mockReturnValue(platform.promise);
+  const release = deployRelease({ ...options, shipTest: true }, deps);
+  await settle();
+  platform.resolve();
+  await release;
   expect(deps.fleet).toHaveBeenCalledOnce();
-  expect(deps.fleet.mock.invocationCallOrder[0]).toBeGreaterThan(deps.desktop.mock.invocationCallOrder[0]);
+  for (const stage of [deps.desktop, deps.site]) expect(deps.fleet.mock.invocationCallOrder[0]).toBeGreaterThan(stage.mock.invocationCallOrder[0]);
 });
 it.each(['platform', 'site', 'desktop'] as const)('does not advance the fleet after a failed %s deployment', async stage => {
   const deps = dependencies();

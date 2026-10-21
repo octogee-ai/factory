@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainBuild } from './main-build.mjs';
 import { withBuildLock } from './build-lock.mjs';
-import { publishSourceArchive } from './source-archive.mjs';
 import { buildImage, buildSummary, builderBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
 import { buildGatewayImages } from './gateway-bake.mjs';
 import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../.github/actions/openclaw-base-key/base-key.mjs';
@@ -31,7 +30,7 @@ const sha = process.env.CI_SOURCE_SHA ?? run('git', ['rev-parse', 'HEAD']);
 const force = process.argv.includes('--force');
 if (process.argv.includes('--desktop-image')) throw new Error('Desktop VM construction requires the explicit desktop workflow');
 const temporary = mkdtempSync(join(tmpdir(), 'octogee-main-'));
-const env = { ...process.env, AR_REPO: repository, AR_REPOSITORY: repository, GCP_PROJECT: project, SOURCE_SHA: sha, SHORT_SHA: sha.slice(0, 7), OCTOGEE_SOURCE_COMMIT: sha, CI_REPO_ROOT: process.cwd(), RUNNER_TEMP: temporary, BASE_SHA: '', RUN_PLATFORM: 'true', RUN_GATEWAY: 'true', RUN_SITE: 'true', DESKTOP_IMAGE_ARTIFACT: '', CI_OUTPUT_FILE: join(temporary, 'output') };
+const env = { ...process.env, AR_REPO: repository, AR_REPOSITORY: repository, GCP_PROJECT: project, SOURCE_SHA: sha, SHORT_SHA: sha.slice(0, 7), OCTOGEE_SOURCE_COMMIT: sha, CI_REPO_ROOT: process.cwd(), RUNNER_TEMP: temporary, BASE_SHA: '', RUN_PLATFORM: 'true', RUN_GATEWAY: 'true', DESKTOP_IMAGE_ARTIFACT: '', CI_OUTPUT_FILE: join(temporary, 'output') };
 const lookup = ref => {
   try { return run('bash', ['.github/actions/release-digest-manifest/resolve-tag-digest.sh', repository, project, ref]); }
   catch (error) {
@@ -101,7 +100,6 @@ try {
     lock: task => withBuildLock(sha, request, task, { canRelease: () => !interrupted }),
     images: async () => {
       run('git', ['merge-base', '--is-ancestor', sha, 'origin/main']);
-      env.SOURCE_ARCHIVE_ARTIFACT = JSON.stringify(await publishSourceArchive(sha));
       run('gcloud', ['auth', 'configure-docker', `${region}-docker.pkg.dev`, '--quiet']);
       await execute('docker', ['buildx', 'create', '--name', builder, '--driver=docker-container', '--use']);
       builderCreated = true;
@@ -111,12 +109,10 @@ try {
         const changed = JSON.parse(run('node', ['.github/actions/release-state-authority/release-inputs.mjs', 'changed', prior, sha]));
         env.RUN_PLATFORM = String(changed.platform);
         env.RUN_GATEWAY = String(changed.platform || changed.gateway);
-        env.RUN_SITE = String(changed.site);
       }
       if (env.RUN_PLATFORM === 'true') await platform();
       if (env.RUN_GATEWAY === 'true') await gateway();
     },
-    frontend: () => env.RUN_SITE === 'true' ? execute('node', ['scripts/ci/frontend.mjs', '--validate-only'], env) : Promise.resolve(),
     publish: async () => {
       env.OPENCLAW_TARBALL = await openclawTarballs();
       await execute('bash', ['scripts/ci/publish-manifest.sh'], env);

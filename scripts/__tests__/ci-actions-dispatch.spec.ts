@@ -1,17 +1,28 @@
 import { expect, it, vi } from "vitest";
-import { dispatchWorkflow } from "../ci/actions-dispatch.mjs";
+import { awaitRun, dispatchWorkflow, findRunningRun } from "../ci/actions-dispatch.mjs";
+
+const url = (id: number) => `https://github.com/octogee-ai/octogee/actions/runs/${id}`;
+function github({ runs = [] as Array<Record<string, unknown>>, conclusion = "success", jobs = [{ name: "build", conclusion: "success" }] } = {}) {
+  return vi.fn(async (method: string, endpoint: string) => {
+    if (method === "POST") return undefined;
+    if (endpoint.endsWith("/jobs?per_page=100")) return { jobs };
+    const run = /actions\/runs\/(\d+)$/.exec(endpoint);
+    if (run) return { id: Number(run[1]), name: "Build main", html_url: url(Number(run[1])), conclusion };
+    return { workflow_runs: runs };
+  });
+}
 
 it("waits for the exact dispatched request rather than another run of the same SHA", async () => {
-  const request = vi.fn()
+  const request = github();
+  request
     .mockResolvedValueOnce(undefined)
-    .mockResolvedValueOnce({ workflow_runs: [{ id: 1, display_title: "Build main [someone-else]" }] })
-    .mockResolvedValueOnce({ workflow_runs: [{ id: 2, display_title: "Build main [request-123]" }] })
-    .mockResolvedValueOnce({ jobs: [{ conclusion: "success" }] });
+    .mockResolvedValueOnce({ workflow_runs: [{ id: 1, display_title: `Build main ${"a".repeat(40)} [someone-else]` }] })
+    .mockResolvedValueOnce({ workflow_runs: [{ id: 2, display_title: `Build main ${"a".repeat(40)} [request-123]` }] });
   const watch = vi.fn();
   const sleep = vi.fn();
-  await dispatchWorkflow("build-main.yml", { source_sha: "a".repeat(40) }, {
+  await expect(dispatchWorkflow("build-main.yml", { source_sha: "a".repeat(40) }, {
     request, watch, sleep, id: () => "request-123", now: () => 0,
-  });
+  })).resolves.toBe(2);
   expect(request.mock.calls[0]).toEqual([
     "POST", "repos/octogee-ai/octogee/actions/workflows/build-main.yml/dispatches",
     { ref: "main", inputs: { source_sha: "a".repeat(40), request_id: "request-123" } },
@@ -20,28 +31,30 @@ it("waits for the exact dispatched request rather than another run of the same S
   expect(watch).toHaveBeenCalledWith(2);
 });
 
-it("propagates failed workflow execution", async () => {
-  const request = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce({
-    workflow_runs: [{ id: 3, display_title: "Deploy platform [request-123]" }],
-  });
+it("names the run URL and conclusion when a dispatched workflow fails", async () => {
+  const request = github({ runs: [{ id: 3, display_title: "Deploy platform [request-123]" }], conclusion: "failure", jobs: [{ name: "deploy", conclusion: "failure" }] });
   await expect(dispatchWorkflow("deploy.yml", {}, {
-    request, watch: async () => { throw new Error("failed"); }, id: () => "request-123",
-  })).rejects.toThrow("failed");
+    request, watch: async () => {}, id: () => "request-123",
+  })).rejects.toThrow(`Deploy platform run ${url(3)} concluded failure (deploy: failure)`);
+});
+
+it("reports a run whose jobs were skipped instead of treating it as completed work", async () => {
+  const request = github({ runs: [{ id: 4, display_title: "Ship TEST [request-123]" }], jobs: [{ name: "build", conclusion: "success" }, { name: "deploy", conclusion: "skipped" }] });
+  await expect(dispatchWorkflow("ship-test.yml", {}, {
+    request, watch: async () => {}, id: () => "request-123",
+  })).rejects.toThrow(`Ship TEST run ${url(4)} concluded skipped (deploy: skipped)`);
+});
+
+it("reports the conclusion even when the watcher exits nonzero", async () => {
+  const request = github({ conclusion: "cancelled", jobs: [{ name: "build", conclusion: "cancelled" }] });
+  await expect(awaitRun(5, { request, watch: async () => { throw new Error("exit 1"); } }))
+    .resolves.toMatchObject({ id: 5, url: url(5), conclusion: "cancelled" });
 });
 
 it("rejects unknown workflows before sending a request", async () => {
   const request = vi.fn();
   await expect(dispatchWorkflow("../untrusted.yml", {}, { request })).rejects.toThrow("Unknown workflow");
   expect(request).not.toHaveBeenCalled();
-});
-
-it("does not report a disabled or skipped workflow as completed work", async () => {
-  const request = vi.fn().mockResolvedValueOnce(undefined)
-    .mockResolvedValueOnce({ workflow_runs: [{ id: 4, display_title: "Build main [request-123]" }] })
-    .mockResolvedValueOnce({ jobs: [{ conclusion: "skipped" }] });
-  await expect(dispatchWorkflow("build-main.yml", {}, {
-    request, watch: async () => {}, id: () => "request-123",
-  })).rejects.toThrow("did not execute every required job");
 });
 
 it("times out without attaching to an unrelated workflow", async () => {
@@ -52,4 +65,18 @@ it("times out without attaching to an unrelated workflow", async () => {
     now: () => time, sleep: async () => { time += 300_000; },
   })).rejects.toThrow("did not appear");
   expect(watch).not.toHaveBeenCalled();
+});
+
+it("finds a running main build of the selected SHA but not one still queued behind another build", async () => {
+  const sha = "a".repeat(40);
+  const request = github({ runs: [
+    { id: 6, status: "completed", display_title: `Build main ${sha} [1]` },
+    { id: 7, status: "in_progress", display_title: `Build main ${"b".repeat(40)} [2]` },
+    { id: 8, status: "pending", display_title: `Build main ${sha} [3]` },
+    { id: 9, status: "in_progress", display_title: `Build main ${sha} [4]` },
+  ] });
+  await expect(findRunningRun("build-main.yml", sha, { request })).resolves.toBe(9);
+  await expect(findRunningRun("build-main.yml", sha, { request: github({ runs: [{ id: 8, status: "pending", display_title: `Build main ${sha} [3]` }] }) })).resolves.toBeNull();
+  expect(request).toHaveBeenCalledWith("GET", "repos/octogee-ai/octogee/actions/workflows/build-main.yml/runs?per_page=100");
+  await expect(findRunningRun("build-main.yml", "c".repeat(40), { request })).resolves.toBeNull();
 });

@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseOptions } from './release-plan.mjs';
-import { resolveRelease, downloadReleaseSource } from './release-source.mjs';
+import { resolveRelease } from './release-source.mjs';
+import { exportSource } from './snapshot.mjs';
 import { dispatchWorkflow } from './actions-dispatch.mjs';
 
 const args = process.argv.slice(2);
@@ -16,18 +17,18 @@ if (!local) {
     log_level: options.logLevel, post_deploy_checks: String(Boolean(options.checks)),
   });
 } else {
+  const { manifest, digest } = await resolveRelease(options.sha);
   const directory = mkdtempSync(join(tmpdir(), 'octogee-deploy-'));
-  const run = (file, values, extra = {}) => execFileSync(file, values, { stdio: 'inherit', ...extra });
+  const copy = exportSource(execFileSync('/usr/bin/git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim(), manifest.sourceSha);
   try {
-    const { manifest, digest } = await resolveRelease(options.sha);
-    const archive = await downloadReleaseSource(manifest);
-    const source = join(directory, 'source');
-    mkdirSync(source);
-    writeFileSync(join(directory, 'source.tgz'), archive);
-    run('python3', ['-c', 'import sys,tarfile\nwith tarfile.open(sys.argv[1]) as t: t.extractall(sys.argv[2],filter="data")', join(directory, 'source.tgz'), source]);
-    writeFileSync(join(source, 'ci-release-manifest.json'), JSON.stringify(manifest));
+    const manifestPath = join(directory, 'ci-release-manifest.json');
+    writeFileSync(manifestPath, JSON.stringify(manifest));
     console.log(`Deploy ${options.environment}: ${manifest.sourceSha} (${digest})`);
-    const releaseArgs = args.filter(arg => arg !== '--local');
-    run(process.execPath, ['scripts/ci/release.mjs', ...releaseArgs], { cwd: source, env: { ...process.env, CI_RELEASE_MANIFEST: join(source, 'ci-release-manifest.json') } });
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+    execFileSync(process.execPath, ['scripts/ci/release.mjs', ...args.filter(arg => arg !== '--local')], {
+      cwd: copy.source, stdio: 'inherit', env: { ...process.env, CI_RELEASE_MANIFEST: manifestPath },
+    });
+  } finally {
+    copy.remove();
+    rmSync(directory, { recursive: true, force: true });
+  }
 }

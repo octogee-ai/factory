@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { desktopRunId, mainBuild, trackSubmission } from "../ci/main-build.mjs";
+import { desktopRunId, ensureMainBuild, mainBuild, trackSubmission } from "../ci/main-build.mjs";
 
 it("preserves the Actions run and attempt identity required for bounded desktop VMs", () => {
   expect(desktopRunId("123456-2")).toBe("123456-2");
@@ -12,7 +12,6 @@ function dependencies() {
     lookup: vi.fn(async () => null),
     lock: vi.fn(async (run: () => Promise<unknown>) => run()),
     images: vi.fn(async () => undefined),
-    frontend: vi.fn(async () => undefined),
     desktop: vi.fn(async () => ({ accepted: true })),
     publish: vi.fn(async () => "sha256:" + "e".repeat(64)),
   };
@@ -36,9 +35,9 @@ describe("Cloud Build main authority", () => {
     await expect(mainBuild(options, deps)).resolves.toBe("sha256:winner");
     expect(deps.publish).not.toHaveBeenCalled();
   });
-  it.each(["images", "frontend"] as const)("does not publish when %s fails", async step => {
+  it("does not publish when the image build fails", async () => {
     const deps = dependencies();
-    deps[step].mockRejectedValue(new Error("failed"));
+    deps.images.mockRejectedValue(new Error("failed"));
     await expect(mainBuild(options, deps)).rejects.toThrow("failed");
     expect(deps.publish).not.toHaveBeenCalled();
   });
@@ -70,4 +69,57 @@ it("tracks the confirmed child before allowing the submission marker to clear", 
   const activeBuilds = new Set();
   expect(trackSubmission(() => "build-id", activeBuilds)).toBe("build-id");
   expect([...activeBuilds]).toEqual(["build-id"]);
+});
+
+describe("Ship TEST main build selection", () => {
+  const sha = "a".repeat(40);
+  const run = { id: 9, url: "https://github.com/octogee-ai/octogee/actions/runs/9" };
+  function ship() {
+    return {
+      manifest: vi.fn(async () => null as unknown),
+      active: vi.fn(async () => null as number | null),
+      watch: vi.fn(async () => ({ ...run, conclusion: "success" })),
+      build: vi.fn(async () => undefined),
+    };
+  }
+  it("deploys an existing manifest without looking for or starting a build", async () => {
+    const deps = ship();
+    deps.manifest.mockResolvedValue({ sourceSha: sha });
+    await ensureMainBuild(sha, deps);
+    expect(deps.active).not.toHaveBeenCalled();
+    expect(deps.build).not.toHaveBeenCalled();
+  });
+  it("waits for the in-flight Build main run instead of starting a competing build", async () => {
+    const deps = ship();
+    deps.active.mockResolvedValue(9);
+    deps.manifest.mockResolvedValueOnce(null).mockResolvedValueOnce({ sourceSha: sha });
+    await ensureMainBuild(sha, deps);
+    expect(deps.watch).toHaveBeenCalledWith(9);
+    expect(deps.build).not.toHaveBeenCalled();
+  });
+  it("starts a build only when no manifest or in-flight run exists", async () => {
+    const deps = ship();
+    deps.manifest.mockResolvedValueOnce(null).mockResolvedValueOnce({ sourceSha: sha });
+    await ensureMainBuild(sha, deps);
+    expect(deps.build).toHaveBeenCalledOnce();
+  });
+  it("starts a build when the in-flight run was superseded before it built", async () => {
+    const deps = ship();
+    deps.active.mockResolvedValue(9);
+    deps.watch.mockResolvedValue({ ...run, conclusion: "cancelled" });
+    deps.manifest.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValueOnce({ sourceSha: sha });
+    await ensureMainBuild(sha, deps);
+    expect(deps.build).toHaveBeenCalledOnce();
+  });
+  it("stops with the run URL when the in-flight build fails", async () => {
+    const deps = ship();
+    deps.active.mockResolvedValue(9);
+    deps.watch.mockResolvedValue({ ...run, conclusion: "failure" });
+    await expect(ensureMainBuild(sha, deps)).rejects.toThrow(`Build main run ${run.url} for ${sha} concluded failure`);
+    expect(deps.build).not.toHaveBeenCalled();
+  });
+  it("fails when a finished build published no manifest", async () => {
+    const deps = ship();
+    await expect(ensureMainBuild(sha, deps)).rejects.toThrow(`Build main for ${sha} published no release-digest manifest`);
+  });
 });

@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { releaseOptions } from './release-plan.mjs';
-import { dispatchWorkflow } from './actions-dispatch.mjs';
+import { ensureMainBuild } from './main-build.mjs';
+import { findRelease } from './release-source.mjs';
+import { awaitRun, dispatchWorkflow, findRunningRun } from './actions-dispatch.mjs';
 
 const args = process.argv.slice(2);
 const local = args.includes('--local');
@@ -10,7 +12,12 @@ const releaseArgs = [...args.filter(arg => arg !== '--local' && arg !== '--force
 const options = releaseOptions(releaseArgs);
 const run = (values, env = process.env) => execFileSync(process.execPath, values, { stdio: 'inherit', env });
 if (local) {
-  run(['scripts/ci/main.mjs', ...(force ? ['--force'] : [])], { ...process.env, CI_SOURCE_SHA: sha, CI_BRANCH: 'main' });
+  await ensureMainBuild(sha, {
+    manifest: findRelease,
+    active: value => findRunningRun('build-main.yml', value),
+    watch: id => awaitRun(id),
+    build: async () => run(['scripts/ci/main.mjs', ...(force ? ['--force'] : [])], { ...process.env, CI_SOURCE_SHA: sha, CI_BRANCH: 'main' }),
+  });
   run(['scripts/ci/deploy.mjs', ...releaseArgs, '--local']);
 } else {
   await dispatchWorkflow('ship-test.yml', { source_sha: sha, force: String(force), actor: options.actor, log_level: options.logLevel });
