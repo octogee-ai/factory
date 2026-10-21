@@ -7,6 +7,7 @@ import { mainBuild } from './main-build.mjs';
 import { withBuildLock } from './build-lock.mjs';
 import { buildImage, buildSummary, builderBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
 import { buildGatewayImages } from './gateway-bake.mjs';
+import { awaitDiskRoom } from './disk-room.mjs';
 import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../.github/actions/openclaw-base-key/base-key.mjs';
 
 const project = 'octogee';
@@ -76,6 +77,8 @@ async function gateway() {
     script: async (file, args) => run('bash', [file, ...args]),
     prepareBase: openclawTarballs,
     bake: async plan => {
+      const room = await awaitDiskRoom(process.env.CI_DISK_ROOM_MARKER);
+      if (room !== null) console.log(`Disk ready for the gateway bake:\n${room}`);
       const file = join(temporary, 'gateway-bake.json');
       writeFileSync(file, JSON.stringify(plan));
       await execute('docker', ['buildx', 'bake', `--file=${file}`]);
