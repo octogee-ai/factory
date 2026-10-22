@@ -148,8 +148,21 @@ function rolloutWaitsForBuilderActivation(rollout: OperationRef, activation: Ope
     activation.kind === MIGRATE_CUSTOMER_KIND &&
     activation.input?.source === "builder-activation-lease" &&
     isBuilderActivateOperationIdFor(activation.id, target) &&
+    !recoveryYieldsToTargetRoll(activation, rollout) &&
     typeof activation.cutoverCommittedAt !== "number" &&
     rollout.input?.gatewayId === target;
+}
+
+function recoveryYieldsToTargetRoll(recovery: OperationRef, rollout: OperationRef): boolean {
+  const target = inputString(recovery.input, "toGatewayId");
+  return recovery.kind === MIGRATE_CUSTOMER_KIND &&
+    recovery.input?.source === "builder-activation-lease" &&
+    recovery.input.recoverSourceOnly === true &&
+    inputString(recovery.input, "fromGatewayId")?.startsWith("shared-") === true &&
+    recovery.customerMigrationV2 === undefined &&
+    typeof recovery.cutoverCommittedAt !== "number" &&
+    isBuilderActivateOperationIdFor(recovery.id, target) &&
+    rollout.kind === "rollout" && rollout.input?.gatewayId === target;
 }
 
 function isPendingBuilderActivation(operation: OperationRef): boolean {
@@ -181,6 +194,7 @@ function findOlderPendingSameScope(
       (pending) =>
         pending.id !== candidate.id &&
         !rolloutWaitsForBuilderActivation(pending, candidate) &&
+        !recoveryYieldsToTargetRoll(pending, candidate) &&
         !placementMoveYieldsToBuilderActivation(pending, candidate) &&
         !isBackingOffReleasedOperation(pending, now) &&
         operationsConflict(candidate, pending) &&
@@ -209,7 +223,8 @@ export function decideOperationClaim(
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
   const activation = pendingOpsSameKind.find((pending) =>
-    rolloutWaitsForBuilderActivation(op, pending) || placementMoveYieldsToBuilderActivation(op, pending));
+    rolloutWaitsForBuilderActivation(op, pending) || placementMoveYieldsToBuilderActivation(op, pending) ||
+    recoveryYieldsToTargetRoll(op, pending));
   if (activation) return { outcome: "queue", waitingOn: describeWaitingOn(activation) };
   const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };

@@ -253,6 +253,36 @@ describe("decideOperationClaim", () => {
     })).toEqual({ outcome: "claim" });
   });
 
+  it.each([0, 2])('repairs an abandoned activation target before source-only recovery regardless of queue order: %s', createdAt => {
+    const recovery = {
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
+      input: { uid: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
+    };
+    const rollout = { id: 'repair', kind: 'rollout', status: 'pending', createdAt, input: { gatewayId: 'builder-a' } };
+    expect(decideOperationClaim({ op: rollout, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [recovery] })).toEqual({ outcome: 'claim' });
+    expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [rollout] })).toEqual({ outcome: 'queue', waitingOn: 'roll builder-a' });
+    expect(decideOperationClaim({ op: rollout, now: 10000, runningOpsSameKind: [recovery], pendingOpsSameKind: [] })).toEqual({ outcome: 'queue', waitingOn: 'migration shared-a → builder-a' });
+    expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [rollout], pendingOpsSameKind: [] })).toEqual({ outcome: 'queue', waitingOn: 'roll builder-a' });
+  });
+
+  it.each([
+    { input: { source: 'continuous-placement-policy' } },
+    { input: { recoverSourceOnly: false } },
+    { input: { fromGatewayId: 'builder-source' } },
+    { customerMigrationV2: { sourceGatewayId: 'shared-a' } },
+    { id: 'different-migration' },
+  ])('keeps ordinary queue exclusion for an unqualified target-repair request: %j', patch => {
+    const recovery = {
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', createdAt: 1,
+      ...patch,
+      input: { source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true, ...patch.input },
+    };
+    expect(decideOperationClaim({
+      op: { id: 'repair', kind: 'rollout', status: 'pending', createdAt: 2, input: { gatewayId: 'builder-a' } },
+      now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [recovery],
+    }).outcome).toBe('queue');
+  });
+
   it.each(["shared-a", "builder-b"])("does not reserve %s for another target's activation retry", (gatewayId) => {
     expect(decideOperationClaim({
       op: { id: "roll", kind: "rollout", status: "pending", createdAt: 2, input: { gatewayId } },
