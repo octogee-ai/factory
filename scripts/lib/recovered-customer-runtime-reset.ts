@@ -89,7 +89,7 @@ function agentStoreNeedsReset(databasePath: string): boolean {
       throw new Error(`customer agent store failed integrity check: ${databasePath}`);
     }
     const tables = userTables(database);
-    if (tables.has("auth_profile_store")) return false;
+    if (tables.has("auth_profile_store") || tables.has("openclaw_engine_anchor")) return false;
     if (contentRows(database, tables) > 0) {
       throw new Error(`customer agent store has durable content but no auth_profile_store: ${databasePath}`);
     }

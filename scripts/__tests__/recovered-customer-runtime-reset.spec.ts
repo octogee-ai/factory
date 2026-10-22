@@ -86,12 +86,15 @@ function agentDatabasePath(openclawDir: string, agentId: string): string {
 function createAgentDatabase(
   openclawDir: string,
   agentId: string,
-  schema: "healthy" | "empty" | "populated-without-auth",
+  schema: "healthy" | "empty" | "populated-without-auth" | "postgres-anchor",
 ): string {
   const databasePath = agentDatabasePath(openclawDir, agentId);
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
-  if (schema === "healthy") {
+  if (schema === "postgres-anchor") {
+    database.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)");
+    database.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run("92c817cc-770f-466d-b4a6-4e9b02998363", "octogee_agent_92c817cc770f466d");
+  } else if (schema === "healthy") {
     database.exec("CREATE TABLE auth_profile_store (profile_id TEXT PRIMARY KEY, payload TEXT)");
   } else if (schema === "populated-without-auth") {
     database.exec("CREATE TABLE conversations (id TEXT PRIMARY KEY); INSERT INTO conversations VALUES ('live')");
@@ -189,6 +192,30 @@ describe("recovered customer runtime reset", () => {
       .toEqual([{ workspace_key: "aug292-root" }, { workspace_key: "ceckert-root" }]);
     observed.close();
     expect(peers.every((peer) => fs.existsSync(agentDatabasePath(openclawDir, peer)))).toBe(true);
+  });
+
+  it("keeps a PostgreSQL agent anchor and its registration, since the agent's content lives in PostgreSQL", () => {
+    const openclawDir = temporaryOpenClawDir();
+    const state = stateDatabase(openclawDir);
+    const agentId = "octogee-ceckert-test-coach";
+    const databasePath = createAgentDatabase(openclawDir, agentId, "postgres-anchor");
+    registerAgent(state, openclawDir, agentId);
+    state.close();
+    const anchorBytes = fs.readFileSync(databasePath);
+
+    const result = resetRecoveredCustomerRuntime({
+      openclawDir,
+      uid: "uid-ceckert",
+      slug: "ceckert-test",
+      agentIds: [agentId],
+    });
+
+    expect(result.removedAgentStores).toEqual([]);
+    expect(result.removedAgentRegistrations).toEqual([]);
+    expect(fs.readFileSync(databasePath)).toEqual(anchorBytes);
+    const observed = new DatabaseSync(path.join(openclawDir, "state", "openclaw.sqlite"), { readOnly: true });
+    expect(observed.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([{ agent_id: agentId }]);
+    observed.close();
   });
 
   it("fails closed instead of discarding a customer store with durable content", () => {
