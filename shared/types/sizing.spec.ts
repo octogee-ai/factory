@@ -75,9 +75,9 @@ describe('sizing-tier SSOT', () => {
     expect(BUILDER_TIERS.hobby.instance).toBe('s');
   });
 
-  it('s is the one-builder headroom tier between xs and m', () => {
-    expect(TIER_PRESETS.s.resources.requests.cpu).toBe('1000m');
-    expect(TIER_PRESETS.s.resources.requests.memory).toBe('4Gi');
+  it('s gives the one active Hobby Builder browser and desktop headroom', () => {
+    expect(TIER_PRESETS.s.resources.requests.cpu).toBe('2000m');
+    expect(TIER_PRESETS.s.resources.requests.memory).toBe('8Gi');
     expect(TIER_PRESETS.s.nodejs.maxOldSpaceSizeMb).toBe('3072');
     expect(TIER_PRESETS.s.capacity.targetActiveBuilders).toBe(1);
   });

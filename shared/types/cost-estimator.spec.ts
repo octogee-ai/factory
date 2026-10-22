@@ -22,7 +22,7 @@ describe("estimateGatewayMonthlyCost", () => {
       Object.fromEntries(
         SIZING_TIERS.map((tier) => [tier, estimateGatewayMonthlyCost(tier).computeUsd]),
       ),
-    ).toEqual({ xs: 23, s: 47, m: 94, l: 187 });
+    ).toEqual({ xs: 23, s: 94, m: 94, l: 187 });
   });
 
   it("computes compute cost from request CPU + memory at general-purpose Autopilot rates", () => {

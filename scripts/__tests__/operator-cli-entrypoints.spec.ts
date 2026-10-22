@@ -190,7 +190,7 @@ describe("setup-stripe-plans catalog", () => {
     expect(builders[0].metadata.instance).toBe("small");
     expect(builders[0].description).toMatch(/Small isolated gateway/i);
     expect(builders.map((builder) => builder.marketingFeatures[1])).toEqual([
-      "Small (1 vCPU / 4GB RAM) isolated gateway",
+      "Small (2 vCPU / 8GB RAM) isolated gateway",
       "2 vCPU / 8GB RAM isolated gateway",
       "4 vCPU / 16GB RAM isolated gateway",
     ]);

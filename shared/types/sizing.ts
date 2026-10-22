@@ -46,10 +46,10 @@ export const TIER_PRESETS: Record<SizingTier, SizingTierPreset> = {
     capacity: { targetActiveBuilders: 1, typicalBuilders: 1 },
   },
   s: {
-    description: 'One active builder with extra runtime headroom',
+    description: 'One active builder with browser and desktop headroom',
     resources: {
-      requests: { cpu: '1000m', memory: '4Gi', 'ephemeral-storage': '4Gi' },
-      limits: { cpu: '1000m', memory: '4Gi', 'ephemeral-storage': '4Gi' },
+      requests: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '4Gi' },
+      limits: { cpu: '2000m', memory: '8Gi', 'ephemeral-storage': '4Gi' },
     },
     nodejs: { uvThreadpoolSize: '4', maxOldSpaceSizeMb: '3072' },
     capacity: { targetActiveBuilders: 1, typicalBuilders: 2 },

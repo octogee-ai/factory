@@ -191,12 +191,12 @@ tiers:
   s:
     resources:
       requests:
-        cpu: "1000m"
-        memory: "4Gi"
+        cpu: "2000m"
+        memory: "8Gi"
         ephemeral-storage: "4Gi"
       limits:
-        cpu: "1000m"
-        memory: "4Gi"
+        cpu: "2000m"
+        memory: "8Gi"
         ephemeral-storage: "4Gi"
     nodejs:
       uvThreadpoolSize: "4"
