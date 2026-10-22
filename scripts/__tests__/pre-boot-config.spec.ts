@@ -1379,7 +1379,7 @@ it.each([
 });
 
 it.each([
-  ["absent", "postgres"],
+  ["absent", "sqlite"],
   ["anchor", "postgres"],
   ["sqlite", "sqlite"],
 ] as const)("puts a cluster Builder's state family on %s local state → %s", (stateStore, engine) => {

@@ -622,7 +622,7 @@ export function applyPreBootPatches(
 }
 
 const BUILDER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
-  absent: "Builder state family on PostgreSQL (fresh store)",
+  absent: "Builder state family on SQLite (fresh store)",
   anchor: "Builder state family on PostgreSQL (reattaching its anchor)",
   sqlite: "Builder state family stays SQLite: this allocation already holds SQLite state",
 };
@@ -636,7 +636,7 @@ export function applyAgentStoreDatabasePatch(
   const current = isPlainObject(config.database) ? config.database : {};
   const { state: _hostState, ...families } = isPlainObject(current.families) ? current.families : {};
   const postgres = isPlainObject(current.postgres) ? current.postgres : {};
-  const state = clusterBuilderGateway(env) ? { state: { engine: stateStore === "sqlite" ? "sqlite" : "postgres" } } : {};
+  const state = clusterBuilderGateway(env) ? { state: { engine: stateStore === "anchor" ? "postgres" : "sqlite" } } : {};
   const next = {
     ...current,
     engine: current.engine ?? "sqlite",
