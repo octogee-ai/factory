@@ -2,6 +2,8 @@ import { setTimeout as pause } from "node:timers/promises";
 import { MIGRATION_IMPORT_FINISH_TIMEOUT_MS } from "@octogee/shared/types/fleet-controller";
 import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
+  FleetBrokerAgentAnchor,
+  FleetBrokerAgentAnchors,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerBlobSignedUrl,
   FleetBrokerNativeSharedContextDownload,
@@ -184,6 +186,8 @@ export interface FleetBrokerClient {
   builderRuntimeStatePrune(input: {
     slug: string;
   }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
+  reportAgentAnchors(input: { slug: string; anchors: FleetBrokerAgentAnchor[]; configuredAgentIds: string[] }): Promise<void>;
+  readAgentAnchors(input: { slug: string }): Promise<FleetBrokerAgentAnchors>;
   claimOpenClawBoot(input: { releaseKey: string }): Promise<FleetBrokerOpenClawBootClaim>;
   completeOpenClawBoot(input: { releaseKey: string }): Promise<void>;
   completeOpenClawDoctor(input: { releaseKey: string; requestId: string; verifiedAgentIds: string[] }): Promise<void>;
@@ -249,6 +253,33 @@ function builderRuntimeStateClient(
         await gatewayCredentialHeaders(),
       );
     },
+  };
+}
+
+function agentAnchorClient(
+  gatewayId: string,
+  revisionId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+): Pick<FleetBrokerClient, "reportAgentAnchors" | "readAgentAnchors"> {
+  return {
+    async reportAgentAnchors(input) {
+      await postNoContent("/internal/fleet/agent-anchors/report", { gatewayId, revisionId, ...input }, await gatewayCredentialHeaders());
+    },
+    async readAgentAnchors(input) {
+      return postJson<FleetBrokerAgentAnchors>("/internal/fleet/agent-anchors/read", { gatewayId, revisionId, ...input }, await gatewayCredentialHeaders());
+    },
+  };
+}
+
+function builderPodClient(
+  gatewayId: string,
+  revisionId: string,
+  gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+) {
+  return {
+    ...builderRuntimeStateClient(gatewayId, revisionId, gatewayCredentialHeaders),
+    ...agentAnchorClient(gatewayId, revisionId, gatewayCredentialHeaders),
+    ...openClawBootClient(gatewayId, revisionId, gatewayCredentialHeaders),
   };
 }
 
@@ -529,7 +560,6 @@ export function createFleetBrokerClient(
         { gatewayId, ...input },
       );
     },
-    ...builderRuntimeStateClient(gatewayId, revisionId, gatewayCredentialHeaders),
-    ...openClawBootClient(gatewayId, revisionId, gatewayCredentialHeaders),
+    ...builderPodClient(gatewayId, revisionId, gatewayCredentialHeaders),
   };
 }

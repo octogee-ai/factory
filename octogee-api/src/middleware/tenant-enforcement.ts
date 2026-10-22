@@ -73,6 +73,8 @@ export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
   "/internal/fleet/builder-runtime-state/download-url",
   "/internal/fleet/builder-runtime-state/snapshot-urls",
   "/internal/fleet/builder-runtime-state/prune",
+  "/internal/fleet/agent-anchors/report",
+  "/internal/fleet/agent-anchors/read",
   "/internal/fleet/computer-home/checkpoint-url",
   "/internal/fleet/computer-home/commit",
   "/internal/fleet/computer-home/download-url",

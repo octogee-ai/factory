@@ -50,6 +50,7 @@ import { DEFAULT_AGENT_LOOK, characterSvg } from "@octogee/shared/types/agent-ch
 import {
   isValidProjectId,
   isValidUsername,
+  parseAgentId,
   projectAgentId,
 } from "@octogee/shared/types/identity";
 import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
@@ -62,6 +63,8 @@ import {
   type FreeTierModelResolver,
 } from "../lib/platform-model-config.js";
 import type {
+  FleetBrokerAgentAnchor,
+  FleetBrokerAgentAnchors,
   BuilderRuntimeStateRecoveryTier,
   FleetBrokerBlobSignedUrl,
   FleetBrokerBuilderRuntimeStatePruneResult,
@@ -2222,6 +2225,7 @@ interface BuilderRuntimeStateScope {
   leaseId: string;
   generation: number;
   slug: string;
+  uid: string;
 }
 
 async function readBuilderRuntimeStateScope(
@@ -2238,7 +2242,141 @@ async function readBuilderRuntimeStateScope(
     !allocation ||
     !configuredBuilderCredentialBootstrapAllowed(gateway, { ...input, uid })
   ) return null;
-  return { ...input, leaseId: allocation.leaseId, generation: allocation.generation };
+  return { ...input, uid, leaseId: allocation.leaseId, generation: allocation.generation };
+}
+
+const AGENT_STORES_SUBCOLLECTION = "agentStores";
+const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
+const AGENT_ANCHOR_STORE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const AGENT_ANCHOR_SCHEMA = /^[a-z_][a-z0-9_]{0,62}$/u;
+
+function agentAnchorBelongsTo(slug: string, agentId: string): boolean {
+  if (agentId === UNMATCHED_ROUTE_AGENT_ID) return true;
+  const parsed = parseAgentId(agentId);
+  return parsed.kind !== "unknown" && parsed.username === slug;
+}
+
+function agentAnchorFor(slug: string, value: unknown): FleetBrokerAgentAnchor | null {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : null;
+  const agentId = record?.agentId;
+  const storeId = record?.storeId;
+  const schema = record?.schema;
+  if (typeof agentId !== "string" || !agentAnchorBelongsTo(slug, agentId) ||
+      typeof storeId !== "string" || !AGENT_ANCHOR_STORE_ID.test(storeId) ||
+      typeof schema !== "string" || !AGENT_ANCHOR_SCHEMA.test(schema)) return null;
+  return { agentId, storeId, schema };
+}
+
+interface AgentAnchorReport {
+  anchors: FleetBrokerAgentAnchor[];
+  configuredAgentIds: ReadonlySet<string>;
+}
+
+function reportedConfiguredAgentIds(body: unknown): Set<string> | null {
+  const ids = (body as { configuredAgentIds?: unknown } | null)?.configuredAgentIds;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 512) return null;
+  if (!ids.every((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 128)) return null;
+  return new Set(ids);
+}
+
+function reportedAgentAnchors(slug: string, body: unknown): AgentAnchorReport | null {
+  const anchors = (body as { anchors?: unknown } | null)?.anchors;
+  const configuredAgentIds = reportedConfiguredAgentIds(body);
+  if (!configuredAgentIds || !Array.isArray(anchors) || anchors.length === 0 || anchors.length > 256) return null;
+  const parsed = anchors.map((value) => agentAnchorFor(slug, value));
+  if (parsed.some((anchor) => anchor === null || !configuredAgentIds.has(anchor.agentId))) return null;
+  const seen = new Set<string>();
+  for (const anchor of parsed as FleetBrokerAgentAnchor[]) {
+    if (seen.has(anchor.agentId)) return null;
+    seen.add(anchor.agentId);
+  }
+  return { anchors: parsed as FleetBrokerAgentAnchor[], configuredAgentIds };
+}
+
+function recordedAgentAnchor(scope: BuilderRuntimeStateScope, data: unknown): FleetBrokerAgentAnchor | null {
+  const record = data && typeof data === "object" ? data as Record<string, unknown> : null;
+  if (record?.gatewayId !== scope.gatewayId || record.generation !== scope.generation) return null;
+  return agentAnchorFor(scope.slug, record);
+}
+
+class AgentAnchorConflictError extends Error {
+  constructor(readonly agentId: string) {
+    super(`agent ${agentId} already records a different PostgreSQL store in this allocation`);
+    this.name = "AgentAnchorConflictError";
+  }
+}
+
+function agentStoreRecords(db: Firestore, uid: string) {
+  return db.collection("users").doc(uid).collection(AGENT_STORES_SUBCOLLECTION);
+}
+
+async function recordAgentAnchors(
+  db: Firestore,
+  scope: BuilderRuntimeStateScope,
+  { anchors, configuredAgentIds }: AgentAnchorReport,
+  recordedAt: number,
+): Promise<void> {
+  const records = agentStoreRecords(db, scope.uid);
+  const reported = new Map(anchors.map((anchor) => [anchor.agentId, anchor]));
+  await db.runTransaction(async (txn) => {
+    const existing = await txn.get(records);
+    for (const doc of existing.docs) {
+      const prior = recordedAgentAnchor(scope, doc.data());
+      if (!prior) continue;
+      const next = reported.get(prior.agentId);
+      if (!configuredAgentIds.has(prior.agentId)) {
+        txn.delete(doc.ref);
+      } else if (next && (prior.storeId !== next.storeId || prior.schema !== next.schema)) {
+        throw new AgentAnchorConflictError(prior.agentId);
+      }
+    }
+    for (const anchor of anchors) {
+      txn.set(records.doc(anchor.agentId), { ...anchor, gatewayId: scope.gatewayId, generation: scope.generation, recordedAt });
+    }
+  });
+}
+
+function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
+  const { db } = deps;
+  const stores = (uid: string) => agentStoreRecords(db, uid);
+
+  router.post("/agent-anchors/report", async (req, res) => {
+    const scope = await requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!scope) return;
+    const report = reportedAgentAnchors(scope.slug, req.body);
+    if (!report) {
+      res.status(400).json({ error: "invalid_agent_anchors" });
+      return;
+    }
+    await runBrokered(res, async () => {
+      const recordedAt = deps.now();
+      try {
+        await recordAgentAnchors(db, scope, report, recordedAt);
+      } catch (error) {
+        if (!(error instanceof AgentAnchorConflictError)) throw error;
+        logger.error("[fleet-broker] agent anchor conflict refused", {
+          gatewayId: scope.gatewayId, generation: scope.generation, slug: scope.slug, agentId: error.agentId,
+        });
+        res.status(409).json({ error: "agent_anchor_conflict", agentId: error.agentId });
+        return;
+      }
+      res.status(204).end();
+    });
+  });
+
+  router.post("/agent-anchors/read", async (req, res) => {
+    const scope = await requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!scope) return;
+    await runBrokered(res, async () => {
+      const snapshot = await stores(scope.uid).get();
+      const anchors = snapshot.docs
+        .map((doc) => recordedAgentAnchor(scope, doc.data()))
+        .filter((anchor): anchor is FleetBrokerAgentAnchor => anchor !== null)
+        .sort((left, right) => left.agentId.localeCompare(right.agentId));
+      const response: FleetBrokerAgentAnchors = { anchors };
+      res.json(response);
+    });
+  });
 }
 
 async function confirmBuilderRuntimeStateAllocationCurrent(
@@ -2322,6 +2460,7 @@ function installOpenClawBootRoutes(
   router: Router,
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
+  installAgentAnchorRoutes(router, deps);
   const store = createOpenClawBootSentinelStore(deps.db, deps.now);
 
   router.post("/openclaw-boot/claim", async (req, res) => {

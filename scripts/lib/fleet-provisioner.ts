@@ -1,5 +1,7 @@
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
 import { unassignedConfiguredAgents, stagedSecretWarningsOnly, unmaterializedProjectAccountIds } from "./shared-broker-profile-readiness.js";
+import { createAgentAnchorReporter } from "./agent-anchor-record.js";
+import { createFleetBrokerClient } from "./fleet-broker-client.js";
 import { builderToolchainRoot } from "./builder-storage.js";
 import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
 import express from "express";
@@ -1552,6 +1554,23 @@ function assignedRosterReader(
   return db ? () => readAssignedSlugsForGateway(db, opts.gatewayId) : null;
 }
 
+function createBuilderAgentAnchorReporter(opts: Pick<StartFleetOptions, "gatewayId" | "log">): () => Promise<void> {
+  let report: (() => Promise<void>) | null = null;
+  return async () => {
+    if (opts.gatewayId.startsWith("shared-")) return;
+    const slug = builderClaimSlug();
+    if (!slug) return;
+    report ??= createAgentAnchorReporter({
+      stateDir: process.env.OPENCLAW_STATE_DIR?.trim() || OPENCLAW_DIR,
+      slug,
+      broker: createFleetBrokerClient(opts.gatewayId),
+      readAgentIds: () => agentIdsFromConfig(readOpenClawConfig()),
+      log: opts.log,
+    });
+    await report();
+  };
+}
+
 export function brokerProfileRoster(
   opts: RosterSourceOptions,
 ): AssignedSlugReader | undefined {
@@ -2989,12 +3008,16 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       }, GATEWAY_HEARTBEAT_INTERVAL_MS)
     : null;
 
+  const reportBuilderAgentAnchors = createBuilderAgentAnchorReporter(opts);
   const brokerProfileTimer = startBrokerProfileRetry(
     caps.provision,
     opts.log,
     opts.rpc,
     (profileReadiness) => {
       brokerProfilesSettled = profileReadiness.settled;
+      if (profileReadiness.settled) {
+        reportBuilderAgentAnchors().catch((error: unknown) => opts.log(`⚠ [agent-anchors] report pass failed: ${String(error)}`));
+      }
     },
     sharedProfileRoster,
   );

@@ -1,0 +1,157 @@
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { queryAgentStore, readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
+import type { FleetBrokerAgentAnchor } from "../../shared/types/fleet-broker.js";
+import type { FleetBrokerClient } from "./fleet-broker-client.js";
+
+const AGENT_STORE_BASENAME = "openclaw-agent.sqlite";
+const STORE_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const SCHEMA_SHAPE = /^[a-z_][a-z0-9_]{0,62}$/u;
+const AGENT_ID_SHAPE = /^[a-z0-9][a-z0-9-]{0,127}$/u;
+
+export function isAgentAnchor(value: unknown): value is FleetBrokerAgentAnchor {
+  const anchor = value as Partial<FleetBrokerAgentAnchor> | null;
+  return typeof anchor?.agentId === "string" && AGENT_ID_SHAPE.test(anchor.agentId) &&
+    typeof anchor.storeId === "string" && STORE_ID_SHAPE.test(anchor.storeId) &&
+    typeof anchor.schema === "string" && SCHEMA_SHAPE.test(anchor.schema);
+}
+
+export function agentStorePath(stateDir: string, agentId: string): string {
+  return path.join(stateDir, "agents", agentId, "agent", AGENT_STORE_BASENAME);
+}
+
+export async function readLocalAgentAnchors(stateDir: string, agentIds: readonly string[]): Promise<FleetBrokerAgentAnchor[]> {
+  const anchors: FleetBrokerAgentAnchor[] = [];
+  for (const agentId of [...new Set(agentIds)].sort()) {
+    if (!AGENT_ID_SHAPE.test(agentId)) continue;
+    const anchor = readPostgresAgentAnchor(agentStorePath(stateDir, agentId));
+    if (anchor) anchors.push({ agentId, storeId: anchor.storeId, schema: anchor.schema });
+  }
+  return anchors;
+}
+
+export type AgentAnchorVerifier = (anchor: FleetBrokerAgentAnchor) => Promise<void>;
+type AgentStoreQuery = (anchor: FleetBrokerAgentAnchor, query: string) => Promise<Record<string, unknown>[]>;
+
+const UNDEFINED_TABLE = "42P01";
+
+function missingSchemaError(anchor: FleetBrokerAgentAnchor): Error {
+  return new Error(`PostgreSQL schema ${anchor.schema} for ${anchor.agentId} is missing; refusing to land an anchor that would open an empty store`);
+}
+
+async function anchorSchemaRows(query: AgentStoreQuery, anchor: FleetBrokerAgentAnchor, sql: string): Promise<Record<string, unknown>[]> {
+  try {
+    return await query(anchor, sql);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === UNDEFINED_TABLE) throw missingSchemaError(anchor);
+    throw error;
+  }
+}
+
+export async function verifyAgentAnchorInPostgres(
+  anchor: FleetBrokerAgentAnchor,
+  query: AgentStoreQuery = (target, sql) => queryAgentStore(target, sql),
+): Promise<void> {
+  const [store] = await anchorSchemaRows(query, anchor, "SELECT store_id FROM $schema.openclaw_schema_meta WHERE store = 'agent'");
+  if (!store) throw missingSchemaError(anchor);
+  if (store.store_id !== anchor.storeId) {
+    throw new Error(`PostgreSQL schema ${anchor.schema} holds store ${String(store.store_id)}, not ${anchor.storeId} recorded for ${anchor.agentId}`);
+  }
+  const [primary] = await anchorSchemaRows(query, anchor, "SELECT agent_id FROM $schema.schema_meta WHERE meta_key = 'primary'");
+  if (primary?.agent_id !== anchor.agentId) {
+    throw new Error(`PostgreSQL schema ${anchor.schema} belongs to ${String(primary?.agent_id)}, not ${anchor.agentId}`);
+  }
+}
+
+export async function landAgentAnchors(
+  stateDir: string,
+  anchors: readonly FleetBrokerAgentAnchor[],
+  verify?: AgentAnchorVerifier,
+): Promise<{ landed: string[]; preserved: string[] }> {
+  for (const anchor of anchors) {
+    if (!isAgentAnchor(anchor)) throw new Error(`agent anchor identity is invalid: ${JSON.stringify(anchor)}`);
+  }
+  const missing: FleetBrokerAgentAnchor[] = [];
+  const preserved: string[] = [];
+  for (const anchor of anchors) {
+    if (await fs.stat(agentStorePath(stateDir, anchor.agentId)).then(() => true, () => false)) preserved.push(anchor.agentId);
+    else missing.push(anchor);
+  }
+  for (const anchor of missing) await verify?.(anchor);
+  const landed: string[] = [];
+  for (const anchor of missing) {
+    if (await publishAgentAnchor(agentStorePath(stateDir, anchor.agentId), anchor)) landed.push(anchor.agentId);
+    else preserved.push(anchor.agentId);
+  }
+  return { landed, preserved };
+}
+
+async function publishAgentAnchor(file: string, anchor: FleetBrokerAgentAnchor): Promise<boolean> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const staged = `${file}.anchor-${randomUUID()}.tmp`;
+  try {
+    const db = new DatabaseSync(staged);
+    try {
+      db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)");
+      db.prepare("INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)").run(anchor.storeId, anchor.schema);
+    } finally {
+      db.close();
+    }
+    await fs.chmod(staged, 0o600);
+    await fs.link(staged, file);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  } finally {
+    await fs.rm(staged, { force: true });
+  }
+}
+
+function anchorFingerprint(anchors: readonly FleetBrokerAgentAnchor[]): string {
+  return JSON.stringify(anchors.map((anchor) => [anchor.agentId, anchor.storeId, anchor.schema]));
+}
+
+export function createAgentAnchorReporter(input: {
+  stateDir: string;
+  slug: string;
+  broker: Pick<FleetBrokerClient, "reportAgentAnchors">;
+  readAgentIds: () => readonly string[];
+  log: (message: string) => void;
+}): () => Promise<void> {
+  let recorded: string | null = null;
+  let lastFailure: string | null = null;
+  const fail = (message: string) => {
+    if (message === lastFailure) return;
+    lastFailure = message;
+    input.log(`⚠ [agent-anchors] ${message}`);
+  };
+  return async () => {
+    let anchors: FleetBrokerAgentAnchor[];
+    let configuredAgentIds: string[];
+    try {
+      configuredAgentIds = [...new Set(input.readAgentIds())].sort();
+      anchors = await readLocalAgentAnchors(input.stateDir, configuredAgentIds);
+    } catch (error) {
+      fail(`reading local agent anchors for ${input.slug} failed: ${String(error)}`);
+      return;
+    }
+    if (anchors.length === 0) {
+      fail(`no configured agent of ${input.slug} has a local PostgreSQL anchor; nothing recorded`);
+      return;
+    }
+    const fingerprint = JSON.stringify([anchorFingerprint(anchors), configuredAgentIds]);
+    if (fingerprint === recorded) return;
+    try {
+      await input.broker.reportAgentAnchors({ slug: input.slug, anchors, configuredAgentIds });
+    } catch (error) {
+      fail(`recording ${anchors.length} agent anchor(s) for ${input.slug} failed: ${String(error)}`);
+      return;
+    }
+    recorded = fingerprint;
+    lastFailure = null;
+    input.log(`[agent-anchors] recorded ${anchors.length} agent anchor(s) for ${input.slug}`);
+  };
+}

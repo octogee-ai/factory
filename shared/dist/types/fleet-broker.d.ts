@@ -139,6 +139,14 @@ export interface FleetBrokerBuilderRuntimeStateSnapshotUrls {
 export interface FleetBrokerBuilderRuntimeStatePruneResult {
     deleted: number;
 }
+export interface FleetBrokerAgentAnchor {
+    agentId: string;
+    storeId: string;
+    schema: string;
+}
+export interface FleetBrokerAgentAnchors {
+    anchors: FleetBrokerAgentAnchor[];
+}
 export interface FleetBrokerComputerHomeCheckpointUrl {
     name: string;
     upload: FleetBrokerBlobSignedUrl;

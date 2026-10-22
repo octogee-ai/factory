@@ -114,6 +114,16 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
       .toMatch(/\$BUILDER_OVERLAY_GATE "\$TSX"/);
   });
 
+  it("lands recorded PostgreSQL agent anchors after the runtime-state restore and before OpenClaw", () => {
+    const runtimeRestoreIdx = entrypoint.indexOf("builder-runtime-state-restore.ts");
+    const anchorIdx = entrypoint.indexOf("agent-anchor-restore.ts");
+    const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
+
+    expect(anchorIdx).toBeGreaterThan(runtimeRestoreIdx);
+    expect(anchorIdx).toBeLessThan(supervisorIdx);
+    expect(entrypoint).toMatch(/until "\$TSX" \/octogee\/scripts\/entrypoints\/agent-anchor-restore\.ts/);
+  });
+
   it("starts the probed runner plane only after the actual OpenClaw process", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");

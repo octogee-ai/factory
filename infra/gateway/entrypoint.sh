@@ -240,6 +240,11 @@ elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
     log "Pre-boot: Builder runtime state restore unavailable; retrying in 5s..."
     sleep 5
   done
+  log "Pre-boot: landing recorded PostgreSQL agent anchors for ${BUILDER_SLUG}..."
+  until "$TSX" /octogee/scripts/entrypoints/agent-anchor-restore.ts; do
+    log "Pre-boot: agent anchor record unavailable; retrying in 5s..."
+    sleep 5
+  done
 else
   if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then
     mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"

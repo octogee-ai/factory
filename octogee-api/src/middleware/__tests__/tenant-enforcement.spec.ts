@@ -159,6 +159,8 @@ function app(opts: {
   a.post("/internal/fleet/builder-runtime-state/download-url", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/snapshot-urls", enforcement, handler);
   a.post("/internal/fleet/builder-runtime-state/prune", enforcement, handler);
+  a.post("/internal/fleet/agent-anchors/report", enforcement, handler);
+  a.post("/internal/fleet/agent-anchors/read", enforcement, handler);
   a.post("/internal/fleet/computer-home/checkpoint-url", enforcement, handler);
   a.post("/internal/fleet/computer-home/commit", enforcement, handler);
   a.post("/internal/fleet/computer-home/download-url", enforcement, handler);
@@ -1039,11 +1041,23 @@ const STILL_ON_SHARED = {
     const foreign = await request(target)
       .post("/internal/fleet/builder-runtime-state/download-url")
       .send({ gatewayId: "other", revisionId: "other", slug: "victim" });
+    const anchorReport = await request(target)
+      .post("/internal/fleet/agent-anchors/report")
+      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim", anchors: [{ agentId: "octogee-victim-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" }], configuredAgentIds: ["octogee-victim-coach"] });
+    const anchorRead = await request(target)
+      .post("/internal/fleet/agent-anchors/read")
+      .send({ gatewayId: "bender", revisionId: "bender-r2", slug: "victim" });
+    const foreignAnchors = await request(target)
+      .post("/internal/fleet/agent-anchors/read")
+      .send({ gatewayId: "other", revisionId: "other", slug: "victim" });
 
     expect(download.status).toBe(200);
     expect(snapshot.status).toBe(200);
     expect(prune.status).toBe(200);
     expect(foreign.status).toBe(403);
+    expect(anchorReport.status).toBe(200);
+    expect(anchorRead.status).toBe(200);
+    expect(foreignAnchors.status).toBe(403);
   });
 
   it("passes channel readiness to its user-membership broker and rejects a foreign gateway", async () => {
