@@ -44,6 +44,7 @@ export interface SessionChannelResult {
 interface SessionChannelDoc {
   kind?: unknown;
   archivedAt?: unknown;
+  createdDisplayName?: unknown;
   mattermost?: {
     channelId?: unknown;
   };
@@ -139,7 +140,7 @@ async function createSessionChannelImpl(
   const scope = laneScope(workspaceId, project, normalized.name);
 
   const docRef = db.doc(channelDocPath(workspaceId, project, normalized.name));
-  const existingResult = await existingSessionChannelResult(docRef, scope, normalized.name);
+  const existingResult = await existingSessionChannelResult(docRef, normalized);
   if (existingResult) return completeExistingSessionChannel(project, workspaceId, normalized.name, existingResult);
 
   const ctx = await getWorkspaceMmContext(actor.uid, workspaceId, actor.userData);
@@ -176,6 +177,7 @@ async function createSessionChannelImpl(
     kind: "session",
     name: normalized.name,
     purpose: normalized.purpose,
+    createdDisplayName: normalized.displayName,
     mattermost: { channelId },
     createdBy: actor.uid,
     createdAt: FieldValue.serverTimestamp(),
@@ -242,8 +244,7 @@ function invalidSessionChannelCreateInput(
 
 async function existingSessionChannelResult(
   docRef: FirebaseFirestore.DocumentReference,
-  scope: string,
-  name: string,
+  request: NormalizedSessionChannelCreateInput,
 ): Promise<SessionChannelResult | null> {
   const existing = await docRef.get();
   if (!existing.exists) return null;
@@ -258,7 +259,13 @@ async function existingSessionChannelResult(
   ) {
     return bad(409, "A channel with this name already exists in your workspace");
   }
-  return { status: 200, body: { success: true, channelId, name } };
+  if (data?.createdDisplayName !== request.displayName) {
+    return bad(
+      409,
+      `A channel already uses the name "${request.name}". Choose a name that differs within its first ${CUSTOM_CHANNEL_MAX_LENGTH} letters and numbers.`,
+    );
+  }
+  return { status: 200, body: { success: true, channelId, name: request.name } };
 }
 
 async function createPrimarySessionChannel(

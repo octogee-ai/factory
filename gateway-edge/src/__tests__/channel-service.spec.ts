@@ -175,6 +175,7 @@ describe("sessionChannelNameAvailability", () => {
 describe("createSessionChannel", () => {
   it("returns the stored primary without requiring a sibling", async () => {
     seedSessionDoc({
+      createdDisplayName: "Patch Roll",
       mattermost: {
         channelId: "channel-1",
       },
@@ -244,13 +245,37 @@ describe("createSessionChannel", () => {
     });
   });
 
-  it("returns the stored primary when the channel doc already exists", async () => {
-    seedSessionDoc();
+  it("returns the stored primary for a retry of the same create", async () => {
+    seedSessionDoc({ createdDisplayName: input.displayName });
     await expect(createSessionChannel(actor(), input)).resolves.toEqual({
       status: 200,
       body: { success: true, channelId: "channel-1", name: "patchroll" },
     });
     expect(h.mmApi).not.toHaveBeenCalled();
+  });
+
+  it("refuses a different channel whose derived name collides with an existing one", async () => {
+    seedSessionDoc({ createdDisplayName: "Patch Roll Q3" });
+    await expect(createSessionChannel(actor(), { ...input, displayName: "Patch Roll Q4" })).resolves.toEqual({
+      status: 409,
+      body: {
+        error: 'A channel already uses the name "patchroll". Choose a name that differs within its first 17 letters and numbers.',
+      },
+    });
+    expect(h.mmApi).not.toHaveBeenCalled();
+    expect(h.writes).toEqual([]);
+  });
+
+  it("refuses an existing channel whose creation name is not recorded", async () => {
+    seedSessionDoc();
+    await expect(createSessionChannel(actor(), input)).resolves.toEqual({
+      status: 409,
+      body: {
+        error: 'A channel already uses the name "patchroll". Choose a name that differs within its first 17 letters and numbers.',
+      },
+    });
+    expect(h.mmApi).not.toHaveBeenCalled();
+    expect(h.writes).toEqual([]);
   });
 
   it("returns 409 with an archived hint when the existing doc is archived", async () => {
@@ -295,6 +320,7 @@ describe("createSessionChannel", () => {
           kind: "session",
           name: "patchroll",
           purpose: "Roll OC patches",
+          createdDisplayName: "OpenClaw Patch Upgrade",
           mattermost: { channelId: "channel-1" },
           createdBy: "owner-1",
           createdAt: "SERVER_TS",
@@ -733,7 +759,7 @@ describe("createProjectSessionChannel", () => {
 
   it("returns the stored project primary when the channel doc already exists", async () => {
     seedProjectDoc();
-    seedProjectSessionDoc();
+    seedProjectSessionDoc({ createdDisplayName: input.displayName });
     await expect(createProjectSessionChannel(actor(), "orbit", input)).resolves.toEqual({
       status: 200,
       body: { success: true, channelId: "channel-1", name: "patchroll" },
@@ -767,6 +793,7 @@ describe("createProjectSessionChannel", () => {
           kind: "session",
           name: "patchroll",
           purpose: "Rolls",
+          createdDisplayName: "OC Patch Upgrade",
           mattermost: { channelId: "channel-1" },
           createdBy: "owner-1",
           createdAt: "SERVER_TS",
@@ -916,7 +943,7 @@ describe("workspace group enrollment during channel creation", () => {
   it("reports failed enrollment and completes it when creation is retried", async () => {
     h.enrollWorkspaceChannelMembers.mockRejectedValueOnce(new Error("Mattermost unavailable"));
     expect((await createSessionChannel(actor(), { name: "patchroll", displayName: "Planning" })).status).toBe(502);
-    seedSessionDoc();
+    seedSessionDoc({ createdDisplayName: "Planning" });
     expect((await createSessionChannel(actor(), { name: "patchroll", displayName: "Planning" })).status).toBe(200);
     expect(h.enrollWorkspaceChannelMembers).toHaveBeenCalledTimes(2);
   });
