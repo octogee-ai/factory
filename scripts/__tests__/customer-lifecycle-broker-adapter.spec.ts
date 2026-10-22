@@ -35,6 +35,7 @@ import { saveAppliedFingerprints } from "../lib/applied-fingerprint-store.js";
 import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { clearBuilderClaim, stubBuilderClaim, withBuilderClaim } from "./helpers/builder-claim.js";
 import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
+import { recordBuilderNativeInitialState } from "../lib/builder-native-initial-state.js";
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -5105,7 +5106,7 @@ async function withPostgresAgentConfig(config: Record<string, unknown>, run: () 
   }
 }
 
-it.each(['empty', 'agent-store', 'running', 'wrong-pod', 'gate-changed'])("cleans an interrupted held Builder target only when no Native state exists: %s", async scenario => {
+it.each(['empty', 'initialized-unused', 'initialized-changed', 'agent-store', 'running', 'wrong-pod', 'gate-changed'])("cleans an interrupted held Builder target only when no customer Native state exists: %s", async scenario => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'broker-empty-target-'));
   const oldState = process.env.OPENCLAW_STATE_DIR;
   const oldPod = process.env.POD_UID;
@@ -5120,10 +5121,16 @@ it.each(['empty', 'agent-store', 'running', 'wrong-pod', 'gate-changed'])("clean
     const agent = path.join(root, 'agents/octogee-alice-coach/agent');
     await fs.mkdir(agent, { recursive: true });
     await fs.writeFile(path.join(agent, scenario === 'agent-store' ? 'openclaw-agent.sqlite' : 'models.json'), 'retained');
+    if (scenario.startsWith('initialized-')) {
+      await fs.mkdir(path.join(root, 'state'));
+      await fs.writeFile(path.join(root, 'state/openclaw.sqlite'), 'Native initial state');
+      recordBuilderNativeInitialState(root, 'pod-current');
+      if (scenario === 'initialized-changed') await fs.appendFile(path.join(root, 'state/openclaw.sqlite'), 'customer data');
+    }
     await withPostgresAgentConfig({ agents: { entries: { 'octogee-alice-coach': {} } } }, async () => {
       const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
       const removing = adapter.removeImportedCustomerBySlug!('alice');
-      if (scenario === 'empty') {
+      if (scenario === 'empty' || scenario === 'initialized-unused') {
         await expect(removing).resolves.toMatchObject({ retained: true });
         expect(rpc.agentsDetach).not.toHaveBeenCalled();
       } else await expect(removing).rejects.toThrow(/workspace identities/);

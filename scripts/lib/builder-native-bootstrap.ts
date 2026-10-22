@@ -7,6 +7,8 @@ import { DatabaseSync } from "node:sqlite";
 import { queryAgentStore, readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { buildSafeDefaultAgent, SAFE_DEFAULT_AGENT_ID } from "./openclaw-config-builders.js";
 import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js";
+import { recordBuilderNativeInitialState } from "./builder-native-initial-state.js";
+import { uninitializedBuilderState } from "./uninitialized-builder-state.js";
 
 async function journalAvailable(databasePath: string): Promise<boolean> {
   const anchor = readPostgresAgentAnchor(databasePath);
@@ -56,7 +58,7 @@ export async function bootFreshBuilderHost(stateDir: string, env: NodeJS.Process
     child.once("error", (error) => { failure = error; });
     child.once("close", (code, signal) => {
       ended = true;
-      failure ??= new Error(`native initialization exited ${code ?? signal}`);
+      if (code !== 0 || signal) failure ??= new Error(`native initialization exited ${code ?? signal}`);
       resolve();
     });
   });
@@ -84,6 +86,7 @@ export async function bootFreshBuilderHost(stateDir: string, env: NodeJS.Process
     await closed;
     await fs.rm(temporary, { recursive: true, force: true });
   }
+  if (failure) throw failure;
 }
 
 export async function initializeBuilderNativeState(
@@ -98,8 +101,10 @@ export async function initializeBuilderNativeState(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  const initialStateWasEmpty = uninitializedBuilderState(stateDir, [], {});
   await (boot ?? ((root) => bootFreshBuilderHost(root, env)))(stateDir);
   if (!await journalAvailable(databasePath)) {
     throw new Error("Builder native deletion journal unavailable; preserve existing history and use explicit native Doctor recovery before importing agents");
   }
+  if (initialStateWasEmpty && !readPostgresAgentAnchor(databasePath)) recordBuilderNativeInitialState(stateDir, env.POD_UID);
 }

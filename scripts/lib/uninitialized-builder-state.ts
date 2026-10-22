@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { builderNativeInitialStateMatches } from './builder-native-initial-state.js';
 
 const GENERATED_AGENT_FILES = new Set(['models.json', '.platform-openai-managed', '.platform-openrouter-managed']);
 
@@ -32,12 +33,14 @@ function onlyGeneratedAgentFiles(stateDir: string, agentId: string): boolean {
 export function uninitializedBuilderState(stateDir: string, agentIds: readonly string[], database: {
   engine?: string;
   families?: { state?: { engine?: string } };
-}): boolean {
+}, podUid?: string): boolean {
   const engine = database.families?.state?.engine ?? database.engine ?? 'sqlite';
   if (engine !== 'sqlite') return false;
   const state = entries(path.join(stateDir, 'state'));
-  return state !== null && state.length === 0 &&
+  const agents = entries(path.join(stateDir, 'agents'));
+  return state !== null && (state.length === 0 || builderNativeInitialStateMatches(stateDir, podUid)) &&
+    agents !== null && agents.every(agent => agent.isDirectory()) &&
     absent(path.join(stateDir, 'workspace-identity-ready')) &&
     absent(path.join(stateDir, 'workspace-identity-bootstrap.json')) &&
-    agentIds.every(agentId => onlyGeneratedAgentFiles(stateDir, agentId));
+    [...new Set([...agentIds, ...agents.map(agent => agent.name)])].every(agentId => onlyGeneratedAgentFiles(stateDir, agentId));
 }

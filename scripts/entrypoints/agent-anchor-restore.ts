@@ -44,9 +44,7 @@ export async function runAgentAnchorRestore(input: {
   const landedState = state && clusterBuilderGateway(env)
     ? await landGatewayStateAnchor(stateRoot, state, input.verifyState)
     : undefined;
-  if (anchors.some((anchor) => configured.has(anchor.agentId))) {
-    await (input.initializeHost ?? ((root) => initializeBuilderNativeState(root, undefined, env)))(stateRoot);
-  }
+  await (input.initializeHost ?? ((root) => initializeBuilderNativeState(root, undefined, env)))(stateRoot);
   const result = await landAgentAnchors(
     stateRoot,
     anchors.filter((anchor) => configured.has(anchor.agentId)),

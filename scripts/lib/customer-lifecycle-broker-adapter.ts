@@ -1827,7 +1827,7 @@ async function stopRetainedConfiguredBuilderAccounts(ctx: BrokerCtx, slug: strin
 async function uninitializedHeldBuilder(agentIds: readonly string[], held: SurgeOpenClawProcessGateState | null): Promise<boolean> {
   if (!held) return false;
   const config = readOpenClawConfig() as { database?: Parameters<typeof uninitializedBuilderState>[2] };
-  if (!uninitializedBuilderState(resolveOpenClawStateDir(), agentIds, config.database ?? {})) return false;
+  if (!uninitializedBuilderState(resolveOpenClawStateDir(), agentIds, config.database ?? {}, held.podUid)) return false;
   const current = await createSurgeOpenClawProcessSupervisorClient(OPENCLAW_DIR).status();
   return JSON.stringify(current) === JSON.stringify(held);
 }
@@ -1845,7 +1845,7 @@ async function removeImportedCustomerBySlug(
   if (isConfiguredGatewayBuilder(slug)) {
     const held = await stopRetainedConfiguredBuilderAccounts(ctx, slug);
     const agentIds = agentIdsForMigration(slug).filter(agentId => !isSafeDefaultAgentPortableStatePath(`agents/${agentId}`));
-    if (await uninitializedHeldBuilder(agentIds, held)) ctx.log(`[remove:${slug}] no Native state exists on this held pod; retained generated Builder configuration`);
+    if (await uninitializedHeldBuilder(agentIds, held)) ctx.log(`[remove:${slug}] no customer Native state exists on this held pod; retained Builder configuration`);
     else await releaseAgentsAndInvalidateCache(ctx, agentIds, `[remove:${slug}]`);
     clearMountedMarker(CUSTOMERS_DIR, slug);
     clearMigratingInPin(CUSTOMERS_DIR, slug);

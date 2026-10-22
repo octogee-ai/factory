@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { initializeBuilderNativeState } from "../lib/builder-native-bootstrap.js";
+import { builderNativeInitialStateMatches } from "../lib/builder-native-initial-state.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -57,4 +58,31 @@ it("propagates native initialization failure and leaves the destination unpublis
   await expect(initializeBuilderNativeState(root, async () => { throw new Error("native refused"); }))
     .rejects.toThrow("native refused");
   await expect(fs.stat(path.join(root, "state", "openclaw.sqlite"))).rejects.toThrow();
+});
+it('records a Native-created baseline only after fresh initialization and never refreshes changed state', async () => {
+  const root = await directory();
+  const env = { POD_UID: 'pod-one' };
+  await initializeBuilderNativeState(root, async () => { database(root, true); }, env);
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(true);
+  const db = new DatabaseSync(path.join(root, 'state/openclaw.sqlite'));
+  try { db.exec("INSERT INTO agent_deletion_journal VALUES ('retained-agent')"); }
+  finally { db.close(); }
+  await initializeBuilderNativeState(root, vi.fn(), env);
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(false);
+});
+
+it('never certifies a fresh host database when customer state preceded the bootstrap', async () => {
+  const root = await directory();
+  const history = path.join(root, 'agents', 'existing', 'agent');
+  await fs.mkdir(history, { recursive: true });
+  await fs.writeFile(path.join(history, 'openclaw-agent.sqlite'), 'retained identity');
+  await initializeBuilderNativeState(root, async () => { database(root, true); }, { POD_UID: 'pod-one' });
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(false);
+  expect(await fs.readFile(path.join(history, 'openclaw-agent.sqlite'), 'utf8')).toBe('retained identity');
+});
+it('never certifies preexisting orphan database sidecars', async () => {
+  const root = await directory();
+  await fs.writeFile(path.join(root, 'state/openclaw.sqlite-wal'), 'retained WAL');
+  await initializeBuilderNativeState(root, async () => { await fs.unlink(path.join(root, 'state/openclaw.sqlite-wal')); database(root, true); }, { POD_UID: 'pod-one' });
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(false);
 });

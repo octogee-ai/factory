@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { uninitializedBuilderState } from '../lib/uninitialized-builder-state.js';
+import { recordBuilderNativeInitialState } from '../lib/builder-native-initial-state.js';
 
 let root: string;
 const agentId = 'octogee-alice-coach';
@@ -38,4 +39,17 @@ it('checks every agent before declaring an uninitialized target', () => {
   const project = 'octogee-alice-proj-orbit-coach';
   write(`agents/${project}/agent/openclaw-agent.sqlite`);
   expect(uninitializedBuilderState(root, [agentId, project], { engine: 'sqlite' })).toBe(false);
+});
+it('accepts only the exact unchanged Native-created host baseline on the same held pod', () => {
+  write('state/openclaw.sqlite');
+  recordBuilderNativeInitialState(root, 'pod-one');
+  expect(uninitializedBuilderState(root, [agentId], { engine: 'sqlite' }, 'pod-one')).toBe(true);
+  expect(uninitializedBuilderState(root, [agentId], { engine: 'sqlite' }, 'pod-other')).toBe(false);
+  fs.appendFileSync(path.join(root, 'state/openclaw.sqlite'), 'customer state');
+  expect(uninitializedBuilderState(root, [agentId], { engine: 'sqlite' }, 'pod-one')).toBe(false);
+});
+
+it('refuses customer state belonging to an agent outside the requested cleanup list', () => {
+  write('agents/unexpected/agent/openclaw-agent.sqlite');
+  expect(uninitializedBuilderState(root, [agentId], { engine: 'sqlite' })).toBe(false);
 });

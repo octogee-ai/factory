@@ -14,6 +14,29 @@ afterEach(async () => {
 const coach = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
 
 describe("agent-anchor-restore entrypoint", () => {
+  it.each(['cluster', 'gce-vm'])("initializes a claimed %s host before its first migration records any anchors", async runtime => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-anchor-first-import-')));
+    roots.push(dir);
+    const initializeHost = vi.fn(async () => undefined);
+    const result = await runAgentAnchorRestore({
+      env: withBuilderClaim({ GATEWAY_CLASS: 'builder', GATEWAY_RUNTIME_KIND: runtime, GATEWAY_ID: 'alice-s-first', OPENCLAW_STATE_DIR: dir }, 'alice'),
+      broker: { readAgentAnchors: async () => ({ anchors: [] }) },
+      readConfig: () => ({ agents: { entries: { [coach.agentId]: {} } } }),
+      initializeHost,
+      log: () => {},
+    });
+    expect(result).toEqual({ landed: [], preserved: [], skipped: false });
+    expect(initializeHost).toHaveBeenCalledExactlyOnceWith(dir);
+  });
+  it('refuses first-import startup if Native initialization fails before any anchors are recorded', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agent-anchor-first-import-')));
+    roots.push(dir);
+    await expect(runAgentAnchorRestore({
+      env: withBuilderClaim({ GATEWAY_CLASS: 'builder', GATEWAY_ID: 'alice-s-first', OPENCLAW_STATE_DIR: dir }, 'alice'),
+      broker: { readAgentAnchors: async () => ({ anchors: [] }) }, readConfig: () => ({}),
+      initializeHost: async () => { throw new Error('Native first-use failed'); }, log: () => {},
+    })).rejects.toThrow('Native first-use failed');
+  });
   it("lands the Builder's recorded anchors for configured agents before OpenClaw opens them", async () => {
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-anchor-restore-")));
     roots.push(dir);
