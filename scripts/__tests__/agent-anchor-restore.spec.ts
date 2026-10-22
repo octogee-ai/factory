@@ -37,6 +37,52 @@ describe("agent-anchor-restore entrypoint", () => {
     expect(logs.some((m) => m.includes("landed 1 agent anchor"))).toBe(true);
   });
 
+  it("lands the recorded gateway state anchor on a cluster Builder only", async () => {
+    const state = { storeId: "c8feb4c9-41a7-4be1-b863-fa07ef6d1bdd", schema: "octogee_state_c8feb4c941a74be1" };
+    const readAgentAnchors = vi.fn(async () => ({ anchors: [coach], state }));
+    const restore = async (runtimeKind: string, verifyState = vi.fn(async () => undefined)) => {
+      const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-anchor-restore-")));
+      roots.push(dir);
+      const result = await runAgentAnchorRestore({
+        env: withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: runtimeKind, GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
+        broker: { readAgentAnchors },
+        readConfig: () => ({ agents: { entries: { [coach.agentId]: {} } } }),
+        verify: async () => undefined,
+        verifyState,
+        log: () => {},
+      });
+      return { dir, result, verifyState };
+    };
+
+    const cluster = await restore("cluster");
+    expect(cluster.result.state).toBe("landed");
+    expect(cluster.verifyState).toHaveBeenCalledExactlyOnceWith(state);
+    expect(readPostgresAgentAnchor(path.join(cluster.dir, "state", "openclaw.sqlite"))).toEqual(state);
+
+    const vm = await restore("gce-vm");
+    expect(vm.result.state).toBeUndefined();
+    expect(vm.verifyState).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(vm.dir, "state", "openclaw.sqlite"))).rejects.toThrow();
+  });
+
+  it("keeps a state store that is already on local disk", async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "agent-anchor-restore-")));
+    roots.push(dir);
+    await fs.mkdir(path.join(dir, "state"));
+    await fs.writeFile(path.join(dir, "state", "openclaw.sqlite"), "local");
+    const verifyState = vi.fn();
+    const result = await runAgentAnchorRestore({
+      env: withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: "alice-s-abc", OPENCLAW_STATE_DIR: dir }, "alice"),
+      broker: { readAgentAnchors: async () => ({ anchors: [], state: { storeId: "c8feb4c9-41a7-4be1-b863-fa07ef6d1bdd", schema: "octogee_state_c8feb4c941a74be1" } }) },
+      readConfig: () => ({ agents: { entries: {} } }),
+      verifyState,
+      log: () => {},
+    });
+    expect(result.state).toBe("preserved");
+    expect(verifyState).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(dir, "state", "openclaw.sqlite"), "utf8")).toBe("local");
+  });
+
   it("skips a Shared gateway and a Builder without a claim", async () => {
     const readAgentAnchors = vi.fn();
     expect(await runAgentAnchorRestore({ env: { GATEWAY_CLASS: "shared", GATEWAY_ID: "shared-a" }, broker: { readAgentAnchors }, readConfig: () => ({}), log: () => {} }))

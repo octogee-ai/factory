@@ -342,7 +342,7 @@ describe("surge OpenClaw process supervisor", () => {
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir, podUid: "source-pod", log: () => undefined, socketPath,
       readinessReleased: async () => true,
-      prepareDatabaseJournals: async () => { order.push("journals"); },
+      prepareDatabases: async () => { order.push("journals"); },
       spawnOpenClaw: () => { order.push("spawn"); const child = new FakeChild(); children.push(child); return child; },
       probeHealthz: healthzOf(children), healthTimeoutMs: 100,
     });
@@ -363,7 +363,7 @@ describe("surge OpenClaw process supervisor", () => {
     const log = vi.fn();
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir, podUid: "standby-pod", log, socketPath, standbyBoot: true,
-      prepareTarget: async () => undefined, prepareDatabaseJournals: async () => undefined,
+      prepareTarget: async () => undefined, prepareDatabases: async () => undefined,
       spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
       probeHealthz: healthzOf(children), healthTimeoutMs: 100,
     });
@@ -381,7 +381,7 @@ describe("surge OpenClaw process supervisor", () => {
     const spawnOpenClaw = vi.fn(() => new FakeChild());
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir, podUid: "owned-pod", log: () => undefined, socketPath,
-      prepareTarget: async () => undefined, prepareDatabaseJournals: async () => undefined,
+      prepareTarget: async () => undefined, prepareDatabases: async () => undefined,
       spawnOpenClaw, probeHealthz: async () => false, healthTimeoutMs: 100,
     });
     try {
@@ -399,7 +399,7 @@ describe("surge OpenClaw process supervisor", () => {
       openclawDir, podUid: "source-pod", log: () => undefined, socketPath,
       readinessReleased: async () => false,
       prepareTarget: async () => undefined,
-      prepareDatabaseJournals: async () => { throw new Error("database integrity refused"); },
+      prepareDatabases: async () => { throw new Error("database integrity refused"); },
       spawnOpenClaw, probeHealthz: async () => false, healthTimeoutMs: 100,
     });
     const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
@@ -422,7 +422,7 @@ describe("surge OpenClaw process supervisor", () => {
     });
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir, podUid: "builder-pod", socketPath, log: () => {}, readinessReleased: async () => false,
-      prepareTarget: async () => {}, prepareDatabaseJournals: async () => {}, bootWatcher,
+      prepareTarget: async () => {}, prepareDatabases: async () => {}, bootWatcher,
       spawnOpenClaw: () => { order.push("spawn"); const child = new FakeChild(); children.push(child); return child; },
       probeHealthz: healthzOf(children), healthTimeoutMs: 100,
     });
@@ -440,7 +440,7 @@ describe("surge OpenClaw process supervisor", () => {
     const bootWatcher = createSurgeOpenClawBootWatcher({ openclawDir, releaseKey: "builder-release", log: () => {}, env: { GATEWAY_CLASS: "builder" },
       client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() }, run: vi.fn() });
     const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "builder-pod", socketPath, log: () => {},
-      readinessReleased: async () => false, prepareTarget: async () => {}, prepareDatabaseJournals: async () => {}, bootWatcher, spawnOpenClaw, probeHealthz: async () => false });
+      readinessReleased: async () => false, prepareTarget: async () => {}, prepareDatabases: async () => {}, bootWatcher, spawnOpenClaw, probeHealthz: async () => false });
     const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
     try { await expect(client.permitNormal()).rejects.toThrow("newer store schema refused"); expect(spawnOpenClaw).not.toHaveBeenCalled();
       await expect(client.status()).resolves.toMatchObject({ phase: "held" });
@@ -600,7 +600,7 @@ describe("surge OpenClaw process supervisor", () => {
   it("refuses an unsupervised OpenClaw before preparing target state it could still be writing", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const prepareTarget = vi.fn(async () => undefined);
-    const prepareDatabaseJournals = vi.fn(async () => undefined);
+    const prepareDatabases = vi.fn(async () => undefined);
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir,
@@ -609,7 +609,7 @@ describe("surge OpenClaw process supervisor", () => {
       socketPath,
       readinessReleased: async () => false,
       prepareTarget,
-      prepareDatabaseJournals,
+      prepareDatabases,
       spawnOpenClaw: () => new FakeChild(),
       probeHealthz: async () => true,
       healthTimeoutMs: 100,
@@ -622,7 +622,7 @@ describe("surge OpenClaw process supervisor", () => {
 
       await expect(client.permit(request)).rejects.toThrow(/refusing to start a second gateway/u);
       expect(prepareTarget).not.toHaveBeenCalled();
-      expect(prepareDatabaseJournals).not.toHaveBeenCalled();
+      expect(prepareDatabases).not.toHaveBeenCalled();
     } finally {
       await supervisor.stop();
     }

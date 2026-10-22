@@ -19,6 +19,7 @@ import {
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
 import { isStandbyBuilderBoot } from "../lib/builder-standby-boot.js";
 import { prepareOpenClawSqliteJournals } from "../lib/openclaw-sqlite-journal-preflight.js";
+import { prepareGatewayStateStore } from "../lib/gateway-state-store-preparation.js";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { inspectConfiguredBuilderAgentStores } from "../lib/openclaw-builder-store-preflight.js";
 import {
@@ -49,7 +50,7 @@ export interface StartSurgeOpenClawSupervisorOptions {
   standbyBoot?: boolean;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
-  prepareDatabaseJournals?: () => Promise<void>;
+  prepareDatabases?: () => Promise<void>;
   probeHealthz?: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
   createServer?: typeof http.createServer;
@@ -300,7 +301,7 @@ interface StartPermittedOpenClawChildOptions {
   podUid: string;
   prepare: boolean;
   prepareTarget: () => Promise<void>;
-  prepareDatabaseJournals: () => Promise<void>;
+  prepareDatabases: () => Promise<void>;
   probeHealthz: () => Promise<boolean>;
   reapOrphanedOpenClaw: () => Promise<void>;
   recordChildPid: (pid: number | undefined) => Promise<void>;
@@ -320,9 +321,9 @@ async function preparePermittedOpenClawChild(
   if (afterPreparation.mode !== "permitted") {
     throw new Error("surge OpenClaw process was held during target preparation");
   }
-  await opts.prepareDatabaseJournals();
+  await opts.prepareDatabases();
   if ((await opts.current()).mode !== "permitted") {
-    throw new Error("surge OpenClaw process was held during journal preparation");
+    throw new Error("surge OpenClaw process was held during database preparation");
   }
   return afterPreparation;
 }
@@ -501,7 +502,7 @@ function createTargetSupervisorOperations(
   };
 }
 
-async function defaultPrepareDatabaseJournals(opts: StartSurgeOpenClawSupervisorOptions): Promise<void> {
+async function defaultPrepareDatabases(opts: StartSurgeOpenClawSupervisorOptions): Promise<void> {
   const result = prepareOpenClawSqliteJournals({
     stateDir: process.env.OPENCLAW_STATE_DIR || opts.openclawDir,
     configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -509,6 +510,7 @@ async function defaultPrepareDatabaseJournals(opts: StartSurgeOpenClawSupervisor
   if (result.converted.length) {
     opts.log(`[surge-openclaw] prepared ${result.converted.length} WAL store(s) for 9p storage`);
   }
+  await prepareGatewayStateStore({ log: opts.log });
 }
 
 function defaultBootWatcher(): OpenClawBootWatcher {
@@ -533,7 +535,7 @@ export async function startSurgeOpenClawSupervisor(
   const sleep = opts.sleep ?? defaultSleep;
   const spawnOpenClaw = opts.spawnOpenClaw ?? defaultSpawnOpenClaw;
   const prepareTarget = opts.prepareTarget ?? prepareConfiguredBuilderTarget;
-  const prepareDatabaseJournals = opts.prepareDatabaseJournals ?? (() => defaultPrepareDatabaseJournals(opts));
+  const prepareDatabases = opts.prepareDatabases ?? (() => defaultPrepareDatabases(opts));
   const timeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const stopGraceMs = opts.stopGraceMs ?? DEFAULT_STOP_GRACE_MS;
   const bootWatcher = opts.bootWatcher ?? defaultBootWatcher();
@@ -609,7 +611,7 @@ export async function startSurgeOpenClawSupervisor(
         podUid: opts.podUid,
         prepare,
         prepareTarget,
-        prepareDatabaseJournals,
+        prepareDatabases,
         probeHealthz,
         reapOrphanedOpenClaw,
         recordChildPid,

@@ -16,6 +16,7 @@ import {
   platformOpenAiEmbeddingsEnabled,
 } from "../lib/openclaw-config-builders.js";
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
+import { clusterBuilderGateway, localStateStoreKind, localStateStorePath, openclawStateRoot, type LocalStateStoreKind } from "../lib/openclaw-state-store.js";
 import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import {
@@ -601,10 +602,11 @@ export function applyPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   logFn: (msg: string) => void = () => {},
+  options: { stateStore?: LocalStateStoreKind } = {},
 ): boolean {
   const builderGateway = env.GATEWAY_CLASS?.trim() === "builder";
   return [
-    applyAgentStoreDatabasePatch(config, env),
+    applyAgentStoreDatabasePatch(config, env, options.stateStore),
     applyOpenClawBeta5CompatibilityPatch(config, logFn),
     builderGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
@@ -619,15 +621,26 @@ export function applyPreBootPatches(
   ].some(Boolean);
 }
 
-export function applyAgentStoreDatabasePatch(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+const BUILDER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
+  absent: "Builder state family on PostgreSQL (fresh store)",
+  anchor: "Builder state family on PostgreSQL (reattaching its anchor)",
+  sqlite: "Builder state family stays SQLite: this allocation already holds SQLite state",
+};
+
+export function applyAgentStoreDatabasePatch(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  stateStore: LocalStateStoreKind = "sqlite",
+): boolean {
   if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
   const current = isPlainObject(config.database) ? config.database : {};
-  const families = isPlainObject(current.families) ? current.families : {};
+  const { state: _hostState, ...families } = isPlainObject(current.families) ? current.families : {};
   const postgres = isPlainObject(current.postgres) ? current.postgres : {};
+  const state = clusterBuilderGateway(env) ? { state: { engine: stateStore === "sqlite" ? "sqlite" : "postgres" } } : {};
   const next = {
     ...current,
     engine: current.engine ?? "sqlite",
-    families: { ...families, agent: { engine: "postgres" } },
+    families: { ...state, ...families, agent: { engine: "postgres" } },
     postgres: {
       ...postgres,
       connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" },
@@ -790,8 +803,10 @@ async function main(): Promise<void> {
     throw e;
   }
   const config = JSON.parse(configRaw);
+  const stateStore = localStateStoreKind(localStateStorePath(openclawStateRoot(process.env)));
+  if (clusterBuilderGateway(process.env)) log(BUILDER_STATE_STORE_LOG[stateStore]);
 
-  if (applyPreBootPatches(config, process.env, log)) {
+  if (applyPreBootPatches(config, process.env, log, { stateStore })) {
     writeConfigAtomically(CONFIG_PATH, config);
     log("openclaw.json patched (env / stale-key cleanup)");
   } else {

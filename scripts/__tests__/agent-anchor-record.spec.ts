@@ -4,7 +4,14 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
-import { createAgentAnchorReporter, landAgentAnchors, readLocalAgentAnchors, verifyAgentAnchorInPostgres } from "../lib/agent-anchor-record.js";
+import {
+  createAgentAnchorReporter,
+  landAgentAnchors,
+  landGatewayStateAnchor,
+  readLocalAgentAnchors,
+  verifyAgentAnchorInPostgres,
+  verifyGatewayStateAnchorInPostgres,
+} from "../lib/agent-anchor-record.js";
 
 const sqliteFault = vi.hoisted(() => ({ failAnchorInsert: false }));
 vi.mock("node:sqlite", async (importOriginal) => {
@@ -125,6 +132,44 @@ describe("verifyAgentAnchorInPostgres", () => {
     await expect(verifyAgentAnchorInPostgres(coach, vi.fn(async () => []))).rejects.toThrow("is missing");
     const unavailable = vi.fn(async () => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); });
     await expect(verifyAgentAnchorInPostgres(coach, unavailable)).rejects.toThrow("ECONNREFUSED");
+  });
+});
+
+describe("gateway state anchors", () => {
+  const state = { storeId: "c8feb4c9-41a7-4be1-b863-fa07ef6d1bdd", schema: "octogee_state_c8feb4c941a74be1" };
+
+  it("verifies the state schema identity before trusting it", async () => {
+    const query = vi.fn(async () => [{ store_id: state.storeId }]);
+    await expect(verifyGatewayStateAnchorInPostgres(state, query)).resolves.toBeUndefined();
+    expect(query).toHaveBeenCalledExactlyOnceWith(state, "SELECT store_id FROM $schema.openclaw_schema_meta WHERE store = 'state'");
+    await expect(verifyGatewayStateAnchorInPostgres(state, vi.fn(async () => [{ store_id: coach.storeId }]))).rejects.toThrow(`holds state store ${coach.storeId}`);
+    const missing = vi.fn(async () => { throw Object.assign(new Error("relation does not exist"), { code: "42P01" }); });
+    await expect(verifyGatewayStateAnchorInPostgres(state, missing)).rejects.toThrow(`PostgreSQL state schema ${state.schema} is missing`);
+    await expect(verifyGatewayStateAnchorInPostgres(state, vi.fn(async () => []))).rejects.toThrow("is missing");
+  });
+
+  it("lands a verified state anchor and lands nothing when verification fails", async () => {
+    const dir = await stateDir();
+    await expect(landGatewayStateAnchor(dir, state, async () => { throw new Error("schema missing"); })).rejects.toThrow("schema missing");
+    await expect(fs.stat(path.join(dir, "state", "openclaw.sqlite"))).rejects.toThrow();
+    await expect(landGatewayStateAnchor(dir, state, async () => undefined)).resolves.toBe("landed");
+    expect(readPostgresAgentAnchor(path.join(dir, "state", "openclaw.sqlite"))).toEqual(state);
+    await expect(landGatewayStateAnchor(dir, state, async () => { throw new Error("not consulted"); })).resolves.toBe("preserved");
+    await expect(landGatewayStateAnchor(dir, { ...state, schema: "../escape" }, async () => undefined)).rejects.toThrow("identity is invalid");
+  });
+
+  it("reports the local state anchor with the agent anchors", async () => {
+    const dir = await stateDir();
+    await seedAnchor(dir, coach);
+    const reportAgentAnchors = vi.fn(async () => undefined);
+    const report = createAgentAnchorReporter({ stateDir: dir, slug: "alice", broker: { reportAgentAnchors }, readAgentIds: () => [coach.agentId], log: () => {} });
+    await report();
+    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [coach], configuredAgentIds: [coach.agentId] });
+
+    await landGatewayStateAnchor(dir, state, async () => undefined);
+    await report();
+    expect(reportAgentAnchors).toHaveBeenCalledTimes(2);
+    expect(reportAgentAnchors).toHaveBeenLastCalledWith({ slug: "alice", anchors: [coach], configuredAgentIds: [coach.agentId], state });
   });
 });
 

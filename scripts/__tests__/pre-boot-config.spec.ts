@@ -1366,9 +1366,46 @@ describe("applyTypingModeDefault — typing starts when the message arrives", ()
   });
 });
 
-it.each(["shared", "builder"])("selects the shared PostgreSQL agent family for %s while keeping local state SQLite", gatewayClass => {
+const AGENT_STORE_POSTGRES = { schemaPrefix: "octogee", connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" } };
+
+it.each([
+  { GATEWAY_CLASS: "shared" },
+  { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" },
+])("selects the PostgreSQL agent family while keeping local state SQLite for %o", env => {
   const config: any = {};
-  expect(applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: gatewayClass })).toBe(true);
-  expect(config.database).toEqual({ engine: "sqlite", families: { agent: { engine: "postgres" } }, postgres: { schemaPrefix: "octogee", connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" } } });
-  expect(applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: gatewayClass })).toBe(false);
+  expect(applyAgentStoreDatabasePatch(config, env, "absent")).toBe(true);
+  expect(config.database).toEqual({ engine: "sqlite", families: { agent: { engine: "postgres" } }, postgres: AGENT_STORE_POSTGRES });
+  expect(applyAgentStoreDatabasePatch(config, env, "absent")).toBe(false);
+});
+
+it.each([
+  ["absent", "postgres"],
+  ["anchor", "postgres"],
+  ["sqlite", "sqlite"],
+] as const)("puts a cluster Builder's state family on %s local state → %s", (stateStore, engine) => {
+  const env = { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster" };
+  const config: any = { database: { families: { state: { engine: engine === "postgres" ? "sqlite" : "postgres" } } } };
+  expect(applyAgentStoreDatabasePatch(config, env, stateStore)).toBe(true);
+  expect(config.database).toEqual({
+    engine: "sqlite",
+    families: { state: { engine }, agent: { engine: "postgres" } },
+    postgres: AGENT_STORE_POSTGRES,
+  });
+  expect(applyAgentStoreDatabasePatch(config, env, stateStore)).toBe(false);
+});
+
+it.each([
+  { GATEWAY_CLASS: "shared" },
+  { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" },
+])("drops a state family carried in from a cluster Builder's tracked config for %o", env => {
+  const config: any = { database: { engine: "sqlite", families: { state: { engine: "postgres" }, agent: { engine: "postgres" } }, postgres: AGENT_STORE_POSTGRES } };
+  expect(applyAgentStoreDatabasePatch(config, env, "absent")).toBe(true);
+  expect(config.database.families).toEqual({ agent: { engine: "postgres" } });
+});
+
+it("passes the local state store kind through the pre-boot patch set", () => {
+  const env = { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", MM_URL: "https://mm.example" };
+  const config: any = {};
+  applyPreBootPatches(config, env, () => {}, { stateStore: "anchor" });
+  expect(config.database.families.state).toEqual({ engine: "postgres" });
 });

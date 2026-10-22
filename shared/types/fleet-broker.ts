@@ -177,8 +177,14 @@ export interface FleetBrokerAgentAnchor {
   schema: string;
 }
 
+export interface FleetBrokerGatewayStateAnchor {
+  storeId: string;
+  schema: string;
+}
+
 export interface FleetBrokerAgentAnchors {
   anchors: FleetBrokerAgentAnchor[];
+  state?: FleetBrokerGatewayStateAnchor;
 }
 
 export interface FleetBrokerComputerHomeCheckpointUrl {
