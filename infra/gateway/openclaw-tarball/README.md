@@ -141,9 +141,11 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 The operator selected latest upstream main during this recut,
 `7910ed1a7418c4ec29948b2da751671d8d78a870`, for independent qualification.
-It remains frozen. The final clean overlay is `f7dfb7bcd4811434a639ec89ade31075f3e5f112`, published from
-`octogee/refresh-7910ed1a` in the OpenClaw fork. Both package objects and hosted
-islands come from that exact built source, version 2026.10.5. The recut starts
+It remains frozen. The final clean overlay is `524d54b44d5a2f297e1ec6c93e4a7b7551b07159`, published from
+`octogee/refresh-7910ed1a-f11` in the OpenClaw fork: the qualified overlay
+`f7dfb7bcd4811434a639ec89ade31075f3e5f112` plus one pending-admission fix. Both
+package objects and hosted islands come from that exact built source, version
+2026.10.5. The recut starts
 from the published overlay `b74ff0c433d355260925bda948f61ff4982ab657` on frozen
 main 304cf4f6, 253 upstream commits earlier.
 
@@ -195,6 +197,16 @@ stays an explicit operator repair. It is contributed as
 [openclaw/openclaw#180345](https://github.com/openclaw/openclaw/pull/180345); remove it when the selected upstream supplies equivalent
 missing-credential recovery for PostgreSQL state.
 
+Also new, a PostgreSQL Gateway whose inherited auth owner is still pending
+admission keeps starting. An evicted Builder restarted while the inheritance
+owner `octogee-unmatched-route` waited out its stale lease; `sidecars.model-runtime`
+failed on that owner's admission refusal, and the pod crash-looped. The inherited
+store now drops only a refusal for that owner's database, so agents run on their
+local credentials until the owner is admitted, and an agent's own pending
+admission still refuses. It is contributed as
+[openclaw/openclaw#180632](https://github.com/openclaw/openclaw/pull/180632); remove
+it when the selected upstream tolerates a pending inherited owner.
+
 The retained-boundary list in the previous assessment is unchanged, and its
 removal conditions still apply. Contribution status: detach #178755, auth
 startup #178970, local checkpoint #178973, reload #177823 and #167431 remain
@@ -207,7 +219,7 @@ downloads match the full SHA256, size and original bytes.
 
 | Package | Object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-e355a5ab.tgz#1792646949833461` | 122271385 | `e355a5ab43409767768fa5e34e4f54de3dfc6659f5c3ccdd6410e405727d33eb` |
+| root | `openclaw-fork-42d163e0.tgz#1792678067280422` | 122283687 | `42d163e09c3de06da14e466d2a987ec82b348a30566053ba54980366e3fbc170` |
 | mattermost | `openclaw-mattermost-618ef335.tgz#1792646954258349` | 1258589 | `618ef335ba0817c54f86656c71c7e8eb203be1a72a05b352dae8278f9ad5740e` |
 
 The pinned pnpm 12.12.1 frozen install and full `pnpm build` passed; installed
@@ -240,6 +252,14 @@ islands were regenerated from the same source; their license, runtime and pin
 contracts and 184 app consumer cases passed. This is local build, package and
 config proof; live Gateway startup and acceptance follow the maintained main
 build and TEST deployment. This refresh deploys no environment by itself.
+
+The checks above qualified `f7dfb7bc`. The pending-admission delta was
+requalified on `524d54b4`: full `pnpm build`, both inherited auth-store suites
+(18 cases), upstream tarball integrity, an isolated strict npm install reporting
+`OpenClaw 2026.10.5 (524d54b)`, and the Linux AMD64 full-plugin installer with
+the same Parallel, Codex and native-hook gates. The repacked Mattermost archive
+is byte-identical to the published `618ef335` object, which is reused. No island
+input changed since `f7dfb7bc`; the regenerated islands differ only in source pin.
 
 ## Previous October 21 refresh on frozen main 304cf4f6
 
