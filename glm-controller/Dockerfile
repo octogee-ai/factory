@@ -27,7 +27,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \
   && rm -rf /var/lib/apt/lists/* \
   && echo "Installing helm ${HELM_VERSION}" \
-  && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-$(dpkg --print-architecture).tar.gz" \
+  && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "https://get.helm.sh/helm-${HELM_VERSION}-linux-$(dpkg --print-architecture).tar.gz" \
        | tar -xz -C /tmp \
   && mv "/tmp/linux-$(dpkg --print-architecture)/helm" /usr/local/bin/helm \
   && rm -rf "/tmp/linux-$(dpkg --print-architecture)" \
