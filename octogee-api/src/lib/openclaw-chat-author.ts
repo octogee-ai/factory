@@ -9,7 +9,7 @@ export async function resolveOpenClawChatAuthor(
   postId: string,
 ): Promise<{ uid: string; username: string; mattermostUserId: string } | null> {
   const access = await authorizeChannel(viewerUid, channelId, workspaceSlug, {
-    requireActiveLedger: true, signal: AbortSignal.timeout(5_000),
+    requireActiveLedger: true, includeCoachConversation: true, signal: AbortSignal.timeout(5_000),
   });
   if (!access || access.forbidden) throw new Error("Chat author channel access denied");
   const post = await access.client.getJson(["posts", postId]) as Record<string, unknown>;

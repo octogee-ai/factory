@@ -16,6 +16,15 @@ describe("Control chat author identity", () => {
     expect(mocks.authorize).toHaveBeenCalledWith("viewer", "channel", "workspace", expect.objectContaining({ requireActiveLedger: true }));
     expect(mocks.where).toHaveBeenCalledWith("mattermost.userId", "==", "mm-author");
   });
+  it("includes the active private coach conversation when authorizing history attribution", async () => {
+    mocks.getJson.mockResolvedValue({ id: "post", channel_id: "coach-channel", user_id: "mm-author" });
+    mocks.authorize.mockImplementation(async (_uid, _channel, _workspace, options) =>
+      options.requireActiveLedger && options.includeCoachConversation
+        ? { forbidden: false, client: { getJson: mocks.getJson } }
+        : null);
+    await expect(resolveOpenClawChatAuthor("owner", "workspace", "coach-channel", "post"))
+      .resolves.toMatchObject({ uid: "uid-author", mattermostUserId: "mm-author" });
+  });
   it.each([null, { forbidden: true }])("rejects inaccessible channels before reading posts", async (access) => {
     mocks.authorize.mockResolvedValue(access);
     await expect(resolveOpenClawChatAuthor("viewer", "workspace", "channel", "post")).rejects.toThrow("access denied");
