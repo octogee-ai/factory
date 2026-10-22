@@ -220,6 +220,7 @@ describe('hosted native Browser surface', () => {
     expect((await request(app).get(url).set('Authorization', 'Bearer other')).status).toBe(404);
     expect((await request(app).get(url).set('Authorization', 'Bearer owner')).status).toBe(200);
     expect(String(fetchImpl.mock.calls[0][0])).toContain('source=%2Ftmp%2Fnative-shot.png');
+    expect(new URL(String(fetchImpl.mock.calls[0][0])).pathname).toBe('/g/b-alice/openclaw/__openclaw__/assistant-media');
     connection.ws.close(); await connection.closed;
     expect((await request(app).get(url).set('Authorization', 'Bearer owner')).status).toBe(404);
     expect((await request(app).get('/api/g/b-alice/tools/__openclaw__/assistant-media?source=/etc/passwd').set('Authorization', 'Bearer owner')).status).toBe(404);

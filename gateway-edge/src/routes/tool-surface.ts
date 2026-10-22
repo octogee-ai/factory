@@ -304,7 +304,7 @@ export function createToolSurface(options: ToolSurfaceOptions = {}) {
     const { live, media } = owned;
     try {
       if (await authorizeSession(live, 5000) !== 'allowed') { res.status(403).json({ error: 'forbidden' }); return; }
-      const url = new URL('/__openclaw__/assistant-media', openClawControlUpstreamBase(env)); url.searchParams.set('source', media.source);
+      const url = new URL(`/g/${encodeURIComponent(live.context.gatewayId)}/openclaw/__openclaw__/assistant-media`, openClawControlUpstreamBase(env)); url.searchParams.set('source', media.source);
       const response = await (options.fetchImpl ?? fetch)(url, { headers: headers(live.context.uid), redirect: 'error', signal: AbortSignal.timeout(30000) });
       if (!response.ok || !response.body) { await response.body?.cancel(); res.status(502).json({ error: 'media_unavailable' }); return; }
       const body = await readMedia(response.body, live);
