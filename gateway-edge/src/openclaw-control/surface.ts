@@ -1615,6 +1615,16 @@ class OpenClawControlSocketBridge {
       ? null : workspaceServingDenial(this.args.workspaceServing());
   }
 
+  private freshWriteAuthority(category: OpenClawControlRpcCategory): Promise<boolean> {
+    if (category === "read" || category === "approval_read") return Promise.resolve(true);
+    return this.args.authorizationCache.authorize({
+      sessionId: this.activeSession.sessionId,
+      gatewayId: this.activeSession.gatewayId,
+      revisionId: this.activeSession.revisionId,
+      env: this.args.env,
+    }, { forceRefresh: true });
+  }
+
   private evaluateAndForward(frame: BrowserRpcFrame): void {
     const category = openClawControlRpcCategory(frame.method);
     const managedConfigWrite = category === "config_mutation";
@@ -1688,6 +1698,52 @@ class OpenClawControlSocketBridge {
     this.args.metrics?.policy(this.metricsIdentity, reason.replaceAll("-", "_"));
   }
 
+  private async authorizePreparedRequest(
+    frame: BrowserRpcFrame,
+    decision: OpenClawControlRpcDecision,
+    deadlineAt: number,
+    releaseRequest: () => void,
+    expireBeforeForward: () => void,
+  ): Promise<number | null> {
+    let remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      expireBeforeForward();
+      return null;
+    }
+    let allowed: boolean;
+    try {
+      allowed = await awaitWithAbort(this.freshWriteAuthority(decision.category), AbortSignal.timeout(remainingMs));
+    } catch (error) {
+      if (Date.now() >= deadlineAt) {
+        expireBeforeForward();
+        return null;
+      }
+      releaseRequest();
+      throw error;
+    }
+    if (browserCannotReceive(this.closing, this.args.browser)) {
+      releaseRequest();
+      return null;
+    }
+    if (!allowed) {
+      releaseRequest();
+      this.deny(frame, decision, "capability-revoked");
+      return null;
+    }
+    const denial = this.servingDenial(decision.category);
+    if (denial) {
+      releaseRequest();
+      this.deny(frame, { allowed: false, category: decision.category, reason: denial }, denial);
+      return null;
+    }
+    remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      expireBeforeForward();
+      return null;
+    }
+    return remainingMs;
+  }
+
   private async forwardAllowed(
     frame: BrowserRpcFrame,
     decision: OpenClawControlRpcDecision,
@@ -1733,6 +1789,12 @@ class OpenClawControlSocketBridge {
     this.admittingIds.add(frame.id);
     let mattermost;
     try {
+      if (!await awaitWithAbort(this.freshWriteAuthority(decision.category), preparationController.signal)) {
+        finishPreparation();
+        releaseRequest();
+        this.deny(frame, decision, "capability-revoked");
+        return;
+      }
       mattermost = await awaitWithAbort(
         this.args.mattermostChat.prepare(
           frame,
@@ -1773,17 +1835,9 @@ class OpenClawControlSocketBridge {
     }
     const mutationLease = await this.acquireMutationLease(frame, decision, lease);
     if (mutationLease === null) return;
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) {
-      expireBeforeForward(mutationLease);
-      return;
-    }
-    const denial = this.servingDenial(decision.category);
-    if (denial) {
-      releaseRequest(mutationLease);
-      this.deny(frame, { allowed: false, category: decision.category, reason: denial }, denial);
-      return;
-    }
+    const remainingMs = await this.authorizePreparedRequest(frame, decision, deadlineAt,
+      () => releaseRequest(mutationLease), () => expireBeforeForward(mutationLease));
+    if (remainingMs === null) return;
     this.track(frame.id, frame.method, decision.category, lease, {
       proposed: decision.proposedConfig,
       mutationLease,

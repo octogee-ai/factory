@@ -2147,13 +2147,13 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
   });
 
   it.each(["config.patch", "chat.send", "terminal.open", "browser.request", "desktop.observe", "tools.invoke", "future.mutation"].flatMap(method =>
-    (["not-serving", "roster-loading", "flips-after-admission"] as const).map(scenario => ({ scenario, method })),
+    (["not-serving", "roster-loading", "flips-after-admission", "stale-roster", "revoked-after-preparation"] as const).map(scenario => ({ scenario, method })),
   ))("refuses dashboard $method while the workspace is $scenario on this gateway, but keeps reads", async ({ scenario, method }) => {
     let servingChecks = 0;
     const workspaceServing = (): "serving" | "not-serving" | "roster-loading" => {
       servingChecks += 1;
       if (scenario === "flips-after-admission") return servingChecks === 1 ? "serving" : "not-serving";
-      return scenario;
+      return scenario === "stale-roster" || scenario === "revoked-after-preparation" ? "serving" : scenario;
     };
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fence-"));
     tempDirs.push(openclawDir);
@@ -2179,7 +2179,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     const device = generateIdentity();
     const edge = http.createServer();
     const router = new WsUpgradeRouter();
-    attachOpenClawControlWsRoute({ router, env: testEnv, sessions: manager, authorize: async () => true,
+    let freshChecks = 0;
+    const prepare = vi.fn(async (_frame: Record<string, unknown>) => null);
+    attachOpenClawControlWsRoute({ router, env: testEnv, sessions: manager,
+      authorize: async () => { freshChecks += 1; return scenario === "stale-roster" ? freshChecks === 1 : scenario === "revoked-after-preparation" ? freshChecks <= 2 : true; },
+      mattermostChat: { prepare },
       proxyIdentity: {
         enabled: true, userHeaders: () => ({ "x-octogee-user": "uid-helper" }),
         serviceHeaders: () => ({ "x-octogee-user": "svc:gateway-edge" }), deviceIdentity: () => device,
@@ -2207,9 +2211,11 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => wss.close(() => resolve()));
     expect(seen.read?.ok).toBe(true);
     expect(result.ok).toBe(false);
-    expect((result.error as { message: string }).message).toContain(scenario === "roster-loading" ? "roster-loading" : "workspace-not-serving");
+    expect((result.error as { message: string }).message).toContain(scenario === "stale-roster" || scenario === "revoked-after-preparation" ? "capability-revoked" : scenario === "roster-loading" ? "roster-loading" : "workspace-not-serving");
     expect(calls).not.toContain(method);
     expect(servingChecks).toBe(scenario === "flips-after-admission" ? 2 : 1);
+    if (scenario === "stale-roster") expect(prepare.mock.calls.filter(([frame]) => frame.method === method)).toHaveLength(0);
+    if (scenario === "revoked-after-preparation") expect(prepare.mock.calls.filter(([frame]) => frame.method === method)).toHaveLength(1);
     const retryLease = acquireSystemConfigSyncLeaseSync({ openclawDir });
     expect(retryLease).not.toBeNull();
     retryLease?.release();
