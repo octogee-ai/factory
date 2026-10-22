@@ -5,6 +5,26 @@ import { createHash, randomUUID } from 'node:crypto';
 const INITIAL_STATE = '.builder-native-initial-state.json';
 const DATABASE_FILES = new Set(['openclaw.sqlite', 'openclaw.sqlite.seal', 'openclaw.sqlite-wal', 'openclaw.sqlite-shm', 'openclaw.sqlite-journal']);
 
+function fingerprintClient(stateDir: string): string | null {
+  const hash = createHash('sha256');
+  const clientDir = path.join(stateDir, 'client');
+  try {
+    const client = fs.lstatSync(clientDir);
+    if (!client.isDirectory()) return null;
+    hash.update(JSON.stringify(['client', client.dev, client.ino]));
+    for (const entry of fs.readdirSync(clientDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isFile()) return null;
+      const bytes = fs.readFileSync(path.join(clientDir, entry.name));
+      if ((entry.name.endsWith('-wal') || entry.name.endsWith('-journal')) && bytes.length !== 0) return null;
+      hash.update(JSON.stringify([entry.name, bytes.length])).update(bytes);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return 'client-absent';
+  }
+  return hash.digest('hex');
+}
+
 function fingerprint(stateDir: string): string | null {
   if (!fs.lstatSync(stateDir).isDirectory()) return null;
   const directory = path.join(stateDir, 'state');
@@ -19,7 +39,8 @@ function fingerprint(stateDir: string): string | null {
     if ((entry.name.endsWith('-wal') || entry.name.endsWith('-journal')) && bytes.length !== 0) return null;
     hash.update(JSON.stringify([entry.name, bytes.length])).update(bytes);
   }
-  return hash.digest('hex');
+  const client = fingerprintClient(stateDir);
+  return client === null ? null : hash.update(client).digest('hex');
 }
 
 export function recordBuilderNativeInitialState(stateDir: string, podUid: string | undefined): void {
@@ -27,7 +48,7 @@ export function recordBuilderNativeInitialState(stateDir: string, podUid: string
   const sha256 = fingerprint(stateDir);
   if (!sha256) throw new Error('Fresh Native host state is not closed and canonical');
   const file = path.join(stateDir, INITIAL_STATE), temporary = `${file}.${randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify({ version: 1, podUid, sha256 }), { mode: 0o600 });
+  fs.writeFileSync(temporary, JSON.stringify({ version: 2, podUid, sha256 }), { mode: 0o600 });
   fs.renameSync(temporary, file);
 }
 
@@ -37,7 +58,7 @@ export function builderNativeInitialStateMatches(stateDir: string, podUid: strin
     const file = path.join(stateDir, INITIAL_STATE), stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.size > 1024) return false;
     const initial = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return initial?.version === 1 && initial.podUid === podUid &&
+    return initial?.version === 2 && initial.podUid === podUid &&
       typeof initial.sha256 === 'string' && /^[a-f0-9]{64}$/.test(initial.sha256) &&
       initial.sha256 === fingerprint(stateDir);
   } catch (error) {

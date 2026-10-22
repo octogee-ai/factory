@@ -38,7 +38,8 @@ export function uninitializedBuilderState(stateDir: string, agentIds: readonly s
   if (engine !== 'sqlite') return false;
   const state = entries(path.join(stateDir, 'state'));
   const agents = entries(path.join(stateDir, 'agents'));
-  return state !== null && (state.length === 0 || builderNativeInitialStateMatches(stateDir, podUid)) &&
+  const client = entries(path.join(stateDir, 'client'));
+  return state !== null && (state.length === 0 && client?.length === 0 || builderNativeInitialStateMatches(stateDir, podUid)) &&
     agents !== null && agents.every(agent => agent.isDirectory()) &&
     absent(path.join(stateDir, 'workspace-identity-ready')) &&
     absent(path.join(stateDir, 'workspace-identity-bootstrap.json')) &&

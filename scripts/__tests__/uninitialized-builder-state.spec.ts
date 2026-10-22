@@ -19,7 +19,7 @@ it('recognizes an uninitialized SQLite host with only generated provider configu
   expect(uninitializedBuilderState(root, [agentId], { engine: 'sqlite', families: { agent: { engine: 'postgres' } } })).toBe(true);
 });
 it.each([
-  'state/openclaw.sqlite', 'state/openclaw.sqlite-wal', 'workspace-identity-ready', 'workspace-identity-bootstrap.json',
+  'state/openclaw.sqlite', 'state/openclaw.sqlite-wal', 'client/credentials.sqlite', 'workspace-identity-ready', 'workspace-identity-bootstrap.json',
   `agents/${agentId}/agent/openclaw-agent.sqlite`, `agents/${agentId}/agent/auth-profiles.json`,
   `agents/${agentId}/sessions/transcript.jsonl`, `agents/${agentId}/memory/private.md`,
 ])('requires Native cleanup when durable or unknown state exists: %s', relative => {

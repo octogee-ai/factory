@@ -67,3 +67,32 @@ it('records a closed database family including empty sidecars and shared memory'
   fs.appendFileSync(path.join(root, 'state/openclaw.sqlite-shm'), 'changed');
   expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(false);
 });
+
+it('binds fresh client credentials and refuses later identities before replacing unused state', () => {
+  fs.mkdirSync(path.join(root, 'client'));
+  fs.writeFileSync(path.join(root, 'client/credentials.sqlite'), 'Native-created client companion');
+  recordBuilderNativeInitialState(root, 'pod-one');
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(true);
+  fs.appendFileSync(path.join(root, 'client/credentials.sqlite'), 'paired device');
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(false);
+});
+it('refuses a client companion created after initial state was recorded', () => {
+  recordBuilderNativeInitialState(root, 'pod-one');
+  fs.mkdirSync(path.join(root, 'client'));
+  fs.writeFileSync(path.join(root, 'client/credentials.sqlite'), 'later credentials');
+  expect(builderNativeInitialStateMatches(root, 'pod-one')).toBe(false);
+});
+
+it('refuses a linked client directory and retains its credentials', () => {
+  fs.mkdirSync(path.join(root, 'external-client'));
+  fs.writeFileSync(path.join(root, 'external-client/credentials.sqlite'), 'retained credentials');
+  fs.symlinkSync(path.join(root, 'external-client'), path.join(root, 'client'));
+  expect(() => recordBuilderNativeInitialState(root, 'pod-one')).toThrow('closed and canonical');
+  expect(fs.readFileSync(path.join(root, 'external-client/credentials.sqlite'), 'utf8')).toBe('retained credentials');
+});
+it('refuses a client companion with a nonempty transaction journal', () => {
+  fs.mkdirSync(path.join(root, 'client'));
+  fs.writeFileSync(path.join(root, 'client/credentials.sqlite'), 'Native-created client companion');
+  fs.writeFileSync(path.join(root, 'client/credentials.sqlite-wal'), 'uncheckpointed credentials');
+  expect(() => recordBuilderNativeInitialState(root, 'pod-one')).toThrow('closed and canonical');
+});
