@@ -1438,7 +1438,7 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     const out = helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", sizingTier, rollStrategy: "surge", "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" });
     const dep = parseDocument(findDoc(out, "Deployment", "octogee-gateway-hobby")!).toJSON();
     const pod = dep.spec.template.spec;
-    expect(dep.spec.strategy).toEqual({ type: "Recreate" });
+    expect(dep.spec.strategy).toEqual({ type: "RollingUpdate", rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } });
     expect(pod.runtimeClassName).toBe("gvisor");
     expect(pod.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "6Gi" } });
     expect(pod.volumes.map((entry: any) => entry.name)).not.toContain("project-materializations");

@@ -311,9 +311,9 @@ describe("gatewayUpsertOptsFromRelease", () => {
     })).toThrow(/missing its immutable Builder gateway image reference/);
   });
 
-  it("recreates Hobby pods to keep exclusive persistent-home ownership", () => {
+  it("retains the source Hobby pod for the fenced transfer of unpublished workspace state", () => {
     const opts = gatewayUpsertOptsFromRelease({ namespace: "octogee-test", gateway: gateway({ gatewayClass: "builder", imageProfile: "builder", sizingTier: "s" }), artifact: artifact(), replicas: 1, chartPath: "/charts/octogee-gateway" });
-    expect(opts.rollStrategy).toBe("recreate");
+    expect(opts.rollStrategy).toBe("surge");
   });
 
   it("keys every name off the bare gatewayId and requests surge rolls for shared gateways", () => {

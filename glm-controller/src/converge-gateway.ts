@@ -327,7 +327,7 @@ export function gatewayUpsertOptsFromRelease(input: {
     deploymentTargetId: input.deploymentTargetId,
     deploymentProjectId: input.deploymentProjectId,
     gatewayServiceAccount: input.gatewayServiceAccount,
-    rollStrategy: gateway.gatewayClass === "builder" ? "recreate" : "surge",
+    rollStrategy: "surge",
     waitForReady: false,
   };
   return {
