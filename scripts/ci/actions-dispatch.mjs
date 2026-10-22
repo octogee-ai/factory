@@ -33,7 +33,9 @@ function runConclusion(run, jobs, incomplete) {
 export async function findRunningRun(workflow, sha, { request = api } = {}) {
   if (!names[workflow]) throw new Error(`Unknown workflow: ${workflow}`);
   const result = await request("GET", `repos/${repository}/actions/workflows/${workflow}/runs?per_page=100`);
-  const run = result.workflow_runs.find(run => run.status === "in_progress" && run.display_title.startsWith(`${names[workflow]} ${sha} [`));
+  const matching = result.workflow_runs.filter(run => run.display_title.startsWith(`${names[workflow]} ${sha} [`));
+  const run = matching.find(run => run.status === "in_progress") ??
+    matching.find(run => ["pending", "queued", "waiting", "requested"].includes(run.status));
   return run?.id ?? null;
 }
 

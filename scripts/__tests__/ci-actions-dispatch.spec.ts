@@ -90,7 +90,7 @@ it("times out without attaching to an unrelated workflow", async () => {
   expect(watch).not.toHaveBeenCalled();
 });
 
-it("finds a running main build of the selected SHA but not one still queued behind another build", async () => {
+it("prefers a running main build and waits for the selected SHA when pending", async () => {
   const sha = "a".repeat(40);
   const request = github({ runs: [
     { id: 6, status: "completed", display_title: `Build main ${sha} [1]` },
@@ -99,7 +99,15 @@ it("finds a running main build of the selected SHA but not one still queued behi
     { id: 9, status: "in_progress", display_title: `Build main ${sha} [4]` },
   ] });
   await expect(findRunningRun("build-main.yml", sha, { request })).resolves.toBe(9);
-  await expect(findRunningRun("build-main.yml", sha, { request: github({ runs: [{ id: 8, status: "pending", display_title: `Build main ${sha} [3]` }] }) })).resolves.toBeNull();
+  await expect(findRunningRun("build-main.yml", sha, { request: github({ runs: [{ id: 8, status: "pending", display_title: `Build main ${sha} [3]` }] }) })).resolves.toBe(8);
   expect(request).toHaveBeenCalledWith("GET", "repos/octogee-ai/octogee/actions/workflows/build-main.yml/runs?per_page=100");
   await expect(findRunningRun("build-main.yml", "c".repeat(40), { request })).resolves.toBeNull();
+});
+
+
+it.each(["pending", "queued", "waiting", "requested"])("reuses a %s build instead of dispatching a competing build", async status => {
+  const sha = "d".repeat(40);
+  await expect(findRunningRun("build-main.yml", sha, { request: github({ runs: [
+    { id: 10, status, display_title: `Build main ${sha} [automatic]` },
+  ] }) })).resolves.toBe(10);
 });
