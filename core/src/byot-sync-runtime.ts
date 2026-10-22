@@ -930,6 +930,9 @@ function expectedCustomerSecretRef(
   config: Record<string, unknown>,
   segments: readonly string[],
 ): Record<string, unknown> | null {
+  if (segments.join(".") === "database.postgres.connection") {
+    return { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
+  }
   if (
     segments.length === 5 &&
     segments[0] === "channels" &&

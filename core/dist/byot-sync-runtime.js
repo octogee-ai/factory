@@ -669,6 +669,9 @@ function agentIdAtSecretRefPath(config, segments) {
     return isRecord(agent) && typeof agent.id === "string" ? agent.id : null;
 }
 function expectedCustomerSecretRef(config, segments) {
+    if (segments.join(".") === "database.postgres.connection") {
+        return { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
+    }
     if (segments.length === 5 &&
         segments[0] === "channels" &&
         segments[1] === "mattermost" &&

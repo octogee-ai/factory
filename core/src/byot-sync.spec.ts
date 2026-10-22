@@ -151,6 +151,17 @@ describe("customer mount configuration projection", () => {
     }
   });
 
+  it("keeps the shared agent-store connection reference when a new customer is attached", () => {
+    const connection = { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" };
+    const database = { families: { agent: { engine: "postgres" } }, postgres: { connection, schemaPrefix: "octogee" } };
+    const patch = customerMountConfigPatch({ database }, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+    expect(patch).not.toHaveProperty("database");
+
+    const redacted = { ...database, postgres: { ...database.postgres, connection: { ...connection, id: "__OPENCLAW_REDACTED__" } } };
+    const fromRedactedRead = customerMountConfigPatch({ database: redacted }, {}, "alice", "platform-openrouter/z-ai/glm-5.2") as any;
+    expect(fromRedactedRead.database?.postgres?.connection ?? connection).toEqual(connection);
+  });
+
   it("does not restore an unsafe model or direct runtime from the mount candidate", () => {
     const id = "octogee-alice-coach";
     const patch = customerMountConfigPatch({}, { agents: { entries: {
