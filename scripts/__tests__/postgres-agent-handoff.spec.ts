@@ -78,6 +78,17 @@ it("refuses duplicate source roots for one agent before detaching either store",
   expect(detachAgent).not.toHaveBeenCalled();
 });
 
+it("carries the anchor while ignoring OpenClaw doctor's retained pre-migration PostgreSQL backup beside it", async () => {
+  const { root, agentId, file } = await fixture();
+  const backupDir = path.join(root, `agents/${agentId}/agent/openclaw-agent.sqlite.pre-startup-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93.postgres.bak`);
+  await fs.mkdir(backupDir);
+  await fs.copyFile(file, path.join(backupDir, "anchor.sqlite"));
+  await fs.writeFile(path.join(backupDir, "database.sqlite"), "doctor-export-fixture");
+  await fs.writeFile(path.join(backupDir, "manifest.json"), "{}");
+  const sources = [{ cwd: root, path: `agents/${agentId}` }];
+  expect((await findPortableAgentStores(sources)).map((store) => store.sourceAgentDir)).toEqual([path.dirname(file)]);
+});
+
 it("refuses an unexpected agent SQLite store while allowing Codex's separate SQLite family", async () => {
   const { root, agentId } = await fixture();
   await fs.mkdir(path.join(root, `agents/${agentId}/agent/codex-home`));

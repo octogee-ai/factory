@@ -84,6 +84,20 @@ describe("listSqliteStores", () => {
     expect(await listSqliteStores(root)).toEqual([dbPath]);
   });
 
+  it("ignores openclaw doctor's retained pre-migration backups beside a store", async () => {
+    const dbPath = seedStore("chris", ["a"]);
+    const stamp = "pre-startup-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93";
+    const backupDir = path.join(agentDir("chris"), `openclaw-agent.sqlite.${stamp}.postgres.bak`);
+    fs.mkdirSync(backupDir);
+    for (const name of ["anchor.sqlite", "database.sqlite", "manifest.json"]) {
+      fs.writeFileSync(path.join(backupDir, name), Buffer.alloc(64));
+    }
+    fs.writeFileSync(path.join(agentDir("chris"), `openclaw-agent.sqlite.${stamp}.bak`), Buffer.alloc(64));
+    fs.writeFileSync(path.join(agentDir("chris"), `openclaw-agent.sqlite.${stamp}.scoped.bak`), Buffer.alloc(64));
+
+    expect(await listSqliteStores(root)).toEqual([dbPath]);
+  });
+
   it("returns nothing for a path that does not exist", async () => {
     expect(await listSqliteStores(path.join(root, "absent"))).toEqual([]);
   });
@@ -151,6 +165,7 @@ describe("SQLITE_CARRY_EXCLUDE_ARGS", () => {
       `--exclude=*.sqlite.memory-reindex-${uuid}*`,
       `--exclude=*.sqlite.backup-${uuid}*`,
       `--exclude=*.sqlite.tmp-${uuid}*`,
+      `--exclude=*.sqlite.pre-startup-migration-${uuid}*`,
     ]);
   });
 });

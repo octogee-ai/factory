@@ -42,6 +42,7 @@ export const SQLITE_VOLATILE_EXCLUDE_ARGS = [
   `--exclude=*${SQLITE_SUFFIX}.memory-reindex-${UUID_GLOB}*`,
   `--exclude=*${SQLITE_SUFFIX}.backup-${UUID_GLOB}*`,
   `--exclude=*${SQLITE_SUFFIX}.tmp-${UUID_GLOB}*`,
+  `--exclude=*${SQLITE_SUFFIX}.pre-startup-migration-${UUID_GLOB}*`,
 ];
 
 export const SQLITE_CARRY_EXCLUDE_ARGS = [
