@@ -95,14 +95,14 @@ var tr = A(() => {
 });
 
 // openclaw/packages/normalization-core/src/string-normalization.ts
-var at = A(() => {
+var $e = A(() => {
   B();
 });
 
 // openclaw/packages/gateway-protocol/src/connect-error-details.ts
 var M, yp, bp, Vt = A(() => {
   ae();
-  at();
+  $e();
   M = {
     AUTH_REQUIRED: "AUTH_REQUIRED",
     AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
@@ -196,7 +196,7 @@ function ct(e, t, n, o) {
 function ga(e, t) {
   return Math.max(1, Math.round(ct(e, t)));
 }
-function $e(e) {
+function qe(e) {
   let t = e === Number.POSITIVE_INFINITY ? 2147e6 : Number.isFinite(e) ? e : 0;
   return Math.min(Math.max(Math.round(t), 0), 2147e6);
 }
@@ -204,11 +204,11 @@ function ma(e, t) {
   return e === "full" ? "full" : typeof e == "number" && Number.isFinite(e) ? Math.min(Math.max(e, 0), 1) : t;
 }
 function ya(e = sr, t) {
-  let n = ga(t?.attempts, e.attempts), o = $e(
+  let n = ga(t?.attempts, e.attempts), o = qe(
     ct(t?.minDelayMs, e.minDelayMs, 0)
   ), r = Math.max(
     o,
-    $e(ct(t?.maxDelayMs, e.maxDelayMs, 0))
+    qe(ct(t?.maxDelayMs, e.maxDelayMs, 0))
   );
   return {
     attempts: n,
@@ -238,7 +238,7 @@ function Ra(e = {}) {
   return async function(i, s = 3, c = 300) {
     let u = [], p = typeof s == "number", g = typeof s == "number" ? { attempts: s } : s, f = ya(sr, g), m = f.attempts, l = f.minDelayMs, d = f.maxDelayMs > 0 ? f.maxDelayMs : Number.POSITIVE_INFINITY, y = g.retryAfterMaxDelayMs === void 0 ? d : Math.max(
       l,
-      $e(ct(g.retryAfterMaxDelayMs, d, 0))
+      qe(ct(g.retryAfterMaxDelayMs, d, 0))
     ), h = g.random ?? n, b = g.sleep ?? t, w = g.shouldRetry ?? (() => !0);
     for (let R = 1; R <= m; R += 1)
       try {
@@ -247,7 +247,7 @@ function Ra(e = {}) {
         if (u.push(S), R >= m || !w(S, R))
           break;
         if (p) {
-          await t($e(c * 2 ** (R - 1)));
+          await t(qe(c * 2 ** (R - 1)));
           continue;
         }
         let x = {
@@ -255,7 +255,7 @@ function Ra(e = {}) {
           maxAttempts: m,
           err: S,
           label: g.label
-        }, E = g.retryAfterMs?.(S), P = typeof E == "number" && Number.isFinite(E), _ = typeof g.delayMs == "function" ? g.delayMs(x) : g.delayMs, C = _ === void 0 ? void 0 : $e(_), O = P ? Math.max(E, l) : C === void 0 ? l * 2 ** (R - 1) : Math.max(C, l), I = P ? y : d, v = Math.min(O, I), z = P && (E ?? 0) <= I, V = f.jitter === "full" && !P || z;
+        }, E = g.retryAfterMs?.(S), P = typeof E == "number" && Number.isFinite(E), _ = typeof g.delayMs == "function" ? g.delayMs(x) : g.delayMs, C = _ === void 0 ? void 0 : qe(_), O = P ? Math.max(E, l) : C === void 0 ? l * 2 ** (R - 1) : Math.max(C, l), I = P ? y : d, v = Math.min(O, I), z = P && (E ?? 0) <= I, V = f.jitter === "full" && !P || z;
         v = ba(
           v,
           f.jitter,
@@ -291,13 +291,14 @@ var ar = A(() => {
 // openclaw/packages/gateway-client/src/protocol-client.ts
 var cr = A(() => {
   N();
+  $e();
   Yt();
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var Lp, lr = A(() => {
+var Bp, lr = A(() => {
   Vt();
-  Lp = /* @__PURE__ */ new Set([
+  Bp = /* @__PURE__ */ new Set([
     M.AUTH_TOKEN_MISSING,
     M.AUTH_BOOTSTRAP_TOKEN_INVALID,
     M.AUTH_PASSWORD_MISSING,
@@ -332,7 +333,7 @@ function fr(e, t) {
   let n = G(G(e)?.__openclaw);
   return pr(n?.seq) ?? pr(t?.messageSeq);
 }
-function qe(e) {
+function We(e) {
   let t = q(e);
   return t?.endsWith(":user") ? t.slice(0, -5) || null : t;
 }
@@ -340,7 +341,7 @@ function Zt(e, t) {
   let n = G(e), o = q(n?.role)?.toLowerCase();
   if (!n || !o)
     return null;
-  let r = G(n.__openclaw), i = q(r?.importedFrom), s = q(r?.cliSessionId), c = q(r?.externalId), u = G(r?.transcriptPosition), p = q(u?.source), f = !(p !== null && p.length <= 128 && typeof u?.rawSeq == "number" && Number.isSafeInteger(u.rawSeq) && u.rawSeq >= 0) && !!(i || s || c), m = q(r?.idempotencyKey) ?? q(n.idempotencyKey) ?? q(t?.idempotencyKey) ?? q(t?.clientRunId), l = qe(m), d = qe(t?.runId), y = qe(r?.runId), h = qe(
+  let r = G(n.__openclaw), i = q(r?.importedFrom), s = q(r?.cliSessionId), c = q(r?.externalId), u = G(r?.transcriptPosition), p = q(u?.source), f = !(p !== null && p.length <= 128 && typeof u?.rawSeq == "number" && Number.isSafeInteger(u.rawSeq) && u.rawSeq >= 0) && !!(i || s || c), m = q(r?.idempotencyKey) ?? q(n.idempotencyKey) ?? q(t?.idempotencyKey) ?? q(t?.clientRunId), l = We(m), d = We(t?.runId), y = We(r?.runId), h = We(
     G(n.openclawStreamFallback)?.runId
   ), b = q(r?.mirrorOrigin) !== null, w = o === "assistant" && q(n.api)?.toLowerCase() === "cli", R = w && l?.startsWith("cli-assistant:") ? q(l.slice(14)) : l, S = o === "assistant" ? y ?? d ?? h ?? (w || !b ? R : null) : y ?? R ?? d;
   return {
@@ -387,7 +388,7 @@ var yr = A(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/client-info.ts
-var xa, Ea, cf, lf, br = A(() => {
+var xa, Ea, uf, df, br = A(() => {
   B();
   xa = {
     WEBCHAT_UI: "webchat-ui",
@@ -417,7 +418,7 @@ var xa, Ea, cf, lf, br = A(() => {
     WORKER: "worker",
     PROBE: "probe",
     TEST: "test"
-  }, cf = new Set(Object.values(xa)), lf = new Set(Object.values(Ea));
+  }, uf = new Set(Object.values(xa)), df = new Set(Object.values(Ea));
 });
 
 // openclaw/packages/gateway-protocol/src/session-row-deltas.ts
@@ -458,7 +459,7 @@ var Er = A(() => {
 });
 
 // openclaw/packages/normalization-core/src/cjk-chars.ts
-var Qt, Of, Nf, Tr = A(() => {
+var Qt, Uf, Lf, Tr = A(() => {
   Qt = [
     [
       [183, 183],
@@ -498,12 +499,12 @@ var Qt, Of, Nf, Tr = A(() => {
       [131072, 195103],
       [196608, 210047]
     ]
-  ], Of = new RegExp(
+  ], Uf = new RegExp(
     `[${Qt.flatMap(
       (e) => e.map(([t, n]) => `\\u{${t.toString(16)}}-\\u{${n.toString(16)}}`)
     ).join("")}]`,
     "u"
-  ), Nf = (() => {
+  ), Lf = (() => {
     let e = Math.max(
       ...Qt.flatMap((n) => n.map(([, o]) => o))
     ), t = new Uint8Array(e + 1);
@@ -584,7 +585,7 @@ function Or(e, t, n) {
   }
   return e.slice(r, i);
 }
-function We(e, t) {
+function je(e, t) {
   let n = Math.max(0, Math.floor(t));
   return e.length <= n ? e : Or(e, 0, n);
 }
@@ -606,7 +607,7 @@ var X = A(() => {
   Ir();
   ur();
   B();
-  at();
+  $e();
   Pr();
   Oe();
 });
@@ -628,8 +629,8 @@ var Lr = A(() => {
 });
 
 // openclaw/packages/acp-core/src/structured-auth-redaction.ts
-var ut, ue, Ne, Ue, ce, le, dt, Se, F, fh, hh, Fr = A(() => {
-  ut = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ue = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, Ne = String.raw`\\{1,64}t`, Ue = String.raw`(?:[ \t]+|${Ne})`, ce = String.raw`(?:[ \t]*\r?\n${Ue}|[ \t]*\\{1,64}r\\{1,64}n${Ue}|[ \t]*\\{1,64}n${Ue}|[ \t]*${Ne}[ \t]*|[ \t]*)`, le = String.raw`(?:[ \t]*\r?\n${Ue}|[ \t]*\\{1,64}r\\{1,64}n${Ue}|[ \t]*\\{1,64}n${Ue}|[ \t]*${Ne}[ \t]*|[ \t]+)`, dt = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${Ne})|[ \t]*\\{1,64}n(?:[ \t]*|${Ne})|[ \t]*${Ne}[ \t]*)`, Se = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, F = String.raw`(?:\\{1,64}["']|["']|)`, fh = String.raw`${Se}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${F}[ \t]*[:=]${ce}${F}([^\s\\"',;]+)`, hh = new RegExp(
+var ut, ue, Ne, Ue, ce, le, dt, Se, F, gh, mh, Fr = A(() => {
+  ut = "[A-Za-z0-9!#$%&'*+.^_`|~-]+", ue = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`, Ne = String.raw`\\{1,64}t`, Ue = String.raw`(?:[ \t]+|${Ne})`, ce = String.raw`(?:[ \t]*\r?\n${Ue}|[ \t]*\\{1,64}r\\{1,64}n${Ue}|[ \t]*\\{1,64}n${Ue}|[ \t]*${Ne}[ \t]*|[ \t]*)`, le = String.raw`(?:[ \t]*\r?\n${Ue}|[ \t]*\\{1,64}r\\{1,64}n${Ue}|[ \t]*\\{1,64}n${Ue}|[ \t]*${Ne}[ \t]*|[ \t]+)`, dt = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${Ne})|[ \t]*\\{1,64}n(?:[ \t]*|${Ne})|[ \t]*${Ne}[ \t]*)`, Se = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`, F = String.raw`(?:\\{1,64}["']|["']|)`, gh = String.raw`${Se}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${F}[ \t]*[:=]${ce}${F}([^\s\\"',;]+)`, mh = new RegExp(
     String.raw`${Se}(?:Proxy-)?Authorization${F}[ \t]*[:=]${ce}${F}(${ut})${le}`,
     "giu"
   );
@@ -739,10 +740,10 @@ function* Xa(e) {
 ` || s === "\r" ? o = !1 : (s === "=" || s === ":" && !Ja.test(e[r + 1] ?? " ")) && (o = !0);
   }
 }
-var $r, Le, ka, ft, Aa, Ca, qr, an, Wr, _a, jr, Hr, wh, va, Ia, Pa, Da, Ma, Oa, Na, Ua, La, Fa, Ba, Ga, Ha, za, $a, xe, pt, Kr, qa, Wa, ja, Va, Ya, zr, Za, Ja, Qa, ec, tc, Yr, Zr, ht, nc, rc, oc, ic, sc, ac, cc, lc, uc, dc, pc, Jr, Xr = A(() => {
+var $r, Le, ka, ft, Aa, Ca, qr, an, Wr, _a, jr, Hr, Sh, va, Ia, Pa, Da, Ma, Oa, Na, Ua, La, Fa, Ba, Ga, Ha, za, $a, xe, pt, Kr, qa, Wa, ja, Va, Ya, zr, Za, Ja, Qa, ec, tc, Yr, Zr, ht, nc, rc, oc, ic, sc, ac, cc, lc, uc, dc, pc, Jr, Xr = A(() => {
   Fr();
   Gr();
-  $r = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, Le = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, ka = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, ft = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, Aa = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${ft}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, Ca = String.raw`${Aa}|app[-_]?secret|credential|${Le}`, qr = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${Le}`, an = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${Le}`, Wr = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${Le}`, _a = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, jr = String.raw`password|passphrase|pass|passwd`, Hr = String.raw`${ft}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${Le}`, wh = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, va = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${$r})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, Ia = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${$r})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, Pa = String.raw`(^|[\s,;({\["])(?:${qr})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, Da = String.raw`(^|[\s,;({\["])(?:${qr})=(["'\x60]?[^\s&#"'\x60<>]+)`, Ma = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${Le}`, Oa = String.raw`/(^|[\s,{])(?:(?:${Ma})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${jr})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${an})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, Na = String.raw`/(^|[\s,{])(?:(?:${Wr})\s*:\s*|(?:${an})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, Ua = String.raw`/(^|[\s,{])(?:${_a})=([^\s#"'\x60<>]+)/g`, La = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${jr})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, Fa = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${an})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, Ba = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${ft}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, Ga = String.raw`"(?:${ka})"\s*:\s*"([^"]+)"`, Ha = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, za = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, $a = String.raw`(^|[^A-Za-z0-9])`, xe = (e) => String.raw`${$a}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, pt = String.raw`(^|[^A-Za-z0-9_])`;
+  $r = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`, Le = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`, ka = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`, ft = String.raw`aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey`, Aa = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|apikey|client[-_]?secret|app[-_]?secret|private[-_]?key|${ft}|credential|authorization|token|key|secret|password|pass|passwd|auth|jwt|session|code|signature|x[-_]?amz[-_]?(?:signature|security[-_]?token)`, Ca = String.raw`${Aa}|app[-_]?secret|credential|${Le}`, qr = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${Le}`, an = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${Le}`, Wr = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${Le}`, _a = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`, jr = String.raw`password|passphrase|pass|passwd`, Hr = String.raw`${ft}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${Le}`, Sh = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`, va = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${$r})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`, Ia = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${$r})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`, Pa = String.raw`(^|[\s,;({\["])(?:${qr})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`, Da = String.raw`(^|[\s,;({\["])(?:${qr})=(["'\x60]?[^\s&#"'\x60<>]+)`, Ma = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${Le}`, Oa = String.raw`/(^|[\s,{])(?:(?:${Ma})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${jr})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${an})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`, Na = String.raw`/(^|[\s,{])(?:(?:${Wr})\s*:\s*|(?:${an})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`, Ua = String.raw`/(^|[\s,{])(?:${_a})=([^\s#"'\x60<>]+)/g`, La = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${jr})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, Fa = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${an})\s*[:=]\s*([^\s#"'\x60<>]+)/g`, Ba = String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|${ft}|credential|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material)"\s*:\s*"([^"]+)"`, Ga = String.raw`"(?:${ka})"\s*:\s*"([^"]+)"`, Ha = String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, za = String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`, $a = String.raw`(^|[^A-Za-z0-9])`, xe = (e) => String.raw`${$a}(?=${e})(?<!;base64,[A-Za-z0-9+/=]*)(${e})`, pt = String.raw`(^|[^A-Za-z0-9_])`;
   Kr = /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
   qa = /\s/, Wa = /[A-Za-z0-9+.-]/, ja = /[A-Za-z]/;
   Va = Object.freeze({
@@ -892,12 +893,12 @@ var $r, Le, ka, ft, Aa, Ca, qr, an, Wr, _a, jr, Hr, wh, va, Ia, Pa, Da, Ma, Oa, 
 });
 
 // openclaw/ui/src/lib/browser-redact.ts
-var _h, Qr = A(() => {
+var Ih, Qr = A(() => {
   Nr();
   Oe();
   Lr();
   Xr();
-  _h = Jr.map(
+  Ih = Jr.map(
     (e) => typeof e == "string" ? new RegExp(...Ur(e)) : e
   );
 });
@@ -909,7 +910,7 @@ var gt = A(() => {
 });
 
 // openclaw/node_modules/.pnpm/@noble+ed25519@3.2.0/node_modules/@noble/ed25519/index.js
-var so, Fe, ln, mt, un, dn, yt, hc, gc, to, bt, mc, ao, co, lo, yc, Ee, H, no, T, bc, cn, uo, ke, je, Te, wc, Rc, te, Sc, ro, xc, pn, Ec, oo, io, Tc, po = A(() => {
+var so, Fe, ln, mt, un, dn, yt, hc, gc, to, bt, mc, ao, co, lo, yc, Ee, H, no, T, bc, cn, uo, ke, Ke, Te, wc, Rc, te, Sc, ro, xc, pn, Ec, oo, io, Tc, po = A(() => {
   so = Object.freeze, Fe = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn, ln = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn, mt = 0x52036cee2b6ffe738cc740797779e89800700a4d4141d8ab75eb4dca135978a3n, un = 0x216936d3cd6e53fec0a4e231fdd6dc5c692cc7609525a7b2c9562d608f25d51an, dn = 0x6666666666666666666666666666666666666666666666666666666666666658n, yt = Fe - 1n, hc = so({
     p: Fe,
     n: ln,
@@ -1069,9 +1070,9 @@ var so, Fe, ln, mt, un, dn, yt, hc, gc, to, bt, mc, ao, co, lo, yc, Ee, H, no, T
         return Te;
       if (t === 1n)
         return this;
-      if (this.equals(je))
+      if (this.equals(Ke))
         return Tc(t).p;
-      let o = Te, r = je, i = this;
+      let o = Te, r = Ke, i = this;
       for (let s = 0; n ? s < 256 : t > 0n; s++)
         t & 1n ? o = o.add(i) : n && (r = r.add(i)), i = i.double(), t >>= 1n;
       return o;
@@ -1105,8 +1106,8 @@ var so, Fe, ln, mt, un, dn, yt, hc, gc, to, bt, mc, ao, co, lo, yc, Ee, H, no, T
     isTorsionFree() {
       return this.multiply(ln / 2n, !1).double().add(this).is0();
     }
-  }, je = new ke(un, dn, 1n, H(un * dn)), Te = new ke(0n, 1n, 1n, 0n);
-  ke.BASE = je;
+  }, Ke = new ke(un, dn, 1n, H(un * dn)), Te = new ke(0n, 1n, 1n, 0n);
+  ke.BASE = Ke;
   ke.ZERO = Te;
   wc = (e) => lo(ao(Ee(e, 0n, uo), 64)).reverse(), Rc = (e) => BigInt("0x" + co(Uint8Array.from(bt(e)).reverse())), te = (e, t) => {
     let n = e;
@@ -1128,7 +1129,7 @@ var so, Fe, ln, mt, un, dn, yt, hc, gc, to, bt, mc, ao, co, lo, yc, Ee, H, no, T
     },
     sha512: void 0
   }, Ec = () => {
-    let e = [], t = je, n;
+    let e = [], t = Ke, n;
     for (let o = 0; o < 33; o++) {
       n = t, e.push(n);
       for (let r = 1; r < 128; r++)
@@ -1140,7 +1141,7 @@ var so, Fe, ln, mt, un, dn, yt, hc, gc, to, bt, mc, ao, co, lo, yc, Ee, H, no, T
     let n = t.negate();
     return e ? n : t;
   }, Tc = (e) => {
-    let t = oo || (oo = Ec()), n = Te, o = je;
+    let t = oo || (oo = Ec()), n = Te, o = Ke;
     for (let r = 0; r < 33; r++) {
       let i = Number(e & 255n);
       e >>= 8n, i > 128 && (i -= 256, e += 1n);
@@ -1160,7 +1161,7 @@ var fo, kc, ho = A(() => {
 
 // openclaw/src/shared/device-auth.ts
 var fn = A(() => {
-  at();
+  $e();
 });
 
 // openclaw/ui/src/local-storage.ts
@@ -1191,10 +1192,10 @@ function ne(e, t, n, o) {
   let r = (t >>> 0) + (o >>> 0);
   return { h: e + n + (r / 2 ** 32 | 0) | 0, l: r | 0 };
 }
-var wt, yo, Cc, _c, hn, gn, Ae, Ce, Ke, Ve, Ro, So, xo, Eo, To, ko, mn = A(() => {
+var wt, yo, Cc, _c, hn, gn, Ae, Ce, Ve, Ye, Ro, So, xo, Eo, To, ko, mn = A(() => {
   wt = BigInt(4294967295), yo = /* @__PURE__ */ BigInt(32);
   Cc = (e) => e / 2 ** 32 | 0, _c = (e) => e >>> 0;
-  hn = (e, t, n) => e >>> n, gn = (e, t, n) => e << 32 - n | t >>> n, Ae = (e, t, n) => e >>> n | t << 32 - n, Ce = (e, t, n) => e << 32 - n | t >>> n, Ke = (e, t, n) => e << 64 - n | t >>> n - 32, Ve = (e, t, n) => e >>> n - 32 | t << 64 - n;
+  hn = (e, t, n) => e >>> n, gn = (e, t, n) => e << 32 - n | t >>> n, Ae = (e, t, n) => e >>> n | t << 32 - n, Ce = (e, t, n) => e << 32 - n | t >>> n, Ve = (e, t, n) => e << 64 - n | t >>> n - 32, Ye = (e, t, n) => e >>> n - 32 | t << 64 - n;
   Ro = (e, t, n) => (e >>> 0) + (t >>> 0) + (n >>> 0), So = (e, t, n, o) => t + n + o + (e / 2 ** 32 | 0) | 0, xo = (e, t, n, o) => (e >>> 0) + (t >>> 0) + (n >>> 0) + (o >>> 0), Eo = (e, t, n, o, r) => t + n + o + r + (e / 2 ** 32 | 0) | 0, To = (e, t, n, o, r) => (e >>> 0) + (t >>> 0) + (n >>> 0) + (o >>> 0) + (r >>> 0), ko = (e, t, n, o, r, i) => t + n + o + r + i + (e / 2 ** 32 | 0) | 0;
 });
 
@@ -1228,7 +1229,7 @@ function _o(e, t) {
   if (!(e.length >= n))
     throw new RangeError('"output" expected length >= ' + n);
 }
-function Ye(...e) {
+function Ze(...e) {
   for (let t = 0; t < e.length; t++)
     e[t].fill(0);
 }
@@ -1275,10 +1276,10 @@ function vo(e, t, n) {
 function Io(e, t, n) {
   return e & t ^ e & n ^ t & n;
 }
-var Ze, Po, Do, Mo, Oo, No = A(() => {
+var Je, Po, Do, Mo, Oo, No = A(() => {
   mn();
   Rn();
-  Ze = class {
+  Je = class {
     blockLen;
     outputLen;
     canXOF = !1;
@@ -1473,7 +1474,7 @@ var Mc, de, St, xt, Et, Uo, Oc, Nc, pe, fe, Be, Tt, kt, Uc, Lc, At, Ct, Fc, Bc, 
     2756734187,
     3204031479,
     3329325298
-  ]), de = /* @__PURE__ */ new Uint32Array(64), St = class extends Ze {
+  ]), de = /* @__PURE__ */ new Uint32Array(64), St = class extends Je {
     // We cannot use array here since array allows indexing by variable
     // which means optimizer/compiler cannot use registers.
     // Numeric initializers matter: starting the fields as `undefined` changes
@@ -1515,10 +1516,10 @@ var Mc, de, St, xt, Et, Uo, Oc, Nc, pe, fe, Be, Tt, kt, Uc, Lc, At, Ct, Fc, Bc, 
       o = o + this.A | 0, r = r + this.B | 0, i = i + this.C | 0, s = s + this.D | 0, c = c + this.E | 0, u = u + this.F | 0, p = p + this.G | 0, g = g + this.H | 0, this.set(o, r, i, s, c, u, p, g);
     }
     roundClean() {
-      Ye(de);
+      Ze(de);
     }
     destroy() {
-      this.destroyed = !0, this.set(0, 0, 0, 0, 0, 0, 0, 0), Ye(this.buffer);
+      this.destroyed = !0, this.set(0, 0, 0, 0, 0, 0, 0, 0), Ze(this.buffer);
     }
   }, xt = class extends St {
     constructor() {
@@ -1609,7 +1610,7 @@ var Mc, de, St, xt, Et, Uo, Oc, Nc, pe, fe, Be, Tt, kt, Uc, Lc, At, Ct, Fc, Bc, 
     "0x597f299cfc657e2a",
     "0x5fcb6fab3ad6faec",
     "0x6c44198c4a475817"
-  ].map((e) => BigInt(e))), Oc = Uo[0], Nc = Uo[1], pe = /* @__PURE__ */ new Uint32Array(80), fe = /* @__PURE__ */ new Uint32Array(80), Be = class extends Ze {
+  ].map((e) => BigInt(e))), Oc = Uo[0], Nc = Uo[1], pe = /* @__PURE__ */ new Uint32Array(80), fe = /* @__PURE__ */ new Uint32Array(80), Be = class extends Je {
     // We cannot use array here since array allows indexing by variable
     // which means optimizer/compiler cannot use registers.
     // h -- high 32 bits, l -- low 32 bits
@@ -1650,12 +1651,12 @@ var Mc, de, St, xt, Et, Uo, Oc, Nc, pe, fe, Be, Tt, kt, Uc, Lc, At, Ct, Fc, Bc, 
       for (let R = 0; R < 16; R++, n += 4)
         pe[R] = t.getUint32(n), fe[R] = t.getUint32(n += 4);
       for (let R = 16; R < 80; R++) {
-        let S = pe[R - 15] | 0, x = fe[R - 15] | 0, E = Ae(S, x, 1) ^ Ae(S, x, 8) ^ hn(S, x, 7), P = Ce(S, x, 1) ^ Ce(S, x, 8) ^ gn(S, x, 7), _ = pe[R - 2] | 0, C = fe[R - 2] | 0, O = Ae(_, C, 19) ^ Ke(_, C, 61) ^ hn(_, C, 6), I = Ce(_, C, 19) ^ Ve(_, C, 61) ^ gn(_, C, 6), v = xo(P, I, fe[R - 7], fe[R - 16]), z = Eo(v, E, O, pe[R - 7], pe[R - 16]);
+        let S = pe[R - 15] | 0, x = fe[R - 15] | 0, E = Ae(S, x, 1) ^ Ae(S, x, 8) ^ hn(S, x, 7), P = Ce(S, x, 1) ^ Ce(S, x, 8) ^ gn(S, x, 7), _ = pe[R - 2] | 0, C = fe[R - 2] | 0, O = Ae(_, C, 19) ^ Ve(_, C, 61) ^ hn(_, C, 6), I = Ce(_, C, 19) ^ Ye(_, C, 61) ^ gn(_, C, 6), v = xo(P, I, fe[R - 7], fe[R - 16]), z = Eo(v, E, O, pe[R - 7], pe[R - 16]);
         pe[R] = z | 0, fe[R] = v | 0;
       }
       let { Ah: o, Al: r, Bh: i, Bl: s, Ch: c, Cl: u, Dh: p, Dl: g, Eh: f, El: m, Fh: l, Fl: d, Gh: y, Gl: h, Hh: b, Hl: w } = this;
       for (let R = 0; R < 80; R++) {
-        let S = Ae(f, m, 14) ^ Ae(f, m, 18) ^ Ke(f, m, 41), x = Ce(f, m, 14) ^ Ce(f, m, 18) ^ Ve(f, m, 41), E = f & l ^ ~f & y, P = m & d ^ ~m & h, _ = To(w, x, P, Nc[R], fe[R]), C = ko(_, b, S, E, Oc[R], pe[R]), O = _ | 0, I = Ae(o, r, 28) ^ Ke(o, r, 34) ^ Ke(o, r, 39), v = Ce(o, r, 28) ^ Ve(o, r, 34) ^ Ve(o, r, 39), z = o & i ^ o & c ^ i & c, V = r & s ^ r & u ^ s & u;
+        let S = Ae(f, m, 14) ^ Ae(f, m, 18) ^ Ve(f, m, 41), x = Ce(f, m, 14) ^ Ce(f, m, 18) ^ Ye(f, m, 41), E = f & l ^ ~f & y, P = m & d ^ ~m & h, _ = To(w, x, P, Nc[R], fe[R]), C = ko(_, b, S, E, Oc[R], pe[R]), O = _ | 0, I = Ae(o, r, 28) ^ Ve(o, r, 34) ^ Ve(o, r, 39), v = Ce(o, r, 28) ^ Ye(o, r, 34) ^ Ye(o, r, 39), z = o & i ^ o & c ^ i & c, V = r & s ^ r & u ^ s & u;
         b = y | 0, w = h | 0, y = l | 0, h = d | 0, l = f | 0, d = m | 0, { h: f, l: m } = ne(p | 0, g | 0, C | 0, O | 0), p = c | 0, g = u | 0, c = i | 0, u = s | 0, i = o | 0, s = r | 0;
         let j = Ro(O, v, V);
         o = So(j, C, I, z), r = j | 0;
@@ -1663,10 +1664,10 @@ var Mc, de, St, xt, Et, Uo, Oc, Nc, pe, fe, Be, Tt, kt, Uc, Lc, At, Ct, Fc, Bc, 
       ({ h: o, l: r } = ne(this.Ah | 0, this.Al | 0, o | 0, r | 0)), { h: i, l: s } = ne(this.Bh | 0, this.Bl | 0, i | 0, s | 0), { h: c, l: u } = ne(this.Ch | 0, this.Cl | 0, c | 0, u | 0), { h: p, l: g } = ne(this.Dh | 0, this.Dl | 0, p | 0, g | 0), { h: f, l: m } = ne(this.Eh | 0, this.El | 0, f | 0, m | 0), { h: l, l: d } = ne(this.Fh | 0, this.Fl | 0, l | 0, d | 0), { h: y, l: h } = ne(this.Gh | 0, this.Gl | 0, y | 0, h | 0), { h: b, l: w } = ne(this.Hh | 0, this.Hl | 0, b | 0, w | 0), this.set(o, r, i, s, c, u, p, g, f, m, l, d, y, h, b, w);
     }
     roundClean() {
-      Ye(pe, fe);
+      Ze(pe, fe);
     }
     destroy() {
-      this.destroyed = !0, Ye(this.buffer), this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+      this.destroyed = !0, Ze(this.buffer), this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
   }, Tt = class extends Be {
     constructor() {
@@ -1752,7 +1753,7 @@ var jc, Bo, Sn = A(() => {
 });
 
 // openclaw/node_modules/.pnpm/punycode.js@2.3.1/node_modules/punycode.js/punycode.js
-var Gi = Jn((Yw, Bi) => {
+var Gi = Jn((Jw, Bi) => {
   "use strict";
   var Vl = /^xn--/, Yl = /[^\0-\x7F]/, Zl = /[\x2E\u3002\uFF0E\uFF61]/g, Jl = {
     overflow: "Overflow: input needs wider integers to process",
@@ -2483,7 +2484,7 @@ var _t = [
   "operator.read",
   "operator.talk.secrets",
   "operator.write"
-], hm = new Set(_t), xn = [
+], mm = new Set(_t), xn = [
   "operator.admin",
   "operator.approvals",
   "operator.pairing",
@@ -2491,23 +2492,23 @@ var _t = [
   "operator.read",
   "operator.talk.secrets",
   "operator.write"
-], gm = new Set(
+], ym = new Set(
   xn
 ), $o = [
   "operator.admin",
   ..._t
-], mm = new Set($o);
-var ym = {
+], bm = new Set($o);
+var wm = {
   // QR/setup-code bootstrap must hand off both tokens for native onboarding:
   // iOS/Android suppress the operator loop while bootstrap auth is active and
   // only start it after persisting this bounded operator token.
   roles: ["node", "operator"],
   scopes: [..._t]
-}, bm = {
+}, Rm = {
   roles: ["operator"],
   scopes: [...xn],
   purpose: "control-ui-owner"
-}, wm = {
+}, Sm = {
   roles: ["node", "operator"],
   scopes: [...$o],
   purpose: "mobile-full"
@@ -2528,7 +2529,7 @@ var qo = {
   working: "Working\u2026",
   ready: "Ready to chat",
   help: "Help",
-  getHelp: "Get help",
+  getHelp: "Get support",
   getApps: "Get the apps",
   discord: "Discord community",
   viewChangelog: "View changelog"
@@ -2541,7 +2542,7 @@ var qo = {
 };
 
 // openclaw/ui/src/i18n/locales/en.ts
-var Je = {
+var Xe = {
   pluginUi: {
     sessionRecentMessages: "Recent messages",
     sessionHistoryUnavailable: "Session history could not be loaded. Try again.",
@@ -3116,6 +3117,7 @@ Delete without a snapshot?`
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
     deleteSessionsStale: "Gateway connection replaced before {count} sessions were deleted. Try again.",
     groupMenu: "Group options for {group}",
+    groupOptions: "Group options",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level"
@@ -3436,7 +3438,7 @@ Delete without a snapshot?`
       menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
       setPrimary: "Set as primary\u2026",
-      openSettings: "Gateway settings\u2026",
+      openSettings: "Gateway settings",
       connected: "Connected",
       unreachable: "Unreachable",
       unknown: "Unknown status"
@@ -3851,6 +3853,7 @@ Delete without a snapshot?`
     linksLabel: "Community and resources",
     linkWebsite: "Website",
     linkDocs: "Docs",
+    linkSupport: "Support",
     linkGitHub: "GitHub",
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
@@ -4852,8 +4855,9 @@ Delete without a snapshot?`
       tooLargeToast: "File too large. Try a smaller file.",
       openOriginal: "Open original",
       compressToFit: "Compress to fit",
+      retryCompression: "Retry compression",
       compressionHint: "Video is too large. Compress a copy on this device; the original stays unchanged.",
-      compressing: "Compressing\u2026 {progress}%",
+      compressing: "Compressing \xB7 {progress}%",
       compressionUnsupported: "This browser cannot compress this video.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",
       compressionFailed: "Could not compress video. Try again.",
@@ -5156,7 +5160,7 @@ var Ko = {
 }, Vo = Object.assign(
   () => {
     let { errors: e, annotatePrompt: t, ...n } = Ko.browser;
-    Object.assign(Je.browser, n), Object.assign(Je.browser.errors, e), Object.assign(Je.browser.annotatePrompt, t);
+    Object.assign(Xe.browser, n), Object.assign(Xe.browser.errors, e), Object.assign(Xe.browser.annotatePrompt, t);
   },
   { catalog: Ko }
 );
@@ -5252,7 +5256,7 @@ var Jo = [
   "mm:thinking",
   "mm:thought",
   "mm:reasoning"
-], $y = new Set(Jo);
+], Wy = new Set(Jo);
 
 // openclaw/src/chat/canvas-render.ts
 function nl(e) {
@@ -5404,13 +5408,13 @@ var ll = "Delivery: Final assistant text is not automatically delivered in this 
 var Dt = "\u27E6openclaw:ctx\u27E7";
 
 // openclaw/src/auto-reply/reply/strip-inbound-meta.ts
-var Tb = `Context: ${Dt}`, dl = "Context:";
-var kb = [
+var Ab = `Context: ${Dt}`, dl = "Context:";
+var Cb = [
   "[",
   Dt,
   ...Pt,
   dl
-], Ab = new RegExp(
+], _b = new RegExp(
   [Dt, ...Pt].map(Ie).join("|"),
   "g"
 );
@@ -5428,7 +5432,7 @@ N();
 // openclaw/src/agents/internal-runtime-context.ts
 var hl = ai, gl = ci;
 var di = "This context is runtime-generated, not user-authored. Keep internal details private.";
-var Yb = ["OpenClaw runtime context (internal):", di, ""].join(`
+var Jb = ["OpenClaw runtime context (internal):", di, ""].join(`
 `) + `
 `;
 function Mt(e) {
@@ -5437,7 +5441,7 @@ function Mt(e) {
     pattern: new RegExp(`(?:^|\\r?\\n)[ \\t]*${Ie(e)}[ \\t]*(?=\\r?\\n|$)`, "g")
   };
 }
-var Zb = Mt(hl), Jb = Mt(gl), Xb = Mt(li), Qb = Mt(ui);
+var Xb = Mt(hl), Qb = Mt(gl), ew = Mt(li), tw = Mt(ui);
 var ml = [
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
@@ -5449,7 +5453,7 @@ var ml = [
   }).map((e) => e.split(/\s+/).map(Ie).join("\\s+")).join("|")
 ), bl = new RegExp(
   di.split(/\s+/).map(Ie).join("\\s+")
-), ew = new RegExp(
+), nw = new RegExp(
   `^[ \\t]*(?:${yl.source})\\s+${bl.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm"
 );
@@ -5469,10 +5473,10 @@ X();
 // openclaw/node_modules/.pnpm/mdurl@2.1.0/node_modules/mdurl/index.mjs
 var An = {};
 jt(An, {
-  decode: () => Xe,
+  decode: () => Qe,
   encode: () => he,
   format: () => He,
-  parse: () => Qe
+  parse: () => et
 });
 
 // openclaw/node_modules/.pnpm/mdurl@2.1.0/node_modules/mdurl/lib/decode.mjs
@@ -5534,7 +5538,7 @@ function Ot(e, t) {
 }
 Ot.defaultChars = ";/?:@&=+$,#";
 Ot.componentChars = "";
-var Xe = Ot;
+var Qe = Ot;
 
 // openclaw/node_modules/.pnpm/mdurl@2.1.0/node_modules/mdurl/lib/encode.mjs
 var fi = {};
@@ -5661,7 +5665,7 @@ Ut.prototype.parseHost = function(e) {
   let t = El.exec(e);
   t && (t = t[0], t !== ":" && (this.port = t.substr(1)), e = e.substr(0, e.length - t.length)), e && (this.hostname = e);
 };
-var Qe = Il;
+var et = Il;
 
 // openclaw/node_modules/.pnpm/uc.micro@3.0.0/node_modules/uc.micro/build/index.mjs
 var Pn = {};
@@ -5669,11 +5673,11 @@ jt(Pn, {
   Any: () => Cn,
   Cc: () => _n,
   Cf: () => Pl,
-  P: () => et,
+  P: () => tt,
   S: () => vn,
   Z: () => In
 });
-var Cn = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, _n = /[\0-\x1F\x7F-\x9F]/, Pl = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, et = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, vn = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, In = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
+var Cn = /[\0-\uD7FF\uE000-\uFFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/, _n = /[\0-\x1F\x7F-\x9F]/, Pl = /[\xAD\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|\uD804[\uDCBD\uDCCD]|\uD80D[\uDC30-\uDC3F]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|\uDB40[\uDC01\uDC20-\uDC7F]/, tt = /[!-#%-\*,-\/:;\?@\[-\]_\{\}\xA1\xA7\xAB\xB6\xB7\xBB\xBF\u037E\u0387\u055A-\u055F\u0589\u058A\u05BE\u05C0\u05C3\u05C6\u05F3\u05F4\u0609\u060A\u060C\u060D\u061B\u061D-\u061F\u066A-\u066D\u06D4\u0700-\u070D\u07F7-\u07F9\u0830-\u083E\u085E\u0964\u0965\u0970\u09FD\u0A76\u0AF0\u0C77\u0C84\u0DF4\u0E4F\u0E5A\u0E5B\u0F04-\u0F12\u0F14\u0F3A-\u0F3D\u0F85\u0FD0-\u0FD4\u0FD9\u0FDA\u104A-\u104F\u10FB\u1360-\u1368\u1400\u166E\u169B\u169C\u16EB-\u16ED\u1735\u1736\u17D4-\u17D6\u17D8-\u17DA\u1800-\u180A\u1944\u1945\u1A1E\u1A1F\u1AA0-\u1AA6\u1AA8-\u1AAD\u1B4E\u1B4F\u1B5A-\u1B60\u1B7D-\u1B7F\u1BFC-\u1BFF\u1C3B-\u1C3F\u1C7E\u1C7F\u1CC0-\u1CC7\u1CD3\u2010-\u2027\u2030-\u2043\u2045-\u2051\u2053-\u205E\u207D\u207E\u208D\u208E\u2308-\u230B\u2329\u232A\u2768-\u2775\u27C5\u27C6\u27E6-\u27EF\u2983-\u2998\u29D8-\u29DB\u29FC\u29FD\u2CF9-\u2CFC\u2CFE\u2CFF\u2D70\u2E00-\u2E2E\u2E30-\u2E4F\u2E52-\u2E5D\u3001-\u3003\u3008-\u3011\u3014-\u301F\u3030\u303D\u30A0\u30FB\uA4FE\uA4FF\uA60D-\uA60F\uA673\uA67E\uA6F2-\uA6F7\uA874-\uA877\uA8CE\uA8CF\uA8F8-\uA8FA\uA8FC\uA92E\uA92F\uA95F\uA9C1-\uA9CD\uA9DE\uA9DF\uAA5C-\uAA5F\uAADE\uAADF\uAAF0\uAAF1\uABEB\uFD3E\uFD3F\uFE10-\uFE19\uFE30-\uFE52\uFE54-\uFE61\uFE63\uFE68\uFE6A\uFE6B\uFF01-\uFF03\uFF05-\uFF0A\uFF0C-\uFF0F\uFF1A\uFF1B\uFF1F\uFF20\uFF3B-\uFF3D\uFF3F\uFF5B\uFF5D\uFF5F-\uFF65]|\uD800[\uDD00-\uDD02\uDF9F\uDFD0]|\uD801\uDD6F|\uD802[\uDC57\uDD1F\uDD3F\uDE50-\uDE58\uDE7F\uDEF0-\uDEF6\uDF39-\uDF3F\uDF99-\uDF9C]|\uD803[\uDD6E\uDEAD\uDED0\uDF55-\uDF59\uDF86-\uDF89]|\uD804[\uDC47-\uDC4D\uDCBB\uDCBC\uDCBE-\uDCC1\uDD40-\uDD43\uDD74\uDD75\uDDC5-\uDDC8\uDDCD\uDDDB\uDDDD-\uDDDF\uDE38-\uDE3D\uDEA9\uDFD4\uDFD5\uDFD7\uDFD8]|\uD805[\uDC4B-\uDC4F\uDC5A\uDC5B\uDC5D\uDCC6\uDDC1-\uDDD7\uDE41-\uDE43\uDE60-\uDE6C\uDEB9\uDF3C-\uDF3E]|\uD806[\uDC3B\uDD44-\uDD46\uDDE2\uDE3F-\uDE46\uDE9A-\uDE9C\uDE9E-\uDEA2\uDF00-\uDF09\uDFE1]|\uD807[\uDC41-\uDC45\uDC70\uDC71\uDEF7\uDEF8\uDF43-\uDF4F\uDFFF]|\uD809[\uDC70-\uDC74]|\uD80B[\uDFF1\uDFF2]|\uD81A[\uDE6E\uDE6F\uDEF5\uDF37-\uDF3B\uDF44]|\uD81B[\uDD6D-\uDD6F\uDE97-\uDE9A\uDFE2]|\uD82F\uDC9F|\uD836[\uDE87-\uDE8B]|\uD839\uDDFF|\uD83A[\uDD5E\uDD5F]/, vn = /[\$\+<->\^`\|~\xA2-\xA6\xA8\xA9\xAC\xAE-\xB1\xB4\xB8\xD7\xF7\u02C2-\u02C5\u02D2-\u02DF\u02E5-\u02EB\u02ED\u02EF-\u02FF\u0375\u0384\u0385\u03F6\u0482\u058D-\u058F\u0606-\u0608\u060B\u060E\u060F\u06DE\u06E9\u06FD\u06FE\u07F6\u07FE\u07FF\u0888\u09F2\u09F3\u09FA\u09FB\u0AF1\u0B70\u0BF3-\u0BFA\u0C7F\u0D4F\u0D79\u0E3F\u0F01-\u0F03\u0F13\u0F15-\u0F17\u0F1A-\u0F1F\u0F34\u0F36\u0F38\u0FBE-\u0FC5\u0FC7-\u0FCC\u0FCE\u0FCF\u0FD5-\u0FD8\u109E\u109F\u1390-\u1399\u166D\u17DB\u1940\u19DE-\u19FF\u1B61-\u1B6A\u1B74-\u1B7C\u1FBD\u1FBF-\u1FC1\u1FCD-\u1FCF\u1FDD-\u1FDF\u1FED-\u1FEF\u1FFD\u1FFE\u2044\u2052\u207A-\u207C\u208A-\u208C\u20A0-\u20C1\u2100\u2101\u2103-\u2106\u2108\u2109\u2114\u2116-\u2118\u211E-\u2123\u2125\u2127\u2129\u212E\u213A\u213B\u2140-\u2144\u214A-\u214D\u214F\u218A\u218B\u2190-\u2307\u230C-\u2328\u232B-\u2429\u2440-\u244A\u249C-\u24E9\u2500-\u2767\u2794-\u27C4\u27C7-\u27E5\u27F0-\u2982\u2999-\u29D7\u29DC-\u29FB\u29FE-\u2B73\u2B76-\u2BFF\u2CE5-\u2CEA\u2E50\u2E51\u2E80-\u2E99\u2E9B-\u2EF3\u2F00-\u2FD5\u2FF0-\u2FFF\u3004\u3012\u3013\u3020\u3036\u3037\u303E\u303F\u309B\u309C\u3190\u3191\u3196-\u319F\u31C0-\u31E5\u31EF\u3200-\u321E\u322A-\u3247\u3250\u3260-\u327F\u328A-\u32B0\u32C0-\u33FF\u4DC0-\u4DFF\uA490-\uA4C6\uA700-\uA716\uA720\uA721\uA789\uA78A\uA828-\uA82B\uA836-\uA839\uAA77-\uAA79\uAB5B\uAB6A\uAB6B\uFB29\uFBB2-\uFBD2\uFD40-\uFD4F\uFD90\uFD91\uFDC8-\uFDCF\uFDFC-\uFDFF\uFE62\uFE64-\uFE66\uFE69\uFF04\uFF0B\uFF1C-\uFF1E\uFF3E\uFF40\uFF5C\uFF5E\uFFE0-\uFFE6\uFFE8-\uFFEE\uFFFC\uFFFD]|\uD800[\uDD37-\uDD3F\uDD79-\uDD89\uDD8C-\uDD8E\uDD90-\uDD9C\uDDA0\uDDD0-\uDDFC]|\uD802[\uDC77\uDC78\uDEC8]|\uD803[\uDD8E\uDD8F\uDED1-\uDED8]|\uD805\uDF3F|\uD807[\uDFD5-\uDFF1]|\uD81A[\uDF3C-\uDF3F\uDF45]|\uD82F\uDC9C|\uD833[\uDC00-\uDCEF\uDCFA-\uDCFC\uDD00-\uDEB3\uDEBA-\uDED0\uDEE0-\uDEF0\uDF50-\uDFC3]|\uD834[\uDC00-\uDCF5\uDD00-\uDD26\uDD29-\uDD64\uDD6A-\uDD6C\uDD83\uDD84\uDD8C-\uDDA9\uDDAE-\uDDEA\uDE00-\uDE41\uDE45\uDF00-\uDF56]|\uD835[\uDEC1\uDEDB\uDEFB\uDF15\uDF35\uDF4F\uDF6F\uDF89\uDFA9\uDFC3]|\uD836[\uDC00-\uDDFF\uDE37-\uDE3A\uDE6D-\uDE74\uDE76-\uDE83\uDE85\uDE86]|\uD838[\uDD4F\uDEFF]|\uD83B[\uDCAC\uDCB0\uDD2E\uDEF0\uDEF1]|\uD83C[\uDC00-\uDC2B\uDC30-\uDC93\uDCA0-\uDCAE\uDCB1-\uDCBF\uDCC1-\uDCCF\uDCD1-\uDCF5\uDD0D-\uDDAD\uDDE6-\uDE02\uDE10-\uDE3B\uDE40-\uDE48\uDE50\uDE51\uDE60-\uDE65\uDF00-\uDFFF]|\uD83D[\uDC00-\uDED8\uDEDC-\uDEEC\uDEF0-\uDEFC\uDF00-\uDFD9\uDFE0-\uDFEB\uDFF0]|\uD83E[\uDC00-\uDC0B\uDC10-\uDC47\uDC50-\uDC59\uDC60-\uDC87\uDC90-\uDCAD\uDCB0-\uDCBB\uDCC0\uDCC1\uDCD0-\uDCD8\uDD00-\uDE57\uDE60-\uDE6D\uDE70-\uDE7C\uDE80-\uDE8A\uDE8E-\uDEC6\uDEC8\uDECD-\uDEDC\uDEDF-\uDEEA\uDEEF-\uDEF8\uDF00-\uDF92\uDF94-\uDFEF\uDFFA]/, In = /[ \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/decode-codepoint.js
 var Dl = [
@@ -5986,7 +5990,7 @@ var zl = class {
   src_Any = Cn.source;
   src_Cc = _n.source;
   src_Z = In.source;
-  src_P = et.source;
+  src_P = tt.source;
   src_ZPCc = [
     this.src_Z,
     this.src_P,
@@ -6436,13 +6440,13 @@ var Hi = Object.defineProperty, Qi = (e, t) => {
   callable: () => es,
   escapeHtml: () => me,
   escapeRE: () => gu,
-  fromCodePoint: () => tt,
-  isMdAsciiPunct: () => ot,
+  fromCodePoint: () => nt,
+  isMdAsciiPunct: () => it,
   isPunctChar: () => ns,
-  isPunctCharCode: () => rt,
+  isPunctCharCode: () => ot,
   isSpace: () => L,
   isValidEntityCode: () => zn,
-  isWhiteSpace: () => nt,
+  isWhiteSpace: () => rt,
   lib: () => mu,
   normalizeReference: () => Ht,
   unescapeAll: () => ze,
@@ -6460,7 +6464,7 @@ function iu(e, t, n) {
 function zn(e) {
   return !(e >= 55296 && e <= 57343 || e >= 64976 && e <= 65007 || (e & 65535) === 65535 || (e & 65535) === 65534 || e >= 0 && e <= 8 || e === 11 || e >= 14 && e <= 31 || e >= 127 && e <= 159 || e > 1114111);
 }
-function tt(e) {
+function nt(e) {
   if (e > 65535) {
     e -= 65536;
     let t = 55296 + (e >> 10), n = 56320 + (e & 1023);
@@ -6472,7 +6476,7 @@ var ts = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, su = new RegExp(`${ts.sou
 function cu(e, t) {
   if (t.charCodeAt(0) === 35 && au.test(t)) {
     let o = t[1].toLowerCase() === "x" ? parseInt(t.slice(2), 16) : parseInt(t.slice(1), 10);
-    return zn(o) ? tt(o) : e;
+    return zn(o) ? nt(o) : e;
   }
   let n = Ft(e);
   return n !== e ? n : e;
@@ -6509,7 +6513,7 @@ function L(e) {
   }
   return !1;
 }
-function nt(e) {
+function rt(e) {
   if (e >= 8192 && e <= 8202) return !0;
   switch (e) {
     case 9:
@@ -6528,12 +6532,12 @@ function nt(e) {
   return !1;
 }
 function ns(e) {
-  return et.test(e) || vn.test(e);
-}
-function rt(e) {
-  return ns(tt(e));
+  return tt.test(e) || vn.test(e);
 }
 function ot(e) {
+  return ns(nt(e));
+}
+function it(e) {
   switch (e) {
     case 33:
     case 34:
@@ -6673,27 +6677,27 @@ var Ru = /* @__PURE__ */ Qi({
   parseLinkLabel: () => yu,
   parseLinkTitle: () => wu
 });
-function it(e) {
+function st(e) {
   "@babel/helpers - typeof";
-  return it = typeof Symbol == "function" && typeof Symbol.iterator == "symbol" ? function(t) {
+  return st = typeof Symbol == "function" && typeof Symbol.iterator == "symbol" ? function(t) {
     return typeof t;
   } : function(t) {
     return t && typeof Symbol == "function" && t.constructor === Symbol && t !== Symbol.prototype ? "symbol" : typeof t;
-  }, it(e);
+  }, st(e);
 }
 function Su(e, t) {
-  if (it(e) != "object" || !e) return e;
+  if (st(e) != "object" || !e) return e;
   var n = e[Symbol.toPrimitive];
   if (n !== void 0) {
     var o = n.call(e, t || "default");
-    if (it(o) != "object") return o;
+    if (st(o) != "object") return o;
     throw new TypeError("@@toPrimitive must return a primitive value.");
   }
   return (t === "string" ? String : Number)(e);
 }
 function xu(e) {
   var t = Su(e, "string");
-  return it(t) == "symbol" ? t : t + "";
+  return st(t) == "symbol" ? t : t + "";
 }
 function k(e, t, n) {
   return (t = xu(t)) in e ? Object.defineProperty(e, t, {
@@ -6807,7 +6811,7 @@ var De = class {
     let n = this.attrIndex(e);
     n < 0 ? this.attrPush([e, t]) : this.attrs[n][1] = `${this.attrs[n][1]} ${t}`;
   }
-}, st = class {
+}, at = class {
   constructor() {
     k(
       this,
@@ -7329,7 +7333,7 @@ function zu(e, t) {
           b = e[n].content.charCodeAt(0);
           break;
         }
-      let w = ot(h) || rt(h), R = ot(b) || rt(b), S = nt(h), x = nt(b);
+      let w = it(h) || ot(h), R = it(b) || ot(b), S = rt(h), x = rt(b);
       if (x ? l = !1 : R && (S || w || (l = !1)), S ? d = !1 : w && (x || R || (d = !1)), b === 34 && m[0] === '"' && h >= 48 && h <= 57 && (d = l = !1), l && d && (l = w, d = R), !l && !d) {
         y && Bt(i, s, m.index, qi);
         continue;
@@ -7395,7 +7399,7 @@ var Ln = [
       * {@link Ruler} instance. Keep configuration of core rules.
       */
       "ruler",
-      new st()
+      new at()
     ), k(this, "State", os);
     for (let e = 0; e < Ln.length; e++) this.ruler.push(Ln[e][0], Ln[e][1]);
   }
@@ -8076,7 +8080,7 @@ var Gt = [
       * {@link Ruler} instance. Keep configuration of block rules.
       */
       "ruler",
-      new st()
+      new at()
     ), k(this, "State", as);
     for (let e = 0; e < Gt.length; e++) this.ruler.push(Gt[e][0], Gt[e][1], { alt: (Gt[e][2] || []).slice() });
   }
@@ -8134,7 +8138,7 @@ var Gt = [
       let d = this.src.charCodeAt(i + 1);
       c = (d & 64512) === 56320 ? 65536 + (c - 55296 << 10) + (d - 56320) : 65533;
     } else (c & 64512) === 56320 && (c = 65533);
-    let u = ot(r) || rt(r), p = ot(c) || rt(c), g = nt(r), f = nt(c), m = !f && (!p || g || u), l = !g && (!u || f || p);
+    let u = it(r) || ot(r), p = it(c) || ot(c), g = rt(r), f = rt(c), m = !f && (!p || g || u), l = !g && (!u || f || p);
     return {
       can_open: m && (t || !l || u),
       can_close: l && (t || !m || p),
@@ -8522,7 +8526,7 @@ function Dd(e, t) {
     if (r) {
       if (!t) {
         let i = r[1][0].toLowerCase() === "x" ? parseInt(r[1].slice(1), 16) : parseInt(r[1], 10), s = e.push("text_special", "", 0);
-        s.content = zn(i) ? tt(i) : tt(65533), s.markup = r[0], s.info = "entity";
+        s.content = zn(i) ? nt(i) : nt(65533), s.markup = r[0], s.info = "entity";
       }
       return e.pos += r[0].length, !0;
     }
@@ -8612,7 +8616,7 @@ var Bn = [
       * {@link Ruler} instance. Keep configuration of inline rules.
       */
       "ruler",
-      new st()
+      new at()
     ), k(
       this,
       /**
@@ -8620,7 +8624,7 @@ var Bn = [
       * (e.g. in emphasis-like rules).
       */
       "ruler2",
-      new st()
+      new at()
     ), k(this, "State", ds);
     for (let e = 0; e < Bn.length; e++) this.ruler.push(Bn[e][0], Bn[e][1]);
     for (let e = 0; e < Gn.length; e++) this.ruler2.push(Gn[e][0], Gn[e][1]);
@@ -8798,7 +8802,7 @@ var Bn = [
   * which includes url-encoding, punycode, etc.
   */
   normalizeLink(e) {
-    let t = Qe(e, !0);
+    let t = et(e, !0);
     if (t.hostname && (!t.protocol || Xi.indexOf(t.protocol) >= 0))
       try {
         t.hostname = Hn.default.toASCII(t.hostname);
@@ -8810,13 +8814,13 @@ var Bn = [
   * Function used to decode link url to a human-readable format`
   */
   normalizeLinkText(e) {
-    let t = Qe(e, !0);
+    let t = et(e, !0);
     if (t.hostname && (!t.protocol || Xi.indexOf(t.protocol) >= 0))
       try {
         t.hostname = Hn.default.toUnicode(t.hostname);
       } catch {
       }
-    return Xe(He(t), Xe.defaultChars + "%");
+    return Qe(He(t), Qe.defaultChars + "%");
   }
   constructor(...e) {
     k(
@@ -9058,7 +9062,7 @@ var Bn = [
   }
 };
 k(ie, "Token", De);
-k(ie, "Ruler", st);
+k(ie, "Ruler", at);
 k(ie, "Renderer", rs);
 k(ie, "ParserCore", ss);
 k(ie, "StateCore", os);
@@ -9071,7 +9075,7 @@ var Fd = es(ie);
 // openclaw/packages/net-policy/src/ip.ts
 B();
 var ys = Xn(ms(), 1);
-var f0 = [ys.default.IPv4.parse("198.18.0.0"), 15];
+var g0 = [ys.default.IPv4.parse("198.18.0.0"), 15];
 
 // openclaw/src/media/parse-output.ts
 X();
@@ -9085,10 +9089,10 @@ B();
 X();
 
 // openclaw/packages/markdown-core/src/fences.ts
-var Bd = /(?:^|\n)( {0,3})(`{3,}|~{3,})([^\r\n\u2028\u2029]*)\r?(?=\n|$)/g, g0 = new RegExp(Bd, "gy");
+var Bd = /(?:^|\n)( {0,3})(`{3,}|~{3,})([^\r\n\u2028\u2029]*)\r?(?=\n|$)/g, y0 = new RegExp(Bd, "gy");
 
 // openclaw/packages/tool-call-repair/src/grammar.ts
-var C0 = new TextEncoder();
+var v0 = new TextEncoder();
 
 // openclaw/src/shared/clawhub-recommendations.ts
 N();
@@ -9101,7 +9105,7 @@ var bs = [
   "installed",
   "official",
   "kind"
-], yR = /* @__PURE__ */ new Set([...bs, "pluginId"]), bR = /* @__PURE__ */ new Set([...bs, "registry", "skillRef"]);
+], wR = /* @__PURE__ */ new Set([...bs, "pluginId"]), RR = /* @__PURE__ */ new Set([...bs, "registry", "skillRef"]);
 
 // openclaw/ui/src/lib/chat/imported-message-display.ts
 N();
@@ -9144,7 +9148,7 @@ N();
 function Me(e, t) {
   return t.map((n) => [n, e]);
 }
-var CS = new Map([
+var vS = new Map([
   // A launched subagent is a worker, not one more operation of the launcher.
   ...Me("subagents", ["sessions_spawn"]),
   ...Me("commands", ["exec", "bash", "shell", "run_command", "run_terminal_cmd"]),
@@ -9184,9 +9188,9 @@ function ye(e) {
 }
 var {
   isAgentActivityItem: Rs,
-  isSessionObserverDigest: vS,
-  isSessionNarrationEvent: IS,
-  isSessionReactionEvent: PS
+  isSessionObserverDigest: PS,
+  isSessionNarrationEvent: DS,
+  isSessionReactionEvent: MS
 } = (() => {
   let e = [
     new RegExp(
@@ -9332,14 +9336,14 @@ function Yd(e, t, n) {
   let i = G(G(e)?.browserTab), s = Tn(i);
   if (n !== "browser" || !i || !s)
     return {};
-  let c = typeof i.url == "string" ? We(i.url, 2048) : "";
+  let c = typeof i.url == "string" ? je(i.url, 2048) : "";
   return {
     browserTab: s,
     preview: Zo(c) ? {
       kind: "browser-tab",
       ...s,
       url: c,
-      ...typeof i.title == "string" ? { title: We(i.title, 512) } : {}
+      ...typeof i.title == "string" ? { title: je(i.title, 512) } : {}
     } : void 0
   };
 }
@@ -9478,11 +9482,11 @@ function Ps(e, t) {
 }
 
 // octogee/app/openclaw-browser/resources.ts
-function lx(e, t) {
+function dx(e, t) {
   return [...Ps(e, []).values()].filter((o) => o.tab.target === "host" && o.tab.profile === t).at(-1) ?? null;
 }
 export {
-  lx as latestNativeBrowserTab
+  dx as latestNativeBrowserTab
 };
 /*!
 TypeBox
