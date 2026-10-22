@@ -131,6 +131,7 @@ interface ScopedPrincipalAccess {
   scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean };
   principal: GatewayPrincipalAccess | null;
   assignmentMissing: boolean;
+  assignmentServing: boolean;
 }
 
 type GatewayRootAuthorization = NonNullable<ReturnType<typeof gatewayAuthorizationFromRootDocument>>;
@@ -144,7 +145,7 @@ async function storedOwnerScope(
     now: number;
   },
   authorization: GatewayRootAuthorization,
-): Promise<{ scope: ScopedPrincipalAccess["scope"]; assignmentMissing: boolean } | null> {
+): Promise<Omit<ScopedPrincipalAccess, "principal"> | null> {
   const gatewayClass = resolveGatewayClass({
     gatewayClass: authorization.config.gatewayClass,
     profile: authorization.config.profile ?? undefined,
@@ -159,13 +160,17 @@ async function storedOwnerScope(
     : authorization.config.ownerUid;
   if (typeof ownerUid !== "string" || !ownerUid) return null;
   const workspaceData = workspace.data();
-  const owner = await args.tx.get(args.db.doc(`users/${ownerUid}`));
+  const [owner, assignment] = await Promise.all([
+    args.tx.get(args.db.doc(`users/${ownerUid}`)),
+    args.tx.get(args.db.doc(`gateways/${args.gatewayId}/assignments/${ownerUid}`)),
+  ]);
   const scope = { gatewayId: args.gatewayId, workspaceSlug: args.workspaceSlug, ownerUid,
     perUserIdentity: workspaceData?.ownerUid === ownerUid &&
       workspacePermissionsEnabled(authorization.config, owner.data() ?? {}, new Date(args.now)),
   };
   return {
     scope,
+    assignmentServing: assignment.data()?.state === "serving",
     assignmentMissing: !owner.exists || !userAssignmentMatchesGateway(
       owner.data(),
       args.gatewayId,
@@ -201,7 +206,7 @@ async function storedPrincipalAccess(args: {
   const storedScope = await storedOwnerScope(args, authorization);
   if (!storedScope) return null;
   if (storedScope.assignmentMissing) {
-    return { scope: storedScope.scope, principal: null, assignmentMissing: true };
+    return { ...storedScope, principal: null };
   }
   if (storedScope.scope.ownerUid === args.uid) {
     const principal = resolveGatewayPrincipalAccess({
@@ -211,10 +216,10 @@ async function storedPrincipalAccess(args: {
     });
     return principal.kind === "denied"
       ? null
-      : { scope: storedScope.scope, principal, assignmentMissing: false };
+      : { ...storedScope, principal };
   }
   const principal = await storedMemberPrincipal(args, storedScope.scope);
-  return { scope: storedScope.scope, principal, assignmentMissing: false };
+  return { ...storedScope, principal };
 }
 
 function auditPrincipalDenial(args: {
@@ -345,7 +350,7 @@ async function sessionAccessInTransaction(args: {
   }
   const authorization = controlUiAuthorization(root, args.gatewayId, principal);
   if (!authorization) return { kind: CAPABILITY_DISABLED };
-  if (!isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
+  if (!stored.assignmentServing || !isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
     return { kind: "not-ready" };
   }
   return { kind: "allowed", session };
@@ -553,6 +558,7 @@ async function redeemPrincipalFailure(args: {
   if (!authorization || !principal || principal.kind === "denied") {
     return rejectRedeemPrincipal({ ...args, principal, scope: stored?.scope ?? null });
   }
+  if (!stored?.assignmentServing) return { kind: "not-ready" };
   return null;
 }
 

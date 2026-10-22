@@ -17,6 +17,11 @@ function workspaceAccessClaim(req: Request): { gatewayId: string; targetUid?: st
   return { gatewayId, targetUid };
 }
 
+async function targetMemberAllowed(targetUid: string | undefined, scope: { ownerUid: string; workspaceSlug: string }, get: DocumentReader): Promise<boolean> {
+  if (!targetUid || targetUid === scope.ownerUid) return true;
+  return isCanonicalWorkspaceMembership((await get(`workspaces/${scope.workspaceSlug}/members/${targetUid}`)).data());
+}
+
 export function createWorkspaceNativeAccessRoutes({ db }: { db: Firestore }): Router {
   const router = Router();
   router.post("/workspace-access", async (req: Request, res, next) => {
@@ -37,7 +42,11 @@ export function createWorkspaceNativeAccessRoutes({ db }: { db: Firestore }): Ro
       }
       const access = await principalAccess(scope, req.uid, get);
       if (access.kind === "denied") { res.status(403).json({ error: "forbidden" }); return; }
-      if (targetUid && targetUid !== scope.ownerUid && !isCanonicalWorkspaceMembership((await get(`workspaces/${scope.workspaceSlug}/members/${targetUid}`)).data())) {
+      const assignment = await db.doc(`gateways/${gatewayId}/assignments/${scope.ownerUid}`).get();
+      if (assignment.data()?.state !== "serving") {
+        res.status(503).json({ error: "workspace_not_serving", retryable: true }); return;
+      }
+      if (!await targetMemberAllowed(targetUid, scope, get)) {
         res.status(404).json({ error: "member_not_found" }); return;
       }
       res.set("cache-control", "no-store").json({ uid: req.uid, gatewayId, workspaceSlug: scope.workspaceSlug, ...(targetUid ? { targetUid } : {}) });

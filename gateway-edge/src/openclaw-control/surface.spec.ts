@@ -924,7 +924,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     }
   });
 
-  it("shares a positive authorization cache between Dashboard assets and the WebSocket attachment", async () => {
+  it.each([true, false])("rechecks Dashboard socket authority after cached asset access (allowed: %s)", async (allowed) => {
     const upstream = http.createServer((_req, res) => res.end("asset"));
     const upstreamWs = new WebSocketServer({ noServer: true });
     upstream.on("upgrade", (req, socket, head) => {
@@ -955,18 +955,26 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
       .get("/api/g/bender/openclaw/assets/app.js")
       .set("cookie", cookie);
     expect(asset.status).toBe(200);
+    expect((await request(edge).get("/api/g/bender/openclaw/assets/app.js").set("cookie", cookie)).status).toBe(200);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    authorize.mockResolvedValue(allowed);
 
     const browser = new WebSocket(`ws://127.0.0.1:${edgePort}/openclaw`, {
       headers: { cookie, origin: "https://api.octogee.com" },
     });
-    await new Promise<void>((resolve, reject) => {
-      browser.once("open", resolve);
-      browser.once("error", reject);
-    });
-    expect(authorize).toHaveBeenCalledTimes(1);
-
-    browser.close();
-    await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    try {
+      const status = await new Promise<number | undefined>((resolve) => {
+        browser.once("open", () => resolve(101));
+        browser.once("unexpected-response", (_req, response) => { response.resume(); resolve(response.statusCode); });
+        browser.on("error", () => undefined);
+      });
+      expect(status).toBe(allowed ? 101 : 401);
+      expect(authorize).toHaveBeenCalledTimes(2);
+    } finally {
+      browser.terminate();
+      for (const client of upstreamWs.clients) client.terminate();
+      await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
+    }
   });
 
   it.each([
@@ -2138,7 +2146,9 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     await new Promise<void>((resolve) => upstreamWs.close(() => resolve()));
   });
 
-  it.each(["not-serving", "roster-loading", "flips-after-admission"] as const)("refuses dashboard config writes while the workspace is %s on this gateway, but keeps reads", async (scenario) => {
+  it.each(["config.patch", "chat.send", "terminal.open", "browser.request", "desktop.observe", "tools.invoke", "future.mutation"].flatMap(method =>
+    (["not-serving", "roster-loading", "flips-after-admission"] as const).map(scenario => ({ scenario, method })),
+  ))("refuses dashboard $method while the workspace is $scenario on this gateway, but keeps reads", async ({ scenario, method }) => {
     let servingChecks = 0;
     const workspaceServing = (): "serving" | "not-serving" | "roster-loading" => {
       servingChecks += 1;
@@ -2188,7 +2198,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
         else if (frame.payload?.type === "hello-ok") browser.send(JSON.stringify({ type: "req", id: "read", method: "config.get", params: {} }));
         else if (frame.id === "read") {
           seen.read = frame;
-          browser.send(JSON.stringify({ type: "req", id: "write", method: "config.patch", params: { raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 90 } } }), baseHash: "hash-1" } }));
+          browser.send(JSON.stringify({ type: "req", id: "write", method, params: method === "config.patch" ? { raw: JSON.stringify({ agents: { defaults: { timeoutSeconds: 90 } } }), baseHash: "hash-1" } : {} }));
         } else if (frame.id === "write") resolve(frame);
       });
     });
@@ -2198,7 +2208,7 @@ describe("OpenClaw Dashboard WebSocket surface", () => {
     expect(seen.read?.ok).toBe(true);
     expect(result.ok).toBe(false);
     expect((result.error as { message: string }).message).toContain(scenario === "roster-loading" ? "roster-loading" : "workspace-not-serving");
-    expect(calls).not.toContain("config.patch");
+    expect(calls).not.toContain(method);
     expect(servingChecks).toBe(scenario === "flips-after-admission" ? 2 : 1);
     const retryLease = acquireSystemConfigSyncLeaseSync({ openclawDir });
     expect(retryLease).not.toBeNull();

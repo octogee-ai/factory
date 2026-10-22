@@ -1610,15 +1610,18 @@ class OpenClawControlSocketBridge {
     );
   }
 
+  private servingDenial(category: OpenClawControlRpcCategory) {
+    return category === "read" || category === "approval_read"
+      ? null : workspaceServingDenial(this.args.workspaceServing());
+  }
+
   private evaluateAndForward(frame: BrowserRpcFrame): void {
     const category = openClawControlRpcCategory(frame.method);
     const managedConfigWrite = category === "config_mutation";
-    if (managedConfigWrite) {
-      const denial = workspaceServingDenial(this.args.workspaceServing());
-      if (denial) {
-        this.deny(frame, { allowed: false, category, reason: denial }, denial);
-        return;
-      }
+    const denial = this.servingDenial(category);
+    if (denial) {
+      this.deny(frame, { allowed: false, category, reason: denial }, denial);
+      return;
     }
     const evaluated = this.args.proxyIdentity.enabled && !managedConfigWrite;
     const context = evaluated ? null : invariantContext(this.args.env, this.activeSession.gatewayId, claimedBuilderIdentity());
@@ -1698,7 +1701,8 @@ class OpenClawControlSocketBridge {
     const deadlineAt = Date.now() + timeoutMs;
     const preparationController = new AbortController();
     let requestReleased = false;
-    const releaseRequest = (): void => {
+    const releaseRequest = (mutationLease?: SystemConfigMutationLease): void => {
+      if (mutationLease) this.releaseMutationLease(mutationLease);
       if (requestReleased) return;
       requestReleased = true;
       lease.release();
@@ -1720,8 +1724,7 @@ class OpenClawControlSocketBridge {
     };
     const expireBeforeForward = (mutationLease?: SystemConfigMutationLease): void => {
       finishPreparation();
-      releaseRequest();
-      if (mutationLease) this.releaseMutationLease(mutationLease);
+      releaseRequest(mutationLease);
       if (this.args.browser.readyState === WebSocket.OPEN) {
         this.args.browser.send(openClawControlTimeoutError(frame));
         this.args.metrics?.rpc(this.metricsIdentity, decision.category, "timeout");
@@ -1773,6 +1776,12 @@ class OpenClawControlSocketBridge {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
       expireBeforeForward(mutationLease);
+      return;
+    }
+    const denial = this.servingDenial(decision.category);
+    if (denial) {
+      releaseRequest(mutationLease);
+      this.deny(frame, { allowed: false, category: decision.category, reason: denial }, denial);
       return;
     }
     this.track(frame.id, frame.method, decision.category, lease, {
@@ -1851,13 +1860,6 @@ class OpenClawControlSocketBridge {
       this.upstreamSocket().readyState !== WebSocket.OPEN) {
       lease.release();
       await acquired.lease.release();
-      return null;
-    }
-    const denial = workspaceServingDenial(this.args.workspaceServing());
-    if (denial) {
-      lease.release();
-      await acquired.lease.release();
-      this.deny(frame, { allowed: false, category: decision.category, reason: denial }, denial);
       return null;
     }
     return acquired.lease;
@@ -1946,7 +1948,7 @@ export function attachOpenClawControlWsRoute(options: AttachOpenClawControlWsRou
           gatewayId,
           revisionId,
           env,
-        });
+        }, { forceRefresh: true });
       } catch (error) {
         const outcome = logBrokerFailure({ operation: "authorize", gatewayId, revisionId, error });
         options.metrics?.session(metricIdentity(env), "authorize", outcome);
