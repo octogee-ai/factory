@@ -85,10 +85,12 @@ const testRuntime = await vi.hoisted(async () => {
   const { join } = await import("node:path");
   const originalDir = process.env.OPENCLAW_DIR;
   const originalAgentsDir = process.env.OPENCLAW_AGENTS_DIR;
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   const dir = mkdtempSync(join(tmpdir(), "octogee-broker-test-"));
   process.env.OPENCLAW_DIR = dir;
   process.env.OPENCLAW_AGENTS_DIR = join(dir, "agents");
-  return { dir, originalDir, originalAgentsDir };
+  process.env.OPENCLAW_STATE_DIR = dir;
+  return { dir, originalDir, originalAgentsDir, originalStateDir };
 });
 
 afterAll(async () => {
@@ -96,6 +98,8 @@ afterAll(async () => {
   else process.env.OPENCLAW_DIR = testRuntime.originalDir;
   if (testRuntime.originalAgentsDir === undefined) delete process.env.OPENCLAW_AGENTS_DIR;
   else process.env.OPENCLAW_AGENTS_DIR = testRuntime.originalAgentsDir;
+  if (testRuntime.originalStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+  else process.env.OPENCLAW_STATE_DIR = testRuntime.originalStateDir;
   await fs.rm(testRuntime.dir, { recursive: true, force: true });
 });
 
@@ -108,6 +112,11 @@ const mocks = vi.hoisted(() => ({
   readActivationManifest: vi.fn(),
   applyOpenClawActivationManifest: vi.fn(),
   removeActivationManifest: vi.fn(),
+}));
+const supervisorMocks = vi.hoisted(() => ({ status: vi.fn() }));
+vi.mock('../lib/surge-openclaw-process-gate.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../lib/surge-openclaw-process-gate.js')>(),
+  createSurgeOpenClawProcessSupervisorClient: () => ({ status: supervisorMocks.status }),
 }));
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(),
@@ -5095,6 +5104,37 @@ async function withPostgresAgentConfig(config: Record<string, unknown>, run: () 
     else await fs.rm(OPENCLAW_CONFIG, { force: true });
   }
 }
+
+it.each(['empty', 'agent-store', 'running', 'wrong-pod', 'gate-changed'])("cleans an interrupted held Builder target only when no Native state exists: %s", async scenario => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'broker-empty-target-'));
+  const oldState = process.env.OPENCLAW_STATE_DIR;
+  const oldPod = process.env.POD_UID;
+  stubBuilderClaim('alice');
+  process.env.OPENCLAW_STATE_DIR = root; process.env.POD_UID = 'pod-current';
+  const failure = new Error('OpenClaw workspace identities are not initialized for this boot');
+  routingActivationMocks.stopStale.mockRejectedValueOnce(failure);
+  supervisorMocks.status.mockReset().mockResolvedValue({ version: 1, podUid: scenario === 'wrong-pod' ? 'old-pod' : 'pod-current', role: 'normal', mode: scenario === 'running' ? 'permitted' : 'held', phase: scenario === 'running' ? 'running' : 'held' });
+  if (scenario === 'gate-changed') supervisorMocks.status.mockResolvedValueOnce({ version: 1, podUid: 'pod-current', role: 'normal', mode: 'held', phase: 'held' }).mockResolvedValue({ version: 1, podUid: 'pod-current', role: 'normal', mode: 'permitted', phase: 'starting' });
+  const rpc = mkGatewayRpc({ agentsDetach: vi.fn().mockRejectedValue(failure) });
+  try {
+    const agent = path.join(root, 'agents/octogee-alice-coach/agent');
+    await fs.mkdir(agent, { recursive: true });
+    await fs.writeFile(path.join(agent, scenario === 'agent-store' ? 'openclaw-agent.sqlite' : 'models.json'), 'retained');
+    await withPostgresAgentConfig({ agents: { entries: { 'octogee-alice-coach': {} } } }, async () => {
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+      const removing = adapter.removeImportedCustomerBySlug!('alice');
+      if (scenario === 'empty') {
+        await expect(removing).resolves.toMatchObject({ retained: true });
+        expect(rpc.agentsDetach).not.toHaveBeenCalled();
+      } else await expect(removing).rejects.toThrow(/workspace identities/);
+    });
+    expect(await fs.readFile(path.join(agent, scenario === 'agent-store' ? 'openclaw-agent.sqlite' : 'models.json'), 'utf8')).toBe('retained');
+  } finally {
+    if (oldState === undefined) delete process.env.OPENCLAW_STATE_DIR; else process.env.OPENCLAW_STATE_DIR = oldState;
+    if (oldPod === undefined) delete process.env.POD_UID; else process.env.POD_UID = oldPod;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 it("purges a retired PostgreSQL project while detaching evicted customer stores", async () => {
   const current = { agents: { entries: keyedRoster(["octogee-alice-coach", "octogee-alice-proj-retired-coach", "octogee-stale-coach", "octogee-bob-coach"]) } };

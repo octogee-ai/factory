@@ -913,6 +913,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const agentDir = path.join(agentsDir, "octogee-alice-coach", "agent");
       await fs.mkdir(customerDir, { recursive: true });
       await fs.mkdir(agentDir, { recursive: true });
+      seedLocalAgentDatabase(path.join(agentDir, 'openclaw-agent.sqlite'), 'retained');
       await fs.mkdir(path.dirname(customerKey), { recursive: true });
       await fs.mkdir(path.join(customerDir, ".system"), { recursive: true });
       await fs.writeFile(customerKey, "private-key");
@@ -973,6 +974,7 @@ describe("customer lifecycle config patch agent directories", () => {
       expect(fsSync.existsSync(customerDir)).toBe(true);
       expect(fsSync.existsSync(customerKey)).toBe(true);
       expect(fsSync.existsSync(agentDir)).toBe(true);
+      expect(readLocalAgentFixtureState(path.join(agentDir, 'openclaw-agent.sqlite'))).toBe('retained');
       expect(residue.departed.filter((entry) => !fsSync.existsSync(entry))).toEqual([]);
       expect(fsSync.existsSync(path.join(customerDir, ".system", ".mounted"))).toBe(false);
       expect(fsSync.existsSync(path.join(customerDir, ".system", ".migrating-in"))).toBe(false);
