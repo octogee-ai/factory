@@ -1553,7 +1553,13 @@ async function cleanupFailedStandbyClaim(input: ActivationTargetContext): Promis
   return true;
 }
 
+function heldClusterTargetWithoutReport(target: PlacementPolicyGateway): boolean {
+  return !target.configuredBuilder && !target.ready && target.runtime !== "gce-vm" &&
+    target.kubernetesStatus === "not-ready";
+}
+
 function targetClaimedForLease(target: PlacementPolicyGateway, lease: BuilderActivationLease): boolean {
+  if (heldClusterTargetWithoutReport(target)) return true;
   const report = target.configuredBuilder;
   if (report?.state !== "claimed") return false;
   return report.generation === lease.generation || (target.runtime === "gce-vm" && report.generation === null);
