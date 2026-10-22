@@ -11,11 +11,25 @@ import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   requestBuilderActivationLease,
+  recordBuilderRuntimeActivity,
   type BuilderActivationLeaseResult,
   type BuilderRuntimeDemandCause,
 } from "@octogee/core/builder-activation-lease";
 
 const router = Router();
+
+router.post("/runtime-activity", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+      Object.keys(body).length !== 1 || !isValidGatewayId(body.gatewayId)) {
+      res.status(400).json({ error: "gatewayId is required" });
+      return;
+    }
+    const recorded = await recordBuilderRuntimeActivity({ db, uid: req.uid!, gatewayId: body.gatewayId });
+    res.json({ recorded });
+  } catch (error) { next(error); }
+});
 
 function activationGatewayId(
   userData: Record<string, unknown> | undefined,

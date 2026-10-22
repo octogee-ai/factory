@@ -16,6 +16,12 @@ export interface BuilderRuntimeDemandRequest {
     now?: number;
     leaseIdFactory?: () => string;
 }
+export declare function recordBuilderRuntimeActivity(input: {
+    db: Firestore;
+    uid: string;
+    gatewayId: string;
+    now?: number;
+}): Promise<boolean>;
 export declare function requestBuilderActivationLease(input: BuilderRuntimeDemandRequest): Promise<BuilderActivationLeaseResult>;
 export declare function builderActivateOperationId(gatewayId: string, generation: number): string;
 export declare function builderReturnOperationId(gatewayId: string, generation: number): string;

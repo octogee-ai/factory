@@ -2,6 +2,39 @@ import { randomUUID } from "node:crypto";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+function activeActivityLease(lease, gatewayId) {
+    return lease.status === "active" && nonEmptyString(lease.leaseId) !== null &&
+        positiveInteger(lease.generation) !== null && lease.targetGatewayId === gatewayId &&
+        lease.returnRequestedAt === undefined;
+}
+function servingActivityAssignment(assigned, uid, gatewayId) {
+    return assigned?.uid === uid && assigned.gatewayId === gatewayId && assigned.state === "serving" &&
+        Number.isSafeInteger(assigned.epoch) && assigned.epoch >= 0;
+}
+export async function recordBuilderRuntimeActivity(input) {
+    const now = input.now ?? Date.now();
+    if (!Number.isFinite(now) || now <= 0)
+        throw new Error("invalid runtime activity time");
+    const userRef = input.db.doc(`users/${input.uid}`);
+    const assignmentRef = input.db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`);
+    return input.db.runTransaction(async (transaction) => {
+        const [user, assignment] = await Promise.all([transaction.get(userRef), transaction.get(assignmentRef)]);
+        const data = user.data();
+        const lease = data ? userLease(data) : null;
+        const assigned = assignment.data();
+        if (!data || !lease || !activeActivityLease(lease, input.gatewayId) ||
+            userGatewayId(data) !== input.gatewayId ||
+            !servingActivityAssignment(assigned, input.uid, input.gatewayId) ||
+            "result" in activationDemandEligibility(data, now))
+            return false;
+        const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
+        if (now - previous >= 60_000)
+            transaction.update(userRef, {
+                "provisioning.openclaw.activationLease.lastActiveAt": now,
+            });
+        return true;
+    });
+}
 function record(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
         ? value

@@ -8,6 +8,7 @@ import {
   isBuilderReturnOperationIdFor,
   placementRetireOperationId,
   requestBuilderActivationLease,
+  recordBuilderRuntimeActivity,
 } from "./builder-activation-lease.js";
 
 type Data = Record<string, unknown>;
@@ -500,5 +501,59 @@ describe("Builder runtime operation id recognition", () => {
 
   it("rejects a missing gateway id", () => {
     expect(isBuilderReturnOperationIdFor("builder-return--g1", undefined)).toBe(false);
+  });
+});
+
+
+describe("recordBuilderRuntimeActivity", () => {
+  function running(status = "active", assignmentState = "serving", target = "builder-alice") {
+    const user = activeTrial({ provisioning: { openclaw: { gatewayId: target,
+      activationLease: { leaseId: "lease-one", generation: 2, status,
+        targetGatewayId: "builder-alice", lastActiveAt: 1_000 } } } });
+    return fakeDb({ "users/uid-alice": user,
+      "gateways/builder-alice/assignments/uid-alice": { uid: "uid-alice", gatewayId: "builder-alice", state: assignmentState, epoch: 4 } });
+  }
+  it("refreshes active use on the current serving lease without replacing its identity", async () => {
+    const { db, docs } = running();
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_000 })).resolves.toBe(true);
+    expect(docs["users/uid-alice"]).toMatchObject({ provisioning: { openclaw: { activationLease: {
+      leaseId: "lease-one", generation: 2, status: "active", lastActiveAt: 90_000,
+    } } } });
+  });
+  it.each(["parked", "requested", "provisioning", "activating", "returning", "failed"])("does not wake or extend a %s lease", async status => {
+    const { db, docs } = running(status); const before = structuredClone(docs);
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_000 })).resolves.toBe(false);
+    expect(docs).toEqual(before);
+  });
+  it.each([["quiescing", "builder-alice"], ["serving", "shared-blue"]])("refuses a stale surface after assignment or placement changes", async (assignment, target) => {
+    const { db, docs } = running("active", assignment, target); const before = structuredClone(docs);
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_000 })).resolves.toBe(false);
+    expect(docs).toEqual(before);
+  });
+  it("refuses another customer or an inactive account", async () => {
+    const { db, docs } = running();
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-other", gatewayId: "builder-alice", now: 90_000 })).resolves.toBe(false);
+    docs["users/uid-alice"].accountLifecycle = { status: "erasing" };
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_000 })).resolves.toBe(false);
+  });
+  it("coalesces frequent input without writing an older activity timestamp", async () => {
+    const { db, docs } = running();
+    await recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_000 });
+    const before = structuredClone(docs);
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_001 })).resolves.toBe(true);
+    expect(docs).toEqual(before);
+  });
+  it("does not undo a return request while the active status is still visible", async () => {
+    const { db, docs } = running();
+    setPath(docs["users/uid-alice"], "provisioning.openclaw.activationLease.returnRequestedAt", 89_000);
+    const before = structuredClone(docs);
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 90_000 })).resolves.toBe(false);
+    expect(docs).toEqual(before);
+  });
+  it("does not extend an expired Builder entitlement", async () => {
+    const { db, docs } = running();
+    const before = structuredClone(docs);
+    await expect(recordBuilderRuntimeActivity({ db: db as never, uid: "uid-alice", gatewayId: "builder-alice", now: 1_000_000 })).resolves.toBe(false);
+    expect(docs).toEqual(before);
   });
 });
