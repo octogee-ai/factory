@@ -1009,7 +1009,7 @@ router.get(
         if (!userSnap.exists) { res.status(404).json({ error: "User not found" }); return; }
         const userData = userSnap.data() ?? {};
 
-        const before = dottedRead(field, userData);
+        const before = dottedRead(field, userData) ?? null;
 
         const update: Record<string, unknown> = { [field]: value === undefined ? null : value };
         if (action === "setTier") update["tier"] = value;

@@ -752,7 +752,7 @@ export function addAdminCustomerRoutes(router, deps) {
                 return;
             }
             const userData = userSnap.data() ?? {};
-            const before = dottedRead(field, userData);
+            const before = dottedRead(field, userData) ?? null;
             const update = { [field]: value === undefined ? null : value };
             if (action === "setTier")
                 update["tier"] = value;

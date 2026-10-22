@@ -41,6 +41,7 @@ function fakeDoc(path: string, store: DocStore) {
       store.set(path, { ...current, ...patch });
     },
     set: async (data: DocData) => {
+      if (Object.values(data).some((value) => value === undefined)) throw new Error("undefined Firestore value");
       store.set(path, data);
     },
   };
@@ -384,6 +385,19 @@ describe("GET /api/admin/customer/:uid — broker-sourced usage", () => {
 });
 
 describe("POST /api/admin/customer/:uid/ops", () => {
+  it("records an absent previous selected tier as null on the first tier change", async () => {
+    const app = makeApp({ "users/uid-ops": customerDoc() });
+
+    const result = await request(app)
+      .post("/api/admin/customer/uid-ops/ops")
+      .send({ action: "setTier", value: "pro" })
+      .expect(200);
+
+    expect(result.body).toMatchObject({ success: true, before: null, after: "pro" });
+    const audit = await request(app).get("/api/admin/customer/uid-ops/audit").expect(200);
+    expect(audit.body.items).toEqual([expect.objectContaining({ action: "setTier", before: null, after: "pro" })]);
+  });
+
   it("rejects setThrottle — the in-pod throttle was retired (#1880)", async () => {
     const app = makeApp({
       "users/uid-ops": customerDoc({}),
