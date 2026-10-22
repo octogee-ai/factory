@@ -1,0 +1,60 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, expect, it, vi } from "vitest";
+import { initializeBuilderNativeState } from "../lib/builder-native-bootstrap.js";
+
+const roots: string[] = [];
+afterEach(async () => {
+  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+});
+async function directory() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-bootstrap-test-"));
+  roots.push(root);
+  await fs.mkdir(path.join(root, "state"));
+  return root;
+}
+function database(root: string, journal: boolean) {
+  const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+  try {
+    if (journal) db.exec("CREATE TABLE agent_deletion_journal(agent_id TEXT)");
+    else db.exec("CREATE TABLE retained_history(value TEXT)");
+  } finally {
+    db.close();
+  }
+}
+
+it("initializes absent host state before accepting the native-created journal", async () => {
+  const root = await directory();
+  const boot = vi.fn(async () => { database(root, true); });
+  await initializeBuilderNativeState(root, boot);
+  expect(boot).toHaveBeenCalledExactlyOnceWith(root);
+});
+
+it.each([false, true])("preserves existing state and recovery history, journal=%s", async (journal) => {
+  const root = await directory();
+  database(root, journal);
+  const before = await fs.readFile(path.join(root, "state", "openclaw.sqlite"));
+  const boot = vi.fn();
+  await initializeBuilderNativeState(root, boot);
+  expect(boot).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(root, "state", "openclaw.sqlite"))).toEqual(before);
+});
+
+it("does not accept a healthy boot that refused to infer a journal from existing history", async () => {
+  const root = await directory();
+  const history = path.join(root, "agents", "existing", "agent");
+  await fs.mkdir(history, { recursive: true });
+  await fs.writeFile(path.join(history, "openclaw-agent.sqlite"), "retained identity");
+  await expect(initializeBuilderNativeState(root, async () => { database(root, false); }))
+    .rejects.toThrow("explicit native Doctor recovery");
+  expect(await fs.readFile(path.join(history, "openclaw-agent.sqlite"), "utf8")).toBe("retained identity");
+});
+
+it("propagates native initialization failure and leaves the destination unpublished", async () => {
+  const root = await directory();
+  await expect(initializeBuilderNativeState(root, async () => { throw new Error("native refused"); }))
+    .rejects.toThrow("native refused");
+  await expect(fs.stat(path.join(root, "state", "openclaw.sqlite"))).rejects.toThrow();
+});

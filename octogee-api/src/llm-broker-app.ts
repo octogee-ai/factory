@@ -663,6 +663,7 @@ async function recordUsage(
       provider: ctx.record.provider,
       gatewayId: ctx.record.gatewayId,
       ownerUid: ctx.record.ownerUid,
+      agentId: ctx.record.trace?.agentId ?? null,
       brokerTokenHash: ctx.record.tokenHash,
       brokerTokenSecretName: ctx.record.secretName,
       providerKeySource: ctx.providerKey.source,

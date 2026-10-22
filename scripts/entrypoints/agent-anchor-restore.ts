@@ -13,6 +13,7 @@ import {
 } from "../lib/agent-anchor-record.js";
 import { clusterBuilderGateway, openclawStateRoot } from "../lib/openclaw-state-store.js";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
+import { initializeBuilderNativeState } from "../lib/builder-native-bootstrap.js";
 
 export interface AgentAnchorRestoreResult {
   landed: string[];
@@ -30,6 +31,7 @@ export async function runAgentAnchorRestore(input: {
   broker: Pick<FleetBrokerClient, "readAgentAnchors">;
   readConfig?: () => unknown;
   verify?: AgentAnchorVerifier;
+  initializeHost?: (stateDir: string) => Promise<void>;
   verifyState?: GatewayStateAnchorVerifier;
   log: (message: string) => void;
 }): Promise<AgentAnchorRestoreResult> {
@@ -39,14 +41,19 @@ export async function runAgentAnchorRestore(input: {
   const configured = new Set(agentIdsFromConfig((input.readConfig ?? readOpenClawConfig)()));
   const { anchors, state } = await input.broker.readAgentAnchors({ slug });
   const stateRoot = openclawStateRoot(env);
+  const landedState = state && clusterBuilderGateway(env)
+    ? await landGatewayStateAnchor(stateRoot, state, input.verifyState)
+    : undefined;
+  if (anchors.some((anchor) => configured.has(anchor.agentId))) {
+    await (input.initializeHost ?? ((root) => initializeBuilderNativeState(root, undefined, env)))(stateRoot);
+  }
   const result = await landAgentAnchors(
     stateRoot,
     anchors.filter((anchor) => configured.has(anchor.agentId)),
     input.verify ?? verifyAgentAnchorInPostgres,
   );
   input.log(`[agent-anchors] landed ${result.landed.length} agent anchor(s) for ${slug}; ${result.preserved.length} already present; ${anchors.length} recorded`);
-  if (!state || !clusterBuilderGateway(env)) return { ...result, skipped: false };
-  const landedState = await landGatewayStateAnchor(stateRoot, state, input.verifyState);
+  if (!landedState) return { ...result, skipped: false };
   input.log(`[agent-anchors] gateway state anchor for ${slug} ${landedState === "landed" ? "landed" : "already present"}`);
   return { ...result, state: landedState, skipped: false };
 }
