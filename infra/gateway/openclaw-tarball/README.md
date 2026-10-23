@@ -137,153 +137,143 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 21 main 7910ed1a
+## Current overlay: October 23 main 6b3e0c6a
 
-The operator selected latest upstream main during this recut,
-`7910ed1a7418c4ec29948b2da751671d8d78a870`, for independent qualification.
-It remains frozen. The final clean overlay is `2126df73edfd9fae76e47aa547fe690197b0572f`, published from
-`codex/native-builder-migration-safety` in the OpenClaw fork. It extends the
-qualified `524d54b44d5a2f297e1ec6c93e4a7b7551b07159` overlay with stopped-Gateway
-agent detach, an opt-in empty-delivery-queue checkpoint guard, and retained-agent
-restoration through the existing creation and schema-inspection owners. Both
-package objects and hosted islands come from that exact built source, version
-2026.10.5. The recut starts
-from the published overlay `b74ff0c433d355260925bda948f61ff4982ab657` on frozen
-main 304cf4f6, 253 upstream commits earlier.
+The operator selected and froze latest upstream main
+`6b3e0c6a94968cdaa03bb019bdcacc8b55aa9b63` for independent qualification. The
+clean overlay is `80b95281118feabd7cb06262f02d6c1759633eec`, published from
+[`codex/octogee-refresh-20261023`](https://github.com/ceckert/openclaw/tree/codex/octogee-refresh-20261023).
+Root, Mattermost and hosted islands share this source, version 2026.10.6.
+The isolated Octogee checkout started at main
+`90a609dd61e435dafe6bfa2367f2e1c4732a8cfb`, then rebased onto current main
+`3195d365258613ee7c7bea559f2b221e622c68ef` before the final complete-image
+build and writer qualification. Other worktrees and services were preserved. Neither an older green OpenClaw commit nor a newer tip was substituted.
 
-The incremental repair preserves the configured roster and retained logical
-stores before settling a completed deletion. Missing PostgreSQL namespaces,
-uninitialized SQLite files and either schema-inspection error form refuse before
-any writer admission or journal claim. Ordinary first-use and duplicate behavior
-remain unchanged. The checkpoint guard refuses any durable delivery row before
-backup sanitation; unflagged backups retain their existing behavior. It does not
-enable whole-Builder checkpoint migration or occupied-target restore recovery.
+The selected tip's scheduled [CI run 39962152091](https://github.com/openclaw/openclaw/actions/runs/39962152091)
+finished with 143 successful, 11 failed and 10 skipped jobs. Inspected failures
+include dependency dead exports, Windows fixture cleanup, updater recovery and
+triage assertions, scheduled continuation and subagent progress, Bun startup
+admission and no-output timeout, subprocess teardown and sessions-send recovery.
+The aggregate gate failed. The newest successful push run
+[39960580969](https://github.com/openclaw/openclaw/actions/runs/39960580969)
+on `edaaab95243eea488901e74d062a661656c6effe` ran only security-fast and skipped
+42 jobs. The inspected successful full scheduled run
+[37419202402](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+qualifies `d8612ec864bb4c872616cfda5340c53803655f5f`, with 154 successes and
+nine skips: Node 24 compatibility, PR fail-fast/check plan, Android/iOS
+screenshots, alternate shared SDK, iOS release E2E and screenshot/seal evidence.
+Those runs do not qualify this selected tip.
 
-The final source passes independent review, 32 focused creation tests, eight
-conformance-discovery cases and four actual CLI/fresh-process cases with real
-PostgreSQL. Final affected lint/types, full build, matched sequential packaging
-and maintained tarball inventory/import-graph checks pass. The Linux AMD64
-`openclaw-full-plugin-installer` target passes strict installation, CUA artifact
-validation, Parallel/Codex bundled source checks and all three native-hook imports
-(image `sha256:7cbeecab92922179b06dd3dd2202c12fa582057916409a90fe25176cab2ff752`).
-The inherited 110-byte Control UI startup-gzip excess remains reported without a
-budget exception. Live retained-Builder recovery and interrupted checkpoint
-recovery remain separate TEST acceptance work. Fork review and source are in
-[ceckert/openclaw#8](https://github.com/ceckert/openclaw/pull/8) and
-[ceckert/openclaw#9](https://github.com/ceckert/openclaw/pull/9); the guard is an
-operator-approved fork contract, not an upstream feature acceptance.
+### Native adoption and retained boundaries
 
-No push CI run existed for the selected SHA when it was locked. The newest
-successful push run, [39717604870](https://github.com/openclaw/openclaw/actions/runs/39717604870)
-on `da0de99ddd8731f7380de148da2199555e51d315`, ran only `security-fast`; its 42
-build and test jobs were skipped. No full CI run qualifies the selected source.
-Neither an older green SHA nor a later moving tip was substituted. Upstream
-main later requires patched Node 24.22.1 or 26.12.1 (#179992); the gateway base
-image already runs Node 26.12.1.
+The previous overlay was recut with 14 conflict resolutions. Native
+[#181198](https://github.com/openclaw/openclaw/pull/181198) now supplies the
+pending inherited-auth owner and startup-publication behavior. The duplicate
+pending-admission implementation, worker plumbing and test suite are removed;
+current native refusals for an agent's own pending admission remain intact.
+The earlier #180632 contribution is closed unmerged and superseded by that native
+owner. Backup/checkpoint parser assertions follow the replacement native CLI
+registration owner instead of restoring the deleted test file. Current config,
+channel, PostgreSQL catalogs and worker inventory are generated by native owners.
+State and agent schemas are both 31; protocol remains 4.
 
-### Recut changes and retained boundaries
+The operator-requested [#181676](https://github.com/openclaw/openclaw/pull/181676)
+is retained as a local patch from exact head
+`ba86793d73839ddf9f884573d6234dfd956fd080`, cherry-picked as `c4d3d7bf054`.
+It admits only the synchronous deletion-recovery-hold read shared by agent
+creation and workspace mutation. Real PostgreSQL controls reproduce the original
+hold-read refusal and verify rechecks, unchanged config after caller refusal,
+held-agent refusal and unrelated SQL rejection outside admission. Remove the
+patch when the selected native base provides the equivalent narrow contract.
+A fully booted PostgreSQL-state Gateway still refuses public `agents.create`
+later, during native cron-ownership inspection on the Gateway thread. The
+cron-owner refusal and read-only owner are unchanged from this frozen upstream;
+this broader PostgreSQL-state config-write path is **not qualified**. No wider
+SQL admission exception is added. Current Octogee writers select SQLite state
+and PostgreSQL agent stores.
 
-The published overlay was applied as one squashed three-way recut with 13
-conflicts. Upstream changes it now follows:
-
-- Upstream retired heartbeat SDK and scheduling entry points (#180106), so
-  `heartbeat:` monitor rows are ordinary legacy jobs under Doctor custody.
-  Non-destructive detach's cron migration custody treats only the managed
-  memory-dreaming declaration as a config-owned projection; legacy monitor rows
-  now migrate with the agent instead of being skipped.
-- Upstream consolidated session input ownership and authority (#177698) into
-  the inbound projection owner. The overlay keeps command-sender authority on
-  joining callers and in the follow-up fingerprint, and the operator-authority
-  identity key beside that owner.
-- Independent explicit grants keep their visibility under a `none` session cap.
-  Mutation authorization now prepares a projected sharing policy only from
-  prepared sharing facts or profiles, as upstream does. The published overlay
-  also did so from a bare membership projection, which hid another owner's
-  read-only session from a write-role operator updating group defaults; the
-  upstream regression for that case now passes.
-- The retained cron schema-21 repair receives its migration assertion from its
-  caller. The published overlay imported the maintenance owner back, a runtime
-  import cycle the native cycle gate rejects.
-- Upstream removed two low-value test files the overlay extended. The overlay
-  keeps the detach journal phase-recovery test and drops the plugin-drain
-  listing.
-
-New in this recut, `openclaw doctor --client-credentials --repair
---non-interactive --rebind-missing-credentials` binds a fresh local client
-credential store to an existing PostgreSQL state store when the host-local
-store is missing, and reports that paired devices must pair again. Gateway
-startup never rebinds; present, mismatched or corrupt stores and SQLite state
-keep their refusals. A replaced Builder host keeps its PostgreSQL state but not
-its local credential file, and no backup exists to restore. No Octogee consumer
-runs it yet; the Builder state-on-PostgreSQL pre-boot will, with the Gateway
-stopped. Upstream treats PostgreSQL as an opt-in pluggable backend, so the flag
-stays an explicit operator repair. It is contributed as
-[openclaw/openclaw#180345](https://github.com/openclaw/openclaw/pull/180345); remove it when the selected upstream supplies equivalent
-missing-credential recovery for PostgreSQL state.
-
-Also new, a PostgreSQL Gateway whose inherited auth owner is still pending
-admission keeps starting. An evicted Builder restarted while the inheritance
-owner `octogee-unmatched-route` waited out its stale lease; `sidecars.model-runtime`
-failed on that owner's admission refusal, and the pod crash-looped. The inherited
-store now drops only a refusal for that owner's database, so agents run on their
-local credentials until the owner is admitted, and an agent's own pending
-admission still refuses. It is contributed as
-[openclaw/openclaw#180632](https://github.com/openclaw/openclaw/pull/180632); remove
-it when the selected upstream tolerates a pending inherited owner.
-
-The retained-boundary list in the previous assessment is unchanged, and its
-removal conditions still apply. Contribution status: detach #178755, auth
-startup #178970, local checkpoint #178973, reload #177823 and #167431 remain
-open. No merge outside this frozen base is claimed included.
+Authorization and membership remain source-owned boundaries: requester/reviewer
+and execution-time authority, independent explicit grants, authoritative empty
+membership revocation and account-bound delivery. Strict stop still joins retained
+startup preparation before claiming success. Reload expiry/supersession, plugin
+capture retirement, memory-shadow custody, durable cron handoff, offline detach,
+checkpoint and retained-agent recovery keep their native owners and refusal
+controls. The retained-boundary table below supplies individual gaps and removal
+conditions; native configuration and Octogee adapters remain preferred over core
+extensions. Detach #178755, auth startup #178970, checkpoint #178973, reload
+#177823 and #167431, and credential recovery #180345 remain open. Contribution
+status alone is not a retention decision.
 
 ### Artifacts and qualification
 
-Both objects are in `gs://octogee-openclaw-fork/`. Generation-specific
-downloads match the full SHA256, size and original bytes.
+Both write-once objects are in `gs://octogee-openclaw-fork/`. Generation-specific
+readback matches full SHA256, size and original bytes.
 
 | Package | Object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-42d163e0.tgz#1792678067280422` | 122283687 | `42d163e09c3de06da14e466d2a987ec82b348a30566053ba54980366e3fbc170` |
-| mattermost | `openclaw-mattermost-618ef335.tgz#1792646954258349` | 1258589 | `618ef335ba0817c54f86656c71c7e8eb203be1a72a05b352dae8278f9ad5740e` |
+| root | `openclaw-fork-706daeef.tgz#1792766258514091` | 122468389 | `706daeef05bb4a79b8f4c3ba7c6bd2b9d382ff4ae15e9e0924030075e793f4c4` |
+| mattermost | `openclaw-mattermost-ef7e6074.tgz#1792766326593830` | 1258422 | `ef7e60741f3b5978ee43435623b88964a23596d67b02b57923555147671497f9` |
 
-The pinned pnpm 12.12.1 frozen install and full `pnpm build` passed; installed
-build metadata equals clean source HEAD. Production core/UI/extension types,
-format and Oxlint across every overlay-changed file, channel and config metadata,
-worker inventory, line-cap, database-worker and database-dialect ratchets, mock
-exports and the native import-cycle gate passed. Not claimed: the max-lines
-suppression ratchet rejects three UI files byte-identical to the selected
-upstream, and the `OPENCLAW_*` budget check fails because the selected upstream
-already counts 462 names against a budget of 452; the overlay adds none. No
-suppression or budget was relaxed.
+Pinned pnpm 12.15.0 with the frozen lockfile, production core/UI/extensions types,
+applicable native test types, generated metadata/catalog checks, worker and dialect
+ratchets, mock/export and line-cap guards, changed-file lint/format and native
+import-cycle checks pass. The final full `pnpm build` passes with build-info
+matching the clean source above. Aggregate `pnpm check` is **not claimed**: its
+preflight and type lanes passed, but the broad lint run was interrupted after
+813 seconds; final file-scoped lint completed separately. No ratchet or budget
+was relaxed.
 
-Focused tests over 124 overlay-changed and touched-module files ran 2264 cases:
-2259 passed, 4 skipped and 1 failed. That managed-desktop password case and two
-queued native-open timeouts in the SQLite worker open-context suite fail
-identically on the published overlay on this macOS host; they are inherited and
-not claimed. The PostgreSQL conformance harness on pgvector 18 passed
-client-credential startup, migration and update, state and agent stores and
-Doctor diagnostics: 48 cases, 2 skipped. The installed CLI, run against
-PostgreSQL 18, refuses a replaced host without the new flag, rebinds with it to
-the same state store and then prepares normally.
+The broad affected native run produced 1,989 passes, five fixture failures and
+eight skips. Focused reruns repair all five failures: the desktop fixture uses the
+native managed-desktop factory, queued-open authority tests signal their actual
+queue barrier, and interactive browser recovery accounts for responsive remounts
+while preserving exact credential assertions. Final desktop and creation consumer
+runs pass 96 cases; queued-open passes both live/revoked cases; browser recovery
+passes all four cases. PostgreSQL credential, retained-agent CLI, checkpoint and
+native inherited-auth checks pass ten cases. Offline CLI PostgreSQL detach passes
+its native timeout on rerun; the earlier timeout remains failed evidence. The
+additional PostgreSQL hold/admission regression passes. The public-RPC failure
+above remains explicit.
 
-Sequential packers, upstream tarball integrity and an isolated strict npm
-installation passed. Installed build-info matches the clean source, all 873
-Mattermost archive files match the built source, and the CLI runs. The actual
-Linux AMD64 full-plugin installer passed CUA artifact validation, native
-registry and bundled trust, Parallel's 9-file match, Codex's 186-file match and
-three native-hook imports. Local AMD64 runs under ARM64-host emulation. Hosted
-islands were regenerated from the same source; their license, runtime and pin
-contracts and 184 app consumer cases passed. This is local build, package and
-config proof; live Gateway startup and acceptance follow the maintained main
-build and TEST deployment. This refresh deploys no environment by itself.
+Sequential root/Mattermost packers, native tarball inventory/import-graph checks
+and an isolated strict npm 12.2.0 install pass. Installed build-info matches
+source; all 873 Mattermost files match the archive. The actual Linux AMD64
+full-plugin installer passes fresh registry/trust, Parallel's nine-file match,
+Codex's 188-file match, all three native-hook imports and installed CUA artifact
+validation. The unchanged locked CUA build/test stages reuse matching cache.
+Hosted islands regenerate from this source; the Computer alias follows the
+native Solid entry after upstream removed its one-line facade. The coexistence
+fixture now exposes FontFaceSet's event interface. App production types and
+185 native-island consumer cases pass, including the repaired coexistence case.
 
-The checks above qualified `f7dfb7bc`. The pending-admission delta was
-requalified on `524d54b4`: full `pnpm build`, both inherited auth-store suites
-(18 cases), upstream tarball integrity, an isolated strict npm install reporting
-`OpenClaw 2026.10.5 (524d54b)`, and the Linux AMD64 full-plugin installer with
-the same Parallel, Codex and native-hook gates. The repacked Mattermost archive
-is byte-identical to the published `618ef335` object, which is reused. No island
-input changed since `f7dfb7bc`; the regenerated islands differ only in source pin.
+The complete Linux AMD64 Gateway image passes provisioner types, extension
+imports, installed runtime dependencies and the full runtime-image gate. Both
+Shared and Builder configurations are materialized through their real roster,
+policy, invariant, broker-catalog and pre-boot writers after the current-main
+rebase. Fresh UID1000 containers use read-only roots, tmpfs state and an
+internal-only PostgreSQL network. Native validation and Doctor exit zero;
+strict comparisons preserve every authored setting and all three complete
+per-agent broker catalogs. Only individually checked native defaults and
+version/migration/timed Doctor bookkeeping change. Negative controls reject
+policy, plugin, roster and model-catalog drift.
+
+Configured plugins load, explicit opt-outs remain disabled, Codex retains bundled
+trust and its three native-hook imports pass in both configurations. Installed
+Linux Memory file listing/index reads and Skills instruction reads execute in
+real subprocesses and exit cleanly. App and Gateway-edge types, 185 island
+consumer cases, 63 edge consumer cases and artifact/license/runtime/pin contracts
+pass. Doctor retains offline model-context inspection diagnostics; provider/tool
+or desktop execution, historical migration and live acceptance are not claimed.
+
+The published qualification image is
+`us-central1-docker.pkg.dev/octogee/octogee/gateway-refresh-qualification@sha256:da594c674530332afb9584b9a14271d1053046791eb765c3a41fd932fe96af6d`.
+Registry manifest/config hashes and a digest-addressed runtime readback verify
+source `80b95281118feabd7cb06262f02d6c1759633eec` on Node 26.12.1. This is a
+qualification image; the immutable main image family is built separately.
+
+This qualification builds and publishes artifacts; it deploys no environment or
+fleet. Final-head Octogee CI and the complete-image checks qualify merge. The
+maintained Build main run produces its immutable image family separately.
 
 ## Previous October 21 refresh on frozen main 304cf4f6
 
