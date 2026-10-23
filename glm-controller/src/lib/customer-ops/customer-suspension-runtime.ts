@@ -35,6 +35,7 @@ function migrationNeedsCancellationRequest(operation: Record<string, unknown>): 
 export async function cancelCustomerMigrationsForSuspension(
   db: Pick<Firestore, "collection" | "runTransaction">,
   uid: string,
+  deletionId: string,
   now: number,
 ): Promise<void> {
   const snapshot = await db
@@ -64,6 +65,7 @@ export async function cancelCustomerMigrationsForSuspension(
         rolledBack: false,
         nextAttemptAt: FieldValue.delete(),
         waitingOn: FieldValue.delete(),
+        cancelledByDeletionId: deletionId,
       });
     });
   }

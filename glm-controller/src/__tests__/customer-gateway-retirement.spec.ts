@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  GatewayRetirementConflictError,
+  GatewayRetirementTelemetryUnavailableError,
+} from "@octogee/core/gateway-retirement-claim";
 
 import { ensureOwnedGatewaysRetired } from "../lib/customer-ops/customer-gateway-retirement.js";
 
@@ -10,6 +14,8 @@ interface Root {
   builderSlug?: string;
   retirementVersion?: number;
   retirementClaim?: { operationId: string; version: number; phase: string };
+  updatedAt?: number;
+  updatedBy?: string;
 }
 
 function harness(
@@ -48,7 +54,7 @@ function harness(
   });
   const operationRef = (id: string) => ({
     path: `glmOperations/${id}`,
-    get: async () => ({ exists: operations[id] !== undefined, data: () => operations[id] }),
+    get: async () => ({ id, exists: operations[id] !== undefined, data: () => operations[id] }),
     listCollections: async () => collections(`glmOperations/${id}`),
   });
   const db = {
@@ -83,9 +89,16 @@ function harness(
     runTransaction: async (action: (transaction: {
       get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
       delete: (ref: { path: string }) => void;
+      set: (ref: { path: string }, data: Partial<Root>, options: { merge: true }) => void;
     }) => Promise<unknown>) => {
       const pending: string[] = [];
-      const result = await action({ get: (ref) => ref.get(), delete: (ref) => { pending.push(ref.path); } });
+      const sets: Array<[string, Partial<Root>]> = [];
+      const result = await action({
+        get: (ref) => ref.get(),
+        delete: (ref) => { pending.push(ref.path); },
+        set: (ref, data) => { sets.push([ref.path.slice("gateways/".length), data]); },
+      });
+      for (const [id, data] of sets) roots[id] = { ...roots[id]!, ...data };
       if (pending.length > 0) {
         if (failures.commit) throw new Error("retirement cleanup commit unavailable");
         committed.push(pending);
@@ -511,6 +524,74 @@ describe("owned customer gateway retirement", () => {
     expect(deleted).toEqual([]);
     operations[`${prefix}-builder-alice-g1`].schedulerHandoffReleased = true;
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retired");
+  });
+
+  it.each([
+    ["this deletion", "delete-1", "retired"],
+    ["another deletion", "delete-0", "retirement-pending"],
+  ])("follows a Builder activation awaiting source recovery that %s cancelled", async (_label, cancelledByDeletionId, outcome) => {
+    const operationId = "delete-retire-delete-1-builder-alice";
+    const operations = {
+      [operationId]: retirementOperation("succeeded"),
+      "builder-activate-builder-alice-g1": {
+        kind: "migrate-customer", status: "failed", rolledBack: false, schedulerHandoffReleased: false, cancelledByDeletionId,
+        error: "customer migration cancelled because the account was suspended",
+        input: {
+          uid: "uid-1", builderSlug: "alice", fromGatewayId: "shared-a", toGatewayId: "builder-alice",
+          source: "builder-activation-lease", recoverSourceOnly: true,
+        },
+        schedulerHandoff: {
+          migrationId: "mig-builder-activate-builder-alice-g1:scheduler:1:claim:1", fromGatewayId: "shared-a",
+          toGatewayId: "builder-alice", uid: "uid-1", slug: "alice", stageAfterCutover: true,
+        },
+      },
+    };
+    const { db } = harness({ "builder-alice": recoveredRoot(operationId) }, operations);
+
+    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+      .resolves.toBe(outcome);
+  });
+
+  it("pauses a running owned Builder whose telemetry is unavailable, then retires it paused", async () => {
+    const roots: Record<string, Root> = {
+      "builder-alice": {
+        ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running",
+        allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
+      },
+    };
+    const { db } = harness(roots);
+    const claimRetirement = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+      if (roots[gatewayId]!.desiredStatus === "running") {
+        throw new GatewayRetirementTelemetryUnavailableError(`gateway ${gatewayId} telemetry is stale or unavailable`);
+      }
+      return { version: 1 };
+    });
+    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never };
+
+    await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retirement-pending");
+    expect(roots["builder-alice"]).toMatchObject({ desiredStatus: "paused", updatedAt: 100, updatedBy: "customer-deletion-lifecycle" });
+
+    await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retirement-pending");
+    expect(claimRetirement).toHaveBeenCalledTimes(2);
+    await expect(claimRetirement.mock.results[1]!.value).resolves.toEqual({ version: 1 });
+  });
+
+  it("keeps a running owned Builder running when retirement is refused for another reason", async () => {
+    const roots: Record<string, Root> = {
+      "builder-alice": {
+        ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running",
+        allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
+      },
+    };
+    const { db } = harness(roots);
+    const claimRetirement = vi.fn(async () => {
+      throw new GatewayRetirementConflictError("gateway builder-alice still has mounted customers: alice");
+    });
+
+    await expect(ensureOwnedGatewaysRetired({
+      db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never,
+    })).rejects.toThrow(/still has mounted customers/);
+    expect(roots["builder-alice"]!.desiredStatus).toBe("running");
   });
 
   it("retires the owned disposable Builder gateway while the user's current placement is shared", async () => {

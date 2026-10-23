@@ -317,7 +317,7 @@ describe("Firestore suspension fences", () => {
       }),
     };
 
-    await cancelCustomerMigrationsForSuspension(db as never, "uid-1", 80);
+    await cancelCustomerMigrationsForSuspension(db as never, "uid-1", "delete-1", 80);
 
     expect(writes).toHaveLength(2);
     expect(writes).toContainEqual({
@@ -327,6 +327,7 @@ describe("Firestore suspension fences", () => {
         completedAt: 80,
         error: "customer migration cancelled because the account was suspended",
         rolledBack: false,
+        cancelledByDeletionId: "delete-1",
       }),
     });
     expect(writes).toContainEqual({

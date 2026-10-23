@@ -3969,8 +3969,8 @@ function buildSuspendCustomerHandler(
       );
     },
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
-    cancelCustomerMigrations: (uid) =>
-      cancelCustomerMigrationsForSuspension(db, uid, Date.now()),
+    cancelCustomerMigrations: (uid, deletionId) =>
+      cancelCustomerMigrationsForSuspension(db, uid, deletionId, Date.now()),
     deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(db, uid),
     invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
     unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),

@@ -13,6 +13,12 @@ export class GatewayRetirementConflictError extends Error {
         this.name = "GatewayRetirementConflictError";
     }
 }
+export class GatewayRetirementTelemetryUnavailableError extends GatewayRetirementConflictError {
+    constructor(message) {
+        super(message);
+        this.name = "GatewayRetirementTelemetryUnavailableError";
+    }
+}
 function isPlainRecord(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -75,6 +81,7 @@ function runningRetirementError(gatewayId, runtime, now, expectedRelease, teleme
     if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
         return {
             error: `gateway ${gatewayId} runtime telemetry is unavailable`,
+            telemetryUnavailable: true,
             liveRuntimeIdentity: null,
         };
     }
@@ -88,6 +95,7 @@ function runningRetirementError(gatewayId, runtime, now, expectedRelease, teleme
     if (!telemetry) {
         return {
             error: `gateway ${gatewayId} mount telemetry is unavailable`,
+            telemetryUnavailable: true,
             liveRuntimeIdentity: null,
         };
     }
@@ -101,6 +109,7 @@ function runningRetirementError(gatewayId, runtime, now, expectedRelease, teleme
     if (!freshObservation(heartbeat.lastHeartbeatAt, now)) {
         return {
             error: `gateway ${gatewayId} telemetry is stale or unavailable`,
+            telemetryUnavailable: true,
             liveRuntimeIdentity: null,
         };
     }
@@ -214,8 +223,11 @@ export async function claimGatewayRetirementAtomic(input) {
         if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
             const runtimeSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId));
             const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now, rootData.liveRelease, input.telemetryObservedAfter);
-            if (inspection.error)
-                throw new GatewayRetirementConflictError(inspection.error);
+            if (inspection.error) {
+                throw inspection.telemetryUnavailable
+                    ? new GatewayRetirementTelemetryUnavailableError(inspection.error)
+                    : new GatewayRetirementConflictError(inspection.error);
+            }
             liveRuntimeIdentity = inspection.liveRuntimeIdentity;
         }
         await input.claimGuard?.({ transaction, root: rootData });

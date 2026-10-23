@@ -3,6 +3,9 @@ import { type GatewayDoc } from "@octogee/shared/types/gateway-releases";
 export declare class GatewayRetirementConflictError extends Error {
     constructor(message: string);
 }
+export declare class GatewayRetirementTelemetryUnavailableError extends GatewayRetirementConflictError {
+    constructor(message: string);
+}
 interface RetirementOperation {
     input?: unknown;
     [key: string]: unknown;

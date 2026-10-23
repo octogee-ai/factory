@@ -30,6 +30,13 @@ export class GatewayRetirementConflictError extends Error {
   }
 }
 
+export class GatewayRetirementTelemetryUnavailableError extends GatewayRetirementConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayRetirementTelemetryUnavailableError";
+  }
+}
+
 interface RetirementOperation {
   input?: unknown;
   [key: string]: unknown;
@@ -143,10 +150,11 @@ function runningRetirementError(
   now: number,
   expectedRelease: number,
   telemetryObservedAfter: number | undefined,
-): { error: string | null; liveRuntimeIdentity: LiveRuntimeIdentity } {
+): { error: string | null; telemetryUnavailable?: true; liveRuntimeIdentity: LiveRuntimeIdentity } {
   if (!isGatewayRuntimeDoc(runtime) || runtime.gatewayId !== gatewayId) {
     return {
       error: `gateway ${gatewayId} runtime telemetry is unavailable`,
+      telemetryUnavailable: true,
       liveRuntimeIdentity: null,
     };
   }
@@ -160,6 +168,7 @@ function runningRetirementError(
   if (!telemetry) {
     return {
       error: `gateway ${gatewayId} mount telemetry is unavailable`,
+      telemetryUnavailable: true,
       liveRuntimeIdentity: null,
     };
   }
@@ -173,6 +182,7 @@ function runningRetirementError(
   if (!freshObservation(heartbeat.lastHeartbeatAt, now)) {
     return {
       error: `gateway ${gatewayId} telemetry is stale or unavailable`,
+      telemetryUnavailable: true,
       liveRuntimeIdentity: null,
     };
   }
@@ -330,7 +340,11 @@ export async function claimGatewayRetirementAtomic(
         rootData.liveRelease,
         input.telemetryObservedAfter,
       );
-      if (inspection.error) throw new GatewayRetirementConflictError(inspection.error);
+      if (inspection.error) {
+        throw inspection.telemetryUnavailable
+          ? new GatewayRetirementTelemetryUnavailableError(inspection.error)
+          : new GatewayRetirementConflictError(inspection.error);
+      }
       liveRuntimeIdentity = inspection.liveRuntimeIdentity;
     }
 

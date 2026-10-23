@@ -1,5 +1,8 @@
 import type { DocumentReference, DocumentSnapshot, Firestore, QueryDocumentSnapshot, Transaction } from "firebase-admin/firestore";
-import { claimGatewayRetirementAtomic } from "@octogee/core/gateway-retirement-claim";
+import {
+  claimGatewayRetirementAtomic,
+  GatewayRetirementTelemetryUnavailableError,
+} from "@octogee/core/gateway-retirement-claim";
 import {
   builderActivateOperationId,
   builderRecoverOperationId,
@@ -24,6 +27,8 @@ export interface OwnedGatewayRetirementInput {
   now: number;
   claimRetirement?: typeof claimGatewayRetirementAtomic;
 }
+
+const CUSTOMER_DELETION_ACTOR = "customer-deletion-lifecycle";
 
 function retirementOperationId(deletionId: string, gatewayId: string): string {
   return `delete-retire-${deletionId}-${gatewayId}`;
@@ -68,19 +73,37 @@ async function reconcileOwnedGatewayRetirement(
       `owned gateway ${doc.id} has invalid desired status: ${String(root.desiredStatus)}`,
     );
   }
-  await claimRetirement({
-    db: input.db,
-    gatewayId: doc.id,
-    operationId,
-    operation: automaticRetirementOperation(input, doc.id),
-    now: input.now,
-    updatedBy: "customer-deletion-lifecycle",
-    claimGuard: async ({ root: claimedRoot }) => {
-      const claimed = claimedRoot as unknown as Record<string, unknown>;
-      assertRetirementClaimOwnership(input, doc.id, claimed);
-    },
-  });
+  try {
+    await claimRetirement({
+      db: input.db,
+      gatewayId: doc.id,
+      operationId,
+      operation: automaticRetirementOperation(input, doc.id),
+      now: input.now,
+      updatedBy: CUSTOMER_DELETION_ACTOR,
+      claimGuard: async ({ root: claimedRoot }) => {
+        const claimed = claimedRoot as unknown as Record<string, unknown>;
+        assertRetirementClaimOwnership(input, doc.id, claimed);
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof GatewayRetirementTelemetryUnavailableError)) throw error;
+    await pauseUnobservableOwnedGateway(input, doc);
+  }
   return true;
+}
+
+async function pauseUnobservableOwnedGateway(
+  input: OwnedGatewayRetirementInput,
+  doc: QueryDocumentSnapshot,
+): Promise<void> {
+  await input.db.runTransaction(async (transaction) => {
+    const current = (await transaction.get(doc.ref)).data();
+    if (!current) return;
+    assertRetirementClaimOwnership(input, doc.id, current);
+    if (current.desiredStatus !== "running" || current.retirementClaim != null) return;
+    transaction.set(doc.ref, { desiredStatus: "paused", updatedAt: input.now, updatedBy: CUSTOMER_DELETION_ACTOR }, { merge: true });
+  });
 }
 
 function automaticRetirementOperation(
@@ -91,7 +114,7 @@ function automaticRetirementOperation(
     kind: "retire-gateway",
     status: "pending",
     origin: "automatic",
-    createdBy: "customer-deletion-lifecycle",
+    createdBy: CUSTOMER_DELETION_ACTOR,
     createdAt: input.now,
     startedAt: null,
     completedAt: null,
@@ -142,7 +165,7 @@ async function finishCompletedGatewayRetirement(
         transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId))),
     ]);
     if (runtime.exists || !assignments.empty || !users.empty ||
-      handoffs.some((snapshot) => schedulerHandoffAwaitingRelease({ ...snapshot.data(), id: snapshot.id }))) return null;
+      handoffs.some((snapshot) => handoffAwaitsRelease(snapshot, input.deletionId))) return null;
     const recoverySnapshots = await Promise.all(recoveryRefs.map((ref) => transaction.get(ref)));
     const cleanupRefs = [doc.ref, operationRef];
     for (const [index, snapshot] of recoverySnapshots.entries()) {
@@ -166,6 +189,12 @@ async function finishCompletedGatewayRetirement(
     for (const ref of currentRefs) transaction.delete(ref);
     return false;
   });
+}
+
+function handoffAwaitsRelease(snapshot: DocumentSnapshot, deletionId: string): boolean {
+  const operation = snapshot.data();
+  if (operation?.cancelledByDeletionId === deletionId) return false;
+  return schedulerHandoffAwaitingRelease({ ...operation, id: snapshot.id });
 }
 
 function retirementOperationAllowsCleanup(
