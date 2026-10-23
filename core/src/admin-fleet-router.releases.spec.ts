@@ -1850,6 +1850,52 @@ describe('POST /gateways/:id/recover-source', () => {
       await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
       expect(opsIn(store, 'restart-gateway')).toHaveLength(0); expect(auditsIn(store)).toHaveLength(0);
     });
+  const SUPERSEDED_DETACH = 'Agent configuration was saved but its application to the active Gateway was not confirmed (superseded); run config.get, then apply the saved config or restart the Gateway.';
+  const detachFailure = (agentIds: string[]) => '/push-rsync-state/shared-0: 500 ' + JSON.stringify({ error: 'push-rsync-state failed',
+    message: agentIds.map(id => `[release:${id}] agents.detach failed for ${id} (${SUPERSEDED_DETACH})`).join('; ') });
+  function supersededDetachSeed() {
+    const seed = sourceSeed();
+    for (let index = 2; index < 6; index++) {
+      delete seed[`users/source-user-${index}`]; delete seed[`gateways/shared-0/assignments/source-user-${index}`]; delete seed[`glmOperations/export-${index}`];
+    }
+    for (const [index, slug] of ['jdog99', 'oct01'].entries()) {
+      const error = detachFailure([`octogee-${slug}-coach`, `octogee-${slug}-proj-notes-coach`]);
+      seed[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 300, completedAt: 400, rolledBack: true,
+        input: { uid: `source-user-${index}`, fromGatewayId: 'shared-0', toGatewayId: 'shared-1' }, error,
+        steps: [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'quiesce-source', status: 'done' },
+          { name: 'flush-source', status: 'done' }, { name: 'final-sync-state', status: 'failed', error },
+          ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))] };
+    }
+    return seed;
+  }
+  it('journals source repair for exports whose final sync lost agents.detach to a newer config write', async () => {
+    const manifest = immutableBuild(), seed = supersededDetachSeed(), before = structuredClone(seed);
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
+    const queued = opsIn(store, 'restart-gateway')[0];
+    expect(queued.input.sourceRecovery.assignments).toHaveLength(2);
+    expect(queued.input.sourceRecovery.failedExports).toEqual(['export-0', 'export-1'].map(operationId => ({ operationId,
+      input: before[`glmOperations/${operationId}`].input, startedAt: 300, completedAt: 400,
+      error: before[`glmOperations/${operationId}`].error, steps: before[`glmOperations/${operationId}`].steps })));
+    expect(queued.input.sourceRecovery.managementRecovery).toBeUndefined();
+    for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
+  });
+  it.each(['other-message', 'foreign-agent', 'partial-error', 'rollback-incomplete', 'not-rolled-back', 'cutover', 'step-error', 'sync-not-failed'])(
+    'refuses source repair for a detach failure with %s', async change => {
+      const manifest = immutableBuild(), seed = supersededDetachSeed(), row = seed['glmOperations/export-0'] as any;
+      if (change === 'other-message') row.error = row.error.replace('(superseded)', '(failed)');
+      if (change === 'foreign-agent') row.error = detachFailure(['octogee-oct01-coach']);
+      if (change === 'partial-error') row.error += ' — source ingress on shared-0 not resumed: /resume/shared-0 transport failed: fetch failed';
+      if (change === 'rollback-incomplete') row.steps = row.steps.filter((step: any) => step.name !== 'rollback:resume-ingress');
+      if (change === 'not-rolled-back') row.rolledBack = false;
+      if (change === 'cutover') row.cutoverCommittedAt = 350;
+      if (change === 'step-error') row.steps.find((step: any) => step.name === 'final-sync-state').error = 'different';
+      if (change === 'sync-not-failed') row.steps.find((step: any) => step.name === 'final-sync-state').status = 'done';
+      if (['other-message', 'foreign-agent', 'partial-error'].includes(change)) row.steps.find((step: any) => step.name === 'final-sync-state').error = row.error;
+      const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+      await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
+      expect(opsIn(store, 'restart-gateway')).toHaveLength(0); expect(auditsIn(store)).toHaveLength(0);
+    });
   it.each([{ sourceSha: 'short' }, { sourceSha: 'a'.repeat(40), restoreAttempt: {} }])('rejects malformed source repair %j', async body => {
     const { app } = mkApp(sourceSeed());
     await request(app).post('/gateways/shared-0/recover-source').send(body).expect(400);

@@ -1,3 +1,4 @@
+import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { managementExportMatches, managementUserMatches, managementPodIdentity } from "./shared-source-management-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 export class SharedSourceRecoveryConflict extends Error {
@@ -41,6 +42,41 @@ function schema24ExportError(error, gatewayId, agentId) {
     return body?.error === "push-rsync-state failed" && body.message ===
         `OpenClaw snapshot of ${agentId} failed: SQLite database cannot be snapshotted safely: ${file}. OpenClaw agent database ${file} uses schema version 24; run openclaw doctor --fix before compacting it.`;
 }
+const SUPERSEDED_DETACH_ENTRY = new RegExp("^\\[release:(octogee-[a-z0-9][a-z0-9_-]*-coach)\\] agents\\.detach failed for \\1 \\(" +
+    "Agent configuration was saved but its application to the active Gateway was not confirmed \\(superseded\\); " +
+    "run config\\.get, then apply the saved config or restart the Gateway\\.\\)$");
+function supersededDetachAgentIds(message) {
+    if (typeof message !== "string")
+        return [];
+    const entries = message.split("; [release:").map((entry, index) => index === 0 ? entry : `[release:${entry}`);
+    const agentIds = entries.map(entry => SUPERSEDED_DETACH_ENTRY.exec(entry)?.[1]);
+    return agentIds.every((agentId) => agentId !== undefined) ? agentIds : [];
+}
+function supersededDetachExportError(error, gatewayId, slug) {
+    const prefix = `/push-rsync-state/${gatewayId}: 500 `;
+    if (typeof error !== "string" || !error.startsWith(prefix))
+        return false;
+    let body;
+    try {
+        body = JSON.parse(error.slice(prefix.length));
+    }
+    catch {
+        return false;
+    }
+    const agentIds = supersededDetachAgentIds(body?.message);
+    return body?.error === "push-rsync-state failed" && agentIds.length > 0 && agentIds.every(agentId => agentIdBelongsToSlug(agentId, slug));
+}
+function schema24Export(row, identity, gatewayId, steps) {
+    return schema24ExportError(row.error, gatewayId, identity.agentId) &&
+        steps.some(step => step.name === "pre-sync-state" && step.status === "failed" && step.error === row.error) &&
+        steps.some(step => step.name === "rollback:unmount-target" && step.status === "done") &&
+        !steps.some(step => step.name === "quiesce-source" || step.name === "final-sync-state");
+}
+function supersededDetachExport(row, identity, gatewayId, steps) {
+    return row.rolledBack === true && supersededDetachExportError(row.error, gatewayId, identity.slug) &&
+        steps.some(step => step.name === "final-sync-state" && step.status === "failed" && step.error === row.error) &&
+        ["scheduler-abort", "unmount-target", "scheduler-resume", "resume-ingress"].every(name => steps.some(step => step.name === `rollback:${name}` && step.status === "done"));
+}
 function failedExportMatches(row, identity, gatewayId) {
     const steps = Array.isArray(row.steps) ? row.steps : [];
     return [row.kind === "migrate-customer", row.status === "failed", row.cancellationRequestedAt === undefined,
@@ -48,10 +84,7 @@ function failedExportMatches(row, identity, gatewayId) {
         row.input?.uid === identity.uid, row.input?.fromGatewayId === gatewayId,
         typeof row.input?.toGatewayId === "string", row.input?.toGatewayId !== gatewayId,
         row.cutoverCommittedAt === undefined, row.restoreAttempt === undefined,
-        schema24ExportError(row.error, gatewayId, identity.agentId),
-        steps.some(step => step.name === "pre-sync-state" && step.status === "failed" && step.error === row.error),
-        steps.some(step => step.name === "rollback:unmount-target" && step.status === "done"),
-        !steps.some(step => step.name === "quiesce-source" || step.name === "final-sync-state")].every(Boolean);
+        schema24Export(row, identity, gatewayId, steps) || supersededDetachExport(row, identity, gatewayId, steps)].every(Boolean);
 }
 function operationTouchesSource(row, gatewayId) {
     return [row.input?.gatewayId, row.input?.fromGatewayId, row.input?.toGatewayId].includes(gatewayId);
@@ -128,7 +161,7 @@ export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOp
         const matched = failed.docs.filter(row => failedExportMatches(row.data(), identity, gatewayId))
             .sort((a, b) => b.data().completedAt - a.data().completedAt)[0];
         if (!matched)
-            return conflict(`source recovery lacks a rolled-back schema24 export for ${identity.slug}`);
+            return conflict(`source recovery lacks a rolled-back recoverable export for ${identity.slug}`);
         const row = matched.data();
         return { operationId: matched.id, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: row.steps };
     });
