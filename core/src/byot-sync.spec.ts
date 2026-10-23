@@ -62,6 +62,7 @@ vi.mock("./internal-fetch", () => ({ internalFetch: vi.fn() }));
 
 import {
   BUILDER_CODEX_APP_SERVER,
+  applyByotState,
   deriveDesiredByotState,
   byosCoachConfigPatch,
   coachFullAgentList,
@@ -2826,7 +2827,7 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
   });
 
-  it("claude-cli BYOS on shared: suppressed — no OAuth restore, store purged, platform profile only", async () => {
+  it("claude-cli BYOS on shared: suppressed — no OAuth restore, purged broker profiles preserved", async () => {
     const applyByotStateFn = vi.fn(() => false);
     const materializeFn = vi.fn(() => true);
     const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
@@ -2852,17 +2853,13 @@ describe("shared gateway — per-customer broker-token materialization", () => {
       }),
     );
 
-    // BYOSUB is single-trust-boundary-only: no OAuth credential may land on a
-    // shared pod, and any lingering profile from the pre-gate era is purged.
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
-    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, {
-      preserveAuthProfileStore: false,
-    });
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
     // no cohort model configured → coach stays on the pod default; never the byos model
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(reloadFn).toHaveBeenCalledTimes(1);
-    expect(logLines.join("\n")).toContain("byosub (claude-cli) suppressed on customer gateway");
+    expect(logLines.join("\n")).toContain("byosub (claude-cli) suppressed on Barn");
   });
 
   it("codex BYOS on shared (paid plan): suppressed to the platform rail, config default model stands", async () => {
@@ -2896,27 +2893,108 @@ describe("shared gateway — per-customer broker-token materialization", () => {
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(reloadFn).toHaveBeenCalledTimes(1);
   });
-  it("grok (non-anthropic) BYOK: writes the custom-provider models.json (store preserved) + materializes the anthropic fallback", async () => {
+  it.each(["anthropic", "openai", "grok", "openrouter", "minimax", "openai-compatible", "claude-cli", "openai-codex"])("keeps %s credentials off Barn and uses platform selections for coach and projects", async provider => {
     const applyByotStateFn = vi.fn(() => true);
     const materializeFn = vi.fn(() => false);
-
-    await syncByotForCustomer(
-      {
-        byotActive: true,
-        username: "tester-70",
-        provisioning: { openclaw: { status: "complete" } },
-        systemConfig: { byot: { provider: "grok", model: "grok-2" } },
+    const restoreOauthFn = vi.fn(async () => ({ restored: true, present: true }));
+    const overrides = vi.fn(async () => true);
+    const purge = vi.fn(async () => ({ changed: true, resetCount: 0 }));
+    const coach = "octogee-tester-70-coach";
+    const project = "octogee-tester-70-proj-web-coach";
+    const safe = { primary: "platform-openrouter/z-ai/glm-5.2", fallbacks: [] };
+    await syncByotForCustomer({
+      byotActive: true,
+      username: "tester-70",
+      selectedTier: "personal",
+      provisioning: { openclaw: { status: "complete" } },
+      builderAgentDefault: safe,
+      systemConfig: {
+        byot: { provider, model: "customer-model", baseUrl: "https://synthetic-provider.example/v1" },
+        agentModels: {
+          [coach]: { primary: "custom-tester-70/customer-model", fallbacks: [] },
+          [project]: { primary: "openai/gpt-5", fallbacks: [safe.primary] },
+        },
       },
-      baseDeps({ applyByotState: applyByotStateFn, materializePlatformBrokerSurfaces: materializeFn }),
-    );
-
-    expect(applyByotStateFn).toHaveBeenCalledWith(
-      "tester-70",
-      expect.objectContaining({ provider: "grok" }),
-      undefined,
-      PRESERVE,
-    );
+    }, baseDeps({
+      isBuilderGateway: () => false,
+      applyByotState: applyByotStateFn,
+      materializePlatformBrokerSurfaces: materializeFn,
+      restoreOauthStoreForSlug: restoreOauthFn,
+      purgeCustomerOauthRuntime: purge,
+      applyAgentModelOverrides: overrides,
+      logFn: () => {},
+    }));
+    expect(applyByotStateFn).toHaveBeenCalledWith("tester-70", null, undefined, PRESERVE);
+    expect(restoreOauthFn).not.toHaveBeenCalled();
+    expect(purge).toHaveBeenCalledWith("tester-70", safe.primary, { forceSafeAll: true });
     expect(materializeFn).toHaveBeenCalledWith("tester-70");
+    expect(overrides).toHaveBeenCalledWith("tester-70", { [coach]: safe, [project]: safe }, { houseOnly: false });
+  });
+
+  it.each([false, true])("converges owned credentials and routing without changing history (dedicated=%s)", async dedicated => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "barn-credentials-"));
+    const home = path.join(root, "home");
+    const coach = "octogee-tester-70-coach";
+    const project = "octogee-tester-70-proj-web-coach";
+    const foreign = "octogee-other-coach";
+    const ids = [coach, project, foreign];
+    const brokerProfiles = (id: string) => Object.fromEntries([
+      ["anthropic", `agent-model-token-${id}`],
+      ["platform-openrouter", `agent-model-token-openrouter-${id}`],
+      ["platform-openai", `agent-model-token-openai-${id}`],
+    ].map(([provider, secret]) => [`${provider}:default`, {
+      type: "api_key", provider, keyRef: { source: "exec", provider: "gcp-secret-manager", id: secret },
+    }]));
+    const customerProfiles = (id: string) => ({ profiles: {
+      ...brokerProfiles(id),
+      "openai:default": { type: "api_key", provider: "openai", key: "synthetic-customer-key" },
+    } });
+    const customerModels = { providers: { "custom-tester-70": { apiKey: "synthetic-customer-key", models: [] } } };
+    const config = { agents: { entries: Object.fromEntries(ids.map(id => [id, { model: "custom-tester-70/customer-model" }])) } };
+    const patches: unknown[] = [];
+    const rpc = { sessionsList: vi.fn(async () => ({ sessions: [] })), sessionsReset: vi.fn(async () => ({ ok: true as const })), close: vi.fn(async () => {}) };
+    try {
+      for (const id of ids) {
+        seedAgent(root, id);
+        const dir = codexAgentDir(root, id);
+        await writeAuthProfileStore(dir, customerProfiles(id));
+        fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify(customerModels));
+        fs.writeFileSync(path.join(dir, ".byot-managed"), "managed");
+        fs.writeFileSync(path.join(dir, "history.jsonl"), "synthetic preserved conversation\n");
+      }
+      await syncByotForCustomer({
+        byotActive: true, username: "tester-70", selectedTier: "personal",
+        provisioning: { openclaw: { status: "complete" } },
+        systemConfig: { byot: { provider: "grok", model: "customer-model" } },
+      }, baseDeps({
+        isBuilderGateway: () => dedicated,
+        isSharedGateway: () => !dedicated,
+        usesLlmBrokerToken: () => dedicated,
+        applyByotState: (slug: string, input: Parameters<typeof applyByotState>[1], _agents: unknown, options: Parameters<typeof applyByotState>[3]) => applyByotState(slug, input, path.join(root, "agents"), options),
+        purgeCustomerOauthRuntime: (slug: string, model: string, options: { forceSafeAll?: boolean }) => purgeCustomerOauthRuntime(slug, model, {
+          ...options, config, openclawDir: root, homeDir: home, rpc,
+          applyConfigPatch: async args => { patches.push(args.buildPatch(config)); return { mode: "rpc", attempts: 1, noop: true }; },
+        }),
+        materializePlatformBrokerSurfaces: vi.fn(async () => false),
+        applyAgentModelOverrides: vi.fn(async () => false),
+        logFn: () => {},
+      }));
+      for (const id of ids) {
+        const dir = codexAgentDir(root, id);
+        expect(fs.readFileSync(path.join(dir, "history.jsonl"), "utf8")).toBe("synthetic preserved conversation\n");
+        const profiles = await readAuthProfileStore(dir);
+        if (dedicated || id === foreign) {
+          expect(profiles).toEqual(customerProfiles(id));
+          expect(JSON.parse(fs.readFileSync(path.join(dir, "models.json"), "utf8"))).toEqual(customerModels);
+        } else {
+          expect(profiles).toEqual({ profiles: brokerProfiles(id) });
+          const modelsFile = path.join(dir, "models.json");
+          expect(fs.existsSync(modelsFile) ? fs.readFileSync(modelsFile, "utf8") : "").not.toMatch(/synthetic-customer-key|custom-tester-70|byok-/);
+          if (id === coach) expect(fs.existsSync(path.join(dir, ".byot-managed"))).toBe(false);
+        }
+      }
+      expect(patches).toHaveLength(dedicated ? 0 : 1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
 

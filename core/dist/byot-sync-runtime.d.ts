@@ -76,7 +76,6 @@ export interface SyncByotForCustomerDeps {
     markPlatformCatalogRestartPending?: () => void;
     clearPlatformCatalogRestartPending?: () => void;
 }
-type DesiredByotState = ReturnType<typeof deriveDesiredByotState>;
 type SyncByotUserData = Parameters<typeof deriveDesiredByotState>[0];
 export declare function agentIdsForSlug(slug: string, config: unknown): string[];
 export declare const CUSTOMER_APPROVED_PLUGINS: readonly ["mattermost", "anthropic", "memory-core", "octogee-chat-tools", "octogee-activity-tools", "octogee-connector-tools", "octogee-access-tools", "octogee-project-tools", "octogee-board-tools", "octogee-status-tools", "octogee-ops-tools", "octogee-web-tools", "octogee-workspace-tools", "parallel", "openai"];
@@ -125,9 +124,5 @@ export interface PlatformModelAllowlistPatch {
 }
 export declare function platformModelAllowlistPatch(current: unknown, builder: boolean): PlatformModelAllowlistPatch;
 export declare function applyPlatformModelAllowlist(applyConfigPatchFn?: typeof applyConfigPatch, builder?: boolean): Promise<boolean>;
-export declare function gateCustomerByosub(desired: DesiredByotState, userData: SyncByotUserData, logFn: (m: string) => void): {
-    desired: DesiredByotState;
-    suppressed: boolean;
-};
 export declare function syncByotForCustomer(userData: SyncByotUserData, deps?: SyncByotForCustomerDeps): Promise<void>;
 export {};

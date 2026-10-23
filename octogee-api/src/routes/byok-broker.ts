@@ -192,6 +192,7 @@ function credentialPathFor(
   configData: Record<string, unknown>,
   gatewayClass: string,
 ): { path: AgentCredentialPath; provider: string | null } {
+  if (gatewayClass === "shared") return { path: "platform_broker", provider: null };
   const credential =
     configData.modelCredential && typeof configData.modelCredential === "object"
       ? (configData.modelCredential as Record<string, unknown>)
@@ -341,6 +342,15 @@ function agentModelTokenSecretName(input: {
   return `${prefix}-${input.gatewayId}-${input.ownerUid}`;
 }
 
+async function apiKeyCredentialAllowed(db: Firestore, bound: GatewayBinding, slug: string): Promise<boolean> {
+  const roster = await readAssignedSlugsForGateway(db, bound.gatewayId);
+  const assigned = roster.includes(slug) || await configuredBuilderSlugCredentialBootstrapAllowed(
+    db, bound.gatewayId, bound.podName, slug,
+  );
+  const authorization = await readGatewayAuthorization(db, bound.gatewayId);
+  return assigned && authorization?.config.gatewayClass === "builder";
+}
+
 async function handleApiKeyCredential(
   db: Firestore,
   readCredentialSecret: (name: string, version?: string) => Promise<string>,
@@ -361,16 +371,7 @@ async function handleApiKeyCredential(
     return;
   }
   const { slug, provider, version } = parsed;
-  const roster = await readAssignedSlugsForGateway(db, bound.gatewayId);
-  if (
-    !roster.includes(slug) &&
-    !(await configuredBuilderSlugCredentialBootstrapAllowed(
-      db,
-      bound.gatewayId,
-      bound.podName,
-      slug,
-    ))
-  ) {
+  if (!await apiKeyCredentialAllowed(db, bound, slug)) {
     res.status(403).json(FORBIDDEN);
     return;
   }
@@ -379,6 +380,10 @@ async function handleApiKeyCredential(
     `byok-${slug}-${provider}`,
     version ?? "latest",
   );
+  if (!await apiKeyCredentialAllowed(db, bound, slug)) {
+    res.status(403).json(FORBIDDEN);
+    return;
+  }
   res.json({ value });
 }
 

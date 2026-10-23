@@ -1161,13 +1161,21 @@ export async function configuredBuilderSlugCredentialBootstrapAllowed(
   const gateway = gatewaySnap.data();
   const config = projectGatewayMutableConfigForGateway(gateway, gatewayId);
   if (!config) return false;
-  return typeof config.ownerUid === "string" &&
-    configuredBuilderCredentialBootstrapAllowed(gateway, {
+  const uid = config.ownerUid;
+  if (typeof uid !== "string" || !configuredBuilderCredentialBootstrapAllowed(gateway, {
       gatewayId,
       podName,
       slug,
-      uid: config.ownerUid,
-    });
+      uid,
+    })) return false;
+  const user = (await db.collection("users").doc(uid).get()).data();
+  if (slugFromAssignedUser(user) !== slug) return false;
+  const assignedGatewayId = stringAt(user, OPENCLAW_GATEWAY_ID_FIELD);
+  if (assignedGatewayId === gatewayId) return true;
+  if (await hasRunningInboundMigrationForUid(db, gatewayId, uid)) return true;
+  const root = projectGatewayDesiredRootForGateway(gateway, gatewayId);
+  return assignedGatewayId === "" && stringAt(user, "provisioning.openclaw.status") !== "complete" &&
+    root?.liveRelease === null && root.latestRelease === 1;
 }
 
 async function requireAssignedUser(

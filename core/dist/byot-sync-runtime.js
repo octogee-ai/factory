@@ -1403,15 +1403,17 @@ async function syncBuilderByotState(slug, desired, actions) {
         await actions.triggerSecretsReload();
     }
 }
-export function gateCustomerByosub(desired, userData, logFn) {
+function gateCustomerModelCredentials(shared, desired, userData, logFn) {
     const provider = desired.input?.provider;
-    if (!provider || !isModelCredentialOauthProvider(provider)) {
+    if (!provider || (!shared && !isModelCredentialOauthProvider(provider))) {
         return { desired, suppressed: false };
     }
     const slug = userData.username ?? "";
-    logFn(`[byot-sync] ${slug}: byosub (${provider}) suppressed on customer gateway — ` +
-        `OAuth agent runtimes cannot preserve verified turn authority; serving the platform ` +
-        `broker profile with the owner's tier grant`);
+    const reason = shared
+        ? `customer credentials stay off Barn; serving the platform broker profile with the owner's tier grant`
+        : `OAuth agent runtimes cannot preserve verified turn authority; serving the platform broker profile with the owner's tier grant`;
+    const credential = isModelCredentialOauthProvider(provider) ? "byosub" : "byok";
+    logFn(`[byot-sync] ${slug}: ${credential} (${provider}) suppressed on ${shared ? "Barn" : "customer gateway"} — ${reason}`);
     return {
         desired: {
             enabled: false,
@@ -1421,38 +1423,22 @@ export function gateCustomerByosub(desired, userData, logFn) {
         suppressed: true,
     };
 }
-// eslint-disable-next-line complexity -- Shared gateways reconcile BYOT, broker profiles, and OAuth allowlists in one ordered pass.
-async function syncSharedBrokerByotState(slug, desired, actions, opts) {
-    const provider = desired.input?.provider;
-    const isOauth = Boolean(provider && isModelCredentialOauthProvider(provider));
-    const isNonAnthropicKey = Boolean(provider && provider !== "anthropic" && !isOauth);
-    const restore = isOauth
-        ? await actions.restoreOauthStoreForSlug(slug)
-        : { restored: false, present: true };
-    const changed = await actions.applyByotState(slug, isNonAnthropicKey ? desired.input : null, undefined, 
-    // A suppressed byosub owner may carry a pre-gate OAuth profile in the
-    // store — purge it; every other shared path preserves the store.
-    { preserveAuthProfileStore: opts?.purgeAuthProfileStore !== true });
+async function syncSharedBrokerByotState(slug, desired, actions, customerOauthRuntimeChanged) {
+    const changed = await actions.applyByotState(slug, null, undefined, {
+        preserveAuthProfileStore: true,
+    });
     const catalogChanged = await actions.materializePlatformBrokerSurfaces(slug);
-    const runtimePatched = await applyRestoredOauthRuntimeAllowlist(restore, actions, STANDARD_CODEX_APP_SERVER);
-    const patched = restore.present && desired.coachModelInput
+    const patched = desired.coachModelInput
         ? await actions.applyCoachModelPatch(desired.coachModelInput)
         : false;
-    const restartRequested = await requestRestartIfRequired(runtimePatched, actions);
-    if ((changed ||
-        restore.restored ||
-        catalogChanged ||
-        runtimePatched.patched ||
-        patched ||
-        opts?.customerOauthRuntimeChanged) &&
-        !restartRequested) {
+    if (changed || catalogChanged || patched || customerOauthRuntimeChanged) {
         await actions.triggerSecretsReload();
     }
 }
-function customerByotGate(builder, desired, userData, logFn) {
+function customerByotGate(builder, shared, desired, userData, logFn) {
     if (builder)
         return { desired, suppressed: false };
-    return gateCustomerByosub(desired, userData, logFn);
+    return gateCustomerModelCredentials(shared, desired, userData, logFn);
 }
 function safeCustomerModelRef(userData, houseOnly) {
     if (houseOnly)
@@ -1483,8 +1469,9 @@ export async function syncByotForCustomer(userData, deps) {
     if (!slug)
         return;
     const builder = isBuilder();
+    const shared = isShared();
     const logFn = deps?.logFn ?? log;
-    const customerGate = customerByotGate(builder, desired, userData, logFn);
+    const customerGate = customerByotGate(builder, shared, desired, userData, logFn);
     const effectiveDesired = customerGate.desired;
     const houseOnly = resolveBillingProfile(userData).modelAccess === "house_only";
     const oauthPurge = await purgeCustomerOauthIfRequired(builder, slug, safeCustomerModelRef(userData, houseOnly), customerGate.suppressed, actions);
@@ -1492,7 +1479,7 @@ export async function syncByotForCustomer(userData, deps) {
         slug,
         desired: effectiveDesired,
         actions,
-        isShared,
+        shared,
         builder,
         usesBrokerToken,
         purgeAuthProfileStore: customerGate.suppressed,
@@ -1609,11 +1596,8 @@ async function convergeCoachToolsIfNoModelPatch(slug, desired, userData, actions
 }
 async function syncByotStateForClass(args) {
     const { slug, desired, actions } = args;
-    if (args.isShared()) {
-        await syncSharedBrokerByotState(slug, desired, actions, {
-            purgeAuthProfileStore: args.purgeAuthProfileStore,
-            customerOauthRuntimeChanged: args.customerOauthRuntimeChanged,
-        });
+    if (args.shared) {
+        await syncSharedBrokerByotState(slug, desired, actions, args.customerOauthRuntimeChanged);
         return;
     }
     if (isBrokerResolvedAnthropic(desired, args.usesBrokerToken())) {

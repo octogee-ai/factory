@@ -1,4 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
+import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
+import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
 
 import type {
   ModelBrokerProvider,
@@ -24,13 +26,13 @@ export type ModelBrokerProviderKeyResolver = (
 ) => Promise<ModelBrokerProviderKey | null>;
 
 export interface AnthropicProviderKeyResolverDeps {
-  db: Pick<Firestore, "collection">;
+  db: Pick<Firestore, "collection" | "doc">;
   platformKey?: string;
   readSecret?: (name: string) => Promise<string>;
 }
 
 export interface ModelBrokerProviderKeyResolverDeps {
-  db: Pick<Firestore, "collection">;
+  db: Pick<Firestore, "collection" | "doc">;
   platformKeys?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   readSecret?: (name: string) => Promise<string>;
 }
@@ -80,6 +82,16 @@ function platformKeyResolution(platformKey: string | undefined): ModelBrokerProv
   return apiKey ? { apiKey, source: "platform" } : null;
 }
 
+function assignedBuilderOwnsKey(
+  record: ModelBrokerTokenRecord,
+  userData: Record<string, unknown> | undefined,
+  authorization: Awaited<ReturnType<typeof readGatewayAuthorization>>,
+): boolean {
+  return authorization?.config.gatewayClass === "builder" &&
+    authorization.config.ownerUid === record.ownerUid &&
+    userAssignmentMatchesGateway(userData, record.gatewayId, authorization.config.builderSlug);
+}
+
 export function createAnthropicProviderKeyResolver(
   deps: AnthropicProviderKeyResolverDeps,
 ): ModelBrokerProviderKeyResolver {
@@ -94,14 +106,23 @@ export function createAnthropicProviderKeyResolver(
     ]);
     const userData = userSnap.data() as Record<string, unknown> | undefined;
     const configData = configSnap.data() as Record<string, unknown> | undefined;
-    const resolution = configuredAnthropicModelCredentialResolution(
-      userData,
-      configData,
-    );
+    const authorization = await readGatewayAuthorization(deps.db, record.gatewayId);
+    if (!authorization) return null;
+    if (authorization.config.gatewayClass === "shared") return platformKeyResolution(deps.platformKey);
+    if (!assignedBuilderOwnsKey(record, userData, authorization)) return null;
+    const resolution = configuredAnthropicModelCredentialResolution(userData, configData);
     if (resolution.kind === "deny") return null;
     if (resolution.kind === "platform") return platformKeyResolution(deps.platformKey);
 
     const apiKey = (await readSecret(resolution.secretName)).trim();
+    const [currentUser, currentConfig] = await Promise.all([
+      deps.db.collection("users").doc(record.ownerUid).get(),
+      deps.db.collection("users").doc(record.ownerUid).collection("system").doc("config").get(),
+    ]);
+    const current = await readGatewayAuthorization(deps.db, record.gatewayId);
+    if (!assignedBuilderOwnsKey(record, currentUser.data(), current)) return null;
+    const currentResolution = configuredAnthropicModelCredentialResolution(currentUser.data(), currentConfig.data());
+    if (currentResolution.kind !== "owner_model_credential" || currentResolution.secretName !== resolution.secretName) return null;
     return apiKey
       ? { apiKey, source: "owner_model_credential", secretName: resolution.secretName }
       : null;
