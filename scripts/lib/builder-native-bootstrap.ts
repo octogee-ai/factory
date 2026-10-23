@@ -10,6 +10,35 @@ import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js"
 import { recordBuilderNativeInitialState } from "./builder-native-initial-state.js";
 import { uninitializedBuilderState } from "./uninitialized-builder-state.js";
 
+const NATIVE_STOP_GRACE_MS = 60_000;
+const NATIVE_HOST_DIRECTORIES = ["state", "client", "agents"];
+
+async function entryNames(directory: string): Promise<Set<string> | null> {
+  try {
+    return new Set(await fs.readdir(directory));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function bootRestoringHostLayout(stateDir: string, boot: () => Promise<void>): Promise<void> {
+  const directories = NATIVE_HOST_DIRECTORIES.map((name) => path.join(stateDir, name));
+  const before = await Promise.all(directories.map(entryNames));
+  try {
+    await boot();
+  } catch (error) {
+    await Promise.all(directories.map(async (directory, index) => {
+      const existing = before[index];
+      if (!existing) return fs.rm(directory, { recursive: true, force: true });
+      for (const name of await entryNames(directory) ?? []) {
+        if (!existing.has(name)) await fs.rm(path.join(directory, name), { recursive: true, force: true });
+      }
+    }));
+    throw error;
+  }
+}
+
 async function journalAvailable(databasePath: string): Promise<boolean> {
   const anchor = readPostgresAgentAnchor(databasePath);
   if (anchor) {
@@ -81,7 +110,9 @@ export async function bootFreshBuilderHost(stateDir: string, env: NodeJS.Process
     }
   } finally {
     signal("SIGTERM");
-    await Promise.race([closed, wait(10_000)]);
+    let grace: NodeJS.Timeout | undefined;
+    await Promise.race([closed, new Promise<void>((resolve) => { grace = setTimeout(resolve, NATIVE_STOP_GRACE_MS); })]);
+    clearTimeout(grace);
     signal("SIGKILL");
     await closed;
     await fs.rm(temporary, { recursive: true, force: true });
@@ -102,7 +133,7 @@ export async function initializeBuilderNativeState(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const initialStateWasEmpty = uninitializedBuilderState(stateDir, [], {});
-  await (boot ?? ((root) => bootFreshBuilderHost(root, env)))(stateDir);
+  await bootRestoringHostLayout(stateDir, () => (boot ?? ((root) => bootFreshBuilderHost(root, env)))(stateDir));
   if (!await journalAvailable(databasePath)) {
     throw new Error("Builder native deletion journal unavailable; preserve existing history and use explicit native Doctor recovery before importing agents");
   }

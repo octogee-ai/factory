@@ -59,6 +59,29 @@ it("propagates native initialization failure and leaves the destination unpublis
     .rejects.toThrow("native refused");
   await expect(fs.stat(path.join(root, "state", "openclaw.sqlite"))).rejects.toThrow();
 });
+it("removes the host state a failed native boot created so the next attempt initializes it", async () => {
+  const root = await directory();
+  await fs.writeFile(path.join(root, "state", "openclaw.sqlite-wal"), "retained WAL");
+  await fs.mkdir(path.join(root, "agents", "existing"), { recursive: true });
+  const failed = vi.fn(async () => {
+    await fs.writeFile(path.join(root, "state", "openclaw.sqlite"), "");
+    await fs.mkdir(path.join(root, "client"));
+    await fs.writeFile(path.join(root, "client", "credentials.sqlite"), "");
+    await fs.mkdir(path.join(root, "agents", "main", "agent"), { recursive: true });
+    await fs.writeFile(path.join(root, "agents", "existing", "added"), "native-added");
+    throw new Error("native refused");
+  });
+  await expect(initializeBuilderNativeState(root, failed)).rejects.toThrow("native refused");
+  expect((await fs.readdir(path.join(root, "state"))).sort()).toEqual(["openclaw.sqlite-wal"]);
+  await expect(fs.stat(path.join(root, "client"))).rejects.toThrow();
+  expect(await fs.readdir(path.join(root, "agents"))).toEqual(["existing"]);
+  expect(await fs.readFile(path.join(root, "agents", "existing", "added"), "utf8")).toBe("native-added");
+
+  const retry = vi.fn(async () => { database(root, true); });
+  await initializeBuilderNativeState(root, retry);
+  expect(retry).toHaveBeenCalledExactlyOnceWith(root);
+});
+
 it('records a Native-created baseline only after fresh initialization and never refreshes changed state', async () => {
   const root = await directory();
   const env = { POD_UID: 'pod-one' };

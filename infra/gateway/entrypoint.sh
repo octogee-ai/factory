@@ -82,6 +82,8 @@ trap shutdown TERM INT
 log "boot: gateway-image=${BUILD_SHA:-unknown}"
 
 # ── Ensure workspace structure exists (idempotent) ──────────────────────────
+mkdir -p "$OPENCLAW_DIR"
+chmod 00700 "$OPENCLAW_DIR"
 mkdir -p "$OPENCLAW_DIR/customers"
 mkdir -p "$OPENCLAW_DIR/identity"
 mkdir -p "$OPENCLAW_DIR/secrets"
@@ -348,8 +350,6 @@ fi
 # ── End gateway auth token publish ──────────────────────────────────────────
 
 # ── Harden file permissions ─────────────────────────────────────────────────
-# The init container sets 775 for PVC/emptyDir. Tighten sensitive files.
-chmod 00700 "$OPENCLAW_DIR" 2>/dev/null || true
 chmod 600 "$OPENCLAW_CONFIG_PATH" 2>/dev/null || true
 log "File permissions hardened"
 

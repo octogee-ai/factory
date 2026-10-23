@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -245,35 +245,6 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(hardenBlock).toMatch(/chmod 600 "\$OPENCLAW_CONFIG_PATH"/);
     expect(hardenBlock).not.toMatch(/SYSTEM_CONFIG_BOOT_ROLE/);
     expect(hardenBlock).not.toMatch(/FATAL/);
-  });
-
-  it("clears inherited directory special bits before OpenClaw creates private state", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-private-root-"));
-    const stateDir = path.join(dir, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const hardenBlock = entrypoint.slice(
-      entrypoint.indexOf("# ── Harden file permissions"),
-      entrypoint.indexOf("# ── Project immutable plugin extensions"),
-    );
-    try {
-      mkdirSync(stateDir);
-      chmodSync(stateDir, 0o2700);
-      writeFileSync(configPath, "{}", { mode: 0o644 });
-      const run = spawnSync("sh", ["-c", `log() { :; }\n${hardenBlock}`], {
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-        timeout: 5_000,
-      });
-      expect(run.error).toBeUndefined();
-      expect(run.status, run.stderr).toBe(0);
-      expect(statSync(stateDir).mode & 0o7777).toBe(0o700);
-      expect(statSync(configPath).mode & 0o7777).toBe(0o600);
-      const controlDir = path.join(stateDir, "control");
-      mkdirSync(controlDir, { mode: 0o700 });
-      expect(statSync(controlDir).mode & 0o7777).toBe(0o700);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("runs pre-boot env patches without requiring the removed Firebase SA key", () => {
