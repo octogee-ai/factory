@@ -1762,6 +1762,54 @@ describe("configured Builder surge release", () => {
     }
   });
 
+  it.each(["success", "retry", "cleanup-failed", "hold-lost", "assigned", "assigned-after-drain", "residue"] as const)("keeps exact cancellation custody through imported cleanup: %s", async scenario => {
+    stubBuilderClaim("ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    const request = { migrationId: "cleanup-op", slug: "ceckert-test", targetPodUid: "target-pod" };
+    let state: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "target", mode: "permitted", phase: "running", ...request };
+    if (scenario === "residue") state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" };
+    const events: string[] = [];
+    const processGate = {
+      status: async () => state,
+      rehold: vi.fn(async () => { events.push("stop"); state = { ...state, mode: "held", phase: "cancelling" }; return state; }),
+      reholdReleasedTarget: vi.fn(async () => { events.push("restop"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "cancelling", ...request }; return state; }),
+      finalizeTargetCancellation: vi.fn(async () => { events.push("finalize"); state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: request }; return state; }),
+      unreserve: vi.fn(async () => state),
+    } as unknown as SurgeOpenClawProcessSupervisorClient;
+    const cleanup = vi.fn(async (assertCurrent: () => Promise<void>) => {
+      events.push("cleanup");
+      await assertCurrent();
+      if (scenario === "cleanup-failed") throw new Error("Native journal unavailable");
+      if (scenario === "hold-lost") state = { ...state, mode: "permitted", phase: "running" };
+    });
+    try {
+      const wiring = createBuilderSurgeGateWiring({ adapter: {} as CustomerLifecycleAdapter, processGate,
+        surgeReadiness: { release: vi.fn(async () => undefined) } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async () => undefined, waitForGatewayReady: async () => undefined,
+        log: () => undefined, provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+        waitForActiveProvisioningDrain: async () => { events.push("drain"); },
+        configuredBuilderAssigned: async () => scenario === "assigned" || (scenario === "assigned-after-drain" && events.includes("drain")),
+      });
+      const cancel = wiring.unreserveSurgeTarget(request, cleanup);
+      if (scenario === "success" || scenario === "retry") {
+        await expect(cancel).resolves.toMatchObject({ role: "normal", terminalTarget: request });
+        expect(events).toEqual(["stop", "drain", "cleanup", "finalize"]);
+        if (scenario === "retry") {
+          await expect(wiring.unreserveSurgeTarget(request, cleanup)).resolves.toMatchObject({ role: "normal", terminalTarget: request });
+          expect(events).toEqual(["stop", "drain", "cleanup", "finalize", "restop", "drain", "cleanup", "finalize"]);
+        }
+      } else {
+        await expect(cancel).rejects.toThrow();
+        expect(processGate.finalizeTargetCancellation).not.toHaveBeenCalled();
+        if (scenario === "assigned" || scenario === "residue") {
+          expect(cleanup).not.toHaveBeenCalled();
+          expect(processGate.rehold).not.toHaveBeenCalled();
+          expect(events).toEqual([]);
+        }
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("reholds, drains, and finalizes a permitted target unreserve without raw fallback", async () => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");

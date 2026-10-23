@@ -304,6 +304,7 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
     slug: string,
     evictionBatch?: readonly string[],
     currentEvictionBatch?: () => Promise<readonly string[]>,
+    targetCleanup?: { migrationId: string; targetPodUid: string; assertCurrent: () => Promise<void> },
   ) => Promise<RemoveCustomerResult>;
 
   releaseAgent?: (agentId: string) => Promise<void>;

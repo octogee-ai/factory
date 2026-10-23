@@ -99,7 +99,7 @@ import { PROC_ROOT } from "./held-files.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
 import { rejectMisaddressedGateway } from "./fleet-gateway-path.js";
-import type { CustomerLifecycleAdapter } from "./customer-lifecycle.js";
+import type { CustomerLifecycleAdapter, RemoveCustomerResult } from "./customer-lifecycle.js";
 import {
   cloneMissingProjects,
   removeCustomerFromGateway,
@@ -184,7 +184,7 @@ unreserveSurgeTarget?: (input: {
   migrationId: string;
   slug: string;
   targetPodUid: string;
-}) => Promise<SurgeOpenClawProcessGateState>;
+}, cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>) => Promise<SurgeOpenClawProcessGateState>;
 pauseSystemConfigWatch?: (slug: string) => Promise<string | void>;
 readSystemConfigWatchFence?: (slug: string) => Promise<string | null>;
 resumeSystemConfigWatch?: (
@@ -2594,7 +2594,15 @@ export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): Reque
 
 async function releaseAbortedBuilderImport(deps: MigrationHandlerDeps, activation: ConfiguredBuilderActivation): Promise<boolean> {
   if (!activation.live) {
-    const state = await deps.unreserveSurgeTarget!(activation.request);
+    let cleaned = false;
+    const state = await deps.unreserveSurgeTarget!(activation.request, async assertCurrent => {
+      const remove = deps.adapter.removeImportedCustomerBySlug;
+      if (!remove) throw new Error("held Builder import cannot be returned without imported-customer removal");
+      await removeCustomerWithSystemConfigWatchPaused({ deps, slug: activation.request.slug,
+        remove: () => remove(activation.request.slug, undefined, undefined, { ...activation.request, assertCurrent }) });
+      cleaned = true;
+    });
+    if (!cleaned) throw new Error("Builder import cleanup was not executed before unreserve");
     if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
     return true;
   }
@@ -2618,10 +2626,7 @@ async function releaseUnmountedBuilderTarget(
   activation: ConfiguredBuilderActivation | null,
 ): Promise<boolean> {
   if (!activation) return true;
-  if (!activation.live) {
-    await deps.unreserveSurgeTarget!(activation.request);
-    return true;
-  }
+  if (!activation.live) return true;
   const admission = await liveImportAdmission(deps, activation);
   if (admission === "refused") return false;
   await assertLiveBuilderUnassigned(deps, activation);
@@ -2881,6 +2886,26 @@ function matchesAllowedMigrationPath(raw: string, entry: string, allowedPrefix: 
   );
 }
 
+async function removeUnmountedBuilderImport(
+  deps: MigrationHandlerDeps,
+  slug: string,
+  activation: ConfiguredBuilderActivation | null,
+): Promise<RemoveCustomerResult> {
+  let result: RemoveCustomerResult | undefined;
+  const remove = async (assertCurrent?: () => Promise<void>) => {
+    result = await removeCustomerWithSystemConfigWatchPaused({
+      deps, slug,
+      remove: () => assertCurrent && activation
+        ? deps.adapter.removeImportedCustomerBySlug!(slug, undefined, undefined, { ...activation.request, assertCurrent })
+        : deps.adapter.removeImportedCustomerBySlug!(slug),
+    });
+  };
+  if (activation && !activation.live) await deps.unreserveSurgeTarget!(activation.request, remove);
+  else await remove();
+  if (!result) throw new Error("Builder import cleanup was not executed before unreserve");
+  return result;
+}
+
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
@@ -2896,12 +2921,11 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
       }
       await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, ACTIVATION_MANIFEST_TRANSFER));
       await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, BUILDER_SYSTEM_CONFIG_TRANSFER));
+      if (activation && !activation.live && !deps.adapter.removeImportedCustomerBySlug) {
+        throw new Error("held Builder import cannot be returned without imported-customer removal");
+      }
       if (deps.adapter.removeImportedCustomerBySlug) {
-        const result = await removeCustomerWithSystemConfigWatchPaused({
-          deps,
-          slug: body.slug,
-          remove: () => deps.adapter.removeImportedCustomerBySlug!(body.slug),
-        });
+        const result = await removeUnmountedBuilderImport(deps, body.slug, activation);
         if (result.wasMounted) deps.adapter.onUnmounted?.(body.slug);
         const response: UnmountResponse = {
           migrationId: body.migrationId,

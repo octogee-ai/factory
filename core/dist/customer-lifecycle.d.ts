@@ -236,7 +236,11 @@ export interface CustomerLifecycleAdapter {
         signal?: AbortSignal;
         timeoutMs?: number;
     }) => Promise<MigrationActivationManifest>;
-    removeImportedCustomerBySlug?: (slug: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>) => Promise<RemoveCustomerResult>;
+    removeImportedCustomerBySlug?: (slug: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>, targetCleanup?: {
+        migrationId: string;
+        targetPodUid: string;
+        assertCurrent: () => Promise<void>;
+    }) => Promise<RemoveCustomerResult>;
     releaseAgent?: (agentId: string) => Promise<void>;
 }
 export type CustomerStateImportMode = "pre" | "final" | "default";

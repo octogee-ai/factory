@@ -2205,7 +2205,7 @@ interface BuilderSurgeGateWiring {
     migrationId: string;
     slug: string;
     targetPodUid: string;
-  }) => Promise<SurgeOpenClawProcessGateState>;
+  }, cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>) => Promise<SurgeOpenClawProcessGateState>;
   selfReleaseHoldReason: () => Promise<string | null>;
   surgeTargetOpenClawHeld: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
   surgeTargetLive: (input: BuilderSurgeTargetRequest) => Promise<boolean>;
@@ -2309,12 +2309,37 @@ function releasedBuilderTargetMatches(
     terminal.targetPodUid === request.targetPodUid;
 }
 
+function reservedBuilderTargetMatches(state: SurgeOpenClawProcessGateState, request: BuilderSurgeTargetRequest): boolean {
+  return state.role === "target" && state.migrationId === request.migrationId &&
+    state.slug === request.slug && state.targetPodUid === request.targetPodUid;
+}
+
+function settledBuilderCancellation(state: SurgeOpenClawProcessGateState): boolean {
+  return state.mode === "held" && state.phase === "held";
+}
+
+async function assertBuilderTargetCleanupCurrent(
+  processGate: SurgeOpenClawProcessSupervisorClient,
+  request: BuilderSurgeTargetRequest,
+  configuredBuilderAssigned: (slug: string) => Promise<boolean>,
+): Promise<void> {
+  const current = await processGate.status();
+  if (current.role !== "target" || current.mode !== "held" ||
+      !["held", "cancelling"].includes(current.phase) ||
+      current.migrationId !== request.migrationId || current.slug !== request.slug ||
+      current.targetPodUid !== request.targetPodUid || current.podUid !== request.targetPodUid) {
+    throw new Error("Builder import cleanup no longer owns its held target");
+  }
+  if (await configuredBuilderAssigned(request.slug)) throw new Error("cannot clean a Builder with a serving assignment");
+}
+
 async function unreserveConfiguredBuilderTarget(input: {
   activeRelease: ActiveBuilderSurgeRelease | null;
   configuredBuilderAssigned: (slug: string) => Promise<boolean>;
   processGate: SurgeOpenClawProcessSupervisorClient;
   request: BuilderSurgeTargetRequest;
   waitForActiveProvisioningDrain: () => Promise<void>;
+  cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>;
 }): Promise<SurgeOpenClawProcessGateState> {
   const { activeRelease, processGate, request, waitForActiveProvisioningDrain } = input;
   const release = activeRelease?.migrationId === request.migrationId &&
@@ -2322,26 +2347,38 @@ async function unreserveConfiguredBuilderTarget(input: {
     ? activeRelease
     : null;
   if (release) release.cancelled = true;
+  const assertCleanupCurrent = () => assertBuilderTargetCleanupCurrent(processGate, request, input.configuredBuilderAssigned);
+  const cleanup = async () => {
+    if (!input.cleanup) return;
+    await assertCleanupCurrent();
+    await input.cleanup(assertCleanupCurrent);
+    await assertCleanupCurrent();
+  };
   const state = await processGate.status();
   if (state.role === "normal") {
-    if (!releasedBuilderTargetMatches(state, request)) return processGate.unreserve(request);
+    if (!releasedBuilderTargetMatches(state, request)) {
+      if (input.cleanup) throw new Error("Builder import cleanup has no matching target reservation");
+      return processGate.unreserve(request);
+    }
     if (await input.configuredBuilderAssigned(request.slug)) {
       throw new Error("cannot cancel a released Builder with a serving assignment");
     }
+    if (!input.cleanup && settledBuilderCancellation(state)) return state;
     await processGate.reholdReleasedTarget(request);
     await waitForActiveProvisioningDrain();
+    await cleanup();
     return processGate.finalizeTargetCancellation(request);
   }
-  if (
-    state.role !== "target" ||
-    state.migrationId !== request.migrationId ||
-    state.slug !== request.slug ||
-    state.targetPodUid !== request.targetPodUid
-  ) {
+  if (!reservedBuilderTargetMatches(state, request)) {
+    if (input.cleanup) throw new Error("Builder import cleanup has no matching target reservation");
     return processGate.unreserve(request);
+  }
+  if (await input.configuredBuilderAssigned(request.slug)) {
+    throw new Error("cannot cancel a Builder with a serving assignment");
   }
   const reheld = await processGate.rehold(request);
   await waitForActiveProvisioningDrain();
+  await cleanup();
   if (reheld.phase !== "cancelling") return processGate.unreserve(request);
   return processGate.finalizeTargetCancellation(request);
 }
@@ -2726,12 +2763,12 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       return reservedTargetOpenClawHeld(await processGate.status(), request);
     },
     ...liveBuilderTargetOperations({ adapter, processGate, surgeReadiness, configuredBuilderAssigned }),
-    async unreserveSurgeTarget(request) {
+    async unreserveSurgeTarget(request, cleanup) {
       preparedTarget = null;
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
       return runCancellation(() => unreserveConfiguredBuilderTarget({
         activeRelease, configuredBuilderAssigned, processGate, request,
-        waitForActiveProvisioningDrain,
+        waitForActiveProvisioningDrain, cleanup,
       }));
     },
     releaseSurgeReadiness(input) {

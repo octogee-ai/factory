@@ -114,6 +114,11 @@ const mocks = vi.hoisted(() => ({
   applyOpenClawActivationManifest: vi.fn(),
   removeActivationManifest: vi.fn(),
 }));
+const offlineDetachMocks = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock('../lib/openclaw-cli.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../lib/openclaw-cli.js')>(),
+  runOpenClaw: offlineDetachMocks.run,
+}));
 const supervisorMocks = vi.hoisted(() => ({ status: vi.fn() }));
 vi.mock('../lib/surge-openclaw-process-gate.js', async importOriginal => ({
   ...await importOriginal<typeof import('../lib/surge-openclaw-process-gate.js')>(),
@@ -5105,6 +5110,72 @@ async function withPostgresAgentConfig(config: Record<string, unknown>, run: () 
     else await fs.rm(OPENCLAW_CONFIG, { force: true });
   }
 }
+
+it.each(['confirmed', 'already-absent', 'missing-journal', 'invalid-json', 'missing-preserve', 'wrong-operation', 'wrong-pod', 'lost-hold', 'partial-retry', 'roster-retry'] as const)("cleans retained imported stores through Native under exact held target custody: %s", async scenario => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'broker-held-native-cleanup-'));
+  const oldState = process.env.OPENCLAW_STATE_DIR;
+  const oldPod = process.env.POD_UID;
+  stubBuilderClaim('alice');
+  process.env.OPENCLAW_STATE_DIR = root; process.env.POD_UID = 'pod-current';
+  const failure = new Error('OpenClaw workspace identities are not initialized for this boot');
+  routingActivationMocks.stopStale.mockRejectedValue(failure);
+  const held = { version: 1 as const, podUid: scenario === 'wrong-pod' ? 'foreign' : 'pod-current', role: 'target' as const, mode: 'held' as const, phase: 'held' as const, migrationId: scenario === 'wrong-operation' ? 'another-op' : 'cleanup-op', slug: 'alice', targetPodUid: 'pod-current' };
+  supervisorMocks.status.mockReset().mockResolvedValue(held);
+  let calls = 0;
+  const receipt = (agentId: string) => ({ code: 0, stdout: JSON.stringify({ ok: true, agentId, detached: true, storePreserved: true }) });
+  const absent = (agentId: string) => ({ code: 1, stdout: JSON.stringify({ ok: false, error: { type: 'cli_error', message: `agent "${agentId}" not found` } }) });
+  offlineDetachMocks.run.mockReset().mockImplementation(async (args: string[]) => {
+    calls++;
+    if (scenario === 'lost-hold') supervisorMocks.status.mockResolvedValue({ ...held, mode: 'permitted', phase: 'running' });
+    if (scenario === 'partial-retry') {
+      if (calls === 2) throw new Error('second Native response lost');
+      if (calls === 3) return absent(args[2]);
+    }
+    if (scenario === 'roster-retry') {
+      if (calls === 2) throw new Error('second Native response lost');
+      const config = JSON.parse(await fs.readFile(OPENCLAW_CONFIG, 'utf8'));
+      delete config.agents.entries[args[2]];
+      await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    }
+    if (scenario === 'already-absent') return absent(args[2]);
+    if (scenario === 'invalid-json') return { code: 0, stdout: 'not-json' };
+    if (scenario === 'missing-preserve') return { code: 0, stdout: JSON.stringify({ ok: true, agentId: args[2], detached: true }) };
+    if (scenario === 'missing-journal') return { code: 1, stdout: JSON.stringify({ ok: false, error: { type: 'cli_error', message: 'Agent deletion journal is missing' } }) };
+    return receipt(args[2]);
+  });
+  const rpc = mkGatewayRpc({ agentsDetach: vi.fn().mockRejectedValue(failure) });
+  try {
+    const agentIds = ['octogee-alice-coach', ...(['partial-retry', 'roster-retry'].includes(scenario) ? ['octogee-alice-proj-orbit-coach'] : [])];
+    const files = agentIds.map(id => path.join(root, 'agents', id, 'agent/openclaw-agent.sqlite'));
+    for (const file of files) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, 'retained customer anchor'); }
+    await withPostgresAgentConfig({ agents: { entries: Object.fromEntries([...agentIds, ...(scenario === 'roster-retry' ? ['octogee-unmatched-route'] : [])].map(id => [id, {}])) } }, async () => {
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+      const remove = () => adapter.removeImportedCustomerBySlug!('alice', undefined, undefined, { migrationId: 'cleanup-op', targetPodUid: 'pod-current', assertCurrent: async () => {} });
+      if (scenario === 'roster-retry') {
+        await expect(remove()).rejects.toThrow('response lost');
+        await expect(remove()).resolves.toMatchObject({ retained: true });
+        await expect(remove()).resolves.toMatchObject({ retained: true });
+        expect(offlineDetachMocks.run.mock.calls.map(([args]) => args[2])).toEqual([agentIds[0], agentIds[1], agentIds[1]]);
+      } else if (scenario === 'partial-retry') {
+        await expect(remove()).rejects.toThrow('response lost');
+        await expect(remove()).resolves.toMatchObject({ retained: true });
+        expect(offlineDetachMocks.run.mock.calls.map(([args]) => args[2])).toEqual([...agentIds, ...agentIds]);
+      } else if (scenario === 'confirmed' || scenario === 'already-absent') {
+        await expect(remove()).resolves.toMatchObject({ retained: true });
+      } else if (scenario === 'missing-journal') await expect(remove()).rejects.toThrow('Agent deletion journal is missing');
+      else await expect(remove()).rejects.toThrow();
+    });
+    if (scenario === 'wrong-operation' || scenario === 'wrong-pod') expect(offlineDetachMocks.run).not.toHaveBeenCalled();
+    else expect(offlineDetachMocks.run).toHaveBeenCalledWith(['agents', 'detach', 'octogee-alice-coach', '--force', '--json'], expect.objectContaining({ env: expect.objectContaining({ OPENCLAW_STATE_DIR: root }) }));
+    expect(rpc.agentsDetach).not.toHaveBeenCalled();
+    for (const file of files) expect(await fs.readFile(file, 'utf8')).toBe('retained customer anchor');
+  } finally {
+    routingActivationMocks.stopStale.mockResolvedValue(undefined);
+    if (oldState === undefined) delete process.env.OPENCLAW_STATE_DIR; else process.env.OPENCLAW_STATE_DIR = oldState;
+    if (oldPod === undefined) delete process.env.POD_UID; else process.env.POD_UID = oldPod;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 it.each(['empty', 'initialized-unused', 'initialized-changed', 'agent-store', 'running', 'wrong-pod', 'gate-changed'])("cleans an interrupted held Builder target only when no customer Native state exists: %s", async scenario => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'broker-empty-target-'));

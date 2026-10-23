@@ -357,7 +357,7 @@ function createTargetGateOperations(
       if (state.phase !== "cancelling") {
         throw new Error("surge OpenClaw process gate target cancellation is not pending");
       }
-      return write({ ...normalState(state), mode: "held", phase: "held" });
+      return write({ ...normalState(state), mode: "held", phase: "held", terminalTarget: { migrationId: input.migrationId, slug: input.slug, targetPodUid: input.targetPodUid } });
     },
     async permitTarget(input) {
       assertRequest(input);
@@ -408,7 +408,7 @@ function createTargetGateOperations(
       if (state.phase !== "held") {
         throw new Error("cannot unreserve a claimed surge OpenClaw process gate");
       }
-      return write({ ...normalState(state), mode: "held", phase: "held" });
+      return write({ ...normalState(state), mode: "held", phase: "held", terminalTarget: { migrationId: input.migrationId, slug: input.slug, targetPodUid: input.targetPodUid } });
     },
     async settleTargetCompletion(input) {
       assertRequest(input);

@@ -1339,9 +1339,10 @@ describe("createUnmountHandler", () => {
         return { wasMounted: true, steps: [] };
       }),
     });
-    const unreserveSurgeTarget = vi.fn(async () => {
+    const unreserveSurgeTarget = vi.fn(async (_request, cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>) => {
       events.push("cancel");
       if (fails) throw new Error("cannot cancel serving assignment");
+      await cleanup?.(async () => {});
       return HELD_BUILDER_GATE_STATE;
     });
     const handler = createUnmountHandler(mkDeps({
@@ -1354,7 +1355,7 @@ describe("createUnmountHandler", () => {
     }), response.res, vi.fn());
     expect(unreserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
       migrationId: SAMPLE_UNMOUNT.migrationId, slug: "chris", targetPodUid: "builder-pod",
-    });
+    }, expect.any(Function));
     expect(response.getStatus()).toBe(fails ? 500 : 200);
     expect(events).toEqual(fails ? ["cancel"] : ["cancel", "unmount"]);
   });
@@ -2552,15 +2553,20 @@ describe("queued-rsync migration control handlers", () => {
     if (fails) expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("supervisor unavailable"));
   });
 
-  it.each(["held", "failed", "permitted"])("cancels a prepared cold Builder import; result: %s", async (outcome) => {
+  it.each(["held", "failed", "permitted", "cleanup-failed"])("cancels a prepared cold Builder import; result: %s", async (outcome) => {
     vi.stubEnv("POD_UID", "builder-pod");
     const adapter = mkAdapter({
       isBuilderGateway: () => true,
       clearMountMarker: vi.fn(),
       clearCustomerMigratingIn: vi.fn(),
+      removeImportedCustomerBySlug: vi.fn(async () => {
+        if (outcome === "cleanup-failed") throw new Error("Native journal unavailable");
+        return { wasMounted: true, steps: [] };
+      }),
     });
-    const unreserveSurgeTarget = vi.fn(async () => {
+    const unreserveSurgeTarget = vi.fn<NonNullable<MigrationHandlerDeps["unreserveSurgeTarget"]>>(async (_request, cleanup) => {
       if (outcome === "failed") throw new Error("supervisor unavailable");
+      await cleanup?.(async () => undefined);
       return { ...HELD_BUILDER_GATE_STATE, mode: outcome === "held" ? "held" as const : "permitted" as const };
     });
     const deps = mkDeps({
@@ -2576,12 +2582,14 @@ describe("queued-rsync migration control handlers", () => {
     }), response.res, vi.fn());
     expect(unreserveSurgeTarget).toHaveBeenCalledExactlyOnceWith({
       migrationId: body.migrationId, slug: "chris", targetPodUid: "builder-pod",
-    });
+    }, expect.any(Function));
     expect(response.getStatus()).toBe(outcome === "held" ? 200 : 500);
     if (outcome !== "held") {
       expect(adapter.onUnmounted).not.toHaveBeenCalled();
+      expect(adapter.clearMountMarker).not.toHaveBeenCalled();
+      expect(adapter.clearCustomerMigratingIn).not.toHaveBeenCalled();
       expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(
-        outcome === "failed" ? "supervisor unavailable" : "process is permitted",
+        outcome === "failed" ? "supervisor unavailable" : outcome === "cleanup-failed" ? "Native journal unavailable" : "process is permitted",
       ), { status: "failed" });
     } else {
       expect(adapter.onUnmounted).toHaveBeenCalledWith("chris");
@@ -2684,7 +2692,7 @@ describe("queued-rsync migration control handlers", () => {
       signature: signForPod(prepareBody.migrationId, JSON.stringify(prepareBody)),
       localAddress: `::ffff:${TARGET_POD_IP}`,
     }), response.res, vi.fn());
-    expect(response.getStatus()).toBe(200);
+    expect(response.getStatus(), JSON.stringify(response.getBody())).toBe(200);
     const daemonArgs = spawnMock.mock.calls[0][1] as string[];
     const configPath = daemonArgs.find((arg) => arg.startsWith("--config="))!.slice(9);
     const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf8"))![1]!;
@@ -2706,7 +2714,7 @@ describe("queued-rsync migration control handlers", () => {
     await createFinishRsyncImportHandler(deps)(mkRequest(finishBody, {
       signature: signForPod(finishBody.migrationId, JSON.stringify(finishBody)),
     }), finished.res, vi.fn());
-    expect(finished.getStatus()).toBe(200);
+    expect(finished.getStatus(), JSON.stringify(finished.getBody())).toBe(200);
     expect(await fs.readFile(path.join(importDir, "customers/chris/draft.txt"), "utf8")).toBe("latest draft");
     expect(await fs.readFile(path.join(importDir, "git-metadata/chris/workspace.git/HEAD"), "utf8")).toBe("ref: refs/heads/work");
     expect(fsSync.existsSync(path.join(importDir, "customers/chris/deleted.txt"))).toBe(false);

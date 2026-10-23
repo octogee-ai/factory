@@ -179,6 +179,7 @@ describe("surge OpenClaw process gate", () => {
       role: "normal",
       mode: "held",
       phase: "held",
+      terminalTarget: { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid },
     });
     await expect(gate.unreserveTarget(request)).resolves.toMatchObject({ role: "normal" });
   });
@@ -209,6 +210,7 @@ describe("surge OpenClaw process gate", () => {
       role: "normal",
       mode: "held",
       phase: "held",
+      terminalTarget: { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid },
     });
   });
 
@@ -314,6 +316,7 @@ describe("surge OpenClaw process gate", () => {
       role: "normal",
       mode: "held",
       phase: "held",
+      terminalTarget: { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid },
     });
   });
 

@@ -141,6 +141,7 @@ import {
   rebindPlatformEmbeddingRefs,
   resolveCoachIdentity,
 } from "./openclaw-config-builders.js";
+import { runOpenClaw, type OpenClawCommandResult } from "./openclaw-cli.js";
 import { createSurgeOpenClawProcessSupervisorClient, type SurgeOpenClawProcessGateState } from "./surge-openclaw-process-gate.js";
 import { uninitializedBuilderState } from "./uninitialized-builder-state.js";
 import {
@@ -1818,7 +1819,7 @@ async function stopRetainedConfiguredBuilderAccounts(ctx: BrokerCtx, slug: strin
       return null;
     });
     if (!process.env.POD_UID || status?.podUid !== process.env.POD_UID ||
-      status.mode !== "held" || status.phase !== "held") throw error;
+      status.mode !== "held" || !["held", "cancelling"].includes(status.phase)) throw error;
     ctx.log(`[remove:${slug}] OpenClaw supervisor confirms this pod has no running chat accounts`);
     return status;
   }
@@ -1832,11 +1833,76 @@ async function uninitializedHeldBuilder(agentIds: readonly string[], held: Surge
   return JSON.stringify(current) === JSON.stringify(held);
 }
 
+interface HeldDetachReceipt {
+  ok?: boolean;
+  agentId?: string;
+  detached?: boolean;
+  storePreserved?: boolean;
+  purgeFailed?: boolean;
+  failed?: unknown[];
+  error?: { type?: string; message?: string };
+}
+
+function hasPreservedAgentDetach(payload: HeldDetachReceipt | null, agentId: string): boolean {
+  return payload?.ok === true && payload.agentId === agentId &&
+    payload.detached === true && payload.storePreserved === true &&
+    payload.purgeFailed !== true && (payload.failed?.length ?? 0) === 0;
+}
+
+function heldDetachAlreadyAbsent(result: OpenClawCommandResult, agentId: string): boolean {
+  let payload: HeldDetachReceipt | null;
+  try { payload = JSON.parse(result.stdout); }
+  catch { throw new Error(`Native offline detach returned invalid JSON for ${agentId}`); }
+  if (result.code === 1 && payload?.ok === false && payload.error?.type === "cli_error" &&
+      payload.error.message === `agent "${agentId}" not found`) return true;
+  if (result.code !== 0 || !hasPreservedAgentDetach(payload, agentId)) {
+    const reason = typeof payload?.error?.message === "string" ? `: ${payload.error.message}` : "";
+    throw new Error(`Native offline detach did not confirm preserved stores for ${agentId} (exit ${result.code})${reason}`);
+  }
+  return false;
+}
+
+async function detachHeldImportedAgents(
+  ctx: BrokerCtx,
+  slug: string,
+  agentIds: readonly string[],
+  target: NonNullable<Parameters<NonNullable<CustomerLifecycleAdapter["removeImportedCustomerBySlug"]>>[3]>,
+): Promise<void> {
+  const supervisor = createSurgeOpenClawProcessSupervisorClient(OPENCLAW_DIR);
+  const assertHeld = async () => {
+    await target.assertCurrent();
+    const current = await supervisor.status();
+    if (!process.env.POD_UID || current.podUid !== process.env.POD_UID ||
+        current.role !== "target" || current.mode !== "held" ||
+        !["held", "cancelling"].includes(current.phase) ||
+        current.migrationId !== target.migrationId || current.slug !== slug ||
+        current.targetPodUid !== target.targetPodUid || current.podUid !== target.targetPodUid) {
+      throw new Error("import cleanup no longer owns its stopped Builder target");
+    }
+  };
+  try {
+    for (const agentId of agentIds) {
+      await assertHeld();
+      const result = await runOpenClaw(["agents", "detach", agentId, "--force", "--json"], {
+        env: { ...process.env, OPENCLAW_STATE_DIR: resolveOpenClawStateDir(), OPENCLAW_CONFIG_PATH: OPENCLAW_CONFIG },
+      });
+      await assertHeld();
+      if (heldDetachAlreadyAbsent(result, agentId)) {
+        ctx.log(`[remove:${slug}] Native reports ${agentId} already absent after deletion admission`);
+        continue;
+      }
+      ctx.log(`[remove:${slug}] Native detached ${agentId} offline and confirmed preserved stores`);
+    }
+    await assertHeld();
+  } finally { invalidateConfigCache(ctx); }
+}
+
 async function removeImportedCustomerBySlug(
   ctx: BrokerCtx,
   slug: string,
   evictionBatch?: readonly string[],
   currentEvictionBatch?: () => Promise<readonly string[]>,
+  targetCleanup?: Parameters<NonNullable<CustomerLifecycleAdapter["removeImportedCustomerBySlug"]>>[3],
 ): Promise<RemoveCustomerResult> {
   const wasMounted =
     fs.existsSync(path.join(CUSTOMERS_DIR, slug)) ||
@@ -1846,6 +1912,7 @@ async function removeImportedCustomerBySlug(
     const held = await stopRetainedConfiguredBuilderAccounts(ctx, slug);
     const agentIds = agentIdsForMigration(slug).filter(agentId => !isSafeDefaultAgentPortableStatePath(`agents/${agentId}`));
     if (await uninitializedHeldBuilder(agentIds, held)) ctx.log(`[remove:${slug}] no customer Native state exists on this held pod; retained Builder configuration`);
+    else if (held && targetCleanup) await detachHeldImportedAgents(ctx, slug, agentIds, targetCleanup);
     else await releaseAgentsAndInvalidateCache(ctx, agentIds, `[remove:${slug}]`);
     clearMountedMarker(CUSTOMERS_DIR, slug);
     clearMigratingInPin(CUSTOMERS_DIR, slug);
@@ -2061,9 +2128,9 @@ export function buildBrokeredLifecycleAdapter(
       }),
     exportOpenClawActivationManifest: (slug, options) =>
       openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug), options),
-    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch) =>
+    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch, targetCleanup) =>
       openClawRuntimeUpdateGuard.run(() =>
-        removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch)),
+        removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch, targetCleanup)),
     releaseAgent: (agentId) => openClawRuntimeUpdateGuard.run(() =>
       releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`)),
   };
