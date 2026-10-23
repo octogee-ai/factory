@@ -133,6 +133,7 @@ export interface MigrateCustomerDeps {
   clearMigrationPreparation?: (input: WorkspaceMigrationPreparationParams) => Promise<void>;
   assertMigrationRecoveryAuthority?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
   completeMigrationRecovery?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
+  prepareBuilderRecoveryTarget?: (input: { recovery: WorkspaceMigrationRecoveryParams; targetGatewayId: string; migrationId: string; slug: string }) => Promise<void>;
   setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: "preparing" | "waiting" | "transferring" | "connecting" }) => Promise<void>;
 
   setAssignmentState: (input: {
@@ -1595,9 +1596,15 @@ function ownershipCheckedSourceRecovery(op: Operation, previous: SchedulerHandof
     (previous.toGatewayId.startsWith("shared-") || builderActivationSourceRecoveryPending(op));
 }
 
-async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Operation, previous: SchedulerHandoffState, sharedScope: boolean): Promise<void> {
+async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Operation, previous: SchedulerHandoffState, sharedScope: boolean, recovery?: WorkspaceMigrationRecoveryParams): Promise<void> {
   if (sharedScope && sharedRecoveryTargetCleaned(op.input, previous)) return;
   if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous);
+  if (op.input.recoverSourceOnly === true && op.input.source === "builder-activation-lease") {
+    if (!recovery || !deps.prepareBuilderRecoveryTarget) throw new Error("Builder source recovery target preparation is unavailable");
+    await deps.assertMigrationRecoveryAuthority!(recovery);
+    await deps.prepareBuilderRecoveryTarget({ recovery, targetGatewayId: previous.toGatewayId, migrationId: deps.genMigrationId(op.id), slug: previous.slug });
+    await deps.assertMigrationRecoveryAuthority!(recovery);
+  }
   if (sharedScope) await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId);
 }
 
@@ -1618,7 +1625,7 @@ async function resumePreviousSchedulerAttempt(
   }
   const scope = previousAttemptScope(op, previous);
   const recovery = scope.recoveryRequired ? await sharedRecoveryAuthority(deps, op, user, uid) : undefined;
-  await cleanupPreviousSchedulerTarget(deps, op, previous, scope.sharedScope);
+  await cleanupPreviousSchedulerTarget(deps, op, previous, scope.sharedScope, recovery);
   const url = await deps.resolveGatewayUrl(previous.fromGatewayId);
   const client = deps.buildClient(() => url);
   if (recovery) await deps.assertMigrationRecoveryAuthority!(recovery);

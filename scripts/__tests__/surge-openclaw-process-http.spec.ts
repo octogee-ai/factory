@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import {
@@ -40,6 +40,10 @@ function request(body: Record<string, unknown>, signature?: string, pathGatewayI
   };
 }
 
+function gateRequest(body: { migrationId: string; slug: string; targetPodUid: string }) {
+  return { migrationId: body.migrationId, slug: body.slug, targetPodUid: body.targetPodUid };
+}
+
 const GATE_STATE = {
   version: 1 as const,
   podUid: "target-pod",
@@ -48,7 +52,25 @@ const GATE_STATE = {
   phase: "held" as const,
 };
 
+beforeEach(() => { vi.stubEnv("POD_UID", "target-pod"); });
+afterEach(() => vi.unstubAllEnvs());
+
 describe("surge OpenClaw process control handlers", () => {
+  it.each(["foreign", "missing"] as const)("refuses a signed hold at the wrong or unbound receiving allocation before gate effects: %s", async scenario => {
+    const hold = vi.fn(async () => ({ ...GATE_STATE, role: "source" as const }));
+    const drain = vi.fn();
+    const handler = createHoldSurgeOpenClawHandler({ publicKey: PUBLIC_KEY, gatewayId: GATEWAY_ID,
+      configuredBuilder: () => true, processGate: { hold, resume: vi.fn(), unreserve: vi.fn(), finalizeTargetCancellation: vi.fn() },
+      waitForActiveProvisioningDrain: drain });
+    const body = { migrationId: "abandoned-target", slug: "ceckert-test", targetPodUid: "old-pod",
+      ...(scenario === "foreign" ? { receivingPodUid: "old-pod" } : {}) };
+    const res = response();
+    await handler(request(body, signForPod(body.migrationId, JSON.stringify(body))) as never, res as never, vi.fn());
+    expect(res.result().status).toBe(scenario === "foreign" ? 409 : 400);
+    expect(hold).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+  });
+
   it("requires a signed configured Builder hold and returns only after the child is held", async () => {
     const hold = vi.fn(async () => GATE_STATE);
     const handler = createHoldSurgeOpenClawHandler({
@@ -61,6 +83,7 @@ describe("surge OpenClaw process control handlers", () => {
       migrationId: "surge-gateway-target",
       slug: "ceckert-test",
       targetPodUid: "target-pod",
+      receivingPodUid: "target-pod",
     };
     const raw = JSON.stringify(body);
     const res = response();
@@ -71,14 +94,15 @@ describe("surge OpenClaw process control handlers", () => {
       vi.fn(),
     );
 
-    expect(hold).toHaveBeenCalledWith(body);
+    expect(hold).toHaveBeenCalledWith(gateRequest(body));
     expect(res.result()).toEqual({
       status: 200,
-      body: { ...body, operation: "hold", role: "target", mode: "held", phase: "held" },
+      body: { ...gateRequest(body), operation: "hold", role: "target", mode: "held", phase: "held" },
     });
   });
 
   it("waits for an active source reconcile after holding the Builder process", async () => {
+    vi.stubEnv("POD_UID", "source-pod");
     let releaseDrain: (() => void) | undefined;
     const hold = vi.fn(async () => ({ ...GATE_STATE, role: "source" as const }));
     const waitForActiveProvisioningDrain = vi.fn(() => new Promise<void>((resolve) => {
@@ -95,6 +119,7 @@ describe("surge OpenClaw process control handlers", () => {
       migrationId: "surge-gateway-source",
       slug: "ceckert-test",
       targetPodUid: "target-pod",
+      receivingPodUid: "source-pod",
     };
     const raw = JSON.stringify(body);
     const res = response();
@@ -109,7 +134,7 @@ describe("surge OpenClaw process control handlers", () => {
 
     await Promise.resolve();
 
-    expect(hold).toHaveBeenCalledWith(body);
+    expect(hold).toHaveBeenCalledWith(gateRequest(body));
     expect(waitForActiveProvisioningDrain).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
 
@@ -118,7 +143,7 @@ describe("surge OpenClaw process control handlers", () => {
 
     expect(res.result()).toEqual({
       status: 200,
-      body: { ...body, operation: "hold", role: "source", mode: "held", phase: "held" },
+      body: { ...gateRequest(body), operation: "hold", role: "source", mode: "held", phase: "held" },
     });
   });
 
@@ -144,6 +169,7 @@ describe("surge OpenClaw process control handlers", () => {
       migrationId: "surge-gateway-target",
       slug: "ceckert-test",
       targetPodUid: "target-pod",
+      receivingPodUid: "target-pod",
     };
     const raw = JSON.stringify(body);
     const res = response();
@@ -163,10 +189,10 @@ describe("surge OpenClaw process control handlers", () => {
     releaseDrain();
     await held;
 
-    expect(finalizeTargetCancellation).toHaveBeenCalledWith(body);
+    expect(finalizeTargetCancellation).toHaveBeenCalledWith(gateRequest(body));
     expect(res.result()).toEqual({
       status: 200,
-      body: { ...body, operation: "hold", role: "normal", mode: "held", phase: "held" },
+      body: { ...gateRequest(body), operation: "hold", role: "normal", mode: "held", phase: "held" },
     });
   });
 
@@ -182,6 +208,7 @@ describe("surge OpenClaw process control handlers", () => {
       migrationId: "surge-gateway-target",
       slug: "ceckert-test",
       targetPodUid: "target-pod",
+      receivingPodUid: "target-pod",
     };
     const unsignedRes = response();
     await handler(request(body) as never, unsignedRes as never, vi.fn());
@@ -213,6 +240,7 @@ describe("surge OpenClaw process control handlers", () => {
       migrationId: "surge-gateway-target",
       slug: "ceckert-test",
       targetPodUid: "target-pod",
+      receivingPodUid: "target-pod",
     };
     const raw = JSON.stringify(body);
     const res = response();
@@ -223,10 +251,10 @@ describe("surge OpenClaw process control handlers", () => {
       vi.fn(),
     );
 
-    expect(unreserve).toHaveBeenCalledWith(body);
+    expect(unreserve).toHaveBeenCalledWith(gateRequest(body));
     expect(res.result()).toEqual({
       status: 200,
-      body: { ...body, operation: "unreserve", role: "normal", mode: "held", phase: "held" },
+      body: { ...gateRequest(body), operation: "unreserve", role: "normal", mode: "held", phase: "held" },
     });
   });
 });

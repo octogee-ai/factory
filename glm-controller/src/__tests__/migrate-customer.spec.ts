@@ -182,6 +182,7 @@ function mkDeps(options: HarnessOptions = {}) {
     buildClient: vi.fn(() => client),
     assertMigrationRecoveryAuthority: vi.fn(async () => undefined),
     completeMigrationRecovery: vi.fn(async () => undefined),
+    prepareBuilderRecoveryTarget: vi.fn(async () => undefined),
     resolveSourcePlacement: vi.fn(async () => ({
       release: 1,
       epoch: 4,
@@ -280,6 +281,55 @@ describe("abandoned Shared migration recovery", () => {
       if (scenario === "authority-failure" || scenario === "ownership-changed") expect(h.client.resume).not.toHaveBeenCalled();
     }
   });
+  it.each(["reserved", "missing-callback", "authority-lost", "scheduler-first", "scheduler-failed", "terminal-changed"] as const)("reserves an abandoned Builder target before source-only cleanup: %s", async scenario => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const target = "alice-m-12345678", id = `builder-activate-${target}-g1`;
+    const op = mkOp({ id, status: "running", startedAt: 4_000, attempts: 1,
+      input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
+      schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, fromGatewayId: "shared-blue", toGatewayId: target,
+        uid: "uid-alice", slug: "alice", stageAfterCutover: true },
+    });
+    op.schedulerHandoff!.sourceRecovery = { migrationId: op.schedulerHandoff!.migrationId, sourceEpoch: 4,
+      steps: [{ name: "quiesce-source", status: "done" }] };
+    if (scenario.startsWith("scheduler-")) op.schedulerHandoff!.stageAfterCutover = false;
+    const events: string[] = [];
+    h.client.scheduler = vi.fn(async ({ migrationId, phase }) => {
+      events.push(`scheduler:${phase}`);
+      if (scenario === "scheduler-failed" && phase === "abort") throw new Error("scheduler abort unavailable");
+      return { operationId: migrationId, phase, agentIds: [], drained: true };
+    });
+    const originalUnmount = h.client.unmount;
+    h.client.unmount = vi.fn(async request => { events.push("unmount"); return originalUnmount(request); });
+    let reserved = false;
+    const reserve = vi.fn(async () => { events.push("reserve"); reserved = true; });
+    h.deps.prepareBuilderRecoveryTarget = scenario === "missing-callback" ? undefined : reserve;
+    h.deps.assertMigrationRecoveryAuthority = vi.fn(async () => {
+      events.push("authority");
+      if (scenario === "authority-lost" && reserved) throw new Error("authority changed after reservation");
+    });
+    h.client.abortImport = vi.fn(async request => {
+      if (!reserved || scenario === "terminal-changed") throw new Error("Builder import cleanup has no matching target reservation");
+      events.push(`abort:${request.mode}`);
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(op, h.ctx);
+    if (scenario === "reserved") {
+      expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
+      expect(reserve).toHaveBeenCalledExactlyOnceWith({ recovery: { uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: id, sourceEpoch: 4, claimStartedAt: 4_000 },
+        targetGatewayId: target, migrationId: `mig-${id}`, slug: "alice" });
+      expect(events.slice(0, 5)).toEqual(["authority", "authority", "reserve", "authority", "abort:keys"]);
+      expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+    } else {
+      expect(result.rolledBack).not.toBe(true);
+      if (scenario !== "terminal-changed") expect(h.client.abortImport).not.toHaveBeenCalled();
+      if (scenario.startsWith("scheduler-")) {
+        expect(reserve).not.toHaveBeenCalled();
+        expect(events).toEqual(["scheduler:abort"]);
+      }
+      expect(h.client.resume).not.toHaveBeenCalled();
+      expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+    }
+  });
+
   const previous = { migrationId: "mig-op-1:scheduler:1:claim:1000", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };
   function recovery() {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });

@@ -415,6 +415,23 @@ describe("surge handoff direct pod transport", () => {
     expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({ migrationId: "surge-op", slug: "alice" });
   });
 
+  it.each(["target", "settled", "foreign-id", "foreign-pod", "foreign-role", "permitted", "stopping", "released"] as const)("validates exact target hold ownership while retaining ordinary late-hold rejection: %s", async scenario => {
+    const body = { migrationId: "recovery-op", slug: "alice", targetPodUid: target.uid, operation: "hold", role: scenario === "settled" ? "normal" : "target", mode: "held", phase: "held" };
+    if (scenario === "foreign-id") body.migrationId = "other";
+    if (scenario === "foreign-pod") body.targetPodUid = "other";
+    if (scenario === "foreign-role") body.role = "source";
+    if (scenario === "permitted") body.mode = "permitted";
+    if (scenario === "stopping") body.phase = "stopping";
+    const fetch = vi.fn(async () => scenario === "released"
+      ? new Response(JSON.stringify({ error: "OpenClaw process hold failed", message: "surge OpenClaw process gate target migration already released" }), { status: 409 })
+      : new Response(JSON.stringify(body), { status: 200 }));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, request: requestThroughFetch(fetch), log: vi.fn() });
+    const hold = transport.holdTargetOpenClaw!({ gatewayId: GATEWAY_ID, slug: "alice", operationId: "recovery-op", targetPod: target });
+    if (scenario === "target" || scenario === "settled") await expect(hold).resolves.toBeUndefined();
+    else await expect(hold).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("uses native full-operation deadlines for Builder holds, source resume, and target completion", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const bodies: Record<string, unknown>[] = [];
@@ -436,7 +453,9 @@ describe("surge handoff direct pod transport", () => {
         response.setEncoding = vi.fn();
         queueMicrotask(() => {
           onResponse(response);
-          response.emit("data", JSON.stringify({ resumed: true }));
+          response.emit("data", JSON.stringify(options.hostname === target.podIP && options.path === "/hold-surge-openclaw/default"
+            ? { ...JSON.parse(body), operation: "hold", role: "target", mode: "held", phase: "held" }
+            : { resumed: true }));
           response.emit("end");
         });
       };
@@ -509,16 +528,19 @@ describe("surge handoff direct pod transport", () => {
         migrationId: "surge-default-new",
         slug: "alice",
         targetPodUid: target.uid,
+        receivingPodUid: source.uid,
       },
       {
         migrationId: "surge-default-new",
         slug: "alice",
         targetPodUid: target.uid,
+        receivingPodUid: target.uid,
       },
       {
         migrationId: "surge-default-new",
         slug: "alice",
         targetPodUid: target.uid,
+        receivingPodUid: source.uid,
       },
       {
         migrationId: "surge-default-new",
@@ -1094,7 +1116,7 @@ describe("surge handoff direct pod transport", () => {
         response.setEncoding = vi.fn();
         queueMicrotask(() => {
           onResponse(response);
-          response.emit("data", JSON.stringify({ ok: true }));
+          response.emit("data", JSON.stringify({ ...body, operation: "unreserve", role: "normal", mode: "held", phase: "held" }));
           response.emit("end");
         });
       };
@@ -1126,6 +1148,7 @@ describe("surge handoff direct pod transport", () => {
       migrationId: "surge-gw-a-target",
       slug: "alice",
       targetPodUid: target.uid,
+      receivingPodUid: target.uid,
     });
     const native = request.mock.results[0]?.value as NativeRequest;
     expect(native.setTimeout).toHaveBeenCalledWith(

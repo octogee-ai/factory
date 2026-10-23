@@ -26,7 +26,11 @@ export interface SurgeOpenClawProcessHandlerDeps {
   log?: (message: string) => void;
 }
 
-function parseProcessRequestBody(rawBody: string): SurgeOpenClawProcessRequest | null {
+function validProcessPodUid(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512;
+}
+
+function parseProcessRequestBody(rawBody: string): (SurgeOpenClawProcessRequest & { receivingPodUid: string }) | null {
   let body: Record<string, unknown>;
   try {
     const parsed = JSON.parse(rawBody) as unknown;
@@ -35,11 +39,12 @@ function parseProcessRequestBody(rawBody: string): SurgeOpenClawProcessRequest |
   } catch {
     return null;
   }
-  const { migrationId, slug, targetPodUid } = body;
+  const { migrationId, slug, targetPodUid, receivingPodUid } = body;
   if (typeof migrationId !== "string" || !migrationId || migrationId.length > 512) return null;
   if (typeof slug !== "string" || !isValidUsername(slug)) return null;
-  if (typeof targetPodUid !== "string" || !targetPodUid || targetPodUid.length > 512) return null;
-  return { migrationId, slug, targetPodUid };
+  if (!validProcessPodUid(targetPodUid)) return null;
+  if (!validProcessPodUid(receivingPodUid)) return null;
+  return { migrationId, slug, targetPodUid, receivingPodUid };
 }
 
 function parseAndVerify(
@@ -50,7 +55,7 @@ function parseAndVerify(
   const rawBody = (req as Request & { rawBody?: string }).rawBody ?? "";
   const request = parseProcessRequestBody(rawBody);
   if (!request) {
-    res.status(400).json({ error: "missing or invalid migrationId/slug/targetPodUid" });
+    res.status(400).json({ error: "missing or invalid migrationId/slug/targetPodUid/receivingPodUid" });
     return null;
   }
   const signature = req.header(SIGNATURE_HEADER);
@@ -67,7 +72,12 @@ function parseAndVerify(
   if (rejectMisaddressedGateway(req, res, deps.gatewayId, deps.log ?? (() => undefined))) {
     return null;
   }
-  return request;
+  const ownPodUid = process.env.POD_UID?.trim();
+  if (!ownPodUid || request.receivingPodUid !== ownPodUid) {
+    res.status(409).json({ error: "OpenClaw process request receiving pod UID does not match this allocation" });
+    return null;
+  }
+  return { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid };
 }
 
 function requireConfiguredBuilder(

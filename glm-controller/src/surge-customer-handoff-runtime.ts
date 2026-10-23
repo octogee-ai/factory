@@ -573,6 +573,27 @@ type SurgeControlCall = (
   options: SurgeControlOptions,
 ) => Promise<Record<string, unknown>>;
 
+export function isReleasedSurgeTargetHold(error: unknown): boolean {
+  if (!(error instanceof SurgePodControlError) || error.status !== 409) return false;
+  const body = error.body;
+  return body !== null && typeof body === "object" &&
+    "error" in body && body.error === "OpenClaw process hold failed" &&
+    "message" in body && body.message === "surge OpenClaw process gate target migration already released";
+}
+
+function assertHeldTargetResponse(
+  response: Record<string, unknown>,
+  input: { operationId: string; slug: string; targetPod: SurgePod },
+  operation: "hold" | "unreserve",
+): void {
+  if (response.migrationId !== input.operationId || response.slug !== input.slug ||
+      response.targetPodUid !== input.targetPod.uid || response.operation !== operation ||
+      response.mode !== "held" || response.phase !== "held" ||
+      (response.role !== "normal" && (operation !== "hold" || response.role !== "target"))) {
+    throw new Error(`target OpenClaw ${operation} did not confirm its held migration identity`);
+  }
+}
+
 async function controlSurgeOpenClawProcess(
   control: SurgeControlCall,
   input: {
@@ -585,9 +606,9 @@ async function controlSurgeOpenClawProcess(
     capability: string;
     timeoutMs?: number;
   },
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   try {
-    await control(
+    return await control(
       input.pod,
       input.gatewayId,
       input.path,
@@ -597,6 +618,7 @@ async function controlSurgeOpenClawProcess(
           migrationId: input.operationId,
           slug: input.slug,
           targetPodUid: input.targetPodUid,
+          receivingPodUid: input.pod.uid,
         },
         timeoutMs: input.timeoutMs,
       },
@@ -865,7 +887,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async holdTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
-      await controlSurgeOpenClawProcess(control, {
+      const response = await controlSurgeOpenClawProcess(control, {
         pod: targetPod,
         gatewayId,
         path: "hold-surge-openclaw",
@@ -874,10 +896,11 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         targetPodUid: targetPod.uid,
         capability: "reserve",
       });
+      assertHeldTargetResponse(response, { operationId, slug, targetPod }, "hold");
     },
 
     async unreserveTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
-      await controlSurgeOpenClawProcess(control, {
+      const response = await controlSurgeOpenClawProcess(control, {
         pod: targetPod,
         gatewayId,
         path: "unreserve-surge-openclaw",
@@ -886,6 +909,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         targetPodUid: targetPod.uid,
         capability: "unreserve",
       });
+      assertHeldTargetResponse(response, { operationId, slug, targetPod }, "unreserve");
     },
 
     async flush({

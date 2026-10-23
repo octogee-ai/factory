@@ -1,3 +1,4 @@
+import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
 import { createAgentStoreCredentialProvisioner, assertNoBuilderAgentStores } from "@octogee/core/agent-store-credentials";
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
@@ -3198,7 +3199,27 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const recoveryTargetTransport = createSurgePodTransport({ privateKey, log: logFn });
+  const recoveryTargetEndpoints = createSurgeEndpointLister({
+    readRuntimeDoc: async gatewayId => (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data(),
+    listPods: gatewayId => listSurgePods(spawnKubectl, NAMESPACE, gatewayId),
+    readComputerReady: createComputerReadinessProbe({ port: FLEET_CONTROLLER_PORT, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, log: logFn }),
+  });
   const migrateCustomer = createMigrateCustomerHandler({
+    prepareBuilderRecoveryTarget: input => prepareBuilderRecoveryTarget({
+      assertAuthority: recovery => assertWorkspaceMigrationRecoveryAuthority({ db: db as unknown as FleetStateFirestore,
+        serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, recovery),
+      targetAssigned: async gatewayId => {
+        const [assignments, users] = await Promise.all([
+          readAssignmentDocsForGateway(db, gatewayId),
+          db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId).limit(1).get(),
+        ]);
+        return assignments.length > 0 || !users.empty;
+      },
+      listPods: recoveryTargetEndpoints,
+      holdTargetOpenClaw: recoveryTargetTransport.holdTargetOpenClaw!,
+      unreserveTargetOpenClaw: recoveryTargetTransport.unreserveTargetOpenClaw!,
+    }, input),
     assertMigrationRecoveryAuthority: (input) => assertWorkspaceMigrationRecoveryAuthority({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     completeMigrationRecovery: (input) => completeWorkspaceMigrationRecovery({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
