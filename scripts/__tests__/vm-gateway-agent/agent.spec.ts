@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   TOKEN_REFRESH_MS,
   PREEMPTION_WATCH_RETRY_MS,
@@ -6,12 +10,17 @@ import {
   fetchRuntimeBundle,
   initialAgentState,
   watchPreemption,
+  applyBundle,
+  applyServices,
   type VmAgentDeps,
 } from "../../lib/vm-gateway-agent/agent";
 import type { DockerEngine } from "../../lib/vm-gateway-agent/docker-engine";
 import { scratchVolumeName } from "../../lib/vm-gateway-agent/scratch.js";
 import { HOME_CHECKPOINT_INTERVAL_MS } from "../../lib/vm-gateway-agent/home-checkpoint";
 import { bundleFixture } from "./fixture";
+import { planBundle } from "../../lib/vm-gateway-agent/plan.js";
+import { createSurgeOpenClawProcessSupervisorClient } from "../../lib/surge-openclaw-process-gate.js";
+import { startSurgeOpenClawSupervisor } from "../../entrypoints/surge-openclaw-supervisor.js";
 
 const SHA = "c".repeat(64);
 const DISK = { sizeBytes: 42_949_672_960, freeBytes: 3_221_225_472 };
@@ -126,6 +135,7 @@ function deps(
     apiUrl: "http://10.128.9.9:3001",
     stateRoot: "/srv/octogee",
     engine: docker.engine,
+    holdOpenClaw: vi.fn(async () => {}),
     metadata: {
       identityToken: async (aud) => `id-${aud}`,
       accessToken: async () => "access-1",
@@ -207,6 +217,93 @@ it("retains old and orphan caches through runtime replacement and steady converg
 
 const calls = (fetchImpl: typeof fetch, suffix: string) =>
   (fetchImpl as unknown as { mock: { calls: Array<[string, RequestInit]> } }).mock.calls.filter(([url]) => String(url).endsWith(suffix));
+
+describe.each(["bundle", "services"] as const)("%s runtime replacement", (kind) => {
+  function replacement() {
+    const docker = fakeDocker();
+    const bundle = homeBundle();
+    const h = deps(docker, () => runtimeReply(bundle), { now: 0 });
+    docker.containers.set("octogee-gateway", { running: true, config: { Image: "old", HostConfig: {} } });
+    const plan = planBundle(bundle, { stateRoot: h.d.stateRoot, instanceId: "4242", desktopAuth: true });
+    const apply = () => kind === "bundle" ? applyBundle(h.d, bundle, plan) : applyServices(h.d, bundle, plan.services);
+    return { docker, h, apply, bundle, plan };
+  }
+
+  it("keeps the old container until its Native supervisor acknowledges the stop", async () => {
+    const { docker, h, apply } = replacement();
+    let acknowledge!: () => void;
+    h.d.holdOpenClaw = vi.fn(() => new Promise<void>((resolve) => { acknowledge = resolve; }));
+    const applying = apply();
+    await vi.waitFor(() => expect(h.d.holdOpenClaw).toHaveBeenCalledWith("/srv/octogee/volumes/data/.openclaw"));
+    expect(docker.containers.get("octogee-gateway")?.config.Image).toBe("old");
+    expect(docker.log).not.toContain("DELETE /containers/octogee-gateway");
+    acknowledge();
+    await applying;
+    expect(docker.containers.get("octogee-gateway")?.config.Image).not.toBe("old");
+  });
+
+  it("preserves the old runtime when the Native supervisor refuses a migration-owned stop", async () => {
+    const { docker, h, apply } = replacement();
+    h.d.holdOpenClaw = vi.fn(async () => { throw new Error("migration owns Native process"); });
+    await expect(apply()).rejects.toThrow("migration owns Native process");
+    expect(docker.containers.get("octogee-gateway")?.config.Image).toBe("old");
+    expect(docker.log.some((line) => line.startsWith("DELETE /containers/"))).toBe(false);
+  });
+
+  it("does not contact Native for a stopped gateway or an edge-only replacement", async () => {
+    const { docker, h, apply, bundle, plan } = replacement();
+    await applyServices(h.d, bundle, plan.services.filter((service) => service.name !== "octogee-gateway"));
+    expect(h.d.holdOpenClaw).not.toHaveBeenCalled();
+    expect(docker.containers.get("octogee-gateway")?.config.Image).toBe("old");
+    docker.containers.get("octogee-gateway")!.running = false;
+    await apply();
+    expect(h.d.holdOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it("refuses a paused gateway without destroying its writer hold", async () => {
+    const { docker, h, apply } = replacement();
+    docker.containers.get("octogee-gateway")!.paused = true;
+    await expect(apply()).rejects.toThrow("paused Native gateway");
+    expect(h.d.holdOpenClaw).not.toHaveBeenCalled();
+    expect(docker.log.some((line) => line.startsWith("DELETE /containers/"))).toBe(false);
+  });
+
+  it("waits for child exit through the real supervisor socket before destroying the container", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vm-stop-"));
+    const socketPath = join(root, "s");
+    const { docker, h, bundle } = replacement();
+    h.d.stateRoot = root;
+    const openclawDir = `${root}/volumes/data/.openclaw`;
+    let alive = false;
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, socketPath, podUid: "vm-4242", log: () => {},
+      readinessReleased: async () => true,
+      prepareDatabases: async () => {},
+      spawnOpenClaw: () => { alive = true; return child; },
+      probeHealthz: async () => alive,
+      healthTimeoutMs: 100,
+    });
+    try {
+      await vi.waitFor(async () => expect(await supervisor.state()).toMatchObject({ phase: "running" }));
+      h.d.holdOpenClaw = async (dir) => { await createSurgeOpenClawProcessSupervisorClient(dir, { socketPath }).holdNormal(); };
+      const plan = planBundle(bundle, { stateRoot: root, instanceId: "4242", desktopAuth: true });
+      const applying = kind === "bundle" ? applyBundle(h.d, bundle, plan) : applyServices(h.d, bundle, plan.services);
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGTERM"));
+      expect(docker.log).not.toContain("DELETE /containers/octogee-gateway");
+      alive = false;
+      child.emit("exit", 0, null);
+      await applying;
+      expect(await supervisor.state()).toMatchObject({ role: "normal", mode: "held", phase: "held" });
+      expect(docker.containers.get("octogee-gateway")?.running).toBe(true);
+    } finally {
+      alive = false;
+      child.emit("exit", 0, null);
+      await supervisor.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("convergeOnce", () => {
   it("writes the Desk identity into a Builder's home from the configured bootstrap and keeps converging when it is unavailable", async () => {

@@ -79,6 +79,7 @@ export interface VmAgentDeps {
   apiUrl: string;
   stateRoot: string;
   engine: DockerEngine;
+  holdOpenClaw: (openclawDir: string) => Promise<void>;
   metadata: MetadataClient;
   fetchImpl: typeof fetch;
   fs: AgentFs;
@@ -320,6 +321,7 @@ export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
     deps.log(`[vm-agent] pulling ${image}`);
     await pullImage(deps.engine, image, accessToken);
   }
+  await holdGatewayForReplacement(deps, bundle, plan.services);
   for (const service of plan.services) await removeContainer(deps.engine, service.name);
   await restoreHomeIfEmpty(deps, bundle);
   await writeBundleBuilderClaim(deps, bundle);
@@ -342,10 +344,23 @@ export async function applyServices(deps: VmAgentDeps, bundle: GatewayVmRuntimeB
     deps.log(`[vm-agent] pulling ${image}`);
     await pullImage(deps.engine, image, accessToken);
   }
+  await holdGatewayForReplacement(deps, bundle, services);
   for (const service of services) {
     deps.log(`[vm-agent] replacing ${service.name} (${bundle.version})`);
     await replaceContainer(deps.engine, service);
   }
+}
+
+async function holdGatewayForReplacement(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, services: DockerContainerSpec[]): Promise<void> {
+  if (!services.some((service) => service.name === "octogee-gateway")) return;
+  const gateway = await inspectContainer(deps.engine, "octogee-gateway");
+  if (!gateway?.State?.Running) return;
+  if (gateway.State.Paused) throw new Error("cannot replace a paused Native gateway");
+  const data = bundle.volumes.find((volume) => volume.name === HOME_VOLUME_NAME && volume.kind === "emptyDir");
+  if (!data) throw new Error("cannot stop Native without its persistent home volume");
+  const startedAt = deps.now();
+  await deps.holdOpenClaw(`${volumeHostPath(deps.stateRoot, data)}/.openclaw`);
+  deps.log(`[vm-agent] Native supervisor stopped gateway for replacement in ${deps.now() - startedAt}ms`);
 }
 
 export async function syncBuilderDesk(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle): Promise<void> {

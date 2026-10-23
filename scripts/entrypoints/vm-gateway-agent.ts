@@ -6,6 +6,7 @@ import { createDockerEngine } from "../lib/vm-gateway-agent/docker-engine.js";
 import { createDesktopControl } from "../lib/vm-gateway-agent/desktop-control.js";
 import { createHomeFs, homeShell } from "../lib/vm-gateway-agent/home-fs.js";
 import { createMetadataClient } from "../lib/vm-gateway-agent/metadata.js";
+import { createSurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -21,6 +22,7 @@ await runVmGatewayAgent(
     apiUrl: requireEnv("OCTOGEE_API_URL").replace(/\/$/, ""),
     stateRoot,
     engine: createDockerEngine({ socketPath: process.env.DOCKER_SOCKET?.trim() || "/var/run/docker.sock" }),
+    holdOpenClaw: async (openclawDir) => { await createSurgeOpenClawProcessSupervisorClient(openclawDir).holdNormal(); },
     metadata: createMetadataClient(),
     fetchImpl: fetch,
     fs: {
