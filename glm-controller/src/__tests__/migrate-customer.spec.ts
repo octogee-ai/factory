@@ -497,11 +497,30 @@ describe("native computer return", () => {
     return native;
   }
 
+  it("returns to a Barn after the prior assignment removed its customer SSH key", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    let targetHasCustomerKey = false;
+    vi.mocked(h.client.transferState).mockImplementation(async request => {
+      if (request.mode === "keys") targetHasCustomerKey = true;
+      if (request.mode === "final" && !targetHasCustomerKey) {
+        throw new Error("local SSH public key is missing for alice");
+      }
+      return { migrationId: request.migrationId, slug: request.slug, imported: true };
+    });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    expect(vi.mocked(h.client.transferState).mock.calls.map(([request]) => request.mode)).toEqual(["keys", "final"]);
+    expect(h.client.transferState).toHaveBeenNthCalledWith(1, {
+      migrationId: "mig-op-1", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", mode: "keys",
+    });
+  });
+
   it("hands off the current PostgreSQL store before checkpoint and cutover", async () => {
     const h = mkDeps();
     const native = nativeReturn(h);
     const order: string[] = [];
     h.client.transferState = vi.fn(async request => {
+      if (request.mode === "keys") return { migrationId: "mig-op-1", slug: "alice", imported: true };
       order.push("store-handoff");
       expect(request).toMatchObject({ mode: "final", includeActivationManifest: true });
       expect(request.agentContext).toBeUndefined();
@@ -517,6 +536,18 @@ describe("native computer return", () => {
     expect(order).toEqual(["store-handoff", "request-checkpoint", "cutover"]);
     expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
     expect(h.deps.prepareNativeSharedContextRestore).not.toHaveBeenCalled();
+  });
+
+  it("keeps the source available when returning customer keys cannot be transferred", async () => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    vi.mocked(h.client.transferState).mockRejectedValueOnce(new Error("customer key transfer failed"));
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.flushGateway).not.toHaveBeenCalled();
+    expect(native.requestCheckpoint).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "quiescing" }));
   });
 
   it("unmounts the customer on the live Builder after its writer hold is released and before suspending it", async () => {
@@ -829,7 +860,8 @@ describe("native computer return", () => {
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.every((line) => line.endsWith(" op=op-1") && line.match(/ op=/gu)?.length === 1)).toBe(true);
     expect(h.client.restoreTarget).not.toHaveBeenCalled();
-    expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final", includeActivationManifest: true }));
+    expect(h.client.transferState).toHaveBeenCalledTimes(2);
+    expect(h.client.transferState).toHaveBeenNthCalledWith(2, expect.objectContaining({ mode: "final", includeActivationManifest: true }));
     expect(h.deps.readGatewayOpenclawVersion).toHaveBeenCalledWith("gw-blue");
     expect(h.deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
   });
@@ -1122,7 +1154,8 @@ describe("native computer return", () => {
     expect(events.indexOf("request-checkpoint")).toBeLessThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
     expect(events.indexOf("native-checkpoint")).toBeGreaterThan(events.indexOf("cutover:gw-blue->gw-green:mirror=true"));
     expect(events.indexOf("native-checkpoint")).toBeLessThan(events.indexOf("park"));
-    expect(client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final", includeActivationManifest: true }));
+    expect(client.transferState).toHaveBeenCalledTimes(2);
+    expect(client.transferState).toHaveBeenNthCalledWith(2, expect.objectContaining({ mode: "final", includeActivationManifest: true }));
     expect(client.unmount).toHaveBeenCalledOnce();
     expect(client.flushGateway).toHaveBeenCalledTimes(requested ? 0 : 1);
     expect(native.release).not.toHaveBeenCalled();
@@ -1223,7 +1256,7 @@ describe("native computer return", () => {
       ]);
       expect(vi.mocked(h.client.scheduler).mock.calls[1][0]).toMatchObject({ migrationId: handoffId, agentIds: ["octogee-alice-coach"], snapshot });
       expect(h.steps.filter((step) => step.status === "done").map((step) => step.name)).toEqual([
-        "wait-for-active-work", "quiesce-source", "flush-source", "transfer-agent-store", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer",
+        "keys-sync-state", "wait-for-active-work", "quiesce-source", "flush-source", "transfer-agent-store", "stage-scheduler", "request-native-checkpoint", "cutover-firestore", "checkpoint-native-computer",
         "release-native-writers", "retire-source-scheduler", "unmount-source", "park-native-computer", "activate-scheduler", "verify-target",
       ]);
       expect(vi.mocked(h.deps.log).mock.calls.flat().join("\n")).toContain("desktop-watch");

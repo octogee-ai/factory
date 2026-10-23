@@ -739,6 +739,9 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
   let sourceFenced = false;
   try {
     await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
+    if (input.nativeReturn) await step("keys-sync-state", () => client.transferState({
+      migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "keys",
+    }));
     await step("wait-for-active-work", () => client.quiesce({ migrationId, gatewayId: targets.fromGatewayId, slug, timeoutMs: 30_000, stopMattermost: false }));
     await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "transferring" });
     await deps.setAssignmentState({
