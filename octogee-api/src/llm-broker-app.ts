@@ -38,6 +38,7 @@ import {
 } from "@octogee/shared/types/model-broker-usage";
 import { meterExhausted, readPlatformSpendState } from "./lib/platform-usage-allowance.js";
 import type { ModelBrokerOwnerAccessResolver } from "./lib/model-broker-owner-access.js";
+import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 
 export interface LlmBrokerAppDeps {
   store: Pick<ModelBrokerTokenStore, "lookupToken">;
@@ -1507,6 +1508,61 @@ interface ResolvedBrokerRequest {
   grant: OwnerModelBrokerGrant;
 }
 
+async function authorizeBrokerCredential(
+  deps: LlmBrokerAppDeps,
+  req: Request,
+  res: ExpressResponse,
+  now: () => number,
+): Promise<ModelBrokerTokenRecord | null> {
+  const lookup = await deps.store.lookupToken(authToken(req), now());
+  if (lookup.outcome !== "valid" || lookup.record.capped !== true) {
+    rejectBrokerToken(deps, res, requestUrl(req), lookup);
+    return null;
+  }
+  return await ownerAllowsBrokerRequest(deps, lookup.record, res) ? lookup.record : null;
+}
+
+function createBrokerCatalogHandler(deps: LlmBrokerAppDeps, now: () => number) {
+  return async (req: Request, res: ExpressResponse): Promise<void> => {
+    res.setHeader("cache-control", "no-store");
+    try {
+      const record = await authorizeBrokerCredential(deps, req, res, now);
+      if (!record) return;
+      if (record.purpose !== "model") {
+        res.status(403).json({ error: "model catalog requires a model credential" });
+        return;
+      }
+      const providerKey = await resolveProviderKeyForRequest({
+        record,
+        providerKeys: deps.providerKeys,
+        providerKeyResolver: deps.providerKeyResolver,
+        onError: (error) => reportBrokerResolutionError(deps, error),
+      });
+      if (!await authorizeBrokerCredential(deps, req, res, now)) return;
+      if (!providerKey) {
+        res.status(503).json({ error: `${record.provider} upstream is not configured` });
+        return;
+      }
+      res.json({
+        schemaVersion: 1,
+        provider: record.provider,
+        purpose: record.purpose,
+        agentId: record.trace?.agentId ?? null,
+        providerCredentialConfigured: true,
+        admission: "request-time",
+        routes: Array.from(ALLOWED_ENDPOINTS_BY_PROVIDER[record.provider], (route) => {
+          const [method, path] = route.split(" ");
+          return { method, path };
+        }),
+        models: modelCatalogForProvider(record.provider),
+      });
+    } catch (error) {
+      reportBrokerResolutionError(deps, error);
+      res.status(503).json({ error: "model catalog unavailable" });
+    }
+  };
+}
+
 async function resolveBrokerRequest(
   options: BrokerRequestHandlerOptions,
   req: Request,
@@ -1518,13 +1574,8 @@ async function resolveBrokerRequest(
     res.status(404).json({ error: "unsupported LLM broker endpoint" });
     return null;
   }
-  const lookup = await deps.store.lookupToken(authToken(req), now());
-  if (lookup.outcome !== "valid" || lookup.record.capped !== true) {
-    rejectBrokerToken(deps, res, url, lookup);
-    return null;
-  }
-  const record = lookup.record;
-  if (!(await ownerAllowsBrokerRequest(deps, record, res))) return null;
+  const record = await authorizeBrokerCredential(deps, req, res, now);
+  if (!record) return null;
   if (!providerAllowedEndpoint(record, req, url)) {
     res.status(404).json({ error: "unsupported LLM broker endpoint" });
     return null;
@@ -1703,6 +1754,8 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       },
     });
   });
+
+  app.get("/v1/catalog", createBrokerCatalogHandler(deps, now));
 
   app.use(
     "/v1",
