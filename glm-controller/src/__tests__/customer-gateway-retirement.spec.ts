@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GatewayRetirementConflictError,
+  GatewayRetirementReleaseUnconvergedError,
   GatewayRetirementTelemetryUnavailableError,
 } from "@octogee/core/gateway-retirement-claim";
 
@@ -552,7 +553,10 @@ describe("owned customer gateway retirement", () => {
       .resolves.toBe(outcome);
   });
 
-  it("pauses a running owned Builder whose telemetry is unavailable, then retires it paused", async () => {
+  it.each([
+    ["telemetry is unavailable", GatewayRetirementTelemetryUnavailableError, "telemetry is stale or unavailable"],
+    ["desired release never went live", GatewayRetirementReleaseUnconvergedError, "desired release is not converged to live"],
+  ])("pauses a running owned Builder whose %s, then retires it paused", async (_label, Refusal, reason) => {
     const roots: Record<string, Root> = {
       "builder-alice": {
         ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running",
@@ -562,7 +566,7 @@ describe("owned customer gateway retirement", () => {
     const { db } = harness(roots);
     const claimRetirement = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       if (roots[gatewayId]!.desiredStatus === "running") {
-        throw new GatewayRetirementTelemetryUnavailableError(`gateway ${gatewayId} telemetry is stale or unavailable`);
+        throw new Refusal(`gateway ${gatewayId} ${reason}`);
       }
       return { version: 1 };
     });

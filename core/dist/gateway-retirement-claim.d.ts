@@ -6,6 +6,9 @@ export declare class GatewayRetirementConflictError extends Error {
 export declare class GatewayRetirementTelemetryUnavailableError extends GatewayRetirementConflictError {
     constructor(message: string);
 }
+export declare class GatewayRetirementReleaseUnconvergedError extends GatewayRetirementConflictError {
+    constructor(message: string);
+}
 interface RetirementOperation {
     input?: unknown;
     [key: string]: unknown;

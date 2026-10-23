@@ -1,6 +1,7 @@
 import type { DocumentReference, DocumentSnapshot, Firestore, QueryDocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import {
   claimGatewayRetirementAtomic,
+  GatewayRetirementReleaseUnconvergedError,
   GatewayRetirementTelemetryUnavailableError,
 } from "@octogee/core/gateway-retirement-claim";
 import {
@@ -87,13 +88,18 @@ async function reconcileOwnedGatewayRetirement(
       },
     });
   } catch (error) {
-    if (!(error instanceof GatewayRetirementTelemetryUnavailableError)) throw error;
-    await pauseUnobservableOwnedGateway(input, doc);
+    if (!retirableOnlyOncePaused(error)) throw error;
+    await pauseOwnedGatewayForRetirement(input, doc);
   }
   return true;
 }
 
-async function pauseUnobservableOwnedGateway(
+function retirableOnlyOncePaused(error: unknown): boolean {
+  return error instanceof GatewayRetirementTelemetryUnavailableError ||
+    error instanceof GatewayRetirementReleaseUnconvergedError;
+}
+
+async function pauseOwnedGatewayForRetirement(
   input: OwnedGatewayRetirementInput,
   doc: QueryDocumentSnapshot,
 ): Promise<void> {

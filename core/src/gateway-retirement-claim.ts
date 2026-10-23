@@ -37,6 +37,13 @@ export class GatewayRetirementTelemetryUnavailableError extends GatewayRetiremen
   }
 }
 
+export class GatewayRetirementReleaseUnconvergedError extends GatewayRetirementConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayRetirementReleaseUnconvergedError";
+  }
+}
+
 interface RetirementOperation {
   input?: unknown;
   [key: string]: unknown;
@@ -199,6 +206,19 @@ function runningRetirementError(
   return { error: null, liveRuntimeIdentity: liveRuntimeIdentity(heartbeat) };
 }
 
+function unconvergedRetirementError(gatewayId: string, runtime: unknown): GatewayRetirementConflictError {
+  const mountedCustomers = isGatewayRuntimeDoc(runtime) && runtime.gatewayId === gatewayId
+    ? retirementHeartbeat(runtime.heartbeat)?.mountedCustomers ?? []
+    : [];
+  return mountedCustomers.length > 0
+    ? new GatewayRetirementConflictError(
+      `gateway ${gatewayId} still has mounted customers: ${mountedCustomers.join(", ")}`,
+    )
+    : new GatewayRetirementReleaseUnconvergedError(
+      `gateway ${gatewayId} desired release is not converged to live`,
+    );
+}
+
 function readClaim(value: unknown): RetirementClaim | null {
   if (!isPlainRecord(value)) return null;
   const valid = [
@@ -247,15 +267,6 @@ function claimableGatewayRetirementRoot(
   if (root.retirementClaim != null) {
     throw new GatewayRetirementConflictError(
       `gateway ${gatewayId} already has a retirement claim`,
-    );
-  }
-  if (
-    projected.desiredStatus !== "paused" &&
-    projected.liveRelease != null &&
-    projected.desiredRelease !== projected.liveRelease
-  ) {
-    throw new GatewayRetirementConflictError(
-      `gateway ${gatewayId} desired release is not converged to live`,
     );
   }
   return {
@@ -333,9 +344,13 @@ export async function claimGatewayRetirementAtomic(
       const runtimeSnap = await transaction.get(
         input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId),
       );
+      const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
+      if (rootData.desiredRelease !== rootData.liveRelease) {
+        throw unconvergedRetirementError(input.gatewayId, runtime);
+      }
       const inspection = runningRetirementError(
         input.gatewayId,
-        runtimeSnap.exists ? runtimeSnap.data() : undefined,
+        runtime,
         input.now,
         rootData.liveRelease,
         input.telemetryObservedAfter,

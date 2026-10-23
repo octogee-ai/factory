@@ -19,6 +19,12 @@ export class GatewayRetirementTelemetryUnavailableError extends GatewayRetiremen
         this.name = "GatewayRetirementTelemetryUnavailableError";
     }
 }
+export class GatewayRetirementReleaseUnconvergedError extends GatewayRetirementConflictError {
+    constructor(message) {
+        super(message);
+        this.name = "GatewayRetirementReleaseUnconvergedError";
+    }
+}
 function isPlainRecord(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -123,6 +129,14 @@ function runningRetirementError(gatewayId, runtime, now, expectedRelease, teleme
     }
     return { error: null, liveRuntimeIdentity: liveRuntimeIdentity(heartbeat) };
 }
+function unconvergedRetirementError(gatewayId, runtime) {
+    const mountedCustomers = isGatewayRuntimeDoc(runtime) && runtime.gatewayId === gatewayId
+        ? retirementHeartbeat(runtime.heartbeat)?.mountedCustomers ?? []
+        : [];
+    return mountedCustomers.length > 0
+        ? new GatewayRetirementConflictError(`gateway ${gatewayId} still has mounted customers: ${mountedCustomers.join(", ")}`)
+        : new GatewayRetirementReleaseUnconvergedError(`gateway ${gatewayId} desired release is not converged to live`);
+}
 function readClaim(value) {
     if (!isPlainRecord(value))
         return null;
@@ -164,11 +178,6 @@ function claimableGatewayRetirementRoot(gatewayId, value) {
     }
     if (root.retirementClaim != null) {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} already has a retirement claim`);
-    }
-    if (projected.desiredStatus !== "paused" &&
-        projected.liveRelease != null &&
-        projected.desiredRelease !== projected.liveRelease) {
-        throw new GatewayRetirementConflictError(`gateway ${gatewayId} desired release is not converged to live`);
     }
     return {
         rootData: projected,
@@ -222,7 +231,11 @@ export async function claimGatewayRetirementAtomic(input) {
         let liveRuntimeIdentity = null;
         if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
             const runtimeSnap = await transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId));
-            const inspection = runningRetirementError(input.gatewayId, runtimeSnap.exists ? runtimeSnap.data() : undefined, input.now, rootData.liveRelease, input.telemetryObservedAfter);
+            const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
+            if (rootData.desiredRelease !== rootData.liveRelease) {
+                throw unconvergedRetirementError(input.gatewayId, runtime);
+            }
+            const inspection = runningRetirementError(input.gatewayId, runtime, input.now, rootData.liveRelease, input.telemetryObservedAfter);
             if (inspection.error) {
                 throw inspection.telemetryUnavailable
                     ? new GatewayRetirementTelemetryUnavailableError(inspection.error)
