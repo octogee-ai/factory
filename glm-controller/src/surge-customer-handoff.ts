@@ -17,6 +17,7 @@ export type SurgeCustomerHandoffResult =
   | { ready: true; prelaunchHeld: true };
 
 export interface SurgePod {
+  image?: string;
   uid: string;
   name: string;
   podIP: string;
@@ -40,6 +41,7 @@ export interface SurgePodHealth {
   handoffReleased: boolean;
   prelaunchState: SurgePrelaunchState;
   mountedCustomers: readonly string[];
+  migratingIn?: readonly string[];
 }
 
 export interface SurgeAssignment {

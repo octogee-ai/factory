@@ -955,6 +955,26 @@ export function readSchedulerMigrationIdentity(operationId: unknown, migrationId
   return { attempt, claimStartedAt };
 }
 
+export interface BuilderActivationTargetRollbackProof {
+  operationId: string;
+  migrationId: string;
+  uid: string;
+  slug: string;
+  sourceGatewayId: string;
+  sourceEpoch: number;
+  targetGatewayId: string;
+  leaseId: string;
+  generation: number;
+  liveRelease: number;
+  desiredRelease: number;
+  latestRelease: number;
+  retainedPodUid: string;
+  discardedPodUid: string | null;
+  rollOperationId: string;
+  rollClaimStartedAt: number;
+  completedAt: number;
+}
+
 export interface SchedulerHandoffState {
   migrationId: string;
   fromGatewayId: string;
@@ -967,6 +987,7 @@ export interface SchedulerHandoffState {
     migrationId: string;
     sourceEpoch: number;
     steps: OperationStep[];
+    targetRollback?: BuilderActivationTargetRollbackProof;
   };
 }
 

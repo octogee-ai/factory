@@ -650,3 +650,25 @@ it("permits a paused rollout without requiring the running computer's identity t
   expect(result.success).toBe(true);
   expect(deps.readDeploymentPrerequisiteError).not.toHaveBeenCalled();
 });
+
+describe('held unadmitted activation target rollback ownership', () => {
+  const proof = { operationId: 'builder-activate-builder-a-g1', migrationId: 'mig-builder-activate-builder-a-g1:scheduler:1:claim:1000', uid: 'alice', slug: 'alice', sourceGatewayId: 'shared-a', sourceEpoch: 7, targetGatewayId: 'builder-a', leaseId: 'lease-a', generation: 1, liveRelease: 1, desiredRelease: 2, latestRelease: 2, retainedPodUid: 'old', discardedPodUid: 'new', rollOperationId: 'op-1', rollClaimStartedAt: 0, completedAt: 1000 };
+  it('settles the current rollout as failed after owned rollback instead of claiming target readiness or activating another release', async () => {
+    const rollback = vi.fn(async () => proof);
+    const deps = mkDeps({ rollbackUnadmittedActivationTarget: rollback });
+    const op = mkOp({ gatewayId: 'builder-a', targetRelease: 2, imageTag: 'cafe123-ocbeta2' });
+    const result = await createRolloutHandler(deps)(op, ctx);
+    expect(result).toMatchObject({ success: false, output: { builderActivationTargetRollback: proof } });
+    expect(result.error).toContain('source recovery');
+    expect(deps.activateDesiredRelease).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalledWith(op, ctx);
+  });
+  it('observes a newly demonstrated held target cycle while the existing rollout awaits convergence', async () => {
+    const rollback = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(proof);
+    const deps = mkDeps({ rollbackUnadmittedActivationTarget: rollback });
+    const result = await createRolloutHandler(deps)(mkOp({ gatewayId: 'builder-a', targetRelease: 2, imageTag: 'cafe123-ocbeta2' }), ctx);
+    expect(result).toMatchObject({ success: false, output: { builderActivationTargetRollback: proof } });
+    expect(deps.activateDesiredRelease).toHaveBeenCalledTimes(1);
+    expect(rollback).toHaveBeenCalledTimes(2);
+  });
+});

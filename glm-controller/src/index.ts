@@ -1,3 +1,5 @@
+import { createBuilderActivationRollRecoveryOwner } from './builder-activation-roll-recovery-owner.js';
+import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCustody } from './builder-activation-roll-recovery.js';
 import { createMigrationAgentStorePreparer, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
@@ -1167,6 +1169,23 @@ async function convergeOneGateway(
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
   const { db } = passDeps;
+  if (isDisposableBuilderGateway(gateway) && gateway.liveRelease !== null && gateway.liveRelease < gateway.desiredRelease) {
+    const recovery = await readBuilderActivationRollRecoveryCustody({ db, gatewayId: gateway.gatewayId });
+    if (recovery && hasBuilderActivationTargetRollback({ id: recovery.recovery.operationId, ...recovery.operation }, recovery.recovery)) {
+      passDeps.log(`[converge-gateway] ${gateway.gatewayId} retained target rollout while source recovery ${recovery.recovery.operationId} owns custody`);
+      return;
+    }
+  }
+  await convergeAvailableGateway(passDeps, gateway, instances, runtimeById);
+}
+
+async function convergeAvailableGateway(
+  passDeps: GatewayConvergencePassDeps,
+  gateway: DurableGateway,
+  instances: HelmInstancesMap,
+  runtimeById: Map<string, GatewayRuntimeDoc>,
+): Promise<void> {
+  const { db } = passDeps;
   const instance = instances[gateway.gatewayId];
   const helmObserved = observedHelmInstance(instance);
   const artifact =
@@ -1364,7 +1383,7 @@ function observedHelmInstance(
 }
 
 async function prepareDesiredGatewayIntent(input: {
-  passDeps: GatewayConvergencePassDeps;
+  passDeps: Pick<GatewayConvergencePassDeps, "prepareGatewayConfig" | "chartFingerprint">;
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
   instance: HelmInstancesMap[string] | undefined;
@@ -1818,6 +1837,7 @@ async function attemptClaimOrQueueOperation(
             origin: pendingOperation.origin,
             input: pendingOperation.input,
             output: pendingOperation.output,
+            schedulerHandoff: pendingOperation.schedulerHandoff,
             createdAt: pendingOperation.createdAt,
             queuedAt: pendingOperation.queuedAt,
             nextAttemptAt: pendingOperation.nextAttemptAt,
@@ -1841,6 +1861,7 @@ async function attemptClaimOrQueueOperation(
           queuedAt: freshOperation.queuedAt,
           nextAttemptAt: freshOperation.nextAttemptAt,
           input: freshOperation.input,
+          schedulerHandoff: freshOperation.schedulerHandoff,
           customerMigrationV2: freshOperation.customerMigrationV2,
           cutoverCommittedAt: freshOperation.cutoverCommittedAt,
         }, rolloutLanes),
@@ -3548,7 +3569,28 @@ async function buildHandlers(
     log: logFn,
   });
 
+  const rollbackTransport = createSurgePodTransport({ privateKey, log: logFn });
+  const rollbackUnadmittedActivationTarget = createBuilderActivationRollRecoveryOwner({
+    db, namespace: NAMESPACE, helm, chartFingerprint: fleetOps.chartFingerprint,
+    runExclusive: fleetOps.runRuntimeRecovery,
+    readRelease: (gatewayId, release) => readGatewayArtifact(db, gatewayId, release),
+    prepareIntent: async (gateway, artifact) => {
+      const intent = await prepareDesiredGatewayIntent({ passDeps: fleetOps, gateway, artifact, instance: undefined });
+      if (!intent) throw new Error('Builder rollback immutable live intent is unavailable');
+      return intent.opts;
+    },
+    listPods: gatewayId => listSurgePods(spawnKubectl, NAMESPACE, gatewayId),
+    readPodHealth: rollbackTransport.readPodHealth,
+    holdTarget: rollbackTransport.holdTargetOpenClaw!, unreserveTarget: rollbackTransport.unreserveTargetOpenClaw!,
+    readTemplateObjects: async gatewayId => {
+      const result = await spawnKubectl(['-n', NAMESPACE, 'get', 'deployment,replicaset,pod', '-l', `app=octogee-gateway,gateway-instance=${gatewayId}`, '-o', 'json']);
+      if (result.code !== 0) throw new Error(`Builder rollback template inspection failed: ${result.stderr.trim()}`);
+      return JSON.parse(result.stdout) as unknown;
+    },
+    now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 1000)), log: logFn,
+  });
   const rollout = createRolloutHandler({
+    rollbackUnadmittedActivationTarget,
     readGatewayDoc: async (gatewayId) => {
       const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       if (!snap.exists) return null;

@@ -1,3 +1,4 @@
+import { hasBuilderActivationTargetRollback } from './builder-activation-roll-recovery.js';
 import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
@@ -15,6 +16,7 @@ export function isSeriallyExclusiveKind(kind: string): boolean {
 }
 
 export interface OperationRef {
+  schedulerHandoff?: unknown;
   id: string;
   kind: string;
   rolloutLane?: RolloutLane;
@@ -158,6 +160,7 @@ function recoveryYieldsToTargetRoll(recovery: OperationRef, rollout: OperationRe
   return recovery.kind === MIGRATE_CUSTOMER_KIND &&
     recovery.input?.source === "builder-activation-lease" &&
     recovery.input.recoverSourceOnly === true &&
+    !hasBuilderActivationTargetRollback(recovery) &&
     inputString(recovery.input, "fromGatewayId")?.startsWith("shared-") === true &&
     recovery.customerMigrationV2 === undefined &&
     typeof recovery.cutoverCommittedAt !== "number" &&

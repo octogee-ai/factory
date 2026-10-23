@@ -265,6 +265,19 @@ describe("decideOperationClaim", () => {
     expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [rollout], pendingOpsSameKind: [] })).toEqual({ outcome: 'queue', waitingOn: 'roll builder-a' });
   });
 
+  it('finishes exact source recovery after its rollout retained a proven cleaned predecessor', () => {
+    const migrationId = 'mig-builder-activate-builder-a-g1:scheduler:1:claim:1000';
+    const recovery = {
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
+      input: { uid: 'alice', builderSlug: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
+      schedulerHandoff: { migrationId, fromGatewayId: 'shared-a', toGatewayId: 'builder-a', uid: 'alice', slug: 'alice', sourceRecovery: { migrationId, sourceEpoch: 7, steps: [],
+        targetRollback: { operationId: 'builder-activate-builder-a-g1', migrationId, uid: 'alice', slug: 'alice', sourceGatewayId: 'shared-a', sourceEpoch: 7, targetGatewayId: 'builder-a', leaseId: 'lease-a', generation: 1, retainedPodUid: 'retained-r1', completedAt: 2000 } } },
+    };
+    const rollout = { id: 'new-roll', kind: 'rollout', status: 'pending', createdAt: 0, input: { gatewayId: 'builder-a' } };
+    expect(decideOperationClaim({ op: rollout, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [recovery] })).toEqual({ outcome: 'queue', waitingOn: 'migration shared-a → builder-a' });
+    expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [rollout] })).toEqual({ outcome: 'claim' });
+  });
+
   it.each([
     { input: { source: 'continuous-placement-policy' } },
     { input: { recoverSourceOnly: false } },

@@ -1,3 +1,4 @@
+import type { BuilderActivationTargetRollbackProof } from '../builder-activation-roll-recovery.js';
 import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
@@ -9,6 +10,7 @@ import {
 } from "../roll-state-migration.js";
 
 export interface RolloutDeps {
+  rollbackUnadmittedActivationTarget?: (op: Operation, ctx: OperationContext) => Promise<BuilderActivationTargetRollbackProof | null>;
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
   readDeploymentPrerequisiteError: (gatewayId: string) => Promise<string | null>;
@@ -43,6 +45,7 @@ interface RollTarget {
 interface RollProgress {
   startedAt: number;
   refreshLiveness: () => Promise<void>;
+  checkTargetRecovery: () => Promise<RollOutcome | null>;
 }
 
 function fail(error: string): OperationResult {
@@ -120,8 +123,13 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
 
     const startedAt = deps.now();
     await reportStep(ctx, { name: "release-roll", status: "running", startedAt });
-    const outcome = await runReleaseRoll(deps, target, op.id, {
+    const checkTargetRecovery = async (): Promise<RollOutcome | null> => {
+      const targetRollback = await deps.rollbackUnadmittedActivationTarget?.(op, ctx);
+      return targetRollback ? { success: false, targetRollback, error: `rollout stopped after retaining a cleaned unadmitted target; source recovery ${targetRollback.operationId} must finish` } : null;
+    };
+    const outcome = await checkTargetRecovery() ?? await runReleaseRoll(deps, target, op.id, {
       startedAt,
+      checkTargetRecovery,
       refreshLiveness: () =>
         reportStep(ctx, { name: "release-roll", status: "running", startedAt }),
     });
@@ -132,8 +140,9 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       completedAt: deps.now(),
       ...(outcome.error ? { error: outcome.error } : {}),
     });
-    const journaled = outcome.stateMigration
-      ? { output: { stateMigration: outcome.stateMigration } }
+    const journaled = outcome.stateMigration || outcome.targetRollback
+      ? { output: { ...(outcome.stateMigration ? { stateMigration: outcome.stateMigration } : {}),
+          ...(outcome.targetRollback ? { builderActivationTargetRollback: outcome.targetRollback } : {}) } }
       : {};
     return outcome.success
       ? { steps: [], success: true, ...journaled }
@@ -142,6 +151,7 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
 }
 
 interface RollOutcome {
+  targetRollback?: BuilderActivationTargetRollbackProof;
   success: boolean;
   error?: string;
   stateMigration?: RollStateMigrationDecision;
@@ -319,6 +329,8 @@ async function awaitConvergence(
       ...target,
     });
     if (outcome) return outcome;
+    const recovery = await progress.checkTargetRecovery();
+    if (recovery) return recovery;
     const prerequisite = await readDeploymentPrerequisite(deps, gw);
     if (prerequisite.status === "terminal") return { success: false, error: prerequisite.error };
     if (prerequisite.status === "transient" && prerequisite.error !== narration.lastError) {

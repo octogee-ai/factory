@@ -37,6 +37,7 @@ interface PodList {
       name?: string;
       deletionTimestamp?: string;
     };
+    spec?: { containers?: Array<{ name?: string; image?: string }> };
     status?: {
       phase?: string;
       podIP?: string;
@@ -63,6 +64,11 @@ class SurgePodFleetStateError extends Error {
   }
 }
 
+function surgePodImage(item: NonNullable<PodList['items']>[number]): { image?: string } {
+  const image = item.spec?.containers?.find(container => container.name === 'gateway')?.image;
+  return image ? { image } : {};
+}
+
 export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
   const parsed = JSON.parse(raw) as PodList;
   const observedPodUids: string[] = [];
@@ -76,6 +82,7 @@ export function parseSurgePodSnapshot(raw: string): SurgePodSnapshot {
       uid,
       name,
       podIP,
+      ...surgePodImage(item),
       ready: (conditions ?? []).some((condition) =>
         condition.type === "Ready" && condition.status === "True"),
       terminating: Boolean(deletionTimestamp),
@@ -518,6 +525,7 @@ function parseSurgePodHealth(input: {
     handoffReleased: input.ready.handoffReleased,
     prelaunchState,
     mountedCustomers: [...new Set(input.state.customers)],
+    ...(input.state.migratingIn ? { migratingIn: [...new Set(input.state.migratingIn)] } : {}),
   };
 }
 
