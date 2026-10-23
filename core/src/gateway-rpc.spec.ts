@@ -2188,7 +2188,7 @@ await new Promise((r) => setTimeout(r, 50));
 describe("initial coach automation", () => {
   it("uses the upstream proactive job contract through the existing scheduler", async () => {
     const cronAdd = vi.fn(async (_job: CronAddSpec) => ({ id: "monitor" }));
-    await provisionCoachAutomation({ cronAdd }, { slug: "test", mattermostUserId: "a".repeat(26) });
+    await provisionCoachAutomation({ cronAdd }, { slug: "test", coachChannelId: "c".repeat(26) });
     expect(cronAdd).toHaveBeenCalledWith({
       declarationKey: "octogee:coach-monitor:octogee-test-coach",
       name: "Proactive check (octogee-test-coach)",
@@ -2204,24 +2204,24 @@ describe("initial coach automation", () => {
         message: "Review your automation scratch checklist and relevant session context. Do not infer or repeat old tasks from prior conversations. Take useful action only when needed. Use NO_REPLY when there is nothing to tell the user.",
         skipIfScratchEmpty: true,
       },
-      delivery: { mode: "announce", channel: "mattermost", accountId: "test-coach", to: `user:${"a".repeat(26)}` },
+      delivery: { mode: "announce", channel: "mattermost", accountId: "test-coach", to: `channel:${"c".repeat(26)}` },
     });
   });
 
-  it("binds each coach job to that customer's account and direct user target", async () => {
+  it("binds each coach job to its workspace's verified private coach channel", async () => {
     const cronAdd = vi.fn(async (_job: CronAddSpec) => ({ id: "monitor" }));
-    await provisionCoachAutomation({ cronAdd }, { slug: "alice", mattermostUserId: "a".repeat(26) });
-    await provisionCoachAutomation({ cronAdd }, { slug: "bob", mattermostUserId: "b".repeat(26) });
+    await provisionCoachAutomation({ cronAdd }, { slug: "alice", coachChannelId: "a".repeat(26) });
+    await provisionCoachAutomation({ cronAdd }, { slug: "bob", coachChannelId: "b".repeat(26) });
     expect(cronAdd.mock.calls.map(([job]) => job.delivery)).toEqual([
-      { mode: "announce", channel: "mattermost", accountId: "alice-coach", to: `user:${"a".repeat(26)}` },
-      { mode: "announce", channel: "mattermost", accountId: "bob-coach", to: `user:${"b".repeat(26)}` },
+      { mode: "announce", channel: "mattermost", accountId: "alice-coach", to: `channel:${"a".repeat(26)}` },
+      { mode: "announce", channel: "mattermost", accountId: "bob-coach", to: `channel:${"b".repeat(26)}` },
     ]);
   });
 
   it("refuses initial monitoring without a canonical customer destination", () => {
     const cronAdd = vi.fn();
-    expect(() => provisionCoachAutomation({ cronAdd }, { slug: "alice", mattermostUserId: null }))
-      .toThrow("requires its customer's Mattermost user ID");
+    expect(() => provisionCoachAutomation({ cronAdd }, { slug: "alice", coachChannelId: null }))
+      .toThrow("requires its workspace's private coach channel ID");
     expect(cronAdd).not.toHaveBeenCalled();
   });
 });

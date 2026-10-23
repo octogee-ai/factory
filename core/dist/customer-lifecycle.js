@@ -717,11 +717,13 @@ async function markCompleteIfNeeded(adapter, uid, snapshot, newCustomer, mmUpdat
     if (!newCustomer && snapshot.agentIds.length > 0)
         return [];
     if (newCustomer) {
-        const mattermostUserId = mmUpdate ? mmUpdate["mattermost.userId"] : snapshot.mattermostUserId;
-        if (mattermostUserId !== null && typeof mattermostUserId !== "string") {
-            throw new Error(`Initial coach monitoring for ${snapshot.slug} has no Mattermost owner`);
+        const coachChannels = snapshot.channels.filter((channel) => channel.scope === "workspace" && channel.kind === "coach-dm");
+        const existingCoachChannelId = coachChannels.length === 1 ? coachChannels[0].channelId : null;
+        const coachChannelId = mmUpdate ? mmUpdate["mattermost.channelId"] : existingCoachChannelId;
+        if (typeof coachChannelId !== "string" || !coachChannelId) {
+            throw new Error(`Initial coach monitoring for ${snapshot.slug} has no private coach channel`);
         }
-        await adapter.provisionCoachAutomation({ slug: snapshot.slug, mattermostUserId });
+        await adapter.provisionCoachAutomation({ slug: snapshot.slug, coachChannelId });
     }
     const coachAgentId = `octogee-${snapshot.slug}-coach`;
     await adapter.setAgentIds(uid, [coachAgentId]);

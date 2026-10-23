@@ -1325,10 +1325,10 @@ async function openAndConnect(params: OpenAndConnectParams): Promise<WebSocket> 
 
 export function provisionCoachAutomation(
   rpc: Pick<GatewayRpcClient, "cronAdd">,
-  customer: { slug: string; mattermostUserId: string | null },
+  customer: { slug: string; coachChannelId: string | null },
 ): Promise<CronAddResult> {
-  if (!customer.mattermostUserId || !/^[a-z0-9]{26}$/u.test(customer.mattermostUserId)) {
-    throw new Error(`Coach automation for ${customer.slug} requires its customer's Mattermost user ID`);
+  if (!customer.coachChannelId || !/^[a-z0-9]{26}$/u.test(customer.coachChannelId)) {
+    throw new Error(`Coach automation for ${customer.slug} requires its workspace's private coach channel ID`);
   }
   const agentId = `octogee-${customer.slug}-coach`;
   return rpc.cronAdd({
@@ -1350,7 +1350,7 @@ export function provisionCoachAutomation(
       mode: "announce",
       channel: "mattermost",
       accountId: `${customer.slug}-coach`,
-      to: `user:${customer.mattermostUserId}`,
+      to: `channel:${customer.coachChannelId}`,
     },
   });
 }

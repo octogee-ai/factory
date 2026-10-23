@@ -273,5 +273,5 @@ export interface GatewayRpcClient {
 export declare function createGatewayRpc(opts?: GatewayRpcClientOptions): GatewayRpcClient;
 export declare function provisionCoachAutomation(rpc: Pick<GatewayRpcClient, "cronAdd">, customer: {
     slug: string;
-    mattermostUserId: string | null;
+    coachChannelId: string | null;
 }): Promise<CronAddResult>;

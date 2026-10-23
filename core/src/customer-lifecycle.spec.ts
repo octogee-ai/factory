@@ -227,7 +227,7 @@ return "ssh-pubkey";
       record("provisionMattermostUser");
       const update: MmUpdate = {
         "mattermost.userId": "mm-user-123",
-        "mattermost.channelId": "channel-abc",
+        "mattermost.channelId": "c".repeat(26),
         _coachPersonalToken: "coach-pat",
       };
       return update;
@@ -279,7 +279,7 @@ function snap(overrides: Partial<UserSnapshot> = {}): UserSnapshot {
     agentIds: [],
     repoUrl: "",
     mattermostUserId: null,
-    channels: [],
+    channels: [{ scope: "workspace", kind: "coach-dm", channelId: "c".repeat(26) }],
     ownerName: "Test User",
     projectCheckoutScope: "workspace-and-projects",
     ...overrides,
@@ -363,26 +363,47 @@ describe("addCustomerToGateway — first-time provisioning", () => {
     expect(provisioned).toBeLessThan(state.calls.lastIndexOf("write:provisioning.openclaw.status"));
   });
 
-  it("uses the created Mattermost owner for initial monitoring even while the snapshot is stale", async () => {
+  it("uses the newly created private coach channel while the snapshot is stale", async () => {
     const adapter = makeAdapter(state);
-    const ownerId = "a".repeat(26);
+    const channelId = "c".repeat(26);
     const cronAdd = vi.fn(async () => ({ id: "initial-monitor" }));
-    adapter.provisionMattermostUser = async () => ({ "mattermost.userId": ownerId });
+    adapter.provisionMattermostUser = async () => ({ "mattermost.userId": "a".repeat(26), "mattermost.channelId": channelId });
     adapter.provisionCoachAutomation = async (customer) => {
       await provisionCoachAutomation({ cronAdd }, customer);
     };
     await addCustomerToGateway(adapter, "uid-test");
     expect(cronAdd).toHaveBeenCalledWith(expect.objectContaining({
-      delivery: { mode: "announce", channel: "mattermost", accountId: "test-coach", to: `user:${ownerId}` },
+      delivery: { mode: "announce", channel: "mattermost", accountId: "test-coach", to: `channel:${channelId}` },
     }));
   });
 
-  it("refuses a missing created Mattermost owner before monitoring or completion", async () => {
+  it("refuses a missing private coach channel before monitoring or completion", async () => {
     const adapter = makeAdapter(state);
     adapter.provisionMattermostUser = async () => ({});
     adapter.provisionCoachAutomation = vi.fn(async () => {});
-    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("has no Mattermost owner");
+    await expect(addCustomerToGateway(adapter, "uid-test")).rejects.toThrow("has no private coach channel");
     expect(adapter.provisionCoachAutomation).not.toHaveBeenCalled();
+    expect(state.writes).not.toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
+  });
+
+  it("uses only the canonical workspace coach channel on a provisioning retry", async () => {
+    state.user = snap({ status: "provisioning", mattermostUserId: "a".repeat(26), channels: [
+      { scope: "workspace", kind: "general", channelId: "g".repeat(26) },
+      { scope: "project", projectId: "project", kind: "coach-dm", channelId: "p".repeat(26) },
+      { scope: "workspace", kind: "coach-dm", channelId: "c".repeat(26) },
+    ] });
+    const adapter = makeAdapter(state);
+    adapter.provisionCoachAutomation = vi.fn(async () => {});
+    await addCustomerToGateway(adapter, "uid-test");
+    expect(adapter.provisionCoachAutomation).toHaveBeenCalledWith({ slug: "test", coachChannelId: "c".repeat(26) });
+  });
+
+  it("refuses ambiguous private coach channel bindings before durable completion", async () => {
+    state.user = snap({ status: "provisioning", mattermostUserId: "a".repeat(26), channels: [
+      { scope: "workspace", kind: "coach-dm", channelId: "a".repeat(26) },
+      { scope: "workspace", kind: "coach-dm", channelId: "b".repeat(26) },
+    ] });
+    await expect(addCustomerToGateway(makeAdapter(state), "uid-test")).rejects.toThrow("has no private coach channel");
     expect(state.writes).not.toContainEqual({ field: "provisioning.openclaw.status", value: "complete" });
   });
 
