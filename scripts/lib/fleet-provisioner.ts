@@ -2505,6 +2505,22 @@ function reservedTargetOpenClawHeld(
   return true;
 }
 
+export async function builderSourceOpenClawHeld(
+  processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
+  request: { migrationId: string; slug: string },
+): Promise<boolean> {
+  if (!processGate) return false;
+  const state = await processGate.status();
+  if (state.role !== "source" || state.mode === "permitted") return false;
+  if (state.migrationId !== request.migrationId || state.slug !== request.slug) {
+    throw new Error("configured Builder source is held by another migration");
+  }
+  if (state.phase !== "held") {
+    throw new Error(`configured Builder source OpenClaw is still stopping (phase ${state.phase})`);
+  }
+  return true;
+}
+
 function liveBuilderTarget(
   state: SurgeOpenClawProcessGateState,
   request: BuilderSurgeTargetRequest,
@@ -3086,6 +3102,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     prepareSurgeTarget: surgeGate.prepareSurgeTarget,
     reserveSurgeTarget: surgeGate.reserveSurgeTarget,
     surgeTargetOpenClawHeld: surgeGate.surgeTargetOpenClawHeld,
+    surgeSourceOpenClawHeld: (request: { migrationId: string; slug: string }) => builderSourceOpenClawHeld(builderProcessGate, request),
     surgeTargetLive: surgeGate.surgeTargetLive,
     admitLiveSurgeTarget: surgeGate.admitLiveSurgeTarget,
     liveSurgeTargetAssigned: surgeGate.liveSurgeTargetAssigned,

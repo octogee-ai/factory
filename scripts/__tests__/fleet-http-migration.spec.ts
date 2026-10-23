@@ -3146,8 +3146,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     mode?: "pre" | "final";
     runOpenClaw?: ReturnType<typeof fakeOpenClaw>;
     log?: MigrationHandlerDeps["log"];
+    releaseAgent?: () => Promise<void>;
+    surgeSourceOpenClawHeld?: MigrationHandlerDeps["surgeSourceOpenClawHeld"];
   } = {}): {
     handler: ReturnType<typeof createPushRsyncStateHandler>;
+    adapter: ReturnType<typeof mkAdapter>;
     req: Request;
   } {
     const body: PushRsyncStateRequestBody = {
@@ -3165,11 +3168,13 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       listExportPaths: vi.fn(async () => [
         { cwd: stateDir, path: path.join("agents", "octogee-chris-coach") },
       ]),
-      releaseAgent: vi.fn(async () => undefined),
+      releaseAgent: vi.fn(options.releaseAgent ?? (async () => undefined)),
       exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
     });
     return {
-      handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw(), ...(options.log ? { log: options.log } : {}) })),
+      handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw(), ...(options.log ? { log: options.log } : {}),
+        ...(options.surgeSourceOpenClawHeld ? { surgeSourceOpenClawHeld: options.surgeSourceOpenClawHeld } : {}) })),
+      adapter,
       req: mkRequest(body, {
         signature: signForPod(migrationId, JSON.stringify(body)),
       }),
@@ -3203,6 +3208,44 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       "--exclude=openclaw-agent.sqlite",
       "--exclude=openclaw-agent.sqlite-*",
     ]));
+  });
+
+  it("carries a held Builder source's PostgreSQL anchor without detaching through its stopped OpenClaw", async () => {
+    const stateDir = await mkTempRoot();
+    await writeStore(stateDir, CARRIED_STORE, () => {});
+    const surgeSourceOpenClawHeld = vi.fn(async () => true);
+    let snapshotCarried = false;
+    spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
+      const snapshotSource = args.find((arg) => arg.endsWith(`/./${SNAPSHOT_REPOSITORY}`));
+      snapshotCarried = snapshotSource !== undefined &&
+        fsSync.existsSync(path.join(snapshotSource.replace("/./", "/"), "postgres-anchor", "database.sqlite"));
+      return mkFakeChild({ exitCode: 0 });
+    });
+    const { handler, adapter, req } = pushRsync(stateDir, "surge-held-source", {
+      surgeSourceOpenClawHeld,
+      releaseAgent: async () => { throw new Error("WS open failed: connect ECONNREFUSED 127.0.0.1:18789"); },
+    });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(surgeSourceOpenClawHeld).toHaveBeenCalledWith({ migrationId: "surge-held-source", slug: "chris" });
+    expect(adapter.releaseAgent).not.toHaveBeenCalled();
+    expect(snapshotCarried).toBe(true);
+  });
+
+  it("detaches through OpenClaw when the source is not held for the migration", async () => {
+    const stateDir = await mkTempRoot();
+    await writeStore(stateDir, CARRIED_STORE, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const { handler, adapter, req } = pushRsync(stateDir, "surge-running-source", { surgeSourceOpenClawHeld: vi.fn(async () => false) });
+    const { res, getStatus } = mkResponse();
+
+    await handler(req, res, vi.fn());
+
+    expect(getStatus()).toBe(200);
+    expect(adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
   });
 
   it("pushes files only during pre-sync without snapshotting or transferring agent databases", async () => {

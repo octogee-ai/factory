@@ -17,6 +17,7 @@ import {
   createConfiguredBuilderAssignmentMatcher,
   createConfiguredBuilderReconcileAdmission,
   createReconcileConvergenceHooks,
+  builderSourceOpenClawHeld,
   createBuilderSurgeGateWiring,
   createVerifyAttachPending,
   desiredEnsureLaneFingerprint,
@@ -1906,6 +1907,28 @@ describe("configured Builder surge release", () => {
     } else {
       await expect(wiring.surgeTargetOpenClawHeld(request)).resolves.toBe(expected);
     }
+  });
+
+  it.each([
+    ["held and stopped for this migration", { role: "source", mode: "held", phase: "held" }, true],
+    ["running normally", { role: "normal", mode: "permitted", phase: "running" }, false],
+    ["resumed after a rollback", { role: "source", mode: "permitted", phase: "starting" }, false],
+    ["held while still stopping", { role: "source", mode: "held", phase: "stopping" }, "still stopping"],
+    ["held by another migration", { role: "source", mode: "held", phase: "held", migrationId: "surge-2" }, "held by another migration"],
+  ] as const)("reports whether a Builder source's OpenClaw is held for this migration: %s", async (_label, gate, expected) => {
+    const request = { migrationId: "surge-1", slug: "chris" };
+    const processGate = {
+      status: vi.fn(async () => ({ version: 1, podUid: "source-pod", targetPodUid: "target-pod", ...request, ...gate })),
+    } as unknown as SurgeOpenClawProcessSupervisorClient;
+    if (typeof expected === "string") {
+      await expect(builderSourceOpenClawHeld(processGate, request)).rejects.toThrow(expected);
+    } else {
+      await expect(builderSourceOpenClawHeld(processGate, request)).resolves.toBe(expected);
+    }
+  });
+
+  it("reports a gateway without a process gate as never holding a source", async () => {
+    await expect(builderSourceOpenClawHeld(null, { migrationId: "shared-move", slug: "chris" })).resolves.toBe(false);
   });
 
   it.each([

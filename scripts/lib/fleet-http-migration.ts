@@ -177,6 +177,7 @@ surgeTargetOpenClawHeld?: (input: {
   slug: string;
   targetPodUid: string;
 }) => Promise<boolean>;
+surgeSourceOpenClawHeld?: (input: { migrationId: string; slug: string }) => Promise<boolean>;
 surgeTargetLive?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<boolean>;
 admitLiveSurgeTarget?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<void>;
 liveSurgeTargetAssigned?: (input: { migrationId: string; slug: string; targetPodUid: string }) => Promise<boolean>;
@@ -1814,12 +1815,17 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           });
       cleanupActivationManifest = activationManifest.cleanup;
       if (mode === "final") {
+        const sourceHeld = await deps.surgeSourceOpenClawHeld?.({ migrationId: body.migrationId, slug: body.slug }) === true;
         sources.push(...await exportAgentStoreSnapshots({
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),
           signal: controller.signal,
           log,
           detachAgent: async (agentId) => {
+            if (sourceHeld) {
+              log(`[migration-rsync] OpenClaw is held for migration ${body.migrationId}; carrying ${agentId}'s closed anchor without detach`);
+              return;
+            }
             if (!deps.adapter.releaseAgent) throw new Error("Gateway cannot detach PostgreSQL agents");
             await deps.adapter.releaseAgent(agentId);
           },
