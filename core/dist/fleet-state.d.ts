@@ -31,6 +31,11 @@ export interface WorkspaceMigrationRecoveryParams {
     sourceEpoch: number;
     claimStartedAt: number;
 }
+export interface WorkspaceMigrationSourcePreparationParams extends WorkspaceMigrationRecoveryParams {
+    slug: string;
+    targetGatewayId: string;
+}
+export declare function assertWorkspaceMigrationSourcePreparationAuthority(deps: FleetStateDeps, params: WorkspaceMigrationSourcePreparationParams): Promise<void>;
 export declare function assertWorkspaceMigrationRecoveryAuthority(deps: FleetStateDeps, params: WorkspaceMigrationRecoveryParams): Promise<void>;
 export declare function builderActivationRecoveryTargetMatches(params: {
     operationId: string;

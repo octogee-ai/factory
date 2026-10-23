@@ -19,6 +19,17 @@ END `,
 });
 
 describe("trusted agent-store routine definitions", () => {
+  it.each([
+    { kind: "constraint", definition: "PRIMARY KEY (store)" },
+    { kind: "index", definition: "CREATE UNIQUE INDEX openclaw_schema_meta_pkey ON tenant.openclaw_schema_meta USING btree (store)" },
+  ])("accepts the Native engine metadata $kind", ({ kind, definition }) => {
+    const expression = { kind, relname: "openclaw_schema_meta", name: "openclaw_schema_meta_pkey", definition };
+    const key = `${kind}:openclaw_schema_meta:openclaw_schema_meta_pkey`;
+    const expected = (trusted.expressions as Record<string, string>)[key];
+    expect(agentStoreExpressionFingerprint(expression, "tenant")).toBe(expected);
+    expect(agentStoreExpressionFingerprint({ ...expression, definition: definition.replace("(store)", "(store_id)") }, "tenant")).not.toBe(expected);
+  });
+
   it.each([1, 1536, 3072, 16000])("accepts the native vector trigger at %i dimensions", dimensions => {
     expect(agentStoreRoutineFingerprint(vectorRoutine(dimensions), "tenant")).toBe(trusted.routines.memory_index_chunks_vec_sync);
   });

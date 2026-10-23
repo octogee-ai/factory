@@ -48,6 +48,79 @@ export async function setWorkspaceMigrationPhase(deps, params) {
         });
     });
 }
+export async function assertWorkspaceMigrationSourcePreparationAuthority(deps, params) {
+    if (![params.uid, params.slug, params.sourceGatewayId, params.targetGatewayId, params.operationId].every(value => typeof value === "string" && value.length > 0 && !value.includes("/")) ||
+        params.sourceGatewayId === params.targetGatewayId || !Number.isSafeInteger(params.sourceEpoch) || params.sourceEpoch < 0 ||
+        !Number.isSafeInteger(params.claimStartedAt) || params.claimStartedAt <= 0) {
+        throw new Error("workspace migration source preparation identity is invalid");
+    }
+    await deps.db.runTransaction(async (txn) => {
+        const [userSnapshot, operationSnapshot, sourceSnapshot, sourceRootSnapshot, targetSnapshot, targetRootSnapshot, targetRuntimeSnapshot] = await Promise.all([
+            txn.get(deps.db.collection("users").doc(params.uid)),
+            txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(params.operationId)),
+            txn.get(assignmentRef(deps.db, params.sourceGatewayId, params.uid)),
+            txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.sourceGatewayId)),
+            txn.get(assignmentRef(deps.db, params.targetGatewayId, params.uid)),
+            txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.targetGatewayId)),
+            txn.get(deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.targetGatewayId)),
+        ]);
+        const user = userSnapshot.data();
+        assertRestoreUnfenced(user);
+        const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+        const marker = readWorkspaceMigrationMarker(openclaw);
+        const operation = recordOrEmpty(operationSnapshot.data());
+        const input = recordOrEmpty(operation.input);
+        const source = recordOrEmpty(sourceSnapshot.data());
+        const sourceRoot = projectGatewayDesiredRootForGateway(sourceRootSnapshot.data(), params.sourceGatewayId);
+        const targetRoot = projectGatewayDesiredRootForGateway(targetRootSnapshot.data(), params.targetGatewayId);
+        const exact = [
+            userSnapshot.exists, operationSnapshot.exists,
+            openclaw.gatewayId === params.sourceGatewayId, slugFromAssignedUser(user) === params.slug,
+            openclaw.nativeSharedContextRestore === undefined,
+            marker?.operationId === params.operationId, marker?.state === "preparing", marker?.phase === "preparing",
+            operation.kind === MIGRATE_CUSTOMER_OPERATION_KIND, operation.status === "running", operation.startedAt === params.claimStartedAt,
+            operation.cancellationRequestedAt === undefined, operation.cutoverCommittedAt === undefined,
+            operation.customerMigrationV2 === undefined, operation.sourceTransferExecution === undefined,
+            operation.nativeSharedAgentContextStage === undefined, operation.restoreAttempt === undefined,
+            operation.schedulerHandoffLost === undefined, input.recoverSourceOnly !== true, input.sourceTransferMode === undefined,
+            input.uid === params.uid, input.fromGatewayId === params.sourceGatewayId, input.toGatewayId === params.targetGatewayId,
+            input.builderSlug === undefined || input.builderSlug === params.slug,
+            preparationAssignmentMatches(params, sourceSnapshot), source.slug === params.slug,
+            sourceRoot?.gatewayClass === "shared", sourceRoot?.desiredStatus === "running" || sourceRoot?.desiredStatus === "draining",
+            recordOrEmpty(sourceRootSnapshot.data()).runtimeRestartFence === undefined,
+            recordOrEmpty(targetRootSnapshot.data()).runtimeRestartFence === undefined,
+            targetRoot?.desiredStatus === "running", !targetSnapshot.exists,
+            sourcePreparationAttemptClean(operation, params), sourcePreparationTargetUnadmitted(targetRuntimeSnapshot.data(), params),
+        ].every(Boolean);
+        if (!exact)
+            throw new Error("workspace migration source preparation authority changed");
+        assertRecoveryTarget({ operationId: params.operationId, input, openclaw, sourceEpoch: params.sourceEpoch, targetRoot: targetRootSnapshot.data(), schedulerHandoff: undefined });
+    });
+}
+function sourcePreparationAttemptClean(operation, params) {
+    if (!Array.isArray(operation.steps) || operation.steps.length !== 0)
+        return false;
+    if (operation.schedulerHandoff === undefined)
+        return operation.schedulerHandoffReleased === undefined && operation.schedulerHandoffReleasedAt === undefined;
+    const handoff = recordOrEmpty(operation.schedulerHandoff);
+    const identity = readSchedulerMigrationIdentity(params.operationId, handoff.migrationId);
+    return [
+        operation.schedulerHandoffReleased === true,
+        Number.isSafeInteger(operation.schedulerHandoffReleasedAt),
+        identity !== null && identity.claimStartedAt < params.claimStartedAt,
+        identity !== null && Number(operation.schedulerHandoffReleasedAt) >= identity.claimStartedAt,
+        handoff.uid === params.uid, handoff.slug === params.slug,
+        handoff.fromGatewayId === params.sourceGatewayId, handoff.toGatewayId === params.targetGatewayId,
+    ].every(Boolean);
+}
+function sourcePreparationTargetUnadmitted(runtime, params) {
+    if (runtime === undefined)
+        return true;
+    const heartbeat = recordOrEmpty(runtime.heartbeat);
+    return isGatewayRuntimeDoc(runtime) && runtime.gatewayId === params.targetGatewayId &&
+        Array.isArray(heartbeat.mountedCustomers) && !heartbeat.mountedCustomers.includes(params.slug) &&
+        Array.isArray(heartbeat.migratingIn) && !heartbeat.migratingIn.includes(params.slug);
+}
 export async function assertWorkspaceMigrationRecoveryAuthority(deps, params) {
     await workspaceMigrationRecovery(deps, params, false);
 }

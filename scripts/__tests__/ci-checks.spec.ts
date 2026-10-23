@@ -27,6 +27,12 @@ describe("portable Linux PR checks", () => {
     expect(plan.find(job => job.name === "app")?.commands).toContain("npm test");
   });
 
+  it("requires real PostgreSQL before core unit tests, which may depend on the qualified catalog", () => {
+    const commands = checkPlan(["core/src/agent-store-credentials.ts"], "tests").find(job => job.name === "core")!.commands;
+    expect(commands.indexOf("node ../scripts/ci/core-postgres.mjs")).toBeGreaterThan(0);
+    expect(commands.indexOf("node ../scripts/ci/core-postgres.mjs")).toBeLessThan(commands.indexOf("npm test"));
+  });
+
   it("runs every check on Node 24 except Cloud Functions, which stays on its Node 22 runtime", () => {
     const plan = checkPlan(["package-lock.json", "artifact-worker/renderer/Cargo.lock"], "all", true);
     const node22 = plan.filter(job => job.nodeVersion === 22).map(job => job.name).sort();

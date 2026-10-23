@@ -14,6 +14,10 @@ if (!checkout || !dsn) throw new Error("Usage: OCTOGEE_TEST_POSTGRES_DSN=<dispos
 const pin = JSON.parse(readFileSync(new URL("../../infra/gateway/openclaw-tarball/current.json", import.meta.url), "utf8"));
 const source = path => execFileSync("/usr/bin/git", ["-C", checkout, "show", `${pin.sourceSha}:${path}`], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
 const load = async code => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(code)).toString("base64")}`);
+const metadataSource = source("src/infra/database-engine/postgres-schema.ts");
+const metadataExport = metadataSource.match(/^export const postgresSchemaMetadataSql = `[^`]*`;/m)?.[0];
+if (!metadataExport) throw new Error("Pinned OpenClaw engine metadata DDL export was not found");
+const { postgresSchemaMetadataSql } = await load(metadataExport);
 const { agentPostgresRuntime } = await load(source("src/state/postgres-schema.generated/agent-runtime.ts"));
 const searchSource = source("src/infra/database-engine/postgres-search-schema.ts");
 const generator = searchSource.slice(searchSource.indexOf("export function postgresSearchSql("), searchSource.indexOf("export function rebuildPostgresSearch("));
@@ -31,6 +35,7 @@ try {
   await client.query("BEGIN");
   await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
   await client.query(`SET LOCAL search_path = ${pg.escapeIdentifier(schema)}`);
+  await client.query(postgresSchemaMetadataSql);
   await client.query(agentPostgresRuntime.sql);
   await client.query(agentSearchPostgresRuntime.sql);
   await client.query(postgresSearchSql(agentTranscriptSearchSchema, schema));

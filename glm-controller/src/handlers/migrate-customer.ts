@@ -1,6 +1,7 @@
 import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js';
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
 import type { MigrationProgressRecord, SourceTransferExecution, GatewayVmHomeCheckpoint } from '@octogee/shared/types/glm';
+import type { PrepareMigrationAgentStores } from "../migration-agent-stores.js";
 import { createMigrationProgress } from "../migration-progress.js";
 import { operationScopedLog, withOperationLogScope } from "../operation-log-scope.js";
 import {
@@ -40,7 +41,7 @@ import type { OperationContext, OperationHandler, OperationResult } from "../ope
 import { computerPreemptionError } from "../operation-retry.js";
 import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
-import { sharedRecoveryTargetCleaned, type WorkspaceMigrationPreparationParams, type WorkspaceMigrationRecoveryParams } from "@octogee/core/fleet-state";
+import { sharedRecoveryTargetCleaned, type WorkspaceMigrationPreparationParams, type WorkspaceMigrationRecoveryParams, type WorkspaceMigrationSourcePreparationParams } from "@octogee/core/fleet-state";
 import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
@@ -132,7 +133,9 @@ export interface MigrateCustomerDeps {
 
   clearMigrationPreparation?: (input: WorkspaceMigrationPreparationParams) => Promise<void>;
   assertMigrationRecoveryAuthority?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
+  assertMigrationSourcePreparationAuthority?: (input: WorkspaceMigrationSourcePreparationParams) => Promise<void>;
   completeMigrationRecovery?: (input: WorkspaceMigrationRecoveryParams) => Promise<void>;
+  prepareMigrationAgentStores?: PrepareMigrationAgentStores;
   prepareBuilderRecoveryTarget?: (input: { recovery: WorkspaceMigrationRecoveryParams; targetGatewayId: string; migrationId: string; slug: string }) => Promise<void>;
   setMigrationPhase?: (input: { uid: string; sourceGatewayId: string; operationId: string; phase: "preparing" | "waiting" | "transferring" | "connecting" }) => Promise<void>;
 
@@ -1608,9 +1611,28 @@ async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Ope
   if (sharedScope) await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId);
 }
 
+async function prepareSourceRecoveryAgentStores(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  recovery: WorkspaceMigrationRecoveryParams,
+  slug: string,
+): Promise<void> {
+  if (!deps.prepareMigrationAgentStores || !ctx.assertActiveClaim) {
+    throw new Error("Source agent-store recovery requires ownership preparation and an active operation claim");
+  }
+  const assertCurrent = async () => {
+    await ctx.assertActiveClaim!();
+    await deps.assertMigrationRecoveryAuthority!(recovery);
+  };
+  await assertCurrent();
+  await deps.prepareMigrationAgentStores(recovery.sourceGatewayId, slug, { expectedBuilderUid: recovery.uid, assertCurrent });
+  await assertCurrent();
+}
+
 async function resumePreviousSchedulerAttempt(
   deps: MigrateCustomerDeps,
   op: Operation,
+  ctx: OperationContext,
   user: UserGatewayInfo,
   uid: string,
 ): Promise<boolean> {
@@ -1626,6 +1648,7 @@ async function resumePreviousSchedulerAttempt(
   const scope = previousAttemptScope(op, previous);
   const recovery = scope.recoveryRequired ? await sharedRecoveryAuthority(deps, op, user, uid) : undefined;
   await cleanupPreviousSchedulerTarget(deps, op, previous, scope.sharedScope, recovery);
+  if (recovery && scope.resumeSourceScheduler) await prepareSourceRecoveryAgentStores(deps, ctx, recovery, user.slug);
   const url = await deps.resolveGatewayUrl(previous.fromGatewayId);
   const client = deps.buildClient(() => url);
   if (recovery) await deps.assertMigrationRecoveryAuthority!(recovery);
@@ -1719,6 +1742,32 @@ function declaredMigrationSourceChanged(input: MigrateCustomerInput, resolvedSou
   return typeof input.fromGatewayId === "string" && input.fromGatewayId !== resolvedSource;
 }
 
+async function prepareSharedSourceAgentStores(input: {
+  deps: MigrateCustomerDeps; op: Operation; ctx: OperationContext;
+  targets: MigrationTargets; uid: string; slug: string;
+}): Promise<void> {
+  const { deps, op, ctx, targets, uid, slug } = input;
+  if (targets.fromGatewayClass !== "shared" || targets.sourceAssignmentMode !== "assigned" ||
+      op.input.fromGatewayId !== targets.fromGatewayId || op.steps.length !== 0 ||
+      op.schedulerHandoff && op.schedulerHandoffReleased !== true) return;
+  if (!ctx.assertActiveClaim || !deps.setMigrationPhase || !deps.assertMigrationSourcePreparationAuthority || !deps.prepareMigrationAgentStores) {
+    throw new Error("Shared source preparation requires ownership preparation and claimed placement authority");
+  }
+  const authority: WorkspaceMigrationSourcePreparationParams = {
+    uid, slug, sourceGatewayId: targets.fromGatewayId, targetGatewayId: targets.toGatewayId,
+    operationId: op.id, sourceEpoch: targets.fromEpoch, claimStartedAt: requiredClaimStartedAt(op),
+  };
+  const assertCurrent = async () => {
+    await ctx.assertActiveClaim!();
+    await deps.assertMigrationSourcePreparationAuthority!(authority);
+  };
+  await ctx.assertActiveClaim();
+  await deps.setMigrationPhase({ uid, sourceGatewayId: targets.fromGatewayId, operationId: op.id, phase: "preparing" });
+  await assertCurrent();
+  await deps.prepareMigrationAgentStores(targets.fromGatewayId, slug, { expectedBuilderUid: uid, assertCurrent });
+  await assertCurrent();
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1753,7 +1802,7 @@ async function prepareMigration(
   const migrationId = deps.genMigrationId(op.id);
 
   try {
-    const sourceRecovered = await resumePreviousSchedulerAttempt(deps, op, user, request.uid);
+    const sourceRecovered = await resumePreviousSchedulerAttempt(deps, op, ctx, user, request.uid);
     const rollback = await sourceOnlyRecoveryResult(op, sourceRecovered, ctx, deps.now());
     if (rollback) return { result: rollback };
     const resolved = await resolveMigrationTargets(
@@ -1815,6 +1864,7 @@ async function prepareMigration(
       });
       return { result, stateMigration };
     }
+    await prepareSharedSourceAgentStores({ deps, op, ctx, targets: resolved.targets, uid: request.uid, slug: user.slug });
     const urls = new Map<string, string>();
     urls.set(
       resolved.targets.fromGatewayId,

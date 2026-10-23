@@ -109,7 +109,7 @@ function testJob(name: JobKey): CheckJob {
     name, directory: pkg.dir, nodeVersion: packageNodeVersion(pkg.dir),
     matchGatewayImageNpm: pkg.matchGatewayImageNpm,
     installs: installsFor(pkg.dir),
-    commands: [...(name === JOBS.site ? ["npx playwright install chromium"] : []), pkg.typecheck, "npm test"],
+    commands: [...(name === JOBS.site ? ["npx playwright install chromium"] : []), pkg.typecheck, ...(name === JOBS.core ? ["node ../scripts/ci/core-postgres.mjs"] : []), "npm test"],
   };
   const directory = emulatorDirectories[name];
   if (directory) return { name, directory, nodeVersion: packageNodeVersion(directory), installs: installsFor(directory), commands: ["npm run test:emulator"] };

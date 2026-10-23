@@ -6,7 +6,7 @@ function harness(gateway: { gatewayClass: "shared" | "builder"; ownerUid: string
   const readGateway = vi.fn(async () => gateway);
   const readBuilder = vi.fn(async () => ({ uid: "uid-alice", slug: "alice" }));
   const ensureCredentials = vi.fn(async () => { order.push("credentials"); });
-  const transferOwnership = vi.fn(async () => { order.push("ownership"); });
+  const transferOwnership = vi.fn<(builder: { uid: string; slug: string }, target: "shared" | "builder", assertCurrent?: () => Promise<void>) => Promise<void>>(async () => { order.push("ownership"); });
   return { order, readGateway, readBuilder, ensureCredentials, transferOwnership,
     prepare: createMigrationAgentStorePreparer({ readGateway, readBuilder, ensureCredentials, transferOwnership }) };
 }
@@ -54,5 +54,30 @@ describe("migration agent-store ownership", () => {
     const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
     h.transferOwnership.mockRejectedValue(new Error("ownership failed"));
     await expect(h.prepare("target", "alice")).rejects.toThrow("ownership failed");
+  });
+});
+
+
+describe("claimed agent-store recovery authority", () => {
+  it("passes the exact recovery authority to the PostgreSQL transaction owner", async () => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    const assertCurrent = vi.fn(async () => undefined);
+    await h.prepare("source", "alice", { expectedBuilderUid: "uid-alice", assertCurrent });
+    expect(h.transferOwnership).toHaveBeenCalledExactlyOnceWith({ uid: "uid-alice", slug: "alice" }, "shared", assertCurrent);
+  });
+
+  it.each(["changed-uid", "claim-lost", "gateway-rebound", "slug-reassigned"] as const)("refuses stale ownership before transfer after credential await: %s", async scenario => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    let credentialsDone = false;
+    const assertCurrent = vi.fn(async () => { if (scenario === "claim-lost" && credentialsDone) throw new Error("recovery claim replaced"); });
+    if (scenario === "changed-uid") h.readBuilder.mockResolvedValue({ uid: "uid-bob", slug: "alice" });
+    h.ensureCredentials.mockImplementation(async () => {
+      credentialsDone = true;
+      if (scenario === "gateway-rebound") h.readGateway.mockResolvedValue({ gatewayClass: "builder", ownerUid: "uid-bob", builderSlug: "alice" });
+      if (scenario === "slug-reassigned") h.readBuilder.mockResolvedValue({ uid: "uid-bob", slug: "alice" });
+    });
+    await expect(h.prepare("source", "alice", { expectedBuilderUid: "uid-alice", assertCurrent })).rejects.toThrow();
+    expect(h.transferOwnership).not.toHaveBeenCalled();
+    if (scenario === "changed-uid") expect(h.ensureCredentials).not.toHaveBeenCalled();
   });
 });

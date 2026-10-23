@@ -183,7 +183,7 @@ export function createAgentStoreOwnershipTransferer(adminDsn) {
     const sharedRole = roleFor("shared", scope);
     const pool = new pg.Pool({ connectionString: adminDsn, max: 2, connectionTimeoutMillis: 10_000, allowExitOnIdle: true });
     pool.on("error", error => console.error("Agent-store ownership connection failed", error.message));
-    return async (builder, target) => {
+    return async (builder, target, assertCurrent) => {
         if (!builder.uid || !builder.slug)
             throw new Error("Agent-store ownership transfer requires a complete Builder identity");
         const owner = roleFor("builder", `${scope}:${builder.uid}`);
@@ -192,6 +192,7 @@ export function createAgentStoreOwnershipTransferer(adminDsn) {
             await client.query("BEGIN");
             await client.query("SET LOCAL search_path = pg_catalog");
             await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+            await assertCurrent?.();
             const { rows: [{ current_user: admin }] } = await client.query("SELECT current_user");
             await ensureRole(client, sharedRole);
             await ensureRole(client, owner);
@@ -199,6 +200,7 @@ export function createAgentStoreOwnershipTransferer(adminDsn) {
             await client.query(`GRANT ${identifier(owner)} TO ${identifier(admin)} WITH INHERIT TRUE, SET TRUE`);
             await isolateSharedRole(client, sharedRole);
             await transferStores(client, target === "shared" ? owner : sharedRole, target === "shared" ? sharedRole : owner, builder.slug);
+            await assertCurrent?.();
             await client.query("COMMIT");
         }
         catch (error) {

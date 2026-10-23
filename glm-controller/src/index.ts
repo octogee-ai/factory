@@ -280,6 +280,7 @@ import {
   clearWorkspaceMigrationPreparation,
   completeWorkspaceMigrationRecovery,
   assertWorkspaceMigrationRecoveryAuthority,
+  assertWorkspaceMigrationSourcePreparationAuthority,
   type FleetStateFirestore,
 } from "@octogee/core/fleet-state";
 import {
@@ -3235,6 +3236,7 @@ async function buildHandlers(
       unreserveTargetOpenClaw: recoveryTargetTransport.unreserveTargetOpenClaw!,
     }, input),
     assertMigrationRecoveryAuthority: (input) => assertWorkspaceMigrationRecoveryAuthority({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
+    assertMigrationSourcePreparationAuthority: (input) => assertWorkspaceMigrationSourcePreparationAuthority({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     completeMigrationRecovery: (input) => completeWorkspaceMigrationRecovery({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
     setMigrationPhase: (input) => setWorkspaceMigrationPhase({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
@@ -3314,6 +3316,7 @@ async function buildHandlers(
       logFn,
       fleetOps.prepareMigrationAgentStores,
     ),
+    prepareMigrationAgentStores: fleetOps.prepareMigrationAgentStores,
     resolveSourcePlacement: async (uid, currentGatewayId) => {
       const source = await resolveSourceRevisionFromFirestore(db, uid, currentGatewayId);
       if (!source) return null;

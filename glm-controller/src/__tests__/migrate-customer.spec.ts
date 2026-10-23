@@ -181,8 +181,11 @@ function mkDeps(options: HarnessOptions = {}) {
     recordMigrationProgress: vi.fn(async () => undefined),
     buildClient: vi.fn(() => client),
     assertMigrationRecoveryAuthority: vi.fn(async () => undefined),
+    assertMigrationSourcePreparationAuthority: vi.fn(async () => undefined),
+    setMigrationPhase: vi.fn(async () => undefined),
     completeMigrationRecovery: vi.fn(async () => undefined),
     prepareBuilderRecoveryTarget: vi.fn(async () => undefined),
+    prepareMigrationAgentStores: vi.fn(async () => undefined),
     resolveSourcePlacement: vi.fn(async () => ({
       release: 1,
       epoch: 4,
@@ -208,6 +211,7 @@ function mkDeps(options: HarnessOptions = {}) {
   };
   const steps: OperationStep[] = [];
   const ctx: OperationContext = {
+    assertActiveClaim: vi.fn(async () => undefined),
     persistSchedulerHandoff: vi.fn(async () => undefined),
     persistCutoverCommitted: vi.fn(async (at: number) => {
       events.push(`cutover-recorded:${at}`);
@@ -237,6 +241,55 @@ function mockNativeReturn(checkpointRequested = false) {
 }
 
 describe("PostgreSQL agent context transfer", () => {
+  it.each(["pristine", "released", "claim-lost", "authority-lost", "missing-preparer"] as const)("restores Shared database access before resolving source readiness: %s", async scenario => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 4, assignmentMode: "assigned", gatewayClass: "shared" });
+    const op = mkOp({ input: { uid: "uid-alice", fromGatewayId: "shared-blue", toGatewayId: "gw-green" } });
+    if (scenario === "released") Object.assign(op, {
+      schedulerHandoff: { migrationId: "mig-op-1:scheduler:1:claim:1000", fromGatewayId: "shared-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" },
+      schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3000,
+    });
+    let prepared = false, lost = false;
+    const order: string[] = [];
+    h.ctx.assertActiveClaim = vi.fn(async () => { if (lost && scenario === "claim-lost") throw new Error("source preparation claim changed"); });
+    h.deps.assertMigrationSourcePreparationAuthority = vi.fn(async params => {
+      expect(params).toEqual({ uid: "uid-alice", slug: "alice", sourceGatewayId: "shared-blue", targetGatewayId: "gw-green", sourceEpoch: 4, operationId: "op-1", claimStartedAt: 4000 });
+      if (lost && scenario === "authority-lost") throw new Error("source preparation placement changed");
+    });
+    h.deps.prepareMigrationAgentStores = scenario === "missing-preparer" ? undefined : vi.fn(async (gatewayId, slug, authority) => {
+      expect([gatewayId, slug, authority?.expectedBuilderUid]).toEqual(["shared-blue", "alice", "uid-alice"]);
+      await authority?.assertCurrent();
+      prepared = true; lost = true; order.push("ownership");
+    });
+    h.deps.resolveGatewayUrl = vi.fn(async gatewayId => {
+      if (gatewayId === "shared-blue") {
+        if (!prepared) throw new Error("source readiness blocked by agent-store permissions");
+        order.push("source-ready");
+      }
+      return `http://${gatewayId}.svc:3003`;
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(op, h.ctx);
+    if (scenario === "pristine" || scenario === "released") {
+      expect(result).toMatchObject({ success: true });
+      expect(order.slice(0, 2)).toEqual(["ownership", "source-ready"]);
+      expect(h.deps.setMigrationPhase).toHaveBeenCalledWith({ uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: "op-1", phase: "preparing" });
+    } else {
+      expect(result.success).toBe(false);
+      expect(h.deps.resolveGatewayUrl).not.toHaveBeenCalled();
+      expect(h.client.transferState).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not reclaim Shared stores during an admitted current handoff", async () => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 4, assignmentMode: "assigned", gatewayClass: "shared" });
+    const op = mkOp({ input: { uid: "uid-alice", fromGatewayId: "shared-blue", toGatewayId: "gw-green" },
+      schedulerHandoff: { migrationId: "mig-op-1:scheduler:1:claim:4000", fromGatewayId: "shared-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" } });
+    expect(await createMigrateCustomerHandler(h.deps)(op, h.ctx)).toMatchObject({ success: true });
+    expect(h.deps.prepareMigrationAgentStores).not.toHaveBeenCalled();
+    expect(h.deps.assertMigrationSourcePreparationAuthority).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("uses the current store without selecting an archived context (durable=%s)", async durable => {
     const h = mkDeps({ durable });
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: true });
@@ -247,6 +300,61 @@ describe("PostgreSQL agent context transfer", () => {
 });
 
 describe("abandoned Shared migration recovery", () => {
+  it.each(["success", "missing-callback", "ownership-failed", "authority-lost", "claim-lost", "missing-claim", "cleanup-failed"] as const)("prepares source store ownership before recovery scheduler resume: %s", async scenario => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const handoff = { migrationId: "mig-op-1:scheduler:1:claim:1000", fromGatewayId: "shared-blue", toGatewayId: "shared-green",
+      uid: "uid-alice", slug: "alice", stageAfterCutover: true as const,
+      sourceRecovery: { migrationId: "mig-op-1:scheduler:1:claim:1000", sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" as const }] } };
+    const request = mkOp({ input: { uid: "uid-alice", fromGatewayId: "shared-blue", toGatewayId: "shared-green", recoverSourceOnly: true }, schedulerHandoff: handoff, attempts: 1 });
+    const order: string[] = [];
+    let prepared = false, authorityLost = false, claimLost = false;
+    h.deps.assertMigrationRecoveryAuthority = vi.fn(async () => { if (authorityLost) throw new Error("recovery authority changed after ownership await"); });
+    vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async gatewayId => {
+      if (gatewayId === "shared-blue" && !prepared) throw new Error("source runtime is not ready until store ownership is restored");
+      return `http://${gatewayId}.svc:3003`;
+    });
+    h.ctx.assertActiveClaim = scenario === "missing-claim" ? undefined : vi.fn(async () => { if (claimLost) throw new Error("operation claim replaced after ownership await"); });
+    h.client.abortImport = vi.fn(async ({ mode }) => { order.push(`abort:${mode}`); });
+    vi.mocked(h.client.unmount).mockImplementation(async ({ migrationId, slug }) => {
+      order.push("unmount");
+      if (scenario === "cleanup-failed") throw new Error("target cleanup incomplete");
+      return { migrationId, slug, unmounted: true };
+    });
+    const prepare = vi.fn<NonNullable<MigrateCustomerDeps["prepareMigrationAgentStores"]>>(async (gatewayId, slug, authority) => {
+      expect(gatewayId).toBe("shared-blue"); expect(slug).toBe("alice");
+      expect(authority?.expectedBuilderUid).toBe("uid-alice");
+      expect(authority?.assertCurrent).toBeTypeOf("function");
+      await authority?.assertCurrent();
+      order.push("ownership");
+      if (scenario === "ownership-failed") throw new Error("ownership transfer refused");
+      prepared = true;
+      authorityLost = scenario === "authority-lost"; claimLost = scenario === "claim-lost";
+    });
+    h.deps.prepareMigrationAgentStores = scenario === "missing-callback" ? undefined : prepare;
+    h.client.scheduler = vi.fn(async ({ migrationId, phase }) => {
+      order.push(`scheduler:${phase}`);
+      if (!prepared) throw new Error("permission denied for source agent schema");
+      return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true };
+    });
+    h.client.resume = vi.fn(async () => { order.push("resume"); });
+    h.deps.completeMigrationRecovery = vi.fn(async () => { order.push("complete"); });
+    const result = await createMigrateCustomerHandler(h.deps)(request, h.ctx);
+    if (scenario === "success") {
+      expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
+      expect(order).toEqual(["abort:keys", "abort:pre", "abort:final", "unmount", "ownership", "scheduler:resume", "resume", "complete"]);
+      expect(prepare).toHaveBeenCalledOnce();
+    } else {
+      expect(result.rolledBack).not.toBe(true);
+      expect(h.client.scheduler).not.toHaveBeenCalled();
+      expect(h.client.resume).not.toHaveBeenCalled();
+      expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+      if (["missing-callback", "missing-claim", "cleanup-failed"].includes(scenario)) expect(prepare).not.toHaveBeenCalled();
+      else expect(prepare).toHaveBeenCalledOnce();
+    }
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+
   it.each(["success", "resume-failure", "authority-failure", "ownership-changed", "never-quiesced"])("restores a pre-cutover Builder activation through the existing source-only worker: %s", async (scenario) => {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     const target = "alice-s-12345678";

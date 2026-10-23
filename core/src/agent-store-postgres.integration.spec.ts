@@ -61,6 +61,10 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     try {
       for (const [schema, agentId] of [[aliceSchema, "octogee-alice-coach"], [bobSchema, "octogee-bob-coach"]]) {
         await shared.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema!)}`);
+        await shared.query(`CREATE TABLE ${object(schema!, "openclaw_schema_meta")} (
+          store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL,
+          fingerprint TEXT, ddl_hash TEXT, server_major BIGINT)`);
+        await shared.query(`INSERT INTO ${object(schema!, "openclaw_schema_meta")} (store, version, store_id) VALUES ('agent', 1, $1)`, [randomUUID()]);
         await shared.query(`CREATE TABLE ${object(schema!, "schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT)`);
         await shared.query(`INSERT INTO ${object(schema!, "schema_meta")} VALUES ('primary', 'agent', $1)`, [agentId]);
         await shared.query(`CREATE TABLE ${object(schema!, "session_nodes")} (session_key TEXT PRIMARY KEY, entry_json TEXT)`);

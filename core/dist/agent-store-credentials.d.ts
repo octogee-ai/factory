@@ -11,7 +11,7 @@ export declare function createAgentStoreCredentialProvisioner(adminDsn: string, 
 export declare function createAgentStoreOwnershipTransferer(adminDsn: string): (builder: {
     uid: string;
     slug: string;
-}, target: "shared" | "builder") => Promise<void>;
+}, target: "shared" | "builder", assertCurrent?: () => Promise<void>) => Promise<void>;
 export declare function assertNoBuilderAgentStores(adminDsn: string, builder: {
     uid: string;
     slug: string;
