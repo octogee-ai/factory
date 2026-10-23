@@ -45,6 +45,7 @@ export interface MigrationClientDeps {
   timeouts?: MigrationClientTimeouts;
 
   finishAgentContextRestore?: MigrationClient["finishAgentContextRestore"];
+  prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
   transferState: MigrationClient["transferState"];
 }
 
@@ -305,6 +306,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       if (result.ready !== true) throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
     },
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot, resume }) {
+      await deps.prepareAgentStores?.(gatewayId, slug);
       const res = await postSignedJson<RestoreMigrationResponse>({
         transportId: transportId ?? gatewayId,
         path: `/${resume === true ? "resume-restore" : "restore"}/${gatewayId}`,
@@ -320,6 +322,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
     },
 
     async resume({ migrationId, gatewayId, transportId, slug }) {
+      await deps.prepareAgentStores?.(gatewayId, slug);
       const response = await postSignedJson<{ resumed: boolean }>({
         transportId: transportId ?? gatewayId, path: `/resume/${gatewayId}`,
         gatewayId, migrationId, body: { migrationId, slug }, timeoutMs: quiesceMs,

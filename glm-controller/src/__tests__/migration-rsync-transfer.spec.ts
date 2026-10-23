@@ -185,6 +185,29 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+  it.each(["keys", "pre", "final"] as const)("prepares ownership after detach and before adoption only for final import (%s)", async mode => {
+    const calls: string[] = [];
+    const prepareAgentStores = vi.fn(async (gatewayId: string, slug: string) => {
+      expect({ gatewayId, slug }).toEqual({ gatewayId: "gw-to", slug: "alice" });
+      expect(calls.at(-1)).toContain("/push-rsync-state/");
+      expect(calls.some(url => url.includes("/finish-rsync-import/"))).toBe(false);
+    });
+    const transfer = createRsyncMigrationTransfer({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: id => `http://${id}`, runCommand: makeCommandRunner([]), fetch: makeFetch(calls), prepareAgentStores });
+    await transfer({ migrationId: "ownership-1", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode });
+    expect(prepareAgentStores).toHaveBeenCalledTimes(mode === "final" ? 1 : 0);
+  });
+
+  it("aborts the target without adopting when ownership transfer fails", async () => {
+    const calls: string[] = [];
+    const transfer = createRsyncMigrationTransfer({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
+      resolveGatewayUrl: id => `http://${id}`, runCommand: makeCommandRunner([]), fetch: makeFetch(calls),
+      prepareAgentStores: async () => { throw new Error("ownership failed"); } });
+    await expect(transfer({ migrationId: "ownership-1", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).rejects.toThrow("ownership failed");
+    expect(calls.some(url => url.includes("/finish-rsync-import/"))).toBe(false);
+    expect(calls.at(-1)).toContain("/abort-rsync-import/");
+  });
+
   it("stages archived Shared context without finishing or waiting for target readiness", async () => {
     const custody = { uid: "uid-alice", slug: "alice", returnOperationId: "prior", migrationId: "prior-scheduler", sourceGatewayId: "native-old", sharedGatewayId: "gw-from", instanceName: "native", instanceId: "1", zone: "a", homeDiskId: "2", homeDiskSource: "disk", completedAt: 100, cutoverCommittedAt: 90 };
     const archive = { archiveId: "archive", uid: "uid-alice", slug: "alice", agentIds: ["octogee-alice-coach"], contextSha256: "a".repeat(64), custody };
@@ -206,14 +229,18 @@ describe("createRsyncMigrationTransfer", () => {
     const recovery = { checkpoint: { name: "20261011T120000Z.tar.gz", generation: "123", coverage: "builder-home-v2" as const, writerProtocol: 3 as const, size: 100, sha256: "c".repeat(64), instanceId: scenario === "checkpoint-owner-changed" ? "other-vm" : "1", completedAt: 120 } };
     const calls: string[] = [];
     const baseline = makeFetch(calls);
-    const finish = createRsyncAgentContextRestoreFinish({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, resolveGatewayVm: async () => scenario === "checkpoint-target-native" ? { instanceName: "unexpected-native-target", internalIp: "10.0.0.2" } : null, runCommand: makeCommandRunner([]), fetch: (async (url, init) => {
+    const prepareAgentStores = vi.fn(async (gatewayId: string, slug: string) => {
+      expect({ gatewayId, slug }).toEqual({ gatewayId: "gw-to", slug: "alice" });
+      expect(calls).toEqual([]);
+    });
+    const finish = createRsyncAgentContextRestoreFinish({ prepareAgentStores, db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, resolveGatewayVm: async () => scenario === "checkpoint-target-native" ? { instanceName: "unexpected-native-target", internalIp: "10.0.0.2" } : null, runCommand: makeCommandRunner([]), fetch: (async (url, init) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({ agentContext: { mode: "restore-shared", archive }, targetCertificateSha256: stage.targetCertificateSha256 });
       if (scenario === "checkpoint-recovery") expect(JSON.parse(String(init?.body)).sharedAgentContextRecovery).toEqual(recovery);
       return baseline(url, init);
     }) as typeof fetch });
     const result = finish({ migrationId: "staged-restore", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", agentContext: { mode: "restore-shared", archive }, stage, ...(scenario.startsWith("checkpoint-") ? { sharedAgentContextRecovery: recovery } : {}) });
-    if (scenario === "matching" || scenario === "checkpoint-recovery") { await expect(result).resolves.toMatchObject({ imported: true }); expect(calls).toHaveLength(1); }
-    else { await expect(result).rejects.toThrow(scenario === "checkpoint-owner-changed" ? "checkpoint scope changed" : "target changed"); expect(calls).toEqual([]); }
+    if (scenario === "matching" || scenario === "checkpoint-recovery") { await expect(result).resolves.toMatchObject({ imported: true }); expect(calls).toHaveLength(1); expect(prepareAgentStores).toHaveBeenCalledOnce(); }
+    else { await expect(result).rejects.toThrow(scenario === "checkpoint-owner-changed" ? "checkpoint scope changed" : "target changed"); expect(calls).toEqual([]); expect(prepareAgentStores).not.toHaveBeenCalled(); }
   });
 
   it("signs the selected context in every control phase and preserves the final receipt", async () => {
@@ -926,7 +953,9 @@ describe("retained source final transfer",()=>{
 
   it.each(["pending","complete","stale"])("keeps normal target protocol without lease or source push when helper is %s",async outcome=>{
     const store:Store={};const calls:string[]=[];const commands:Array<{command:string;args:string[]}>=[];
+    const prepareAgentStores = vi.fn(async () => { expect(calls.some(url => url.includes("/finish-rsync-import/"))).toBe(false); });
     const transfer=createRsyncMigrationTransfer({
+      prepareAgentStores,
       db:makeDb(store),namespace:"octogee-test",privateKey:FLEET_KEY_PAIR.privateKey,
       fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:id=>`http://${id}`,
       fetch:makeFetch(calls),runCommand:makeCommandRunner(commands),
@@ -941,6 +970,7 @@ describe("retained source final transfer",()=>{
     if(outcome==="pending")await expect(result).rejects.toThrow("observation pending");
     else if(outcome==="stale")await expect(result).rejects.toThrow("active claim changed");
     else await expect(result).resolves.toMatchObject({imported:true});
+    expect(prepareAgentStores).toHaveBeenCalledTimes(outcome === "complete" ? 1 : 0);
     expect(store).toEqual({});
     expect(calls.some(url=>url.includes("/push-rsync-state/")||url.includes("/abort-rsync-import/"))).toBe(false);
     expect(calls.filter(url=>url.includes("/finish-rsync-import/"))).toHaveLength(outcome==="complete"?1:0);

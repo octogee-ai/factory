@@ -1,6 +1,7 @@
+import { createMigrationAgentStorePreparer, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
-import { createAgentStoreCredentialProvisioner, assertNoBuilderAgentStores } from "@octogee/core/agent-store-credentials";
+import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores } from "@octogee/core/agent-store-credentials";
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
 import { createBuilderHomeMigrator } from "./builder-home-migration.js";
 import { createBuilderHomeProvider } from "./lib/builder-home-provider.js";
@@ -2637,6 +2638,19 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     provisionAgentStore: provisionAgentStoreCredentials,
     runKubectl,
   });
+  const prepareMigrationAgentStores = createMigrationAgentStorePreparer({
+    readGateway: async gatewayId => {
+      const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+      return projectGatewayDesiredRootForGateway(snapshot.exists ? snapshot.data() : undefined, gatewayId);
+    },
+    readBuilder: async slug => {
+      const users = await db.collection("users").where("provisioning.openclaw.slug", "==", slug).limit(2).get();
+      if (users.size !== 1) throw new Error(`Agent-store handoff requires one Builder for slug ${slug}`);
+      return { uid: users.docs[0].id, slug };
+    },
+    ensureCredentials: gatewayId => ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId }),
+    transferOwnership: createAgentStoreOwnershipTransferer(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store handoff requires the controller-only administration URL")),
+  });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,
     log,
@@ -2772,7 +2786,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
     runRuntimeRecovery: convergeGateways.runExclusive,
-    ensureGatewayCredentials,
+    prepareMigrationAgentStores,
   });
 
   const deps: ControllerDeps = {
@@ -2938,23 +2952,23 @@ function createMigrationClientBuilder(
   db: Firestore,
   privateKey: string,
   logFn: (msg: string) => void,
-  ensureGatewayCredentials?: AuthSecretEnsurer["ensureAuthSecret"],
+  prepareAgentStores?: PrepareMigrationAgentStores,
 ) {
   return (resolveSync: (gatewayId: string) => string, retainedSource?: RetainedSourceContext) => {
     return createMigrationClient({
       privateKey,
       resolveGatewayUrl: resolveSync,
       log: logFn,
+      prepareAgentStores,
       finishAgentContextRestore: createRsyncAgentContextRestoreFinish({
+        prepareAgentStores,
         db, namespace: NAMESPACE, privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
         resolveGatewayUrl: resolveSync, resolveGatewayVm: transportId => readGatewayVmAddress(db, transportId), log: logFn,
       }),
       transferState: async (request) => {
-        if (request.mode === "final") {
-          if (!ensureGatewayCredentials) throw new Error("Final agent-store transfer requires Gateway credential provisioning");
-          await ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId: request.toGatewayId });
-        }
+        if (request.mode === "final" && !prepareAgentStores) throw new Error("Final agent-store transfer requires ownership preparation");
         return createRsyncMigrationTransfer({
+        prepareAgentStores,
         ...(retainedSource ? {retainedSource: retainedSourceRunner(db,retainedSource)} : {}),
         db,
         namespace: NAMESPACE,
@@ -3145,7 +3159,7 @@ async function buildHandlers(
     ) => Promise<T>;
     chartFingerprint: string;
     runRuntimeRecovery: (work: () => Promise<void>) => Promise<void>;
-    ensureGatewayCredentials: AuthSecretEnsurer["ensureAuthSecret"];
+    prepareMigrationAgentStores: PrepareMigrationAgentStores;
   },
 ): Promise<OperationHandlers> {
   const { privateKey, modelKeySourceIssuer } = fleetOps;
@@ -3298,7 +3312,7 @@ async function buildHandlers(
       db,
       privateKey,
       logFn,
-      fleetOps.ensureGatewayCredentials,
+      fleetOps.prepareMigrationAgentStores,
     ),
     resolveSourcePlacement: async (uid, currentGatewayId) => {
       const source = await resolveSourceRevisionFromFirestore(db, uid, currentGatewayId);

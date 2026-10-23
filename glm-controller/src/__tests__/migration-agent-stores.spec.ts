@@ -1,0 +1,58 @@
+import { describe, expect, it, vi } from "vitest";
+import { createMigrationAgentStorePreparer } from "../migration-agent-stores.js";
+
+function harness(gateway: { gatewayClass: "shared" | "builder"; ownerUid: string | null; builderSlug: string | null } | null) {
+  const order: string[] = [];
+  const readGateway = vi.fn(async () => gateway);
+  const readBuilder = vi.fn(async () => ({ uid: "uid-alice", slug: "alice" }));
+  const ensureCredentials = vi.fn(async () => { order.push("credentials"); });
+  const transferOwnership = vi.fn(async () => { order.push("ownership"); });
+  return { order, readGateway, readBuilder, ensureCredentials, transferOwnership,
+    prepare: createMigrationAgentStorePreparer({ readGateway, readBuilder, ensureCredentials, transferOwnership }) };
+}
+
+describe("migration agent-store ownership", () => {
+  it.each(["shared", "builder"] as const)("prepares %s ownership from the authoritative Builder identity", async gatewayClass => {
+    const h = harness({ gatewayClass, ownerUid: gatewayClass === "builder" ? "uid-alice" : null, builderSlug: gatewayClass === "builder" ? "alice" : null });
+    await h.prepare("target", "alice");
+    expect(h.readGateway).toHaveBeenCalledWith("target");
+    expect(h.readBuilder).toHaveBeenCalledWith("alice");
+    expect(h.ensureCredentials).toHaveBeenCalledWith("target");
+    expect(h.transferOwnership).toHaveBeenCalledWith({ uid: "uid-alice", slug: "alice" }, gatewayClass);
+    expect(h.order).toEqual(["credentials", "ownership"]);
+  });
+
+  it.each([
+    null,
+    { gatewayClass: "builder" as const, ownerUid: "uid-bob", builderSlug: "alice" },
+    { gatewayClass: "builder" as const, ownerUid: "uid-alice", builderSlug: "bob" },
+    { gatewayClass: "shared" as const, ownerUid: "uid-alice", builderSlug: "alice" },
+  ])("rejects a missing or mismatched desired owner (%j)", async gateway => {
+    const h = harness(gateway);
+    await expect(h.prepare("target", "alice")).rejects.toThrow();
+    expect(h.ensureCredentials).not.toHaveBeenCalled();
+    expect(h.transferOwnership).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing Builder or a slug mismatch", async () => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    h.readBuilder.mockResolvedValue({ uid: "", slug: "alice" });
+    await expect(h.prepare("target", "alice")).rejects.toThrow("identity changed");
+    h.readBuilder.mockResolvedValue({ uid: "uid-alice", slug: "bob" });
+    await expect(h.prepare("target", "alice")).rejects.toThrow("identity changed");
+    expect(h.transferOwnership).not.toHaveBeenCalled();
+  });
+
+  it("stops before ownership changes if credential publication fails", async () => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    h.ensureCredentials.mockRejectedValue(new Error("publication failed"));
+    await expect(h.prepare("target", "alice")).rejects.toThrow("publication failed");
+    expect(h.transferOwnership).not.toHaveBeenCalled();
+  });
+
+  it("surfaces ownership failures so import or rollback stays fenced", async () => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    h.transferOwnership.mockRejectedValue(new Error("ownership failed"));
+    await expect(h.prepare("target", "alice")).rejects.toThrow("ownership failed");
+  });
+});

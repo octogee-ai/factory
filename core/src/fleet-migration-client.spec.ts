@@ -399,7 +399,13 @@ describe("MigrationClient.restoreTarget", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
+    let ownershipPrepared = false;
     const client = createMigrationClient({
+      prepareAgentStores: async (gatewayId, slug) => {
+        expect({ gatewayId, slug }).toEqual({ gatewayId: "gw-green", slug: "alice" });
+        expect(calls).toHaveLength(0);
+        ownershipPrepared = true;
+      },
       transferState: transferNotUnderTest,
       privateKey: PRIVATE_KEY,
       resolveGatewayUrl: () => `https://fleet.example.com`,
@@ -413,6 +419,7 @@ describe("MigrationClient.restoreTarget", () => {
       snapshot: SNAPSHOT,
       resume,
     });
+    expect(ownershipPrepared).toBe(true);
     expect(res.restored).toBe(true);
     expect(calls[0].url).toBe(`https://fleet.example.com/${resume ? "resume-restore" : "restore"}/gw-green`);
     const parsed = JSON.parse(calls[0].body!);
@@ -684,6 +691,20 @@ it("signs destination progress for its target gateway and preserves HTTP failure
 });
 
 describe("MigrationClient.resume", () => {
+  it.each([true, false])("restores source ownership before resuming ingress (ownership succeeds=%s)", async succeeds => {
+    const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({ resumed: true }), { status: 200 }));
+    const prepareAgentStores = async (gatewayId: string, slug: string) => {
+      expect({ gatewayId, slug }).toEqual({ gatewayId: "source", slug: "alice" });
+      expect(calls).toHaveLength(0);
+      if (!succeeds) throw new Error("ownership failed");
+    };
+    const client = createMigrationClient({ transferState: transferNotUnderTest, privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://source.example.com", fetch: fakeFetch, prepareAgentStores });
+    const result = client.resume({ migrationId: "m1", gatewayId: "source", slug: "alice" });
+    if (succeeds) await expect(result).resolves.toBeUndefined();
+    else await expect(result).rejects.toThrow("ownership failed");
+    expect(calls).toHaveLength(succeeds ? 1 : 0);
+  });
+
   it.each([true, false])("requires an acknowledged restart (resumed=%s)", async (resumed) => {
     const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify({ resumed }), { status: 200 }));
     const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://source.example.com", fetch: fakeFetch });

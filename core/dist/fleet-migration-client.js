@@ -133,6 +133,7 @@ export function createMigrationClient(deps) {
                 throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
         },
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot, resume }) {
+            await deps.prepareAgentStores?.(gatewayId, slug);
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,
                 path: `/${resume === true ? "resume-restore" : "restore"}/${gatewayId}`,
@@ -145,6 +146,7 @@ export function createMigrationClient(deps) {
             return res;
         },
         async resume({ migrationId, gatewayId, transportId, slug }) {
+            await deps.prepareAgentStores?.(gatewayId, slug);
             const response = await postSignedJson({
                 transportId: transportId ?? gatewayId, path: `/resume/${gatewayId}`,
                 gatewayId, migrationId, body: { migrationId, slug }, timeoutMs: quiesceMs,

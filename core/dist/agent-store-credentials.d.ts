@@ -8,6 +8,10 @@ export interface AgentStoreGatewayIdentity {
     };
 }
 export declare function createAgentStoreCredentialProvisioner(adminDsn: string, clientDsn: string): (identity: AgentStoreGatewayIdentity) => Promise<string>;
+export declare function createAgentStoreOwnershipTransferer(adminDsn: string): (builder: {
+    uid: string;
+    slug: string;
+}, target: "shared" | "builder") => Promise<void>;
 export declare function assertNoBuilderAgentStores(adminDsn: string, builder: {
     uid: string;
     slug: string;

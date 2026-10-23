@@ -1,0 +1,53 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { agentStoreRoutineFingerprint, agentStoreRoutinesQuery, agentStoreTriggerFingerprint, agentStoreTriggersQuery, agentStoreExpressionFingerprint, agentStoreExpressionsQuery } from "../../core/dist/agent-store-routines.js";
+
+const require = createRequire(new URL("../../core/package.json", import.meta.url));
+const { default: pg } = await import(require.resolve("pg"));
+const checkout = process.argv[2];
+const dsn = process.env.OCTOGEE_TEST_POSTGRES_DSN;
+if (!checkout || !dsn) throw new Error("Usage: OCTOGEE_TEST_POSTGRES_DSN=<disposable database> node scripts/ops/qualify-agent-store-routines.mjs <OpenClaw checkout>");
+const pin = JSON.parse(readFileSync(new URL("../../infra/gateway/openclaw-tarball/current.json", import.meta.url), "utf8"));
+const source = path => execFileSync("/usr/bin/git", ["-C", checkout, "show", `${pin.sourceSha}:${path}`], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+const load = async code => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(code)).toString("base64")}`);
+const { agentPostgresRuntime } = await load(source("src/state/postgres-schema.generated/agent-runtime.ts"));
+const searchSource = source("src/infra/database-engine/postgres-search-schema.ts");
+const generator = searchSource.slice(searchSource.indexOf("export function postgresSearchSql("), searchSource.indexOf("export function rebuildPostgresSearch("));
+const { postgresSearchSql } = await load(`export const pgSearchName = name => '"' + name.replaceAll('"', '""') + '"'; const searchConfig = 'openclaw_simple_unaccent';\n${generator}`);
+const { agentSearchPostgresRuntime } = await load(source("src/state/postgres-schema.generated/agent-search-runtime.ts"));
+const { agentTranscriptSearchSchema } = await load(source("src/state/openclaw-agent-search-schema.ts"));
+const { memoryVectorSearchSchema, memoryTextSearchSchema, memoryStandingIntentSearchSchema } = await load(source("packages/memory-host-sdk/src/host/memory-search-schema.ts"));
+const schema = `octogee_qualify_${randomUUID().replaceAll("-", "")}`;
+const client = new pg.Client({ connectionString: dsn });
+await client.connect();
+let routines;
+let triggers;
+let expressions;
+try {
+  await client.query("BEGIN");
+  await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+  await client.query(`SET LOCAL search_path = ${pg.escapeIdentifier(schema)}`);
+  await client.query(agentPostgresRuntime.sql);
+  await client.query(agentSearchPostgresRuntime.sql);
+  await client.query(postgresSearchSql(agentTranscriptSearchSchema, schema));
+  await client.query(postgresSearchSql(memoryTextSearchSchema("trigram"), schema, { text: true }));
+  await client.query(postgresSearchSql(memoryStandingIntentSearchSchema, schema, { text: true }));
+  await client.query(postgresSearchSql(memoryVectorSearchSchema(1536), schema));
+  await client.query("SET LOCAL search_path = pg_catalog");
+  const { rows } = await client.query(agentStoreRoutinesQuery, [schema]);
+  routines = Object.fromEntries(rows.map(row => [row.proname, agentStoreRoutineFingerprint(row, schema)]));
+  const captured = await client.query(agentStoreTriggersQuery, [schema]);
+  triggers = Object.fromEntries(captured.rows.map(row => [row.tgname, agentStoreTriggerFingerprint(row, schema)]));
+  const executable = await client.query(agentStoreExpressionsQuery, [schema]);
+  expressions = Object.fromEntries(executable.rows.map(row => [`${row.kind}:${row.relname}:${row.name}`, agentStoreExpressionFingerprint(row, schema)]));
+} finally {
+  await client.query("ROLLBACK");
+  await client.end();
+}
+const output = new URL("../../core/src/agent-store-routines.json", import.meta.url);
+writeFileSync(output, `${JSON.stringify({ sourceSha: pin.sourceSha, routines, triggers, expressions }, null, 2)}\n`);
+console.log(`Qualified ${Object.keys(routines).length} routine definitions from ${pin.sourceSha} into ${fileURLToPath(output)}`);

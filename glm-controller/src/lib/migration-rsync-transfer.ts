@@ -70,6 +70,7 @@ export type CommandRunner = (
 import type { RetainedSourceTransfer } from './retained-source-transfer.js';
 
 export interface RSyncMigrationTransferDeps {
+  prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
   retainedSource?: RetainedSourceTransfer;
   db: Firestore;
   namespace: string;
@@ -515,6 +516,7 @@ export function createRsyncAgentContextRestoreFinish(deps: RSyncMigrationTransfe
       runCommand, requireReady: false, resolveGatewayVm: deps.resolveGatewayVm });
     assertSharedRestoreEndpoint(target, stage, recovery);
     const baseUrl = podBaseUrl(target.podIP, deps.fleetControllerPort);
+    await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
     const finished = await postSignedJson<ImportResponse>({ fetchImpl, privateKey: deps.privateKey, resolveGatewayUrl: deps.resolveGatewayUrl }, {
       transportId: input.toGatewayId, gatewayId: input.toGatewayId, migrationId: input.migrationId,
       path: `/finish-rsync-import/${input.toGatewayId}`, baseUrl,
@@ -580,6 +582,7 @@ export function createRsyncMigrationTransfer(
       const baseUrl = podBaseUrl(record.targetIp,deps.fleetControllerPort);
       await retainedSource.settledTarget(target);
       await retainedSource.assertActiveClaim();
+      await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
       const finished = await control<ImportResponse>({transportId:toTransportId,gatewayId:input.toGatewayId,pathSuffix:"/finish-rsync-import",migrationId:input.migrationId,body:{migrationId:input.migrationId,slug:input.slug,rpcPhase:"finish-rsync-import",mode,agentContext:input.agentContext},baseUrl});
       if (target.vm) await waitForTargetVmReady(fetchImpl,wait,now,{name:target.name,baseUrl});
       else await waitForTargetPodReady(runCommand,deps.namespace,target.name);
@@ -594,12 +597,7 @@ export function createRsyncMigrationTransfer(
     if (deps.retainedSource && mode === "final") return transferRetained(input);
     const transferKey = randomBytes(32).toString("hex");
     const claimed = await claimTask(
-      {
-        db: deps.db,
-        now,
-        workerId,
-        leaseMs,
-      },
+      { db: deps.db, now, workerId, leaseMs },
       { ...input, mode },
     );
 
@@ -679,6 +677,7 @@ export function createRsyncMigrationTransfer(
         mode,
         ...agentContextField(input.agentContext),
       };
+      if (mode === "final") await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
       const finished = await control<ImportResponse>({
         transportId: toTransportId,
         gatewayId: input.toGatewayId,

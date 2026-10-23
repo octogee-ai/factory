@@ -14,6 +14,7 @@ export interface MigrationClientDeps {
     log?: (msg: string) => void;
     timeouts?: MigrationClientTimeouts;
     finishAgentContextRestore?: MigrationClient["finishAgentContextRestore"];
+    prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
     transferState: MigrationClient["transferState"];
 }
 export interface MigrationClient {
