@@ -91,15 +91,22 @@ async function reconcileDeletedMaterializedAssets(input: HydrationInput, materia
   return removed;
 }
 
-async function prepareExistingBlob(destination: string, relative: string, entry: ManifestEntry, prior: ManifestEntry | undefined): Promise<{ destination: string; replacement?: BigIntStats } | null> {
+interface BlobDestination {
+  destination: string;
+  replacement?: BigIntStats;
+  retained?: { sha256: string; stat: BigIntStats };
+}
+
+async function prepareExistingBlob(destination: string, relative: string, entry: ManifestEntry, prior: ManifestEntry | undefined): Promise<BlobDestination | null> {
   if (prior?.gcsPath === entry.gcsPath && prior.uploadedAt === entry.uploadedAt) return null;
   const snapshot = await existingBlobSnapshot(destination);
   if (entry.sha256 === snapshot.sha256 && BigInt(entry.size) === snapshot.stat.size) return null;
+  if (!entry.sha256 && !prior?.sha256) return { destination, retained: snapshot };
   if (!prior?.sha256 || prior.sha256 !== snapshot.sha256 || BigInt(prior.size) !== snapshot.stat.size) throw new Error(`remote project asset conflicts with local work: ${relative}`);
   return { destination, replacement: snapshot.stat };
 }
 
-async function prepareBlobPath(root: string, relative: string, entry: ManifestEntry, prior: ManifestEntry | undefined, preserveExisting = false): Promise<{ destination: string; replacement?: BigIntStats } | null> {
+async function prepareBlobPath(root: string, relative: string, entry: ManifestEntry, prior: ManifestEntry | undefined, preserveExisting = false): Promise<BlobDestination | null> {
   let current = root;
   for (const segment of relative.split("/").slice(0, -1)) {
     current = path.join(current, segment);
@@ -116,7 +123,7 @@ async function prepareBlobPath(root: string, relative: string, entry: ManifestEn
   throw new Error("project blob would overwrite an existing committed file");
 }
 
-async function downloadBlob(client: Pick<ProjectBlobHydrationClient, "blobMaterializationReadUrl">, input: { slug: string; project: string; relative: string; size: number; gcsPath: string; destination: string; sha256?: string; replacement?: BigIntStats }): Promise<void> {
+async function downloadBlob(client: Pick<ProjectBlobHydrationClient, "blobMaterializationReadUrl">, input: { slug: string; project: string; relative: string; size: number; gcsPath: string; sha256?: string } & BlobDestination): Promise<void> {
   const signed = await client.blobMaterializationReadUrl({ slug: input.slug, path: `projects/${input.project}/${input.relative}`, size: input.size, ...(input.sha256 ? { sha256: input.sha256 } : {}) });
   validateIdentity(signed, input);
   const response = await fetch(signed.download.url, { method: "GET", redirect: "error", signal: AbortSignal.timeout(DEADLINE_MS) });
@@ -135,8 +142,12 @@ async function downloadBlob(client: Pick<ProjectBlobHydrationClient, "blobMateri
       await output.sync();
     } finally { await output.close(); }
     if (bytes !== signed.size || hash.digest("base64") !== signed.md5Hash) throw new Error("project blob size or checksum mismatch");
-    if (input.sha256 && contentHash.digest("hex") !== input.sha256) throw new Error("project blob content hash mismatch");
-    if (input.replacement) {
+    const sha256 = contentHash.digest("hex");
+    if (input.sha256 && sha256 !== input.sha256) throw new Error("project blob content hash mismatch");
+    if (input.retained) {
+      if (sha256 !== input.retained.sha256) throw new Error(`remote project asset conflicts with local work: ${input.relative}`);
+      if (!sameBlobSnapshot(input.retained.stat, await fs.lstat(input.destination, { bigint: true }))) throw new Error("project blob changed during restoration");
+    } else if (input.replacement) {
       if (!sameBlobSnapshot(input.replacement, await fs.lstat(input.destination, { bigint: true }))) throw new Error("project blob changed during restoration");
       await fs.rename(file, input.destination);
     } else await fs.link(file, input.destination);
@@ -174,6 +185,10 @@ async function hydrationManifest(client: HydrationClient, input: HydrationInput,
     return { manifest, generation };
 }
 
+function canDeferMissingBlob(input: HydrationInput, destination: BlobDestination): boolean {
+  return input.allowDeferred === true && !destination.replacement && !destination.retained;
+}
+
 async function hydrationPlan(input: HydrationInput, prefix: string, manifest: Manifest) {
     const materialized = await withMaterializedProjectAssets(input.destination, prefix, async files => files);
     assertSelectedAssets(input.paths, manifest);
@@ -188,7 +203,7 @@ async function hydrationPlan(input: HydrationInput, prefix: string, manifest: Ma
       if (destination === null) { materialized[relative] = entry; continue; }
       if (!input.paths && input.preserveExisting && materialized[relative]?.gcsPath === entry.gcsPath && materialized[relative]?.uploadedAt === entry.uploadedAt) continue;
       if (entry.size > 512 * 1024 * 1024 || bytes + entry.size > input.maxBytes) {
-        if (!input.allowDeferred || destination.replacement) throw new Error("project blob manifest exceeds quota");
+        if (!canDeferMissingBlob(input, destination)) throw new Error("project blob manifest exceeds quota");
         deferred += 1;
         continue;
       }
@@ -209,15 +224,15 @@ export function createBrokeredProjectBlobHydrator(client: ProjectBlobHydrationCl
     const prefix = `customers/${input.slug}/projects/${input.project}`;
     const { manifest, generation } = await hydrationManifest(client, input, prefix);
     const { materialized, pending, bytes, deferred, removed } = await hydrationPlan(input, prefix, manifest);
-    for (const { relative, entry, destination, replacement } of pending) {
-      await downloadBlob(client, { slug: input.slug, project: input.project, relative, size: entry.size, gcsPath: entry.gcsPath, destination, ...(entry.sha256 ? { sha256: entry.sha256 } : {}), ...(replacement ? { replacement } : {}) });
+    for (const { relative, entry, ...destination } of pending) {
+      await downloadBlob(client, { slug: input.slug, project: input.project, relative, size: entry.size, gcsPath: entry.gcsPath, ...destination, ...(entry.sha256 ? { sha256: entry.sha256 } : {}) });
       materialized[relative] = entry;
     }
     await withMaterializedProjectAssets(input.destination, prefix, async files => {
       for (const relative of removed) delete files[relative];
       Object.assign(files, materialized);
     });
-    return { bytes, files: pending.length, generation, ...(input.allowDeferred ? { deferred } : {}) };
+    return { bytes, files: pending.filter(item => !item.retained).length, generation, ...(input.allowDeferred ? { deferred } : {}) };
   };
   return async input => {
     const lease = acquireWorkspaceMutationLeaseSync({ workspaceDir: input.destination, gitDir: projectMutationLeaseGitDir(input.destination, customersRoot) ?? undefined });
