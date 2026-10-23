@@ -3099,7 +3099,16 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   }
 
   function fakeOpenClaw(options: { failSnapshot?: string } = {}) {
-    return vi.fn(async (args: string[]) => {
+    return vi.fn(async (args: string[], commandOptions?: { env: NodeJS.ProcessEnv }) => {
+      if (args[0] === "agents") {
+        const stateDir = commandOptions?.env.OPENCLAW_STATE_DIR;
+        if (!stateDir) throw new Error("Native agent commands require the target state root");
+        if (args[1] === "list") return { code: 0, stdout: JSON.stringify([
+          { id: "octogee-chris-coach", workspace: path.join(stateDir, "customers", "chris"), agentDir: path.dirname(path.join(stateDir, CARRIED_STORE)) },
+        ]) };
+        if (args[1] === "add") return { code: 0, stdout: JSON.stringify({ agentId: args[2],
+          workspace: args[args.indexOf("--workspace") + 1], agentDir: args[args.indexOf("--agent-dir") + 1] }) };
+      }
       const [, , action] = args;
       if (action === "create") {
         if (options.failSnapshot) return snapshotResult(false, { message: options.failSnapshot });
@@ -4244,7 +4253,61 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await expect(fs.access(path.join(importDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
   });
 
-  it("replaces an occupied database on a held Builder target without calling its unreleased OpenClaw", async () => {
+  it.each([false, true])("reattaches carried Builder agents offline before permitting Native (restoration fails: %s)", async (refused) => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    const target = builderTargetImport(async () => true);
+    const destination = path.join(importDir, CARRIED_STORE);
+    const workspace = path.join(importDir, "customers", "chris");
+    const runOpenClaw = vi.fn(async (args: string[]) => {
+      expect(rowCount(destination)).toBe(2);
+      expect(target.deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+      if (args[1] === "list") return { code: 0, stdout: JSON.stringify([
+        { id: "octogee-chris-coach", workspace, agentDir: path.dirname(destination) },
+      ]) };
+      return refused
+        ? { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: "deletion cleanup is still pending" } }) }
+        : { code: 0, stdout: JSON.stringify({ agentId: "octogee-chris-coach", workspace, agentDir: path.dirname(destination) }) };
+    });
+    const migrationId = `mig-builder-restore-${refused}`;
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter: target.adapter,
+      deps: { ...target.deps, procRoot, runOpenClaw } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const { getStatus } = await finishImport(deps, migrationId);
+
+    expect(getStatus()).toBe(refused ? 500 : 200);
+    expect(runOpenClaw.mock.calls.map(([args]) => args)).toEqual([
+      ["agents", "list", "--json"],
+      ["agents", "add", "octogee-chris-coach", "--workspace", workspace, "--agent-dir", path.dirname(destination), "--non-interactive", "--json"],
+    ]);
+    expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(refused ? 0 : 1);
+    expect(rowCount(destination)).toBe(2);
+  });
+
+  it("refuses Native startup when the Builder hold is lost during anchor installation", async () => {
+    const importDir = await mkTempRoot();
+    const procRoot = await mkTempRoot();
+    await writeStore(importDir, CARRIED_STORE, () => {});
+    const held = vi.fn(async () => true);
+    const target = builderTargetImport(held);
+    const migrationId = "mig-builder-restore-hold-lost";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: target.adapter, deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    held.mockResolvedValue(false).mockResolvedValueOnce(true);
+
+    const { getStatus, getBody } = await finishImport(deps, migrationId);
+
+    expect(getStatus()).toBe(500);
+    expect(getBody()).toMatchObject({ message: "Native Builder restoration requires the migration target to remain held" });
+    expect(deps.runOpenClaw).not.toHaveBeenCalled();
+    expect(target.deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+  });
+
+  it("replaces an occupied database on a held Builder target without using its unavailable RPC", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
     const previous = await writeStore(importDir, CARRIED_STORE, (db) => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
@@ -4313,10 +4376,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await stageSnapshot(stageDir, (db) => db.exec("INSERT INTO transcript_events VALUES ('carried')"));
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
-    const { getStatus } = await finishImport(deps, "mig-carry-permitted-builder");
+    const { getStatus, getBody } = await finishImport(deps, "mig-carry-permitted-builder");
 
-    expect(getStatus()).toBe(200);
+    expect(getStatus(), JSON.stringify(getBody())).toBe(200);
     expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
+    expect(deps.runOpenClaw).not.toHaveBeenCalled();
     expect(rowCount(previous)).toBe(1);
   });
 

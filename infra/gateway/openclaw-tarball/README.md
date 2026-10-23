@@ -141,13 +141,37 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 The operator selected latest upstream main during this recut,
 `7910ed1a7418c4ec29948b2da751671d8d78a870`, for independent qualification.
-It remains frozen. The final clean overlay is `524d54b44d5a2f297e1ec6c93e4a7b7551b07159`, published from
-`octogee/refresh-7910ed1a-f11` in the OpenClaw fork: the qualified overlay
-`f7dfb7bcd4811434a639ec89ade31075f3e5f112` plus one pending-admission fix. Both
+It remains frozen. The final clean overlay is `2126df73edfd9fae76e47aa547fe690197b0572f`, published from
+`codex/native-builder-migration-safety` in the OpenClaw fork. It extends the
+qualified `524d54b44d5a2f297e1ec6c93e4a7b7551b07159` overlay with stopped-Gateway
+agent detach, an opt-in empty-delivery-queue checkpoint guard, and retained-agent
+restoration through the existing creation and schema-inspection owners. Both
 package objects and hosted islands come from that exact built source, version
 2026.10.5. The recut starts
 from the published overlay `b74ff0c433d355260925bda948f61ff4982ab657` on frozen
 main 304cf4f6, 253 upstream commits earlier.
+
+The incremental repair preserves the configured roster and retained logical
+stores before settling a completed deletion. Missing PostgreSQL namespaces,
+uninitialized SQLite files and either schema-inspection error form refuse before
+any writer admission or journal claim. Ordinary first-use and duplicate behavior
+remain unchanged. The checkpoint guard refuses any durable delivery row before
+backup sanitation; unflagged backups retain their existing behavior. It does not
+enable whole-Builder checkpoint migration or occupied-target restore recovery.
+
+The final source passes independent review, 32 focused creation tests, eight
+conformance-discovery cases and four actual CLI/fresh-process cases with real
+PostgreSQL. Final affected lint/types, full build, matched sequential packaging
+and maintained tarball inventory/import-graph checks pass. The Linux AMD64
+`openclaw-full-plugin-installer` target passes strict installation, CUA artifact
+validation, Parallel/Codex bundled source checks and all three native-hook imports
+(image `sha256:7cbeecab92922179b06dd3dd2202c12fa582057916409a90fe25176cab2ff752`).
+The inherited 110-byte Control UI startup-gzip excess remains reported without a
+budget exception. Live retained-Builder recovery and interrupted checkpoint
+recovery remain separate TEST acceptance work. Fork review and source are in
+[ceckert/openclaw#8](https://github.com/ceckert/openclaw/pull/8) and
+[ceckert/openclaw#9](https://github.com/ceckert/openclaw/pull/9); the guard is an
+operator-approved fork contract, not an upstream feature acceptance.
 
 No push CI run existed for the selected SHA when it was locked. The newest
 successful push run, [39717604870](https://github.com/openclaw/openclaw/actions/runs/39717604870)

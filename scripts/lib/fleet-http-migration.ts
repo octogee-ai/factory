@@ -94,6 +94,7 @@ import {
   type OpenMigrationTlsEndpoint,
 } from "./migration-rsync-tls.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+import { reattachBuilderAgents } from "./reattach-builder-agents.js";
 import { PROC_ROOT } from "./held-files.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
@@ -2246,6 +2247,9 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
   const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
   try {
+    const activation = input.activation;
+    const restoreOffline = activation && !activation.live &&
+      await deps.surgeTargetOpenClawHeld?.(activation.request) === true;
     await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     if (retained) return archiveRetainedImport(input, prepared, retained);
     await installPreparedAgentStores({
@@ -2255,6 +2259,20 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
       log,
     });
     await installCodexStoreSnapshots({ prepared: codex, importDir: session.importDir, procRoot: deps.procRoot ?? PROC_ROOT, log, signal: input.signal });
+    if (restoreOffline) {
+      await reattachBuilderAgents({
+        stores: prepared.stores,
+        env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
+        run: deps.runOpenClaw,
+        signal: input.signal,
+        log,
+        assertHeld: async () => {
+          if (await deps.surgeTargetOpenClawHeld?.(activation.request) !== true) {
+            throw new Error("Native Builder restoration requires the migration target to remain held");
+          }
+        },
+      });
+    }
     if (session.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) return session.agentContext.archive;
   } finally {
     await discardCodexStoreSnapshots(codex, log);
