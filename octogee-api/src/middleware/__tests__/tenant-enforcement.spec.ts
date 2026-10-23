@@ -114,6 +114,7 @@ function app(opts: {
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/connectors/github-project-clone-access", enforcement, handler);
   a.post("/internal/byok/agent-usage-status", enforcement, handler);
+  a.post("/internal/byok/broker-inspect", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/byok/byosub-cred-syncback", enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
@@ -718,12 +719,12 @@ const STILL_ON_SHARED = {
     expect(foreignGateway.status).toBe(403);
   });
 
-  it("passes agent usage status to route-level roster authorization", async () => {
+  it.each(["agent-usage-status", "broker-inspect"])("passes %s to route-level roster authorization", async route => {
     const ownedGateway = await request(app({ boundTenant: BENDER }))
-      .post("/internal/byok/agent-usage-status")
+      .post(`/internal/byok/${route}`)
       .send({ agentId: "octogee-alice-coach" });
     const foreignGateway = await request(app({ boundTenant: BENDER }))
-      .post("/internal/byok/agent-usage-status")
+      .post(`/internal/byok/${route}`)
       .send({ gatewayId: "other", agentId: "octogee-alice-coach" });
 
     expect(ownedGateway.status).toBe(200);
@@ -1117,6 +1118,7 @@ const STILL_ON_SHARED = {
       "/internal/workspace-git/authorize",
       "/internal/channel-agent-readiness/authorize",
       "/internal/byok/agent-usage-status",
+      "/internal/byok/broker-inspect",
       "/internal/agent-projects/list",
       "/internal/computer/agent-context",
     ]) {

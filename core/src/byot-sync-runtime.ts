@@ -738,6 +738,7 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-project-tools",
   "octogee-board-tools",
   "octogee-status-tools",
+  "octogee-broker-tools",
   "octogee-ops-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
@@ -749,6 +750,7 @@ const FLEET_BROKER_URL_PLACEHOLDER = "${FLEET_BROKER_URL}";
 const BROKER_TOKEN_PATH_PLACEHOLDER = "${OCTOGEE_API_SA_TOKEN_PATH}";
 
 const CUSTOMER_PLUGIN_ENTRIES = {
+  "octogee-broker-tools": { enabled: true, config: { brokerUrl: FLEET_BROKER_URL_PLACEHOLDER, tokenPath: BROKER_TOKEN_PATH_PLACEHOLDER } },
   mattermost: { enabled: true },
   anthropic: { enabled: true },
   "octogee-activity-tools": {

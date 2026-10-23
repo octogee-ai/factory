@@ -79,6 +79,8 @@ describe("system config platform invariants", () => {
       allow: string[];
       entries: Record<string, { enabled: boolean; config: Record<string, unknown> }>;
     };
+    expect(plugins.allow).toContain("octogee-broker-tools");
+    expect(plugins.entries["octogee-broker-tools"].enabled).toBe(true);
     expect(plugins.allow).toContain("octogee-activity-tools");
     expect(plugins.entries["octogee-activity-tools"]).toEqual({
       enabled: true,

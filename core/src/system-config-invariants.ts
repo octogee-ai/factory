@@ -95,6 +95,7 @@ const REQUIRED_PLUGINS = [
   "octogee-project-tools",
   "octogee-board-tools",
   "octogee-status-tools",
+  "octogee-broker-tools",
   "octogee-web-tools",
   "octogee-workspace-tools",
   "parallel",
@@ -136,6 +137,10 @@ const PLATFORM_PLUGIN_CONFIGS: Readonly<Record<string, JsonObject>> = {
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },
   "octogee-board-tools": {
+    brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
+    tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
+  },
+  "octogee-broker-tools": {
     brokerUrl: FLEET_BROKER_URL_PLACEHOLDER,
     tokenPath: OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
   },
@@ -484,6 +489,7 @@ export function platformInvariantTable(
     },
     { kind: "exact", path: "channels.mattermost.commands.native", value: false },
     { kind: "mattermost-account-projection", path: "channels.mattermost.accounts", platformOwned: !isolated },
+    { kind: "exact", path: "models.providers.octogee-broker", value: { baseUrl: "${ANTHROPIC_BASE_URL}", models: [] } },
     { kind: "exact", path: "plugins.enabled", value: true },
     { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
     { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: RETIRED_PLUGINS },

@@ -14,6 +14,10 @@ function expectJobs(paths: string[], expected: JobKey[]) {
 }
 
 describe("resolveScope — ownership", () => {
+  it("runs broker adapter behavioral coverage for installed extension changes", () => {
+    expect(resolveScope(["infra/gateway/extensions/octogee-broker-tools/catalog.ts"]).jobs).toContain("octogee-broker-tools");
+    expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-broker-tools")?.dir).toBe("infra/gateway/extensions/octogee-broker-tools");
+  });
   it("empty diff runs nothing (not everything)", () => {
     const r = resolveScope([]);
     expect(r.jobs).toEqual([]);

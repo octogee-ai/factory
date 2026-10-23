@@ -43,6 +43,7 @@ export interface OpenClawControlRpcPolicyContext {
 }
 
 const READ_METHODS = new Set([
+  "octogee.broker.inspect",
   "health",
   "status",
   "system.info",

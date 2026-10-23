@@ -16,6 +16,10 @@ function policyContext(extra: Record<string, unknown> = {}) {
 }
 
 describe("native Dashboard permissions and managed configuration", () => {
+  it("passes private inspection through Native read authorization without adding caller identity", () => {
+    const frame = request("octogee.broker.inspect", { agentId: "octogee-alice-coach" });
+    expect(evaluateOpenClawControlRpc(frame, policyContext(), false)).toMatchObject({ allowed: true, category: "read", outbound: frame });
+  });
   it.each(["member", "admin"] as const)("lets OpenClaw authorize ordinary RPCs for %s", (role) => {
     const frame = { type: "req", id: "list", method: "future.plugin.rpc" };
     expect(evaluateOpenClawControlRpc(frame, policyContext(), role === "admin")).toMatchObject({ allowed: true, outbound: { ...frame, params: {} } });

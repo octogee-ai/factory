@@ -130,6 +130,8 @@ describe("customer mount configuration projection", () => {
       allow: ["octogee-activity-tools"],
       entries: { "octogee-activity-tools": { enabled: true, config: { activityEnabled: false, heartbeatMs: 5000 } } },
     } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
+    expect(patch.plugins.allow).toContain("octogee-broker-tools");
+    expect(patch.plugins.entries["octogee-broker-tools"]).toMatchObject({ enabled: true });
     expect(patch.plugins.allow).toContain("octogee-activity-tools");
     expect(patch.plugins.entries["octogee-activity-tools"]).not.toBeNull();
     const fresh = customerMountConfigPatch({ plugins: { allow: [], entries: {} } }, {}, "sep30", "platform-openrouter/z-ai/glm-5.2") as any;
@@ -1905,6 +1907,7 @@ describe("customer OAuth runtime purge", () => {
       "octogee-project-tools",
       "octogee-board-tools",
       "octogee-status-tools",
+      "octogee-broker-tools",
       "octogee-ops-tools",
       "octogee-web-tools",
       "octogee-workspace-tools",

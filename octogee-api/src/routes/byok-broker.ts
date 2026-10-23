@@ -17,6 +17,7 @@ import {
   spendDegradeState,
   spendWindowPercentUsed,
   type BillingProfile,
+  signupOfferBudgetForOwner,
 } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,
@@ -49,8 +50,10 @@ import {
 } from "./fleet-broker.js";
 import {
   createOwnerWorkspaceTurnVerifier,
+  createAgentSupportTurnVerifier,
   type OwnerWorkspaceTurnVerifier,
 } from "../lib/openclaw-owner-turn.js";
+import { MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION, parseModelBrokerSignupOfferBudget } from "@octogee/shared/types/signup-offer";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 
 type GatewayBinding = Extract<
@@ -645,6 +648,65 @@ function registerAgentUsageStatusRoute(
   });
 }
 
+async function privateBrokerInspectionPayload(
+  db: Firestore,
+  gatewayId: string,
+  assigned: { uid: string; data: Record<string, unknown> },
+  agentId: string,
+  nowMs: number,
+): Promise<Record<string, unknown>> {
+  const status = await agentUsageStatusPayload(db, gatewayId, assigned, nowMs);
+  const offer = signupOfferBudgetForOwner(assigned.data, assigned.uid, new Date(nowMs));
+  let signupOffer: Record<string, unknown> | null = null;
+  if (offer) {
+    const snapshot = await db.collection(MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION).doc(offer.budgetKey).get();
+    const ledger = parseModelBrokerSignupOfferBudget(snapshot.data(), offer);
+    if (!ledger) throw new Error("signup offer accounting unavailable");
+    signupOffer = { currency: "USD", spent: ledger.chargeUsd, unlocked: offer.unlockedCapUsd, hardCap: offer.hardCapUsd,
+      remaining: Math.max(0, offer.unlockedCapUsd - ledger.chargeUsd), expiresAt: new Date(offer.endsAtMs).toISOString(),
+      nextUnlockAt: offer.nextUnlockAtMs === null ? null : new Date(offer.nextUnlockAtMs).toISOString() };
+  }
+  return { schemaVersion: 1, agentId, ...status, observedAt: new Date(nowMs).toISOString(), signupOffer,
+    periods: {
+      burst: { kind: "fixed", durationMs: MODEL_BROKER_USAGE_WINDOW_MS, startsAt: new Date(usageWindowStartMs(nowMs)).toISOString(),
+        resetAt: new Date(usageWindowStartMs(nowMs) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString() },
+      week: { kind: "fixed", durationMs: MODEL_BROKER_WEEK_WINDOW_MS, startsAt: new Date(weekWindowStartMs(nowMs)).toISOString(),
+        resetAt: new Date(weekWindowStartMs(nowMs) + MODEL_BROKER_WEEK_WINDOW_MS).toISOString() },
+    } };
+}
+
+function registerPrivateBrokerInspection(router: Router, db: Firestore, now: () => number): void {
+  const verifyCanonicalOwner = createAgentSupportTurnVerifier(db);
+  router.post("/broker-inspect", async (req, res) => {
+    res.setHeader("cache-control", "no-store");
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const { agentId, requesterUid } = req.body ?? {};
+    if (Object.keys(req.body ?? {}).length !== 2 || typeof agentId !== "string" || !isSafeAgentId(agentId) ||
+        typeof requesterUid !== "string" || requesterUid.length === 0 || requesterUid.length > 128) {
+      res.status(400).json({ error: "valid agentId and attested requester required" });
+      return;
+    }
+    const authorize = async () => {
+      const assigned = await findAssignedOrInboundMigratingOrConfiguredUserByAgentId(db, bound.gatewayId, bound.podName, agentId);
+      if (!assigned || assigned.uid !== requesterUid || bound.ownerUid !== undefined && bound.ownerUid !== assigned.uid ||
+          !accountAllowsInteractiveAccess(assigned.data) ||
+          !await verifyCanonicalOwner({ req, gatewayId: bound.gatewayId, agentId, ownerUid: assigned.uid, assignedData: assigned.data })) return null;
+      return assigned;
+    };
+    try {
+      const assigned = await authorize();
+      if (!assigned) { res.status(403).json(FORBIDDEN); return; }
+      const payload = await privateBrokerInspectionPayload(db, bound.gatewayId, assigned, agentId, now());
+      if (!await authorize()) { res.status(403).json(FORBIDDEN); return; }
+      res.json(payload);
+    } catch {
+      logger.warn("[byok-broker] private broker inspection unavailable");
+      res.status(503).json({ error: "broker inspection unavailable" });
+    }
+  });
+}
+
 function registerByosubUserRoute(router: Router, db: Firestore): void {
   router.post("/byosub-user", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -823,6 +885,7 @@ export function createByokBrokerRoutes(opts: {
 
   registerCredentialMaterializationRoutes(router, db, readCredentialSecret, writeByosubCredential);
   registerAgentModelTokenRoute(router, db, now);
+  registerPrivateBrokerInspection(router, db, now);
 
   registerAgentUsageStatusRoute(
     router,

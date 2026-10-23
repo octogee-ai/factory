@@ -10,6 +10,7 @@ export const JOBS = {
   shared: "shared",
   testHelpers: "test-helpers",
   octogeeActivityTools: "octogee-activity-tools",
+  octogeeBrokerTools: "octogee-broker-tools",
   octogeeVoiceTools: "octogee-voice-tools",
   octogeeChatTools: "octogee-chat-tools",
   octogeeAccessTools: "octogee-access-tools",
@@ -86,6 +87,11 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
     name: JOBS.octogeeVoiceTools,
     dir: "infra/gateway/extensions/octogee-voice-tools",
     typecheck: 'echo "Voice SDK types run during native packaging; this job runs behavioral tests"',
+  },
+  {
+    name: JOBS.octogeeBrokerTools,
+    dir: "infra/gateway/extensions/octogee-broker-tools",
+    typecheck: 'echo "Broker SDK types run against the pinned Native source; behavioral tests run here"',
   },
   {
     name: JOBS.octogeeActivityTools,
@@ -182,6 +188,10 @@ export const OWNERSHIP: readonly Ownership[] = [
   {
     dir: "infra/gateway/extensions/octogee-voice-tools/",
     jobs: [JOBS.octogeeVoiceTools, JOBS.tests],
+  },
+  {
+    dir: "infra/gateway/extensions/octogee-broker-tools/",
+    jobs: [JOBS.octogeeBrokerTools],
   },
   {
     dir: "infra/gateway/extensions/octogee-activity-tools/",
