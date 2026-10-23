@@ -253,6 +253,12 @@ resource "google_storage_bucket_iam_member" "functions_storage_cleanup" {
   member = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
 
+resource "google_storage_bucket_iam_member" "glm_controller_storage_cleanup" {
+  bucket = "${var.project_id}.firebasestorage.app"
+  role   = google_project_iam_custom_role.functions_storage_cleanup.id
+  member = "serviceAccount:${google_service_account.glm_controller.email}"
+}
+
 resource "google_project_iam_member" "functions_datastore_user" {
   project = var.project_id
   role    = "roles/datastore.user"
