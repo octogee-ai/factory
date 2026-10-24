@@ -5279,22 +5279,121 @@ describe("destination migration progress", () => {
 });
 
 describe("createResumeHandler", () => {
-  it("resumes only the signed customer's channels", async () => {
-    const adapter = mkAdapter();
+  it("reclaims the retained key before resuming the signed customer's channels and voice", async () => {
+    let releaseClaim!: () => void;
+    const claimPending = new Promise<void>(resolve => { releaseClaim = resolve; });
+    const adapter = mkAdapter({ createGiteaUser: vi.fn(() => claimPending) });
+    const deps = mkDeps({ adapter });
     const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
     const response = mkResponse();
-    await createResumeHandler(mkDeps({ adapter }))(
+    const resumed = createResumeHandler(deps)(
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
+    try {
+      expect(adapter.createGiteaUser).toHaveBeenCalledExactlyOnceWith("chris", "ssh-ed25519 LOCAL chris@gateway");
+      expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+      expect(deps.voiceMigration).not.toHaveBeenCalled();
+    } finally {
+      releaseClaim();
+      await resumed;
+    }
     expect(response.getStatus()).toBe(200);
     expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris");
+    expect(deps.voiceMigration).toHaveBeenCalledExactlyOnceWith({ slug: "chris", operationId: body.migrationId, phase: "resume" });
   });
+
+  it.each(["missing-key", "broker-failure"])("refuses resume effects after %s", async failure => {
+    const adapter = mkAdapter(failure === "missing-key"
+      ? { readLocalCustomerPubKey: vi.fn(() => null) }
+      : { createGiteaUser: vi.fn(async () => { throw new Error("key reclaim denied"); }) });
+    const deps = mkDeps({ adapter });
+    const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
+    const response = mkResponse();
+    await createResumeHandler(deps)(
+      mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toEqual({
+      error: "resume failed",
+      message: failure === "missing-key" ? "[migration-http] local SSH public key is missing for chris" : "key reclaim denied",
+    });
+    expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+    expect(deps.voiceMigration).not.toHaveBeenCalled();
+    if (failure === "missing-key") expect(adapter.createGiteaUser).not.toHaveBeenCalled();
+  });
+
+  it("reclaims the source key so a stale failed target release cannot remove it", async () => {
+    vi.stubEnv("GITEA_URL", "http://gitea.test:3000");
+    vi.stubEnv("GITEA_TOKEN", "synthetic-admin-token");
+    const sourceOwner = "builder/source-pod";
+    const targetOwner = "shared/failed-target-pod";
+    const inheritedKey = "ssh-ed25519 INHERITED chris@gateway";
+    const keyTitle = (owner: string) => `octogee-gateway-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
+    let keys: Array<{ id: number; title: string; key: string }> = [];
+    let nextKeyId = 1;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const pathname = new URL(url).pathname;
+      if (method === "POST" && pathname === "/api/v1/admin/users") return new globalThis.Response("{}", { status: 422 });
+      if (method === "GET" && pathname === "/api/v1/users/ws-chris/keys") return globalThis.Response.json(keys);
+      if (method === "DELETE" && pathname.startsWith("/api/v1/admin/users/ws-chris/keys/")) {
+        keys = keys.filter(key => key.id !== Number(pathname.split("/").at(-1)));
+        return new globalThis.Response(null, { status: 204 });
+      }
+      if (method === "POST" && pathname === "/api/v1/admin/users/ws-chris/keys") {
+        const body = JSON.parse(String(init?.body)) as { title: string; key: string };
+        keys.push({ id: nextKeyId++, ...body });
+        return globalThis.Response.json({}, { status: 201 });
+      }
+      throw new Error(`unexpected Gitea request: ${method} ${pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { ensureGiteaUser, deleteGiteaUserPubKey } = await import("../../gateway-edge/src/lib/gitea-admin.js");
+      await ensureGiteaUser("chris", inheritedKey, sourceOwner);
+      await ensureGiteaUser("chris", inheritedKey, targetOwner);
+      expect(keys).toEqual([{ id: 2, title: keyTitle(targetOwner), key: inheritedKey }]);
+      const adapter = mkAdapter({
+        readLocalCustomerPubKey: vi.fn(() => inheritedKey),
+        createGiteaUser: vi.fn((slug, key) => ensureGiteaUser(slug, key, sourceOwner)),
+        resumeCustomer: vi.fn(async () => {
+          expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
+        }),
+      });
+      const deps = mkDeps({ adapter });
+      const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
+      const response = mkResponse();
+      await createResumeHandler(deps)(
+        mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
+      );
+      expect(response.getStatus()).toBe(200);
+      expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris");
+      await deleteGiteaUserPubKey("chris", inheritedKey, targetOwner);
+      expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
+      const retried = mkResponse();
+      await createResumeHandler(deps)(
+        mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), retried.res, vi.fn(),
+      );
+      expect(retried.getStatus()).toBe(200);
+      expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
+      expect(adapter.createGiteaUser).toHaveBeenCalledTimes(2);
+      expect(adapter.resumeCustomer).toHaveBeenCalledTimes(2);
+      expect(deps.voiceMigration).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not resume channels without a valid signature", async () => {
     const adapter = mkAdapter();
+    const deps = mkDeps({ adapter });
     const response = mkResponse();
-    await createResumeHandler(mkDeps({ adapter }))(mkRequest(SAMPLE_QUIESCE, { signature: "bad" }), response.res, vi.fn());
+    await createResumeHandler(deps)(mkRequest(SAMPLE_QUIESCE, { signature: "bad" }), response.res, vi.fn());
     expect(response.getStatus()).toBe(401);
+    expect(adapter.readLocalCustomerPubKey).not.toHaveBeenCalled();
+    expect(adapter.createGiteaUser).not.toHaveBeenCalled();
     expect(adapter.resumeCustomer).not.toHaveBeenCalled();
+    expect(deps.voiceMigration).not.toHaveBeenCalled();
   });
 });
 

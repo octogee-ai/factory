@@ -345,7 +345,7 @@ async function activateImportedCustomerForMigration(input: {
 async function ensureMigrationGiteaKey(
   deps: MigrationHandlerDeps,
   slug: string,
-  phase: "source-flush" | "target-activation",
+  phase: "source-flush" | "target-activation" | "source-resume",
 ): Promise<void> {
   const pubKey = deps.adapter.readLocalCustomerPubKey(slug);
   if (pubKey === null) {
@@ -587,6 +587,7 @@ export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler 
     const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
     if (!body) return;
     try {
+      await ensureMigrationGiteaKey(deps, body.slug, "source-resume");
       await deps.adapter.resumeCustomer(body.slug);
       await (deps.voiceMigration ?? updateVoiceMigration)({ slug: body.slug, operationId: body.migrationId, phase: "resume" });
       res.status(200).json({ migrationId: body.migrationId, slug: body.slug, resumed: true });
