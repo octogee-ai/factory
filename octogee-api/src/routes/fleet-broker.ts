@@ -118,6 +118,7 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import {
   GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
+  customerRuntimeMutationFenced,
   isAssignmentState,
   projectGatewayDesiredRootForGateway,
   type GatewayDoc,
@@ -2268,7 +2269,7 @@ interface SharedAgentAnchorScope {
 
 type AgentAnchorScope = BuilderRuntimeStateScope | SharedAgentAnchorScope;
 
-function sharedAnchorAssignment(
+function agentAnchorAssignment(
   scope: Pick<SharedAgentAnchorScope, "gatewayId" | "uid" | "slug">,
   data: Record<string, unknown> | undefined,
 ): Pick<SharedAgentAnchorScope, "assignmentEpoch" | "assignmentState"> | null {
@@ -2287,7 +2288,7 @@ function sharedAgentAnchorScopeCurrent(
   assignmentData: Record<string, unknown> | undefined,
 ): SharedAgentAnchorScope | null {
   const gateway = projectGatewayDesiredRootForGateway(gatewayData, scope.gatewayId);
-  const assignment = sharedAnchorAssignment(scope, assignmentData);
+  const assignment = agentAnchorAssignment(scope, assignmentData);
   if (!gateway || gateway.gatewayClass !== "shared" || gateway.retirementClaim != null ||
       (gateway.desiredStatus !== "running" && gateway.desiredStatus !== "draining") ||
       stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== scope.gatewayId || slugFromAssignedUser(userData) !== scope.slug ||
@@ -2429,6 +2430,16 @@ function agentStoreRecords(db: Firestore, uid: string) {
   return db.collection("users").doc(uid).collection(AGENT_STORES_SUBCOLLECTION);
 }
 
+function builderAgentAnchorPruningAllowed(
+  scope: BuilderRuntimeStateScope,
+  user: Record<string, unknown> | undefined,
+  assignment: Record<string, unknown> | undefined,
+): boolean {
+  return agentAnchorAssignment(scope, assignment)?.assignmentState === "serving" &&
+    stringAt(user, OPENCLAW_GATEWAY_ID_FIELD) === scope.gatewayId && slugFromAssignedUser(user) === scope.slug &&
+    readPath(user, "provisioning.openclaw.migration") === undefined && !customerRuntimeMutationFenced(user);
+}
+
 async function recordAgentAnchors(
   db: Firestore,
   scope: BuilderRuntimeStateScope,
@@ -2438,7 +2449,12 @@ async function recordAgentAnchors(
   const records = agentStoreRecords(db, scope.uid);
   const reported = new Map(anchors.map((anchor) => [anchor.agentId, anchor]));
   await db.runTransaction(async (txn) => {
-    const existing = await txn.get(records);
+    const [existing, user, assignment] = await Promise.all([
+      txn.get(records),
+      txn.get(db.collection("users").doc(scope.uid)),
+      txn.get(db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(scope.uid)),
+    ]);
+    const canPrune = builderAgentAnchorPruningAllowed(scope, user.data(), assignment.data());
     for (const doc of existing.docs) {
       if (doc.id === GATEWAY_STATE_ANCHOR_DOC) {
         const prior = recordedGatewayStateAnchor(scope, doc.data());
@@ -2451,7 +2467,7 @@ async function recordAgentAnchors(
       if (!prior) continue;
       const next = reported.get(prior.agentId);
       if (!configuredAgentIds.has(prior.agentId)) {
-        txn.delete(doc.ref);
+        if (canPrune) txn.delete(doc.ref);
       } else if (next && (prior.storeId !== next.storeId || prior.schema !== next.schema)) {
         throw new AgentAnchorConflictError(prior.agentId);
       }
