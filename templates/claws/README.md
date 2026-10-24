@@ -25,5 +25,6 @@ host's tool and permission policy remains authoritative.
 
 These are optional starters, separate from hosted provisioning and Barn/Builder
 migration. They do not include an existing agent's store UUID, conversations,
-memory or files. Full Builder export/import needs a separate state-transfer
-contract; neither Claw Add nor an anchor-only checkpoint supplies it.
+memory or files. Existing authored-workspace portability uses Octogee's GitHub
+integration model; Claw Add does not export an existing agent. Full runtime
+export/import is outside the current implementation scope.
