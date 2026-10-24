@@ -83,7 +83,6 @@ import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapt
 import {
   addCustomerToGateway,
   cloneMissingProjects,
-  cloneProjectsFromSnapshot,
   removeCustomerFromGateway,
 } from "./customer-lifecycle.js";
 import type { AddCustomerOptions } from "./customer-lifecycle.js";
@@ -2609,7 +2608,9 @@ async function prepareConfiguredBuilderTarget(input: {
   await runProvisioningWork({ provisioning, work: async (onWorkSettled) => {
     const attachedSlug = await attachConfigured({ adapter, log, onWorkSettled });
     if (attachedSlug !== request.slug) throw new Error("Builder preparation attached the wrong customer");
-    const checkouts = await cloneProjectsFromSnapshot(adapter, prepared.snapshot, { signal: input.signal });
+    input.signal?.throwIfAborted();
+    const checkouts = await cloneMissingProjects(adapter, request.slug, { signal: input.signal });
+    input.signal?.throwIfAborted();
     if (checkouts.pending.length > 0) throw new Error(`Builder preparation has pending repositories: ${checkouts.pending.join(", ")}`);
   } });
   const lockSha256 = process.env.OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256?.trim();

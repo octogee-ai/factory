@@ -175,11 +175,11 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
 function githubRepoSourceOf(target) {
     return target.repoSource?.provider === "github" ? target.repoSource : null;
 }
-function projectCloneOptions(target) {
+function projectCloneOptions(target, signal) {
     const repoSource = githubRepoSourceOf(target);
-    if (!repoSource)
+    if (!repoSource && !signal)
         return undefined;
-    return { repoSource };
+    return { ...(repoSource ? { repoSource } : {}), ...(signal ? { signal } : {}) };
 }
 function projectCloneSourceLabel(target) {
     const repoSource = githubRepoSourceOf(target);
@@ -638,11 +638,14 @@ function githubCheckoutsHydrateHere(adapter, slug) {
     return adapter.isBuilderGateway() && adapter.isConfiguredBuilderCustomer(slug);
 }
 export async function cloneMissingProjects(adapter, slug, options = {}) {
+    throwIfAborted(options.signal, slug);
     const toClone = await adapter.listProjectsNeedingClone(slug);
+    throwIfAborted(options.signal, slug);
     const steps = [];
     const deferred = new Set();
     const ownerRuntime = options.githubCheckouts !== "defer" && githubCheckoutsHydrateHere(adapter, slug);
     for (const p of toClone) {
+        throwIfAborted(options.signal, slug);
         if (!hasProjectCloneSource(p)) {
             adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`);
             continue;
@@ -650,19 +653,22 @@ export async function cloneMissingProjects(adapter, slug, options = {}) {
         if (githubRepoSourceOf(p) && !ownerRuntime) {
             deferred.add(p.projectSlug);
             await adapter.seedDeferredProjectWorkspace(slug, p.projectSlug);
+            throwIfAborted(options.signal, slug);
             adapter.log(options.githubCheckouts === "defer"
                 ? `[add:${slug}/${p.projectSlug}] GitHub checkout deferred until the customer is assigned here — the reconcile clones it after cutover`
                 : `[add:${slug}/${p.projectSlug}] GitHub checkout deferred — it hydrates on ${slug}'s own Builder runtime`);
             continue;
         }
         try {
-            const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p));
+            const ok = await adapter.cloneProjectRepo(slug, p.projectSlug, p.giteaRepoName, projectCloneOptions(p, options.signal));
+            throwIfAborted(options.signal, slug);
             if (ok) {
                 steps.push("project-clone");
                 adapter.log(`[add:${slug}/${p.projectSlug}] cloned from ${projectCloneSourceLabel(p)}`);
             }
         }
         catch (err) {
+            throwIfAborted(options.signal, slug);
             adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project clone failed: ${String(err)}`);
         }
     }
@@ -670,6 +676,7 @@ export async function cloneMissingProjects(adapter, slug, options = {}) {
     // reasons (repo absent upstream, no SSH key), so only a re-probe can say whether the
     // checkout actually landed.
     const remaining = await adapter.listProjectsNeedingClone(slug);
+    throwIfAborted(options.signal, slug);
     const pending = remaining
         .map((p) => p.projectSlug)
         .filter((projectSlug) => !deferred.has(projectSlug))

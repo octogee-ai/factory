@@ -43,7 +43,8 @@ async function preparationFixture() {
     projectSlug: "new-project", giteaRepoName: null,
     repoSource: { provider: "github" as const, owner: "alice", repo: "new-project" },
   };
-  const cloneProjectRepo = vi.fn(async () => true);
+  const cloned = new Set<string>();
+  const cloneProjectRepo = vi.fn(async (_slug: string, projectSlug: string) => { cloned.add(projectSlug); return true; });
   const loadUserSnapshot = vi.fn(async () => ({ uid: "uid-alice", slug: request.slug, projects: [project] }));
   const adapter = {
     uidForSlug: async () => "uid-alice",
@@ -56,7 +57,7 @@ async function preparationFixture() {
     listLocalCustomerSlugs: () => hasMountedMarker(customersDir, request.slug) ? [request.slug] : [],
     hasWorkspaceGitDir: () => true,
     hasGitRemote: () => true,
-    listProjectsNeedingClone: async () => [project],
+    listProjectsNeedingClone: async () => (await loadUserSnapshot()).projects.filter(target => !cloned.has(target.projectSlug)),
     cloneProjectRepo,
   } as unknown as CustomerLifecycleAdapter;
   const attach = vi.fn(async () => { writeMountedMarker(customersDir, request.slug); return request.slug; });

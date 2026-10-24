@@ -3010,6 +3010,65 @@ describe("cloneMissingProjects — GitHub checkouts hydrate only on the owner's 
     expect(cloneProjectRepo).toHaveBeenCalledTimes(2);
     expect(result).toEqual({ steps: ["project-clone"], pending: ["octogee"], deferred: [] });
   });
+
+  it("does not probe checkouts for an already cancelled owner", async () => {
+    const { adapter, cloneProjectRepo } = adapterFor(true, new Set());
+    const controller = new AbortController();
+    controller.abort(new Error("finish import cancelled"));
+
+    await expect(cloneMissingProjects(adapter, "chris", { signal: controller.signal }))
+      .rejects.toThrow("finish import cancelled");
+
+    expect(adapter.listProjectsNeedingClone).not.toHaveBeenCalled();
+    expect(cloneProjectRepo).not.toHaveBeenCalled();
+  });
+
+  it("does not clone after its initial checkout probe is cancelled", async () => {
+    const { adapter, cloneProjectRepo } = adapterFor(true, new Set());
+    const controller = new AbortController();
+    adapter.listProjectsNeedingClone = vi.fn(async () => {
+      controller.abort(new Error("finish import cancelled"));
+      return targets;
+    });
+
+    await expect(cloneMissingProjects(adapter, "chris", { signal: controller.signal }))
+      .rejects.toThrow("finish import cancelled");
+
+    expect(cloneProjectRepo).not.toHaveBeenCalled();
+  });
+
+  it.each(["gitea", "github"] as const)("propagates cancellation from a %s clone instead of starting another project", async provider => {
+    const { adapter } = adapterFor(true, new Set());
+    const ordered = provider === "gitea" ? targets : [...targets].reverse();
+    adapter.listProjectsNeedingClone = vi.fn(async () => ordered);
+    const controller = new AbortController();
+    const clone = vi.fn(async () => {
+      controller.abort(new Error("finish import cancelled"));
+      throw new Error("clone interrupted");
+    });
+    adapter.cloneProjectRepo = clone;
+
+    await expect(cloneMissingProjects(adapter, "chris", { signal: controller.signal }))
+      .rejects.toThrow("finish import cancelled");
+
+    expect(clone).toHaveBeenCalledExactlyOnceWith("chris", ordered[0].projectSlug, ordered[0].giteaRepoName,
+      expect.objectContaining({ signal: controller.signal }));
+    expect(adapter.listProjectsNeedingClone).toHaveBeenCalledOnce();
+  });
+
+  it("does not report hydration complete after its final checkout probe is cancelled", async () => {
+    const { adapter } = adapterFor(true, new Set());
+    const controller = new AbortController();
+    adapter.listProjectsNeedingClone = vi.fn()
+      .mockResolvedValueOnce([targets[0]])
+      .mockImplementationOnce(async () => {
+        controller.abort(new Error("finish import cancelled"));
+        return [];
+      });
+
+    await expect(cloneMissingProjects(adapter, "chris", { signal: controller.signal }))
+      .rejects.toThrow("finish import cancelled");
+  });
 });
 
 describe("lifecycle log identity", () => {

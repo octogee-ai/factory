@@ -169,11 +169,11 @@ const routingActivationMocks = vi.hoisted(() => ({
         desiredAccountIds: params.accountIds,
         evictionSlugs: params.evictionSlugs,
       }, log);
-      routingActivationMocks.mark(openclawDir, params.reason, params.accountIds, params.baseline);
     }
-    if (params.required || params.configNoop) {
+    if (params.required || routingActivationMocks.pending) {
       await routingActivationMocks.activate(rpc, openclawDir, log, {
-        restartAccountIds: params.configNoop ? params.accountIds : [],
+        restartAccountIds: params.restartAccountIds ?? [],
+        restartConfiguredPending: true,
       });
     }
   }),
@@ -1484,7 +1484,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     );
   });
 
-  it("restarts only the configured Builder manifest accounts after a retained-overlay no-op", async () => {
+  it("preserves configured Builder manifest accounts after a retained-overlay no-op without pending activation", async () => {
     stubBuilderClaim("tester10");
     try {
       const desiredAccountIds = ["tester10-coach", "tester10-proj-orbit"];
@@ -1557,7 +1557,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({
         appliedFingerprint: "fp-tester10",
       });
-      expect(accountsRestarted).toBe(true);
+      expect(accountsRestarted).toBe(false);
       expect(routingActivationMocks.stopStale).toHaveBeenCalledWith(
         rpc,
         {
@@ -1584,22 +1584,19 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
           evictionSlugs: [],
         },
       );
-      expect(routingActivationMocks.activate).toHaveBeenCalledWith(
-        rpc,
-        testRuntime.dir,
-        expect.any(Function),
-        { restartAccountIds: desiredAccountIds },
-      );
+      expect(routingActivationMocks.mark).not.toHaveBeenCalled();
+      expect(routingActivationMocks.activate).not.toHaveBeenCalled();
       expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
-        routingActivationMocks.activate.mock.invocationCallOrder[0]!,
+        routingActivationMocks.activateAfterPatch.mock.invocationCallOrder[0]!,
       );
     } finally {
       clearBuilderClaim();
     }
   });
 
-  it("keeps a configured Builder no-op activation pending when its account restart fails", async () => {
+  it("keeps an existing configured Builder no-op activation pending when its account restart fails", async () => {
     stubBuilderClaim("tester10");
+    routingActivationMocks.pending = true;
     try {
       mocks.readActivationManifest.mockResolvedValueOnce({
         slug: "tester10",
@@ -1638,12 +1635,12 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         verificationPending: "Mattermost account restart failed",
       });
 
-      expect(routingActivationMocks.mark).toHaveBeenCalledWith(
-        testRuntime.dir,
-        "[import:tester10] account-level Mattermost binding changed",
-        ["tester10-coach"],
-        { "tester10-coach": 0 },
+      expect(routingActivationMocks.mark).not.toHaveBeenCalled();
+      expect(routingActivationMocks.activate).toHaveBeenCalledWith(
+        rpc, testRuntime.dir, expect.any(Function),
+        { restartAccountIds: [], restartConfiguredPending: true },
       );
+      expect(routingActivationMocks.pending).toBe(true);
       expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
       expect(rpc.channelsStatus).not.toHaveBeenCalled();
     } finally {

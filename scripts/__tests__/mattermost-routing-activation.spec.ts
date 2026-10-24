@@ -67,6 +67,59 @@ afterEach(async () => {
 });
 
 describe("Mattermost routing activation", () => {
+  it("preserves healthy desired accounts after an ordinary config no-op", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const accountIds = ["alice-coach", "alice-proj-orbit"];
+    let start = 100;
+    const rpc = channelOperationRpc(accountIds, vi.fn(async () => ({
+      channelAccounts: { mattermost: accountIds.map((accountId) => ({
+        accountId, running: true, connected: true, lastStartAt: start,
+      })) },
+    })));
+    vi.mocked(rpc.channelsStart).mockImplementation(async ({ accountId }) => {
+      start++;
+      return { channel: "mattermost", accountId, started: true };
+    });
+
+    await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
+      accountIds, baseline: Object.fromEntries(accountIds.map((accountId) => [accountId, 100])),
+      configNoop: true, required: false, reason: "unchanged routing", currentSlug: "alice", evictionSlugs: [],
+    });
+
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(rpc.channelsStart).not.toHaveBeenCalled();
+    expect(rpc.configGet).not.toHaveBeenCalled();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+    expect(await fs.readdir(openclawDir)).toEqual([]);
+  });
+
+  it.each([false, true])("services only durable pending accounts when the captured required flag is false (configNoop=%s)", async (configNoop) => {
+    const openclawDir = await temporaryOpenClawDir();
+    const accountId = "alice-proj-orbit";
+    const accountIds = ["alice-coach", accountId];
+    markMattermostRoutingActivationPending(openclawDir, "project binding changed", [accountId], { [accountId]: 100 });
+    const starts: Record<string, number> = { "alice-coach": 200, [accountId]: 100 };
+    const rpc = channelOperationRpc(accountIds, vi.fn(async () => ({
+      channelAccounts: { mattermost: [
+        { accountId: "alice-coach", running: true, connected: true, lastStartAt: starts["alice-coach"] },
+        { accountId, running: true, connected: true, lastStartAt: starts[accountId] },
+      ] },
+    })));
+    vi.mocked(rpc.channelsStart).mockImplementation(async ({ accountId: restartedAccountId }) => {
+      starts[restartedAccountId]++;
+      return { channel: "mattermost", accountId: restartedAccountId, started: true };
+    });
+
+    await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
+      accountIds, baseline: { "alice-coach": 200, [accountId]: 100 }, configNoop,
+      required: false, reason: "unchanged routing", currentSlug: "alice", evictionSlugs: [],
+    });
+
+    expect(rpc.channelsStop).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId });
+    expect(rpc.channelsStart).toHaveBeenCalledExactlyOnceWith({ channel: "mattermost", accountId });
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
+  });
+
   it("restarts the unchanged coach monitor after a binding-only config patch", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const accountId = "alice-coach";
@@ -193,7 +246,8 @@ describe("Mattermost routing activation", () => {
     ).rejects.toThrow("Mattermost account ceckert-coach has an invalid lastStartAt");
   });
 
-  it("stops removed project and evicted accounts without restarting them", async () => {
+  it.each([false, true])("stops removed project and evicted accounts without restarting them (afterConfigNoop=%s)", async (afterConfigNoop) => {
+    const openclawDir = await temporaryOpenClawDir();
     const rpc = channelOperationRpc(
       ["alice-coach"],
       vi.fn(async () => ({
@@ -206,17 +260,25 @@ describe("Mattermost routing activation", () => {
       })),
     );
 
-    await stopStaleMattermostRoutingAccounts(rpc, {
-      currentSlug: "alice",
-      desiredAccountIds: ["alice-coach"],
-      evictionSlugs: ["bob"],
-    }, vi.fn());
+    if (afterConfigNoop) {
+      await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
+        accountIds: ["alice-coach"], baseline: { "alice-coach": 100 },
+        configNoop: true, required: false, reason: "unchanged routing", currentSlug: "alice", evictionSlugs: ["bob"],
+      });
+    } else {
+      await stopStaleMattermostRoutingAccounts(rpc, {
+        currentSlug: "alice",
+        desiredAccountIds: ["alice-coach"],
+        evictionSlugs: ["bob"],
+      }, vi.fn());
+    }
 
     expect(vi.mocked(rpc.channelsStop).mock.calls.map(([params]) => params.accountId)).toEqual([
       "alice-proj-retired",
       "bob-coach",
     ]);
     expect(rpc.channelsStart).not.toHaveBeenCalled();
+    expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
   it("accepts the config hot-reload activation without manually restarting the account", async () => {
@@ -277,7 +339,7 @@ describe("Mattermost routing activation", () => {
     expect(mattermostRoutingActivationPending(openclawDir)).toBe(false);
   });
 
-  it("restarts a newly minted project account even when the config patch changed unrelated fields", async () => {
+  it.each([false, true])("restarts a newly minted project account even when its bindings are unchanged (configNoop=%s)", async (configNoop) => {
     const openclawDir = await temporaryOpenClawDir();
     const accountId = "ceckert-proj-orbit";
     markMattermostRoutingActivationPending(openclawDir, "project enabled", [accountId], { [accountId]: 100 });
@@ -285,7 +347,7 @@ describe("Mattermost routing activation", () => {
       channelAccounts: { mattermost: [{ accountId, running: true, connected: true, lastStartAt: 101 }] },
     })));
     await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
-      accountIds: [accountId], baseline: { [accountId]: 100 }, configNoop: false,
+      accountIds: [accountId], baseline: { [accountId]: 100 }, configNoop,
       required: true, reason: "project enabled", currentSlug: "ceckert", evictionSlugs: [], restartAccountIds: [accountId],
     });
     expect(rpc.channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId });
@@ -301,6 +363,7 @@ describe("Mattermost routing activation", () => {
       ["ceckert-coach"],
       { "ceckert-coach": 100 },
     );
+    let start = 101;
     const rpc = channelOperationRpc(
       ["ceckert-coach", "unrelated-coach"],
       vi.fn(async () => ({
@@ -309,7 +372,7 @@ describe("Mattermost routing activation", () => {
             accountId: "ceckert-coach",
             running: true,
             connected: true,
-            lastStartAt: 101,
+            lastStartAt: start,
           },
           {
             accountId: "unrelated-coach",
@@ -321,8 +384,13 @@ describe("Mattermost routing activation", () => {
       })),
     );
 
+    vi.mocked(rpc.channelsStart).mockImplementation(async ({ accountId }) => {
+      start++;
+      return { channel: "mattermost", accountId, started: true };
+    });
+
     await activateMattermostRoutingAfterConfigPatch(rpc, openclawDir, vi.fn(), {
-      configNoop, accountIds: ["ceckert-coach"], baseline: { "ceckert-coach": 100 },
+      configNoop, accountIds: ["ceckert-coach"], baseline: { "ceckert-coach": 101 },
       required: true, reason: "persisted binding may have a stale monitor", currentSlug: "ceckert", evictionSlugs: [],
     });
 

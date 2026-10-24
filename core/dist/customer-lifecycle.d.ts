@@ -299,6 +299,7 @@ export declare function cloneProjectsFromSnapshot(adapter: CustomerLifecycleAdap
 }>;
 export interface CloneMissingProjectsOptions {
     githubCheckouts?: "hydrate-here" | "defer";
+    signal?: AbortSignal;
 }
 export declare function cloneMissingProjects(adapter: CustomerLifecycleAdapter, slug: string, options?: CloneMissingProjectsOptions): Promise<{
     steps: AddCustomerStep[];

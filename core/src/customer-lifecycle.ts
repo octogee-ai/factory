@@ -626,10 +626,10 @@ function githubRepoSourceOf(target: ProjectCloneTarget): ProjectRepoSource | nul
   return target.repoSource?.provider === "github" ? target.repoSource : null;
 }
 
-function projectCloneOptions(target: ProjectCloneTarget): ProjectCloneOptions | undefined {
+function projectCloneOptions(target: ProjectCloneTarget, signal?: AbortSignal): ProjectCloneOptions | undefined {
   const repoSource = githubRepoSourceOf(target);
-  if (!repoSource) return undefined;
-  return { repoSource };
+  if (!repoSource && !signal) return undefined;
+  return { ...(repoSource ? { repoSource } : {}), ...(signal ? { signal } : {}) };
 }
 
 function projectCloneSourceLabel(target: ProjectCloneTarget): string {
@@ -1263,6 +1263,7 @@ function githubCheckoutsHydrateHere(adapter: CustomerLifecycleAdapter, slug: str
 
 export interface CloneMissingProjectsOptions {
   githubCheckouts?: "hydrate-here" | "defer";
+  signal?: AbortSignal;
 }
 
 export async function cloneMissingProjects(
@@ -1270,11 +1271,14 @@ export async function cloneMissingProjects(
   slug: string,
   options: CloneMissingProjectsOptions = {},
 ): Promise<{ steps: AddCustomerStep[]; pending: string[]; deferred: string[] }> {
+  throwIfAborted(options.signal, slug);
   const toClone = await adapter.listProjectsNeedingClone(slug);
+  throwIfAborted(options.signal, slug);
   const steps: AddCustomerStep[] = [];
   const deferred = new Set<string>();
   const ownerRuntime = options.githubCheckouts !== "defer" && githubCheckoutsHydrateHere(adapter, slug);
   for (const p of toClone) {
+    throwIfAborted(options.signal, slug);
     if (!hasProjectCloneSource(p)) {
       adapter.log(
         `[add:${slug}/${p.projectSlug}] ✖ project checkout skipped — no Gitea repo and no GitHub repoSource`,
@@ -1284,6 +1288,7 @@ export async function cloneMissingProjects(
     if (githubRepoSourceOf(p) && !ownerRuntime) {
       deferred.add(p.projectSlug);
       await adapter.seedDeferredProjectWorkspace(slug, p.projectSlug);
+      throwIfAborted(options.signal, slug);
       adapter.log(
         options.githubCheckouts === "defer"
           ? `[add:${slug}/${p.projectSlug}] GitHub checkout deferred until the customer is assigned here — the reconcile clones it after cutover`
@@ -1296,13 +1301,15 @@ export async function cloneMissingProjects(
         slug,
         p.projectSlug,
         p.giteaRepoName,
-        projectCloneOptions(p),
+        projectCloneOptions(p, options.signal),
       );
+      throwIfAborted(options.signal, slug);
       if (ok) {
         steps.push("project-clone");
         adapter.log(`[add:${slug}/${p.projectSlug}] cloned from ${projectCloneSourceLabel(p)}`);
       }
     } catch (err) {
+      throwIfAborted(options.signal, slug);
       adapter.log(`[add:${slug}/${p.projectSlug}] ✖ project clone failed: ${String(err)}`);
     }
   }
@@ -1311,6 +1318,7 @@ export async function cloneMissingProjects(
   // reasons (repo absent upstream, no SSH key), so only a re-probe can say whether the
   // checkout actually landed.
   const remaining = await adapter.listProjectsNeedingClone(slug);
+  throwIfAborted(options.signal, slug);
   const pending = remaining
     .map((p) => p.projectSlug)
     .filter((projectSlug) => !deferred.has(projectSlug))

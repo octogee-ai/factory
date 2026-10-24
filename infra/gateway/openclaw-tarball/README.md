@@ -148,7 +148,86 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 23 retained PostgreSQL restoration and runtime security
+## Current overlay: October 23 outbound delivery custody
+
+The selected upstream remains frozen at
+`6b3e0c6a94968cdaa03bb019bdcacc8b55aa9b63`. The qualified overlay is
+`be883be916375649db9caacad9521b85118e1da7`, available from
+[`fix/detach-outbound-custody-20261023`](https://github.com/ceckert/openclaw/tree/fix/detach-outbound-custody-20261023).
+It adds only the outbound custody repair to the previously qualified
+`5fa6d0924b834f5917adf4847ab615bb98d6fe8a` source described below; version
+remains 2026.10.6.
+
+An isolated public-RPC/Mattermost reproduction demonstrated that `agents.detach`
+could retire an agent still needed by unfinished outbound delivery. The repair
+checks completion, execution and mirror dependencies in the existing state
+transaction before removing its roster entry. A pending delivery refuses detach
+through the existing unavailable response; an unchanged configured source agent
+can have its matching pre-removal detach fence rolled back so normal recovery
+can finish delivery. New outbound custody is refused after detach retirement,
+while existing-id retries and settlement retain their existing owners. No queue
+is cleared or transferred by this fix. This belongs in Native because admission
+and retirement must share its authoritative state transaction; an Octogee queue
+probe cannot close that race. Remove the overlay once the selected upstream
+supplies equivalent custody and the installed refusal/recovery controls pass.
+
+### Artifacts and isolated qualification
+
+The sequential maintained packers used clean, fully built source; installed
+build-info names `be883be916375649db9caacad9521b85118e1da7`. The root was
+published with a create-only generation condition. Unchanged Mattermost reuses
+its existing generation. Complete generation-specific downloads match both
+qualified archives' full SHA256, size and original bytes; previous objects
+remain immutable.
+
+| Package | Object in `gs://octogee-openclaw-fork/` | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-888e10c4.tgz#1792806145087956` | 128838929 | `888e10c46ed6175b8354689c1ffd50e881df3b6efc2e51a4df78714b5222841f` |
+| mattermost | `openclaw-mattermost-ef7e6074.tgz#1792766326593830` (unchanged bytes) | 1258422 | `ef7e60741f3b5978ee43435623b88964a23596d67b02b57923555147671497f9` |
+
+Normal postcommit build, sequential packing, Native tarball integrity checks and
+strict fresh npm installation with Native lifecycle scripts pass. Installed npm
+12.2.1 carries the same 15 official fixed files in Native's bundled closure and
+its independent global installation; source dependencies remain stock. The
+actual Linux AMD64 full-plugin installer passes CUA lint, registry/bundled trust,
+Parallel's nine-file match, Codex's 188-file match and all three native-hook
+imports. All 873 Mattermost files match the paired archive. Node 26.12.1's
+builtin Undici and direct Undici are 8.12.2; bundled npm uses Undici 6.29.1 and
+ip-address 10.7.4. Pinned OSV 2.5.1 scans all 759 actual production package roots
+with no reported vulnerabilities, no new ignore and the existing policy
+unchanged. The inherited http-cache-semantics semantic residual described below
+is unchanged.
+
+The installed PostgreSQL control and cleanup replays use actual public Native
+RPCs, the production Octogee adapter and a loopback Mattermost receiver. Pending
+delivery refuses detach while preserving the exact config/agent/account,
+canonical session/history, store UUID and namespace. The original scheduler and
+channels resume; restoring the receiver lets canonical recovery produce one
+physical effect without a manual resend, after which normal cleanup succeeds.
+The independently reviewed source-owner regressions cover the queue transaction
+and attribution boundaries, including seven real-PG cases; the explicit
+SQLite-only CLI child fixture remains skipped in that PG run. Generic installed
+operator delivery and source session-final regressions are separate proofs.
+
+The maintained PostgreSQL catalog qualifier passes against fresh disposable
+PostgreSQL 16.15/pgvector 0.8.7 as a non-superuser CREATEROLE database owner. All
+five routine, five trigger and 289 expression fingerprints remain unchanged;
+the generated catalog and its built interface change only their source SHA.
+The existing catalog/routine and isolated PostgreSQL boundary suites pass
+41 cases, independently of installed Native public-path acceptance. Hosted UI
+provenance is regenerated from this same clean built source. All 50 shared
+chunks and four entries remain byte-identical after exact chunk-filename
+mapping; 49 chunk names change, while the six provenance/license pairs change
+only their source SHA. Eight artifact/island suites pass 89 cases. The normal
+local-file dependency owner also refreshes three stale core lock declarations
+to their existing google-auth-library range, without changing resolved versions.
+
+This qualifies the isolated published Native pair. The combined Octogee release
+still requires normal CI/build/TEST deployment. Full controller/source-held
+queued session-final migration proof and live TEST acceptance remain pending;
+this repair does not define a new policy for wholly unattributed outbound rows.
+
+## Previous October 23 retained PostgreSQL restoration and runtime security
 
 The selected upstream remains frozen at
 `6b3e0c6a94968cdaa03bb019bdcacc8b55aa9b63`; its CI limitations and the

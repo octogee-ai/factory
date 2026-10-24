@@ -455,22 +455,14 @@ export async function activateMattermostRoutingAfterConfigPatch(
     restartAccountIds?: readonly string[];
   },
 ): Promise<void> {
-  let required = params.required;
   if (params.configNoop) {
     await stopStaleMattermostRoutingAccounts(rpc, {
       currentSlug: params.currentSlug,
       desiredAccountIds: params.accountIds,
       evictionSlugs: params.evictionSlugs,
     }, log);
-    markMattermostRoutingActivationPending(
-      openclawDir,
-      params.reason,
-      params.accountIds,
-      params.baseline,
-    );
-    required = true;
   }
-  if (!required) return;
+  if (!params.required && !mattermostRoutingActivationPending(openclawDir)) return;
   await activatePendingMattermostRouting(rpc, openclawDir, log, {
     restartAccountIds: params.restartAccountIds ?? [],
     restartConfiguredPending: true,
