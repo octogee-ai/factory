@@ -1,3 +1,4 @@
+import { sharedAgentAnchorMigrationScope } from "../lib/shared-agent-anchor-migration.js";
 import { SharedContextPendingError } from "../lib/native-shared-context-job.js";
 import { createGcsSharedContextObjectStore, type SharedContextObjectStore } from "../lib/native-shared-context-object.js";
 import { authorizeSharedContextCheckpoint } from "../lib/native-shared-context-checkpoint.js";
@@ -41,7 +42,7 @@ import {
   type ComputerHomeStore,
 } from "../lib/computer-home-checkpoint.js";
 import { Router, type Request, type Response } from "express";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore, type QuerySnapshot } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
@@ -64,6 +65,7 @@ import {
 } from "../lib/platform-model-config.js";
 import type {
   FleetBrokerAgentAnchor,
+  FleetBrokerAgentAnchorMigration,
   FleetBrokerAgentAnchors,
   FleetBrokerGatewayStateAnchor,
   BuilderRuntimeStateRecoveryTier,
@@ -2254,6 +2256,92 @@ async function readBuilderRuntimeStateScope(
   return { ...input, uid, leaseId: allocation.leaseId, generation: allocation.generation };
 }
 
+interface SharedAgentAnchorScope {
+  migration?: FleetBrokerAgentAnchorMigration;
+  gatewayId: string;
+  podName: string | undefined;
+  uid: string;
+  slug: string;
+  assignmentEpoch: number;
+  assignmentState: "serving" | "quiescing";
+}
+
+type AgentAnchorScope = BuilderRuntimeStateScope | SharedAgentAnchorScope;
+
+function sharedAnchorAssignment(
+  scope: Pick<SharedAgentAnchorScope, "gatewayId" | "uid" | "slug">,
+  data: Record<string, unknown> | undefined,
+): Pick<SharedAgentAnchorScope, "assignmentEpoch" | "assignmentState"> | null {
+  const assignment = parseAssignmentDoc(scope.uid, data);
+  const epoch = data?.epoch;
+  const state = data?.state;
+  if (!assignment || data?.uid !== scope.uid || assignment.gatewayId !== scope.gatewayId || assignment.slug !== scope.slug ||
+      (state !== "serving" && state !== "quiescing") || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0) return null;
+  return { assignmentEpoch: epoch, assignmentState: state };
+}
+
+function sharedAgentAnchorScopeCurrent(
+  scope: Pick<SharedAgentAnchorScope, "gatewayId" | "uid" | "slug">,
+  gatewayData: unknown,
+  userData: Record<string, unknown> | undefined,
+  assignmentData: Record<string, unknown> | undefined,
+): SharedAgentAnchorScope | null {
+  const gateway = projectGatewayDesiredRootForGateway(gatewayData, scope.gatewayId);
+  const assignment = sharedAnchorAssignment(scope, assignmentData);
+  if (!gateway || gateway.gatewayClass !== "shared" || gateway.retirementClaim != null ||
+      (gateway.desiredStatus !== "running" && gateway.desiredStatus !== "draining") ||
+      stringAt(userData, OPENCLAW_GATEWAY_ID_FIELD) !== scope.gatewayId || slugFromAssignedUser(userData) !== scope.slug ||
+      !assignment) return null;
+  return { ...scope, podName: undefined, ...assignment };
+}
+
+async function requireAgentAnchorScope(db: Firestore, req: Request, res: Response): Promise<AgentAnchorScope | null> {
+  const bound = boundGateway(req, res);
+  if (!bound) return null;
+  const request = configuredBuilderBootstrapRequest(bound.gatewayId, bound.podName, req.body);
+  if (!request) { res.status(403).json(FORBIDDEN); return null; }
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId);
+  const gateway = await gatewayRef.get();
+  if (projectGatewayDesiredRootForGateway(gateway.data(), bound.gatewayId)?.gatewayClass !== "shared") {
+    return requireConfiguredBuilderRuntimeState(db, req, res);
+  }
+  if (migrationAnchorRequest(req)) {
+    return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);
+  }
+  const uid = req.body?.uid;
+  if (typeof uid !== "string" || !uid || uid.length > 128 || uid.includes("/")) {
+    res.status(403).json(FORBIDDEN); return null;
+  }
+  const [user, assignment] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(uid).get(),
+  ]);
+  const scope = sharedAgentAnchorScopeCurrent({ gatewayId: bound.gatewayId, uid, slug: request.slug }, gateway.data(), user.data(), assignment.data());
+  if (!scope || (req.path.endsWith("/report") &&
+      (req.body.assignmentEpoch !== scope.assignmentEpoch || req.body.assignmentState !== scope.assignmentState))) {
+    res.status(403).json(FORBIDDEN); return null;
+  }
+  return { ...scope, podName: bound.podName };
+}
+
+function migrationAnchorRequest(req: Request): boolean {
+  return req.body?.migrationId !== undefined || req.body?.migration !== undefined;
+}
+
+async function requireMigratingAgentAnchorScope(
+  db: Firestore, req: Request, res: Response,
+  bound: { gatewayId: string; podName?: string }, slug: string,
+): Promise<SharedAgentAnchorScope | null> {
+  const scope = await db.runTransaction((txn) => sharedAgentAnchorMigrationScope(db, txn, {
+    gatewayId: bound.gatewayId, slug, migrationId: req.body.migration?.migrationId ?? req.body.migrationId, expected: req.body.migration,
+  }));
+  if (!scope || (req.body.uid !== undefined && req.body.uid !== scope.uid) ||
+      (req.path.endsWith("/report") && (!req.body.migration || req.body.assignmentEpoch !== scope.assignmentEpoch || req.body.assignmentState !== scope.assignmentState))) {
+    res.status(403).json(FORBIDDEN); return null;
+  }
+  return { ...scope, podName: bound.podName };
+}
+
 const AGENT_STORES_SUBCOLLECTION = "agentStores";
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
 const AGENT_ANCHOR_STORE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -2377,26 +2465,87 @@ async function recordAgentAnchors(
   });
 }
 
+function recordedSharedAgentAnchor(scope: SharedAgentAnchorScope, id: string, data: unknown): FleetBrokerAgentAnchor | null {
+  if (id === UNMATCHED_ROUTE_AGENT_ID || !agentAnchorBelongsTo(scope.slug, id)) return null;
+  const record = data as Record<string, unknown> | null;
+  const anchor = agentAnchorFor(scope.slug, data);
+  if (!anchor || anchor.agentId !== id || (scope.assignmentState === "quiescing" && !scope.migration &&
+      (!record || record.gatewayId !== scope.gatewayId || record.assignmentEpoch !== scope.assignmentEpoch))) {
+    throw new AgentAnchorConflictError(id);
+  }
+  return anchor;
+}
+
+class SharedAgentAnchorCustodyError extends Error {}
+
+function anchorCustodyGateway(scope: SharedAgentAnchorScope): string {
+  return scope.migration?.sourceGatewayId ?? scope.gatewayId;
+}
+
+function unconfiguredSharedAgentAnchors(scope: SharedAgentAnchorScope, existing: QuerySnapshot, configuredAgentIds: ReadonlySet<string>) {
+  if (scope.assignmentState !== "serving" || scope.migration) return [];
+  return existing.docs.filter((doc) => {
+    const prior = recordedSharedAgentAnchor(scope, doc.id, doc.data());
+    return prior && !configuredAgentIds.has(prior.agentId);
+  });
+}
+
+async function recordSharedAgentAnchors(
+  db: Firestore,
+  scope: SharedAgentAnchorScope,
+  { anchors, configuredAgentIds }: AgentAnchorReport,
+  recordedAt: number,
+): Promise<void> {
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(scope.gatewayId);
+  const records = agentStoreRecords(db, scope.uid);
+  await db.runTransaction(async (txn) => {
+    const [gateway, user, assignment, existing] = await Promise.all([
+      txn.get(gatewayRef), txn.get(db.collection("users").doc(scope.uid)),
+      txn.get(gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(scope.uid)), txn.get(records),
+    ]);
+    const current = scope.migration
+      ? await sharedAgentAnchorMigrationScope(db, txn, { gatewayId: scope.gatewayId, slug: scope.slug, migrationId: scope.migration.migrationId, expected: scope.migration })
+      : sharedAgentAnchorScopeCurrent(scope, gateway.data(), user.data(), assignment.data());
+    if (!current || current.assignmentEpoch !== scope.assignmentEpoch || current.assignmentState !== scope.assignmentState) {
+      throw new SharedAgentAnchorCustodyError("Shared agent anchor custody changed before reporting");
+    }
+    for (const anchor of anchors) {
+      const doc = existing.docs.find((candidate) => candidate.id === anchor.agentId);
+      const prior = doc ? recordedSharedAgentAnchor(scope, doc.id, doc.data()) : null;
+      if ((prior && (prior.storeId !== anchor.storeId || prior.schema !== anchor.schema)) ||
+          (!prior && scope.assignmentState !== "serving")) throw new AgentAnchorConflictError(anchor.agentId);
+    }
+    for (const doc of unconfiguredSharedAgentAnchors(scope, existing, configuredAgentIds)) txn.delete(doc.ref);
+    for (const anchor of anchors) {
+      const prior = existing.docs.find((candidate) => candidate.id === anchor.agentId)?.data();
+      txn.set(records.doc(anchor.agentId), { ...prior, ...anchor, gatewayId: anchorCustodyGateway(scope), assignmentEpoch: scope.assignmentEpoch, recordedAt });
+    }
+  });
+}
+
 function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps): void {
   const { db } = deps;
   const stores = (uid: string) => agentStoreRecords(db, uid);
 
   router.post("/agent-anchors/report", async (req, res) => {
-    const scope = await requireConfiguredBuilderRuntimeState(db, req, res);
+    const scope = await requireAgentAnchorScope(db, req, res);
     if (!scope) return;
     const report = reportedAgentAnchors(scope.slug, req.body);
-    if (!report) {
+    if (!report || ("assignmentEpoch" in scope && (report.state ||
+        [...report.configuredAgentIds].some((id) => id === UNMATCHED_ROUTE_AGENT_ID || !agentAnchorBelongsTo(scope.slug, id))))) {
       res.status(400).json({ error: "invalid_agent_anchors" });
       return;
     }
     await runBrokered(res, async () => {
       const recordedAt = deps.now();
       try {
-        await recordAgentAnchors(db, scope, report, recordedAt);
+        if ("assignmentEpoch" in scope) await recordSharedAgentAnchors(db, scope, report, recordedAt);
+        else await recordAgentAnchors(db, scope, report, recordedAt);
       } catch (error) {
+        if (error instanceof SharedAgentAnchorCustodyError) { res.status(403).json(FORBIDDEN); return; }
         if (!(error instanceof AgentAnchorConflictError)) throw error;
         logger.error("[fleet-broker] agent anchor conflict refused", {
-          gatewayId: scope.gatewayId, generation: scope.generation, slug: scope.slug, agentId: error.agentId,
+          gatewayId: scope.gatewayId, slug: scope.slug, agentId: error.agentId,
         });
         res.status(409).json({ error: "agent_anchor_conflict", agentId: error.agentId });
         return;
@@ -2406,10 +2555,27 @@ function installAgentAnchorRoutes(router: Router, deps: ResolvedFleetBrokerRoute
   });
 
   router.post("/agent-anchors/read", async (req, res) => {
-    const scope = await requireConfiguredBuilderRuntimeState(db, req, res);
+    const scope = await requireAgentAnchorScope(db, req, res);
     if (!scope) return;
     await runBrokered(res, async () => {
-      const snapshot = await stores(scope.uid).get();
+      const snapshot = "assignmentEpoch" in scope && scope.migration ? await db.runTransaction(async (txn) => {
+        const current = await sharedAgentAnchorMigrationScope(db, txn, { gatewayId: scope.gatewayId, slug: scope.slug, migrationId: scope.migration!.migrationId, expected: scope.migration });
+        if (!current) return null;
+        return txn.get(stores(scope.uid));
+      }) : await stores(scope.uid).get();
+      if (!snapshot) { res.status(403).json(FORBIDDEN); return; }
+      if ("assignmentEpoch" in scope) {
+        try {
+          const anchors = snapshot.docs.map((doc) => recordedSharedAgentAnchor(scope, doc.id, doc.data()))
+            .filter((anchor): anchor is FleetBrokerAgentAnchor => anchor !== null)
+            .sort((left, right) => left.agentId.localeCompare(right.agentId));
+          res.json({ anchors, assignment: { uid: scope.uid, epoch: scope.assignmentEpoch, state: scope.assignmentState }, ...(scope.migration ? { migration: scope.migration } : {}) } satisfies FleetBrokerAgentAnchors);
+        } catch (error) {
+          if (!(error instanceof AgentAnchorConflictError)) throw error;
+          res.status(409).json({ error: "agent_anchor_conflict", agentId: error.agentId });
+        }
+        return;
+      }
       const anchors = snapshot.docs
         .filter((doc) => doc.id !== GATEWAY_STATE_ANCHOR_DOC)
         .map((doc) => recordedAgentAnchor(scope, doc.data()))

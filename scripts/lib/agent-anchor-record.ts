@@ -94,6 +94,78 @@ export async function landAgentAnchors(
   return { landed, preserved };
 }
 
+interface SharedCustomerAgentAnchorsInput {
+  stateDir: string;
+  uid?: string;
+  migrationId?: string;
+  slug: string;
+  agentIds: readonly string[];
+  allowQuiescingExisting?: boolean;
+  broker: Pick<FleetBrokerClient, "readAgentAnchors" | "reportAgentAnchors">;
+}
+
+function sharedAnchorReadRequest(input: SharedCustomerAgentAnchorsInput) {
+  return { ...(input.uid ? { uid: input.uid } : {}), slug: input.slug, ...(input.migrationId ? { migrationId: input.migrationId } : {}) };
+}
+
+async function readSharedAnchorAuthority(input: SharedCustomerAgentAnchorsInput) {
+  const { slug, broker } = input;
+  const recorded = await broker.readAgentAnchors(sharedAnchorReadRequest(input));
+  const uid = input.uid ?? recorded.assignment?.uid;
+  if (!uid || (input.migrationId && recorded.migration?.migrationId !== input.migrationId)) throw new Error(`Shared migration anchor authority is missing for ${slug}`);
+  const assignment = recorded.assignment;
+  if (assignment?.uid !== uid ||
+      (assignment.state !== "serving" && (assignment.state !== "quiescing" || input.allowQuiescingExisting !== true && !input.migrationId)) ||
+      !Number.isSafeInteger(assignment.epoch) || assignment.epoch < 0) {
+    throw new Error(`Shared agent anchor attach requires a current serving assignment for ${slug}`);
+  }
+  return { recorded, uid, assignment: { ...assignment, state: assignment.state } };
+}
+
+export async function prepareSharedCustomerAgentAnchors(input: SharedCustomerAgentAnchorsInput): Promise<() => Promise<void>> {
+  const { stateDir, slug, broker } = input;
+  const agentIds = [...new Set(input.agentIds)].sort();
+  const { recorded, uid, assignment } = await readSharedAnchorAuthority(input);
+  const assignmentState = assignment.state;
+  const quiescingExisting = assignmentState === "quiescing";
+  const assignmentEpoch = assignment.epoch;
+  const expected = recorded.anchors.filter((anchor) => agentIds.includes(anchor.agentId));
+  if (expected.some((anchor) => !isAgentAnchor(anchor)) || new Set(expected.map((anchor) => anchor.agentId)).size !== expected.length) {
+    throw new Error(`Recorded Shared agent anchors are invalid for ${slug}`);
+  }
+  const sameIdentity = (left: FleetBrokerAgentAnchor, right: FleetBrokerAgentAnchor) =>
+    left.storeId === right.storeId && left.schema === right.schema;
+  const assertRecordedIdentities = async () => {
+    const local = await readLocalAgentAnchors(stateDir, agentIds);
+    for (const anchor of expected) {
+      const current = local.find((candidate) => candidate.agentId === anchor.agentId);
+      const exists = await fs.stat(agentStorePath(stateDir, anchor.agentId)).then(() => true, (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      });
+      if (exists && (!current || !sameIdentity(current, anchor))) {
+        throw new Error(`Local agent ${anchor.agentId} has a different identity from its recorded PostgreSQL store`);
+      }
+    }
+    return local;
+  };
+  const local = await assertRecordedIdentities();
+  if (quiescingExisting && (expected.length !== agentIds.length || local.length !== agentIds.length)) {
+    throw new Error(`Shared quiescing resume requires existing local and recorded identities for ${slug}`);
+  }
+  for (const anchor of new Map([...local, ...expected].map((anchor) => [anchor.agentId, anchor])).values()) {
+    await verifyAgentAnchorInPostgres(anchor);
+  }
+  if (!quiescingExisting) await landAgentAnchors(stateDir, expected);
+  await assertRecordedIdentities();
+  return async () => {
+    const anchors = await assertRecordedIdentities();
+    if (anchors.length !== agentIds.length) throw new Error(`Shared agent anchors are incomplete for ${slug}`);
+    for (const anchor of anchors) await verifyAgentAnchorInPostgres(anchor);
+    await broker.reportAgentAnchors({ uid, slug, assignmentEpoch, assignmentState, anchors, configuredAgentIds: agentIds, ...(recorded.migration ? { migration: recorded.migration } : {}) });
+  };
+}
+
 export type GatewayStateAnchorVerifier = (anchor: FleetBrokerGatewayStateAnchor) => Promise<void>;
 
 export async function verifyGatewayStateAnchorInPostgres(

@@ -291,7 +291,7 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
 
   activateImportedCustomer: (
     slug: string,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; migrationId?: string },
   ) => Promise<{ appliedFingerprint: string; verificationPending?: string }>;
   recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
 

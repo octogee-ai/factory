@@ -10,6 +10,7 @@ import {
   projectCheckoutScopeForRuntime,
   waitForAppliedConfigRevision,
 } from "../lib/customer-lifecycle-broker-adapter.js";
+import { landAgentAnchors, readLocalAgentAnchors } from "../lib/agent-anchor-record.js";
 import { OPENCLAW_CONFIG } from "../lib/config.js";
 import { OpenclawWireError, type GatewayRpcClient } from "../lib/gateway-rpc.js";
 import {
@@ -132,6 +133,11 @@ const gitMocks = vi.hoisted(() => ({
 }));
 const patchMocks = vi.hoisted(() => ({
   applyConfigPatch: vi.fn(async () => ({ mode: "rpc" as const, attempts: 1 })),
+}));
+const anchorQuery = vi.hoisted(() => vi.fn());
+vi.mock("@octogee/core/agent-postgres", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@octogee/core/agent-postgres")>(),
+  queryAgentStore: anchorQuery,
 }));
 const modelCredentialMocks = vi.hoisted(() => ({
   syncModelCredentialsForCustomer: vi.fn(async () => undefined),
@@ -446,6 +452,72 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       tempStateDir = null;
     }
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  });
+
+  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "pre-cutover", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-import-"));
+    const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
+    const priorState = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = dir;
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ database: { engine: "postgres" } }));
+    clearBuilderClaim();
+    const anchors = [
+      { agentId: "octogee-tester10-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" },
+      { agentId: "octogee-tester10-proj-orbit-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" },
+    ];
+    const migrating = mode === "pre-cutover" || mode === "stale-migration";
+    const migration = { migrationId: "mig-move", claimStartedAt: 10, sourceGatewayId: "source", sourceEpoch: 0 };
+    const quiescing = mode.startsWith("quiescing") || migrating;
+    if (mode === "quiescing-resume" || migrating) await landAgentAnchors(dir, anchors);
+    anchorQuery.mockImplementation(async (target, sql) => sql.includes("openclaw_schema_meta")
+      ? [{ store_id: target.storeId }] : [{ agent_id: anchors.find((anchor) => anchor.schema === target.schema)!.agentId }]);
+    mocks.readActivationManifest.mockResolvedValue({
+      slug: "tester10", appliedFingerprint: "retained-import", agentId: anchors[0].agentId,
+      agent: { id: anchors[0].agentId, workspace: path.join(testRuntime.dir, "customers/tester10") },
+      accountId: "tester10-coach", mattermostAccount: { botToken: "synthetic-coach-pat" },
+      projectAgents: [{ agentId: anchors[1].agentId, accountId: "tester10-proj-orbit", agent: {
+        id: anchors[1].agentId, workspace: path.join(testRuntime.dir, "customers/tester10/projects/orbit"),
+      } }],
+    });
+    const read = vi.fn(async () => {
+      if (mode === "stale-migration") throw new Error("migration custody changed");
+      return { ...(migrating ? { migration } : {}), anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
+    let release!: () => void;
+    const recorded = new Promise<void>((resolve) => { release = resolve; });
+    const report = vi.fn(async () => recorded);
+    const rpc = mkGatewayRpc({ agentsCreate: vi.fn(async ({ name, workspace }) => {
+      expect(await readLocalAgentAnchors(dir, anchors.map((anchor) => anchor.agentId))).toEqual(anchors);
+      return { ok: true as const, agentId: name, name, workspace };
+    }), channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [
+      { accountId: "tester10-coach", running: true, connected: true },
+      { accountId: "tester10-proj-orbit", running: true, connected: true },
+    ] } })) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ ...(migrating ? { uidForSlug: vi.fn(async () => null) } : {}), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
+    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10");
+    const observed = activation.catch((error) => error);
+    try {
+      if (mode === "quiescing-missing" || mode === "stale-migration") {
+        await expect(activation).rejects.toThrow(mode === "stale-migration" ? "custody changed" : "existing local");
+        expect(rpc.agentsCreate).not.toHaveBeenCalled();
+        expect(report).not.toHaveBeenCalled();
+      } else {
+        await vi.waitFor(() => expect(report).toHaveBeenCalledOnce());
+        expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+        expect(rpc.channelsStart).not.toHaveBeenCalled();
+        expect(read).toHaveBeenCalledWith({ ...(migrating ? { migrationId: migration.migrationId } : { uid: "uid-tester10" }), slug: "tester10" });
+        expect(report).toHaveBeenCalledWith({ uid: "uid-tester10", slug: "tester10", ...(migrating ? { migration } : {}), assignmentEpoch: 0, assignmentState: quiescing ? "quiescing" : "serving", anchors, configuredAgentIds: anchors.map((anchor) => anchor.agentId) });
+        release();
+        await activation;
+        expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+      }
+    } finally {
+      release(); await observed;
+      if (priorState === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = priorState;
+      if (priorConfig) await fs.writeFile(OPENCLAW_CONFIG, priorConfig);
+      else await fs.rm(OPENCLAW_CONFIG, { force: true });
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("defers credential repair until an account import finishes its configuration updates", async () => {
@@ -1162,7 +1234,15 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       const rpc = mkGatewayRpc({ ...rosterRpc(config), agentsDetach,
         channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] } })),
       });
-      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+      tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-import-detach-"));
+      process.env.OPENCLAW_STATE_DIR = tempStateDir;
+      const coach = { agentId: "octogee-tester10-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
+      anchorQuery.mockImplementation(async (_target, sql) => sql.includes("openclaw_schema_meta") ? [{ store_id: coach.storeId }] : [{ agent_id: coach.agentId }]);
+      const client = mkClient({
+        readAgentAnchors: vi.fn(async () => ({ anchors: [coach], assignment: { uid: "uid-tester10", epoch: 0, state: "serving" } })),
+        reportAgentAnchors: vi.fn(async () => undefined),
+      });
+      const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
       await adapter.activateImportedCustomer("tester10");
       expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-tester10-proj-surplus-coach" });
       expect(rpc.agentsDelete).not.toHaveBeenCalled();
@@ -2467,6 +2547,115 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("restores recorded Shared agent identities before agents.create and awaits their durable report before attach completes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-attach-"));
+    const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ database: { engine: "postgres" } }));
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    vi.stubEnv("OPENCLAW_AGENT_STORE_DSN", "synthetic-pg-test");
+    vi.stubEnv("GATEWAY_CLASS", "shared");
+    const anchors = [
+      { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" },
+      { agentId: "octogee-alice-proj-orbit-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" },
+    ];
+    anchorQuery.mockImplementation(async (target, sql) => sql.includes("openclaw_schema_meta")
+      ? [{ store_id: target.storeId }] : [{ agent_id: anchors.find((anchor) => anchor.schema === target.schema)!.agentId }]);
+    const snapshot = aliceSnapshot({ projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "orbit-pat", status: "ready" }] });
+    let release!: () => void;
+    const reported = new Promise<void>((resolve) => { release = resolve; });
+    const read = vi.fn(async () => ({ anchors, assignment: { uid: snapshot.uid, epoch: 0, state: "serving" as const } }));
+    const report = vi.fn(async () => reported);
+    const rpc = mkGatewayRpc({ agentsCreate: vi.fn(async ({ name, workspace }) => {
+      expect(await readLocalAgentAnchors(dir, anchors.map((anchor) => anchor.agentId))).toEqual(anchors);
+      return { ok: true as const, agentId: name, name, workspace };
+    }) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
+    let complete = false;
+    const attaching = adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" }).finally(() => { complete = true; });
+    const observed = attaching.catch((error) => error);
+    try {
+      await vi.waitFor(() => expect(report).toHaveBeenCalledOnce());
+      expect(complete).toBe(false);
+      expect(report).toHaveBeenCalledWith({ uid: snapshot.uid, slug: snapshot.slug, assignmentEpoch: 0, assignmentState: "serving", anchors, configuredAgentIds: anchors.map((anchor) => anchor.agentId) });
+      release();
+      await attaching;
+      expect(read).toHaveBeenCalledWith({ uid: snapshot.uid, slug: snapshot.slug });
+    } finally {
+      release(); await observed; await fs.rm(dir, { recursive: true, force: true });
+      if (priorConfig) await fs.writeFile(OPENCLAW_CONFIG, priorConfig);
+      else await fs.rm(OPENCLAW_CONFIG, { force: true });
+    }
+  });
+
+  it.each(["read", "verify", "report", "local-mismatch"])("refuses Shared attach on %s failure without accepting replacement identities", async (failure) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-refuse-"));
+    const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ database: { engine: "postgres" } }));
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    vi.stubEnv("OPENCLAW_AGENT_STORE_DSN", "synthetic-pg-test");
+    vi.stubEnv("GATEWAY_CLASS", "shared");
+    const anchor = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
+    const snapshot = aliceSnapshot();
+    const replacement = { ...anchor, storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa" };
+    if (failure === "local-mismatch") await landAgentAnchors(dir, [replacement]);
+    anchorQuery.mockImplementation(async (_target, sql) => {
+      if (failure === "verify") throw new Error("synthetic verify failure");
+      return sql.includes("openclaw_schema_meta") ? [{ store_id: anchor.storeId }] : [{ agent_id: anchor.agentId }];
+    });
+    const read = vi.fn(async () => {
+      if (failure === "read") throw new Error("synthetic read failure");
+      return { anchors: [anchor], assignment: { uid: snapshot.uid, epoch: 0, state: "serving" as const } };
+    });
+    const report = vi.fn(async () => { if (failure === "report") throw new Error("synthetic report failure"); });
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
+    try {
+      await expect(adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" })).rejects.toThrow(failure === "local-mismatch" ? "different" : `synthetic ${failure} failure`);
+      if (failure !== "report") expect(rpc.agentsCreate).not.toHaveBeenCalled();
+      expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+      if (failure === "local-mismatch") expect(await readLocalAgentAnchors(dir, [anchor.agentId])).toEqual([replacement]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      if (priorConfig) await fs.writeFile(OPENCLAW_CONFIG, priorConfig);
+      else await fs.rm(OPENCLAW_CONFIG, { force: true });
+    }
+  });
+
+  it.each(["new", "incomplete", "quiescing"])("requires complete verified Shared anchors after first creation (%s)", async (mode) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-new-"));
+    const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ database: { families: { agent: { engine: "postgres" } } } }));
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    vi.stubEnv("GATEWAY_CLASS", "shared");
+    const anchor = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
+    const snapshot = aliceSnapshot();
+    anchorQuery.mockImplementation(async (_target, sql) => sql.includes("openclaw_schema_meta") ? [{ store_id: anchor.storeId }] : [{ agent_id: anchor.agentId }]);
+    const report = vi.fn(async () => undefined);
+    const rpc = mkGatewayRpc({ agentsCreate: vi.fn(async ({ name, workspace }) => {
+      if (mode === "new") await landAgentAnchors(dir, [anchor]);
+      return { ok: true as const, agentId: name, name, workspace };
+    }) });
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot), reportAgentAnchors: report,
+      readAgentAnchors: vi.fn(async () => ({ anchors: [], assignment: { uid: snapshot.uid, epoch: 0, state: mode === "quiescing" ? "quiescing" as const : "serving" as const } })) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn(), isBuilderGateway: () => false });
+    try {
+      const attach = adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "coach-pat" });
+      if (mode === "new") {
+        await attach;
+        expect(report).toHaveBeenCalledWith({ uid: snapshot.uid, slug: snapshot.slug, assignmentEpoch: 0, assignmentState: "serving", anchors: [anchor], configuredAgentIds: [anchor.agentId] });
+        expect(anchorQuery).toHaveBeenCalledWith(anchor, "SELECT agent_id FROM $schema.schema_meta WHERE meta_key = 'primary'");
+      } else {
+        await expect(attach).rejects.toThrow(mode === "incomplete" ? "incomplete" : "serving assignment");
+        expect(report).not.toHaveBeenCalled();
+        if (mode === "quiescing") expect(rpc.agentsCreate).not.toHaveBeenCalled();
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      if (priorConfig) await fs.writeFile(OPENCLAW_CONFIG, priorConfig);
+      else await fs.rm(OPENCLAW_CONFIG, { force: true });
+    }
   });
 
   it.each(["builder", "shared"])("keeps %s account endpoint ownership through a full remount", async (gatewayClass) => {
@@ -5243,14 +5432,29 @@ it.each(['empty', 'initialized-unused', 'initialized-changed', 'agent-store', 'r
 
 it("purges a retired PostgreSQL project while detaching evicted customer stores", async () => {
   const current = { agents: { entries: keyedRoster(["octogee-alice-coach", "octogee-alice-proj-retired-coach", "octogee-stale-coach", "octogee-bob-coach"]) } };
-  await withPostgresAgentConfig(current, async () => {
-    const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
-    const rpc = mkRemovalRpc(current, { agentsDetach });
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
-    await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }, { evictionBatch: ["stale"] });
-    expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-stale-coach" });
-    expect(rpc.agentsDelete).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-alice-proj-retired-coach", deleteFiles: false });
-  });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-eviction-"));
+  const oldStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = dir;
+  const coach = { agentId: "octogee-alice-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" };
+  anchorQuery.mockImplementation(async (_target, sql) => sql.includes("openclaw_schema_meta") ? [{ store_id: coach.storeId }] : [{ agent_id: coach.agentId }]);
+  try {
+    await withPostgresAgentConfig(current, async () => {
+      const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => ({ ok: true as const, agentId }));
+      const rpc = mkRemovalRpc(current, { agentsDetach });
+      const client = mkClient({
+        readAgentAnchors: vi.fn(async () => ({ anchors: [coach], assignment: { uid: "uid-alice", epoch: 0, state: "serving" } })),
+        reportAgentAnchors: vi.fn(async () => undefined),
+      });
+      const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+      await adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }, { evictionBatch: ["stale"] });
+      expect(agentsDetach).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-stale-coach" });
+      expect(rpc.agentsDelete).toHaveBeenCalledExactlyOnceWith({ agentId: "octogee-alice-proj-retired-coach", deleteFiles: false });
+    });
+  } finally {
+    if (oldStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = oldStateDir;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 it("purges a retired configured Builder PostgreSQL project without deleting imported agents", async () => {

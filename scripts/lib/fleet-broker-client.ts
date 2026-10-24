@@ -3,6 +3,7 @@ import { MIGRATION_IMPORT_FINISH_TIMEOUT_MS } from "@octogee/shared/types/fleet-
 import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
   FleetBrokerAgentAnchor,
+  FleetBrokerAgentAnchorMigration,
   FleetBrokerAgentAnchors,
   FleetBrokerGatewayStateAnchor,
   FleetBrokerAssignmentRosterEntry,
@@ -187,8 +188,8 @@ export interface FleetBrokerClient {
   builderRuntimeStatePrune(input: {
     slug: string;
   }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
-  reportAgentAnchors(input: { slug: string; anchors: FleetBrokerAgentAnchor[]; configuredAgentIds: string[]; state?: FleetBrokerGatewayStateAnchor }): Promise<void>;
-  readAgentAnchors(input: { slug: string }): Promise<FleetBrokerAgentAnchors>;
+  reportAgentAnchors(input: { slug: string; uid?: string; migration?: FleetBrokerAgentAnchorMigration; assignmentEpoch?: number; assignmentState?: "serving" | "quiescing"; anchors: FleetBrokerAgentAnchor[]; configuredAgentIds: string[]; state?: FleetBrokerGatewayStateAnchor }): Promise<void>;
+  readAgentAnchors(input: { slug: string; uid?: string; migrationId?: string }): Promise<FleetBrokerAgentAnchors>;
   claimOpenClawBoot(input: { releaseKey: string }): Promise<FleetBrokerOpenClawBootClaim>;
   completeOpenClawBoot(input: { releaseKey: string }): Promise<void>;
   completeOpenClawDoctor(input: { releaseKey: string; requestId: string; verifiedAgentIds: string[] }): Promise<void>;

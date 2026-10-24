@@ -291,10 +291,15 @@ async function resumeSystemConfigWatchForBuilder(
   await enableSystemConfigWatch(OPENCLAW_DIR, slug, expectedGeneration);
 }
 
+function importedActivationOptions(signal?: AbortSignal, migrationId?: string): { signal?: AbortSignal; migrationId?: string } | undefined {
+  return signal || migrationId ? { ...(signal ? { signal } : {}), ...(migrationId ? { migrationId } : {}) } : undefined;
+}
+
 async function activateImportedCustomerForMigration(input: {
   deps: MigrationHandlerDeps;
   slug: string;
   mode: MigrationImportMode;
+  migrationId?: string;
   loadStrategy?: MigrationLoadStrategy;
   signal?: AbortSignal;
 }): Promise<string | undefined> {
@@ -319,9 +324,8 @@ async function activateImportedCustomerForMigration(input: {
       );
     }
   }
-  const activation = signal
-    ? await deps.adapter.activateImportedCustomer(slug, { signal })
-    : await deps.adapter.activateImportedCustomer(slug);
+  const options = importedActivationOptions(signal, input.migrationId);
+  const activation = options ? await deps.adapter.activateImportedCustomer(slug, options) : await deps.adapter.activateImportedCustomer(slug);
   if (loadStrategy === "standard") {
     deps.adapter.recordAppliedFingerprint?.(
       slug,
@@ -949,6 +953,7 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
       const verificationPending = await activateImportedCustomerForMigration({
         deps,
         slug: body.slug,
+        migrationId: body.migrationId,
         mode: "default",
       });
       deps.adapter.writeMountMarker?.(body.slug);
@@ -2161,6 +2166,7 @@ async function activateFinishedRsyncImport(input: {
       verificationPending = await activateImportedCustomerForMigration({
         deps,
         slug: body.slug,
+        migrationId: body.migrationId,
         mode: "final",
         loadStrategy,
         signal,

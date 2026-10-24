@@ -1,3 +1,4 @@
+import { prepareSharedCustomerAgentAnchors } from "./agent-anchor-record.js";
 import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
 import { prepareBuilderProjectAssets } from "./builder-project-assets.js";
 import { createBrokeredProjectBlobHydrator } from "./project-blob-materialization.js";
@@ -307,6 +308,21 @@ function invalidateConfigCache(ctx: BrokerCtx): void {
   ctx.configCache.hash = "";
 }
 
+function postgresAgentStoreConfigured(): boolean {
+  const database = fs.existsSync(OPENCLAW_CONFIG)
+    ? (readOpenClawConfig() as { database?: { engine?: string; families?: { agent?: { engine?: string } } } }).database : undefined;
+  return (database?.families?.agent?.engine ?? database?.engine) === "postgres";
+}
+
+async function prepareCustomerSharedAnchors(ctx: BrokerCtx, input: {
+  uid?: string; slug: string; agentIds: readonly string[]; allowQuiescingExisting?: boolean; migrationId?: string;
+}): Promise<(() => Promise<void>) | undefined> {
+  if (ctx.isBuilderGateway() || !postgresAgentStoreConfigured()) return undefined;
+  const uid = input.uid ?? await ctx.client.uidForSlug(input.slug);
+  if (!uid && !input.migrationId) throw new Error(`Shared imported agent anchors require an assigned owner for ${input.slug}`);
+  return prepareSharedCustomerAgentAnchors({ ...input, uid: uid ?? undefined, migrationId: uid ? undefined : input.migrationId, stateDir: resolveOpenClawStateDir(), broker: ctx.client });
+}
+
 async function releaseAgentsAndInvalidateCache(
   ctx: BrokerCtx,
   agentIds: readonly string[],
@@ -314,9 +330,7 @@ async function releaseAgentsAndInvalidateCache(
   options: { purgeStore?: boolean } = {},
 ): Promise<void> {
   if (agentIds.length === 0) return;
-  const database = fs.existsSync(OPENCLAW_CONFIG)
-    ? (readOpenClawConfig() as { database?: { engine?: string; families?: { agent?: { engine?: string } } } }).database : undefined;
-  const postgres = (database?.families?.agent?.engine ?? database?.engine) === "postgres";
+  const postgres = postgresAgentStoreConfigured();
   const failures: unknown[] = [];
   try {
     for (const agentId of agentIds) {
@@ -1096,6 +1110,9 @@ async function applyAddCustomerConfigPatch(
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
   await callOpts?.brokerProfilesReady;
+  const reportSharedAnchors = await prepareCustomerSharedAnchors(ctx, {
+    uid: snapshot.uid, slug: snapshot.slug, agentIds: brokerAgentIds,
+  });
   await reconcileCustomerRosterAgents(
     ctx,
     snapshot.slug,
@@ -1103,6 +1120,7 @@ async function applyAddCustomerConfigPatch(
     brokerAgentIds,
     customerAgentEntries,
   );
+  await reportSharedAnchors?.();
   await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log, secretMaterial);
   const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
     captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
@@ -1602,8 +1620,9 @@ async function prepareKeyImportDir(slug: string): Promise<string> {
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
-  opts: { signal?: AbortSignal } | undefined,
+  opts: { signal?: AbortSignal; resumeExistingSharedCustody?: boolean; migrationId?: string } | undefined,
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
+  opts ??= {};
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const configuredBuilder = isConfiguredGatewayBuilder(slug);
   const ownerMmUserId = configuredBuilder
@@ -1613,7 +1632,7 @@ async function activateImportedCustomer(
     ctx.log(`[import:${slug}] waiting for the Builder control runtime before roster activation`);
     await waitForAppliedConfigRevision(ctx.rpc, slug, {
       timeoutMs: BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
-      signal: opts?.signal,
+      signal: opts.signal,
       acceptSupersedingRevision: true,
     });
     ctx.log(`[import:${slug}] Builder control runtime is ready for roster activation`);
@@ -1628,6 +1647,9 @@ async function activateImportedCustomer(
   const routingActivationReason = `[import:${slug}] account-level Mattermost binding changed`;
   setRepoSshCommand(path.join(CUSTOMERS_DIR, slug), slug);
   ctx.log(`[import:${slug}] canonical workspace Git metadata ready`);
+  const reportSharedAnchors = await prepareCustomerSharedAnchors(ctx, {
+    slug, agentIds: activationManifestAgentIds(safeManifest), allowQuiescingExisting: opts.resumeExistingSharedCustody, migrationId: opts.migrationId,
+  });
   await deleteSupersededCustomerAgents(ctx, {
     slug,
     evictionSlugs: [],
@@ -1639,9 +1661,10 @@ async function activateImportedCustomer(
     safeManifest.agent,
     ...safeManifest.projectAgents.map((entry) => entry.agent),
   ], `[import:${slug}]`, {
-    signal: opts?.signal,
+    signal: opts.signal,
     waitForAppliedRevision: ctx.isBuilderGateway(),
   });
+  await reportSharedAnchors?.();
   await materializeCustomerBrokerProfiles(
     activationManifestAgentIds(safeManifest),
     slug,
@@ -1666,7 +1689,7 @@ async function activateImportedCustomer(
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
-    signal: opts?.signal,
+    signal: opts.signal,
     log: ctx.log,
     gatewayClass: ctx.isBuilderGateway() ? "builder" : "shared",
     ...(configuredBuilder
@@ -1693,7 +1716,7 @@ async function activateImportedCustomer(
     slug,
     patch,
     secretMaterial,
-    signal: opts?.signal,
+    signal: opts.signal,
     configuredBuilderRouting: configuredBuilder
       ? { accountIds, baseline: routingActivationBaseline }
       : undefined,
@@ -2134,7 +2157,7 @@ export function buildBrokeredLifecycleAdapter(
         if (error.code === "ENOENT") return null;
         throw error;
       });
-      if (manifest) await activateImportedCustomer(ctx, slug, undefined);
+      if (manifest) await activateImportedCustomer(ctx, slug, { resumeExistingSharedCustody: true });
       await setCustomerChannelsRunning(ctx.rpc, slug, true);
     }),
     listExportPaths,

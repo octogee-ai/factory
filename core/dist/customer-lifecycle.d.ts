@@ -227,6 +227,7 @@ export interface CustomerLifecycleAdapter {
     prepareKeyImportDir: (slug: string) => Promise<string>;
     activateImportedCustomer: (slug: string, opts?: {
         signal?: AbortSignal;
+        migrationId?: string;
     }) => Promise<{
         appliedFingerprint: string;
         verificationPending?: string;

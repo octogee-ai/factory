@@ -182,9 +182,18 @@ export interface FleetBrokerGatewayStateAnchor {
   schema: string;
 }
 
+export interface FleetBrokerAgentAnchorMigration {
+  migrationId: string;
+  claimStartedAt: number;
+  sourceGatewayId: string;
+  sourceEpoch: number;
+}
+
 export interface FleetBrokerAgentAnchors {
+  migration?: FleetBrokerAgentAnchorMigration;
   anchors: FleetBrokerAgentAnchor[];
   state?: FleetBrokerGatewayStateAnchor;
+  assignment?: FleetBrokerAssignmentRosterEntry;
 }
 
 export interface FleetBrokerComputerHomeCheckpointUrl {

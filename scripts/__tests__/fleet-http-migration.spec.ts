@@ -1766,7 +1766,7 @@ describe("queued-rsync migration control handlers", () => {
       "chris",
       "ssh-ed25519 TARGET chris@gateway",
     );
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { migrationId: body.migrationId });
     expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
     );
@@ -1836,7 +1836,7 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { migrationId: body.migrationId });
     expect(getBody()).toMatchObject({ migrationId: "mig-github-deferred", slug: "chris", imported: true });
   });
 
@@ -1867,7 +1867,7 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris");
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { migrationId: body.migrationId });
     expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", pendingCloneAppliedFingerprint("fp-chris"));
     expect(getBody()).toMatchObject({ migrationId: "mig-github-owner-runtime", slug: "chris", imported: true });
   });
