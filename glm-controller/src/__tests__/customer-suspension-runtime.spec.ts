@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FieldValue } from "firebase-admin/firestore";
 import {
   assertCustomerRestoreNotInProgress,
   cancelCustomerMigrationsForSuspension,
@@ -48,6 +49,16 @@ describe("assertCustomerRestoreNotInProgress", () => {
 });
 
 describe("releaseCustomerPlacement", () => {
+  it.each(["shared-0", undefined])("clears the migration projection after releasing placement %j", async (gatewayId) => {
+    const { db, writes } = placementDb({ provisioning: { openclaw: {
+      gatewayId, migration: { state: "preparing", phase: "waiting", operationId: "failed-activation" },
+    } } });
+    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+    expect(writes.find(write => write.op === "update")?.data).toEqual(expect.objectContaining({
+      "provisioning.openclaw.migration": FieldValue.delete(),
+    }));
+  });
+
   it.each([null, false, { phase: "dispatched", claimStartedAt: 1 }])("preserves all assignments while a restore fence remains: %j", async (restoreFence) => {
     const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", restoreFence } } });
     await expect(releaseCustomerPlacement(db as never, "uid-1", "shared-0")).rejects.toThrow("customer restore is in progress");

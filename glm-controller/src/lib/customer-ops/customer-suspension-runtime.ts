@@ -101,10 +101,11 @@ export async function releaseCustomerPlacement(
     for (const gatewayId of new Set([capturedGatewayId, currentGatewayId])) {
       if (gatewayId) txn.delete(assignmentRef(gatewayId));
     }
-    if (!user.exists || currentGatewayId === null) return;
+    if (!user.exists) return;
     txn.update(userRef, {
       "provisioning.openclaw.gatewayId": FieldValue.delete(),
       "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
+      "provisioning.openclaw.migration": FieldValue.delete(),
     });
   });
 }
