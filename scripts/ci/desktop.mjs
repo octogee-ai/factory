@@ -34,7 +34,7 @@ try {
         cleaned = true;
       }
     },
-    publish: async record => publishDesktopRelease(record, await resolveRelease(sha), temporary),
+    publish: (record, build) => publishDesktopRelease(record, build, temporary),
   });
   console.log(`Accepted desktop image ${result.desktopImage.name}; immutable artifact ${result.digest}; main manifest unchanged`);
 } finally { rmSync(temporary, { recursive: true, force: true }); }

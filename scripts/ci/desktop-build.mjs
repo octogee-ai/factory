@@ -13,7 +13,7 @@ export async function desktopBuild(options, deps) {
     if (existing) return existing;
     const desktopImage = await deps.desktop(build);
     return deps.publish(validateDesktopRelease({ schemaVersion: 1, sourceSha: options.sourceSha,
-      manifestDigest: build.digest, gatewayDigest: build.manifest.surfaces.gateway['octogee-gateway-builder'], desktopImage }, build));
+      manifestDigest: build.digest, gatewayDigest: build.manifest.surfaces.gateway['octogee-gateway-builder'], desktopImage }, build), build);
   });
 }
 

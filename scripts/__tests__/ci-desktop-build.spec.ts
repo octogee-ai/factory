@@ -21,11 +21,12 @@ function dependencies() {
     publish: vi.fn(async () => ({ desktopImage: artifact, digest: `sha256:${'f'.repeat(64)}` })),
   };
 }
-it('constructs the explicitly requested desktop image after Cloud Build has sealed the main manifest', async () => {
+it('publishes the desktop image with the same immutable main build selected before construction', async () => {
   const deps = dependencies();
   await desktopBuild(options, deps);
+  expect(deps.main).toHaveBeenCalledOnce();
   expect(deps.desktop).toHaveBeenCalledWith(build);
-  expect(deps.publish).toHaveBeenCalledWith(record);
+  expect(deps.publish).toHaveBeenCalledExactlyOnceWith(record, build);
   expect(deps.publish.mock.invocationCallOrder[0]).toBeGreaterThan(deps.desktop.mock.invocationCallOrder[0]);
 });
 it('reuses an existing immutable desktop companion without rebuilding or rewriting it', async () => {
