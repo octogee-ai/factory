@@ -74,6 +74,15 @@ describe("native computer return checkpoint", () => {
     expect(h.update).not.toHaveBeenCalled();
   });
 
+  it("refuses native return recovery when its old target root disappeared", async () => {
+    const h = harness();
+    delete h.docs["gateways/shared"];
+    await expect(prepareNativeComputerReturn(h.deps, input)).rejects.toThrow("native computer return target is unavailable: shared");
+    expect(h.update).not.toHaveBeenCalled();
+    h.source.runtime = "kubernetes";
+    expect(await prepareNativeComputerReturn(h.deps, input)).toBeNull();
+  });
+
   it("waits for acknowledgement of a fresh checkpoint and retains the hold for parking", async () => {
     const h = harness();
     h.source.vmHome.lastCheckpoint = { completedAt: 500 };

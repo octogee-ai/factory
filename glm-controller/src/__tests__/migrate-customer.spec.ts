@@ -1,9 +1,10 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
-import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
+import { createMigrationClient, MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
@@ -239,6 +240,99 @@ function mockNativeReturn(checkpointRequested = false) {
     acknowledgeCompletedSchedulerHandoff: vi.fn(async () => {}),
   };
 }
+
+describe("previous native return cleanup ownership", () => {
+  const privateKey = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+  it.each(["acknowledged", "unready", "retargeted", "abort-failed", "abort-mismatch", "unmount-failed", "unmount-mismatch", "claim-lost", "owner-changed", "missing-preparer", "source-url-claim-lost", "scheduler-owner-changed", "ingress-claim-lost", "target-url-claim-lost"] as const)("cleans the old Shared import before source resume can reclaim PostgreSQL ownership: %s", async scenario => {
+    const source = "builder-alice", target = "shared-green";
+    const h = mkDeps({ sourceGatewayId: source });
+    const native = mockNativeReturn();
+    h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
+    const events: string[] = [];
+    let targetDetached = false;
+    let owner = "shared", claimLost = false, ownerChanged = false;
+    h.ctx.assertActiveClaim = vi.fn(async () => { if (claimLost) throw new Error("fixture operation claim lost"); });
+    h.deps.readUser = vi.fn(async () => ({ slug: "alice", currentGatewayId: ownerChanged ? "foreign-builder" : source }));
+    const prepareAgentStores = vi.fn(async (gatewayId: string, slug: string) => {
+      expect(slug).toBe("alice");
+      events.push(`ownership:${gatewayId}`);
+      if (gatewayId === source) owner = "builder";
+    });
+    h.deps.prepareMigrationAgentStores = scenario === "missing-preparer" ? undefined : vi.fn(async (gatewayId, slug, authority) => {
+      expect(authority?.expectedBuilderUid).toBe("uid-alice");
+      await authority?.assertCurrent();
+      await prepareAgentStores(gatewayId, slug);
+      await authority?.assertCurrent();
+    });
+    const fetch: typeof globalThis.fetch = vi.fn(async (input, init) => {
+      const url = new URL(String(input));
+      const body = JSON.parse(String(init?.body)) as { migrationId: string; slug: string; mode?: string; phase?: string };
+      const reply = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }));
+      if (url.pathname.startsWith("/scheduler/")) {
+        events.push(`scheduler:${url.pathname.endsWith(target) ? target : source}:${body.phase}`);
+        if (url.pathname.endsWith(source) && body.phase === "resume") {
+          if (owner !== "builder") return reply({ error: "source scheduler cannot read foreign PostgreSQL stores" }, 500);
+          ownerChanged = scenario === "scheduler-owner-changed";
+        }
+        return reply({ operationId: body.migrationId, phase: body.phase, agentIds: [], drained: true });
+      }
+      if (url.pathname.startsWith("/abort-rsync-import/")) {
+        events.push(`abort:${body.mode}`);
+        if (scenario === "abort-failed") return reply({ error: "import cleanup failed" }, 500);
+        return reply({ migrationId: scenario === "abort-mismatch" ? "foreign-import" : body.migrationId, slug: body.slug, imported: false });
+      }
+      if (url.pathname.startsWith("/unmount/")) {
+        events.push("unmount");
+        if (owner !== "shared") return reply({ error: "permission denied for canonical agent schema" }, 500);
+        if (scenario === "unmount-failed") return reply({ error: "Native detach incomplete" }, 500);
+        targetDetached = true;
+        claimLost = scenario === "claim-lost";
+        ownerChanged = scenario === "owner-changed";
+        return reply({ migrationId: scenario === "unmount-mismatch" ? "foreign-import" : body.migrationId, slug: body.slug, unmounted: true });
+      }
+      if (url.pathname.startsWith("/resume/")) {
+        events.push("resume");
+        if (!targetDetached) return reply({ error: "source resumed before old target cleanup" }, 500);
+        claimLost = scenario === "ingress-claim-lost";
+        return reply({ resumed: true });
+      }
+      throw new Error(`unexpected migration RPC ${url.pathname}`);
+    });
+    const transferState = vi.fn<MigrationClient["transferState"]>();
+    h.deps.buildClient = resolveGatewayUrl => createMigrationClient({ privateKey, resolveGatewayUrl, fetch, prepareAgentStores, transferState });
+    h.deps.resolveGatewayUrl = vi.fn(async (gatewayId, options) => {
+      if (scenario === "unready" && gatewayId === target && options?.allowUnready !== true) throw new Error("old Shared target requires its exact recovery transport");
+      if (gatewayId === source && scenario === "source-url-claim-lost" || gatewayId === target && scenario === "target-url-claim-lost") claimLost = true;
+      return `http://${gatewayId}.fixture:3003`;
+    });
+    h.deps.resolveSourcePlacement = vi.fn(async () => { throw new Error("fixture forward boundary reached"); });
+    const operation = mkOp({ attempts: 21, input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: source, toGatewayId: scenario === "retargeted" ? "shared-new" : target, source: "builder-activation-lease" },
+      schedulerHandoff: { migrationId: "mig-op-1:scheduler:21:claim:1000", uid: "uid-alice", slug: "alice", fromGatewayId: source, toGatewayId: target } });
+    const result = await createMigrateCustomerHandler(h.deps)(operation, h.ctx);
+    if (scenario === "acknowledged" || scenario === "unready" || scenario === "retargeted") {
+      expect(events).toEqual([`scheduler:${target}:abort`, "abort:keys", "abort:pre", "abort:final", "unmount", `ownership:${source}`, `scheduler:${source}:resume`, `ownership:${source}`, "resume"]);
+      expect(result).toMatchObject({ success: false, error: "fixture forward boundary reached" });
+      expect(h.deps.resolveSourcePlacement).toHaveBeenCalledOnce();
+    } else {
+      expect(result.success).toBe(false);
+      if (["source-url-claim-lost", "scheduler-owner-changed", "ingress-claim-lost"].includes(scenario)) {
+        expect(prepareAgentStores).toHaveBeenCalledTimes(scenario === "ingress-claim-lost" ? 2 : 1);
+        if (scenario === "source-url-claim-lost") expect(events).not.toContain(`scheduler:${source}:resume`);
+        if (scenario !== "ingress-claim-lost") expect(events).not.toContain("resume");
+      } else {
+        expect(prepareAgentStores).not.toHaveBeenCalled();
+        if (scenario === "target-url-claim-lost") expect(fetch).not.toHaveBeenCalled();
+        expect(events).not.toContain(`scheduler:${source}:resume`);
+        expect(events).not.toContain("resume");
+      }
+      expect(h.deps.resolveSourcePlacement).not.toHaveBeenCalled();
+    }
+    expect(h.deps.resolveGatewayUrl).toHaveBeenCalledWith(target, { allowUnready: true });
+    expect(transferState).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+});
 
 describe("PostgreSQL agent context transfer", () => {
   it.each(["pristine", "released", "claim-lost", "authority-lost", "missing-preparer"] as const)("restores Shared database access before resolving source readiness: %s", async scenario => {

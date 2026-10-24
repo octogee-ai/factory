@@ -331,7 +331,9 @@ export async function prepareNativeComputerReturn(
     deps.db.collection(GATEWAYS_COLLECTION).doc(input.toGatewayId).get(),
     deps.db.collection(GATEWAYS_COLLECTION).doc(input.fromGatewayId).get(),
   ]);
-  if (source.data()?.runtime !== "gce-vm" || target.data()?.gatewayClass !== "shared") return null;
+  if (source.data()?.runtime !== "gce-vm") return null;
+  if (!target.exists) throw new Error(`native computer return target is unavailable: ${input.toGatewayId}`);
+  if (target.data()?.gatewayClass !== "shared") return null;
   assertOwner(root.data(), input);
   let requestedAt = returnRequest(source.data(), input.operationId);
   return {

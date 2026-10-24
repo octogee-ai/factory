@@ -1,7 +1,8 @@
 /* eslint-disable sonarjs/sql-queries -- Disposable fixture identifiers are escaped; values use query parameters. */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import pg from "pg";
 import { describe, expect, it, vi } from "vitest";
+import { createMigrationClient } from "./fleet-migration-client.js";
 import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer } from "./agent-store-credentials.js";
 
 const dsn = process.env.OCTOGEE_TEST_POSTGRES_DSN;
@@ -88,6 +89,67 @@ describe.skipIf(!dsn)("claimed PostgreSQL source recovery", () => {
       await blocker.query("ROLLBACK");
       await moving?.catch(() => {});
       await shared?.end(); await source?.end(); await blocker.end();
+      try {
+        if (fixtureVerifiedFresh) {
+          await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
+          const owner = await admin.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [fixtureRoles[2]]);
+          if (owner.rowCount) await admin.query(`REVOKE CONNECT, CREATE ON DATABASE ${pg.escapeIdentifier(scope)} FROM ${pg.escapeIdentifier(fixtureRoles[2]!)}`);
+          for (const role of fixtureRoles) await admin.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(role)}`);
+        }
+      } finally { await admin.end(); }
+    }
+  }, 30_000);
+});
+
+
+describe.skipIf(!dsn)("native return PostgreSQL source resume", () => {
+  it("removes old Shared access while preserving the canonical store UUID and history", async () => {
+    const nonce = randomUUID().replaceAll("-", "");
+    const builder = { uid: `return-${nonce}`, slug: `return-${nonce}` };
+    const schema = `return_${nonce}`, sharedId = `shared-${nonce}`, sourceId = `builder-${nonce}`;
+    const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
+    const fixtureRoles = [roleFor("gateway", `${scope}:${sharedId}`), roleFor("gateway", `${scope}:${sourceId}`), roleFor("builder", `${scope}:${builder.uid}`)];
+    const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
+    const transfer = createAgentStoreOwnershipTransferer(dsn!);
+    const admin = new pg.Client({ connectionString: dsn! });
+    await admin.connect();
+    let shared: pg.Client | undefined, source: pg.Client | undefined;
+    let fixtureVerifiedFresh = false;
+    const table = (name: string) => `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(name)}`;
+    const storeId = randomUUID(), history = '{"text":"retained native return history"}';
+    try {
+      expect((await admin.query("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [fixtureRoles])).rows).toEqual([]);
+      expect((await admin.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [schema])).rows).toEqual([]);
+      fixtureVerifiedFresh = true;
+      shared = new pg.Client({ connectionString: await provision({ gatewayClass: "shared", gatewayId: sharedId, token: "synthetic-shared" }, async () => {}) });
+      source = new pg.Client({ connectionString: await provision({ gatewayClass: "builder", gatewayId: sourceId, token: "synthetic-builder", builder }, async () => {}) });
+      await shared.connect(); await source.connect();
+      await shared.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      await shared.query(`CREATE TABLE ${table("schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT, store_id TEXT)`);
+      await shared.query(`INSERT INTO ${table("schema_meta")} VALUES ('primary', 'agent', $1, $2)`, [`octogee-${builder.slug}-coach`, storeId]);
+      await shared.query(`CREATE TABLE ${table("session_nodes")} (entry_json TEXT)`);
+      await shared.query(`INSERT INTO ${table("session_nodes")} VALUES ($1)`, [history]);
+      const before = await admin.query("SELECT oid FROM pg_namespace WHERE nspname = $1", [schema]);
+      expect((await shared.query(`SELECT store_id FROM ${table("schema_meta")}`)).rows).toEqual([{ store_id: storeId }]);
+      const prepareAgentStores = vi.fn(async (gatewayId: string, slug: string) => {
+        expect(gatewayId).toBe(sourceId); expect(slug).toBe(builder.slug);
+        await transfer(builder, "builder");
+      });
+      const fetch: typeof globalThis.fetch = vi.fn(async () => {
+        expect(prepareAgentStores).toHaveBeenCalledOnce();
+        await expect(shared!.query(`SELECT * FROM ${table("schema_meta")}`)).rejects.toMatchObject({ code: "42501" });
+        return new Response(JSON.stringify({ resumed: true }));
+      });
+      const privateKey = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+      const client = createMigrationClient({ privateKey, resolveGatewayUrl: () => "http://synthetic-source.invalid", fetch, prepareAgentStores,
+        transferState: vi.fn() });
+      await client.resume({ gatewayId: sourceId, slug: builder.slug, migrationId: `return-${nonce}` });
+      expect(fetch).toHaveBeenCalledOnce();
+      expect((await source.query(`SELECT store_id FROM ${table("schema_meta")}`)).rows).toEqual([{ store_id: storeId }]);
+      expect((await source.query(`SELECT entry_json FROM ${table("session_nodes")}`)).rows).toEqual([{ entry_json: history }]);
+      expect((await admin.query("SELECT oid FROM pg_namespace WHERE nspname = $1", [schema])).rows).toEqual(before.rows);
+    } finally {
+      await shared?.end(); await source?.end();
       try {
         if (fixtureVerifiedFresh) {
           await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
