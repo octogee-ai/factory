@@ -8,6 +8,7 @@ import type {
   Operation,
   OperationStep,
 } from "@octogee/shared/types/glm";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 
@@ -15,6 +16,13 @@ export type OperationFailureClassification = "transient" | "terminal";
 
 export function isGatewayStartupUnavailable(error: string | undefined): boolean {
   return typeof error === "string" && /\b(?:agent \S+ (?:has not completed startup inspection and preparation|startup preparation was superseded)|gateway starting; retry shortly)\b/i.test(error);
+}
+
+export function isAgentStoreRetirementSessionDrain(error: unknown, gatewayId?: string): boolean {
+  if (typeof error !== "string") return false;
+  const match = /^agent-store credential retirement failed \(records preserved for retry\): Agent-store Gateway (\S+) still has database sessions$/.exec(error);
+  const failedGatewayId = match?.[1];
+  return isValidGatewayId(failedGatewayId) && (gatewayId === undefined || failedGatewayId === gatewayId);
 }
 
 // Explicit allowlist, terminal by default: "TRUE validation failures... fail
@@ -67,7 +75,7 @@ export function classifyOperationFailure(
   error: string | undefined,
 ): OperationFailureClassification {
   if (!error) return "terminal";
-  if (isGatewayStartupUnavailable(error)) return "transient";
+  if (isGatewayStartupUnavailable(error) || isAgentStoreRetirementSessionDrain(error)) return "transient";
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(error))
     ? "transient"
     : "terminal";

@@ -16,6 +16,38 @@ import {
   verifiedDeletionCompletion,
 } from "../operation-retry";
 
+describe("Gateway credential retirement drain", () => {
+  const error = "agent-store credential retirement failed (records preserved for retry): " +
+    "Agent-store Gateway shared-0 still has database sessions";
+
+  it("retries the stopped Gateway's remaining sessions with its claim and failed-attempt evidence intact", () => {
+    const steps = [
+      { name: "helm-uninstall", status: "done" as const },
+      { name: "revoke-agent-store-credentials", status: "failed" as const, error: "Agent-store Gateway shared-0 still has database sessions" },
+    ];
+    expect(classifyOperationFailure(error)).toBe("transient");
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "retire-gateway", startedAt: 1_000,
+        input: { gatewayId: "shared-0", retirementClaimVersion: 1 } },
+      result: { success: false, error, steps }, steps, now: 2_000,
+    });
+    expect(update).toMatchObject({ status: "pending", attempts: 1, nextAttemptAt: 32_000,
+      attemptHistory: [{ attempt: 1, classification: "transient", error, steps }] });
+    expect(update).not.toHaveProperty("input");
+  });
+
+  it.each([
+    "agent-store credential retirement failed (records preserved for retry): permission denied",
+    "agent-store credential retirement failed (records preserved for retry): Agent-store Gateway shared-0 ownership changed",
+    "Agent-store Gateway shared-0 still has database sessions",
+    `${error}; permission denied`,
+    error.replace("shared-0", "SHARED-0"),
+    error.replace("shared-0", "shared/foreign"),
+  ])("keeps unrelated or malformed credential failures terminal: %s", (failure) => {
+    expect(classifyOperationFailure(failure)).toBe("terminal");
+  });
+});
+
 describe("migration retry queue position", () => {
   it("requeues a fully rolled-back migration at the time of each failed attempt", () => {
     const update = buildOperationCompletionUpdate({
