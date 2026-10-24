@@ -454,7 +454,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   });
 
-  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "pre-cutover", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
+  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-import-"));
     const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
     const priorState = process.env.OPENCLAW_STATE_DIR;
@@ -465,12 +465,17 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       { agentId: "octogee-tester10-coach", storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_agent_92c817cc770f466d" },
       { agentId: "octogee-tester10-proj-orbit-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" },
     ];
-    const migrating = mode === "pre-cutover" || mode === "stale-migration";
+    const migrating = mode.startsWith("pre-cutover") || mode === "stale-migration";
     const migration = { migrationId: "mig-move", claimStartedAt: 10, sourceGatewayId: "source", sourceEpoch: 0 };
     const quiescing = mode.startsWith("quiescing") || migrating;
-    if (mode === "quiescing-resume" || migrating) await landAgentAnchors(dir, anchors);
+    if (mode === "quiescing-resume" || mode === "pre-cutover" || mode === "stale-migration") await landAgentAnchors(dir, anchors);
+    if (mode === "pre-cutover-partial") await landAgentAnchors(dir, [anchors[0]]);
+    if (mode === "pre-cutover-local-conflict") await landAgentAnchors(dir, [{ ...anchors[0], storeId: "11111111-2222-4333-8444-555555555555", schema: "octogee_agent_1111111122224333" }]);
+    const priorLocalCoach = await fs.readFile(path.join(dir, "agents", anchors[0].agentId, "agent", "openclaw-agent.sqlite")).catch(() => undefined);
+    const priorLocalProject = await fs.readFile(path.join(dir, "agents", anchors[1].agentId, "agent", "openclaw-agent.sqlite")).catch(() => undefined);
     let firstAnchorQuery = mode === "activate";
     anchorQuery.mockImplementation(async (target, sql) => {
+      if (mode === "pre-cutover-missing-pg" && target.schema === anchors[1].schema) throw Object.assign(new Error("relation missing"), { code: "42P01" });
       if (firstAnchorQuery) {
         firstAnchorQuery = false;
         await new Promise(resolve => setTimeout(resolve, 1_100));
@@ -488,7 +493,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     });
     const read = vi.fn(async () => {
       if (mode === "stale-migration") throw new Error("migration custody changed");
-      return { ...(migrating ? { migration } : {}), anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
+      return { ...(migrating && mode !== "pre-cutover-no-claim" ? { migration: mode === "pre-cutover-wrong-claim" ? { ...migration, migrationId: "mig-other" } : migration } : {}), anchors: mode === "pre-cutover-missing-record" ? anchors.slice(0, 1) : anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
     let release!: () => void;
     const recorded = new Promise<void>((resolve) => { release = resolve; });
     let reportStarted!: () => void;
@@ -505,10 +510,20 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10");
     const observed = activation.catch((error) => error);
     try {
-      if (mode === "quiescing-missing" || mode === "stale-migration") {
-        await expect(activation).rejects.toThrow(mode === "stale-migration" ? "custody changed" : "existing local");
+      const refusals: Partial<Record<string, string>> = {
+        "quiescing-missing": "existing local", "stale-migration": "custody changed",
+        "pre-cutover-missing-record": "every recorded agent identity", "pre-cutover-local-conflict": "different identity",
+        "pre-cutover-wrong-claim": "migration anchor authority", "pre-cutover-no-claim": "migration anchor authority", "pre-cutover-missing-pg": "is missing",
+      };
+      const refusal = refusals[mode];
+      if (refusal) {
+        await expect(activation).rejects.toThrow(refusal);
         expect(rpc.agentsCreate).not.toHaveBeenCalled();
         expect(report).not.toHaveBeenCalled();
+        if (priorLocalProject) expect(await fs.readFile(path.join(dir, "agents", anchors[1].agentId, "agent", "openclaw-agent.sqlite"))).toEqual(priorLocalProject);
+        else await expect(fs.stat(path.join(dir, "agents", anchors[1].agentId, "agent", "openclaw-agent.sqlite"))).rejects.toThrow();
+        if (priorLocalCoach) expect(await fs.readFile(path.join(dir, "agents", anchors[0].agentId, "agent", "openclaw-agent.sqlite"))).toEqual(priorLocalCoach);
+        else await expect(fs.stat(path.join(dir, "agents", anchors[0].agentId, "agent", "openclaw-agent.sqlite"))).rejects.toThrow();
       } else {
         await Promise.race([
           reportEntered,
@@ -522,6 +537,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         release();
         await activation;
         expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+        if (priorLocalCoach) expect(await fs.readFile(path.join(dir, "agents", anchors[0].agentId, "agent", "openclaw-agent.sqlite"))).toEqual(priorLocalCoach);
       }
     } finally {
       release(); await observed;

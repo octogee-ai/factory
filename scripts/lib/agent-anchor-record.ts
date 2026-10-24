@@ -127,7 +127,8 @@ export async function prepareSharedCustomerAgentAnchors(input: SharedCustomerAge
   const agentIds = [...new Set(input.agentIds)].sort();
   const { recorded, uid, assignment } = await readSharedAnchorAuthority(input);
   const assignmentState = assignment.state;
-  const quiescingExisting = assignmentState === "quiescing";
+  const migrationImport = input.migrationId !== undefined && recorded.migration?.migrationId === input.migrationId;
+  const quiescingExisting = assignmentState === "quiescing" && !migrationImport;
   const assignmentEpoch = assignment.epoch;
   const expected = recorded.anchors.filter((anchor) => agentIds.includes(anchor.agentId));
   if (expected.some((anchor) => !isAgentAnchor(anchor)) || new Set(expected.map((anchor) => anchor.agentId)).size !== expected.length) {
@@ -152,6 +153,9 @@ export async function prepareSharedCustomerAgentAnchors(input: SharedCustomerAge
   const local = await assertRecordedIdentities();
   if (quiescingExisting && (expected.length !== agentIds.length || local.length !== agentIds.length)) {
     throw new Error(`Shared quiescing resume requires existing local and recorded identities for ${slug}`);
+  }
+  if (migrationImport && expected.length !== agentIds.length) {
+    throw new Error(`Shared migration import requires every recorded agent identity for ${slug}`);
   }
   for (const anchor of new Map([...local, ...expected].map((anchor) => [anchor.agentId, anchor])).values()) {
     await verifyAgentAnchorInPostgres(anchor);
