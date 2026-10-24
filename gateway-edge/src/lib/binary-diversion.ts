@@ -290,7 +290,7 @@ export async function divertWorktreeBinaries(
   customerDir: string,
   target: WorkspaceBlobTarget,
   deps: DivertBinariesDeps = DEFAULT_DEPS,
-  options: { retainLocalFiles?: boolean } = {},
+  options: { retainLocalFiles?: boolean; excludePaths?: string[] } = {},
 ): Promise<DivertBinariesResult> {
   const status = await deps.gitStatus(customerDir, { untracked: "all" });
   if (!status.ok) {
@@ -330,6 +330,7 @@ export async function divertWorktreeBinaries(
 
   const candidates = new Set([...status.entries.filter(entry => entry.change !== "deleted").map(entry => entry.path), ...assetPaths]);
   for (const name of candidates) {
+    if (options.excludePaths?.some(excluded => name === excluded || name.startsWith(`${excluded}/`))) continue;
     if (!isDivertablePath(name)) continue;
     try {
       const divertedBlob = await divertBinaryEntry(customerDir, name, target, deps, { retainLocalFiles: options.retainLocalFiles, knownAsset: assetPaths.has(name), materializedManifest: materializedManifests.get(name) });

@@ -84,7 +84,7 @@ interface SharedPersistenceDeps {
   resolveCustomer: typeof resolveCustomerDir;
   resolveProject: typeof resolveProjectDir;
   commit: typeof commitAndPushWorkspace;
-  divert: (dir: string, target: WorkspaceBlobTarget) => ReturnType<typeof divertWorktreeBinaries>;
+  divert: (dir: string, target: WorkspaceBlobTarget, options?: { excludePaths: string[] }) => ReturnType<typeof divertWorktreeBinaries>;
   trustedGitea: typeof isTrustedGiteaCustomerCheckout;
 }
 
@@ -127,7 +127,7 @@ function checkpointAssignmentEpoch(assignments: FleetBrokerAssignmentRosterEntry
 const sharedDefaults: SharedPersistenceDeps = {
   readCustomer: readSharedCustomer, resolveCustomer: resolveCustomerDir, resolveProject: resolveProjectDir,
   commit: commitAndPushWorkspace, trustedGitea: isTrustedGiteaCustomerCheckout,
-  divert: (dir, target) => divertWorktreeBinaries(dir, target, undefined, { retainLocalFiles: target.projectSlug !== null }),
+  divert: (dir, target, options) => divertWorktreeBinaries(dir, target, undefined, { retainLocalFiles: target.projectSlug !== null, ...options }),
 };
 
 function sharedGiteaProjects(customer: FleetBrokerUserSnapshot): Map<string, string> {
@@ -172,10 +172,11 @@ export async function persistSharedCustomerFiles(input: { root: string; slug: st
         assertCurrent,
         beforeCommit: async () => {
           await assertCurrent();
+          const excludePaths = project === null ? ["projects"] : [];
           const gcsPrefix = project ? `customers/${input.slug}/projects/${project}` : `customers/${input.slug}`;
-          const result = await deps.divert(dir, { slug: input.slug, projectSlug: project, gcsPrefix });
+          const result = await deps.divert(dir, { slug: input.slug, projectSlug: project, gcsPrefix }, { excludePaths });
           return result.failures.length ? { ok: false, error: { code: "BLOB_DIVERSION_FAILED", cwd: dir, paths: result.failedPaths } }
-            : { ok: true, excludePaths: result.diverted.map(blob => blob.path) };
+            : { ok: true, excludePaths: [...excludePaths, ...result.diverted.map(blob => blob.path)] };
         },
       });
       if (!saved.ok) throw new Error(`Shared checkpoint failed: ${saved.error.code}`);

@@ -152,6 +152,20 @@ export interface CommitResult {
   empty: boolean;
 }
 
+async function stageWorkspaceChanges(customerDir: string, excluded: string[]): Promise<GitRunOk | GitFailure> {
+  if (!excluded.length) return runGit(customerDir, ["add", "-A"]);
+  const changes = await runGit(customerDir, ["ls-files", "--modified", "--deleted", "--others", "--exclude-standard", "-z", "--", ".", ...excluded.map(file => `:(exclude,literal)${file}`)]);
+  if (!changes.ok) return changes;
+  const paths = [...new Set(changes.stdout.split(NUL).filter(Boolean))];
+  if (paths.length) {
+    const added = await runGit(customerDir, ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
+      input: paths.map(file => `:(literal)${file}${NUL}`).join(""),
+    });
+    if (!added.ok) return added;
+  }
+  return runGit(customerDir, ["rm", "-r", "--cached", "--ignore-unmatch", "--", ...excluded.map(file => `:(literal)${file}`)]);
+}
+
 export async function gitCommit(
   customerDir: string,
   options: { message: string; author: CommitAuthor; excludePaths?: string[] },
@@ -162,12 +176,8 @@ export async function gitCommit(
   }
 
   const excluded = options.excludePaths ?? [];
-  const addRes = await runGit(customerDir, ["add", "-A", ...(excluded.length ? ["--", ".", ...excluded.map(file => `:(exclude,literal)${file}`)] : [])]);
-  if (!addRes.ok) return addRes;
-  if (excluded.length) {
-    const removed = await runGit(customerDir, ["rm", "--cached", "--ignore-unmatch", "--", ...excluded.map(file => `:(literal)${file}`)]);
-    if (!removed.ok) return removed;
-  }
+  const staged = await stageWorkspaceChanges(customerDir, excluded);
+  if (!staged.ok) return staged;
 
 const statusRes = await runGit(customerDir, excluded.length ? ["diff", "--cached", "--name-only", "-z"] : ["status", "--porcelain=v1", "-z"]);
   if (!statusRes.ok) return statusRes;
@@ -1049,7 +1059,7 @@ async function unsafeLocalRepositoryConfigKey(cwd: string): Promise<string | nul
 async function runGit(
   cwd: string,
   args: ReadonlyArray<string>,
-  options: { timeoutMs?: number; githubToken?: string; noEdit?: boolean } = {},
+  options: { timeoutMs?: number; githubToken?: string; noEdit?: boolean; input?: string } = {},
 ): Promise<GitRunOk | { ok: false; error: WorkspaceGitError }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const unsafeConfigKey = await unsafeLocalRepositoryConfigKey(cwd);
@@ -1072,13 +1082,14 @@ async function runGit(
     const stderrChunks: Buffer[] = [];
     let timedOut = false;
     let outputCapped = false;
+    let inputError: Error | undefined;
 
     let proc: ReturnType<typeof spawn>;
     try {
       
       proc = spawn("/usr/bin/git", fullArgs, {
         cwd,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         env: { ...workspaceGitEnvironment(process.env, cwd, options.githubToken),
           ...(options.noEdit ? { GIT_EDITOR: "/usr/bin/true" } : {}),
         },
@@ -1144,8 +1155,16 @@ async function runGit(
         });
         return;
       }
+      if (inputError) {
+        resolve({ ok: false, error: { code: "INTERNAL", message: inputError.message } });
+        return;
+      }
       resolve({ ok: true, stdout, stderr });
     });
+    if (options.input !== undefined) {
+      proc.stdin!.on("error", error => { inputError = error; });
+      proc.stdin!.end(options.input);
+    }
   });
 }
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
@@ -70,7 +70,7 @@ beforeEach(() => {
   reviewed = { authenticated: true, namespace: "octogee-test", saName: "octogee-gw-shared-one", audiences: ["octogee-api"] };
   _setGatewayTokenReviewerForTests(async provided => provided === "workload-token" ? reviewed : { authenticated: false });
   const ssh = path.join(root, "ssh");
-  writeFileSync(ssh, `#!/bin/sh\nfor last; do :; done\ncase "$last" in\n` + ["workspace", "demo"].flatMap(name => ["upload", "receive"].map(op =>
+  writeFileSync(ssh, `#!/bin/sh\nfor last; do :; done\ncase "$last" in\n` + ["workspace", "demo", "other"].flatMap(name => ["upload", "receive"].map(op =>
     `  "git-${op}-pack 'alice/${name}.git'") exec /usr/bin/git-${op}-pack '${remoteRoot}/${name}.git';;\n`)).join("") + "  *) exit 91;;\nesac\n", { mode: 0o700 });
   vi.stubEnv("TEST_GIT_SSH", ssh);
   snapshot = { uid: "uid-alice", slug: "alice", gatewayId: "shared-one", status: "complete", projects: [{ projectSlug: "demo", giteaRepoName: "demo", provisioningState: "active" }] };
@@ -93,6 +93,82 @@ it("checkpoints exact Shared coach and Gitea project persona bytes for a cold cl
   expect((await flush()).status).toBe(200);
   expect(restored("workspace")).toEqual(Buffer.from(personas.workspace));
   expect(restored("demo")).toEqual(Buffer.from(personas.demo));
+});
+
+it.each(["missing", "stale"])("keeps nested project histories out of a %s workspace ignore policy", async policy => {
+  const other = checkout("other");
+  snapshot.projects = [...snapshot.projects as object[], { projectSlug: "other", giteaRepoName: "other", provisioningState: "active" }];
+  const demo = path.join(customer, "projects/demo");
+  for (const dir of [demo, other]) {
+    writeFileSync(path.join(dir, "deleted.md"), "delete this published project file\n");
+    git(dir, "add", "."); git(dir, "commit", "-m", "published project baseline");
+    git(dir, "push", path.join(remoteRoot, `${path.basename(dir)}.git`), "main");
+    rmSync(path.join(dir, "deleted.md"));
+    writeFileSync(path.join(dir, "unpublished.md"), `local-only ${path.basename(dir)}\n`);
+  }
+  const prior = git(demo, "rev-parse", "HEAD");
+  git(customer, "update-index", "--add", "--cacheinfo", "160000", prior, "projects/retired");
+  git(customer, "update-index", "--add", "--cacheinfo", "160000", prior, "projects/demo");
+  git(customer, "commit", "-m", "legacy workspace project gitlinks");
+  git(customer, "push", path.join(remoteRoot, "workspace.git"), "main");
+  if (policy === "missing") rmSync(path.join(customer, ".gitignore"));
+  else writeFileSync(path.join(customer, ".gitignore"), "# legacy user policy\n*.tmp\n");
+  mkdirSync(path.join(customer, "projects/.octogee-state"));
+  writeFileSync(path.join(customer, "projects/.octogee-state/runtime.json"), "{\"runtime\":true}\n");
+  writeFileSync(path.join(customer, "deleted.md"), "workspace deletion\n");
+  git(customer, "add", "deleted.md"); git(customer, "commit", "-m", "workspace deletion baseline");
+  rmSync(path.join(customer, "deleted.md"));
+
+  expect((await flush()).status).toBe(200);
+  const heads = ["workspace", "demo", "other"].map(name => git(path.join(remoteRoot, `${name}.git`), "rev-parse", "main"));
+  expect((await flush()).status).toBe(200);
+  expect(["workspace", "demo", "other"].map(name => git(path.join(remoteRoot, `${name}.git`), "rev-parse", "main"))).toEqual(heads);
+  expect(restored("workspace")).toEqual(Buffer.from(personas.workspace));
+  expect(git(path.join(root, "restored/workspace"), "ls-files").split("\n").filter(name => name === "projects" || name.startsWith("projects/"))).toEqual([]);
+  expect(existsSync(path.join(root, "restored/workspace/deleted.md"))).toBe(false);
+  for (const name of ["demo", "other"]) {
+    restored(name);
+    expect(readFileSync(path.join(root, `restored/${name}/unpublished.md`), "utf8")).toBe(`local-only ${name}\n`);
+    expect(existsSync(path.join(root, `restored/${name}/deleted.md`))).toBe(false);
+    expect(readFileSync(path.join(customer, `projects/${name}/unpublished.md`), "utf8")).toBe(`local-only ${name}\n`);
+  }
+  expect(readFileSync(path.join(customer, "projects/demo/IDENTITY.md"), "utf8")).toBe(personas.demo);
+  expect(existsSync(path.join(customer, "projects/.octogee-state/runtime.json"))).toBe(true);
+});
+
+it("still refuses a workspace symlink outside the reserved projects namespace", async () => {
+  const outside = path.join(root, "outside.txt"); writeFileSync(outside, "private\n");
+  symlinkSync(outside, path.join(customer, "escape.txt"));
+  const before = git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main");
+  expect((await flush()).status).toBe(503);
+  expect(git(path.join(remoteRoot, "workspace.git"), "rev-parse", "main")).toBe(before);
+  expect(readFileSync(outside, "utf8")).toBe("private\n");
+});
+
+it.each(["directory-to-file", "file-to-directory"])("checkpoints a 40-file %s replacement with the projects boundary", async direction => {
+  const entry = path.join(customer, "replacement");
+  const populate = () => {
+    mkdirSync(entry);
+    for (let index = 0; index < 40; index++) writeFileSync(path.join(entry, `${index}.md`), `file ${index}\n`);
+  };
+  if (direction === "directory-to-file") populate();
+  else writeFileSync(entry, "old regular file\n");
+  git(customer, "add", "replacement"); git(customer, "commit", "-m", "replacement baseline");
+  git(customer, "push", path.join(remoteRoot, "workspace.git"), "main");
+  rmSync(entry, { recursive: true });
+  if (direction === "directory-to-file") writeFileSync(entry, "replacement text\n");
+  else populate();
+  writeFileSync(path.join(customer, ":(glob)*.md"), "literal pathspec name\n");
+  writeFileSync(path.join(customer, "line\nbreak.md"), "NUL-delimited path\n");
+
+  expect((await flush()).status).toBe(200);
+  expect(restored("workspace")).toEqual(Buffer.from(personas.workspace));
+  const clone = path.join(root, "restored/workspace");
+  if (direction === "directory-to-file") expect(readFileSync(path.join(clone, "replacement"), "utf8")).toBe("replacement text\n");
+  else for (let index = 0; index < 40; index++) expect(readFileSync(path.join(clone, "replacement", `${index}.md`), "utf8")).toBe(`file ${index}\n`);
+  expect(readFileSync(path.join(clone, ":(glob)*.md"), "utf8")).toBe("literal pathspec name\n");
+  expect(readFileSync(path.join(clone, "line\nbreak.md"), "utf8")).toBe("NUL-delimited path\n");
+  expect(git(clone, "ls-files").split("\n").some(name => name.startsWith("projects/"))).toBe(false);
 });
 
 it("retains local files on remote failure and pushes the existing commit on retry", async () => {
