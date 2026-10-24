@@ -5,6 +5,7 @@ export const JOBS = {
   glmController: "glm-controller",
   tests: "tests",
   acceptance: "acceptance",
+  artifactWorker: "artifact-worker",
   scripts: "scripts",
   core: "core",
   shared: "shared",
@@ -82,6 +83,7 @@ export const UNIT_PACKAGES: readonly UnitPackage[] = [
   },
   { name: JOBS.tests, dir: "tests", typecheck: TYPECHECK },
   { name: JOBS.acceptance, dir: "acceptance", typecheck: TYPECHECK },
+  { name: JOBS.artifactWorker, dir: "artifact-worker", typecheck: TYPECHECK },
   { name: JOBS.scripts, dir: "scripts", typecheck: "npx tsc --noEmit", matchGatewayImageNpm: true },
   {
     name: JOBS.octogeeVoiceTools,
@@ -230,6 +232,36 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "app/", jobs: [JOBS.app] },
   { dir: "obsidian-connect/", jobs: [JOBS.obsidianConnect, JOBS.tests] },
   { dir: "firestore-rules-tests/", jobs: [JOBS.firestoreRules] },
+  { dir: "shared/", jobs: [JOBS.shared] },
+  { dir: "artifact-worker/", jobs: [JOBS.artifactWorker] },
+  { dir: "infra/gateway/", jobs: [JOBS.scripts, JOBS.tests, JOBS.octogeeApi, JOBS.gatewayEdge, JOBS.core, JOBS.acceptance] },
+  { dir: "infra/desktop/", jobs: [JOBS.scripts, JOBS.tests, JOBS.glmController] },
+  { dir: "infra/mattermost/", jobs: [] },
+  { dir: "infra/cloud-sql/", jobs: [] },
+  { dir: "helm/", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: "terraform/", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: "templates/", jobs: [JOBS.scripts, JOBS.tests, JOBS.gatewayEdge, JOBS.glmController, JOBS.octogeeApi] },
+  { dir: "design-system/", jobs: [JOBS.app, JOBS.site, JOBS.scripts, JOBS.tests] },
+  { dir: ".github/", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: ".github/ISSUE_TEMPLATE/", jobs: [] },
+  { dir: ".githooks/", jobs: [] },
+  { dir: ".files/", jobs: [] },
+  { dir: "storage.rules", jobs: [JOBS.firestoreRules] },
+  { dir: "firebase.json", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: "firebase-app.json", jobs: [] },
+  { dir: ".firebaserc", jobs: [JOBS.tests] },
+  { dir: ".terraform-version", jobs: [JOBS.tests] },
+  { dir: ".dockerignore", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: ".env.example", jobs: [JOBS.scripts] },
+  { dir: ".gitattributes", jobs: [JOBS.scripts] },
+  { dir: ".gitignore", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: ".nvmrc", jobs: [] },
+  { dir: "LICENSE", jobs: [JOBS.app, JOBS.scripts, JOBS.tests] },
+  { dir: "eslint.config.mjs", jobs: [] },
+  { dir: "knip.json", jobs: [JOBS.tests] },
+  { dir: "osv-scanner.toml", jobs: [JOBS.tests] },
+  { dir: ".gitleaks.toml", jobs: [JOBS.tests] },
+  { dir: ".gitleaksignore", jobs: [] },
 ];
 
 export interface ScopeEdge {
@@ -370,18 +402,50 @@ export const EDGES: readonly ScopeEdge[] = [
     reason:
       "tests/specs/transitive-security.spec.ts verifies the Firebase tooling dependency overrides recorded in firestore-rules-tests/package-lock.json",
   },
+  {
+    when: "shared/",
+    jobs: [
+      JOBS.acceptance,
+      JOBS.app,
+      JOBS.artifactWorker,
+      JOBS.core,
+      JOBS.functions,
+      JOBS.functionsEmulator,
+      JOBS.gatewayEdge,
+      JOBS.gatewayEdgeEmulator,
+      JOBS.glmController,
+      JOBS.glmControllerEmulator,
+      JOBS.octogeeApi,
+      JOBS.octogeeApiEmulator,
+      JOBS.opsAgent,
+      JOBS.opsAgentRuntimeTools,
+      JOBS.scripts,
+      JOBS.customerLifecycleEmulator,
+      JOBS.site,
+      JOBS.tests,
+    ],
+    reason:
+      "@octogee/shared is imported by acceptance, app, artifact-worker, core, gateway-edge, glm-controller, octogee-api, ops-agent, scripts, site and tests, and installed for functions; desktop, obsidian-connect and the gateway extension packages do not consume it",
+  },
+  {
+    when: "artifact-worker/",
+    jobs: [JOBS.core, JOBS.octogeeApi, JOBS.scripts, JOBS.tests],
+    reason:
+      "core, octogee-api, scripts and tests specs read artifact-worker source and packaging files directly",
+  },
 ];
 
 // Repo-wide blast radius → run everything. Exact root-file names (so app/package.json
-// does NOT match) plus prefixes for the type substrate and the resolver itself.
+// does NOT match) plus prefixes for the check runner and the resolver itself.
 export const GLOBAL_EXACT: ReadonlySet<string> = new Set([
   "package.json",
   "package-lock.json",
   "tsconfig.json",
   "tsconfig.base.json",
+  ".github/workflows/checks.yml",
   ".github/workflows/test.yml",
 ]);
-export const GLOBAL_PREFIX: readonly string[] = ["shared/", "scripts/lib/scope/", "scripts/lib/ci-", "scripts/ops/ci-", "scripts/ci/", "ci/"];
+export const GLOBAL_PREFIX: readonly string[] = [".github/actions/setup-ci/", "scripts/lib/scope/", "scripts/lib/ci-", "scripts/ops/ci-", "scripts/ci/", "ci/"];
 
 // Inert → run nothing: docs and root-level markdown only. A *.md under a package
 // dir (e.g. site content) still falls to that package, never inert.

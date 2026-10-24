@@ -81,3 +81,22 @@ it('builds locally only without a manifest or in-flight run, and stops after a f
   expect(command.mock.calls[0][1]).toEqual(['scripts/ci/main.mjs']);
   expect(dispatch).not.toHaveBeenCalled();
 });
+
+const endToEndCall = (call: unknown[]) => (call[1] as string[])[0] === 'scripts/ci/end-to-end-tests.mjs';
+
+it('runs end-to-end tests against TEST after a local deploy completes', async () => {
+  process.argv.push('--local');
+  findRelease.mockResolvedValue({ manifest: { sourceSha: sha } });
+  await import('../ci/ship-test.mjs');
+  const calls = command.mock.calls;
+  expect(calls.findIndex(endToEndCall)).toBeGreaterThan(calls.findIndex(deployCall));
+  expect((calls.find(endToEndCall)![2] as { env: NodeJS.ProcessEnv }).env.CI_LIVE_RESTART).toBe('true');
+});
+
+it('skips end-to-end tests when the local deploy fails', async () => {
+  process.argv.push('--local');
+  findRelease.mockResolvedValue({ manifest: { sourceSha: sha } });
+  command.mockImplementationOnce(() => { throw new Error('deploy failed'); });
+  await expect(import('../ci/ship-test.mjs')).rejects.toThrow('deploy failed');
+  expect(command.mock.calls.map(call => (call[1] as string[])[0])).toEqual(['scripts/ci/deploy.mjs']);
+});

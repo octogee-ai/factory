@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
-case "${1:?check name required}" in
+check=${1:?check name required}
+shift
+scoped=false
+files=()
+if [ "${1:-}" = -- ]; then
+  scoped=true
+  shift
+  for file in "$@"; do
+    if [ -f "$file" ]; then files+=("$file"); fi
+  done
+fi
+case "$check" in
   eslint)
     node scripts/ds-tokens.mjs
-    npm run lint -- --format=stylish --max-warnings=0
+    if [ "$scoped" = false ]; then npm run lint -- --format=stylish --max-warnings=0
+    elif [ "${#files[@]}" -gt 0 ]; then npx eslint --format=stylish --max-warnings=0 --no-warn-ignored -- "${files[@]}"
+    else echo 'No changed lint sources remain'
+    fi
     ;;
   knip)
     while IFS= read -r workspace; do
@@ -18,8 +32,13 @@ case "${1:?check name required}" in
     ;;
   osv-scanner)
     args=(--config=osv-scanner.toml)
-    while IFS= read -r lockfile; do args+=("--lockfile=$lockfile"); done < <(git ls-files '*package-lock.json')
-    [ "${#args[@]}" -gt 1 ] || { echo 'No tracked lockfiles found' >&2; exit 1; }
+    if [ "$scoped" = true ]; then
+      for lockfile in ${files[@]+"${files[@]}"}; do args+=("--lockfile=$lockfile"); done
+      if [ "${#args[@]}" -eq 1 ]; then echo 'No changed lockfiles remain'; exit 0; fi
+    else
+      while IFS= read -r lockfile; do args+=("--lockfile=$lockfile"); done < <(git ls-files '*package-lock.json')
+      [ "${#args[@]}" -gt 1 ] || { echo 'No tracked lockfiles found' >&2; exit 1; }
+    fi
     osv-scanner scan source "${args[@]}"
     ;;
   trivy)
@@ -28,5 +47,5 @@ case "${1:?check name required}" in
     trivy "${args[@]}" --severity CRITICAL --exit-code 1
     ;;
   cargo-audit) (cd artifact-worker/renderer && cargo-audit audit) ;;
-  *) echo "Unknown quality check: $1" >&2; exit 2 ;;
+  *) echo "Unknown quality check: $check" >&2; exit 2 ;;
 esac

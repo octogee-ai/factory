@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
   resolveScope,
@@ -5,7 +7,7 @@ import {
   serializeGhaOutputs,
   type JobKey,
 } from "../lib/scope/resolve.js";
-import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
+import { UNIT_PACKAGES } from "../lib/scope/manifest.js";
 
 // Helper: assert the resolved job set equals exactly `expected` (order-free).
 function expectJobs(paths: string[], expected: JobKey[]) {
@@ -293,27 +295,52 @@ describe("resolveScope — cross-package hazard edges", () => {
   });
 });
 
-describe("resolveScope — fail-open (run everything)", () => {
-  it("a shared/ change fails open to everything (type substrate, broad consumers)", () => {
+describe("resolveScope — consumer scoping", () => {
+  it("a shared/ change runs its consumers, not desktop, Obsidian or gateway extension packages", () => {
     const r = resolveScope(["shared/types/openclaw-wire.ts"]);
-    expect(r.everything).toBe(true);
-    expect([...r.jobs].sort()).toEqual([...ALL_JOBS].sort());
+    expect(r.everything).toBe(false);
+    expect(r.jobs).toEqual(expect.arrayContaining(["shared", "app", "gateway-edge", "octogee-api-emulator", "tests"]));
+    expect(r.jobs.some(job => job === "desktop" || job === "obsidian-connect" || job === "firestore-rules" || (job.startsWith("octogee-") && job.endsWith("-tools")))).toBe(false);
   });
 
-  it("root lockfile change fails open to everything", () => {
+  it("a gateway image change runs the packages that read gateway files, not app, site or emulators", () => {
+    expectJobs(["infra/gateway/Dockerfile"], ["acceptance", "core", "gateway-edge", "octogee-api", "scripts", "tests"]);
+  });
+
+  it("the artifact worker runs its own suite and the specs that read it", () => {
+    expectJobs(["artifact-worker/src/worker.ts"], ["artifact-worker", "core", "octogee-api", "scripts", "tests"]);
+  });
+
+  it("files no test reads run no test jobs", () => {
+    expectJobs(["infra/mattermost/Dockerfile", ".github/ISSUE_TEMPLATE/bug.yml", ".gitleaksignore"], []);
+  });
+});
+
+describe("resolveScope — repo-wide changes run everything", () => {
+  it("root lockfile change runs everything", () => {
     expect(resolveScope(["package-lock.json"]).everything).toBe(true);
   });
 
-  it("editing the Test workflow itself fails open to everything", () => {
+  it("editing the Checks workflow or its setup runs everything", () => {
+    expect(resolveScope([".github/workflows/checks.yml"]).everything).toBe(true);
+    expect(resolveScope([".github/actions/setup-ci/action.yml"]).everything).toBe(true);
     expect(resolveScope([".github/workflows/test.yml"]).everything).toBe(true);
   });
 
-  it("editing the resolver itself fails open to everything", () => {
+  it("editing the resolver itself runs everything", () => {
     expect(resolveScope(["scripts/lib/scope/manifest.ts"]).everything).toBe(true);
   });
+});
 
-  it("an unmapped path (no owning package) fails open to everything", () => {
-    expect(resolveScope(["helm/values.yaml"]).everything).toBe(true);
+describe("resolveScope — ownership is required", () => {
+  it("refuses a path with no CI owner instead of silently running everything", () => {
+    expect(() => resolveScope(["new-package/src/index.ts"])).toThrow("No CI owner for new-package/src/index.ts");
+  });
+
+  it("every tracked path has a CI owner", () => {
+    const root = fileURLToPath(new URL("../..", import.meta.url));
+    const tracked = execFileSync("/usr/bin/git", ["ls-files"], { cwd: root, encoding: "utf8" }).split("\n").filter(Boolean);
+    expect(() => resolveScope(tracked)).not.toThrow();
   });
 });
 

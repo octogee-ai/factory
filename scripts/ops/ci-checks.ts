@@ -17,7 +17,8 @@ const base = git("rev-parse", "--verify", `${value("base") ?? "origin/main"}^{co
 const fork = git("merge-base", base, head);
 const paths = args.includes("--all") ? ["package-lock.json", "ci/"] : git("diff", "--name-only", fork, head).split("\n").filter(Boolean);
 if (!value("head")) paths.push(...git("diff", "--name-only", "HEAD").split("\n").filter(Boolean), ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean));
-const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package"), value("lane")).filter(job => !value("check") || job.name === value("check"));
+const full = args.includes("--full") || args.includes("--all");
+const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full), value("lane")).filter(job => !value("check") || job.name === value("check"));
 if (value("check") && !jobs.length) throw new Error(`Check ${value("check")} is not in scope`);
 if (args.includes("--plan")) {
   console.log(JSON.stringify(jobs, null, 2));

@@ -19,6 +19,7 @@ if (local) {
     build: async () => run(['scripts/ci/main.mjs', ...(force ? ['--force'] : [])], { ...process.env, CI_SOURCE_SHA: sha, CI_BRANCH: 'main' }),
   });
   run(['scripts/ci/deploy.mjs', ...releaseArgs, '--local']);
+  run(['scripts/ci/end-to-end-tests.mjs'], { ...process.env, CI_LIVE_RESTART: 'true' });
 } else {
   await dispatchWorkflow('ship-test.yml', { source_sha: sha, force: String(force), actor: options.actor, log_level: options.logLevel });
 }

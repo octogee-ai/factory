@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 function fakeNode(version: string): string {
@@ -68,19 +69,64 @@ describe("portable Linux PR checks", () => {
     expect(checkPlan(["docs/INDEX.md"], "tests")).toEqual([]);
   });
 
-  it("covers every Linux PR quality gate without deployment commands", () => {
-    const plan = checkPlan(["artifact-worker/renderer/Cargo.lock"], "quality");
+  it("runs every quality gate on a full run without deployment commands", () => {
+    const plan = checkPlan(["docs/INDEX.md"], "quality", false, true);
     expect(plan.map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
+    expect(plan.map(job => job.commands)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"].map(name => [`bash scripts/ci/quality.sh ${name}`]));
     expect(JSON.stringify(plan)).not.toMatch(/firebase deploy|helm upgrade|desiredRelease/);
   });
 
+  it("runs every test job on a full run, whatever the diff", () => {
+    expect(checkPlan(["docs/INDEX.md"], "tests", false, true).map(job => job.name).sort())
+      .toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
+  });
+
+  it("scans only the diff for secrets on a docs-only pull request", () => {
+    expect(checkPlan(["docs/INDEX.md"], "quality").map(job => job.commands)).toEqual([["bash scripts/ci/quality.sh gitleaks"]]);
+  });
+
+  it("lints changed sources and audits changed lockfiles without repo-wide lint or knip", () => {
+    const plan = checkPlan(["app/src/App.tsx", "app/src/index.css", "app/package-lock.json", "docs/INDEX.md"], "quality");
+    expect(plan.map(job => job.name)).toEqual(["eslint", "gitleaks", "osv-scanner"]);
+    expect(plan[0].commands).toEqual(["bash scripts/ci/quality.sh eslint -- 'app/src/App.tsx'"]);
+    expect(plan[2].commands).toEqual(["bash scripts/ci/quality.sh osv-scanner -- 'app/package-lock.json'"]);
+  });
+
+  it("runs the design-token scan for style-only changes without passing them to ESLint", () => {
+    expect(checkPlan(["site/src/styles/global.css"], "quality")[0].commands).toEqual(["bash scripts/ci/quality.sh eslint --"]);
+  });
+
+  it("quotes changed paths so a file name cannot inject shell", () => {
+    expect(checkPlan(["scripts/odd '$(touch x)'.ts"], "quality")[0].commands)
+      .toEqual(["bash scripts/ci/quality.sh eslint -- 'scripts/odd '\\''$(touch x)'\\''.ts'"]);
+  });
+
+  it("runs repo-wide checks when their configuration changes", () => {
+    expect(checkPlan(["eslint.config.mjs"], "quality")[0].commands).toEqual(["bash scripts/ci/quality.sh eslint"]);
+    expect(checkPlan(["knip.json"], "quality").map(job => job.name)).toContain("knip");
+    expect(checkPlan(["osv-scanner.toml"], "quality").find(job => job.name === "osv-scanner")?.commands).toEqual(["bash scripts/ci/quality.sh osv-scanner"]);
+    expect(checkPlan(["package.json"], "quality").map(job => job.name)).toEqual(["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]);
+  });
+
+  it("scans infrastructure configuration only when it changes", () => {
+    expect(checkPlan(["helm/octogee/values.yaml"], "quality").map(job => job.name)).toContain("trivy");
+    expect(checkPlan(["infra/gateway/Dockerfile"], "quality").map(job => job.name)).toContain("trivy");
+    expect(checkPlan(["app/src/App.tsx"], "quality").map(job => job.name)).not.toContain("trivy");
+    expect(checkPlan(["artifact-worker/renderer/Cargo.lock"], "quality").map(job => job.name)).toEqual(["gitleaks", "cargo-audit"]);
+  });
+
   it("fails the aggregate check when an in-scope job fails, without skipping later checks", async () => {
-    const jobs = checkPlan(["docs/INDEX.md"], "quality");
+    const jobs = checkPlan(["docs/INDEX.md"], "quality", false, true);
     const run = vi.fn(async (job: { name: string }) => {
       if (job.name === "gitleaks") throw new Error("secret found");
     });
     await expect(executeChecks(jobs, run)).rejects.toThrow("gitleaks");
     expect(run).toHaveBeenCalledTimes(jobs.length);
+  });
+
+  it("runs the artifact worker suite with its shared types installed", () => {
+    expect(checkPlan(["artifact-worker/src/worker.ts"], "tests").find(job => job.name === "artifact-worker"))
+      .toMatchObject({ directory: "artifact-worker", installs: ["shared", "artifact-worker"], commands: ["npm run typecheck", "npm test"] });
   });
 
   it.each(["package-lock.json", "gateway-edge/src/index.ts", "docs/INDEX.md"])("partitions every required check exactly once: %s", path => {
@@ -142,5 +188,50 @@ describe("portable Linux PR checks", () => {
     expect(vitestOptions("vitest run", false, 4, 2)).toBe(" -- --maxWorkers=1");
     expect(vitestOptions("vitest run", true, 1, 8)).toContain("--testTimeout=60000 --hookTimeout=60000 --maxWorkers=2");
     expect(vitestOptions("node --test", false, 1, 8)).toBe("");
+  });
+});
+
+describe("scoped quality script", () => {
+  const source = fileURLToPath(new URL("../ci/quality.sh", import.meta.url));
+
+  function workspace(): { root: string; calls: string; env: NodeJS.ProcessEnv } {
+    const root = mkdtempSync(join(tmpdir(), "quality-sh-"));
+    mkdirSync(join(root, "scripts/ci"), { recursive: true });
+    copyFileSync(source, join(root, "scripts/ci/quality.sh"));
+    writeFileSync(join(root, "scripts/ds-tokens.mjs"), "");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const calls = join(root, "calls");
+    for (const tool of ["npx", "osv-scanner", "npm"]) {
+      writeFileSync(join(bin, tool), `#!/bin/bash\nprintf '%s\\n' "${tool} $*" >> '${calls}'\n`);
+      chmodSync(join(bin, tool), 0o755);
+    }
+    return { root, calls, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } };
+  }
+  const run = (root: string, env: NodeJS.ProcessEnv, args: string[]) =>
+    execFileSync("/bin/bash", ["scripts/ci/quality.sh", ...args], { cwd: root, env, encoding: "utf8" });
+
+  it("lints only changed files that still exist, and skips ESLint when none remain", () => {
+    const { root, calls, env } = workspace();
+    writeFileSync(join(root, "kept.ts"), "");
+    run(root, env, ["eslint", "--", "kept.ts", "deleted.ts"]);
+    expect(readFileSync(calls, "utf8")).toBe("npx eslint --format=stylish --max-warnings=0 --no-warn-ignored -- kept.ts\n");
+    expect(run(root, env, ["eslint", "--", "deleted.ts"])).toContain("No changed lint sources remain");
+    expect(readFileSync(calls, "utf8").split("\n").filter(Boolean)).toHaveLength(1);
+  });
+
+  it("lints the whole repository without a file list", () => {
+    const { root, calls, env } = workspace();
+    run(root, env, ["eslint"]);
+    expect(readFileSync(calls, "utf8")).toBe("npm run lint -- --format=stylish --max-warnings=0\n");
+  });
+
+  it("audits only changed lockfiles that still exist", () => {
+    const { root, calls, env } = workspace();
+    mkdirSync(join(root, "app"));
+    writeFileSync(join(root, "app/package-lock.json"), "{}");
+    run(root, env, ["osv-scanner", "--", "app/package-lock.json", "gone/package-lock.json"]);
+    expect(readFileSync(calls, "utf8")).toBe("osv-scanner scan source --config=osv-scanner.toml --lockfile=app/package-lock.json\n");
+    expect(run(root, env, ["osv-scanner", "--", "gone/package-lock.json"])).toContain("No changed lockfiles remain");
   });
 });

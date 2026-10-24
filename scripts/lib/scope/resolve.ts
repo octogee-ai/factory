@@ -40,9 +40,9 @@ function ownerOf(path: string): (typeof OWNERSHIP)[number] | undefined {
 }
 
 /**
- * The CI test jobs a diff must run. Pure. Fail-open: any repo-wide path or any
- * path no package owns escalates to the full set; an empty diff runs nothing.
- * The CLI passes `everything` itself when the diff base is unusable.
+ * The CI test jobs a diff must run. Pure. A repo-wide path escalates to the full
+ * set; a path no manifest entry owns is refused so it gets an owner; an empty
+ * diff runs nothing. The CLI passes `everything` itself when the diff base is unusable.
  */
 export function resolveScope(changedPaths: string[]): ScopeResult {
   const acc: ScopeAccumulator = {
@@ -53,6 +53,11 @@ export function resolveScope(changedPaths: string[]): ScopeResult {
 
   for (const path of changedPaths) {
     addPathScope(acc, path);
+  }
+
+  const unmapped = changedPaths.filter((path) => !isGlobal(path) && !isInert(path) && !ownerOf(path));
+  if (unmapped.length) {
+    throw new Error(`No CI owner for ${unmapped.join(", ")}; add it to OWNERSHIP in scripts/lib/scope/manifest.ts`);
   }
 
   if (acc.everything) {
@@ -86,11 +91,7 @@ function markGlobalOrInert(acc: ScopeAccumulator, path: string): boolean {
 
 function addOwnerScope(acc: ScopeAccumulator, path: string): void {
   const owner = ownerOf(path);
-  if (!owner) {
-    acc.everything = true;
-    acc.reasons.push(`unmapped:${path}`);
-    return;
-  }
+  if (!owner) return;
 
   addJobs(acc.jobs, owner.jobs);
   acc.reasons.push(`owner:${owner.dir}`);

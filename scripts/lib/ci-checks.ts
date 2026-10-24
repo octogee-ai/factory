@@ -1,5 +1,5 @@
 import { availableParallelism } from "node:os";
-import { JOBS, UNIT_PACKAGES, type JobKey } from "./scope/manifest.js";
+import { ALL_JOBS, JOBS, UNIT_PACKAGES, type JobKey } from "./scope/manifest.js";
 import { resolveScope } from "./scope/resolve.js";
 
 export interface CheckJob {
@@ -98,7 +98,7 @@ export function vitestOptions(script: string, emulated: boolean, concurrentLanes
 function installsFor(directory: string): string[] {
   if (directory === "tests") return ["scripts", "shared", directory];
   if (directory === "octogee-api") return ["gateway-edge", "shared", directory];
-  if (["app", "functions", "gateway-edge"].includes(directory)) return ["shared", directory];
+  if (["app", "artifact-worker", "functions", "gateway-edge"].includes(directory)) return ["shared", directory];
   if (directory === "glm-controller") return ["scripts", directory];
   return [directory];
 }
@@ -122,15 +122,41 @@ function testJob(name: JobKey): CheckJob {
   throw new Error(`No portable CI implementation for ${name}`);
 }
 
-export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false): CheckJob[] {
-  const result = group === "quality" ? [] : resolveScope(paths).jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob);
+const LINTED_SOURCE = /\.[cm]?[jt]sx?$/;
+const TOKEN_SCANNED_SOURCE = /\.(?:[cm]?[jt]sx?|astro|css|html)$/;
+const FULL_LINT_INPUTS = ["eslint.config.mjs", "scripts/ds-tokens.mjs", "design-system/tailwind-preset.mjs"];
+const INFRASTRUCTURE_CONFIG = /(^|\/)Dockerfile[^/]*$|\.(?:tf|ya?ml)$|^(?:helm|terraform|infra|\.github)\//;
+const RUST_AUDIT_INPUTS = ["artifact-worker/renderer/", "scripts/ci/", "ci/"];
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+function qualityCommand(name: string, files?: string[]): string {
+  const command = ["bash", "scripts/ci/quality.sh", name];
+  if (files) command.push("--", ...files.map(shellQuote));
+  return command.join(" ");
+}
+
+function qualityJobs(paths: string[], full: boolean): CheckJob[] {
+  const job = (name: string, command: string): CheckJob =>
+    ({ name, directory: ".", nodeVersion: DEFAULT_NODE_VERSION, installs: name === "eslint" || name === "knip" ? ["."] : [], commands: [command] });
+  const jobs: CheckJob[] = [];
+  if (full || paths.some(path => FULL_LINT_INPUTS.includes(path))) jobs.push(job("eslint", qualityCommand("eslint")));
+  else if (paths.some(path => TOKEN_SCANNED_SOURCE.test(path))) jobs.push(job("eslint", qualityCommand("eslint", paths.filter(path => LINTED_SOURCE.test(path)))));
+  if (full || paths.includes("knip.json")) jobs.push(job("knip", qualityCommand("knip")));
+  jobs.push(job("gitleaks", qualityCommand("gitleaks")));
+  const lockfiles = paths.filter(path => path.endsWith("package-lock.json"));
+  if (full || paths.includes("osv-scanner.toml")) jobs.push(job("osv-scanner", qualityCommand("osv-scanner")));
+  else if (lockfiles.length) jobs.push(job("osv-scanner", qualityCommand("osv-scanner", lockfiles)));
+  if (full || paths.some(path => INFRASTRUCTURE_CONFIG.test(path))) jobs.push(job("trivy", qualityCommand("trivy")));
+  if (full || paths.some(path => RUST_AUDIT_INPUTS.some(prefix => path.startsWith(prefix)))) jobs.push(job("cargo-audit", qualityCommand("cargo-audit")));
+  return jobs;
+}
+
+export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false): CheckJob[] {
+  const scope = full ? { jobs: [...ALL_JOBS], everything: true } : resolveScope(paths);
+  const result = group === "quality" ? [] : scope.jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob);
   if (group !== "quality" && desktopPackage && !result.some(job => job.name === JOBS.desktopPackage)) result.push(testJob(JOBS.desktopPackage));
   if (group === "tests") return result;
-  for (const name of ["eslint", "knip", "gitleaks", "osv-scanner", "trivy", "cargo-audit"]) {
-    if (name === "cargo-audit" && !paths.some(path => path.startsWith("artifact-worker/renderer/") || path.startsWith("scripts/ci/") || path.startsWith("ci/"))) continue;
-    result.push({ name, directory: ".", nodeVersion: DEFAULT_NODE_VERSION, installs: name === "eslint" || name === "knip" ? ["."] : [], commands: [`bash scripts/ci/quality.sh ${name}`] });
-  }
-  return result;
+  return [...result, ...qualityJobs(paths, scope.everything)];
 }
 
 export async function executeChecks(jobs: CheckJob[], run: (job: CheckJob) => Promise<void>): Promise<void> {
