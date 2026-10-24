@@ -1,5 +1,5 @@
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
-import { persistBuilderProjects, startProjectAutosave } from "../lib/project-persistence.js";
+import { persistBuilderProjects, persistSharedCustomerFiles, persistAssignedSharedCustomers, startProjectAutosave } from "../lib/project-persistence.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("provisioner");
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
@@ -318,6 +318,9 @@ async function main(): Promise<void> {
     throw new Error("fleet controller public key unavailable: expected FLEET_CONTROLLER_PUBLIC_KEY");
   }
   const builder = isBuilderGateway();
+  let persistProjects: ((slug: string) => Promise<void>) | undefined;
+  if (builder) persistProjects = persistBuilderProjects;
+  else if (GATEWAY_CLASS === "shared") persistProjects = persistSharedCustomerFiles;
   const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
   let builderSlug = entrypointConfig.builderSlug;
   let stopClaimedBuilderServices: (() => void) | undefined;
@@ -401,7 +404,7 @@ async function main(): Promise<void> {
       gatewayClass: GATEWAY_CLASS,
       builderSlug: () => builderSlug,
       builder,
-      flushFiles: (slug) => flushCustomerFiles(slug, { persistProjects: builder ? persistBuilderProjects : undefined }),
+      flushFiles: (slug) => flushCustomerFiles(slug, { persistProjects }),
       syncBlobs: builder
         ? undefined
         : (slug) => blobSyncForSlug(slug, {
@@ -421,6 +424,13 @@ async function main(): Promise<void> {
   // retired status server (the probes moved to :3003/health and OpenClaw's own
   // :18789; GATEWAY-SIMPLE-ROLL-SPEC).
   if (builderSlug) startClaimedBuilderServices(builderSlug);
+  const stopSharedAutosave = GATEWAY_CLASS === "shared" ? startProjectAutosave({
+    save: () => persistAssignedSharedCustomers({
+      readCustomers: () => brokerClient.assignedUsers({ completeOnly: true }),
+      persist: persistSharedCustomerFiles,
+      log,
+    }), log,
+  }) : undefined;
   claimRuntime.poke();
   const claimPollTimer = setInterval(() => claimRuntime.poke(), BUILDER_CLAIM_SAFETY_POLL_MS);
 
@@ -447,6 +457,7 @@ async function main(): Promise<void> {
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
     stopClaimedBuilderServices?.();
+    stopSharedAutosave?.();
     clearInterval(claimPollTimer);
     clearInterval(blobSyncTimer);
     if (usageTimer) clearInterval(usageTimer);

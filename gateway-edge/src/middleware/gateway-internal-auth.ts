@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import {
   isValidGatewayInternalAuth,
   resolveGatewayInternalAuthSecret,
+  type GatewayInternalAuthValidationOptions,
 } from "../lib/gateway-internal-auth.js";
 import type { Reviewer } from "../lib/kubernetes-token-review.js";
 import { logger } from "./logging.js";
@@ -22,8 +23,9 @@ async function handleGatewayInternalAuth(
   req: Request,
   res: Response,
   next: NextFunction,
+  options: GatewayInternalAuthValidationOptions = {},
 ): Promise<void> {
-  const secret = resolveGatewayInternalAuthSecret(process.env);
+  const secret = resolveGatewayInternalAuthSecret(process.env, options);
   if (!secret) {
     logger.error("gateway internal auth is not configured — refusing request");
     res.status(503).json({ error: "Internal auth unavailable" });
@@ -39,6 +41,7 @@ async function handleGatewayInternalAuth(
   let valid = false;
   try {
     valid = await isValidGatewayInternalAuth(provided, process.env, {
+      ...options,
       reviewer: tokenReviewerForTests ?? undefined,
     });
   } catch (err) {
@@ -58,6 +61,10 @@ async function handleGatewayInternalAuth(
   }
 
   next();
+}
+
+export function createGatewayInternalAuth(options: GatewayInternalAuthValidationOptions): typeof requireGatewayInternalAuth {
+  return (req, res, next) => { handleGatewayInternalAuth(req, res, next, options).catch(next); };
 }
 
 export function requireGatewayInternalAuth(

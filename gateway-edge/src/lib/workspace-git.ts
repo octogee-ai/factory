@@ -209,6 +209,7 @@ export interface CommitAndPushOptions {
   author: CommitAuthor;
   githubToken?: string;
   beforeCommit?: () => Promise<WorkspaceCommitPreparation>;
+  assertCurrent?: () => Promise<void>;
 }
 
 export interface CommitAndPushDeps {
@@ -325,6 +326,7 @@ export async function commitAndPushWorkspace(
       if (!prepared.ok) return prepared;
       if (prepared.excludePaths?.length) commitOptions = { ...options, excludePaths: prepared.excludePaths };
     }
+    await options.assertCurrent?.();
     const commitRes = await deps.gitCommit(customerDir, commitOptions);
     if (!commitRes.ok) return commitRes;
     const committed = !commitRes.result.empty;
@@ -343,6 +345,7 @@ export async function commitAndPushWorkspace(
         },
       };
     }
+    await options.assertCurrent?.();
     const pushRes = await deps.gitPush(customerDir, {
       ...prepareRes.target,
       ...(options.githubToken ? { githubToken: options.githubToken } : {}),
@@ -862,6 +865,18 @@ export function isTrustedGithubCustomerCheckout(cwd: string): boolean {
       ?.startsWith("https://github.com/") === true;
   } catch {
     return false;
+  }
+}
+
+export function isTrustedGiteaCustomerCheckout(cwd: string, repoName: string): boolean {
+  const identity = customerGitIdentity(cwd);
+  if (!identity || !isSafeSlug(repoName)) return false;
+  try {
+    return readFileSync(`${identity.metadataDir}.octogee-trusted-v3`, "utf8") ===
+      `octogee-customer-git-v3\ngitea:${repoName}\n`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 

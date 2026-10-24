@@ -1,13 +1,24 @@
 import { Router } from "express";
-import { requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
-import { persistBuilderProjects } from "../../lib/project-persistence.js";
+import { createGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
+import { persistBuilderProjects, persistSharedCustomerFiles } from "../../lib/project-persistence.js";
+import { isValidUsername } from "@octogee/shared/types/identity";
 import { logger } from "../../middleware/logging.js";
 import { claimedBuilderIdentity } from "../../lib/builder-identity.js";
 
 export function createProjectPersistenceRouter(persist = persistBuilderProjects): Router {
   const router = Router();
-  router.use(requireGatewayInternalAuth);
+  router.use(createGatewayInternalAuth({ allowSharedGateway: true }));
   router.post("/flush", async (req, res) => {
+    if (process.env.GATEWAY_CLASS === "shared") {
+      if (!isValidUsername(req.body?.slug)) { res.status(400).json({ error: "invalid project owner" }); return; }
+      try {
+        res.json(await persistSharedCustomerFiles({ root: process.env.CUSTOMERS_DIR || "/home/node/.openclaw/customers", slug: req.body.slug }));
+      } catch (error) {
+        logger.error("Shared checkpoint failed; local work must be retained", { slug: req.body.slug, error: String(error) });
+        res.status(503).json({ error: "Shared remote save failed; local work retained" });
+      }
+      return;
+    }
     const slug = claimedBuilderIdentity()?.builderSlug;
     if (process.env.GATEWAY_CLASS !== "builder" || !slug || req.body?.slug !== slug) {
       res.status(403).json({ error: "project owner differs from this Builder" });

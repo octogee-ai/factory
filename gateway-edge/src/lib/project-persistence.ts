@@ -5,9 +5,13 @@ import { createBrokeredProjectBlobHydrator, prepareBuilderProjectAssets } from "
 import { projectBlobHydrationClient } from "./project-blob-upload.js";
 import { logger } from "../middleware/logging.js";
 import { isValidProjectId, isValidUsername } from "@octogee/shared/types/identity";
-import { commitAndPushWorkspace, isTrustedGithubCustomerCheckout, resolveProjectDir } from "./workspace-git.js";
+import { commitAndPushWorkspace, isTrustedGithubCustomerCheckout, isTrustedGiteaCustomerCheckout, resolveCustomerDir, resolveProjectDir } from "./workspace-git.js";
 import { divertWorktreeBinaries } from "./binary-diversion.js";
 import { readOwnerRuntimeConnectorAccessToken } from "./connector-tokens.js";
+import { gatewayCredentialHeaders, internalFetch } from "@octogee/core/internal-fetch";
+import type { FleetBrokerAssignmentRosterEntry, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
+import { isValidGatewayId } from "@octogee/shared/types/glm";
+import type { WorkspaceBlobTarget } from "./workspace-blob.js";
 
 interface ProjectPersistenceDeps {
   resolveProject: typeof resolveProjectDir;
@@ -53,6 +57,10 @@ async function waitForPreviousPersistence(previous: Promise<void>): Promise<void
 }
 
 export async function persistBuilderProjects(input: { root: string; slug: string }, deps: ProjectPersistenceDeps = defaults): Promise<{ projects: number }> {
+  return serializePersistence(input, () => persistProjectsOnce(input, deps));
+}
+
+async function serializePersistence(input: { root: string; slug: string }, save: () => Promise<{ projects: number }>): Promise<{ projects: number }> {
   if (!isValidUsername(input.slug)) throw new Error("invalid project owner");
   const key = path.resolve(input.root, input.slug);
   const previous = persistenceTails.get(key);
@@ -62,11 +70,120 @@ export async function persistBuilderProjects(input: { root: string; slug: string
   persistenceTails.set(key, tail);
   try {
     if (previous) await waitForPreviousPersistence(previous);
-    return await persistProjectsOnce(input, deps);
+    return await save();
   } finally {
     release();
     void tail.then(() => { if (persistenceTails.get(key) === tail) persistenceTails.delete(key); });
   }
+}
+
+type SharedCheckpointCustomer = FleetBrokerUserSnapshot & { checkpointEpoch: number };
+
+interface SharedPersistenceDeps {
+  readCustomer: (slug: string) => Promise<SharedCheckpointCustomer>;
+  resolveCustomer: typeof resolveCustomerDir;
+  resolveProject: typeof resolveProjectDir;
+  commit: typeof commitAndPushWorkspace;
+  divert: (dir: string, target: WorkspaceBlobTarget) => ReturnType<typeof divertWorktreeBinaries>;
+  trustedGitea: typeof isTrustedGiteaCustomerCheckout;
+}
+
+async function readSharedCustomer(slug: string): Promise<SharedCheckpointCustomer> {
+  const gatewayId = process.env.GATEWAY_ID;
+  const base = (process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL)?.replace(/\/$/u, "");
+  if (!isValidGatewayId(gatewayId) || !base) throw new Error("Shared checkpoint requires its gateway and fleet broker");
+  const post = async (route: string, body: object) => {
+    const response = await internalFetch(`${base}/internal/fleet/${route}`, {
+      method: "POST", headers: { "content-type": "application/json", ...await gatewayCredentialHeaders() },
+      body: JSON.stringify({ gatewayId, ...body }),
+    });
+    if (!response.ok) throw new Error(`Shared checkpoint admission failed: HTTP ${response.status}`);
+    return response.json();
+  };
+  const { uid } = await post("uid-for-slug", { slug }) as { uid?: unknown };
+  if (typeof uid !== "string" || !uid) throw new Error("Shared checkpoint owner is unavailable");
+  const { user } = await post("user-snapshot", { uid }) as { user?: FleetBrokerUserSnapshot };
+  assertSharedCustomer(user, { uid, slug, gatewayId });
+  const { assignments } = await post("assignment-roster", { revisionId: gatewayId }) as { assignments?: FleetBrokerAssignmentRosterEntry[] };
+  return { ...user, checkpointEpoch: checkpointAssignmentEpoch(assignments, uid) };
+}
+
+function assertSharedCustomer(user: FleetBrokerUserSnapshot | undefined, expected: { uid: string; slug: string; gatewayId: string }): asserts user is FleetBrokerUserSnapshot {
+  if (!user || user.uid !== expected.uid || user.slug !== expected.slug || user.gatewayId !== expected.gatewayId ||
+      user.status !== "complete" || user.nativeSharedContextRestore !== undefined || !Array.isArray(user.projects)) {
+    throw new Error("Shared checkpoint owner is no longer assigned and ready here");
+  }
+}
+
+function checkpointAssignmentEpoch(assignments: FleetBrokerAssignmentRosterEntry[] | undefined, uid: string): number {
+  const owned = assignments?.filter(row => row.uid === uid);
+  if (!owned || owned.length !== 1 || !["serving", "quiescing"].includes(owned[0].state) ||
+      !Number.isSafeInteger(owned[0].epoch) || owned[0].epoch < 0) {
+    throw new Error("Shared checkpoint canonical assignment is unavailable");
+  }
+  return owned[0].epoch;
+}
+
+const sharedDefaults: SharedPersistenceDeps = {
+  readCustomer: readSharedCustomer, resolveCustomer: resolveCustomerDir, resolveProject: resolveProjectDir,
+  commit: commitAndPushWorkspace, trustedGitea: isTrustedGiteaCustomerCheckout,
+  divert: (dir, target) => divertWorktreeBinaries(dir, target, undefined, { retainLocalFiles: target.projectSlug !== null }),
+};
+
+function sharedGiteaProjects(customer: FleetBrokerUserSnapshot): Map<string, string> {
+  const projects = new Map<string, string>();
+  for (const project of customer.projects) {
+    if (project.checkoutEnabled === false || project.repoSource?.provider === "github" ||
+        (project.provisioningState !== undefined && project.provisioningState !== "active")) continue;
+    if (!isValidProjectId(project.projectSlug) || !isValidProjectId(project.giteaRepoName) || projects.has(project.projectSlug)) {
+      throw new Error("Shared checkpoint project source is invalid");
+    }
+    projects.set(project.projectSlug, project.giteaRepoName);
+  }
+  return projects;
+}
+
+async function assertSharedCheckpointDirectory(input: { root: string; slug: string }, project: string | null): Promise<void> {
+  const customer = path.join(input.root, input.slug);
+  const directories = [input.root, customer, ...(project ? [path.join(customer, "projects"), path.join(customer, "projects", project)] : [])];
+  for (const directory of directories) {
+    if (!(await lstat(directory)).isDirectory()) throw new Error("Shared checkpoint directory is not confined");
+  }
+}
+
+export async function persistSharedCustomerFiles(input: { root: string; slug: string }, deps: SharedPersistenceDeps = sharedDefaults): Promise<{ projects: number }> {
+  return serializePersistence(input, async () => {
+    const customer = await deps.readCustomer(input.slug);
+    const projects = sharedGiteaProjects(customer);
+    for (const [project, repo] of [[null, "workspace"], ...projects] as Array<[string | null, string]>) {
+      const assertCurrent = async () => {
+        await assertSharedCheckpointDirectory(input, project);
+        const current = await deps.readCustomer(input.slug);
+        if (current.uid !== customer.uid || current.gatewayId !== customer.gatewayId || current.checkpointEpoch !== customer.checkpointEpoch ||
+            (project !== null && sharedGiteaProjects(current).get(project) !== repo)) {
+          throw new Error("Shared checkpoint authority changed");
+        }
+      };
+      await assertCurrent();
+      const dir = project === null ? await deps.resolveCustomer(input.root, input.slug) : await deps.resolveProject(input.root, input.slug, project);
+      if (!dir || !deps.trustedGitea(dir, repo)) throw new Error("Shared checkpoint canonical Gitea checkout is unavailable");
+      const saved = await deps.commit(dir, {
+        message: "autosave: workspace changes", author: { name: "Octogee autosave", email: `${input.slug}@octogee.com` },
+        assertCurrent,
+        beforeCommit: async () => {
+          await assertCurrent();
+          const gcsPrefix = project ? `customers/${input.slug}/projects/${project}` : `customers/${input.slug}`;
+          const result = await deps.divert(dir, { slug: input.slug, projectSlug: project, gcsPrefix });
+          return result.failures.length ? { ok: false, error: { code: "BLOB_DIVERSION_FAILED", cwd: dir, paths: result.failedPaths } }
+            : { ok: true, excludePaths: result.diverted.map(blob => blob.path) };
+        },
+      });
+      if (!saved.ok) throw new Error(`Shared checkpoint failed: ${saved.error.code}`);
+      if (!saved.result.pushed) throw new Error(`Shared checkpoint remote push unconfirmed: ${saved.result.pushError || repo}`);
+      await assertCurrent();
+    }
+    return { projects: projects.size };
+  });
 }
 
 async function persistProjectsOnce(input: { root: string; slug: string }, deps: ProjectPersistenceDeps): Promise<{ projects: number }> {

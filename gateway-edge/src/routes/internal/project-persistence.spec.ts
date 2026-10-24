@@ -25,9 +25,6 @@ it("requires this gateway's authenticated identity and Builder owner",async()=>{
   expect((await request(a).post("/internal/projects/flush").send({slug:"alice"})).status).toBe(401);
   expect((await request(a).post("/internal/projects/flush").set("x-k8s-sa-token","other-token").send({slug:"alice"})).status).toBe(401);
   expect((await request(a).post("/internal/projects/flush").set("x-k8s-sa-token","own-token").send({slug:"bob"})).status).toBe(403);
-  vi.stubEnv("GATEWAY_CLASS","shared");
-  vi.stubEnv("INTERNAL_SERVICE_KEY","platform-secret");
-  expect((await request(a).post("/internal/projects/flush").set("x-internal-service-key","platform-secret").send({slug:"alice"})).status).toBe(403);
   expect(persist).not.toHaveBeenCalled();
 });
 it("acknowledges only a confirmed save and returns retryable failure otherwise",async()=>{

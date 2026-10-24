@@ -1,7 +1,7 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("prestop-flush");
 import { flushCustomerFiles, flushAllCustomerFiles } from "../lib/customer-file-state.js";
-import { persistBuilderProjects } from "../lib/project-persistence.js";
+import { persistBuilderProjects, persistSharedCustomerFiles } from "../lib/project-persistence.js";
 import { blobSyncAllWithOptions, blobSyncForSlug } from "../lib/blob-sync.js";
 import {
   GATEWAY_CLASS,
@@ -176,7 +176,12 @@ async function main(): Promise<void> {
     quiesceSessions: createPreStopSessionQuiesce(builderSlug),
     flushFiles: builderSlug
       ? () => flushCustomerFiles(builderSlug, { persistProjects: gatewayClass === "builder" ? persistBuilderProjects : undefined })
-      : () => flushAllCustomerFiles(),
+      : async () => flushAllCustomerFiles({
+        ...(gatewayClass === "shared" ? {
+          slugs: (await brokerClient.assignedUsers({ completeOnly: true })).map(customer => customer.slug),
+          persistProjects: persistSharedCustomerFiles,
+        } : {}),
+      }),
     syncBlobs: builderSlug
       ? () => blobSyncForSlug(builderSlug, {
           strict: true,

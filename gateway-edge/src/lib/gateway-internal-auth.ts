@@ -29,6 +29,7 @@ export interface GatewayInternalAuthSecret {
 
 export interface GatewayInternalAuthValidationOptions {
   reviewer?: Reviewer;
+  allowSharedGateway?: boolean;
 }
 
 let sharedReviewer: Reviewer | null = null;
@@ -118,8 +119,10 @@ function timingSafeStringEqual(provided: string | undefined, expected: string): 
 
 export function resolveGatewayInternalAuthSecret(
   env: Record<string, string | undefined> = process.env,
+  opts: GatewayInternalAuthValidationOptions = {},
 ): GatewayInternalAuthSecret | null {
-  const platformKey = nonBlank(env.INTERNAL_SERVICE_KEY);
+  const sharedGateway = opts.allowSharedGateway === true && env.GATEWAY_CLASS === "shared";
+  const platformKey = sharedGateway ? undefined : nonBlank(env.INTERNAL_SERVICE_KEY);
   if (platformKey) {
     return {
       value: platformKey,
@@ -128,7 +131,7 @@ export function resolveGatewayInternalAuthSecret(
     };
   }
 
-  if (env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder") {
+  if (sharedGateway || (env.GATEWAY_CLASS === "builder" && env.GATEWAY_PROFILE === "builder")) {
     const serviceAccountToken = readProjectedServiceAccountToken(env);
     if (serviceAccountToken) {
       return {
@@ -148,7 +151,7 @@ export async function isValidGatewayInternalAuth(
   opts: GatewayInternalAuthValidationOptions = {},
 ): Promise<boolean> {
   if (!provided) return false;
-  const secret = resolveGatewayInternalAuthSecret(env);
+  const secret = resolveGatewayInternalAuthSecret(env, opts);
   if (!secret) return false;
 
   if (secret.mode === "platform") return timingSafeStringEqual(provided, secret.value);
@@ -157,5 +160,9 @@ export async function isValidGatewayInternalAuth(
   if (!review.authenticated) return false;
   if (!review.audiences.includes(TOKEN_REVIEW_AUDIENCE)) return false;
   if (review.namespace !== expectedNamespace(env)) return false;
+  if (opts.allowSharedGateway && env.GATEWAY_CLASS === "shared") {
+    const own = nonBlank(env.K8S_SERVICE_ACCOUNT_NAME);
+    return Boolean(own) && review.saName === own;
+  }
   return allowedGatewayServiceAccounts(env).has(review.saName);
 }

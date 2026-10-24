@@ -259,6 +259,25 @@ git(repo, ["config", "--unset", "diff.external"]);
 });
 
 describe("platform-owned customer Git metadata", () => {
+  it.each(["prepare", "divert"])("rechecks custody after awaited %s work before its next Git effect", async phase => {
+    let current = true;
+    const release = vi.fn();
+    const gitCommit = vi.fn(async () => ({ ok: true as const, result: { sha: "local", empty: false } }));
+    const gitPush = vi.fn(async () => ({ ok: true as const }));
+    const save = commitAndPushWorkspace("/private/synthetic/customer", {
+      message: "checkpoint", author: { name: "Alice", email: "alice@example.test" },
+      beforeCommit: async () => { if (phase === "divert") { current = false; } return { ok: true }; },
+      assertCurrent: async () => { if (!current) throw new Error("custody changed"); },
+    }, {
+      acquireMutationLease: () => ({ release }) as never,
+      gitCommit, gitPush,
+      gitPreparePush: async () => { current = false; return { ok: true, target: { branch: "main", setUpstream: false } }; },
+    });
+    await expect(save).rejects.toThrow("custody changed");
+    expect(gitCommit).toHaveBeenCalledTimes(phase === "divert" ? 0 : 1);
+    expect(gitPush).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
   it("never inherits the Builder's ambient GitHub credential", async () => {
     const previousCustomersDir = process.env.CUSTOMERS_DIR;
     const previousGatewayClass = process.env.GATEWAY_CLASS;

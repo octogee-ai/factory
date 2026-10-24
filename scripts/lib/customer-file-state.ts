@@ -44,17 +44,20 @@ export async function flushCustomerFiles(slug: string, { root = OPENCLAW_DIR, pe
   }
 }
 
-export async function flushAllCustomerFiles({ root = OPENCLAW_DIR } = {}): Promise<void> {
+export async function flushAllCustomerFiles({ root = OPENCLAW_DIR, persistProjects, slugs }: { root?: string; persistProjects?: (slug: string) => Promise<void>; slugs?: readonly string[] } = {}): Promise<void> {
   const customers = path.join(root, "customers");
-  let entries;
-  try { entries = await fs.readdir(customers, { withFileTypes: true }); }
+  let targets = slugs;
+  try { targets ??= (await fs.readdir(customers, { withFileTypes: true })).filter(entry => entry.isDirectory() && isValidUsername(entry.name)).map(entry => entry.name); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  for (const entry of entries) {
-    if (entry.isDirectory() && isValidUsername(entry.name)) await flushCustomerFiles(entry.name, { root });
+  const failures: Error[] = [];
+  for (const slug of targets) {
+    try { await flushCustomerFiles(slug, { root, persistProjects }); }
+    catch (error) { failures.push(new Error(`${slug}: ${String(error)}`, { cause: error })); }
   }
+  if (failures.length) throw new AggregateError(failures, `Customer file flush failed: ${failures.map(error => error.message).join("; ")}`);
 }
 
 export async function removeDepartedCustomerFileState(

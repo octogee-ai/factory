@@ -3,11 +3,27 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { customerFileStatePaths, flushCustomerFiles, removeDepartedCustomerFileState } from "../lib/customer-file-state.js";
+import { customerFileStatePaths, flushAllCustomerFiles, flushCustomerFiles, removeDepartedCustomerFileState } from "../lib/customer-file-state.js";
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+it("requires confirmed Shared remote saves before acknowledging all-customer lifecycle flush", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  await fs.mkdir(path.join(root, "customers/alice"), { recursive: true });
+  await fs.writeFile(path.join(root, "customers/alice/IDENTITY.md"), "local persona");
+  const persistProjects = vi.fn(async () => { throw new Error("Shared push unconfirmed"); });
+  await expect(flushAllCustomerFiles({ root, persistProjects })).rejects.toThrow("Shared push unconfirmed");
+  expect(persistProjects).toHaveBeenCalledWith("alice");
+  expect(await fs.readFile(path.join(root, "customers/alice/IDENTITY.md"), "utf8")).toBe("local persona");
+});
+it("continues other assigned customers after a pre-stop save fails and reports aggregate failure", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  for (const slug of ["alice", "bob", "departed"]) await fs.mkdir(path.join(root, "customers", slug), { recursive: true });
+  const persistProjects = vi.fn().mockRejectedValueOnce(new Error("remote unavailable")).mockResolvedValueOnce(undefined);
+  await expect(flushAllCustomerFiles({ root, slugs: ["alice", "bob"], persistProjects })).rejects.toThrow(/alice.*remote unavailable/);
+  expect(persistProjects.mock.calls.map(([slug]) => slug)).toEqual(["alice", "bob"]);
+});
 it("fails the lifecycle flush if project publication fails and preserves local data", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
   const project = path.join(root, "customers/alice/projects/demo");
