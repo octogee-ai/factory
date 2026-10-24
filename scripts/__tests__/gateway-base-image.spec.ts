@@ -268,12 +268,17 @@ describe("gateway base image", () => {
 
   it("pins the npm runtime shared by core boot and post-readiness hydration", () => {
     const dockerfile = readRepoFile("infra/gateway/Dockerfile.base");
-    const npmUpgrade = dockerfile.indexOf("npm install --global npm@${NPM_VERSION}");
+    const install = runInstructionContaining(dockerfile, "npm install --global /tmp/npm.tgz");
+    const npmUpgrade = dockerfile.indexOf(install);
 
     expect(npmUpgrade).toBeGreaterThan(dockerfile.indexOf("AS gateway-core-system"));
     expect(npmUpgrade).toBeLessThan(dockerfile.indexOf("AS gateway-system"));
-    expect(runInstructionContaining(dockerfile, "npm@${NPM_VERSION}"))
-      .toContain("npm cache clean --force");
+    expect(install).toContain("target=/tmp/openclaw-fork.tgz,readonly");
+    expect(install).toContain("tar -xOf /tmp/openclaw-fork.tgz package/vendor/npm.tgz > /tmp/npm.tgz");
+    expect(install).toContain('test "$(npm --version)" = "$NPM_VERSION"');
+    expect(install).toContain('test "$(npx --version)" = "$NPM_VERSION"');
+    expect(install).toContain("&& rm /tmp/npm.tgz");
+    expect(install).toContain("npm cache clean --force");
   });
 
   it("copies only staged OpenClaw runtime outputs into the shipped stage and verifies them at build time", () => {
@@ -312,7 +317,7 @@ describe("gateway base image", () => {
       runInstructionContaining(dockerfile, "@anthropic-ai/claude-code"),
     ).toContain("npm cache clean --force");
     expect(
-      runInstructionContaining(dockerfile, "npm@${NPM_VERSION}"),
+      runInstructionContaining(dockerfile, "npm install --global /tmp/npm.tgz"),
     ).toContain("npm cache clean --force");
     expect(runInstructionContaining(dockerfile, "pip3 install")).toContain("--no-cache-dir");
   });

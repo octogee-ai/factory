@@ -71,6 +71,7 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
+import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
 
 const spawnMock = vi.fn();
 const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -3456,11 +3457,12 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
 
   const STAGED_SNAPSHOT = path.join(SNAPSHOT_REPOSITORY, "snap-1");
 
-  async function stageSnapshot(stageDir: string, seed: (db: DatabaseSync) => void): Promise<void> {
-    await writeStore(stageDir, path.join(STAGED_SNAPSHOT, "database.sqlite"), seed);
-    const bytes = await fs.readFile(path.join(stageDir, STAGED_SNAPSHOT, "database.sqlite"));
-    await fs.writeFile(path.join(stageDir, STAGED_SNAPSHOT, "manifest.json"), JSON.stringify({ schemaVersion: 1,
-      database: { role: "agent", agentId: "octogee-chris-coach", engine: "postgres", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" },
+  async function stageSnapshot(stageDir: string, seed: (db: DatabaseSync) => void, agentId = "octogee-chris-coach"): Promise<void> {
+    const snapshot = STAGED_SNAPSHOT.replace("octogee-chris-coach", agentId);
+    await writeStore(stageDir, path.join(snapshot, "database.sqlite"), seed);
+    const bytes = await fs.readFile(path.join(stageDir, snapshot, "database.sqlite"));
+    await fs.writeFile(path.join(stageDir, snapshot, "manifest.json"), JSON.stringify({ schemaVersion: 1,
+      database: { role: "agent", agentId, engine: "postgres", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" },
       artifact: { path: "database.sqlite", sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") },
     }));
   }
@@ -4335,6 +4337,103 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     ]);
     expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(refused ? 0 : 1);
     expect(rowCount(destination)).toBe(2);
+  });
+
+  it.each(["active", "disabled", "missing-token", "owner-changed", "hold-lost"] as const)("checks current ownership before admitting a carried project absent from a fresh Builder roster: %s", async mode => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    let held = true;
+    const target = builderTargetImport(async () => held);
+    const agentId = "octogee-chris-proj-demo-coach";
+    const workspace = path.join(importDir, "customers", "chris", "projects", "demo");
+    const agentDir = path.join(importDir, "agents", agentId, "agent");
+    const runOpenClaw = vi.fn(async (args: string[]) => {
+      expect(target.deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+      if (args[1] === "list") return { code: 0, stdout: JSON.stringify([
+        { id: "octogee-chris-coach", workspace: path.dirname(path.dirname(workspace)), agentDir: path.dirname(path.join(importDir, CARRIED_STORE)) },
+      ]) };
+      expect(args).toEqual(["agents", "add", agentId, "--workspace", workspace, "--agent-dir", agentDir, "--non-interactive", "--json"]);
+      expect(rowCount(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(2);
+      return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
+    });
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-builder-unconfigured-project", importDir, daemon: mkFakeChild(),
+      adapter: { ...target.adapter, loadUserSnapshot: vi.fn(async () => {
+        if (mode === "hold-lost") held = false;
+        return { ...RESTORE_SNAPSHOT, uid: mode === "owner-changed" ? "other-owner" : "uid-chris",
+          projectAgents: [{ projectId: "demo", enabled: mode !== "disabled", status: "ready" as const,
+            ...(mode === "missing-token" ? {} : { token: "fixture-project-token" }) }],
+        };
+      }) }, deps: { ...target.deps, procRoot, runOpenClaw } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('project'), ('project')"), agentId);
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, "mig-builder-unconfigured-project");
+
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(mode === "active" ? 200 : 500);
+    expect(runOpenClaw).toHaveBeenCalledTimes(mode === "active" ? 2 : 1);
+    expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(mode === "active" ? 1 : 0);
+    expect(rowCount(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(2);
+  });
+
+  it("preserves carried project persona files after Native registration of a fresh Builder roster", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const target = builderTargetImport(async () => true);
+    const agentId = "octogee-chris-proj-demo-coach";
+    const workspace = path.join(importDir, "customers", "chris", "projects", "demo");
+    const agentDir = path.join(importDir, "agents", agentId, "agent");
+    const identity = "# IDENTITY.md\n\n- **Name:** Harbor\n\nAuthored project personality.\n";
+    const runOpenClaw = vi.fn(async (args: string[]) => {
+      if (args[1] === "list") return { code: 0, stdout: "[]" };
+      expect(rowCount(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(2);
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(path.join(workspace, "IDENTITY.md"), `# IDENTITY.md\n\n- Name: ${agentId}\n`);
+      return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
+    });
+    const { deps, stageDir } = await prepareImport({ migrationId: "mig-builder-project-persona", importDir, daemon: mkFakeChild(),
+      adapter: { ...target.adapter, loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT,
+        projectAgents: [{ projectId: "demo", enabled: true, status: "ready" as const, token: "fixture-project-token" }],
+      })) }, deps: { ...target.deps, procRoot, runOpenClaw } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('project'), ('project')"), agentId);
+    const sourceWorkspace = path.join(stageDir, "customers", "chris", "projects", "demo");
+    await fs.mkdir(sourceWorkspace, { recursive: true });
+    await fs.writeFile(path.join(sourceWorkspace, "IDENTITY.md"), identity);
+    spawnMock.mockImplementation(await realMigrationSpawn());
+
+    const result = await finishImport(deps, "mig-builder-project-persona");
+
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(await fs.readFile(path.join(workspace, "IDENTITY.md"), "utf8")).toBe(identity);
+    expect(rowCount(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(2);
+    expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
+  });
+
+  it("restores a late-created Codex home after held Builder registration and final copy", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const target = builderTargetImport(async () => true);
+    const migrationId = `mig-builder-late-codex-${path.basename(importDir)}`;
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: target.adapter, deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('required')"));
+    const home = "agents/octogee-chris-coach/agent/codex-home";
+    const raw = await writeStore(stageDir, `${home}/goals_1.sqlite`, db =>
+      db.exec("INSERT INTO transcript_events VALUES ('late Codex history'), ('late Codex history')"));
+    await fs.writeFile(path.join(stageDir, home, "config.toml"), "late-home=true\n");
+    const canonicalStage = await fs.realpath(stageDir);
+    const codexLog = vi.fn();
+    const exported = await exportCodexStoreSnapshots({ sources: [{ cwd: canonicalStage, path: home }], exportRoot: canonicalStage, log: codexLog });
+    expect(exported, JSON.stringify(codexLog.mock.calls)).toHaveLength(1);
+    const snapshot = await fs.readFile(path.join(stageDir, home, ".octogee-codex-snapshots/goals_1.sqlite.backup"));
+    await fs.writeFile(raw, "raw database must not be copied");
+    await expect(fs.access(path.join(importDir, home))).rejects.toMatchObject({ code: "ENOENT" });
+    spawnMock.mockImplementation(await realMigrationSpawn());
+
+    const result = await finishImport(deps, migrationId);
+
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(await fs.readFile(path.join(importDir, home, "goals_1.sqlite"))).toEqual(snapshot);
+    expect(rowCount(path.join(importDir, home, "goals_1.sqlite"))).toBe(2);
+    expect(await fs.readFile(path.join(importDir, home, "config.toml"), "utf8")).toBe("late-home=true\n");
+    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
+    expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
   });
 
   it("refuses Native startup when the Builder hold is lost during anchor installation", async () => {

@@ -1,5 +1,5 @@
 {
-  "sourceSha": "3474860ac35ee5e3f4a2d4cbe7e3e631ecbb0333",
+  "sourceSha": "5fa6d0924b834f5917adf4847ab615bb98d6fe8a",
   "routines": {
     "memory_index_chunks_vec_sync": "aa3fd60d05de31bd95264d5c8d33e060f12c3d92520718dab3d988c53714c74a",
     "openclaw_session_conversations_trigger": "51062b9356fe3ddd2477d84bae1f51627d0a31ca3b6d31e6d4901c18f6d566a7",

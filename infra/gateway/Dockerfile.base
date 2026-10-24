@@ -1,6 +1,6 @@
 FROM node:26.12.1-bookworm-slim@sha256:b3dbaf0531ffedead011f14afc779688202fc975f89d2cebf2a63e8beed89e8a AS gateway-core-system
 
-ARG NPM_VERSION=12.2.0
+ARG NPM_VERSION=12.2.1
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -8,7 +8,12 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     ca-certificates curl git jq openssh-client rsync tar \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
+RUN --mount=type=bind,source=infra/gateway/openclaw-tarball/openclaw-fork.tgz,target=/tmp/openclaw-fork.tgz,readonly \
+    tar -xOf /tmp/openclaw-fork.tgz package/vendor/npm.tgz > /tmp/npm.tgz \
+    && npm install --global /tmp/npm.tgz --ignore-scripts --no-audit --no-fund \
+    && test "$(npm --version)" = "$NPM_VERSION" \
+    && test "$(npx --version)" = "$NPM_VERSION" \
+    && rm /tmp/npm.tgz \
     && npm cache clean --force \
     && install -d -o node -g node /home/node/.npm
 

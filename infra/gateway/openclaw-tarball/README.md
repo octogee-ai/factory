@@ -89,6 +89,17 @@ MATTERMOST_TGZ=$(bash infra/gateway/openclaw-tarball/pack-mattermost-tarball.sh 
 Before publication:
 
 - Run upstream's `scripts/check-openclaw-package-tarball.mjs` on the root archive.
+- Verify `vendor/npm.tgz` in the root archive and the independent global npm
+  installation contain the qualified runtime bytes. The packer stages stock npm
+  12.2.1 and applies [its distribution patch](npm-12.2.1.patch) to that temporary
+  copy before packing. The root keeps its exact npm 12.2.1 dependency and bundles
+  that patched closure in a disposable package stage; a relative tarball
+  dependency cannot be resolved before global install extracts the root. The
+  normal npm package inventory supplies stage files and modes, with escaping
+  paths refused. Installed source dependencies remain unchanged. Native's
+  source uses stock npm 12.2.1. Octogee owns the nested Undici 6.29.1 and
+  ip-address 10.7.4 fixes because pnpm 12.15 loses these bundled-file patches on
+  a cached import. Reassess this patch against each selected npm release.
 - Install the exact root and Mattermost pair in an isolated npm prefix and
   verify installed build-info. Core, Codex, Parallel and Mattermost must come
   from the same checkout, not merely share a version.
@@ -137,7 +148,123 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 23 main 6b3e0c6a
+## Current overlay: October 23 retained PostgreSQL restoration and runtime security
+
+The selected upstream remains frozen at
+`6b3e0c6a94968cdaa03bb019bdcacc8b55aa9b63`; its CI limitations and the
+preceding recut qualification remain recorded below. The clean overlay is now
+`5fa6d0924b834f5917adf4847ab615bb98d6fe8a`, available from
+[`fix/retained-agent-create-admission-20261023`](https://github.com/ceckert/openclaw/tree/fix/retained-agent-create-admission-20261023).
+It adds the agent-creation fix and runtime dependency security repairs to
+`3474860ac35ee5e3f4a2d4cbe7e3e631ecbb0333`;
+no unrelated upstream changes are included. Version remains 2026.10.6.
+
+The installed baseline's public `agents add` accepted an absent roster entry
+whose existing PostgreSQL anchor referenced a missing namespace, recreating
+empty storage under the carried store UUID. The fix admits existing PostgreSQL
+anchors through Native's existing-only restoration owner before workspace or
+config effects. It preserves the original metadata/identity refusal, while
+fresh creation, unanchored/zero-byte retries, SQLite and journal/hold recovery
+retain their existing owners. This belongs in Native because its storage owner
+must distinguish restoration from fresh creation; an Octogee SQL probe cannot
+replace that admission. Remove the overlay when the selected upstream supplies
+equivalent admission and the installed restoration/refusal/retry controls pass.
+The independent upstream-only adaptation is
+[#181951](https://github.com/openclaw/openclaw/pull/181951); an open contribution
+does not replace the qualified overlay in this frozen selected base.
+
+The direct `fast-uri` dependency and existing override move from 4.2.2 to 4.2.3
+for the maintainer’s [four URI security fixes](https://github.com/fastify/fast-uri/releases/tag/v4.2.3).
+The approved exact-version cooldown exception is removable after
+2026-10-26T22:51:36.634Z; the global seven-day strict dependency gate remains.
+Frozen pnpm 12.15 regenerates the lock. The subsequent runtime repair moves
+direct Undici to 8.12.2 and npm to 12.2.1 without a Node upgrade or new cooldown
+exception. Native's authenticated bundled-dependency publisher policy admits
+only npm 12.2.1's known stock minimatch/ip-address declarations, preserving its
+parent integrity, name, version, path and `inBundle` checks. Octogee's temporary
+distribution stage then replaces 15 files with verified official Undici 6.29.1
+and ip-address 10.7.4 bytes. Both the bundled Native npm and independent global
+npm use that same qualified closure. Installed source dependencies stay stock;
+there is no postinstall rewrite or new Native contract.
+The existing MCP schema suite passes six cases, and all four official security
+vectors change from vulnerable to fixed in the source and installed artifacts.
+Both isolated npm and actual Linux image readback find only fixed `fast-uri`
+4.2.3 and nested AJV 3.1.9. Remove this dependency overlay once the selected
+upstream supplies the fixed dependency and these controls pass.
+
+Octogee's held Builder import uses that public creation path for carried project
+agents absent from the fresh target roster. Current owner/project eligibility
+and canonical project paths are checked during preflight and before and after
+registration, including configured entries left by an interrupted attempt.
+Changed authority keeps retries held until valid current authority returns.
+Anchors are installed first;
+the final source rsync follows Native registration so bootstrap cannot replace
+authored persona files. Existing activation-manifest application then restores
+the source config identity independently from `IDENTITY.md`; those values may
+intentionally differ. There is no new identity writer or migration contract.
+Codex snapshots install after that final copy creates their canonical home
+directories, preserving valid databases created after pre-copy.
+
+### Artifacts and qualification
+
+Both write-once objects are in `gs://octogee-openclaw-fork/`. The replacement
+root was published with a create-only generation condition; unchanged Mattermost
+reuses its existing generation. Complete generation-specific downloads match
+the qualified archives' full SHA256, size and original bytes. Previous objects
+remain unchanged.
+
+| Package | Object | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-9266eedf.tgz#1792800630948190` | 128832764 | `9266eedf9dac28c78178484377596d682b306d196127fb6e5882776b78cf5fd5` |
+| mattermost | `openclaw-mattermost-ef7e6074.tgz#1792766326593830` (unchanged bytes) | 1258422 | `ef7e60741f3b5978ee43435623b88964a23596d67b02b57923555147671497f9` |
+
+Pinned pnpm 12.15.0 frozen installation and full `pnpm build` pass; build-info
+matches source `5fa6d0924b834f5917adf4847ab615bb98d6fe8a` and source remains
+clean after sequential maintained packers. Native tarball inventory/import-graph
+checks and isolated strict npm 12.2.1 installation pass. Installed build-info
+matches source. All 15 official fixed files survive installation in both Native's
+nested npm and the independent global npm; their Undici/ip-address versions are
+6.29.1/10.7.4, and direct Undici is 8.12.2. The actual Linux AMD64 full-plugin
+installer passes CUA artifact lint, fresh registry/bundled trust, Parallel's
+nine-file match, Codex's 188-file match and all three native-hook imports. All
+873 Mattermost files match the paired archive. Image readback confirms source
+5fa6d09 on Node 26.12.1 with builtin Undici 8.12.2. The unchanged repository
+policy and pinned OSV 2.5.1 scan all 759 actual production package roots across
+Native/plugins and independent global npm, with no reported vulnerabilities.
+The maintained PostgreSQL catalog is regenerated from this source with unchanged
+routine/trigger/expression fingerprints; real PostgreSQL and catalog tests pass
+44 cases against a non-superuser CREATEROLE database owner. Eight installed
+public-CLI cases requalify intact/missing/mismatched/fresh stores, global
+PostgreSQL selection and SQLite/PostgreSQL zero-byte retries against this pair.
+
+The 35 owning Native unit cases, two named held-store recovery integrations,
+focused test types, changed-file lint/format and independent full-context review
+pass. Installed public CLI controls preserve intact storage and refuse missing
+namespaces or mismatched UUIDs without replacing history; fresh creation and
+SQLite/PostgreSQL zero-byte retries pass. Intact/missing-store controls also
+pass with PostgreSQL selected for global state. Local real-CLI/rsync composition
+preserves persona/anchor bytes and PostgreSQL UUID/schema OID/transcript bytes;
+real Gateway roster ensure and source-manifest replay preserve differing config
+and file identities. After integration with main, the migration/reattach suites
+pass 272 cases through the existing Linux rsync test adapter; the Codex snapshot
+suite passes 12 cases, including the existing storage/trust guards. Lifecycle/activation
+suites pass 183 cases, and scripts types and strict changed-file lint pass.
+Hosted islands regenerate from
+the same clean built source with no changed upstream island inputs or JS/CSS
+bytes; only source provenance and license headers change from the prior pin.
+Eight artifact/island suites pass 89 cases. TEST migration
+acceptance and full aggregate Native `pnpm check` are not claimed by this local
+qualification.
+
+The inherited http-cache-semantics advisory remains separately assessed under
+the existing scanner policy. Version 4.3 retains the disputed `max-stale` path:
+an existing private cache can reuse a same-URL response after credentials change
+when `Vary` is absent. No unauthenticated network leak was demonstrated. The
+upstream [maintainer discussion](https://github.com/kornelski/http-cache-semantics/issues/56)
+does not establish a semantic fix; this dependency refresh makes no such claim
+and adds no scanner ignore.
+
+## Previous October 23 overlay on main 6b3e0c6a
 
 The operator selected and froze latest upstream main
 `6b3e0c6a94968cdaa03bb019bdcacc8b55aa9b63` for independent qualification. The

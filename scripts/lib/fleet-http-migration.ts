@@ -95,6 +95,7 @@ import {
 } from "./migration-rsync-tls.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { reattachBuilderAgents } from "./reattach-builder-agents.js";
+import { activeAgentProjectIds } from "./openclaw-config-builders.js";
 import { PROC_ROOT } from "./held-files.js";
 import { pickPlanInputs } from "../../shared/types/billing.js";
 import { gatewayScopedJobId, verifyFleetRequest } from "./fleet-signature.js";
@@ -2232,6 +2233,23 @@ async function archiveRetainedImport(input: StagedImportInput, prepared: Prepare
   return receipt;
 }
 
+async function carriedProjectWorkspace(input: StagedImportInput, agentId: string): Promise<string | null> {
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind !== "project" || parsed.username !== input.slug) return null;
+  const uid = await input.deps.adapter.uidForSlug(input.slug);
+  if (!uid) throw new Error("Carried Builder project has no current owner");
+  const snapshot = await input.deps.adapter.loadUserSnapshot(uid, { refresh: true });
+  if (!snapshot || snapshot.uid !== uid || snapshot.slug !== input.slug) throw new Error("Carried Builder project ownership changed");
+  if (!activeAgentProjectIds(snapshot.projectAgents ?? []).has(parsed.project)) return null;
+  return path.join(input.session.importDir, "customers", input.slug, "projects", parsed.project);
+}
+
+async function heldBuilderActivation(input: StagedImportInput): Promise<ConfiguredBuilderActivation | null> {
+  const activation = input.activation;
+  if (!activation || activation.live) return null;
+  return await input.deps.surgeTargetOpenClawHeld?.(activation.request) === true ? activation : null;
+}
+
 async function deliverStagedImport(input: StagedImportInput): Promise<NativeSharedAgentContextArchive | undefined> {
   const { deps, session, log } = input;
   const retained = await retainedImportPolicy(input);
@@ -2253,10 +2271,8 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
   const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
   try {
-    const activation = input.activation;
-    const restoreOffline = activation && !activation.live &&
-      await deps.surgeTargetOpenClawHeld?.(activation.request) === true;
-    await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+    const offlineActivation = await heldBuilderActivation(input);
+    if (!offlineActivation || retained) await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     if (retained) return archiveRetainedImport(input, prepared, retained);
     await installPreparedAgentStores({
       prepared,
@@ -2264,21 +2280,23 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
       procRoot: deps.procRoot ?? PROC_ROOT,
       log,
     });
-    await installCodexStoreSnapshots({ prepared: codex, importDir: session.importDir, procRoot: deps.procRoot ?? PROC_ROOT, log, signal: input.signal });
-    if (restoreOffline) {
+    if (offlineActivation) {
       await reattachBuilderAgents({
         stores: prepared.stores,
         env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
         run: deps.runOpenClaw,
+        resolveCarriedProjectWorkspace: agentId => carriedProjectWorkspace(input, agentId),
         signal: input.signal,
         log,
         assertHeld: async () => {
-          if (await deps.surgeTargetOpenClawHeld?.(activation.request) !== true) {
+          if (await deps.surgeTargetOpenClawHeld?.(offlineActivation.request) !== true) {
             throw new Error("Native Builder restoration requires the migration target to remain held");
           }
         },
       });
+      await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     }
+    await installCodexStoreSnapshots({ prepared: codex, importDir: session.importDir, procRoot: deps.procRoot ?? PROC_ROOT, log, signal: input.signal });
     if (session.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) return session.agentContext.archive;
   } finally {
     await discardCodexStoreSnapshots(codex, log);

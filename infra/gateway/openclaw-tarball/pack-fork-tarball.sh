@@ -57,6 +57,7 @@ node "$PACKER_DIR/../verify-broker-plugin-contract.mjs" "$FORK_DIR" "$(git rev-p
 node "$PACKER_DIR/../verify-broker-plugin-runtime.mjs" "$FORK_DIR" "$(git rev-parse HEAD)" >&2
 
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd -P)"
 rm -f "$OUT_DIR"/openclaw-[0-9]*.tgz
 
 OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG=1 \
@@ -121,6 +122,32 @@ for name in $WS_DEPS; do
   echo "  vendored workspace dep: $name@$ver -> file:$vend" >&2
 done
 
+NPM_DIR="$(node -p 'require("node:path").dirname(require.resolve("npm/package.json"))')"
+NPM_PACKAGE_VERSION="$(node -p 'require(process.argv[1]).version' "$NPM_DIR/package.json")"
+DECLARED_NPM_VERSION="$(node -p 'require("./package.json").dependencies.npm')"
+if [ "$NPM_PACKAGE_VERSION" != "$DECLARED_NPM_VERSION" ]; then
+  echo "FATAL: installed npm does not match the source dependency" >&2
+  exit 1
+fi
+mkdir -p vendor
+(
+  npmstage="$(mktemp -d)"
+  trap 'rm -rf "$npmstage"' EXIT
+  mkdir "$npmstage/package"
+  cp -a "$NPM_DIR/." "$npmstage/package/"
+  cd "$npmstage/package"
+  git apply --check "$PACKER_DIR/npm-${NPM_PACKAGE_VERSION}.patch"
+  git apply "$PACKER_DIR/npm-${NPM_PACKAGE_VERSION}.patch"
+  npm pack --ignore-scripts --pack-destination "$npmstage" >/dev/null
+  cp "$npmstage"/npm-*.tgz "$FORK_DIR/vendor/npm.tgz"
+)
+node -e '
+  const fs = require("node:fs");
+  const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  if (!p.files.includes("vendor/")) p.files.push("vendor/");
+  fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+'
+
 for ext in codex parallel; do
   name="$(node -e "console.log(require('./extensions/$ext/package.json').name)")"
   ver="$(node -e "console.log(require('./extensions/$ext/package.json').version)")"
@@ -140,7 +167,44 @@ for ext in codex parallel; do
   echo "  vendored source-matched companion: $name@$ver -> $vendtgz" >&2
 done
 
-npm pack --ignore-scripts --pack-destination "$OUT_DIR" >&2
+node -e '
+  const fs = require("node:fs");
+  const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  p.bundleDependencies = [...new Set([...(p.bundleDependencies ?? []), "npm"])];
+  fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+'
+(
+  package_stage="$(mktemp -d)"
+  trap 'rm -rf "$package_stage"' EXIT
+  npm pack --dry-run --ignore-scripts --json > "$package_stage/inventory.json"
+  mkdir "$package_stage/package"
+  node --input-type=module -e '
+    import fs from "node:fs";
+    import path from "node:path";
+    const [source, stage] = process.argv.slice(1);
+    const inventory = JSON.parse(fs.readFileSync(path.join(stage, "inventory.json"), "utf8"));
+    const packages = Array.isArray(inventory) ? inventory : Object.values(inventory);
+    if (packages.length !== 1 || !Array.isArray(packages[0].files)) {
+      throw new Error("npm pack must provide exactly one package inventory");
+    }
+    const root = path.join(stage, "package");
+    for (const file of packages[0].files) {
+      const target = path.resolve(root, file.path);
+      const relative = path.relative(root, target);
+      if (path.isAbsolute(file.path) || !relative || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+        throw new Error(`npm package inventory path escapes the stage: ${file.path}`);
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(source, file.path), target);
+      fs.chmodSync(target, file.mode);
+    }
+  ' "$FORK_DIR" "$package_stage"
+  rm -rf "$package_stage/package/node_modules/npm"
+  mkdir -p "$package_stage/package/node_modules/npm"
+  tar -xzf "$FORK_DIR/vendor/npm.tgz" -C "$package_stage/package/node_modules/npm" --strip-components=1
+  cd "$package_stage/package"
+  npm pack --ignore-scripts --pack-destination "$OUT_DIR" >&2
+)
 TARBALL="$OUT_DIR/$(ls -t "$OUT_DIR"/openclaw-[0-9]*.tgz | head -1 | xargs basename)"
 trap - EXIT
 restore
