@@ -28,6 +28,8 @@ export interface RetireGatewayDeps {
   // already-absent release so a crashed retire re-drives cleanly.
   helmUninstallGateway: (gatewayId: string) => Promise<void>;
 
+  revokeAgentStoreCredentials: (gatewayId: string, assertCurrent: () => Promise<void>) => Promise<void>;
+
   deleteGlmGateway: (gatewayId: string) => Promise<void>;
 
   deleteGatewayHeartbeat: (gatewayId: string) => Promise<void>;
@@ -147,6 +149,15 @@ export function createRetireGatewayHandler(deps: RetireGatewayDeps): OperationHa
     if (!uninstall.ok) {
       return failure(`helm uninstall failed: ${uninstall.error ?? UNKNOWN_ERROR}`);
     }
+
+    const credentials = await runReportedStep(ctx, deps, "revoke-agent-store-credentials", () =>
+      deps.revokeAgentStoreCredentials(gatewayId, async () => {
+        await ctx.assertActiveClaim?.();
+        const current = await verifyRetirementClaim(deps, gatewayId, op.id, retirementClaimVersion);
+        if (current) throw new Error(current.error);
+      }),
+    );
+    if (!credentials.ok) return failure(`agent-store credential retirement failed (records preserved for retry): ${credentials.error ?? UNKNOWN_ERROR}`);
 
     // Tear down the per-gateway resources. Steps are independent and
     // best-effort: every one is attempted even if a prior one failed, so a

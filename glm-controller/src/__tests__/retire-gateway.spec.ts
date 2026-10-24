@@ -68,6 +68,7 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
     helmUninstallGateway: vi.fn(async (gatewayId: string) => {
       state.helmUninstalled.push(gatewayId);
     }),
+    revokeAgentStoreCredentials: vi.fn(async (_gatewayId, assertCurrent) => { await assertCurrent(); }),
     deleteGlmGateway: vi.fn(async (gatewayId: string) => {
       state.deletedGlm.add(gatewayId);
     }),
@@ -94,6 +95,48 @@ function makeDeps(state: FakeState, overrides: Partial<RetireGatewayDeps> = {}):
 }
 
 describe("createRetireGatewayHandler — simple-roll retirement", () => {
+  it("revokes SQL login after runtime removal and before deleting retirement evidence", async () => {
+    const state = baseState();
+    const deps = makeDeps(state, { revokeAgentStoreCredentials: vi.fn(async (gatewayId, assertCurrent) => {
+      expect(state.helmUninstalled).toEqual([gatewayId]);
+      expect(state.teardownCalls).toEqual([]);
+      await assertCurrent();
+    }) });
+    expect((await createRetireGatewayHandler(deps)(mkOp(), makeCtx())).success).toBe(true);
+    expect(deps.revokeAgentStoreCredentials).toHaveBeenCalledOnce();
+  });
+
+  it("preserves retirement records and resources when SQL login retirement fails", async () => {
+    const state = baseState();
+    const deps = makeDeps(state, { revokeAgentStoreCredentials: vi.fn(async () => { throw new Error("login still connected"); }) });
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("login still connected");
+    expect(state.teardownCalls).toEqual([]);
+    expect(state.deletedGlm.size).toBe(0);
+    expect(state.deletedHeartbeat.size).toBe(0);
+  });
+
+  it("refuses SQL retirement when the retirement claim changes after runtime removal", async () => {
+    const state = baseState();
+    const deps = makeDeps(state, { helmUninstallGateway: vi.fn(async () => { state.claimOk = false; }) });
+    const result = await createRetireGatewayHandler(deps)(mkOp(), makeCtx());
+    expect(result.success).toBe(false);
+    expect(state.deletedGlm.size).toBe(0);
+    expect(state.teardownCalls).toEqual([]);
+  });
+
+  it("preserves records when the executing operation loses its active claim", async () => {
+    const state = baseState();
+    const deps = makeDeps(state);
+    const ctx = { ...makeCtx(), assertActiveClaim: async () => { throw new Error("operation lease lost"); } };
+    const result = await createRetireGatewayHandler(deps)(mkOp(), ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("operation lease lost");
+    expect(state.teardownCalls).toEqual([]);
+    expect(state.deletedGlm.size).toBe(0);
+  });
+
   it("uninstalls the stable release, tears down resources, then removes records and syncs ingress", async () => {
     const state = baseState();
     const deps = makeDeps(state);

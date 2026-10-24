@@ -133,7 +133,7 @@ export function createAgentStoreCredentialProvisioner(adminDsn, clientDsn) {
     const sharedRole = roleFor("shared", scope);
     const pool = new pg.Pool({ connectionString: adminDsn, max: 2, connectionTimeoutMillis: 10_000, allowExitOnIdle: true });
     pool.on("error", error => console.error("Agent-store credential connection failed", error.message));
-    return async (identity) => {
+    return async (identity, assertCurrent) => {
         if (!identity.gatewayId || !identity.token || (identity.builder && (!identity.builder.uid || !identity.builder.slug))) {
             throw new Error("Agent-store credentials require a complete Gateway identity");
         }
@@ -147,6 +147,7 @@ export function createAgentStoreCredentialProvisioner(adminDsn, clientDsn) {
             await client.query("BEGIN");
             await client.query("SET LOCAL search_path = pg_catalog");
             await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+            await assertCurrent();
             const { rows: [{ current_user: admin, current_database: database }] } = await client.query("SELECT current_user, current_database()");
             await ensureRole(client, sharedRole);
             await ensureRole(client, owner);
@@ -161,11 +162,47 @@ export function createAgentStoreCredentialProvisioner(adminDsn, clientDsn) {
             if (identity.builder) {
                 await claimNeutralStores(client, unclaimedRole, owner);
             }
+            await assertCurrent();
             await client.query("COMMIT");
             const url = new URL(clientUrl);
             url.username = login;
             url.password = identity.token;
             return url.toString();
+        }
+        catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+        }
+        finally {
+            client.release();
+        }
+    };
+}
+export function createAgentStoreCredentialRevoker(adminDsn) {
+    const scope = decodeURIComponent(new URL(adminDsn).pathname.slice(1));
+    if (!scope)
+        throw new Error("Agent-store credential retirement requires a database");
+    const pool = new pg.Pool({ connectionString: adminDsn, max: 2, connectionTimeoutMillis: 10_000, allowExitOnIdle: true });
+    pool.on("error", error => console.error("Agent-store credential retirement connection failed", error.message));
+    return async (gatewayId, assertCurrent) => {
+        if (!gatewayId)
+            throw new Error("Agent-store credential retirement requires a Gateway identity");
+        const login = roleFor("gateway", `${scope}:${gatewayId}`);
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            await client.query("SET LOCAL search_path = pg_catalog");
+            await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+            await assertCurrent();
+            const role = await client.query("SELECT oid FROM pg_roles WHERE rolname = $1", [login]);
+            if (role.rowCount) {
+                const sessions = await client.query("SELECT 1 FROM pg_stat_activity WHERE usesysid = $1 LIMIT 1", [role.rows[0].oid]);
+                if (sessions.rowCount)
+                    throw new Error(`Agent-store Gateway ${gatewayId} still has database sessions`);
+                await client.query(`ALTER ROLE ${identifier(login)} NOLOGIN`);
+            }
+            await assertCurrent();
+            await client.query("COMMIT");
         }
         catch (error) {
             await client.query("ROLLBACK");

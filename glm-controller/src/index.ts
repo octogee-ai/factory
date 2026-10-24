@@ -3,7 +3,7 @@ import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCu
 import { createMigrationAgentStorePreparer, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
-import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
+import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
 import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement, type SharedAgentErasureSource } from "./lib/customer-ops/agent-store-erasure.js";
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
 import { createBuilderHomeMigrator } from "./builder-home-migration.js";
@@ -3476,6 +3476,7 @@ async function buildHandlers(
   });
 
   const retireGateway = createRetireGatewayHandler({
+    revokeAgentStoreCredentials: createAgentStoreCredentialRevoker(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "Gateway retirement requires the controller-only administration URL")),
     isPausedNativeSourceFencedOff: (input) => pausedNativeRetirementSourceFencedOff({
       db,
       describe: (name, zone) => createGatewayComputeClient(logFn).describe(name, zone),

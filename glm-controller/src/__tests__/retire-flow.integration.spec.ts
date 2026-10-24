@@ -108,6 +108,7 @@ function makeRetireDeps(state: SharedState) {
     helmUninstallGateway: async (gatewayId: string) => {
       state.helmReleases.delete(gatewayId);
     },
+    revokeAgentStoreCredentials: async (_gatewayId, assertCurrent) => { await assertCurrent(); },
     deleteGlmGateway: async (gatewayId: string) => {
       state.glmGateways.delete(gatewayId);
     },
@@ -192,6 +193,8 @@ expect(state.helmReleases.size).toBe(0);
     expect(stepFlow).toEqual([
       "helm-uninstall:running",
       "helm-uninstall:done",
+      "revoke-agent-store-credentials:running",
+      "revoke-agent-store-credentials:done",
       "delete-pvc:running",
       "delete-pvc:done",
       "delete-kube-secret:running",

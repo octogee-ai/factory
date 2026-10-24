@@ -40,8 +40,8 @@ describe.skipIf(!dsn)("claimed PostgreSQL source recovery", () => {
       expect(existing.rows).toEqual([]);
       expect((await admin.query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [schema])).rows).toEqual([]);
       fixtureVerifiedFresh = true;
-      shared = new pg.Client({ connectionString: await provision({ gatewayClass: "shared", gatewayId: sharedId, token: "synthetic-shared" }) });
-      source = new pg.Client({ connectionString: await provision({ gatewayClass: "builder", gatewayId: builderId, token: "synthetic-builder", builder }) });
+      shared = new pg.Client({ connectionString: await provision({ gatewayClass: "shared", gatewayId: sharedId, token: "synthetic-shared" }, async () => {}) });
+      source = new pg.Client({ connectionString: await provision({ gatewayClass: "builder", gatewayId: builderId, token: "synthetic-builder", builder }, async () => {}) });
       await shared.connect(); await source.connect();
       await shared.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
       await shared.query(`CREATE TABLE ${table("schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT, store_id TEXT)`);
