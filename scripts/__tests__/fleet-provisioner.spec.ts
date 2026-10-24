@@ -66,6 +66,7 @@ import {
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import { builderClaimFromIdentity, markBuilderClaimOverlayApplied, writeBuilderClaim } from "@octogee/shared/server/builder-claim";
+import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 
 const tmpDirs: string[] = [];
 
@@ -730,6 +731,71 @@ function configuredBuilderLifecycleAdapter(input: {
 }
 
 describe("configured Builder surge release", () => {
+  it.each(["startup", "permanent", "deadline", "late-admission", "claim-loss", "custody-loss"])("waits for Native RPC admission during normal self-release and preserves %s fencing", async outcome => {
+    stubBuilderClaim("ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const { adapter } = configuredBuilderLifecycleAdapter();
+      let assigned = true;
+      let clock = 0;
+      let admissionCalls = 0;
+      const events: string[] = [];
+      let state: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" };
+      const holdNormal = vi.fn(async () => { events.push("hold"); state = { ...state, mode: "held", phase: "held" }; });
+      adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => {
+        events.push("projects");
+        expect(admissionCalls).toBe(3);
+        return { elapsedMs: 0 };
+      });
+      const release = vi.fn(async () => { events.push("release"); });
+      const wiring = createBuilderSurgeGateWiring({
+        adapter,
+        processGate: {
+          status: async () => state,
+          permitNormal: async () => { events.push("permit"); state = { ...state, mode: "permitted", phase: "running" }; },
+          holdNormal,
+        } as unknown as SurgeOpenClawProcessSupervisorClient,
+        surgeReadiness: { release } as unknown as SurgeReadinessGate,
+        waitForGatewayHealthy: async assertCurrent => waitForOpenClawHealthz({
+          probeHealthz: async () => true,
+          probeAdmission: async () => {
+            admissionCalls++;
+            if (outcome === "claim-loss") { assigned = false; return {}; }
+            if (outcome === "custody-loss") { state = { ...state, podUid: "replacement-pod" }; return {}; }
+            if (outcome === "late-admission") { clock = 2_001; return {}; }
+            if (outcome === "permanent") throw new OpenclawWireError("auth-failed", "gateway starting; retry shortly", { serverCode: "UNAVAILABLE", details: { reason: "profile-unavailable" } });
+            if (outcome === "deadline" || admissionCalls < 3) {
+              throw new OpenclawWireError(admissionCalls === 1 ? "auth-failed" : "rpc-error", "gateway starting; retry shortly", { serverCode: "UNAVAILABLE", details: { reason: "startup-sidecars" } });
+            }
+            return {};
+          },
+          assertCurrent,
+          timeoutMs: 2_000,
+          now: () => clock,
+          sleep: async ms => { clock += ms; },
+        }),
+        waitForGatewayReady: async () => { events.push("ready"); },
+        configuredBuilderAssigned: async () => assigned,
+        log: () => {},
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      });
+      if (outcome === "startup") {
+        await wiring.selfRelease("target-pod");
+        expect(events).toEqual(["permit", "projects", "ready", "release"]);
+        expect(state).toMatchObject({ role: "normal", mode: "permitted", phase: "running" });
+        expect(holdNormal).not.toHaveBeenCalled();
+        expect(release).toHaveBeenCalledOnce();
+      } else {
+        const reason = outcome === "permanent" ? /gateway starting/ : outcome === "deadline" || outcome === "late-admission" ? /within 2000ms/ : /assignment|custody/;
+        await expect(wiring.selfRelease("target-pod")).rejects.toThrow(reason);
+        expect(holdNormal).toHaveBeenCalledOnce();
+        expect(state).toMatchObject({ role: "normal", mode: "held", phase: "held" });
+        expect(adapter.reconcileConfiguredBuilderProjectAgents).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+        if (outcome !== "deadline") expect(admissionCalls).toBe(1);
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("matches normal self-release against the authoritative desired roster", async () => {
     const readDesiredCustomers = vi.fn(async () => new Map([
       ["ceckert-test", { uid: "uid-builder", fingerprint: "fingerprint", lane: "move" as const, ensureAllowed: true }],

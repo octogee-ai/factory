@@ -469,8 +469,15 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     const migration = { migrationId: "mig-move", claimStartedAt: 10, sourceGatewayId: "source", sourceEpoch: 0 };
     const quiescing = mode.startsWith("quiescing") || migrating;
     if (mode === "quiescing-resume" || migrating) await landAgentAnchors(dir, anchors);
-    anchorQuery.mockImplementation(async (target, sql) => sql.includes("openclaw_schema_meta")
-      ? [{ store_id: target.storeId }] : [{ agent_id: anchors.find((anchor) => anchor.schema === target.schema)!.agentId }]);
+    let firstAnchorQuery = mode === "activate";
+    anchorQuery.mockImplementation(async (target, sql) => {
+      if (firstAnchorQuery) {
+        firstAnchorQuery = false;
+        await new Promise(resolve => setTimeout(resolve, 1_100));
+      }
+      return sql.includes("openclaw_schema_meta")
+        ? [{ store_id: target.storeId }] : [{ agent_id: anchors.find((anchor) => anchor.schema === target.schema)!.agentId }];
+    });
     mocks.readActivationManifest.mockResolvedValue({
       slug: "tester10", appliedFingerprint: "retained-import", agentId: anchors[0].agentId,
       agent: { id: anchors[0].agentId, workspace: path.join(testRuntime.dir, "customers/tester10") },
@@ -484,7 +491,9 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       return { ...(migrating ? { migration } : {}), anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
     let release!: () => void;
     const recorded = new Promise<void>((resolve) => { release = resolve; });
-    const report = vi.fn(async () => recorded);
+    let reportStarted!: () => void;
+    const reportEntered = new Promise<void>((resolve) => { reportStarted = resolve; });
+    const report = vi.fn(async () => { reportStarted(); await recorded; });
     const rpc = mkGatewayRpc({ agentsCreate: vi.fn(async ({ name, workspace }) => {
       expect(await readLocalAgentAnchors(dir, anchors.map((anchor) => anchor.agentId))).toEqual(anchors);
       return { ok: true as const, agentId: name, name, workspace };
@@ -501,7 +510,11 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         expect(rpc.agentsCreate).not.toHaveBeenCalled();
         expect(report).not.toHaveBeenCalled();
       } else {
-        await vi.waitFor(() => expect(report).toHaveBeenCalledOnce());
+        await Promise.race([
+          reportEntered,
+          activation.then(() => { throw new Error("activation completed before anchor reporting"); }),
+        ]);
+        expect(report).toHaveBeenCalledOnce();
         expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
         expect(rpc.channelsStart).not.toHaveBeenCalled();
         expect(read).toHaveBeenCalledWith({ ...(migrating ? { migrationId: migration.migrationId } : { uid: "uid-tester10" }), slug: "tester10" });

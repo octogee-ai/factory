@@ -6,6 +6,7 @@ import { builderToolchainRoot } from "./builder-storage.js";
 import { waitForPreparedBuilderToolchain } from "./builder-toolchain-preparation.js";
 import express from "express";
 import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstrap";
+import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
@@ -1042,8 +1043,30 @@ export async function probeOpenClawRuntimeReady(
   return await probeHealthz() && identitiesReady();
 }
 
+function nativeStartupAdmissionPending(error: unknown): boolean {
+  if (!(error instanceof OpenclawWireError)) return false;
+  if (error.code !== "auth-failed" && error.code !== "rpc-error") return false;
+  const details = error.details as {
+    serverCode?: unknown;
+    details?: { reason?: unknown };
+  } | null | undefined;
+  return details?.serverCode === "UNAVAILABLE" && details.details?.reason === "startup-sidecars";
+}
+
+async function probeNativeRpcAdmission(probeAdmission?: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await probeAdmission?.();
+    return true;
+  } catch (error) {
+    if (!nativeStartupAdmissionPending(error)) throw error;
+    return false;
+  }
+}
+
 export async function waitForOpenClawHealthz(input: {
   probeHealthz: () => Promise<boolean>;
+  probeAdmission?: () => Promise<unknown>;
+  assertCurrent?: () => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   now?: () => number;
@@ -1053,7 +1076,13 @@ export async function waitForOpenClawHealthz(input: {
   const now = input.now ?? Date.now;
   const deadline = input.timeoutMs === undefined ? null : now() + input.timeoutMs;
   while (true) {
-    if (await input.probeHealthz()) return;
+    await input.assertCurrent?.();
+    if (await input.probeHealthz()) {
+      const admitted = await probeNativeRpcAdmission(input.probeAdmission);
+      await input.assertCurrent?.();
+      const admissionExpired = input.probeAdmission && deadline !== null && now() > deadline;
+      if (admitted && !admissionExpired) return;
+    }
     if (deadline !== null && now() >= deadline) {
       throw new Error(`OpenClaw healthz did not answer within ${input.timeoutMs}ms`);
     }
@@ -2392,7 +2421,7 @@ async function selfReleaseConfiguredBuilder(input: {
   surgeReadiness: SurgeReadinessGate;
   targetPodUid: string;
   waitForActiveProvisioningDrain: () => Promise<void>;
-  waitForGatewayHealthy: () => Promise<void>;
+  waitForGatewayHealthy: (assertCurrent: () => Promise<void>) => Promise<void>;
   waitForGatewayReady: () => Promise<void>;
 }): Promise<void> {
   const {
@@ -2437,7 +2466,15 @@ async function selfReleaseConfiguredBuilder(input: {
     await attachConfiguredBuilderWithProvisioning({ adapter, attachConfigured, log, provisioning });
     await waitForActiveProvisioningDrain();
     await processGate.permitNormal();
-    await waitForGatewayHealthy();
+    await waitForGatewayHealthy(async () => {
+      const current = await processGate.status();
+      if (current.podUid !== targetPodUid || current.role !== "normal" || current.mode !== "permitted") {
+        throw new Error("configured Builder self-release process custody changed during startup");
+      }
+      if (!(await configuredBuilderAssigned(slug))) {
+        throw new Error("configured Builder assignment changed during startup");
+      }
+    });
     if (adapter.reconcileConfiguredBuilderProjectAgents) {
       const uid = await adapter.uidForSlug(slug);
       const snapshot = uid ? await adapter.loadUserSnapshot(uid) : null;
@@ -2476,7 +2513,7 @@ interface BuilderSurgeGateWiringOptions {
   adapter: CustomerLifecycleAdapter;
   processGate: SurgeOpenClawProcessSupervisorClient | null;
   surgeReadiness: SurgeReadinessGate;
-  waitForGatewayHealthy: () => Promise<void>;
+  waitForGatewayHealthy: (assertCurrent: () => Promise<void>) => Promise<void>;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
   provisioning: ProvisioningCounter;
@@ -3082,8 +3119,10 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     adapter: wrappedAdapter,
     processGate: builderProcessGate,
     surgeReadiness,
-    waitForGatewayHealthy: () => waitForOpenClawHealthz({
+    waitForGatewayHealthy: assertCurrent => waitForOpenClawHealthz({
       probeHealthz,
+      probeAdmission: () => opts.rpc.configGet(),
+      assertCurrent,
       timeoutMs: BUILDER_POST_START_HEALTH_TIMEOUT_MS,
     }),
     waitForGatewayReady: () => waitForOpenClawUp(BUILDER_POST_START_HEALTH_TIMEOUT_MS),
