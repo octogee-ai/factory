@@ -1,3 +1,4 @@
+import { createNativeReturnTargetRetirementVerifier } from "../lib/native-return-target-retirement.js";
 import { describe, expect, it, vi } from "vitest";
 import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "../lib/customer-ops/retired-shared-gateway.js";
 
@@ -30,7 +31,7 @@ function harness() {
   });
   const db = { collection, runTransaction: async (action: any) => action({ get: (ref: any) => ref.get() }) };
   const readRuntimeAbsent = vi.fn(async () => true);
-  return { records, readRuntimeAbsent, run: () => isRetiredSharedGateway(db as never, gatewayId, readRuntimeAbsent) };
+  return { db, records, readRuntimeAbsent, run: () => isRetiredSharedGateway(db as never, gatewayId, readRuntimeAbsent) };
 }
 
 describe("retired Shared gateway unmount proof", () => {
@@ -136,4 +137,26 @@ it("does not accept a deployment recreated during pod absence inspection", async
   };
   await expect(retiredSharedGatewayRuntimeAbsent(kubeOps as never, "octogee-test", gatewayId, `octogee-gateway-${gatewayId}`))
     .resolves.toBe(false);
+});
+
+
+describe("retired native return target proof", () => {
+  it.each(["complete", "runtime-live", "credentials-live", "root-recreated", "receipt-changed"])("revalidates physical and PostgreSQL retirement: %s", async scenario => {
+    const h = harness();
+    if (scenario === "runtime-live") h.readRuntimeAbsent.mockResolvedValue(false);
+    const credentialsRetired = vi.fn(async () => {
+      if (scenario === "root-recreated") h.records[`gateways/${gatewayId}`] = { gatewayClass: "shared", desiredStatus: "running" };
+      if (scenario === "receipt-changed") h.records[`glmOperations/${operationId}`].status = "pending";
+      return scenario !== "credentials-live";
+    });
+    const verify = createNativeReturnTargetRetirementVerifier({ db: h.db as never, runtimeAbsent: h.readRuntimeAbsent, credentialsRetired });
+    expect(await verify(gatewayId, async () => {})).toBe(scenario === "complete");
+    if (scenario === "runtime-live") expect(credentialsRetired).not.toHaveBeenCalled();
+  });
+  it("retains uncertainty if the caller loses authority during PostgreSQL proof", async () => {
+    const h = harness(); let current = true;
+    const verify = createNativeReturnTargetRetirementVerifier({ db: h.db as never, runtimeAbsent: h.readRuntimeAbsent,
+      credentialsRetired: async () => { current = false; return true; } });
+    await expect(verify(gatewayId, async () => { if (!current) throw new Error("source claim changed"); })).rejects.toThrow("source claim changed");
+  });
 });

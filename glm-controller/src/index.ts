@@ -3,7 +3,7 @@ import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCu
 import { createMigrationAgentStorePreparer, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
-import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
+import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreCredentialRetirementVerifier, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
 import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement, type SharedAgentErasureSource } from "./lib/customer-ops/agent-store-erasure.js";
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
 import { createBuilderHomeMigrator } from "./builder-home-migration.js";
@@ -22,7 +22,9 @@ import { fleetOperationLockResources } from "@octogee/core/fleet-operation-lock"
 import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 import { operationScopedLog } from "./operation-log-scope.js";
 import { prepareNativeAgentContextTransfer, acknowledgeNativeAgentContextTransfer, acknowledgeNativeSharedContextStage, prepareNativeSharedContextRestore, acknowledgeNativeSharedContextRestore } from "./lib/native-agent-context-transfer.js";
-import { prepareNativeComputerReturn } from "./lib/native-computer-return.js";
+import { createNativeReturnSourceRecoveryOwner } from "./native-return-source-recovery.js";
+import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-target-retirement.js";
+import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-computer-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
@@ -523,6 +525,7 @@ interface ControllerDeps {
   modelKeySecretEnsurer?: GatewayModelKeySecretEnsurer;
   restartGatewayDeployment?: (revisionId: string) => Promise<void>;
   handlers: OperationHandlers;
+  requestNativeReturnSourceRecovery?: ReturnType<typeof createNativeReturnSourceRecoveryOwner>["request"];
   log: (msg: string) => void;
   syncFleetIngress?: (
     gateways: ReadonlyArray<{ gatewayId: string }>,
@@ -2511,6 +2514,7 @@ function startControllerBackgroundTasks({
             httpKubeOps.readGatewayPodDiagnosticsBatch({ namespace: NAMESPACE, gatewayIds }),
         }
       : {}),
+    requestNativeReturnSourceRecovery: deps.requestNativeReturnSourceRecovery,
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     revokeConnectorGrantsForUser: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
@@ -2639,6 +2643,31 @@ function buildSurgeHandoffDeps(input: {
     },
     log,
   };
+}
+
+function buildNativeReturnSourceRecoveryOwner(db: Firestore, kubeOps: KubeOps, privateKey: string, prepareMigrationAgentStores: PrepareMigrationAgentStores) {
+  return createNativeReturnSourceRecoveryOwner({
+    db, now: Date.now, log, prepareSourceStores: prepareMigrationAgentStores,
+    verifyRetiredTarget: createNativeReturnTargetRetirementVerifier({
+      db, credentialsRetired: createAgentStoreCredentialRetirementVerifier(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "native return recovery requires PostgreSQL retirement proof")),
+      runtimeAbsent: async gatewayId => {
+        if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
+        const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
+        if (pvc.code !== 0) throw new Error("native return recovery could not inspect retired Shared home storage");
+        return !pvc.stdout.trim();
+      },
+    }),
+    releaseSourceHold: input => releaseNativeReturnSourceRecoveryHold({ db, vm: createGatewayComputeClient(log), now: Date.now,
+      wait: ms => new Promise(resolve => setTimeout(resolve, ms)) }, input),
+    sourceClient: async (gatewayId, authority) => {
+      const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+      return createMigrationClientBuilder(db, privateKey, log,
+        (id, slug) => prepareMigrationAgentStores(id, slug, authority))(id => {
+          if (id !== gatewayId) throw new Error("native return recovery source transport changed");
+          return url;
+        });
+    },
+  });
 }
 
 async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
@@ -2805,11 +2834,12 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       log,
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
+  const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(db, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
   const handlers = await buildHandlers(db, log, helm, kubeOps, {
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
     runRuntimeRecovery: convergeGateways.runExclusive,
-    prepareMigrationAgentStores,
+    prepareMigrationAgentStores, nativeReturnRecovery,
   });
 
   const deps: ControllerDeps = {
@@ -2820,6 +2850,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     modelKeySecretEnsurer,
     restartGatewayDeployment: createGatewayDeploymentRestarter(db,runKubectl, log),
     handlers,
+    requestNativeReturnSourceRecovery: nativeReturnRecovery.request,
     log,
     syncFleetIngress: syncEdgeIngressForGateways,
     convergeGateways,
@@ -3183,6 +3214,7 @@ async function buildHandlers(
     chartFingerprint: string;
     runRuntimeRecovery: (work: () => Promise<void>) => Promise<void>;
     prepareMigrationAgentStores: PrepareMigrationAgentStores;
+    nativeReturnRecovery: ReturnType<typeof createNativeReturnSourceRecoveryOwner>;
   },
 ): Promise<OperationHandlers> {
   const { privateKey, modelKeySourceIssuer } = fleetOps;
@@ -3268,6 +3300,7 @@ async function buildHandlers(
     },
     recordMigrationProgress: ({ operation, event }) =>
       journalOperationProgress(progressJournalDeps(db, logFn), operation, event),
+    recoverNativeReturnSource: fleetOps.nativeReturnRecovery.recover,
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
       db, vm: createGatewayComputeClient(logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -3715,13 +3748,14 @@ async function buildHandlers(
     replaceStoppedComputer: async (gatewayId, operationId, assertAuthority) => {
       const runtime = vmGatewayRuntimeRef.current;
       if (!runtime) throw new Error("retained-home boot replacement requires configured GCE runtime");
+      const assertCurrent = async () => {
+        await assertAuthority();
+        await withGatewayRuntimeMutation(db, gatewayId, async () => undefined);
+      };
       return runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
         actor: "cowboy", forced: false, what: "replace-builder-platform-boot", why: "Replace a stopped platform image while retaining the exact Builder home and pinned recovery images",
         target: { gatewayId, operationId }, preActionStatus: {}, mutation: { retainedHome: true },
-        action: () => runtime.replaceStoppedComputer(gatewayId, operationId, async () => {
-          await assertAuthority();
-          await withGatewayRuntimeMutation(db, gatewayId, async () => undefined);
-        }),
+        action: () => runtime.replaceStoppedComputer(gatewayId, operationId, assertCurrent),
       });
     },
     vm: createGatewayComputeClient(logFn),

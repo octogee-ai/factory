@@ -218,6 +218,7 @@ export interface FleetRouterDeps {
     gatewayIds: readonly string[],
   ) => Promise<Record<string, GatewayPodDiagnostics>>;
 
+  requestNativeReturnSourceRecovery?: (input: { uid: string; operationId: string; requestedAt: number; requestedBy: string }) => Promise<boolean>;
   suspendAuthUser: (uid: string) => Promise<void>;
   revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
 }
@@ -5471,14 +5472,12 @@ router.post(
             operationId,
           },
           classifyResult: classifyReasonedActivationLeaseMutation,
-          action: async () => db.runTransaction((transaction) =>
-            retryActivationLeaseReturn(db, transaction, {
-              uid,
-              operationId,
-              requestedAt: Date.now(),
-              requestedBy: (req as ActorRequest).uid ?? "unknown",
-            })
-          ),
+          action: async () => {
+            const input = { uid, operationId, requestedAt: Date.now(), requestedBy: (req as ActorRequest).uid ?? "unknown" };
+            const ordinary = await db.runTransaction(transaction => retryActivationLeaseReturn(db, transaction, input));
+            if (ordinary.kind === "conflict" && await deps.requestNativeReturnSourceRecovery?.(input)) return { kind: "retried" as const };
+            return ordinary;
+          },
         });
         if (outcome.kind === "not-found") {
           res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });

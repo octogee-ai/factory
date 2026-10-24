@@ -121,6 +121,16 @@ async function releaseUncommittedCheckpoint(deps: NativeReturnDeps, input: Nativ
   });
 }
 
+export async function releaseNativeReturnSourceRecoveryHold(deps: NativeReturnDeps, input: NativeComputerReturnInput): Promise<void> {
+  const source = await deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId).get();
+  if (source.data()?.runtime !== "gce-vm") throw new Error("native return source recovery runtime changed");
+  const home = source.data()?.vmHome;
+  if ((home?.returnOperationId !== undefined || home?.checkpointRequestedAt !== undefined) && home?.returnOperationId !== input.operationId) {
+    throw new Error("native return source recovery retains a foreign checkpoint hold");
+  }
+  await releaseUncommittedCheckpoint(deps, input, returnRequest(source.data(), input.operationId));
+}
+
 async function releaseCommittedWriterHold(deps: NativeReturnDeps, input: NativeComputerReturnInput, requestedAt: number | null): Promise<void> {
   const source = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.fromGatewayId);
   await deps.db.runTransaction(async (tx) => {

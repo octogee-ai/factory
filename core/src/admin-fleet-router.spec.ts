@@ -831,6 +831,7 @@ function mkAdminFleetRouteApp(opts: {
   gateways?: Record<string, Record<string, unknown>>;
   operations?: Record<string, Record<string, unknown>>;
   podDiagnostics?: Record<string, GatewayPodDiagnostics>;
+  requestNativeReturnSourceRecovery?: (input: { uid: string; operationId: string; requestedAt: number; requestedBy: string }) => Promise<boolean>;
   // gateways/{gatewayId}/assignments/{uid} durable roster docs (PR7).
   assignments?: Record<string, Record<string, Record<string, unknown>>>;
 }) {
@@ -939,6 +940,7 @@ function mkAdminFleetRouteApp(opts: {
     workspaceSlugsForUser: (data) => data.username ? [data.username] : [],
     provisionGatewayAuthSecret: vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
+    requestNativeReturnSourceRecovery: opts.requestNativeReturnSourceRecovery,
     ...(opts.podDiagnostics
       ? {
           readGatewayPodDiagnostics: vi.fn(async (gatewayId: string) =>
@@ -2145,6 +2147,25 @@ describe("manual disposable runtime return", () => {
         },
       },
     });
+  });
+
+  it.each([true, false])("asks the cleanup owner to recover a terminal Native return without forging rollback (admitted=%s)", async admitted => {
+    const source = "ceckert-test-m-4e0f970a", operationId = `builder-return-${source}-g114`;
+    const requestNativeReturnSourceRecovery = vi.fn(async () => admitted);
+    const { app, state } = mkAdminFleetRouteApp({ config: {}, requestNativeReturnSourceRecovery,
+      users: { admin: { username: "ceckert-test", provisioning: { openclaw: { gatewayId: source,
+        activationLease: { leaseId: "lease114", generation: 114, status: "returning", targetGatewayId: source, returnOperationId: operationId } } } } },
+      gateways: { [source]: { gatewayClass: "builder", ownerUid: "admin", allocation: { kind: "disposable-builder", claimedByUid: "admin", leaseId: "lease114", generation: 114 } } },
+      assignments: { [source]: { admin: { uid: "admin", gatewayId: source, state: "serving", epoch: 25 } } },
+      operations: { [operationId]: { kind: "migrate-customer", status: "failed", inputUid: "admin", rolledBack: false,
+        input: { uid: "admin", fromGatewayId: source, toGatewayId: "shared-old", source: "builder-activation-lease" },
+        steps: [{ name: "quiesce-source", status: "failed" }], error: "target cleanup unconfirmed" } },
+    });
+    await request(app).post("/customers/admin/activation-lease/return/retry").send({ operationId }).expect(admitted ? 202 : 409);
+    expect(requestNativeReturnSourceRecovery).toHaveBeenCalledWith({ uid: "admin", operationId, requestedAt: expect.any(Number), requestedBy: "unknown" });
+    expect(state.operations[operationId]).toMatchObject({ status: "failed", rolledBack: false });
+    expect(state.operations[operationId].schedulerHandoffReleased).toBeUndefined();
+    expect(state.operations[operationId].retryRequestedAt).toBeUndefined();
   });
 
   it("refuses to rearm a manual migration as a Builder return", async () => {

@@ -4,6 +4,8 @@ import pg from "pg";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 const identifier = pg.escapeIdentifier;
 const literal = pg.escapeLiteral;
+const AGENT_STORE_SEARCH_PATH = "SET LOCAL search_path = pg_catalog";
+const AGENT_STORE_CREDENTIAL_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))";
 const roleFor = (kind, id) => `octogee_${kind}_${createHash("sha256").update(id).digest("hex").slice(0, 24)}`;
 async function lockSchemaRelation(client, schema, source, object) {
     if (object.relkind === "S") {
@@ -145,8 +147,8 @@ export function createAgentStoreCredentialProvisioner(adminDsn, clientDsn) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            await client.query("SET LOCAL search_path = pg_catalog");
-            await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+            await client.query(AGENT_STORE_SEARCH_PATH);
+            await client.query(AGENT_STORE_CREDENTIAL_LOCK);
             await assertCurrent();
             const { rows: [{ current_user: admin, current_database: database }] } = await client.query("SELECT current_user, current_database()");
             await ensureRole(client, sharedRole);
@@ -191,8 +193,8 @@ export function createAgentStoreCredentialRevoker(adminDsn) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            await client.query("SET LOCAL search_path = pg_catalog");
-            await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+            await client.query(AGENT_STORE_SEARCH_PATH);
+            await client.query(AGENT_STORE_CREDENTIAL_LOCK);
             await assertCurrent();
             const role = await client.query("SELECT oid FROM pg_roles WHERE rolname = $1", [login]);
             if (role.rowCount) {
@@ -203,6 +205,41 @@ export function createAgentStoreCredentialRevoker(adminDsn) {
             }
             await assertCurrent();
             await client.query("COMMIT");
+        }
+        catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+        }
+        finally {
+            client.release();
+        }
+    };
+}
+export function createAgentStoreCredentialRetirementVerifier(adminDsn) {
+    const scope = decodeURIComponent(new URL(adminDsn).pathname.slice(1));
+    if (!scope)
+        throw new Error("Agent-store retirement verification requires a database");
+    const pool = new pg.Pool({ connectionString: adminDsn, max: 2, connectionTimeoutMillis: 10_000, query_timeout: 5_000, allowExitOnIdle: true });
+    pool.on("error", error => console.error("Agent-store retirement verification connection failed", error.message));
+    return async (gatewayId, assertCurrent) => {
+        if (!gatewayId)
+            throw new Error("Agent-store retirement verification requires a Gateway identity");
+        const login = roleFor("gateway", `${scope}:${gatewayId}`), client = await pool.connect();
+        try {
+            await client.query("BEGIN READ ONLY");
+            await client.query(AGENT_STORE_SEARCH_PATH);
+            await client.query("SET LOCAL statement_timeout = '5000ms'");
+            const lock = await client.query("SELECT pg_try_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0)) AS acquired");
+            if (lock.rows[0]?.acquired !== true) {
+                await client.query("ROLLBACK");
+                return false;
+            }
+            await assertCurrent();
+            const role = await client.query("SELECT oid, rolcanlogin FROM pg_roles WHERE rolname = $1", [login]);
+            const sessions = await client.query("SELECT 1 FROM pg_stat_activity WHERE usename = $1 OR usesysid = $2 LIMIT 1", [login, role.rows[0]?.oid ?? null]);
+            await assertCurrent();
+            await client.query("COMMIT");
+            return !role.rows.some(row => row.rolcanlogin) && sessions.rowCount === 0;
         }
         catch (error) {
             await client.query("ROLLBACK");
@@ -227,8 +264,8 @@ export function createAgentStoreOwnershipTransferer(adminDsn) {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            await client.query("SET LOCAL search_path = pg_catalog");
-            await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+            await client.query(AGENT_STORE_SEARCH_PATH);
+            await client.query(AGENT_STORE_CREDENTIAL_LOCK);
             await assertCurrent?.();
             const { rows: [{ current_user: admin }] } = await client.query("SELECT current_user");
             await ensureRole(client, sharedRole);
@@ -394,9 +431,9 @@ export async function eraseBuilderAgentStores(adminDsn, builder, custody) {
     await client.connect();
     try {
         await client.query("BEGIN");
-        await client.query("SET LOCAL search_path = pg_catalog");
+        await client.query(AGENT_STORE_SEARCH_PATH);
         await client.query("SET LOCAL row_security = off");
-        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+        await client.query(AGENT_STORE_CREDENTIAL_LOCK);
         await custody.assertCurrent();
         const discovered = await discoverAgentStoreErasureTargets(client, builder, owner, shared);
         const assertStopped = async (targets, gateways) => {

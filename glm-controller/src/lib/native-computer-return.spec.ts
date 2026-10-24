@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
-import { prepareNativeComputerReturn } from "./native-computer-return.js";
+import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./native-computer-return.js";
 
 const input = { fromGatewayId: "native", toGatewayId: "shared", uid: "alice-id", slug: "alice", operationId: "return-1", claimedStartedAt: 900 };
 
@@ -81,6 +81,22 @@ describe("native computer return checkpoint", () => {
     expect(h.update).not.toHaveBeenCalled();
     h.source.runtime = "kubernetes";
     expect(await prepareNativeComputerReturn(h.deps, input)).toBeNull();
+  });
+
+  it("releases only its exact pre-cutover source hold after typed recovery proves the target removed", async () => {
+    const h = harness(); await (await prepareNativeComputerReturn(h.deps, input))!.requestCheckpoint();
+    delete h.docs["gateways/shared"];
+    await releaseNativeReturnSourceRecoveryHold(h.deps, input);
+    expect(h.source.vmHome.returnOperationId).toBeUndefined(); expect(h.source.vmHome.checkpointRequestedAt).toBeUndefined();
+    expect(h.user.provisioning.openclaw.gatewayId).toBe("native");
+  });
+  it.each(["claim", "owner", "foreign-hold"])("retains the source hold if recovery %s changes", async change => {
+    const h = harness(); await (await prepareNativeComputerReturn(h.deps, input))!.requestCheckpoint();
+    if (change === "claim") h.docs["glmOperations/return-1"].startedAt = 901;
+    if (change === "owner") h.root.ownerUid = "foreign";
+    if (change === "foreign-hold") h.source.vmHome.returnOperationId = "foreign-return";
+    const before = { ...h.source.vmHome }; delete h.docs["gateways/shared"];
+    await expect(releaseNativeReturnSourceRecoveryHold(h.deps, input)).rejects.toThrow(); expect(h.source.vmHome).toEqual(before);
   });
 
   it("waits for acknowledgement of a fresh checkpoint and retains the hold for parking", async () => {

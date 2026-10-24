@@ -3934,12 +3934,13 @@ export function addAdminFleetRoutes(router, deps) {
                     operationId,
                 },
                 classifyResult: classifyReasonedActivationLeaseMutation,
-                action: async () => db.runTransaction((transaction) => retryActivationLeaseReturn(db, transaction, {
-                    uid,
-                    operationId,
-                    requestedAt: Date.now(),
-                    requestedBy: req.uid ?? "unknown",
-                })),
+                action: async () => {
+                    const input = { uid, operationId, requestedAt: Date.now(), requestedBy: req.uid ?? "unknown" };
+                    const ordinary = await db.runTransaction(transaction => retryActivationLeaseReturn(db, transaction, input));
+                    if (ordinary.kind === "conflict" && await deps.requestNativeReturnSourceRecovery?.(input))
+                        return { kind: "retried" };
+                    return ordinary;
+                },
             });
             if (outcome.kind === "not-found") {
                 res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });

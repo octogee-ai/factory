@@ -94,6 +94,7 @@ type PlacementResolution =
 export interface MigrateCustomerDeps {
   reportMigrationProgress: (gatewayId: string, event: MigrationProgressRequestBody) => Promise<void>;
   recordMigrationProgress: (input: { operation: Operation; event: MigrationProgressRecord }) => Promise<void>;
+  recoverNativeReturnSource?: OperationHandler;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
   prepareNativeAgentContextTransfer: (input: NativeAgentContextTransferInput) => Promise<NativeAgentContextTransfer | null>;
   acknowledgeNativeAgentContextTransfer: (input: NativeAgentContextTransferInput, policy: NativeAgentContextTransfer, result: ImportResponse) => Promise<void>;
@@ -2170,6 +2171,10 @@ export function createMigrateCustomerHandler(deps: MigrateCustomerDeps): Operati
   return async (op: Operation, ctx: OperationContext): Promise<OperationResult> => {
     if (op.input.sourceTransferMode !== undefined && op.input.sourceTransferMode !== RETAINED_POD) throw new Error('unsupported source transfer mode');
     if (op.input.sourceTransferMode === RETAINED_POD && (!deps.observeSourceTransfer || (typeof op.input.fromGatewayId !== 'string' || !op.input.fromGatewayId.startsWith('shared-')))) throw new Error('retained source transfer requires a Shared source');
+    if (op.input.recoverSourceOnly === true && op.input.nativeReturnSourceRecovery !== undefined) {
+      if (!deps.recoverNativeReturnSource) throw new Error("native return source recovery owner is unavailable");
+      return deps.recoverNativeReturnSource(op, ctx);
+    }
     const scoped: MigrateCustomerDeps = { ...deps, log: operationScopedLog(deps.log) };
     return withOperationLogScope(op.id, async () =>
       attributePreemption(scoped, op, await runMigrateCustomer(scoped, op, ctx)),

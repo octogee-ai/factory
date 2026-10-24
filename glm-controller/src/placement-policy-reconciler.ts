@@ -3845,6 +3845,12 @@ async function assertBuilderPlacementNotHeld(db: Firestore, transaction: Transac
   }
 }
 
+function nativeReturnRecoveryRearmPatch(data: Record<string, unknown>): Record<string, unknown> {
+  const recovery = record(record(data.input)?.nativeReturnSourceRecovery);
+  if (typeof recovery?.completedAt !== "number" || recovery.completedAt <= 0) return {};
+  return { "input.recoverSourceOnly": FieldValue.delete(), "input.nativeReturnSourceRecovery": FieldValue.delete() };
+}
+
 export async function enqueuePlacementMigration(
   input: FirestorePlacementPolicyInput,
   request: EnqueuePlacementMigrationInput,
@@ -3903,6 +3909,7 @@ export async function enqueuePlacementMigration(
         gatewayId: request.toGatewayId,
         retryRequestedAt: FieldValue.delete(),
         retryRequestedBy: FieldValue.delete(),
+        ...nativeReturnRecoveryRearmPatch(data),
       });
       return;
     }

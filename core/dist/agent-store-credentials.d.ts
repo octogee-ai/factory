@@ -9,6 +9,7 @@ export interface AgentStoreGatewayIdentity {
 }
 export declare function createAgentStoreCredentialProvisioner(adminDsn: string, clientDsn: string): (identity: AgentStoreGatewayIdentity, assertCurrent: () => Promise<void>) => Promise<string>;
 export declare function createAgentStoreCredentialRevoker(adminDsn: string): (gatewayId: string, assertCurrent: () => Promise<void>) => Promise<void>;
+export declare function createAgentStoreCredentialRetirementVerifier(adminDsn: string): (gatewayId: string, assertCurrent: () => Promise<void>) => Promise<boolean>;
 export declare function createAgentStoreOwnershipTransferer(adminDsn: string): (builder: {
     uid: string;
     slug: string;

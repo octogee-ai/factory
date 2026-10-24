@@ -1,13 +1,36 @@
 /* eslint-disable sonarjs/sql-queries -- Disposable fixture identifiers are escaped; values use query parameters. */
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
-import { describe, expect, it } from "vitest";
-import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker } from "./agent-store-credentials.js";
+import { describe, expect, it, vi } from "vitest";
+import { createAgentStoreCredentialProvisioner, createAgentStoreCredentialRevoker, createAgentStoreCredentialRetirementVerifier } from "./agent-store-credentials.js";
 
 const dsn = process.env.OCTOGEE_TEST_POSTGRES_DSN;
 const roleFor = (kind: string, id: string) => `octogee_${kind}_${createHash("sha256").update(id).digest("hex").slice(0, 24)}`;
 
 describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
+  it("refuses boundedly under a held credential lock without issuing a proof or creating a role", async () => {
+    const gatewayId = `retirement-lock-${randomUUID()}`;
+    const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
+    const login = roleFor("gateway", `${scope}:${gatewayId}`);
+    const blocker = new pg.Client({ connectionString: dsn });
+    await blocker.connect();
+    let pending: Promise<boolean> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+      const assertCurrent = vi.fn(async () => {});
+      pending = createAgentStoreCredentialRetirementVerifier(dsn!)(gatewayId, assertCurrent);
+      const unavailable = new Promise<never>((_resolve, reject) => { const timer = setTimeout(() => reject(new Error("retirement proof waited on the held credential lock")), 1000); timer.unref(); });
+      expect(await Promise.race([pending, unavailable])).toBe(false);
+      expect(assertCurrent).not.toHaveBeenCalled();
+      expect((await blocker.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [login])).rows).toEqual([]);
+    } finally {
+      await blocker.query("ROLLBACK");
+      await pending?.catch(() => {});
+      await blocker.end();
+    }
+  }, 5000);
+
   it("disables only the stopped Gateway login, preserves ownership, rejects active sessions and stale issuance", async () => {
     const gatewayId = `retirement-${randomUUID()}`;
     const builder = { uid: gatewayId, slug: gatewayId };
@@ -18,6 +41,7 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
     const admin = new pg.Client({ connectionString: dsn });
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
     const revoke = createAgentStoreCredentialRevoker(dsn!);
+    const verify = createAgentStoreCredentialRetirementVerifier(dsn!);
     const identity = { gatewayId, gatewayClass: "builder" as const, builder, token: "synthetic-retirement" };
     let active: pg.Client | undefined;
     await admin.connect();
@@ -27,14 +51,22 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
       await active.connect();
       await active.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
       const before = await admin.query("SELECT oid, nspowner FROM pg_namespace WHERE nspname = $1", [schema]);
+      expect(await verify(gatewayId, async () => {})).toBe(false);
       await expect(revoke(gatewayId, async () => {})).rejects.toThrow("still has database sessions");
+      await admin.query(`ALTER ROLE ${pg.escapeIdentifier(login)} NOLOGIN`);
+      expect(await verify(gatewayId, async () => {})).toBe(false);
       await active.end(); active = undefined;
+      expect(await verify(gatewayId, async () => {})).toBe(true);
+      await admin.query(`ALTER ROLE ${pg.escapeIdentifier(login)} LOGIN`);
+      expect(await verify(gatewayId, async () => {})).toBe(false);
       let checks = 0;
       await expect(revoke(gatewayId, async () => { if (++checks === 2) throw new Error("claim lost"); })).rejects.toThrow("claim lost");
       expect((await admin.query("SELECT rolcanlogin FROM pg_roles WHERE rolname = $1", [login])).rows[0].rolcanlogin).toBe(true);
       await revoke(gatewayId, async () => {});
       await revoke(gatewayId, async () => {});
       expect((await admin.query("SELECT rolcanlogin FROM pg_roles WHERE rolname = $1", [login])).rows[0].rolcanlogin).toBe(false);
+      expect(await verify(gatewayId, async () => {})).toBe(true);
+      await expect(verify(gatewayId, async () => { throw new Error("retirement proof changed"); })).rejects.toThrow("retirement proof changed");
       expect((await admin.query("SELECT oid, nspowner FROM pg_namespace WHERE nspname = $1", [schema])).rows).toEqual(before.rows);
       expect((await admin.query("SELECT 1 FROM pg_auth_members m JOIN pg_roles p ON p.oid = m.roleid JOIN pg_roles c ON c.oid = m.member WHERE p.rolname = $1 AND c.rolname = $2", [owner, login])).rowCount).toBe(1);
       await expect(provision(identity, async () => { throw new Error("Gateway retired"); })).rejects.toThrow("Gateway retired");
@@ -68,12 +100,15 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
         await pending;
         await blocker.end();
       }
+      await admin.query(`DROP ROLE ${pg.escapeIdentifier(login)}`);
+      expect(await verify(gatewayId, async () => {})).toBe(true);
       await revoke(`absent-${gatewayId}`, async () => {});
     } finally {
       await active?.end();
       await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
-      await admin.query(`DROP OWNED BY ${pg.escapeIdentifier(login)}, ${pg.escapeIdentifier(owner)}`);
-      await admin.query(`DROP ROLE ${pg.escapeIdentifier(login)}, ${pg.escapeIdentifier(owner)}`);
+      const remaining = await admin.query("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [[login, owner]]);
+      if (remaining.rowCount) await admin.query(`DROP OWNED BY ${remaining.rows.map(row => pg.escapeIdentifier(row.rolname)).join(", ")}`);
+      await admin.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(login)}, ${pg.escapeIdentifier(owner)}`);
       await admin.end();
     }
   });

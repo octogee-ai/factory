@@ -58,6 +58,12 @@ export interface FleetRouterDeps {
     releaseAuthority?: CentralReleaseAuthority;
     readGatewayPodDiagnostics?: (gatewayId: string) => Promise<GatewayPodDiagnostics>;
     readGatewayPodDiagnosticsBatch?: (gatewayIds: readonly string[]) => Promise<Record<string, GatewayPodDiagnostics>>;
+    requestNativeReturnSourceRecovery?: (input: {
+        uid: string;
+        operationId: string;
+        requestedAt: number;
+        requestedBy: string;
+    }) => Promise<boolean>;
     suspendAuthUser: (uid: string) => Promise<void>;
     revokeConnectorGrantsForUser: (uid: string) => Promise<void>;
 }
