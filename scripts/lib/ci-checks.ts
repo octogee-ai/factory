@@ -19,14 +19,14 @@ const emulatorDirectories: Partial<Record<JobKey, string>> = {
   [JOBS.octogeeApiEmulator]: "octogee-api",
 };
 
-export const NODE_MINIMUMS: Record<number, string> = { 22: "22.0.0", 24: "24.12.0" };
+export const NODE_MINIMUMS: Record<number, string> = { 22: "22.0.0", 24: "24.22.1" };
 const DEFAULT_NODE_VERSION = 24;
 const packageNodeVersion = (directory: string) => UNIT_PACKAGES.find(pkg => pkg.dir === directory)?.nodeVersion ?? DEFAULT_NODE_VERSION;
 
 export function nodeVersionCheck(nodeVersion: number): string {
   const minimum = NODE_MINIMUMS[nodeVersion];
   if (!minimum) throw new Error(`No Node ${nodeVersion} toolchain is declared for CI`);
-  return `node -e 'const [major, minor] = process.versions.node.split(".").map(Number); const [, wantMinor] = "${minimum}".split(".").map(Number); if (major !== ${nodeVersion} || minor < wantMinor) throw new Error("CI requires Node >=${minimum} <${nodeVersion + 1} (found " + process.versions.node + "); set CI_NODE_${nodeVersion}_BIN or use ci:docker")'`;
+  return `node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); const [, wantMinor, wantPatch] = "${minimum}".split(".").map(Number); if (major !== ${nodeVersion} || (minor < wantMinor || (minor === wantMinor && patch < wantPatch))) throw new Error("CI requires Node >=${minimum} <${nodeVersion + 1} (found " + process.versions.node + "); set CI_NODE_${nodeVersion}_BIN or use ci:docker")'`;
 }
 
 export const CHECK_LANES = ["units-1", "units-2", "units-3", "emulators", "quality"] as const;

@@ -51,6 +51,8 @@ export function runCorePostgresChecks() {
     run("git", ["-C", checkout, "fetch", "--depth=1", "https://github.com/ceckert/openclaw.git", sourceSha], {
       env: { ...env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
     });
+    run("git", ["-C", checkout, "checkout", "--detach", sourceSha]);
+    run("corepack", ["pnpm", "--filter", ".", "install", "--frozen-lockfile", "--ignore-scripts"], { cwd: checkout, env });
     run(process.execPath, [join(root, "scripts/ops/qualify-agent-store-routines.mjs"), checkout], { env });
     const failures = [];
     try { run("git", ["diff", "--exit-code", "--", "core/src/agent-store-routines.json"]); }

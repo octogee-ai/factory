@@ -10,6 +10,7 @@ let directory: string;
 let drift = false;
 let integrationFails = false;
 let roleValid = true;
+let preparationFails = false;
 const calls: { command: string; args: string[]; env?: NodeJS.ProcessEnv }[] = [];
 
 beforeEach(() => {
@@ -19,6 +20,7 @@ beforeEach(() => {
   directory = "";
   drift = integrationFails = false;
   roleValid = true;
+  preparationFails = false;
   exec.mockReset().mockImplementation((command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
     calls.push({ command: basename(command), args, env: options.env });
     if (basename(command) === "postgres") return "postgres (PostgreSQL) 16.15\n";
@@ -30,7 +32,8 @@ beforeEach(() => {
     }
     if (basename(command) === "psql" && args.includes("-At")) return roleValid ? "t\n" : "f\n";
     if (basename(command) === "git" && args.includes("diff") && drift) throw new Error("catalog drift");
-    if (command === "npm" && integrationFails) throw new Error("integration failed");
+    if (command === "corepack" && preparationFails) throw new Error("frozen dependency preparation failed");
+    if (command === "npm" && args[0] === "test" && integrationFails) throw new Error("integration failed");
     return "";
   });
 });
@@ -44,8 +47,16 @@ describe("required core PostgreSQL CI", () => {
   it("uses an isolated non-superuser owner and runs both PG files after pinned catalog qualification", () => {
     runCorePostgresChecks();
     const qualifier = calls.findIndex(call => call.args.some(arg => arg.endsWith("qualify-agent-store-routines.mjs")));
+    const checkout = calls.findIndex(call => call.command === "git" && call.args.includes("checkout"));
+    const dependencies = calls.findIndex(call => call.command === "corepack");
+    expect(checkout).toBeGreaterThan(-1);
+    const fetched = calls.find(call => call.command === "git" && call.args.includes("fetch"))!;
+    expect(calls[checkout].args).toEqual(["-C", join(directory, "native"), "checkout", "--detach", fetched.args.at(-1)]);
+    expect(calls[dependencies].args).toEqual(["pnpm", "--filter", ".", "install", "--frozen-lockfile", "--ignore-scripts"]);
+    expect(dependencies).toBeGreaterThan(checkout);
+    expect(qualifier).toBeGreaterThan(dependencies);
     const diff = calls.findIndex(call => call.command === "git" && call.args.includes("diff"));
-    const integration = calls.findIndex(call => call.command === "npm");
+    const integration = calls.findIndex(call => call.command === "npm" && call.args[0] === "test");
     expect(qualifier).toBeGreaterThan(-1);
     expect(diff).toBeGreaterThan(qualifier);
     expect(integration).toBeGreaterThan(diff);
@@ -54,6 +65,15 @@ describe("required core PostgreSQL CI", () => {
     expect(dsn.username).toBe("octogee_ci_admin");
     expect(dsn.searchParams.get("host")).toBe(join(directory, "socket"));
     expect(calls.find(call => call.command === "psql" && call.args.some(arg => arg.includes("CREATE ROLE")))?.args.join(" ")).toContain("NOSUPERUSER NOCREATEDB CREATEROLE");
+    expect(calls.at(-1)?.args).toContain("stop");
+    expect(existsSync(directory)).toBe(false);
+  });
+
+  it("stops its database and refuses qualification when frozen Native preparation fails", () => {
+    preparationFails = true;
+    expect(() => runCorePostgresChecks()).toThrow("frozen dependency preparation failed");
+    expect(calls.some(call => call.args.some(arg => arg.endsWith("qualify-agent-store-routines.mjs")))).toBe(false);
+    expect(calls.some(call => call.command === "npm")).toBe(false);
     expect(calls.at(-1)?.args).toContain("stop");
     expect(existsSync(directory)).toBe(false);
   });

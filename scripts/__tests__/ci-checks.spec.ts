@@ -41,13 +41,14 @@ describe("portable Linux PR checks", () => {
     expect(plan.filter(job => job.nodeVersion !== 22).every(job => job.nodeVersion === 24)).toBe(true);
   });
 
-  it("rejects a Node 24 toolchain older than Firebase 13's 24.12 floor", () => {
+  it("rejects a Node 24 toolchain older than Native qualification's 24.22.1 floor", () => {
     const check = (version: string) => () => execFileSync("/bin/bash", ["-euc", nodeVersionCheck(24)], {
       env: { ...process.env, PATH: fakeNode(version) }, stdio: "pipe",
     });
-    expect(check("24.11.9")).toThrow(/requires Node >=24.12.0/);
-    expect(check("22.20.0")).toThrow(/requires Node >=24.12.0/);
-    expect(check("24.12.0")).not.toThrow();
+    expect(check("24.21.0")).toThrow(/requires Node >=24.22.1/);
+    expect(check("22.20.0")).toThrow(/requires Node >=24.22.1/);
+    expect(check("24.22.0")).toThrow(/requires Node >=24.22.1/);
+    expect(check("24.22.1")).not.toThrow();
     expect(() => nodeVersionCheck(20)).toThrow("No Node 20 toolchain");
   });
 
