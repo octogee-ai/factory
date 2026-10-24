@@ -214,17 +214,14 @@ point itself.
   `vi.mock(".../gateway-edge/src/lib/db")` is debt to migrate onto this
   pattern, not a model to copy).
 
-## Live tests (`tests/live/*.live.spec.ts`) must self-clean at every depth
+## Manual live tests (`tests/live/*.live.spec.ts`) must self-clean at every depth
 
-[`live-test.yml`](../../.github/workflows/live-test.yml) runs these against deployed TEST (api-test.octogee.com +
-`octogee-test` Firestore) on a cron. Any live spec that provisions real
-resources (reservations, customers, gateways) must tear them down on **every**
-depth/branch it can run, not only its deepest "activate" path — a provisioning
-live spec that cleaned up only on `activate` minted a ghost disposable Builder gateway
-in TEST every night because the cron's *default* depth was the shallower
-`request` (reserve-only). Before adding or reviewing a provisioning
-`*.live.spec.ts`, verify cleanup runs on the cron's default path specifically,
-not only a manual `workflow_dispatch` deep mode.
+The `tests/live/` package is available for explicit operator runs against deployed
+TEST (`api-test.octogee.com` and `octogee-test` Firestore). The scheduled Live TEST
+checks workflow and its dedicated runner have been removed. Any manual live spec
+that provisions real resources must tear them down on every selected depth or
+branch, not only its deepest activation path. Before running a provisioning spec,
+verify cleanup covers the selected path.
 
 ## Tests that shell out to real git break on CI two ways local git config masks
 
