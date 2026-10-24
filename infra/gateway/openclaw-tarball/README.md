@@ -148,7 +148,55 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 24 frozen main
+## Current overlay: October 24 session-list replacement readiness
+
+This recut adds the six-file session-list repair to the qualified October 24
+overlay below. Source `cf149eb8ba23177fbf1992a7ff4f3a7dc47b8b94` is published on
+[`fix/session-catalog-reload-readiness-20261024`](https://github.com/ceckert/openclaw/tree/fix/session-catalog-reload-readiness-20261024).
+The upstream contribution is [#182783](https://github.com/openclaw/openclaw/pull/182783).
+It awaits the current provider catalog at the existing asynchronous session-list
+selection boundary when runtime replacement invalidates the previous callbacks.
+Cancellation, disposal and superseding replacement retain their owning lifecycle;
+ordinary background catalog enrichment keeps its completed facts.
+
+The source remains on frozen upstream `fe8d4597345c307f637fe0a2a5e6770226c7da9d`
+with the existing security overlay. Dependency manifests, lockfiles and policy,
+storage owners, PostgreSQL DDL and migrations are unchanged from `55d6c80e`.
+Protocol remains 4, state schema 31 and agent schema 33. The maintained PostgreSQL
+catalog qualifier reproduced identical routine, trigger and expression identities;
+only its source provenance changes. Hosted UI inputs are unchanged and the
+maintained generator regenerates their bundles and notices from the exact source.
+
+The owning 21 tests, Native types, lint/format and scoped independent review pass.
+Normal build, both maintained packers, the Native tarball checker and the strict
+isolated pair install pass. Actual Linux AMD64 and ARM64 full-plugin installers
+pass their bundled trust, registry, CUA, source-matched Codex/Parallel and three
+native-hook checks. Each installed inventory has 762 physical package roots and
+569 name/version pairs; pinned OSV 2.5.1 passes with unchanged policy and no new
+exception. Both nested and independent global npm copies match all 15 previously
+qualified upstream repair files.
+
+The same installed Gateway fixture runs on AMD64/Node 26.12.1 against both pins.
+Public `config.patch` holds synthetic-provider replacement; request logs confirm
+`sessions.list` entered the server before observations. `55d6c80e` produces the
+exact `PluginInstanceUnavailableError`. This source respects a 1000ms caller
+deadline, keeps the next request pending until publication, then returns the
+successor's high thinking policy and the same persisted session. Subsequent
+config/model reads, cron hold/session read/resume, health and clean shutdown pass.
+No model calls occur. Ordinary catalog enrichment was correctly nonblocking and
+is not used as the failure control. The original Mattermost-stop-to-reload trigger
+is not established; full live Octogee migration acceptance remains required.
+
+Qualified root: `openclaw-fork-3b908e0f.tgz`, 132264656 bytes,
+SHA256 `3b908e0f5ad977595a371e7a2ce446b82c1eba07084f6fd6d4647c7b0189f85d`.
+Qualified Mattermost: `openclaw-mattermost-dc7c9709.tgz`, 1258426 bytes,
+SHA256 `dc7c97096165b496741e6d215180f3dbb26db0eb6b006a563207ff22ce87c85e`.
+The 873 Mattermost file hashes match the prior pair; the archive encoding differs.
+Both objects were published create-only. Full generation-bound downloads verify
+the exact hashes and byte counts: root generation `1792870075754965`, Mattermost
+generation `1792870079047411`. This publishes packages, not an environment.
+
+## Previous October 24 frozen main
 
 The operator selected latest upstream main `fe8d4597345c307f637fe0a2a5e6770226c7da9d`
 for independent qualification. It remains frozen. The overlay is
