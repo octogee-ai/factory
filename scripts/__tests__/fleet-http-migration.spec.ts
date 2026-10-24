@@ -72,6 +72,8 @@ import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
 import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
+import { OPENCLAW_DIR } from "../lib/config.js";
+import { readActivationManifest, activationManifestTarPath } from "../lib/migration-activation-manifest.js";
 
 const spawnMock = vi.fn();
 const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -250,7 +252,8 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     log: vi.fn(),
     uidForSlug: vi.fn(async () => "uid-chris"),
     resumeCustomer: vi.fn(async () => undefined),
-    exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
+    sourceMigrationIdentityCustody: vi.fn(async (_slug, migrationId) => ({ migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 })),
+    exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "chris") }, projectAgents: [], mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
     quiesceCustomer: vi.fn(async () => ({ drained: true, runningCount: 0 })),
     listExportPaths: vi.fn(async () => [
       { cwd: "/tmp/state", path: "agents/octogee-chris-coach" },
@@ -2114,7 +2117,7 @@ describe("queued-rsync migration control handlers", () => {
     const manifest = {
       version: 2 as const, slug: "chris", appliedFingerprint: "fp-chris",
       agentId: "octogee-chris-coach", accountId: "chris-coach",
-      agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "coach-pat" }, bindings: [],
+      agent: { id: "octogee-chris-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "chris") }, projectAgents: [], mattermostAccount: { botToken: "coach-pat" }, bindings: [],
     };
     const sources = [{ cwd: "/state", path: "agents/octogee-chris-coach" }];
     function push(adapter: CustomerLifecycleAdapter, timeoutMs = 330_000) {
@@ -3081,7 +3084,12 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   );
   const tempRoots: string[] = [];
 
+  beforeEach(async () => {
+    await fs.rm(path.dirname(path.join(OPENCLAW_DIR, activationManifestTarPath("chris"))), { recursive: true, force: true });
+  });
+
   afterEach(async () => {
+    await fs.rm(path.dirname(path.join(OPENCLAW_DIR, activationManifestTarPath("chris"))), { recursive: true, force: true });
     for (const root of tempRoots.splice(0)) {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -3176,6 +3184,9 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     adapter: ReturnType<typeof mkAdapter>;
     req: Request;
   } {
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const workspace = path.join(stateDir, "customers", "chris");
+    fsSync.mkdirSync(workspace, { recursive: true });
     const body: PushRsyncStateRequestBody = {
       migrationId,
       slug: "chris",
@@ -3192,7 +3203,8 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
         { cwd: stateDir, path: path.join("agents", "octogee-chris-coach") },
       ]),
       releaseAgent: vi.fn(options.releaseAgent ?? (async () => undefined)),
-      exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach" }, mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
+      sourceMigrationIdentityCustody: vi.fn(async () => ({ migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 })),
+      exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace }, projectAgents: [], mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
     });
     return {
       handler: createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw: options.runOpenClaw ?? fakeOpenClaw(), ...(options.log ? { log: options.log } : {}),
@@ -3203,6 +3215,28 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       }),
     };
   }
+
+  it.skipIf(process.platform !== "linux")("captures source persona before detach and retains its first bytes across a failed push retry", async () => {
+    const stateDir = await mkTempRoot();
+    await writeStore(stateDir, CARRIED_STORE, () => {});
+    const original = Buffer.from("# Identity\r\n- **Name:** Original source 🐙\r\n");
+    const workspace = path.join(stateDir, "customers", "chris"), file = path.join(workspace, "IDENTITY.md");
+    await fs.mkdir(workspace, { recursive: true }); await fs.writeFile(file, original);
+    const captured: unknown[] = [];
+    const { handler, adapter, req } = pushRsync(stateDir, "source-persona-retry", { releaseAgent: async () => {
+      const manifest = await readActivationManifest(OPENCLAW_DIR, "chris");
+      captured.push(manifest.sourceWorkspaceIdentities);
+      expect(Buffer.from(manifest.sourceWorkspaceIdentities!.files[0].content!, "base64")).toEqual(original);
+      await fs.writeFile(file, "Native drift after the initial capture");
+    } });
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 23 }));
+    const first = mkResponse(); await handler(req, first.res, vi.fn()); expect(first.getStatus()).toBe(500);
+    const retained = await readActivationManifest(OPENCLAW_DIR, "chris");
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const retry = mkResponse(); await handler(req, retry.res, vi.fn()); expect(retry.getStatus()).toBe(200);
+    expect(adapter.exportOpenClawActivationManifest).toHaveBeenCalledOnce();
+    expect(captured).toEqual([retained.sourceWorkspaceIdentities, retained.sourceWorkspaceIdentities]);
+  });
 
   it("carries a detached PostgreSQL anchor and never the live files", async () => {
     const stateDir = await mkTempRoot();
@@ -3773,6 +3807,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   async function archivedContextFixture(configOnlyAgent = false) {
     const stateDir = await mkTempRoot(), stageDir = await mkTempRoot(), landingRoot = await mkTempRoot(), procRoot = await mkTempRoot();
     const destinationPath = await writeStore(stateDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native'), ('native')"));
+    await fs.mkdir(path.join(stateDir, "customers", "chris"), { recursive: true });
     const restoredPath = await writeStore(landingRoot, "restored.sqlite", db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
     await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
     await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-coach", "agent", "memory.md"), "shared-memory");
@@ -5298,7 +5333,7 @@ describe("createResumeHandler", () => {
       await resumed;
     }
     expect(response.getStatus()).toBe(200);
-    expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris");
+    expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
     expect(deps.voiceMigration).toHaveBeenCalledExactlyOnceWith({ slug: "chris", operationId: body.migrationId, phase: "resume" });
   });
 
@@ -5367,7 +5402,7 @@ describe("createResumeHandler", () => {
         mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
       );
       expect(response.getStatus()).toBe(200);
-      expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris");
+      expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
       await deleteGiteaUserPubKey("chris", inheritedKey, targetOwner);
       expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
       const retried = mkResponse();

@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { execFileSync, spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
 import { applyConfigPatch } from "./apply-config-patch";
@@ -16,6 +17,8 @@ import {
   extractOpenClawActivationManifest,
   readActivationManifest,
   writeActivationManifest,
+  captureSourceWorkspaceIdentities,
+  restoreSourceWorkspaceIdentities,
   type MigrationActivationManifest,
 } from "./migration-activation-manifest";
 import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
@@ -1299,5 +1302,130 @@ describe("migration activation manifest — patch budget", () => {
     expect(vi.mocked(applyConfigPatch).mock.calls[0][1]).toMatchObject({
       totalDeadlineMs: IMPORT_ACTIVATION_PATCH_DEADLINE_MS,
     });
+  });
+});
+
+
+describe.skipIf(process.platform !== "linux")("source rollback workspace identities", () => {
+  const custody = { migrationId: "mig-alice", uid: "uid-alice", gatewayId: "shared-source", podUid: "source-pod", epoch: 0 };
+  async function source() {
+    const root = await mkTmp();
+    const workspace = path.join(root, "customers", "alice"), project = path.join(workspace, "projects", "orbit");
+    await fs.mkdir(project, { recursive: true });
+    const value = manifest();
+    value.agent.workspace = workspace;
+    const projectId = "octogee-alice-proj-orbit-coach";
+    value.projectAgents = [{ agentId: projectId, accountId: "alice-proj-orbit", agent: { id: projectId, workspace: project },
+      mattermostAccount: { botToken: "project-pat" }, bindings: [{ agentId: projectId, match: { channel: "mattermost", accountId: "alice-proj-orbit" } }] }];
+    return { root, workspace, project, value };
+  }
+
+  it("durably retains exact Unicode/CRLF bytes and intentional absence across retry without recapturing Native drift", async () => {
+    const f = await source(), file = path.join(f.project, "IDENTITY.md");
+    const original = Buffer.from("# Persona\r\n- **Name:** Harbor 🐙\r\n\r\nAuthored notes\r\n");
+    await fs.writeFile(file, original);
+    const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    await writeActivationManifest(f.root, captured);
+    await fs.writeFile(file, "- Name: native-machine-id\n");
+    await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), "Native-created file\n");
+    const restored = await readActivationManifest(f.root, "alice");
+    expect(await captureSourceWorkspaceIdentities(restored, f.root, custody)).toEqual(captured);
+    const current = vi.fn(async () => undefined);
+    await restoreSourceWorkspaceIdentities(restored, f.root, custody, current);
+    expect(await fs.readFile(file)).toEqual(original);
+    await expect(fs.stat(path.join(f.workspace, "IDENTITY.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await restoreSourceWorkspaceIdentities(restored, f.root, custody, current);
+    expect(await fs.readFile(file)).toEqual(original);
+    expect(current).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["capture", "restore"] as const)("rejects a FIFO identity without blocking %s", async mode => {
+    const f = await source(), file = path.join(f.project, "IDENTITY.md");
+    await fs.writeFile(file, "original persona");
+    const value = mode === "restore" ? await captureSourceWorkspaceIdentities(f.value, f.root, custody) : f.value;
+    await fs.unlink(file);
+    execFileSync("/usr/bin/mkfifo", [file]);
+    const result = await new Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-"], { timeout: 4_000, killSignal: "SIGKILL", stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      let opening: ReturnType<typeof setTimeout> | undefined;
+      child.stdout.on("data", bytes => {
+        stdout += bytes;
+        if (!opening && stdout.includes("Opening FIFO")) opening = setTimeout(() => { child.kill("SIGKILL"); }, 2_000);
+      });
+      child.stderr.on("data", bytes => { stderr += bytes; });
+      child.on("error", reject);
+      child.on("close", (code, signal) => { clearTimeout(opening); resolve({ code, signal, stdout, stderr }); });
+      child.stdin.end(`import { captureSourceWorkspaceIdentities, restoreSourceWorkspaceIdentities } from ${JSON.stringify(new URL("../dist/migration-activation-manifest.js", import.meta.url).href)};
+        try {
+          const manifest = ${JSON.stringify(value)}, root = ${JSON.stringify(f.root)}, custody = ${JSON.stringify(custody)};
+          process.stdout.write("Opening FIFO\\n");
+          if (${JSON.stringify(mode)} === "capture") await captureSourceWorkspaceIdentities(manifest, root, custody);
+          else await restoreSourceWorkspaceIdentities(manifest, root, custody, async () => {});
+          process.stderr.write("FIFO was accepted"); process.exitCode = 2;
+        } catch (error) {
+          if (!String(error.message).includes("identity file is unsafe")) throw error;
+          process.stdout.write("FIFO refused");
+        }`);
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ code: 0, signal: null });
+    expect(result.stdout).toContain("FIFO refused");
+    expect((await fs.lstat(file)).isFIFO()).toBe(true);
+  });
+
+  it.each(["workspace", "file", "hardlink"])("refuses an unsafe %s without following it", async mode => {
+    const f = await source(), outside = await mkTmp();
+    const target = path.join(outside, "IDENTITY.md");
+    await fs.writeFile(target, "foreign bytes");
+    if (mode === "workspace") { await fs.rm(f.project, { recursive: true }); await fs.symlink(outside, f.project); }
+    else if (mode === "file") await fs.symlink(target, path.join(f.project, "IDENTITY.md"));
+    else await fs.link(target, path.join(f.project, "IDENTITY.md"));
+    await expect(captureSourceWorkspaceIdentities(f.value, f.root, custody)).rejects.toThrow();
+    expect(await fs.readFile(target, "utf8")).toBe("foreign bytes");
+  });
+
+  it.each(["workspace", "agent"])("refuses foreign captured %s authority", async mode => {
+    const f = await source();
+    if (mode === "workspace") f.value.projectAgents[0].agent.workspace = f.workspace;
+    else f.value.projectAgents[0].agentId = "octogee-bob-proj-orbit-coach";
+    await expect(captureSourceWorkspaceIdentities(f.value, f.root, custody)).rejects.toThrow(/foreign|canonical/);
+  });
+
+  it("refuses content corruption and files exceeding the existing Native identity limit", async () => {
+    const f = await source(), file = path.join(f.project, "IDENTITY.md");
+    await fs.writeFile(file, "original");
+    const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    captured.sourceWorkspaceIdentities!.files[1].content = Buffer.from("tampered").toString("base64");
+    await writeActivationManifest(f.root, captured);
+    await expect(readActivationManifest(f.root, "alice")).rejects.toThrow("capture changed");
+    await fs.writeFile(file, Buffer.alloc(4 * 1024 ** 2 + 1));
+    await expect(captureSourceWorkspaceIdentities(f.value, f.root, custody)).rejects.toThrow("limit");
+  });
+
+  it("keeps source identity captures out of the Native config RPC payload", async () => {
+    const f = await source();
+    const original = Buffer.from("private source identity bytes that belong only in the retained manifest");
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), original);
+    const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    const patches: object[] = [];
+    await applyOpenClawActivationManifest(captured, {
+      rpc: { configGet: async () => ({ config: {}, hash: "before" }), configPatch: async patch => { patches.push(patch); return { hash: "after" }; } } as never,
+      log: vi.fn(),
+    });
+    expect(patches.length).toBeGreaterThan(0);
+    expect(JSON.stringify(patches)).not.toContain("sourceWorkspaceIdentities");
+    expect(JSON.stringify(patches)).not.toContain(original.toString("base64"));
+    expect(JSON.stringify(patches)).not.toContain(custody.podUid);
+  });
+
+  it("keeps Native drift and the original durable capture when the final custody check refuses", async () => {
+    const f = await source(), file = path.join(f.project, "IDENTITY.md");
+    await fs.writeFile(file, "original");
+    const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    await writeActivationManifest(f.root, captured);
+    await fs.writeFile(file, "Native drift");
+    await expect(restoreSourceWorkspaceIdentities(captured, f.root, custody, async () => { throw new Error("source departed"); })).rejects.toThrow("source departed");
+    expect(await fs.readFile(file, "utf8")).toBe("Native drift");
+    expect((await readActivationManifest(f.root, "alice")).sourceWorkspaceIdentities).toEqual(captured.sourceWorkspaceIdentities);
   });
 });

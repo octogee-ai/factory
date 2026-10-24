@@ -11,7 +11,7 @@ export function runCorePostgresChecks() {
   const bin = "/usr/lib/postgresql/16/bin";
   const run = (command, args, options = {}) => execFileSync(command, args, { cwd: root, stdio: "inherit", ...options });
   const server = (command, args) => process.getuid?.() === 0
-    ? run("runuser", ["-u", "postgres", "--", join(bin, command), ...args])
+    ? run("/usr/sbin/runuser", ["-u", "postgres", "--", join(bin, command), ...args])
     : run(join(bin, command), args);
   const version = run(join(bin, "postgres"), ["--version"], { encoding: "utf8", stdio: "pipe" });
   if (!/^postgres \(PostgreSQL\) 16\./.test(version)) throw new Error("Core CI requires PostgreSQL 16");

@@ -3,6 +3,22 @@ import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { type GatewayConfigClass } from "./system-config-invariants.js";
 export declare const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export declare const MIGRATION_ACTIVATION_FILE = "activation.json";
+export declare const MIGRATION_ACTIVATION_MAX_BYTES: number;
+export interface MigrationSourceIdentityCustody {
+    migrationId: string;
+    uid: string;
+    gatewayId: string;
+    podUid: string;
+    epoch: number;
+}
+interface SourceWorkspaceIdentity {
+    agentId: string;
+    content: string | null;
+    sha256: string | null;
+}
+interface SourceWorkspaceIdentities extends MigrationSourceIdentityCustody {
+    files: SourceWorkspaceIdentity[];
+}
 export interface MigrationActivationManifestProjectAgent {
     agentId: string;
     accountId: string;
@@ -20,8 +36,12 @@ export interface MigrationActivationManifest {
     mattermostAccount: Record<string, unknown>;
     bindings: unknown[];
     projectAgents: MigrationActivationManifestProjectAgent[];
+    sourceWorkspaceIdentities?: SourceWorkspaceIdentities;
 }
 export declare function activationManifestTarPath(slug: string): string;
+export declare function assertSourceIdentityCustody(expected: MigrationSourceIdentityCustody, actual: MigrationSourceIdentityCustody): void;
+export declare function captureSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody): Promise<MigrationActivationManifest>;
+export declare function restoreSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody, assertCurrent: () => Promise<void>): Promise<void>;
 export declare function extractOpenClawActivationManifest(configPath: string, slug: string, opts: {
     appliedFingerprint: string;
     botToken?: string;

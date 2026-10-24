@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { IMPORT_ACTIVATION_PATCH_DEADLINE_MS } from "@octogee/shared/types/fleet-controller";
@@ -25,6 +26,26 @@ import {
 
 export const MIGRATION_ACTIVATION_DIR = ".octogee-migration-activation";
 export const MIGRATION_ACTIVATION_FILE = "activation.json";
+export const MIGRATION_ACTIVATION_MAX_BYTES = 256 * 1024 ** 2;
+const IDENTITY_MAX_BYTES = 4 * 1024 ** 2;
+
+export interface MigrationSourceIdentityCustody {
+  migrationId: string;
+  uid: string;
+  gatewayId: string;
+  podUid: string;
+  epoch: number;
+}
+
+interface SourceWorkspaceIdentity {
+  agentId: string;
+  content: string | null;
+  sha256: string | null;
+}
+
+interface SourceWorkspaceIdentities extends MigrationSourceIdentityCustody {
+  files: SourceWorkspaceIdentity[];
+}
 
 export interface MigrationActivationManifestProjectAgent {
   agentId: string;
@@ -44,6 +65,7 @@ export interface MigrationActivationManifest {
   mattermostAccount: Record<string, unknown>;
   bindings: unknown[];
   projectAgents: MigrationActivationManifestProjectAgent[];
+  sourceWorkspaceIdentities?: SourceWorkspaceIdentities;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -223,7 +245,158 @@ function validateManifestShape(
     appliedFingerprint,
     ...workspace,
     projectAgents,
+    ...(value.sourceWorkspaceIdentities === undefined ? {} : {
+      sourceWorkspaceIdentities: validateSourceWorkspaceIdentities(value.sourceWorkspaceIdentities, [workspace, ...projectAgents]),
+    }),
   };
+}
+
+function validateSourceIdentityCustody(value: unknown): asserts value is MigrationSourceIdentityCustody {
+  if (!isRecord(value) || !["migrationId", "uid", "gatewayId", "podUid"].every(key =>
+    typeof value[key] === "string" && /^[A-Za-z0-9_.:-]{1,200}$/u.test(value[key] as string)) ||
+    !Number.isSafeInteger(value.epoch) || Number(value.epoch) < 0) {
+    throw new Error("Source workspace identity custody is invalid");
+  }
+}
+
+function identityBytes(file: SourceWorkspaceIdentity): Buffer | null {
+  if (file.content === null && file.sha256 === null) return null;
+  if (typeof file.content !== "string" || file.content.length > Math.ceil(IDENTITY_MAX_BYTES / 3) * 4 ||
+      typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(file.sha256)) {
+    throw new Error("Source workspace identity capture is invalid");
+  }
+  const bytes = Buffer.from(file.content, "base64");
+  if (bytes.length > IDENTITY_MAX_BYTES || bytes.toString("base64") !== file.content ||
+      createHash("sha256").update(bytes).digest("hex") !== file.sha256) {
+    throw new Error("Source workspace identity capture changed");
+  }
+  return bytes;
+}
+
+function validateSourceWorkspaceIdentities(value: unknown, agents: readonly { agentId: string }[]): SourceWorkspaceIdentities {
+  validateSourceIdentityCustody(value);
+  const raw = value as unknown as Record<string, unknown>;
+  if (!Array.isArray(raw.files) || raw.files.length !== agents.length || raw.files.length > 16_384) {
+    throw new Error("Source workspace identity coverage is invalid");
+  }
+  const expected = new Set(agents.map(agent => agent.agentId));
+  const files = raw.files.map(file => {
+    if (!isRecord(file) || typeof file.agentId !== "string" || !expected.delete(file.agentId)) {
+      throw new Error("Source workspace identity agent is invalid");
+    }
+    const captured = { agentId: file.agentId, content: file.content, sha256: file.sha256 } as SourceWorkspaceIdentity;
+    identityBytes(captured);
+    return captured;
+  });
+  return { migrationId: value.migrationId, uid: value.uid, gatewayId: value.gatewayId,
+    podUid: value.podUid, epoch: value.epoch, files };
+}
+
+export function assertSourceIdentityCustody(expected: MigrationSourceIdentityCustody, actual: MigrationSourceIdentityCustody): void {
+  validateSourceIdentityCustody(expected);
+  validateSourceIdentityCustody(actual);
+  if (["migrationId", "uid", "gatewayId", "podUid", "epoch"].some(key =>
+    expected[key as keyof MigrationSourceIdentityCustody] !== actual[key as keyof MigrationSourceIdentityCustody])) {
+    throw new Error("Source workspace identity custody changed");
+  }
+}
+
+async function withIdentityWorkspace<T>(stateDir: string, slug: string, agent: { agentId: string; agent: Record<string, unknown> }, use: (location: string, assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> {
+  const parsed = parseAgentId(agent.agentId);
+  if (parsed.kind === "unknown" || parsed.username !== slug) throw new Error("Source workspace identity agent is foreign");
+  const parts = ["customers", slug, ...(parsed.kind === "project" ? ["projects", parsed.project] : [])];
+  const workspace = path.join(stateDir, ...parts);
+  if (agent.agent.workspace !== workspace || await fs.realpath(stateDir) !== stateDir) throw new Error("Source workspace identity path is not canonical");
+  const handles: fs.FileHandle[] = [];
+  const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
+  try {
+    handles.push(await fs.open(stateDir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
+    for (const part of parts) handles.push(await fs.open(`${fdRoot}/${handles.at(-1)!.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
+    const directory = handles.at(-1)!;
+    const identity = await directory.stat();
+    const assertCurrent = async () => {
+      const current = await fs.lstat(workspace);
+      if (!current.isDirectory() || current.dev !== identity.dev || current.ino !== identity.ino || await fs.realpath(workspace) !== workspace) {
+        throw new Error("Source workspace identity directory changed");
+      }
+    };
+    await assertCurrent();
+    const result = await use(`${fdRoot}/${directory.fd}/IDENTITY.md`, assertCurrent);
+    await assertCurrent();
+    return result;
+  } finally { for (const handle of handles.reverse()) await handle.close(); }
+}
+
+async function readSourceIdentity(location: string): Promise<Buffer | null> {
+  let file: fs.FileHandle;
+  try { file = await fs.open(location, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const before = await file.stat();
+    if (!before.isFile() || before.nlink !== 1 || before.size > IDENTITY_MAX_BYTES) throw new Error("Source workspace identity file is unsafe or exceeds Native's limit");
+    const bytes = Buffer.alloc(before.size + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const read = await file.read(bytes, size, bytes.length - size, size);
+      if (read.bytesRead === 0) break;
+      size += read.bytesRead;
+    }
+    const after = await file.stat();
+    if (size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error("Source workspace identity changed while captured");
+    return bytes.subarray(0, size);
+  } finally { await file.close(); }
+}
+
+export async function captureSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody): Promise<MigrationActivationManifest> {
+  validateSourceIdentityCustody(custody);
+  const agents = manifestAgents(manifest);
+  if (agents.length > 16_384) throw new Error("Source workspace identity coverage exceeds transfer limit");
+  if (manifest.sourceWorkspaceIdentities) {
+    const captured = validateSourceWorkspaceIdentities(manifest.sourceWorkspaceIdentities, manifestAgents(manifest));
+    assertSourceIdentityCustody(captured, custody);
+    for (const agent of manifestAgents(manifest)) await withIdentityWorkspace(stateDir, manifest.slug, agent, async location => { await readSourceIdentity(location); });
+    return manifest;
+  }
+  const files: SourceWorkspaceIdentity[] = [];
+  let bytesCaptured = Buffer.byteLength(JSON.stringify(manifest));
+  for (const agent of agents) await withIdentityWorkspace(stateDir, manifest.slug, agent, async location => {
+    const bytes = await readSourceIdentity(location);
+    const file = { agentId: agent.agentId, content: bytes?.toString("base64") ?? null,
+      sha256: bytes === null ? null : createHash("sha256").update(bytes).digest("hex") };
+    bytesCaptured += Buffer.byteLength(JSON.stringify(file));
+    if (bytesCaptured > MIGRATION_ACTIVATION_MAX_BYTES) throw new Error("Source activation manifest exceeds transfer limit");
+    files.push(file);
+  });
+  const captured = { ...manifest, sourceWorkspaceIdentities: { ...custody, files } };
+  if (Buffer.byteLength(JSON.stringify(captured)) > MIGRATION_ACTIVATION_MAX_BYTES) throw new Error("Source activation manifest exceeds transfer limit");
+  return captured;
+}
+
+export async function restoreSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody, assertCurrent: () => Promise<void>): Promise<void> {
+  const captured = validateSourceWorkspaceIdentities(manifest.sourceWorkspaceIdentities, manifestAgents(manifest));
+  assertSourceIdentityCustody(captured, custody);
+  const files = new Map(captured.files.map(file => [file.agentId, file]));
+  for (const agent of manifestAgents(manifest)) await withIdentityWorkspace(stateDir, manifest.slug, agent, async (location, assertDirectory) => {
+    const bytes = identityBytes(files.get(agent.agentId)!);
+    const current = await readSourceIdentity(location);
+    if (current === null && bytes === null || current !== null && bytes !== null && current.equals(bytes)) return;
+    const temporary = `${location}.${randomUUID()}.tmp`;
+    try {
+      if (bytes !== null) {
+        const file = await fs.open(temporary, "wx", 0o600);
+        try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
+      }
+      await assertCurrent();
+      await assertDirectory();
+      if (bytes === null) await fs.unlink(location);
+      else await fs.rename(temporary, location);
+      const directory = await fs.open(path.dirname(location), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await fs.rm(temporary, { force: true }); }
+  });
 }
 
 function sourceAgents(parsed: {
@@ -415,13 +588,15 @@ export async function writeActivationManifest(
   rootDir: string,
   manifest: MigrationActivationManifest,
 ): Promise<{ cwd: string; path: string }> {
+  const contents = `${JSON.stringify(manifest)}\n`;
+  if (Buffer.byteLength(contents) > MIGRATION_ACTIVATION_MAX_BYTES) throw new Error("Source activation manifest exceeds transfer limit");
   const relPath = activationManifestTarPath(manifest.slug);
   const fullPath = path.join(rootDir, relPath);
   await fs.mkdir(path.dirname(fullPath), { recursive: true, mode: 0o700 });
   const temporary = `${fullPath}.${randomUUID()}.tmp`;
   try {
     const file = await fs.open(temporary, "wx", 0o600);
-    try { await file.writeFile(`${JSON.stringify(manifest)}\n`, "utf-8"); await file.sync(); }
+    try { await file.writeFile(contents, "utf-8"); await file.sync(); }
     finally { await file.close(); }
     await fs.rename(temporary, fullPath);
     const directory = await fs.open(path.dirname(fullPath), "r");
@@ -435,6 +610,7 @@ export async function readActivationManifest(
   slug: string,
 ): Promise<MigrationActivationManifest> {
   const manifestPath = activationManifestDiskPath(openclawDir, slug);
+  if ((await fs.stat(manifestPath)).size > MIGRATION_ACTIVATION_MAX_BYTES) throw new Error("Source activation manifest exceeds transfer limit");
   const raw = await fs.readFile(manifestPath, "utf-8");
   return validateManifestShape(JSON.parse(raw), slug);
 }

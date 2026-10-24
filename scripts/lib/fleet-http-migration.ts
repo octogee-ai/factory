@@ -113,6 +113,8 @@ import { withCustomerRemoval } from "./customer-removal-exclusion.js";
 import {
   MIGRATION_ACTIVATION_DIR,
   writeActivationManifest,
+  assertSourceIdentityCustody,
+  captureSourceWorkspaceIdentities,
   readActivationManifest,
 } from "./migration-activation-manifest.js";
 import {
@@ -588,7 +590,7 @@ export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler 
     if (!body) return;
     try {
       await ensureMigrationGiteaKey(deps, body.slug, "source-resume");
-      await deps.adapter.resumeCustomer(body.slug);
+      await deps.adapter.resumeCustomer(body.slug, { migrationId: body.migrationId });
       await (deps.voiceMigration ?? updateVoiceMigration)({ slug: body.slug, operationId: body.migrationId, phase: "resume" });
       res.status(200).json({ migrationId: body.migrationId, slug: body.slug, resumed: true });
     } catch (error) {
@@ -983,7 +985,7 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
 async function maybeMaterializeActivationManifest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody & { includeActivationManifest?: boolean },
-  options: { signal: AbortSignal; timeoutMs: number; preserveForRollback?: boolean },
+  options: { signal: AbortSignal; timeoutMs: number; preserveForRollback?: boolean; sourceHeld?: boolean },
 ): Promise<{ source: { cwd: string; path: string } | null; cleanup: () => Promise<void> }> {
   if (body.includeActivationManifest !== true && !options.preserveForRollback) {
     return { source: null, cleanup: async () => undefined };
@@ -997,8 +999,16 @@ async function maybeMaterializeActivationManifest(
       if (error.code === "ENOENT") return null;
       throw error;
     });
+    if (manifest && !manifest.sourceWorkspaceIdentities && !options.sourceHeld) throw new Error("Retained source activation has no original workspace identity capture");
   }
   manifest ??= await deps.adapter.exportOpenClawActivationManifest(body.slug, options);
+  if (options.preserveForRollback && !options.sourceHeld) {
+    const readCustody = deps.adapter.sourceMigrationIdentityCustody;
+    if (!readCustody) throw new Error("Source rollback requires current identity custody");
+    const custody = await readCustody(body.slug, body.migrationId);
+    manifest = await captureSourceWorkspaceIdentities(manifest, resolveOpenClawStateDir(), custody);
+    assertSourceIdentityCustody(custody, await readCustody(body.slug, body.migrationId));
+  }
   if (options.preserveForRollback) await writeActivationManifest(OPENCLAW_DIR, manifest);
   if (body.includeActivationManifest !== true) return { source: null, cleanup: async () => undefined };
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `migration-activation-${body.migrationId}-`));
@@ -1813,6 +1823,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       }
       const postgresHandoff = mode === "final" && (await findPortableAgentStores(sources)).some(store =>
         readPostgresAgentAnchor(path.join(store.sourceAgentDir, AGENT_STORE_BASENAME)) !== null);
+      const sourceHeld = mode === "final" && await deps.surgeSourceOpenClawHeld?.({ migrationId: body.migrationId, slug: body.slug }) === true;
       const manifestRequest = configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER ? { ...body, includeActivationManifest: false } : body;
       const activationManifest = mode === "keys"
         ? { source: null, cleanup: async () => {} }
@@ -1820,10 +1831,10 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
             signal: controller.signal,
             timeoutMs: remainingTransferTimeout(deadline, controller.signal),
             preserveForRollback: postgresHandoff,
+            sourceHeld,
           });
       cleanupActivationManifest = activationManifest.cleanup;
       if (mode === "final") {
-        const sourceHeld = await deps.surgeSourceOpenClawHeld?.({ migrationId: body.migrationId, slug: body.slug }) === true;
         sources.push(...await exportAgentStoreSnapshots({
           sources,
           exportRoot: path.join(tmpDir, "snapshots"),

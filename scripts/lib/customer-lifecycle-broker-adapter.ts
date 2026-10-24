@@ -18,6 +18,7 @@ import { projectAgentsRuntimeReady, reportProjectAgentReadiness } from "./projec
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
   FleetBrokerProjectCheckoutScope,
@@ -174,6 +175,10 @@ import {
   MIGRATION_ACTIVATION_DIR,
   readActivationManifest,
   removeActivationManifest,
+  assertSourceIdentityCustody,
+  restoreSourceWorkspaceIdentities,
+  captureSourceWorkspaceIdentities,
+  type MigrationSourceIdentityCustody,
 } from "./migration-activation-manifest.js";
 import { assertNotHeld, type HeldPathOptions, matchUnder, PROC_ROOT } from "./held-files.js";
 import {
@@ -1617,6 +1622,57 @@ async function prepareKeyImportDir(slug: string): Promise<string> {
   return OPENCLAW_DIR;
 }
 
+async function sourceMigrationIdentityCustody(ctx: BrokerCtx, slug: string, migrationId: string): Promise<MigrationSourceIdentityCustody> {
+  const gatewayId = process.env.GATEWAY_ID ?? "", podUid = process.env.POD_UID ?? "";
+  const uid = await ctx.client.uidForSlug(slug);
+  const snapshot = uid ? await ctx.client.userSnapshot(uid) : null;
+  const assignments = (await ctx.client.assignmentRoster()).filter(assignment => assignment.uid === uid);
+  if (!uid || snapshot?.uid !== uid || snapshot.slug !== slug || snapshot.gatewayId !== gatewayId ||
+      snapshot.status !== "complete" || snapshot.nativeSharedContextRestore !== undefined ||
+      assignments.length !== 1 || !["serving", "quiescing"].includes(assignments[0].state)) {
+    throw new Error("Source workspace identity requires its current assigned customer");
+  }
+  const custody = { migrationId, uid, gatewayId, podUid, epoch: assignments[0].epoch };
+  assertSourceIdentityCustody(custody, custody);
+  return custody;
+}
+
+async function sourceIdentityForResume(ctx: BrokerCtx, manifest: Awaited<ReturnType<typeof readActivationManifest>>, opts: { resumeExistingSharedCustody?: boolean; migrationId?: string }): Promise<MigrationSourceIdentityCustody | undefined> {
+  if (!opts.resumeExistingSharedCustody) return undefined;
+  const custody = await sourceMigrationIdentityCustody(ctx, manifest.slug, opts.migrationId ?? "");
+  if (manifest.sourceWorkspaceIdentities) {
+    assertSourceIdentityCustody(manifest.sourceWorkspaceIdentities, custody);
+    await captureSourceWorkspaceIdentities(manifest, resolveOpenClawStateDir(), custody);
+  } else {
+    const current = await freshRosterConfig(ctx) as { agents?: { entries?: Record<string, Record<string, unknown>>; list?: Array<Record<string, unknown>> } };
+    const roster: Array<Record<string, unknown>> = current.agents?.entries ? Object.entries(current.agents.entries).map(([id, agent]) => ({ ...agent, id })) : current.agents?.list ?? [];
+    for (const entry of [manifest, ...manifest.projectAgents]) {
+      const matches = roster.filter(agent => agent.id === entry.agentId);
+      if (matches.length !== 1 || matches[0].workspace !== entry.agent.workspace ||
+          typeof entry.agent.workspace !== "string" ||
+          entry.agent.agentDir !== undefined && matches[0].agentDir !== entry.agent.agentDir) {
+        throw new Error("Source rollback without an identity capture requires its intact Native roster");
+      }
+    }
+  }
+  return custody;
+}
+
+async function assertSourceResumeCurrent(ctx: BrokerCtx, manifest: Awaited<ReturnType<typeof readActivationManifest>>, custody: MigrationSourceIdentityCustody): Promise<void> {
+  assertSourceIdentityCustody(custody, await sourceMigrationIdentityCustody(ctx, manifest.slug, custody.migrationId));
+  if (!isDeepStrictEqual(manifest, await readActivationManifest(OPENCLAW_DIR, manifest.slug))) {
+    throw new Error("Source rollback activation manifest changed");
+  }
+}
+
+async function restoreSourceIdentityAfterRoster(ctx: BrokerCtx, manifest: Awaited<ReturnType<typeof readActivationManifest>>, safeManifest: Awaited<ReturnType<typeof readActivationManifest>>, custody: MigrationSourceIdentityCustody | undefined): Promise<void> {
+  if (!custody || !safeManifest.sourceWorkspaceIdentities) return;
+  await assertSourceResumeCurrent(ctx, manifest, custody);
+  await restoreSourceWorkspaceIdentities(safeManifest, resolveOpenClawStateDir(), custody, async () => {
+    await assertSourceResumeCurrent(ctx, manifest, custody);
+  });
+}
+
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
@@ -1624,6 +1680,7 @@ async function activateImportedCustomer(
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
   opts ??= {};
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
+  const sourceIdentity = await sourceIdentityForResume(ctx, manifest, opts);
   const configuredBuilder = isConfiguredGatewayBuilder(slug);
   const ownerMmUserId = configuredBuilder
     ? validOwnerMmUserId(slug, (await snapshotForSlug(ctx, slug))?.customerMmUserId)
@@ -1657,13 +1714,16 @@ async function activateImportedCustomer(
     logPrefix: `[import:${slug}]`,
     purpose: "import",
   });
-  await ensureCustomerRosterAgents(ctx, [
-    safeManifest.agent,
-    ...safeManifest.projectAgents.map((entry) => entry.agent),
-  ], `[import:${slug}]`, {
-    signal: opts.signal,
-    waitForAppliedRevision: ctx.isBuilderGateway(),
-  });
+  if (!sourceIdentity || safeManifest.sourceWorkspaceIdentities) {
+    await ensureCustomerRosterAgents(ctx, [
+      safeManifest.agent,
+      ...safeManifest.projectAgents.map((entry) => entry.agent),
+    ], `[import:${slug}]`, {
+      signal: opts.signal,
+      waitForAppliedRevision: ctx.isBuilderGateway(),
+    });
+  }
+  await restoreSourceIdentityAfterRoster(ctx, manifest, safeManifest, sourceIdentity);
   await reportSharedAnchors?.();
   await materializeCustomerBrokerProfiles(
     activationManifestAgentIds(safeManifest),
@@ -1686,6 +1746,7 @@ async function activateImportedCustomer(
     ctx.rpc,
     accountIds,
   );
+  if (sourceIdentity) await assertSourceResumeCurrent(ctx, manifest, sourceIdentity);
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
@@ -2152,12 +2213,13 @@ export function buildBrokeredLifecycleAdapter(
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     schedulerReady: async () => { await ctx.rpc.configGet(); },
-    resumeCustomer: (slug) => openClawRuntimeUpdateGuard.run(async () => {
+    sourceMigrationIdentityCustody: (slug, migrationId) => sourceMigrationIdentityCustody(ctx, slug, migrationId),
+    resumeCustomer: (slug, resumeOptions) => openClawRuntimeUpdateGuard.run(async () => {
       const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;
       });
-      if (manifest) await activateImportedCustomer(ctx, slug, { resumeExistingSharedCustody: true });
+      if (manifest) await activateImportedCustomer(ctx, slug, { resumeExistingSharedCustody: true, migrationId: resumeOptions?.migrationId });
       await setCustomerChannelsRunning(ctx.rpc, slug, true);
     }),
     listExportPaths,

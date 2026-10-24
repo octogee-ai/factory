@@ -44,6 +44,28 @@ afterEach(() => {
 });
 
 describe("required core PostgreSQL CI", () => {
+  it("starts and cleans the root-owned fixture when PATH excludes system administration binaries", () => {
+    vi.spyOn(process, "getuid").mockReturnValue(0);
+    const execute = exec.getMockImplementation()!;
+    exec.mockImplementation((command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+      if (command === "runuser") throw Object.assign(new Error("spawnSync runuser ENOENT"), { code: "ENOENT" });
+      return command === "/usr/sbin/runuser" ? execute(args[3], args.slice(4), options) : execute(command, args, options);
+    });
+
+    runCorePostgresChecks();
+
+    const launches = exec.mock.calls.filter(([command]) => command.endsWith("runuser"));
+    expect(launches).toHaveLength(3);
+    for (const [command, args] of launches) {
+      expect(command).toBe("/usr/sbin/runuser");
+      expect(args.slice(0, 3)).toEqual(["-u", "postgres", "--"]);
+    }
+    expect(launches.map(([, args]) => basename(args[3]))).toEqual(["initdb", "pg_ctl", "pg_ctl"]);
+    expect(launches.at(-1)![1]).toContain("stop");
+    expect(calls.some(call => call.command === "npm" && call.args[0] === "test")).toBe(true);
+    expect(existsSync(directory)).toBe(false);
+  });
+
   it("uses an isolated non-superuser owner and runs both PG files after pinned catalog qualification", () => {
     runCorePostgresChecks();
     const qualifier = calls.findIndex(call => call.args.some(arg => arg.endsWith("qualify-agent-store-routines.mjs")));

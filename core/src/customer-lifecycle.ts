@@ -11,7 +11,7 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
 import { projectCheckoutEnabled } from "@octogee/shared/types/project";
-import type { MigrationActivationManifest } from "./migration-activation-manifest.js";
+import type { MigrationActivationManifest, MigrationSourceIdentityCustody } from "./migration-activation-manifest.js";
 import {
   ADD_CUSTOMER_DEADLINE_MS,
   VERIFY_ACCOUNT_TIMEOUT_MS,
@@ -276,7 +276,8 @@ schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promis
 
 schedulerReady: () => Promise<void>;
 
-resumeCustomer: (slug: string) => Promise<void>;
+resumeCustomer: (slug: string, opts?: { migrationId: string }) => Promise<void>;
+sourceMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<MigrationSourceIdentityCustody>;
 
 quiesceCustomer: (
     slug: string,

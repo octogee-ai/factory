@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
@@ -37,6 +38,7 @@ import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard
 import { clearBuilderClaim, stubBuilderClaim, withBuilderClaim } from "./helpers/builder-claim.js";
 import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
 import { recordBuilderNativeInitialState } from "../lib/builder-native-initial-state.js";
+import { captureSourceWorkspaceIdentities, writeActivationManifest, readActivationManifest as realReadActivationManifest } from "@octogee/core/migration-activation-manifest";
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -499,15 +501,17 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     let reportStarted!: () => void;
     const reportEntered = new Promise<void>((resolve) => { reportStarted = resolve; });
     const report = vi.fn(async () => { reportStarted(); await recorded; });
-    const rpc = mkGatewayRpc({ agentsCreate: vi.fn(async ({ name, workspace }) => {
+    const resuming = !migrating && mode !== "activate";
+    if (resuming) { vi.stubEnv("GATEWAY_ID", "shared-source"); vi.stubEnv("POD_UID", "source-pod"); }
+    const rpc = mkGatewayRpc({ ...(resuming ? { configGet: vi.fn(async () => configSnapshot({ agents: { entries: Object.fromEntries(anchors.map(anchor => [anchor.agentId, { workspace: path.join(testRuntime.dir, "customers", "tester10", ...(anchor.agentId.includes("-proj-") ? ["projects", "orbit"] : [])) }])) } })) } : {}), agentsCreate: vi.fn(async ({ name, workspace }) => {
       expect(await readLocalAgentAnchors(dir, anchors.map((anchor) => anchor.agentId))).toEqual(anchors);
       return { ok: true as const, agentId: name, name, workspace };
     }), channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [
       { accountId: "tester10-coach", running: true, connected: true },
       { accountId: "tester10-proj-orbit", running: true, connected: true },
     ] } })) });
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ ...(migrating ? { uidForSlug: vi.fn(async () => null) } : {}), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
-    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10");
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ ...(resuming ? { userSnapshot: vi.fn(async () => ({ uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", status: "complete" }) as FleetBrokerUserSnapshot), assignmentRoster: vi.fn(async () => [{ uid: "uid-tester10", state: quiescing ? "quiescing" as const : "serving" as const, epoch: 0 }]) } : {}), ...(migrating ? { uidForSlug: vi.fn(async () => null) } : {}), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
+    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10", { migrationId: "mig-move" });
     const observed = activation.catch((error) => error);
     try {
       const refusals: Partial<Record<string, string>> = {
@@ -541,6 +545,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       }
     } finally {
       release(); await observed;
+      if (resuming) vi.unstubAllEnvs();
       if (priorState === undefined) delete process.env.OPENCLAW_STATE_DIR;
       else process.env.OPENCLAW_STATE_DIR = priorState;
       if (priorConfig) await fs.writeFile(OPENCLAW_CONFIG, priorConfig);
@@ -823,17 +828,188 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(modelCredentialMocks.restoreModelCredentialOauthStoreForSlug).not.toHaveBeenCalled();
   });
 
-  it("re-adopts a detached source from its saved activation manifest before resuming channels", async () => {
+  async function sourcePersonaFixture(epoch = 4) {
+    const workspace = path.join(testRuntime.dir, "customers", "tester10");
+    const project = path.join(workspace, "projects", "persona");
+    const coachId = "octogee-tester10-coach", projectId = "octogee-tester10-proj-persona-coach";
+    const originals = new Map([
+      [workspace, Buffer.from("# Coach\r\n\r\n- **Name:** Authored coach\r\nPrivate notes.\r\n")],
+      [project, Buffer.from("# Identity\n\n- **Name:** Authored name\n\nPersonal notes stay byte-exact. 🐙\n")],
+    ]);
+    for (const [dir, bytes] of originals) { await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, "IDENTITY.md"), bytes); }
+    vi.stubEnv("GATEWAY_ID", "shared-source");
+    vi.stubEnv("POD_UID", "source-pod");
+    const binding = { migrationId: "migration-source-persona", uid: "uid-tester10", gatewayId: "shared-source", podUid: "source-pod", epoch };
+    const manifest = await captureSourceWorkspaceIdentities({
+      version: 2, slug: "tester10", appliedFingerprint: "source-persona", agentId: coachId, accountId: "tester10-coach",
+      agent: { id: coachId, workspace, identity: { name: "Config coach differs" } },
+      mattermostAccount: { botToken: "coach-token" }, bindings: [{ agentId: coachId, match: { channel: "mattermost", accountId: "tester10-coach" } }],
+      projectAgents: [{ agentId: projectId, accountId: "tester10-proj-persona", agent: { id: projectId, workspace: project, identity: { name: "Config project differs" } }, mattermostAccount: { botToken: "project-token" }, bindings: [{ agentId: projectId, match: { channel: "mattermost", accountId: "tester10-proj-persona" } }] }],
+    }, testRuntime.dir, binding);
+    await writeActivationManifest(testRuntime.dir, manifest);
+    mocks.readActivationManifest.mockImplementation(() => realReadActivationManifest(testRuntime.dir, "tester10"));
+    const client = mkClient({
+      userSnapshot: vi.fn(async () => ({ uid: binding.uid, slug: "tester10", gatewayId: binding.gatewayId, status: "complete" }) as FleetBrokerUserSnapshot),
+      assignmentRoster: vi.fn(async () => [{ uid: binding.uid, state: "quiescing", epoch: binding.epoch }]),
+    });
+    const nativeWrite = async ({ name, workspace }: { name: string; workspace: string }) => {
+      const filename = path.join(workspace, "IDENTITY.md");
+      const content = await fs.readFile(filename, "utf8");
+      await fs.writeFile(filename, content.replace(/^- \*?\*?Name:\*?\*?.*$/mu, `- Name: ${name}`));
+      return { ok: true as const, agentId: name, name, workspace };
+    };
     const rpc = mkGatewayRpc({
-      configGet: vi.fn(async () => configSnapshot({ agents: { entries: {} }, channels: { mattermost: { accounts: { "tester10-coach": {} } } } })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { entries: {} }, channels: { mattermost: { accounts: { "tester10-coach": {}, "tester10-proj-persona": {} } } } })), agentsCreate: vi.fn(nativeWrite),
       channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: true, connected: true }] } })),
     });
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
-    await adapter.resumeCustomer("tester10");
-    expect(rpc.agentsCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "octogee-tester10-coach" }));
-    expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
-    expect(rpc.channelsStart).toHaveBeenCalledWith({ channel: "mattermost", accountId: "tester10-coach" });
-    expect(mocks.removeActivationManifest.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(rpc.channelsStart).mock.invocationCallOrder[0]!);
+    mocks.applyOpenClawActivationManifest.mockImplementation(async (applied) => {
+      for (const [dir, bytes] of originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+      expect(applied.projectAgents[0].agent.identity.name).toBe("Config project differs");
+      return { routingActivationRequired: false, elapsedMs: 0 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    return { workspace, project, projectId, coachId, originals, manifest, binding, client, rpc, nativeWrite, adapter };
+  }
+
+  it.skipIf(process.platform !== "linux")("preserves exact authored coach and project persona before rollback routing resumes", async () => {
+    try {
+      const fixture = await sourcePersonaFixture();
+      await fixture.adapter.resumeCustomer("tester10", { migrationId: fixture.binding.migrationId });
+      expect(fixture.rpc.channelsStart).toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("retains the original capture across a late Native writer, duplicate retry and repeated source resume", async () => {
+    try {
+      const f = await sourcePersonaFixture();
+      let completeLateWrite!: () => Promise<void>;
+      let timedOut = false;
+      const registered = new Set<string>();
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+        if (registered.has(params.name)) throw new OpenclawWireError("rpc-error", `agent "${params.name}" already exists`);
+        if (params.name === f.projectId && !timedOut) {
+          timedOut = true;
+          completeLateWrite = async () => { await f.nativeWrite(params); registered.add(params.name); };
+          throw new OpenclawWireError("rpc-error", "first create client timed out; Native owns its in-flight write");
+        }
+        const result = await f.nativeWrite(params); registered.add(params.name); return result;
+      });
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("first create client timed out");
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+      expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+      expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect((await realReadActivationManifest(testRuntime.dir, "tester10")).sourceWorkspaceIdentities).toEqual(f.manifest.sourceWorkspaceIdentities);
+      await completeLateWrite();
+      expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).not.toEqual(f.originals.get(f.project));
+      await f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId });
+      await f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId });
+      expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledTimes(2);
+      for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["migrationId", "uid", "gatewayId", "podUid", "epoch"] as const)("refuses a foreign retained source %s before Native registration", async key => {
+    try {
+      const f = await sourcePersonaFixture();
+      const changed = { ...f.manifest, sourceWorkspaceIdentities: { ...f.manifest.sourceWorkspaceIdentities!, [key]: key === "epoch" ? 5 : "foreign" } };
+      await writeActivationManifest(testRuntime.dir, changed);
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("custody changed");
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("retains the capture and stays stopped when source authority changes during registration", async () => {
+    try {
+      const f = await sourcePersonaFixture();
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+        const result = await f.nativeWrite(params);
+        vi.mocked(f.client.assignmentRoster).mockResolvedValue([{ uid: f.binding.uid, state: "quiescing", epoch: 5 }]);
+        return result;
+      });
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("custody changed");
+      expect(f.rpc.channelsStart).not.toHaveBeenCalled(); expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+      expect((await realReadActivationManifest(testRuntime.dir, "tester10")).sourceWorkspaceIdentities).toEqual(f.manifest.sourceWorkspaceIdentities);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("refuses a retained project workspace redirected to the coach before Native registration", async () => {
+    try {
+      const f = await sourcePersonaFixture();
+      f.manifest.projectAgents[0].agent.workspace = f.workspace;
+      await writeActivationManifest(testRuntime.dir, f.manifest);
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("not canonical");
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["intact", "absent", "workspace", "agentDir"] as const)("requires exact no-detach source roster proof without invoking creation: %s", async mode => {
+    try {
+      const f = await sourcePersonaFixture();
+      const noCapture = { ...f.manifest }; delete noCapture.sourceWorkspaceIdentities;
+      noCapture.projectAgents[0].agent.agentDir = path.join(testRuntime.dir, "agents", f.projectId, "agent");
+      await writeActivationManifest(testRuntime.dir, noCapture);
+      const entries = Object.fromEntries([noCapture, ...noCapture.projectAgents].map(row => [row.agentId, { ...row.agent }]));
+      if (mode === "absent") delete entries[f.projectId];
+      else if (mode === "workspace") entries[f.projectId].workspace = f.workspace;
+      else if (mode === "agentDir") entries[f.projectId].agentDir = "/foreign/agent";
+      vi.mocked(f.rpc.configGet).mockResolvedValue(configSnapshot({ agents: { entries }, channels: { mattermost: { accounts: { "tester10-coach": {} } } } }));
+      const resumed = f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId });
+      if (mode === "intact") { await resumed; expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce(); expect(f.rpc.channelsStart).toHaveBeenCalled(); }
+      else { await expect(resumed).rejects.toThrow("intact Native roster"); expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled(); }
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled();
+      for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("rejects a same-epoch successor manifest published while Native registration was awaited", async () => {
+    try {
+      const f = await sourcePersonaFixture(0);
+      const successorBytes = Buffer.from("# New g2 persona\n- Name: G2 author\n");
+      const successor = structuredClone(f.manifest);
+      successor.sourceWorkspaceIdentities!.migrationId = "migration-source-persona-g2";
+      Object.assign(successor.sourceWorkspaceIdentities!.files.find(file => file.agentId === f.projectId)!, { content: successorBytes.toString("base64"), sha256: createHash("sha256").update(successorBytes).digest("hex") });
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+        const result = await f.nativeWrite(params);
+        if (params.name === f.projectId) { await fs.writeFile(path.join(f.project, "IDENTITY.md"), successorBytes); await writeActivationManifest(testRuntime.dir, successor); }
+        return result;
+      });
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("manifest changed");
+      expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).toEqual(successorBytes);
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+      vi.mocked(f.rpc.agentsCreate).mockClear();
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("custody changed");
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled();
+      expect((await realReadActivationManifest(testRuntime.dir, "tester10")).sourceWorkspaceIdentities).toEqual(successor.sourceWorkspaceIdentities);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("rechecks the manifest before activation when persona restoration is a no-op", async () => {
+    try {
+      const f = await sourcePersonaFixture(0);
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => ({ ok: true, agentId: params.name, name: params.name, workspace: params.workspace }));
+      routingActivationMocks.capture.mockImplementationOnce(async () => {
+        const successor = structuredClone(f.manifest); successor.sourceWorkspaceIdentities!.migrationId = "migration-source-persona-g2";
+        await writeActivationManifest(testRuntime.dir, successor); return {};
+      });
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("manifest changed");
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+      for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("refuses a detached source without an original identity capture before Native creation", async () => {
+    vi.stubEnv("GATEWAY_ID", "shared-source"); vi.stubEnv("POD_UID", "source-pod");
+    try {
+      const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot({ agents: { entries: {} } })) });
+      const client = mkClient({ userSnapshot: vi.fn(async () => ({ uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", status: "complete" }) as FleetBrokerUserSnapshot),
+        assignmentRoster: vi.fn(async () => [{ uid: "uid-tester10", state: "quiescing", epoch: 0 }]) });
+      const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+      await expect(adapter.resumeCustomer("tester10", { migrationId: "mig-old" })).rejects.toThrow("intact Native roster");
+      expect(rpc.agentsCreate).not.toHaveBeenCalled(); expect(rpc.channelsStart).not.toHaveBeenCalled();
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled(); expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("activates imported standard-gateway state from the transferred activation manifest", async () => {
