@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores, type AgentStoreErasureTarget } from "./agent-store-credentials.js";
 import { readAuthProfileStore, writeAuthProfileStore, deleteAuthProfileStore } from "./auth-profile-store.js";
 import { purgeCustomerOauthRuntimeArtifacts } from "./byosub-restore.js";
+import { assertTrustedAgentStoreRoutines } from "./agent-store-routines.js";
 
 const nativeTriggerBodies = {
   openclaw_session_conversations_trigger: `
@@ -511,4 +512,23 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     }
   });
 
+  it.each([1536, 3072])("admits PostgreSQL's actual %i-dimensional projection and refuses a changed expression", async dimensions => {
+    const pool = new pg.Pool({ connectionString: process.env.OCTOGEE_TEST_POSTGRES_DSN, max: 1 });
+    const client = await pool.connect();
+    const schema = `projection_${randomUUID().replaceAll("-", "")}`;
+    const table = `${pg.escapeIdentifier(schema)}.memory_index_chunks_vec`;
+    try {
+      await client.query("BEGIN");
+      await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      await client.query(`CREATE TABLE ${table} (embedding public.vector(${dimensions}), embedding_bits bit(${dimensions}) GENERATED ALWAYS AS (CASE WHEN public.vector_norm(embedding) > 0 THEN public.binary_quantize(embedding)::bit(${dimensions}) ELSE NULL END) STORED)`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
+      await client.query(`ALTER TABLE ${table} DROP COLUMN embedding_bits`);
+      await client.query(`ALTER TABLE ${table} ADD COLUMN embedding_bits bit(${dimensions}) GENERATED ALWAYS AS (CASE WHEN public.vector_norm(embedding) > 1 THEN public.binary_quantize(embedding)::bit(${dimensions}) ELSE NULL END) STORED`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).rejects.toThrow("untrusted expression default:memory_index_chunks_vec:embedding_bits");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+      await pool.end();
+    }
+  });
 });

@@ -991,6 +991,7 @@ function projectCustomerAgentRuntime(entry, agentId, unsafeProviders, resetAgent
   if (!SAFE_AGENT_ID.test(agentId)) return;
   for (const modelRef of unapprovedAgentModelRefs(entry)) directRefs.add(modelRef);
   if (scrubOwnedAgentRuntime(entry, unsafeProviders)) resetAgentIds.add(agentId);
+  if (agentId === "octogee-unmatched-route" && objectValue(entry)) delete entry.model;
 }
 
 function projectConfiguredCustomerAgentRuntimes(config, unsafeProviders, resetAgentIds, directRefs) {
@@ -1319,6 +1320,16 @@ function scrubUnsafePersistedSessions(openclawDir, agentId, directRuntimeModelRe
   return legacyChanged || sqliteChanged;
 }
 
+function projectUnmatchedRouteModelMetadata(openclawDir, config, modelProviders) {
+  const unmatchedId = "octogee-unmatched-route";
+  const configured = config.agents?.entries?.[unmatchedId] ||
+    config.agents?.list?.some((agent) => agent.id === unmatchedId);
+  if (!configured) return;
+  const metadata = structuredClone(modelProviders);
+  for (const provider of Object.values(metadata)) delete provider.apiKey;
+  projectAgentModelsJson(path.join(openclawDir, "agents", unmatchedId, "agent"), metadata);
+}
+
 function scrubCustomerOauthDisk(
   configPath,
   config,
@@ -1361,6 +1372,7 @@ function scrubCustomerOauthDisk(
       resetAgentIds.add(agentId);
     }
   }
+  projectUnmatchedRouteModelMetadata(openclawDir, config, modelProviders);
   for (const agentId of resetAgentIds) resetAgentSessionStore(openclawDir, agentId);
 }
 

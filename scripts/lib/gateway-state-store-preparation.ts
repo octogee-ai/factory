@@ -95,9 +95,9 @@ export async function prepareGatewayStateStore(input: {
     log: input.log,
   });
   if (fs.existsSync(clientCredentialStorePath(stateRoot))) return;
-  input.log("[state-store] local client credentials are missing for the PostgreSQL state store; rebinding fresh credentials (paired devices pair again)");
+  input.log("[state-store] local client credentials are missing for the PostgreSQL state store; rebinding fresh local credentials (local clients pair again)");
   const result = await (input.run ?? runOpenClaw)(
-    ["doctor", "--client-credentials", "--repair", "--non-interactive", "--rebind-missing-credentials"],
+    ["doctor", "--fix", "--yes", "--non-interactive"],
     { env },
   );
   if (result.code !== 0) {

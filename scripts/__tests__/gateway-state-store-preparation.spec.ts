@@ -142,7 +142,7 @@ describe("prepareGatewayStateStore", () => {
     await prepareGatewayStateStore({ log: () => {}, env: builderEnv(root), hostname: THIS_POD, recover, run });
     expect(order).toEqual(["recover", "rebind"]);
     expect(run).toHaveBeenCalledWith(
-      ["doctor", "--client-credentials", "--repair", "--non-interactive", "--rebind-missing-credentials"],
+      ["doctor", "--fix", "--yes", "--non-interactive"],
       { env: builderEnv(root) },
     );
   });

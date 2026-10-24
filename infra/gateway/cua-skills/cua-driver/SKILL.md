@@ -1,7 +1,7 @@
 ---
 name: cua-driver
-description: Operate native applications on this Builder computer's Omarchy desktop through the `computer` tool, which Cua Driver 0.34.1 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
-version: 0.34.1
+description: Operate native applications on this Builder computer's Omarchy desktop through the `computer` tool, which Cua Driver 0.36.0 fulfils. Covers the observe-act-verify loop, accessibility-first targeting, background versus foreground delivery, and honest handling of refusals. Use for GUI tasks in desktop applications; use the `browser` tool for web page content.
+version: 0.36.0
 metadata:
   openclaw:
     requires:
@@ -74,7 +74,9 @@ available tool does not enlarge the Builder's authorization.
 
 1. `list_windows` and select the intended window explicitly. After launching an
    application, enumerate its windows again rather than assuming one exists.
-2. `get_window_state` with that `windowRef`. It returns the accessibility tree,
+2. `get_window_state` with that `windowRef`. Use `query` for the intended control
+   and bound large trees with `depth` and `maxElements`; widen when the target
+   is absent. It returns the accessibility tree,
    an `observationId`, and a window image when capture succeeds. Ground the
    target on the available tree and image; discovery alone does not prove that
    capture or input is available for that window.

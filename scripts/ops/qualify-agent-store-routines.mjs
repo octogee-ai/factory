@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -12,20 +11,21 @@ const checkout = process.argv[2];
 const dsn = process.env.OCTOGEE_TEST_POSTGRES_DSN;
 if (!checkout || !dsn) throw new Error("Usage: OCTOGEE_TEST_POSTGRES_DSN=<disposable database> node scripts/ops/qualify-agent-store-routines.mjs <OpenClaw checkout>");
 const pin = JSON.parse(readFileSync(new URL("../../infra/gateway/openclaw-tarball/current.json", import.meta.url), "utf8"));
-const source = path => execFileSync("/usr/bin/git", ["-C", checkout, "show", `${pin.sourceSha}:${path}`], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
-const load = async code => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(code)).toString("base64")}`);
-const metadataSource = source("src/infra/database-engine/postgres-schema.ts");
-const metadataExport = metadataSource.match(/^export const postgresSchemaMetadataSql = `[^`]*`;/m)?.[0];
-if (!metadataExport) throw new Error("Pinned OpenClaw engine metadata DDL export was not found");
-const { postgresSchemaMetadataSql } = await load(metadataExport);
-const { agentPostgresRuntime } = await load(source("src/state/postgres-schema.generated/agent-runtime.ts"));
-const searchSource = source("src/infra/database-engine/postgres-search-schema.ts");
-const generator = searchSource.slice(searchSource.indexOf("export function postgresSearchSql("), searchSource.indexOf("export function rebuildPostgresSearch("));
-const { postgresSearchSql } = await load(`export const pgSearchName = name => '"' + name.replaceAll('"', '""') + '"'; const searchConfig = 'openclaw_simple_unaccent';\n${generator}`);
-const { agentSearchPostgresRuntime } = await load(source("src/state/postgres-schema.generated/agent-search-runtime.ts"));
-const { agentTranscriptSearchSchema } = await load(source("src/state/openclaw-agent-search-schema.ts"));
-const { memoryVectorSearchSchema, memoryTextSearchSchema, memoryStandingIntentSearchSchema } = await load(source("packages/memory-host-sdk/src/host/memory-search-schema.ts"));
+const head = execFileSync("/usr/bin/git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const dirty = execFileSync("/usr/bin/git", ["-C", checkout, "status", "--porcelain"], { encoding: "utf8" }).trim();
+if (head !== pin.sourceSha || dirty) throw new Error("OpenClaw must be clean at the exact pinned source SHA");
 const schema = `octogee_qualify_${randomUUID().replaceAll("-", "")}`;
+const nativeDdl = JSON.parse(execFileSync(process.execPath, ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", `
+  import { postgresSchemaMetadataSql, postgresSchemaSql } from "./src/infra/database-engine/postgres-schema.ts";
+  import { agentEngineSchema } from "./src/state/openclaw-agent-db-engine.ts";
+  import { memoryVectorSearchSchema, memoryTextSearchSchema, memoryStandingIntentSearchSchema } from "./packages/memory-host-sdk/src/host/memory-search-schema.ts";
+  const schema = { ...agentEngineSchema, searchExtensions: {
+    memoryText: memoryTextSearchSchema("trigram"),
+    memoryStandingIntent: memoryStandingIntentSearchSchema,
+    memoryVector: memoryVectorSearchSchema(1536),
+  } };
+  process.stdout.write(JSON.stringify({ metadata: postgresSchemaMetadataSql, agent: postgresSchemaSql(schema, ${JSON.stringify(schema)}) }));
+`], { cwd: checkout, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }));
 const client = new pg.Client({ connectionString: dsn });
 await client.connect();
 let routines;
@@ -35,13 +35,8 @@ try {
   await client.query("BEGIN");
   await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
   await client.query(`SET LOCAL search_path = ${pg.escapeIdentifier(schema)}`);
-  await client.query(postgresSchemaMetadataSql);
-  await client.query(agentPostgresRuntime.sql);
-  await client.query(agentSearchPostgresRuntime.sql);
-  await client.query(postgresSearchSql(agentTranscriptSearchSchema, schema));
-  await client.query(postgresSearchSql(memoryTextSearchSchema("trigram"), schema, { text: true }));
-  await client.query(postgresSearchSql(memoryStandingIntentSearchSchema, schema, { text: true }));
-  await client.query(postgresSearchSql(memoryVectorSearchSchema(1536), schema));
+  await client.query(nativeDdl.metadata);
+  await client.query(nativeDdl.agent);
   await client.query("SET LOCAL search_path = pg_catalog");
   const { rows } = await client.query(agentStoreRoutinesQuery, [schema]);
   routines = Object.fromEntries(rows.map(row => [row.proname, agentStoreRoutineFingerprint(row, schema)]));

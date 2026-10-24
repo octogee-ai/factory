@@ -32,7 +32,10 @@ export const agentStoreExpressionsQuery = `WITH relations AS (
     FROM relations r JOIN pg_catalog.pg_index x ON x.indrelid = r.oid JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
   ORDER BY kind, relname, name`;
 export function agentStoreExpressionFingerprint(expression, schema) {
-    const definition = expression.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
+    let definition = expression.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
+    if (expression.kind === "default" && expression.relname === "memory_index_chunks_vec" && expression.name === "embedding_bits") {
+        definition = definition.replace(/::bit\(([1-9]\d{0,4})\)/g, (cast, dimensions) => Number(dimensions) <= 16_000 ? "::bit($dimensions)" : cast);
+    }
     return createHash("sha256").update(JSON.stringify([expression.kind, expression.relname, expression.name, definition])).digest("hex");
 }
 async function assertTrustedTableExpressions(client, schema) {

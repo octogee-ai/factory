@@ -1,11 +1,11 @@
 {
-    "sourceSha": "be883be916375649db9caacad9521b85118e1da7",
+    "sourceSha": "55d6c80e504679ed4d0ffd2c26c1b43af05e5d0d",
     "routines": {
         "memory_index_chunks_vec_sync": "aa3fd60d05de31bd95264d5c8d33e060f12c3d92520718dab3d988c53714c74a",
         "openclaw_session_conversations_trigger": "51062b9356fe3ddd2477d84bae1f51627d0a31ca3b6d31e6d4901c18f6d566a7",
         "openclaw_session_entry_snapshots_trigger": "77eb0676607a410b3084a24b7698c488c68d8edc5785e1628379e1713cf7b6b6",
         "openclaw_transcript_navigation_check": "2dae4274e8b37eeaae16c21c326eb6af04da129a98556fac1dde2aabb02a8315",
-        "openclaw_vector": "4d617c9234c4889c4fd0ebec017fc61f82b361014df615738e0f95adef00043d"
+        "openclaw_vector": "6d15f06e4043912e47051b44bddf295369217ea17c9fd4879425f265080bbfa6"
     },
     "triggers": {
         "memory_index_chunks_vec_sync": "3d0aedf870bc73d12aa0ad20bd6869950d83ff2d117206825f95d6dfed5a9af8",
@@ -173,6 +173,7 @@
         "default:context_engine_turn_outbox:attempt_count": "a7c2898edc89413fb2280bd3718fe35acb37d72f0ef7b867fe123061581bda53",
         "default:memory_index_chunks:openclaw_search": "bfc3529148db7767c4bc0d6e8dfd5a09fca059a1ef114df17cfc1780bda1c042",
         "default:memory_index_chunks:source": "c2a32639047387503fa0010f848657f5d7bfd62362071eb8922f02096d2b9bcd",
+        "default:memory_index_chunks_vec:embedding_bits": "0a8ee6bfc28b1a53e3317f1e4cdcbdcbd9cbd5f1e978826c6aeca8790cae5a74",
         "default:memory_index_sources:openclaw_search": "e45e6b36df5f07991109084d0c0cb5197c275182f92eda309c2c23363c812374",
         "default:memory_index_sources:source": "f7b88324cae75698034351ecfa42690447e4d9ae35c604e372030d77087351f2",
         "default:session_conversations:role": "d195086f740128d2269ceecc90a355a293401d3a5aa9e9b585de4647e9058536",

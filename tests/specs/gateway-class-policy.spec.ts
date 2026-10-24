@@ -159,6 +159,25 @@ function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   return runPolicyWithDir(gatewayClass, config).config;
 }
 
+it("declares unmatched-route model metadata without granting broker credentials", () => {
+  const agentId = "octogee-unmatched-route";
+  const result = runPolicyWithDir("shared", {
+    agents: { entries: { [agentId]: { model: "openai/gpt-6-astra" } } },
+  }, undefined, {
+    OPENROUTER_BASE_URL: "http://broker/openrouter",
+    PLATFORM_OPENAI_BASE_URL: "http://broker/openai",
+  });
+  expect(result.config.agents.entries[agentId]).not.toHaveProperty("model");
+  const agentDir = path.join(result.dir, "agents", agentId, "agent");
+  const catalog = JSON.parse(readFileSync(path.join(agentDir, "models.json"), "utf8"));
+  expect(catalog.providers["platform-openrouter"].models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-v4-pro" }));
+  expect(catalog.providers["platform-openai"].models.length).toBeGreaterThan(0);
+  for (const provider of Object.values(catalog.providers)) expect(provider).not.toHaveProperty("apiKey");
+  expect(existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+  expect(existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+  expect(existsSync(path.join(result.dir, "agents", "main"))).toBe(false);
+});
+
 it("leaves PostgreSQL pointer files to the native SecretRef materializer", () => {
   const agentId = "octogee-acme-coach";
   const result = runPolicyWithDir("shared", { agents: { list: [{ id: agentId }] } }, (dir) => {

@@ -48,7 +48,11 @@ export const agentStoreExpressionsQuery = `WITH relations AS (
 type Expression = { kind: string; relname: string; name: string; definition: string };
 
 export function agentStoreExpressionFingerprint(expression: Expression, schema: string): string {
-  const definition = expression.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
+  let definition = expression.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
+  if (expression.kind === "default" && expression.relname === "memory_index_chunks_vec" && expression.name === "embedding_bits") {
+    definition = definition.replace(/::bit\(([1-9]\d{0,4})\)/g, (cast, dimensions: string) =>
+      Number(dimensions) <= 16_000 ? "::bit($dimensions)" : cast);
+  }
   return createHash("sha256").update(JSON.stringify([expression.kind, expression.relname, expression.name, definition])).digest("hex");
 }
 

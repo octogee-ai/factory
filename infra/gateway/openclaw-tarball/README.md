@@ -148,7 +148,133 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 23 outbound delivery custody
+## Current overlay: October 24 frozen main
+
+The operator selected latest upstream main `fe8d4597345c307f637fe0a2a5e6770226c7da9d`
+for independent qualification. It remains frozen. The overlay is
+`55d6c80e504679ed4d0ffd2c26c1b43af05e5d0d`, published from
+[`codex/openclaw-refresh-20261024`](https://github.com/ceckert/openclaw/tree/codex/openclaw-refresh-20261024),
+version 2026.10.7. The isolated Octogee checkout starts from merged main
+`e965e54c367e7132194c927d5bcbee8e1999701d`, including CI tiering #4759.
+Other worktrees and running services are preserved; neither an older green
+OpenClaw commit nor a moving newer tip was substituted.
+
+The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40104773927)
+ran one successful security-fast job and skipped 42 jobs, including build, types
+and tests. The inspected successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+qualifies `d8612ec864bb4c872616cfda5340c53803655f5f`, with 154 successes and
+nine skips: Node 24 compatibility, PR fail-fast/check plan, Android/iOS
+screenshots, alternate shared SDK, iOS release E2E and screenshot/seal evidence.
+Those results do not qualify this selected tip.
+
+### Native adoption and retained boundaries
+
+Selected main includes [#181676](https://github.com/openclaw/openclaw/pull/181676)
+(`317eaa07692ca8004df4c703b659bab2525cd21d`). Its narrow PostgreSQL recovery-hold
+read and cron-owner worker now supply the earlier fork fix; duplicate owners
+and assertions are dropped. Native's owning PostgreSQL/SQLite tests qualify
+creation, recovery holds, cron inspection and unrelated SQL refusal.
+
+Native [#181201](https://github.com/openclaw/openclaw/pull/181201) now owns missing
+local client-credential recovery. The overlay drops its former explicit rebind
+flag and duplicate credential implementation/tests. Octogee's bounded failed-boot
+recovery invokes `doctor --fix --yes --non-interactive` only after detecting
+missing local credentials and recovering the exact stale same-gateway owner.
+Healthy credentials still skip Doctor; startup without consent, corrupt or
+mismatched retained evidence, and a live owner remain refusal boundaries.
+The superseded #180345 contribution is closed unmerged.
+
+The generated validator registry, agent/state schema and worker inventory remain
+native-owned. Protocol remains 4, state schema is 31 and agent schema is 33.
+Native now supplies direct Undici 8.12.2. The overlay still pins fast-uri 4.2.3
+and npm 12.2.1 because selected main has 4.2.2 and 12.2.0 respectively; the
+existing strict dependency policy is unchanged. npm's distribution patch remains
+staged only during packing, without modifying installed source dependencies.
+
+The retained-boundary table below supplies individual gaps and removal
+conditions. Reconciliation keeps requester/reviewer and execution-time authority,
+independent explicit grants, authoritative empty channel-membership revocation,
+strict-stop joining retained startup preparation, claimed reload-waiter root
+ownership, and non-destructive detach with outbound-delivery custody. Native's
+new mention alias cache carries current membership rather than stale cached
+policy facts. Native AsyncContext owns reload root propagation. Existing-only
+PostgreSQL restoration keeps store UUID/namespace, config, history, jobs and
+recovery holds intact across a fresh executable Gateway restart; wrong paths,
+missing stores and pending cleanup refuse restoration.
+
+Memory shadow, checkpoint/snapshot custody, brokered voice and desktop requester
+boundaries remain for their demonstrated product gaps, with removal conditions
+in the table below. Detach #178755, auth #178970, checkpoint #178973, reload
+#177823/#167431 and PostgreSQL restoration #181951 remain open; contribution
+status alone does not justify retention. This refresh opens no new upstream PR.
+
+### Qualification
+
+The pinned pnpm 12.15.0 frozen install passes on Node 26.12.1. Native production
+types pass for core, UI and extensions, changed-source formatting passes on 360
+files, and focused type-aware lint passes. The boundary run passes 254 tests;
+PostgreSQL credential/hold/outbound qualification passes 18 with one SQLite-only
+case skipped in that lane. The actual CLI restoration and creation-conformance
+run passes five cases, including the fresh executable Gateway restart.
+
+Aggregate `pnpm check` is incomplete: the SQL worker guard did not finish after
+ten minutes and was stopped. Earlier preflights, including line growth, dialect,
+assertion safety and all 108 npm package-lock checks, passed; this is not an
+aggregate check success. The full native build exits zero, but its report-only
+UI budget check reports chat boot gzip 1,277,806 bytes against 1,275,713 bytes.
+No threshold is increased and no security or live provider clearance is claimed.
+
+CUA is rebuilt from official 0.36.0 at
+`6d6c734c127025fb39ad5d585a10382808b39dc1`, required by this native source.
+The existing bounded desktop-discovery patch still applies because upstream
+keeps the X11-only discovery path. Both actual Linux AMD64 and ARM64 builder
+targets pass 29 Wayland tests (one ignored) and four window tests, then build the
+release SDK. This does not establish real desktop-session acceptance.
+
+The catalog qualifier invokes the pinned native schema owner, including current
+vector decoder and search versions. The generated trust catalog admits only
+native routine/trigger/expression identities. The new memory bit projection
+normalizes bounded dimensions 1–16000 only for its exact column; changed
+conditions, functions, source columns and out-of-range dimensions still refuse.
+
+Shared's unmatched-route agent has no broker identity. The class-policy disk
+writer now supplies its public model metadata without API keys or auth profiles,
+and keeps it inheriting the platform default instead of pinning its own model.
+This gives native Doctor a configured consumer of that default and its provider
+metadata, preventing replacement with a direct OpenAI model. The regression starts red and
+passes with the full 48-case class-policy suite; canonical broker identities and
+unknown-agent refusal remain unchanged.
+
+### Published artifacts
+
+Sequential packers consume the same clean full build. Native tarball integrity,
+a fresh strict npm 12.2.1 installation on Node 26.12.1, all 873 Mattermost file
+hashes and the 15 patched npm file hashes pass. The actual Linux AMD64 and ARM64
+full-plugin installers pass Parallel's nine-file match, Codex's 188-file match,
+all three native-hook imports, bundled trust and CUA artifact validation. Both
+installed npm copies carry the same qualified patch bytes. Hosted islands are
+regenerated from the same source; Solid rc.18 notices bind its exact published
+commit, without changing the license bytes.
+
+Create-only publication and full generation-specific readback verify these
+objects in `gs://octogee-openclaw-fork/`:
+
+| Package | Object and generation | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-d1e29c09.tgz#1792857612859479` | 132059983 | `d1e29c0918e186752e3174b79b504bd260e758574c5a881ca652a9aac8e66b33` |
+| mattermost | `openclaw-mattermost-9a88f9ed.tgz#1792857680497716` | 1251521 | `9a88f9ed84d12ad26dac50621c9c972a9d0c8091acf7771981c1d4d1f3e5b4ba` |
+
+Focused Octogee qualification passes 120 artifact/island/CUA contracts, 85 app
+consumer cases and 195 Gateway-edge cases; app and edge production types pass.
+Core guard/recovery coverage passes 54 combined cases, including real PostgreSQL
+projection checks; the credential-retirement administrative fixture uses the
+disposable database administrator. No production database is used.
+
+The refresh PR records complete-image qualification and the published image
+digest. Final-head CI and installed-image qualification gate merge; Build main's
+immutable image-family result is reported separately. Building does not deploy.
+
+## Previous October 23 outbound delivery custody
 
 The selected upstream remains frozen at
 `6b3e0c6a94968cdaa03bb019bdcacc8b55aa9b63`. The qualified overlay is
@@ -1131,18 +1257,18 @@ preservation remain removed. No replacement admin RPC is needed.
 ## Native CUA desktop-discovery preservation
 
 `Dockerfile.base` builds the Linux SDK from the official
-[CUA 0.34.1 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.34.1),
-exact source `0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc`, with
+[CUA 0.36.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.36.0),
+exact source `6d6c734c127025fb39ad5d585a10382808b39dc1`, with
 `cua-desktop-discovery.patch`. The published modifier fix is already present,
 so the older modifier-only fork is not used. Rust and the other CLI/tool pins
 remain unchanged.
 
 The sparse checkout also includes `libs/cua/Cargo.toml` and
-`libs/cua/crates/cua-telemetry`, the 0.34.1 driver's existing path dependency.
+`libs/cua/crates/cua-telemetry`, the 0.36.0 driver's existing path dependency.
 The selected revision's Cargo lockfile, dependency features and test gates remain
 unchanged; the recipe does not fetch the rest of the CUA workspace.
 
-The 0.34.1 `GetAccessibilityTreeTool` still discovers only X11 windows. The
+The 0.36.0 `GetAccessibilityTreeTool` still discovers only X11 windows. The
 patch keeps discovery on the native Wayland/X11 dispatcher, excludes
 off-screen windows and known dead owners, remembers observed Wayland origins,
 and emits the existing canonical window record (including bounds, app name,
@@ -1159,7 +1285,7 @@ new source/library pair must include the Linux crate tests, both required image
 architectures, dynamic loading and the installed driver artifact check; old
 0.28.2 build results do not qualify this pair.
 
-The installer requires matching 0.34.1 installed JavaScript bindings, native
+The installer requires matching 0.36.0 installed JavaScript bindings, native
 package, plugin dependency and patch metadata, the exact official source/tag,
 and a patch digest. It first validates the original SDK against OpenClaw's
 native artifact manifest, then replaces only that architecture's SDK digest in
@@ -1174,16 +1300,17 @@ Wayland/visible/live/origin/canonical-record boundaries and passes matched
 artifact and desktop qualification. A version bump or modifier fix alone does
 not meet that removal condition.
 
-The small upstream discovery correction is proposed in [CUA #5286](https://github.com/trycua/cua/pull/5286).
-Its headless Linux tests passed; real Wayland qualification and the author's CLA
-remain separate. Its newer upstream base does not qualify or replace this pinned
-0.34.1 package/library pair. Both local architecture installers passed here.
+The upstream discovery contribution [CUA #5286](https://github.com/trycua/cua/pull/5286)
+is closed unmerged. Selected 0.36.0 still lacks the required discovery behavior;
+contribution status does not qualify or replace this pinned package/library pair.
+Exact-pair architecture qualification is recorded in the current assessment above.
+Real Wayland-session qualification remains separate from headless checks.
 
 ## Vendored computer-use skills
 
 `infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
-0.34.1 skill pack
-([`0c69d9a2`](https://github.com/trycua/cua/tree/0c69d9a2c8abbb5051a2df4a23f0fa166d5385dc/libs/cua-driver/rust/Skills/cua-driver))
+0.36.0 skill pack
+([`6d6c734c`](https://github.com/trycua/cua/tree/6d6c734c127025fb39ad5d585a10382808b39dc1/libs/cua-driver/rust/Skills/cua-driver))
 and the `cua-omarchy` companion from Omarchy
 [PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
 `provenance.json` records each repository, commit, and the SHA-256 of every

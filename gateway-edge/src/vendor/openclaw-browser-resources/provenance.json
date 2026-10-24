@@ -1,7 +1,7 @@
 {
-  "source": "be883be916375649db9caacad9521b85118e1da7",
+  "source": "55d6c80e504679ed4d0ffd2c26c1b43af05e5d0d",
   "inputs": {
-    "sha256": "456763f79a876ce2ee17b5f6ac8662b69c5b83b403010985a59629af8fde335f",
+    "sha256": "3c871f4e2a9e8834d6187d187ae4e3c6c6279e7c3faaf782f0002ba8a2acc751",
     "files": [
       "octogee/app/openclaw-browser/entry.ts",
       "octogee/app/openclaw-browser/media.ts",
@@ -11,8 +11,8 @@
       "octogee/app/openclaw-islands/i18n.ts",
       "octogee/app/openclaw-islands/inline-css.mjs",
       "octogee/app/openclaw-islands/licenses.mjs",
-      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.16/LICENSE",
-      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.16/provenance.json",
+      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.18/LICENSE",
+      "octogee/app/openclaw-islands/licenses/solid-2.0.0-rc.18/provenance.json",
       "octogee/app/openclaw-islands/mermaid-assets.mjs",
       "octogee/app/openclaw-islands/provenance.mjs",
       "octogee/app/openclaw-islands/solid-runtime.mjs",
@@ -32,7 +32,7 @@
     "ipaddr.js@2.5.0",
     "linkify-it@6.1.0",
     "longest-streak@3.1.0",
-    "markdown-it@15.0.2",
+    "markdown-it@15.0.3",
     "markdown-table@3.0.4",
     "mdast-util-from-markdown@2.1.0",
     "mdast-util-gfm-table@2.0.0",
