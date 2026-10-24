@@ -4163,15 +4163,13 @@ function createCustomerDeletionUnmount(
         gatewayId,
         revisionId: gatewayId,
         profile: authorization.config.profile ?? "standard",
+        runtime: resolveGatewayRuntime(runtimeSnap.data()?.runtime),
       };
     },
-    readAvailableReplicas: (revisionId) =>
-      kubeOps.readAvailableReplicas({
-        namespace: NAMESPACE,
-        name: deploymentNameForInstance(revisionId),
-      }),
+    isRuntimeAbsent: (gatewayId, revisionId) =>
+      retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(revisionId)),
     unmountRpc: ({ gatewayId, slug }) =>
-      callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn }),
+      callUnmountRpc(db, { privateKey, gatewayId, slug, log: logFn, allowUnready: true }),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     log: logFn,
@@ -4317,6 +4315,7 @@ export async function callUnmountRpc(
     log: (msg: string) => void;
     tag?: string;
     timeoutMs?: number;
+    allowUnready?: boolean;
   },
 ): Promise<void> {
   const {
@@ -4328,7 +4327,7 @@ export async function callUnmountRpc(
     timeoutMs = MIGRATION_UNMOUNT_TIMEOUT_MS,
   } = opts;
 
-  const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
+  const url = await resolveGatewayUrlFromFirestore(db, gatewayId, { allowUnready: opts.allowUnready === true });
   const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const body = JSON.stringify({ migrationId, slug });
   const signature = signFleetRequest(

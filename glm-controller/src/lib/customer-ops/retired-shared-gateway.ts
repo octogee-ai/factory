@@ -79,5 +79,6 @@ export async function retiredSharedGatewayRuntimeAbsent(
 ): Promise<boolean> {
   if (await kubeOps.readAvailableReplicas({ namespace, name: deploymentName }) !== null) return false;
   const pods = await kubeOps.readGatewayPodDiagnostics({ namespace, gatewayId });
-  return pods.status === "missing" && pods.totalPods === 0 && pods.pods.length === 0;
+  if (pods.status !== "missing" || pods.totalPods !== 0 || pods.pods.length !== 0) return false;
+  return await kubeOps.readAvailableReplicas({ namespace, name: deploymentName }) === null;
 }

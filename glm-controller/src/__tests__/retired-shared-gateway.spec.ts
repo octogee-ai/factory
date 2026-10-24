@@ -128,3 +128,12 @@ describe("retired Shared Kubernetes absence", () => {
     if (deployment === null) expect(kubeOps.readGatewayPodDiagnostics).toHaveBeenCalledWith({ namespace: "octogee-test", gatewayId });
   });
 });
+
+it("does not accept a deployment recreated during pod absence inspection", async () => {
+  const kubeOps = {
+    readAvailableReplicas: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(0),
+    readGatewayPodDiagnostics: vi.fn(async () => ({ status: "missing", totalPods: 0, pods: [] })),
+  };
+  await expect(retiredSharedGatewayRuntimeAbsent(kubeOps as never, "octogee-test", gatewayId, `octogee-gateway-${gatewayId}`))
+    .resolves.toBe(false);
+});

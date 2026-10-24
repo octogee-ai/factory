@@ -1,9 +1,12 @@
+import type { GatewayRuntime } from "@octogee/shared/types/glm";
+
 export type UnmountOutcome = "unmounted" | "skipped-no-live-pod";
 
 export interface GatewayUnmountTarget {
   gatewayId: string;
   revisionId: string;
   profile: "standard" | "builder";
+  runtime: GatewayRuntime;
 }
 
 export interface UnmountFromGatewayDeps {
@@ -11,7 +14,7 @@ export interface UnmountFromGatewayDeps {
   isRetiredSharedGateway: (gatewayId: string) => Promise<boolean>;
   isGatewayAbsent: (gatewayId: string) => Promise<boolean>;
 
-  readAvailableReplicas: (revisionId: string) => Promise<number | null>;
+  isRuntimeAbsent: (gatewayId: string, revisionId: string) => Promise<boolean>;
 
   unmountRpc: (opts: { gatewayId: string; revisionId: string; slug: string }) => Promise<void>;
 
@@ -43,10 +46,6 @@ function describeFailure(err: TypeError): string {
   return cause ? `${err.message} (${cause})` : err.message;
 }
 
-// A pod with zero available replicas has no local customer footprint (emptyDir),
-// and the gateway's level-triggered mount reconcile only mounts slugs still
-// assigned in Firestore — which deprovision deletes — so a future boot cannot
-// resurrect the customer. Skipping is the truthful outcome, not a swallowed error.
 export function createUnmountFromGateway(
   deps: UnmountFromGatewayDeps,
 ): (gatewayId: string, slug: string) => Promise<UnmountOutcome> {
@@ -70,10 +69,9 @@ export function createUnmountFromGateway(
     const deadline = deps.now() + retryDeadlineMs;
     let attempts = 0;
     for (;;) {
-      const available = await deps.readAvailableReplicas(target.revisionId);
-      if (available == null || available < 1) {
+      if (target.runtime === "cluster" && await deps.isRuntimeAbsent(gatewayId, target.revisionId)) {
         deps.log(
-          `[deprovision] unmount skipped for ${slug}: gateway ${gatewayId} revision ${target.revisionId} has no live pod (availableReplicas=${available ?? "deployment-missing"})`,
+          `[deprovision] unmount skipped for ${slug}: gateway ${gatewayId} revision ${target.revisionId} has no deployment or pods`,
         );
         return "skipped-no-live-pod";
       }

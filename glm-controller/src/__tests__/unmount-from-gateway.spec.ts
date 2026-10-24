@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { retiredSharedGatewayRuntimeAbsent } from "../lib/customer-ops/retired-shared-gateway.js";
 import {
   createUnmountFromGateway,
   type UnmountFromGatewayDeps,
@@ -14,8 +15,9 @@ function mkDeps(overrides: Partial<UnmountFromGatewayDeps> = {}): UnmountFromGat
       gatewayId,
       revisionId: `${gatewayId}-r7`,
       profile: "standard" as const,
+      runtime: "cluster" as const,
     })),
-    readAvailableReplicas: vi.fn(async () => 1),
+    isRuntimeAbsent: vi.fn(async () => false),
     isRetiredSharedGateway: vi.fn(async () => false),
     isGatewayAbsent: vi.fn(async () => false),
     unmountRpc: vi.fn(async () => undefined),
@@ -40,7 +42,7 @@ describe("createUnmountFromGateway — durable runtime resolution", () => {
 
   it("never uses retirement proof for a mismatched serving revision", async () => {
     const deps = mkDeps({
-      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "foreign", revisionId: "foreign", profile: "standard" })),
+      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "foreign", revisionId: "foreign", profile: "standard", runtime: "cluster" })),
       isRetiredSharedGateway: vi.fn(async () => true),
     });
     await expect(createUnmountFromGateway(deps)("shared-old", "alice")).rejects.toThrow(/no validated serving revision/);
@@ -79,23 +81,58 @@ describe("createUnmountFromGateway — durable runtime resolution", () => {
   });
 });
 
-describe("createUnmountFromGateway — no live pod", () => {
-  it("skips when the deployment has zero available replicas (scaled to zero)", async () => {
-    const deps = mkDeps({ readAvailableReplicas: vi.fn(async () => 0) });
-    const unmount = createUnmountFromGateway(deps);
-    await expect(unmount("default", "alice")).resolves.toBe("skipped-no-live-pod");
+describe("createUnmountFromGateway — runtime presence", () => {
+  it.each([0, null])("contacts a retained pod with availableReplicas=%s", async available => {
+    const deps = mkDeps({
+      isRuntimeAbsent: (gatewayId, revisionId) => retiredSharedGatewayRuntimeAbsent({
+        readAvailableReplicas: async () => available,
+        readGatewayPodDiagnostics: async () => ({ status: "not-ready", totalPods: 1, pods: [{ readyContainers: 1, totalContainers: 2 }] }),
+      } as never, "octogee-test", gatewayId, revisionId),
+    });
+    await expect(createUnmountFromGateway(deps)("shared-old", "alice")).resolves.toBe("unmounted");
+    expect(deps.unmountRpc).toHaveBeenCalledOnce();
+  });
+
+  it("requires verified deployment and pod absence before skipping", async () => {
+    const deps = mkDeps({
+      isRuntimeAbsent: vi.fn(async () => true),
+    });
+    await expect(createUnmountFromGateway(deps)("shared-old", "alice")).resolves.toBe("skipped-no-live-pod");
+    expect(deps.isRuntimeAbsent).toHaveBeenCalledWith("shared-old", "shared-old-r7");
     expect(deps.unmountRpc).not.toHaveBeenCalled();
   });
 
-  it("skips when the deployment does not exist", async () => {
-    const deps = mkDeps({ readAvailableReplicas: vi.fn(async () => null) });
-    const unmount = createUnmountFromGateway(deps);
-    await expect(unmount("default", "alice")).resolves.toBe("skipped-no-live-pod");
+  it("does not skip when runtime presence is unknown", async () => {
+    const deps = mkDeps({
+      isRuntimeAbsent: vi.fn(async () => { throw new Error("pod lookup unavailable"); }),
+    });
+    await expect(createUnmountFromGateway(deps)("shared-old", "alice")).rejects.toThrow("pod lookup unavailable");
     expect(deps.unmountRpc).not.toHaveBeenCalled();
   });
 });
 
 describe("createUnmountFromGateway — live pod unmount", () => {
+  it("contacts a VM even when Kubernetes has no objects", async () => {
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "alice-vm", revisionId: "alice-vm", profile: "builder", runtime: "gce-vm" })),
+      isRuntimeAbsent: vi.fn(async () => true),
+    });
+    await expect(createUnmountFromGateway(deps)("alice-vm", "alice")).resolves.toBe("unmounted");
+    expect(deps.isRuntimeAbsent).not.toHaveBeenCalled();
+    expect(deps.unmountRpc).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an unreachable VM failure visible instead of claiming Kubernetes absence", async () => {
+    const deps = mkDeps({
+      resolveGatewayUnmountTarget: vi.fn(async () => ({ gatewayId: "alice-vm", revisionId: "alice-vm", profile: "builder", runtime: "gce-vm" })),
+      isRuntimeAbsent: vi.fn(async () => true),
+      unmountRpc: vi.fn(async () => { throw connectionError(); }),
+      retryDeadlineMs: 0,
+    });
+    await expect(createUnmountFromGateway(deps)("alice-vm", "alice")).rejects.toThrow("unmount unreachable");
+    expect(deps.isRuntimeAbsent).not.toHaveBeenCalled();
+  });
+
   it("calls the platform-signed unmount RPC for standard gateways", async () => {
     const deps = mkDeps();
     const unmount = createUnmountFromGateway(deps);
@@ -113,6 +150,7 @@ describe("createUnmountFromGateway — live pod unmount", () => {
         gatewayId: "bender",
         revisionId: "bender-r7",
         profile: "builder" as const,
+        runtime: "cluster" as const,
       })),
     });
     const unmount = createUnmountFromGateway(deps);
@@ -147,10 +185,10 @@ describe("createUnmountFromGateway — connection-error retry", () => {
     expect(deps.wait).toHaveBeenCalledTimes(2);
   });
 
-  it("re-checks replicas between retries and skips if the pod went away", async () => {
-    const replicaReads = [1, 0];
+  it("rechecks runtime absence between retries", async () => {
+    const absentReads = [false, true];
     const deps = mkDeps({
-      readAvailableReplicas: vi.fn(async () => replicaReads.shift() ?? 0),
+      isRuntimeAbsent: vi.fn(async () => absentReads.shift() ?? true),
       unmountRpc: vi.fn(async () => {
         throw connectionError();
       }),
@@ -216,8 +254,9 @@ describe("createUnmountFromGateway — connection-error retry", () => {
         gatewayId: "bender",
         revisionId: "bender-r7",
         profile: "builder" as const,
+        runtime: "cluster" as const,
       })),
-      readAvailableReplicas: vi.fn(async () => 0),
+      isRuntimeAbsent: vi.fn(async () => true),
     });
     const unmount = createUnmountFromGateway(deps);
     await expect(unmount("bender", "theo")).resolves.toBe("skipped-no-live-pod");

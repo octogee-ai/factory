@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as migrationTransport from "../lib/migration-rsync-transfer.js";
 import type { Firestore } from "firebase-admin/firestore";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
 import { gatewayScopedJobId, verifyFleetRequest } from "@octogee/core/fleet-signature";
@@ -33,6 +34,30 @@ describe("callUnmountRpc", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each([false, true])("uses recovery transport only when deletion opts in: %s", async allowUnready => {
+    const recovery = vi.spyOn(migrationTransport, "resolveMigrationRecoveryUrl")
+      .mockResolvedValue("http://10.0.0.7:3003");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    await callUnmountRpc(fakeDb(), {
+      privateKey: FLEET_KEY_PAIR.privateKey, gatewayId: "bender", slug: "alice", log: vi.fn(),
+      ...(allowUnready ? { allowUnready: true } : {}),
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    if (allowUnready) {
+      expect(recovery).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "bender", port: "3003" }));
+      expect(url).toBe("http://10.0.0.7:3003/unmount/bender");
+    } else {
+      expect(recovery).not.toHaveBeenCalled();
+      expect(url).not.toContain("10.0.0.7");
+    }
+    const rawBody = String(init?.body);
+    const body = JSON.parse(rawBody);
+    const signature = (init?.headers as Record<string, string>)[SIGNATURE_HEADER];
+    expect(body.slug).toBe("alice");
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(body.migrationId, "bender"), rawBody, signature)).toBe(true);
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(body.migrationId, "other"), rawBody, signature)).toBe(false);
   });
 
   it("aborts a stuck unmount RPC instead of hanging the Builder gateway poller", async () => {
