@@ -9,6 +9,9 @@ const CLEANUP_FIELDS = [
   "stripeSubscriptionIds",
   "cleanupContext",
   "suspensionOperationId",
+  "postgresAgentStoreTargets",
+  "sharedAgentStoreCleanup",
+  "retiredGatewayProofs",
 ] as const;
 
 const IDENTITY_MAPPING_FIELDS = ["uid", "erasureOperationId", "posthogErasure"] as const;

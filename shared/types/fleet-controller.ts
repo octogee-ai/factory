@@ -422,13 +422,21 @@ alreadyMounted?: boolean;
 verificationPending?: string;
 }
 
-export interface UnmountRequestBody extends MigrationRequestBody {}
+export interface AgentStoreUnmountCoverage {
+  podUid: string;
+  agentIds: string[];
+}
+
+export interface UnmountRequestBody extends MigrationRequestBody {
+  agentStoreErasure?: AgentStoreUnmountCoverage;
+}
 
 export interface UnmountResponse {
   migrationId: string;
   slug: string;
 
 unmounted: boolean;
+  agentStoreErasure?: AgentStoreUnmountCoverage;
 }
 
 export interface RestoreMigrationRequestBody extends MigrationRequestBody {

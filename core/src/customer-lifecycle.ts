@@ -305,6 +305,7 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
     evictionBatch?: readonly string[],
     currentEvictionBatch?: () => Promise<readonly string[]>,
     targetCleanup?: { migrationId: string; targetPodUid: string; assertCurrent: () => Promise<void> },
+    erasureAgentIds?: readonly string[],
   ) => Promise<RemoveCustomerResult>;
 
   releaseAgent?: (agentId: string) => Promise<void>;
@@ -365,6 +366,7 @@ export interface RemoveCustomerResult {
   wasMounted: boolean;
   steps: RemoveCustomerStep[];
   retained?: boolean;
+  releasedAgentIds?: string[];
 }
 
 const inFlightUids = new Map<string, symbol>();

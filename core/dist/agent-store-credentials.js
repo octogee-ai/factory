@@ -240,3 +240,213 @@ export async function assertNoBuilderAgentStores(adminDsn, builder) {
         await client.end();
     }
 }
+async function assertAgentErasureMetadataTypes(client, namespace) {
+    const unsafeTypes = await client.query(`
+    SELECT 1 FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND a.attnum > 0 AND NOT a.attisdropped
+      AND ((c.relname = 'schema_meta' AND a.attname IN ('meta_key', 'role', 'agent_id'))
+        OR (c.relname = 'openclaw_schema_meta' AND a.attname IN ('store', 'store_id')))
+      AND a.atttypid <> 'pg_catalog.text'::regtype`, [namespace]);
+    if (unsafeTypes.rowCount)
+        throw new Error(`Agent-store erasure metadata type changed: ${namespace}`);
+}
+async function agentStoreErasureIdentity(client, namespace) {
+    const metadataTables = await client.query(`
+    SELECT c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relkind = 'r' AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity
+      AND c.relname IN ('schema_meta', 'openclaw_schema_meta')`, [namespace]);
+    if (metadataTables.rowCount !== 2)
+        throw new Error(`Agent-store erasure metadata is unavailable: ${namespace}`);
+    await assertAgentErasureMetadataTypes(client, namespace);
+    const identity = await client.query(`SELECT store, store_id FROM ${identifier(namespace)}.openclaw_schema_meta`);
+    const agent = await client.query(`SELECT role, agent_id FROM ${identifier(namespace)}.schema_meta WHERE meta_key = 'primary'`);
+    const store = identity.rows[0], primary = agent.rows[0];
+    if (identity.rowCount !== 1 || typeof store.store_id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(store.store_id) ||
+        agent.rowCount !== 1) {
+        throw new Error(`Agent-store erasure identity is unavailable: ${namespace}`);
+    }
+    if (store.store === "agent" && primary.role === "agent" && typeof primary.agent_id === "string") {
+        return { family: "agent", role: "agent", storeId: store.store_id, agentId: primary.agent_id };
+    }
+    if (store.store === "state" && primary.role === "global" && primary.agent_id === null) {
+        return { family: "state", role: "global", storeId: store.store_id, agentId: null };
+    }
+    throw new Error(`Agent-store erasure identity is unavailable: ${namespace}`);
+}
+function erasureIdentityBelongsToBuilder(identity, slug, sharedOwner) {
+    if (identity.family === "agent") {
+        return identity.role === "agent" && (agentIdBelongsToSlug(identity.agentId, slug) ||
+            (!sharedOwner && identity.agentId === "octogee-unmatched-route"));
+    }
+    return !sharedOwner && identity.family === "state" && identity.role === "global" && identity.agentId === null;
+}
+async function discoverAgentStoreErasureTargets(client, builder, owner, shared) {
+    const candidates = await client.query(`
+    SELECT n.nspname, n.oid::text AS oid, r.rolname FROM pg_catalog.pg_namespace n
+    JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
+    WHERE r.rolname = ANY($1::text[]) OR ((r.rolname LIKE 'octogee_gateway_%' OR r.rolname LIKE 'octogee_unclaimed_%')
+      AND r.oid IN (SELECT m.member FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles parent ON parent.oid = m.roleid WHERE parent.rolname = $2))
+    ORDER BY n.nspname`, [[owner, shared], owner]);
+    const targets = [];
+    for (const row of candidates.rows) {
+        if (row.rolname === shared) {
+            const agentTable = await client.query(`SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'schema_meta' AND c.relkind = 'r'`, [row.nspname]);
+            if (!agentTable.rowCount)
+                continue;
+            await assertAgentErasureMetadataTypes(client, row.nspname);
+            const metadata = await client.query(`SELECT agent_id FROM ${identifier(row.nspname)}.schema_meta WHERE meta_key = 'primary' AND role = 'agent'`);
+            if (!metadata.rows.some(row => agentIdBelongsToSlug(row.agent_id, builder.slug)))
+                continue;
+        }
+        const identity = await agentStoreErasureIdentity(client, row.nspname);
+        if (!erasureIdentityBelongsToBuilder(identity, builder.slug, row.rolname === shared)) {
+            throw new Error(`Agent-store erasure found foreign Builder data: ${row.nspname}`);
+        }
+        targets.push({ namespace: row.nspname, namespaceOid: row.oid, owner: row.rolname, ...identity });
+    }
+    return targets;
+}
+function sameErasureTarget(left, right) {
+    return left.namespace === right.namespace && left.namespaceOid === right.namespaceOid && left.owner === right.owner &&
+        left.family === right.family && left.role === right.role && left.storeId === right.storeId && left.agentId === right.agentId;
+}
+async function assertAgentStoreErasureDependencies(client, target) {
+    const dependencies = await client.query(`
+    WITH RECURSIVE removed(classid, objid, objsubid) AS (
+      SELECT 'pg_catalog.pg_namespace'::regclass::oid, $1::oid, 0
+      UNION
+      SELECT d.classid, d.objid, d.objsubid FROM pg_catalog.pg_depend d JOIN removed r
+        ON d.refclassid = r.classid AND d.refobjid = r.objid AND (r.objsubid = 0 OR d.refobjsubid = r.objsubid)
+    )
+    SELECT i.type, i.identity FROM removed r
+    CROSS JOIN LATERAL pg_catalog.pg_identify_object(r.classid, r.objid, r.objsubid) i
+    LEFT JOIN pg_catalog.pg_namespace owned_namespace ON owned_namespace.oid = CASE
+      WHEN r.classid = 'pg_catalog.pg_trigger'::regclass THEN
+        (SELECT c.relnamespace FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid WHERE t.oid = r.objid)
+      WHEN r.classid = 'pg_catalog.pg_attrdef'::regclass THEN
+        (SELECT c.relnamespace FROM pg_catalog.pg_attrdef a JOIN pg_catalog.pg_class c ON c.oid = a.adrelid WHERE a.oid = r.objid)
+      WHEN r.classid = 'pg_catalog.pg_rewrite'::regclass THEN
+        (SELECT c.relnamespace FROM pg_catalog.pg_rewrite w JOIN pg_catalog.pg_class c ON c.oid = w.ev_class WHERE w.oid = r.objid)
+      WHEN r.classid = 'pg_catalog.pg_constraint'::regclass THEN
+        (SELECT c.connamespace FROM pg_catalog.pg_constraint c WHERE c.oid = r.objid)
+    END
+    WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_shdepend d WHERE d.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+      AND d.classid = r.classid AND d.objid = r.objid AND d.deptype = 'o'
+      AND d.refobjid <> (SELECT nspowner FROM pg_catalog.pg_namespace WHERE oid = $1::oid))
+    OR (NOT (r.classid = 'pg_catalog.pg_namespace'::regclass AND r.objid = $1::oid)
+      AND (COALESCE(i.schema, owned_namespace.nspname) IS DISTINCT FROM $2)
+      AND NOT (r.classid = 'pg_catalog.pg_class'::regclass AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_class t JOIN pg_catalog.pg_class b ON b.reltoastrelid = t.oid
+        WHERE b.relnamespace = $1::oid AND (t.oid = r.objid OR r.objid IN (
+          SELECT indexrelid FROM pg_catalog.pg_index WHERE indrelid = t.oid)))))
+    LIMIT 1`, [target.namespaceOid, target.namespace]);
+    if (dependencies.rowCount)
+        throw new Error(`Agent-store erasure has an external or foreign-owned dependency: ${target.namespace}`);
+}
+export async function eraseBuilderAgentStores(adminDsn, builder, custody) {
+    if (!builder.uid || !builder.slug)
+        throw new Error("Agent-store erasure requires a complete Builder identity");
+    const scope = decodeURIComponent(new URL(adminDsn).pathname.slice(1));
+    if (!scope)
+        throw new Error("Agent-store erasure requires a database");
+    const owner = roleFor("builder", `${scope}:${builder.uid}`), shared = roleFor("shared", scope);
+    const client = new pg.Client({ connectionString: adminDsn, connectionTimeoutMillis: 10_000 });
+    await client.connect();
+    try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL search_path = pg_catalog");
+        await client.query("SET LOCAL row_security = off");
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))");
+        await custody.assertCurrent();
+        const discovered = await discoverAgentStoreErasureTargets(client, builder, owner, shared);
+        const assertStopped = async (targets, gateways) => {
+            if (!targets.some(target => target.owner !== shared))
+                return;
+            const logins = await client.query(`WITH RECURSIVE members(oid) AS (
+        SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
+        UNION SELECT m.member FROM pg_catalog.pg_auth_members m JOIN members parent ON parent.oid = m.roleid)
+        SELECT r.rolname FROM members m JOIN pg_catalog.pg_roles r ON r.oid = m.oid WHERE r.rolcanlogin AND r.rolname <> current_user`, [owner]);
+            const stoppedLogins = new Set(gateways.map(id => roleFor("gateway", `${scope}:${id}`)));
+            if (logins.rows.some(row => !stoppedLogins.has(row.rolname)))
+                throw new Error("Agent-store erasure retains a Builder Gateway login without proved runtime retirement");
+        };
+        let stoppedGateways = discovered.length ? await custody.assertWritersStopped(discovered) : [];
+        if (discovered.length)
+            await assertStopped(discovered, stoppedGateways);
+        const bound = await custody.bindTargets(discovered);
+        if (discovered.some(target => !bound.some(existing => sameErasureTarget(existing, target)))) {
+            throw new Error("Agent-store erasure target changed after deletion admission");
+        }
+        if (bound.length && !discovered.length)
+            stoppedGateways = await custody.assertWritersStopped(bound);
+        if (bound.length)
+            await assertStopped(bound, stoppedGateways);
+        for (const target of bound) {
+            if (!erasureIdentityBelongsToBuilder(target, builder.slug, target.owner === shared))
+                throw new Error("Agent-store erasure target changed");
+            await dropBoundAgentStore(client, target, discovered, async () => {
+                await assertStopped(bound, stoppedGateways);
+                await custody.assertCurrent();
+            });
+        }
+        if (bound.length)
+            await assertStopped(bound, await custody.assertWritersStopped(bound));
+        await custody.assertCurrent();
+        await client.query("COMMIT");
+    }
+    catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    }
+    finally {
+        await client.end();
+    }
+}
+async function erasureNamespaceExists(client, target) {
+    const namespace = await client.query(`SELECT n.nspname, n.oid::text AS oid, r.rolname FROM pg_catalog.pg_namespace n
+    JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner WHERE n.oid = $1::oid OR n.nspname = $2`, [target.namespaceOid, target.namespace]);
+    if (namespace.rowCount === 0)
+        return false;
+    const row = namespace.rows[0];
+    if (namespace.rowCount !== 1 || row.nspname !== target.namespace || row.oid !== target.namespaceOid || row.rolname !== target.owner) {
+        throw new Error("Agent-store erasure target changed before cleanup");
+    }
+    return true;
+}
+async function dropBoundAgentStore(client, target, discovered, assertCurrent) {
+    if (!await erasureNamespaceExists(client, target))
+        return;
+    if (!discovered.some(current => sameErasureTarget(current, target)))
+        throw new Error("Agent-store erasure target ownership changed");
+    const relations = await client.query(`SELECT relname FROM pg_catalog.pg_class WHERE relnamespace = $1::oid AND relkind IN ('r', 'p') ORDER BY oid`, [target.namespaceOid]);
+    for (const relation of relations.rows) {
+        await client.query(`LOCK TABLE ${identifier(target.namespace)}.${identifier(relation.relname)} IN ACCESS EXCLUSIVE MODE`);
+    }
+    const identity = await agentStoreErasureIdentity(client, target.namespace);
+    if (!sameErasureTarget(target, { ...target, ...identity }))
+        throw new Error("Agent-store erasure target identity changed");
+    await assertSafeSchemaOwnershipTransfer(client, target.namespace);
+    await assertAgentStoreErasureDependencies(client, target);
+    await assertCurrent();
+    if (!await erasureNamespaceExists(client, target))
+        throw new Error("Agent-store erasure target changed while locking");
+    await dropAgentStoreObjectsRestricted(client, target, relations.rows.map(row => row.relname));
+}
+async function dropAgentStoreObjectsRestricted(client, target, tables) {
+    const qualified = (name) => `${identifier(target.namespace)}.${identifier(name)}`;
+    if (tables.length)
+        await client.query(`DROP TABLE ${tables.map(qualified).join(", ")} RESTRICT`);
+    const functions = await client.query("SELECT p.oid::regprocedure::text AS signature FROM pg_catalog.pg_proc p WHERE p.pronamespace = $1::oid AND p.prokind = 'f' ORDER BY p.oid", [target.namespaceOid]);
+    if (functions.rowCount)
+        await client.query(`DROP FUNCTION ${functions.rows.map(row => row.signature).join(", ")} RESTRICT`);
+    const sequences = await client.query("SELECT relname FROM pg_catalog.pg_class WHERE relnamespace = $1::oid AND relkind = 'S' ORDER BY oid", [target.namespaceOid]);
+    if (sequences.rowCount)
+        await client.query(`DROP SEQUENCE ${sequences.rows.map(row => qualified(row.relname)).join(", ")} RESTRICT`);
+    const configurations = await client.query("SELECT cfgname FROM pg_catalog.pg_ts_config WHERE cfgnamespace = $1::oid ORDER BY oid", [target.namespaceOid]);
+    for (const row of configurations.rows)
+        await client.query(`DROP TEXT SEARCH CONFIGURATION ${qualified(row.cfgname)} RESTRICT`);
+    await client.query(`DROP SCHEMA ${identifier(target.namespace)} RESTRICT`);
+}

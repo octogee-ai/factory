@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores } from "./agent-store-credentials.js";
+import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores, type AgentStoreErasureTarget } from "./agent-store-credentials.js";
 import { readAuthProfileStore, writeAuthProfileStore, deleteAuthProfileStore } from "./auth-profile-store.js";
 import { purgeCustomerOauthRuntimeArtifacts } from "./byosub-restore.js";
 
@@ -43,6 +43,189 @@ const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 describe.skipIf(!dsn)("PostgreSQL agent store", () => {
+  it("erases only immutable due-deletion targets and reconciles a committed drop without adopting replacements", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const builder = { uid: `erase-${suffix}`, slug: `erase-${suffix}` };
+    const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
+    const sharedDsn = await provision({ gatewayClass: "shared", gatewayId: `shared-erase-${suffix}`, token: "synthetic-shared" });
+    const shared = new pg.Client({ connectionString: sharedDsn });
+    const admin = new pg.Client({ connectionString: dsn! });
+    await shared.connect(); await admin.connect();
+    const schema = `erase_${suffix}`, other = `other_${suffix}`;
+    const object = (namespace: string, name: string) => `${pg.escapeIdentifier(namespace)}.${pg.escapeIdentifier(name)}`;
+    const create = async (namespace: string, agentId: string, creator = shared) => {
+      await creator.query(`CREATE SCHEMA ${pg.escapeIdentifier(namespace)}`);
+      await creator.query(`CREATE TABLE ${object(namespace, "openclaw_schema_meta")} (store TEXT PRIMARY KEY, version BIGINT, store_id TEXT)`);
+      await creator.query(`INSERT INTO ${object(namespace, "openclaw_schema_meta")} VALUES ('agent', 1, $1)`, [randomUUID()]);
+      await creator.query(`CREATE TABLE ${object(namespace, "schema_meta")} (meta_key TEXT PRIMARY KEY, role TEXT, agent_id TEXT)`);
+      await creator.query(`INSERT INTO ${object(namespace, "schema_meta")} VALUES ('primary', 'agent', $1)`, [agentId]);
+      await creator.query(`CREATE TABLE ${object(namespace, "history")} (id BIGINT PRIMARY KEY, body TEXT)`);
+      await creator.query(`INSERT INTO ${object(namespace, "history")} VALUES (1, 'retained-history')`);
+    };
+    let bound: readonly AgentStoreErasureTarget[] | undefined;
+    const effects = { stopped: true, current: true, claims: 0, stoppedGateways: ["shared-test"] };
+    const guards = {
+      assertCurrent: async () => { effects.claims++; if (!effects.current) throw new Error("deletion claim lost"); },
+      assertWritersStopped: async () => {
+        if (!effects.stopped) throw new Error("retained runtime exists");
+        return effects.stoppedGateways;
+      },
+      bindTargets: async (targets: readonly AgentStoreErasureTarget[]) => bound ??= targets,
+    };
+    try {
+      await create(schema, `octogee-${builder.slug}-coach`);
+      await create(other, "octogee-other-coach");
+      await shared.query(`CREATE FUNCTION ${object(schema, "sync_history")}() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'`);
+      await shared.query(`CREATE TRIGGER memory_index_chunks_vec_sync AFTER INSERT ON ${object(schema, "history")} FOR EACH ROW EXECUTE FUNCTION ${object(schema, "sync_history")}()`);
+      await shared.query(`ALTER TABLE ${object(schema, "history")} ALTER COLUMN body SET DEFAULT 'created'`);
+      await shared.query(`ALTER TABLE ${object(schema, "history")} ADD CHECK (id > 0)`);
+      await shared.query(`CREATE SEQUENCE ${object(schema, "history_id")}`);
+      await shared.query(`ALTER TABLE ${object(schema, "history")} ALTER COLUMN id SET DEFAULT nextval(${pg.escapeLiteral(object(schema, "history_id"))}::regclass)`);
+      await shared.query(`CREATE TEXT SEARCH CONFIGURATION ${object(schema, "native_search")} (COPY = pg_catalog.simple)`);
+      effects.stopped = false;
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("retained runtime");
+      expect(bound).toBeUndefined();
+      effects.stopped = true;
+      effects.current = false;
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("claim lost");
+      effects.current = true;
+      await shared.query(`CREATE VIEW ${object(other, "foreign_reference")} AS SELECT * FROM ${object(schema, "history")}`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("dependency");
+      expect(bound).toHaveLength(1);
+      await shared.query(`DROP VIEW ${object(other, "foreign_reference")}`);
+      await shared.query(`CREATE TRIGGER foreign_trigger AFTER INSERT ON ${object(other, "history")} FOR EACH ROW EXECUTE FUNCTION ${object(schema, "sync_history")}()`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("dependency");
+      await shared.query(`DROP TRIGGER foreign_trigger ON ${object(other, "history")}`);
+      await shared.query(`GRANT USAGE ON SCHEMA ${pg.escapeIdentifier(schema)} TO PUBLIC`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("schema grants");
+      await shared.query(`REVOKE USAGE ON SCHEMA ${pg.escapeIdentifier(schema)} FROM PUBLIC`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, { ...guards, bindTargets: async targets => {
+        const result = await guards.bindTargets(targets); effects.current = false; return result;
+      } })).rejects.toThrow("claim lost");
+      expect((await shared.query(`SELECT body FROM ${object(schema, "history")}`)).rowCount).toBe(1);
+      effects.current = true;
+      let checks = 0;
+      await expect(eraseBuilderAgentStores(dsn!, builder, { ...guards, assertCurrent: async () => {
+        await guards.assertCurrent();
+        if (++checks !== 2) return;
+        await shared.query(`CREATE TRIGGER concurrent_foreign_trigger AFTER INSERT ON ${object(other, "history")} FOR EACH ROW EXECUTE FUNCTION ${object(schema, "sync_history")}()`);
+      } })).rejects.toThrow("depend");
+      expect((await shared.query(`SELECT body FROM ${object(schema, "history")}`)).rowCount).toBe(1);
+      expect((await shared.query("SELECT 1 FROM pg_catalog.pg_trigger WHERE tgname = 'concurrent_foreign_trigger' AND tgrelid = $1::regclass", [object(other, "history")])).rowCount).toBe(1);
+      await shared.query(`DROP TRIGGER concurrent_foreign_trigger ON ${object(other, "history")}`);
+      await eraseBuilderAgentStores(dsn!, builder, guards);
+      await expect(assertNoBuilderAgentStores(dsn!, builder)).resolves.toBeUndefined();
+      expect((await shared.query(`SELECT body FROM ${object(other, "history")}`)).rows).toEqual([{ body: "retained-history" }]);
+      await eraseBuilderAgentStores(dsn!, builder, guards);
+      await create(schema, `octogee-${builder.slug}-coach`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("changed");
+      expect((await shared.query(`SELECT body FROM ${object(schema, "history")}`)).rowCount).toBe(1);
+      bound = undefined;
+      const builderGateway = `builder-erase-${suffix}`;
+      const builderDsn = await provision({ gatewayClass: "builder", gatewayId: builderGateway, token: "synthetic-builder", builder });
+      await admin.query(`DROP SCHEMA ${pg.escapeIdentifier(schema)} CASCADE`);
+      const builderClient = new pg.Client({ connectionString: builderDsn }); await builderClient.connect();
+      try { await create(schema, `octogee-${builder.slug}-coach`, builderClient); } finally { await builderClient.end(); }
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("Builder Gateway login");
+      expect(bound).toBeUndefined();
+      effects.stoppedGateways.push(builderGateway);
+      await eraseBuilderAgentStores(dsn!, builder, guards);
+      await expect(assertNoBuilderAgentStores(dsn!, builder)).resolves.toBeUndefined();
+    } finally {
+      await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(other)} CASCADE`);
+      await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
+      await shared.end(); await admin.end();
+    }
+  });
+
+  it("erases a retired claimed Builder's agent and global stores while preserving Shared system and foreign customer stores", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const builder = { uid: `erase-system-${suffix}`, slug: `erase-system-${suffix}` };
+    const gatewayId = `builder-erase-system-${suffix}`;
+    const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
+    const sharedDsn = await provision({ gatewayClass: "shared", gatewayId: `shared-system-${suffix}`, token: "synthetic-shared" });
+    const standbyDsn = await provision({ gatewayClass: "builder", gatewayId, token: "synthetic-builder" });
+    const shared = new pg.Client({ connectionString: sharedDsn }), standby = new pg.Client({ connectionString: standbyDsn });
+    const admin = new pg.Client({ connectionString: dsn! });
+    await shared.connect(); await standby.connect(); await admin.connect();
+    const names = Object.fromEntries(["coach", "unmatched", "state", "foreign", "sharedCoach", "sharedUnmatched", "sharedState", "sharedForeign"]
+      .map(name => [name, `erase_${name.toLowerCase()}_${suffix}`])) as Record<string, string>;
+    const object = (namespace: string, name: string) => `${pg.escapeIdentifier(namespace)}.${pg.escapeIdentifier(name)}`;
+    const create = async (creator: pg.Client, namespace: string, family: "agent" | "state", agentId: string | null) => {
+      await creator.query(`CREATE SCHEMA ${pg.escapeIdentifier(namespace)}`);
+      await creator.query(`CREATE TABLE ${object(namespace, "openclaw_schema_meta")} (store TEXT PRIMARY KEY, version BIGINT, store_id TEXT)`);
+      await creator.query(`INSERT INTO ${object(namespace, "openclaw_schema_meta")} VALUES ($1, 1, $2)`, [family, randomUUID()]);
+      await creator.query(`CREATE TABLE ${object(namespace, "schema_meta")} (meta_key TEXT PRIMARY KEY, role TEXT, agent_id TEXT)`);
+      await creator.query(`INSERT INTO ${object(namespace, "schema_meta")} VALUES ('primary', $1, $2)`, [family === "state" ? "global" : "agent", agentId]);
+      await creator.query(`CREATE TABLE ${object(namespace, "history")} (body TEXT)`);
+      await creator.query(`INSERT INTO ${object(namespace, "history")} VALUES ('retained-history')`);
+    };
+    let bound: readonly AgentStoreErasureTarget[] | undefined;
+    const stopped: string[] = [];
+    const guards = {
+      assertCurrent: async () => undefined,
+      assertWritersStopped: async () => stopped,
+      bindTargets: async (targets: readonly AgentStoreErasureTarget[]) => bound ??= targets,
+    };
+    let claimed: pg.Client | undefined;
+    try {
+      await create(standby, names.unmatched!, "agent", "octogee-unmatched-route");
+      await create(standby, names.state!, "state", null);
+      const builderDsn = await provision({ gatewayClass: "builder", gatewayId, token: "synthetic-builder", builder });
+      claimed = new pg.Client({ connectionString: builderDsn }); await claimed.connect();
+      await create(claimed, names.coach!, "agent", `octogee-${builder.slug}-coach`);
+      await create(shared, names.sharedCoach!, "agent", `octogee-${builder.slug}-proj-project-coach`);
+      await create(shared, names.sharedUnmatched!, "agent", "octogee-unmatched-route");
+      await create(shared, names.sharedState!, "state", null);
+      await create(shared, names.sharedForeign!, "agent", "octogee-other-coach");
+      await create(claimed, names.foreign!, "agent", "octogee-other-coach");
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("foreign Builder data");
+      expect(bound).toBeUndefined();
+      await claimed.query(`DROP SCHEMA ${pg.escapeIdentifier(names.foreign!)} CASCADE`);
+      await claimed.query(`UPDATE ${object(names.state!, "openclaw_schema_meta")} SET store = 'workboard'`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("identity is unavailable");
+      await claimed.query(`UPDATE ${object(names.state!, "openclaw_schema_meta")} SET store = 'state'`);
+      await claimed.query(`UPDATE ${object(names.state!, "schema_meta")} SET agent_id = $1`, [`octogee-${builder.slug}-coach`]);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("identity is unavailable");
+      await claimed.query(`UPDATE ${object(names.state!, "schema_meta")} SET agent_id = NULL`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("Builder Gateway login");
+      expect(bound).toBeUndefined();
+      stopped.push(gatewayId);
+      await admin.query(`CREATE VIEW ${object(names.sharedForeign!, "foreign_reference")} AS SELECT * FROM ${object(names.state!, "history")}`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("dependency");
+      await admin.query(`DROP VIEW ${object(names.sharedForeign!, "foreign_reference")}`);
+      await claimed.query(`CREATE FUNCTION ${object(names.state!, "foreign_owned")}() RETURNS integer LANGUAGE SQL AS 'SELECT 1'`);
+      const { rows: [{ current_user: administrator }] } = await admin.query("SELECT current_user");
+      await admin.query(`ALTER FUNCTION ${object(names.state!, "foreign_owned")}() OWNER TO ${pg.escapeIdentifier(administrator)}`);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("routine privileges");
+      await admin.query(`DROP FUNCTION ${object(names.state!, "foreign_owned")}()`);
+      const savedStateId = bound!.find(target => target.namespace === names.state)!.storeId;
+      await claimed.query(`UPDATE ${object(names.state!, "openclaw_schema_meta")} SET store_id = $1`, [randomUUID()]);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("changed");
+      await claimed.query(`UPDATE ${object(names.state!, "openclaw_schema_meta")} SET store_id = $1`, [savedStateId]);
+      for (const name of ["coach", "unmatched", "state", "sharedCoach"]) {
+        expect((await admin.query(`SELECT body FROM ${object(names[name]!, "history")}`)).rowCount).toBe(1);
+      }
+      await eraseBuilderAgentStores(dsn!, builder, guards);
+      expect(bound).toHaveLength(4);
+      expect(bound).toEqual(expect.arrayContaining([
+        expect.objectContaining({ namespace: names.unmatched, family: "agent", role: "agent", agentId: "octogee-unmatched-route" }),
+        expect.objectContaining({ namespace: names.state, family: "state", role: "global", agentId: null }),
+      ]));
+      await expect(assertNoBuilderAgentStores(dsn!, builder)).resolves.toBeUndefined();
+      for (const name of ["sharedUnmatched", "sharedState", "sharedForeign"]) {
+        expect((await shared.query(`SELECT body FROM ${object(names[name]!, "history")}`)).rows).toEqual([{ body: "retained-history" }]);
+      }
+      await eraseBuilderAgentStores(dsn!, builder, guards);
+      await create(claimed, names.state!, "state", null);
+      await expect(eraseBuilderAgentStores(dsn!, builder, guards)).rejects.toThrow("changed");
+      expect((await claimed.query(`SELECT body FROM ${object(names.state!, "history")}`)).rowCount).toBe(1);
+    } finally {
+      for (const namespace of Object.values(names)) await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(namespace)} CASCADE`);
+      await claimed?.end(); await standby.end(); await shared.end(); await admin.end();
+    }
+  });
+
   it("hands tenant ownership between Shared and Builder logins without exposing another Builder's store", async () => {
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
     const transfer = createAgentStoreOwnershipTransferer(dsn!);

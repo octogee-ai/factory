@@ -16,3 +16,29 @@ export declare function assertNoBuilderAgentStores(adminDsn: string, builder: {
     uid: string;
     slug: string;
 }): Promise<void>;
+type AgentStoreErasureIdentity = {
+    family: "agent";
+    role: "agent";
+    storeId: string;
+    agentId: string;
+} | {
+    family: "state";
+    role: "global";
+    storeId: string;
+    agentId: null;
+};
+export type AgentStoreErasureTarget = AgentStoreErasureIdentity & {
+    namespace: string;
+    namespaceOid: string;
+    owner: string;
+};
+export interface AgentStoreErasureCustody {
+    assertCurrent(): Promise<void>;
+    assertWritersStopped(targets: readonly AgentStoreErasureTarget[]): Promise<readonly string[]>;
+    bindTargets(targets: readonly AgentStoreErasureTarget[]): Promise<readonly AgentStoreErasureTarget[]>;
+}
+export declare function eraseBuilderAgentStores(adminDsn: string, builder: {
+    uid: string;
+    slug: string;
+}, custody: AgentStoreErasureCustody): Promise<void>;
+export {};

@@ -1395,6 +1395,28 @@ describe("createUnmountHandler", () => {
     expect(resumeSystemConfigWatch).not.toHaveBeenCalled();
   });
 
+  it.each(["complete", "early-noop", "foreign-agent", "changed-pod"])(
+    "requires exact Shared Native cleanup for a due-erasure unmount: %s", async mode => {
+      vi.stubEnv("POD_UID", "shared-pod");
+      const gatewayId = "shared-erasure";
+      const agentIds = ["octogee-chris-coach", mode === "foreign-agent" ? "octogee-bob-coach" : "octogee-chris-proj-pgonly-coach"];
+      const body: UnmountRequestBody = { ...SAMPLE_UNMOUNT, agentStoreErasure: {
+        podUid: mode === "changed-pod" ? "old-pod" : "shared-pod", agentIds,
+      } };
+      const remove = vi.fn(async () => ({ wasMounted: false, steps: [],
+        ...(mode === "early-noop" ? {} : { releasedAgentIds: agentIds }) }));
+      const handler = createUnmountHandler(mkDeps({ gatewayId, adapter: mkAdapter({ removeImportedCustomerBySlug: remove }) }));
+      const response = mkResponse();
+      await handler(mkRequest(body, { pathGatewayId: gatewayId,
+        signature: signForPod(body.migrationId, JSON.stringify(body), gatewayId) }), response.res, vi.fn());
+      expect(response.getStatus()).toBe(mode === "complete" ? 200 : mode === "early-noop" ? 500 : 400);
+      if (mode === "complete") {
+        expect(response.getBody()).toMatchObject({ unmounted: false, agentStoreErasure: body.agentStoreErasure });
+        expect(remove).toHaveBeenCalledWith("chris", undefined, undefined, undefined, agentIds);
+      }
+      if (mode === "foreign-agent" || mode === "changed-pod") expect(remove).not.toHaveBeenCalled();
+    });
+
   it("keeps a duplicate imported-customer unmount fenced after response loss", async () => {
     const adapter = mkAdapter({
       removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: false, steps: [] })),

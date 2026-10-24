@@ -1,0 +1,188 @@
+import { describe, expect, it, vi } from "vitest";
+import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement } from "../lib/customer-ops/agent-store-erasure.js";
+import type { AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
+
+function harness() {
+  const cleanup = { uid: "uid-1", slug: "alice", currentGatewayId: "shared-old", projectSlugs: [] };
+  const operation = { id: "erase-1", kind: "erase-customer", status: "running", startedAt: 10, input: { uid: "uid-1", deletionId: "delete-1" } };
+  const records: Record<string, Record<string, any>> = {
+    "customerDeletionJobs/delete-1": { version: 1, uid: cleanup.uid, slug: cleanup.slug, currentGatewayId: cleanup.currentGatewayId,
+      erasureOperationId: operation.id, status: "hibernating", requestedBy: "operator", requestedAt: 1, eraseAfter: 5, cleanupContext: cleanup },
+    "users/uid-1": { username: "alice", accountLifecycle: { status: "deletion_scheduled", deletionId: "delete-1", eraseAfter: 5 }, provisioning: { openclaw: {} } },
+    "glmOperations/erase-1": operation,
+  };
+  const field = (data: any, key: string) => key.split(".").reduce((value, key) => value?.[key], data);
+  const collection = (name: string, predicates: Array<(path: string, data: any) => boolean> = [], group = false): any => ({
+    where: (key: string, op: string, value: unknown) => collection(name, [...predicates, (_path, data) =>
+      op === "in" ? (value as unknown[]).includes(field(data, key)) : field(data, key) === value], group),
+    get: async () => {
+      const docs = Object.entries(records).filter(([path, data]) => (group ? path.split("/").at(-2) === name : path.split("/").slice(0, -1).join("/") === name) && predicates.every(test => test(path, data)))
+        .map(([path, data]) => ({ id: path.split("/").at(-1), data: () => data }));
+      return { docs, empty: docs.length === 0 };
+    },
+    doc: (id: string) => ({ path: `${name}/${id}`, collection: (child: string) => collection(`${name}/${id}/${child}`),
+      get: async () => ({ exists: records[`${name}/${id}`] !== undefined, data: () => records[`${name}/${id}`] }) }),
+  });
+  const db = { collection, collectionGroup: (name: string) => collection(name, [], true), runTransaction: async (action: any) => {
+    const writes: Array<[string, Record<string, unknown>]> = [];
+    const result = await action({ get: (ref: any) => ref.get(), update: (ref: any, patch: Record<string, unknown>) => writes.push([ref.path, patch]) });
+    for (const [path, patch] of writes) {
+      for (const [key, value] of Object.entries(patch)) {
+        const parts = key.split("."); let target = records[path]!;
+        for (const part of parts.slice(0, -1)) target = target[part] ??= {};
+        target[parts.at(-1)!] = value;
+      }
+    }
+    return result;
+  } };
+  const target = { namespace: "octogee_agent_one", namespaceOid: "123", owner: "shared", family: "agent" as const, role: "agent" as const,
+    storeId: "d57c47b6-c455-4c58-a30e-30dc01d7d80a", agentId: "octogee-alice-coach" };
+  const deps = {
+    db: db as never, now: () => 20,
+    sharedGatewayRetired: vi.fn(async () => true), runtimeAbsent: vi.fn(async () => true), ownerHomeAbsent: vi.fn(async () => true),
+    eraseComputer: vi.fn(async (_uid: string) => undefined),
+    readSharedSource: vi.fn(async (_gatewayId: string) => ({ gatewayId: "shared-old", podUid: "pod-original", startedAt: 1,
+      status: "ready", customers: ["ceckert-test"], migratingIn: [] })),
+    unmountSharedCustomer: vi.fn(async () => undefined),
+    eraseStores: vi.fn(async (_cleanup, custody: AgentStoreErasureCustody) => {
+      await custody.assertWritersStopped([target]);
+      const bound = await custody.bindTargets([target]);
+      expect(bound).toEqual([target]);
+      await custody.assertCurrent();
+    }),
+  };
+  const claim = vi.fn(async () => undefined);
+  return { records, db, deps, target, cleanup, operation, claim,
+    run: () => createCustomerAgentStoreErasure(deps)(cleanup as never, "delete-1", operation as never, claim) };
+}
+
+function liveBarn() {
+  const h = harness(); h.deps.sharedGatewayRetired.mockResolvedValue(false);
+  h.records["customerDeletionJobs/delete-1"]!.suspensionOperationId = "suspend-1";
+  h.records["glmOperations/suspend-1"] = { id: "suspend-1", kind: "suspend-customer", status: "succeeded",
+    input: { uid: "uid-1", deletionId: "delete-1" }, steps: [{ name: "unmount-gateway", status: "done" }] };
+  return h;
+}
+
+describe("due customer PostgreSQL erasure authority", () => {
+  it("uses captured consent without current assignment and persists targets before erasure", async () => {
+    const h = harness();
+    await h.run();
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toEqual([h.target]);
+    expect(h.deps.sharedGatewayRetired).toHaveBeenCalledWith("shared-old");
+    await h.run();
+  });
+
+  it.each([
+    ["early deadline", "customerDeletionJobs/delete-1", { eraseAfter: 30 }],
+    ["foreign operation", "customerDeletionJobs/delete-1", { erasureOperationId: "other" }],
+    ["changed cleanup", "customerDeletionJobs/delete-1", { cleanupContext: { uid: "other" } }],
+    ["claimed again", "glmOperations/erase-1", { startedAt: 11 }],
+    ["operation retargeted", "glmOperations/erase-1", { input: { uid: "uid-1", deletionId: "delete-other" } }],
+    ["cancelled", "glmOperations/erase-1", { cancellationRequestedAt: 12 }],
+    ["reactivated", "users/uid-1", { accountLifecycle: { status: "active" } }],
+    ["restoring", "users/uid-1", { provisioning: { openclaw: { restoreFence: {} } } }],
+    ["reassigned", "users/uid-1", { provisioning: { openclaw: { gatewayId: "shared-new" } } }],
+    ["assignment", "gateways/shared-new/assignments/uid-1", { uid: "uid-1" }],
+    ["migration", "glmOperations/migration", { status: "running", input: { uid: "uid-1" } }],
+    ["owned running host", "gateways/builder-old", { ownerUid: "uid-1", desiredStatus: "running" }],
+  ])("refuses %s before invoking the database owner", async (_label, path, patch) => {
+    const h = harness();
+    h.records[path as string] = { ...h.records[path as string], ...patch as object };
+    await expect(h.run()).rejects.toThrow();
+    expect(h.deps.eraseStores).not.toHaveBeenCalled();
+  });
+
+  it("does not interpret historical hibernation as old Shared retirement", async () => {
+    const h = harness(); h.deps.sharedGatewayRetired.mockResolvedValue(false);
+    h.deps.readSharedSource.mockResolvedValue(null as never);
+    await expect(h.run()).rejects.toThrow("awaits captured Shared retirement");
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
+    expect(h.deps.eraseComputer).not.toHaveBeenCalled();
+  });
+
+  it("completes exact customer cleanup on a live Barn that still serves another customer", async () => {
+    const h = liveBarn();
+    await h.run();
+    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledExactlyOnceWith(h.cleanup, {
+      podUid: "pod-original", agentIds: [h.target.agentId],
+    }, h.operation);
+    expect(h.records["customerDeletionJobs/delete-1"]!.sharedAgentStoreCleanup).toMatchObject({
+      gatewayId: "shared-old", podUid: "pod-original", startedAt: 1, agentIds: [h.target.agentId], complete: true,
+    });
+    await h.run();
+    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledOnce();
+  });
+
+  it("requires exact Native cleanup coverage for a PG-only project", async () => {
+    const h = liveBarn();
+    const targets = [h.target, { ...h.target, namespace: "project", agentId: "octogee-alice-proj-hidden-coach" }];
+    h.deps.eraseStores.mockImplementation(async (_cleanup, custody) => {
+      await custody.assertWritersStopped(targets);
+      await custody.bindTargets(targets);
+    });
+    await h.run();
+    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledWith(h.cleanup, {
+      podUid: "pod-original", agentIds: targets.map(target => target.agentId),
+    }, h.operation);
+  });
+
+  it.each([null, { status: "booting" }, { gatewayId: "shared-replacement" }, { podUid: "" }, { startedAt: NaN }])(
+    "refuses missing or invalid Shared runtime before Native effects: %j", async change => {
+      const h = liveBarn();
+      h.deps.readSharedSource.mockResolvedValue(change === null ? null as never : { ...await h.deps.readSharedSource("shared-old"), ...change });
+      await expect(h.run()).rejects.toThrow("awaits captured Shared retirement");
+      expect(h.deps.unmountSharedCustomer).not.toHaveBeenCalled();
+    });
+
+  it.each([{ podUid: "recreated-pod" }, { startedAt: 2 }, { status: "booting" }, { customers: ["alice", "ceckert-test"] }])(
+    "does not publish completion after the Shared source changes: %j", async change => {
+      const h = liveBarn(); const source = await h.deps.readSharedSource("shared-old");
+      h.deps.readSharedSource.mockResolvedValueOnce(source).mockResolvedValueOnce({ ...source, ...change });
+      await expect(h.run()).rejects.toThrow("Shared runtime changed");
+      expect(h.records["customerDeletionJobs/delete-1"]!.sharedAgentStoreCleanup.complete).toBe(false);
+    });
+
+  it("refuses a recreated Shared process instead of adopting its old cleanup proof", async () => {
+    const h = liveBarn(); await h.run();
+    h.deps.readSharedSource.mockResolvedValue({ ...await h.deps.readSharedSource("shared-old"), startedAt: 2 });
+    await expect(h.run()).rejects.toThrow("Shared source or agent coverage changed");
+    expect(h.deps.unmountSharedCustomer).toHaveBeenCalledOnce();
+  });
+
+  it("requires succeeded suspension for this exact due deletion before Native effects", async () => {
+    const h = liveBarn(); h.records["glmOperations/suspend-1"]!.input.deletionId = "other";
+    await expect(h.run()).rejects.toThrow("lacks completed suspension");
+    expect(h.deps.unmountSharedCustomer).not.toHaveBeenCalled();
+  });
+
+  it("rechecks deletion authority after waiting for retirement", async () => {
+    const h = harness();
+    h.deps.sharedGatewayRetired.mockImplementation(async () => {
+      h.records["users/uid-1"]!.provisioning.openclaw.restoreFence = {};
+      return true;
+    });
+    await expect(h.run()).rejects.toThrow("due deletion job");
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
+  });
+
+  it("uses existing computer erasure and refuses while its home remains", async () => {
+    const h = harness(); h.deps.ownerHomeAbsent.mockResolvedValue(false);
+    await expect(h.run()).rejects.toThrow("retained a Builder computer or home");
+    expect(h.deps.eraseComputer).toHaveBeenCalledWith("uid-1");
+    expect(h.records["customerDeletionJobs/delete-1"]!.postgresAgentStoreTargets).toBeUndefined();
+  });
+
+  it("requires preserved Builder retirement and actual runtime absence", async () => {
+    const h = harness(); h.cleanup.currentGatewayId = "builder-old";
+    h.records["customerDeletionJobs/delete-1"]!.currentGatewayId = "builder-old";
+    await expect(h.run()).rejects.toThrow("lacks its captured Builder retirement proof");
+    const proof = { gatewayId: "builder-old", operationId: "retire-old", version: 1, completedAt: 15, runtime: "cluster" as const };
+    await preserveCustomerGatewayRetirement(h.db as never, "uid-1", "delete-1", proof);
+    h.deps.runtimeAbsent.mockResolvedValue(false);
+    await expect(h.run()).rejects.toThrow("retained a gateway runtime");
+    h.deps.runtimeAbsent.mockResolvedValue(true);
+    await h.run();
+    expect(h.deps.runtimeAbsent).toHaveBeenCalledWith("builder-old", "cluster");
+  });
+});

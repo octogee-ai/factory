@@ -27,6 +27,15 @@ export interface OwnedGatewayRetirementInput {
   deletionId: string;
   now: number;
   claimRetirement?: typeof claimGatewayRetirementAtomic;
+  preserveRetirementProof?: (proof: CustomerGatewayRetirementProof) => Promise<void>;
+}
+
+export interface CustomerGatewayRetirementProof {
+  gatewayId: string;
+  operationId: string;
+  version: number;
+  completedAt: number;
+  runtime: "cluster" | "gce-vm";
 }
 
 const CUSTOMER_DELETION_ACTOR = "customer-deletion-lifecycle";
@@ -152,6 +161,7 @@ async function finishCompletedGatewayRetirement(
     builderActivateOperationId(doc.id, generation),
     builderReturnOperationId(doc.id, generation),
   ];
+  let proof: CustomerGatewayRetirementProof | undefined;
   const canFinish = async (transaction: Transaction): Promise<DocumentReference[] | null> => {
     const rootSnap = await transaction.get(doc.ref);
     const root = rootSnap.data();
@@ -163,6 +173,7 @@ async function finishCompletedGatewayRetirement(
     }
     const operationSnap = await transaction.get(operationRef);
     if (!retirementOperationAllowsCleanup(input, doc.id, claim.version, operationSnap)) return null;
+    proof = retirementProofForDeletion(input, doc.id, root, claim, operationSnap.data());
     const [runtime, assignments, users, ...handoffs] = await Promise.all([
       transaction.get(input.db.collection("glmGateways").doc(doc.id)),
       transaction.get(doc.ref.collection("assignments")),
@@ -183,6 +194,7 @@ async function finishCompletedGatewayRetirement(
   };
   const cleanupRefs = await input.db.runTransaction(canFinish);
   if (!cleanupRefs) return true;
+  if (proof) await input.preserveRetirementProof!(proof);
   const childCollections = await Promise.all(cleanupRefs.map((ref) => ref.listCollections()));
   for (const collection of childCollections.flat()) {
     if (collection.path === `${doc.ref.path}/assignments`) continue;
@@ -195,6 +207,13 @@ async function finishCompletedGatewayRetirement(
     for (const ref of currentRefs) transaction.delete(ref);
     return false;
   });
+}
+
+function retirementProofForDeletion(input: OwnedGatewayRetirementInput, gatewayId: string, root: Record<string, unknown>, claim: { operationId: string; version: number }, operation: Record<string, unknown> | undefined): CustomerGatewayRetirementProof | undefined {
+  if (!input.preserveRetirementProof) return undefined;
+  const completedAt = operation?.completedAt;
+  if (typeof completedAt !== "number" || !Number.isFinite(completedAt)) throw new Error("retirement completion timestamp is unavailable");
+  return { gatewayId, operationId: claim.operationId, version: claim.version, completedAt, runtime: root.runtime === "gce-vm" ? "gce-vm" : "cluster" };
 }
 
 function handoffAwaitsRelease(snapshot: DocumentSnapshot, deletionId: string): boolean {

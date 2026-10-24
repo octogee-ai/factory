@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { archivedSharedAgentExportPaths, archiveNativeSharedAgentContext, assertNativeAgentContextTransfer, assertRetainedNativeAgentContext } from "./native-shared-agent-context.js";
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
+import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
 import { updateVoiceMigration, type VoiceMigrationInput } from './voice-migration.js';
 import {
   clearMigrationStaging, prepareMigrationStaging, readLiveImportAdmission, writeLiveImportAdmission,
@@ -2930,6 +2931,33 @@ async function removeUnmountedBuilderImport(
   return result;
 }
 
+function validSharedErasureUnmount(deps: MigrationHandlerDeps, body: UnmountRequestBody): boolean {
+  const coverage = body.agentStoreErasure;
+  return Boolean(coverage && deps.gatewayId.startsWith("shared-") && !deps.adapter.isBuilderGateway?.() &&
+    typeof coverage.podUid === "string" && coverage.podUid && coverage.podUid === process.env.POD_UID &&
+    Array.isArray(coverage.agentIds) && coverage.agentIds.length <= 512 &&
+    coverage.agentIds.every(id => typeof id === "string" && agentIdBelongsToSlug(id, body.slug)) &&
+    new Set(coverage.agentIds).size === coverage.agentIds.length);
+}
+
+async function completeSharedErasureUnmount(deps: MigrationHandlerDeps, body: UnmountRequestBody, res: Response): Promise<void> {
+  if (!validSharedErasureUnmount(deps, body)) {
+    res.status(400).json({ error: "invalid Shared customer erasure coverage or pod identity" });
+    return;
+  }
+  const coverage = body.agentStoreErasure!;
+  if (!deps.adapter.removeImportedCustomerBySlug) throw new Error("Shared customer erasure requires Native customer cleanup");
+  const result = await removeCustomerWithSystemConfigWatchPaused({ deps, slug: body.slug,
+    remove: () => deps.adapter.removeImportedCustomerBySlug!(body.slug, undefined, undefined, undefined, coverage.agentIds) });
+  if (result.retained || !Array.isArray(result.releasedAgentIds) ||
+      !isDeepStrictEqual([...result.releasedAgentIds].sort(), [...coverage.agentIds].sort())) {
+    throw new Error("Shared customer erasure did not confirm exact Native agent cleanup");
+  }
+  deps.adapter.onUnmounted?.(body.slug);
+  res.status(200).json({ migrationId: body.migrationId, slug: body.slug, unmounted: result.wasMounted,
+    agentStoreErasure: coverage } satisfies UnmountResponse);
+}
+
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
@@ -2937,6 +2965,10 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
+      if (body.agentStoreErasure !== undefined) {
+        await completeSharedErasureUnmount(deps, body, res);
+        return;
+      }
       const activation = await configuredBuilderActivationRequest(deps, body, "final", ACTIVATION_MANIFEST_TRANSFER);
       if (!await releaseUnmountedBuilderTarget(deps, activation)) {
         log(`[migration-http] unmount left the live Builder untouched: import was never admitted migrationId=${body.migrationId} slug=${body.slug}`);

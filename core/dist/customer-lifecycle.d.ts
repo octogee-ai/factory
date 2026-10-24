@@ -240,7 +240,7 @@ export interface CustomerLifecycleAdapter {
         migrationId: string;
         targetPodUid: string;
         assertCurrent: () => Promise<void>;
-    }) => Promise<RemoveCustomerResult>;
+    }, erasureAgentIds?: readonly string[]) => Promise<RemoveCustomerResult>;
     releaseAgent?: (agentId: string) => Promise<void>;
 }
 export type CustomerStateImportMode = "pre" | "final" | "default";
@@ -263,6 +263,7 @@ export interface RemoveCustomerResult {
     wasMounted: boolean;
     steps: RemoveCustomerStep[];
     retained?: boolean;
+    releasedAgentIds?: string[];
 }
 export declare class ConcurrentMountError extends Error {
     readonly name = "ConcurrentMountError";

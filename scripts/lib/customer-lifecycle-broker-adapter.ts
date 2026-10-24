@@ -38,7 +38,7 @@ import {
   MIGRATION_QUIESCE_GRACE_MS,
   MIGRATION_QUIESCE_STOP_RECHECK_MS,
 } from "../../shared/types/workspace-migration.js";
-import { catalogEntryForModelRef } from "../../shared/types/agent-models.js";
+import { agentIdBelongsToSlug, catalogEntryForModelRef } from "../../shared/types/agent-models.js";
 import { projectCheckoutEnabled, projectRepoSourceFromDoc } from "../../shared/types/project.js";
 import { mattermostAccountEndpointsForTarget } from "../../shared/types/openclaw-mattermost-accounts.js";
 import {
@@ -1900,14 +1900,19 @@ async function detachHeldImportedAgents(
 async function removeImportedCustomerBySlug(
   ctx: BrokerCtx,
   slug: string,
-  evictionBatch?: readonly string[],
-  currentEvictionBatch?: () => Promise<readonly string[]>,
-  targetCleanup?: Parameters<NonNullable<CustomerLifecycleAdapter["removeImportedCustomerBySlug"]>>[3],
+  options: {
+    evictionBatch?: readonly string[];
+    currentEvictionBatch?: () => Promise<readonly string[]>;
+    targetCleanup?: Parameters<NonNullable<CustomerLifecycleAdapter["removeImportedCustomerBySlug"]>>[3];
+    erasureAgentIds?: readonly string[];
+  },
 ): Promise<RemoveCustomerResult> {
+  const { evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds } = options;
+  assertSharedErasureAgentCoverage(slug, erasureAgentIds);
   const wasMounted =
     fs.existsSync(path.join(CUSTOMERS_DIR, slug)) ||
     listLocalCoachWiredSlugs(CUSTOMERS_DIR, (s) => s === slug).includes(slug);
-  if (!wasMounted && !isConfiguredGatewayBuilder(slug)) return { wasMounted: false, steps: [] };
+  if (!wasMounted && !isConfiguredGatewayBuilder(slug) && !erasureAgentIds) return { wasMounted: false, steps: [] };
   if (isConfiguredGatewayBuilder(slug)) {
     const held = await stopRetainedConfiguredBuilderAccounts(ctx, slug);
     const agentIds = agentIdsForMigration(slug).filter(agentId => !isSafeDefaultAgentPortableStatePath(`agents/${agentId}`));
@@ -1937,7 +1942,7 @@ async function removeImportedCustomerBySlug(
     return { wasMounted: true, steps: ["config-patch-remove"], retained: true };
   }
   const agentDirs = await releaseAgentState(
-    agentIdsForMigration(slug),
+    [...new Set([...agentIdsForMigration(slug), ...(erasureAgentIds ?? [])])],
     agentStateRelease(ctx, `[remove:${slug}]`),
     { ignoreReadOnlyConnections: true },
   );
@@ -1947,7 +1952,21 @@ async function removeImportedCustomerBySlug(
   }
   await removeAgentDirs(agentDirs);
   await removeActivationManifest(OPENCLAW_DIR, slug);
-  return { wasMounted: true, steps: ["config-patch-remove", "delete-dir"] };
+  await assertSharedErasureRosterRemoved(ctx, slug, erasureAgentIds);
+  return { wasMounted, steps: ["config-patch-remove", "delete-dir"],
+    ...(erasureAgentIds ? { releasedAgentIds: [...erasureAgentIds] } : {}) };
+}
+
+function assertSharedErasureAgentCoverage(slug: string, agentIds: readonly string[] | undefined): void {
+  if (agentIds && (isConfiguredGatewayBuilder(slug) || agentIds.some(id => !agentIdBelongsToSlug(id, slug)))) {
+    throw new Error("Invalid Shared customer erasure agent coverage");
+  }
+}
+
+async function assertSharedErasureRosterRemoved(ctx: BrokerCtx, slug: string, agentIds: readonly string[] | undefined): Promise<void> {
+  if (agentIds && customerAgentIdsInRoster(await freshRosterConfig(ctx), slug).length > 0) {
+    throw new Error("Shared customer erasure retained configured Native agents");
+  }
 }
 
 export function buildBrokeredLifecycleAdapter(
@@ -2128,9 +2147,9 @@ export function buildBrokeredLifecycleAdapter(
       }),
     exportOpenClawActivationManifest: (slug, options) =>
       openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug), options),
-    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch, targetCleanup) =>
+    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds) =>
       openClawRuntimeUpdateGuard.run(() =>
-        removeImportedCustomerBySlug(ctx, slug, evictionBatch, currentEvictionBatch, targetCleanup)),
+        removeImportedCustomerBySlug(ctx, slug, { evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds })),
     releaseAgent: (agentId) => openClawRuntimeUpdateGuard.run(() =>
       releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`)),
   };

@@ -37,6 +37,12 @@ export interface EraseCustomerDeps {
     deletionId: string,
   ) => Promise<"not-owned" | "retirement-pending" | "retired">;
   findUndrainedArtifactIds: (artifactIds: string[]) => Promise<string[]>;
+  eraseAgentStores: (
+    cleanup: CustomerCleanupContext,
+    deletionId: string,
+    operation: Operation,
+    assertActiveClaim: OperationContext["assertActiveClaim"],
+  ) => Promise<void>;
   cloudErase: (
     cleanup: CustomerCleanupContext,
     currentOperationId: string,
@@ -325,6 +331,14 @@ async function runEraseCustomer(
       status: cleanup.chatArtifactIds.length > 0 ? "done" : "skipped",
     });
 
+    try {
+      await deps.eraseAgentStores(cleanup, deletionId, op, ctx.assertActiveClaim);
+      await report(ctx, deps, { name: "erase-agent-stores", status: "done" });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await report(ctx, deps, { name: "erase-agent-stores", status: "failed", error });
+      return cleanupRetry(deletionId, error);
+    }
     const cloudResults = await deps.cloudErase(cleanup, op.id);
     await reportCloudErasure(cloudResults, ctx, deps);
     const failures = cloudResults.filter((result) => !result.ok && !result.skipped);

@@ -16,7 +16,10 @@ function deletedFields(update: Record<string, unknown>): string[] {
 const CLEANUP_FIELDS = [
   "cleanupContext",
   "currentGatewayId",
+  "postgresAgentStoreTargets",
   "requestedBy",
+  "retiredGatewayProofs",
+  "sharedAgentStoreCleanup",
   "slug",
   "stripeCustomerIds",
   "stripeSubscriptionIds",

@@ -2031,6 +2031,36 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
     routingActivationMocks.discardForCustomers.mockClear();
   });
 
+  it.each(["complete", "pending", "foreign"])("proves exact PG-only cleanup without a local workspace: %s", async mode => {
+    const project = "octogee-alice-proj-pgonly-coach";
+    const configBefore = await fs.readFile(OPENCLAW_CONFIG).catch(() => null);
+    const procRoot = path.join(testRuntime.dir, "erasure-proc");
+    await fs.mkdir(procRoot, { recursive: true });
+    await fs.rm(path.join(testRuntime.dir, "customers", "alice"), { recursive: true, force: true });
+    await fs.rm(path.join(testRuntime.dir, "agents", project), { recursive: true, force: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ database: { families: { agent: { engine: "postgres" } } } }));
+    const agentsDetach = vi.fn(async ({ agentId }: { agentId: string }) => {
+      if (mode === "pending" && agentId === project) throw new OpenclawWireError("rpc-error", "Native cleanup remains pending");
+      return { ok: true as const, agentId, failed: [] };
+    });
+    const rpc = mkRemovalRpc({ agents: { entries: keyedRoster(["octogee-bob-coach"]) } }, { agentsDetach });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, procRoot, log: vi.fn() });
+    try {
+      const ids = ["octogee-alice-coach", mode === "foreign" ? "octogee-bob-coach" : project];
+      const removing = adapter.removeImportedCustomerBySlug!("alice", undefined, undefined, undefined, ids);
+      if (mode === "complete") await expect(removing).resolves.toMatchObject({ wasMounted: false, releasedAgentIds: ids });
+      else await expect(removing).rejects.toThrow(mode === "pending" ? "Native cleanup remains pending" : "Invalid Shared customer erasure");
+      if (mode === "foreign") expect(agentsDetach).not.toHaveBeenCalled();
+      else {
+        expect(agentsDetach).toHaveBeenCalledWith({ agentId: project });
+        expect(agentsDetach).not.toHaveBeenCalledWith({ agentId: "octogee-bob-coach" });
+      }
+    } finally {
+      if (configBefore) await fs.writeFile(OPENCLAW_CONFIG, configBefore);
+      else await fs.rm(OPENCLAW_CONFIG, { force: true });
+    }
+  });
+
   it.each(["ordinary", "orphaned import"])("holds export through %s removal's config and secret mutations", async (mode) => {
     await fs.mkdir(path.join(testRuntime.dir, "customers", "alice"), { recursive: true });
     const procRoot = path.join(testRuntime.dir, "removal-proc");

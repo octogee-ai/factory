@@ -92,6 +92,26 @@ describe("callUnmountRpc", () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
+
+  it.each(["matching", "early-noop", "missing-project", "foreign-agent", "changed-pod"])(
+    "requires exact Native completion for a due-erasure unmount: %s", async mode => {
+      const coverage = { podUid: "pod-current", agentIds: ["octogee-alice-coach", "octogee-alice-proj-hidden-coach"] };
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        const request = JSON.parse(String(init?.body));
+        expect(request.agentStoreErasure).toEqual(coverage);
+        const result = { migrationId: request.migrationId, slug: request.slug, unmounted: false,
+          agentStoreErasure: { ...coverage, agentIds: [...coverage.agentIds] } };
+        if (mode === "early-noop") delete (result as { agentStoreErasure?: unknown }).agentStoreErasure;
+        if (mode === "missing-project") result.agentStoreErasure.agentIds.pop();
+        if (mode === "foreign-agent") result.agentStoreErasure.agentIds[1] = "octogee-bob-coach";
+        if (mode === "changed-pod") result.agentStoreErasure.podUid = "other";
+        return new Response(JSON.stringify(result));
+      });
+      const promise = callUnmountRpc(fakeDb(), { privateKey: FLEET_KEY_PAIR.privateKey,
+        gatewayId: "bender", slug: "alice", log: vi.fn(), migrationId: "erase-op-claim-10", agentStoreErasure: coverage });
+      if (mode === "matching") await expect(promise).resolves.toBeUndefined();
+      else await expect(promise).rejects.toThrow("did not confirm exact customer Native cleanup");
+    });
 });
 
 describe("buildGatewayHeartbeatPollerDeps", () => {

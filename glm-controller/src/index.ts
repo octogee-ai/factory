@@ -3,7 +3,8 @@ import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCu
 import { createMigrationAgentStorePreparer, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
 import { prepareBuilderRecoveryTarget } from "./builder-recovery-target.js";
 import { createGatewayCredentialEnsurers } from "./gateway-credential-ensurers.js";
-import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores } from "@octogee/core/agent-store-credentials";
+import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores } from "@octogee/core/agent-store-credentials";
+import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement, type SharedAgentErasureSource } from "./lib/customer-ops/agent-store-erasure.js";
 import { eraseBuilderHomeMigrationStorage } from "./lib/builder-home-erasure.js";
 import { createBuilderHomeMigrator } from "./builder-home-migration.js";
 import { createBuilderHomeProvider } from "./lib/builder-home-provider.js";
@@ -58,7 +59,7 @@ import {
   startGatewayHeartbeatPoller,
   type GatewayHeartbeatPollerDeps,
 } from "./gateway-heartbeat-poller.js";
-import { createFleetStateFetcher } from "./fleet-state-client.js";
+import { createFleetStateFetcher, requestFleetState } from "./fleet-state-client.js";
 import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
@@ -3651,7 +3652,7 @@ async function buildHandlers(
     logFn,
     kubeOps,
   );
-  const eraseCustomer = buildEraseCustomerHandler(db, logFn);
+  const eraseCustomer = buildEraseCustomerHandler(db, logFn, kubeOps, privateKey);
 
   const restartGateway = createRestartGatewayHandler({
     recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
@@ -3847,8 +3848,46 @@ async function ensureAnonymousDeletionArchive(
 
 const FIRESTORE_DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) {
+function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void, kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">, privateKey: string) {
   const cloudCleanup = buildCustomerCloudCleanupDeps(db, logFn);
+  const clusterAbsent = async (gatewayId: string) => {
+    if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
+    const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
+    if (pvc.code !== 0) throw new Error("Customer PostgreSQL erasure could not inspect retained gateway home storage");
+    return !pvc.stdout.trim();
+  };
+  const eraseAgentStores = createCustomerAgentStoreErasure({
+    db, now: Date.now,
+    eraseStores: (cleanup, custody) => eraseBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account erasure requires the PostgreSQL agent-store administration URL"), cleanup, custody),
+    sharedGatewayRetired: gatewayId => isRetiredSharedGateway(db, gatewayId, clusterAbsent),
+    runtimeAbsent: async (gatewayId, runtime) => runtime === "cluster" ? clusterAbsent(gatewayId) :
+      !await createGatewayComputeClient(logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT }),
+    ownerHomeAbsent: async uid => {
+      const instances = await createGatewayComputeClient(logFn).list({ labels: { "octogee-owner-uid": uid.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT } });
+      const homes = await createBuilderHomeServices(db, logFn).provider.remainingOwnerHomes(uid);
+      return instances.length === 0 && homes.length === 0;
+    },
+    eraseComputer: cloudCleanup.deleteComputer,
+    readSharedSource: async gatewayId => {
+      const root = (await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()).data();
+      const authorization = gatewayAuthorizationFromRootDocument(root, gatewayId);
+      const gateway = authorization?.gateway as DurableGateway | undefined;
+      if (!gateway || gateway.gatewayClass !== "shared" || gateway.ownerUid != null ||
+          gateway.desiredStatus !== "running" || gateway.desiredRelease !== gateway.liveRelease) return null;
+      const diagnostics = await kubeOps.readGatewayPodDiagnostics({ namespace: NAMESPACE, gatewayId });
+      if (diagnostics.status !== "ready" || diagnostics.totalPods !== 1 || diagnostics.pods.length !== 1 ||
+          diagnostics.pods[0]!.deleting || !diagnostics.pods[0]!.uid) return null;
+      const response = await requestFleetState({ baseUrl: await resolveGatewayUrlFromFirestore(db, gatewayId), gatewayId,
+        privateKey, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS, fetchImpl: fetch, newRequestId: randomUUID });
+      if (!response.ok) throw new Error(`Customer PostgreSQL erasure source read refused: ${response.status}`);
+      const source = await response.json() as SharedAgentErasureSource;
+      if (source.podUid !== diagnostics.pods[0]!.uid) throw new Error("Customer PostgreSQL erasure source pod changed");
+      return source;
+    },
+    unmountSharedCustomer: (cleanup, agentStoreErasure, operation) => callUnmountRpc(db, { privateKey,
+      gatewayId: cleanup.currentGatewayId!, slug: cleanup.slug, log: logFn, tag: "erase",
+      migrationId: `erase-${operation.id}-claim-${operation.startedAt}`, agentStoreErasure }),
+  });
   const postHogErasure = createPostHogErasureClient(
     postHogErasureConfigFromEnvironment(),
     {
@@ -3937,6 +3976,7 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         uid: cleanup.uid,
         deletionId,
         now: Date.now(),
+        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(db, cleanup.uid, deletionId, proof),
       }),
     findUndrainedArtifactIds: async (artifactIds) => {
       const snapshots = await Promise.all(
@@ -3954,6 +3994,7 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void) 
         return Date.parse(expiresAt) + 60_000 > now ? [artifactIds[index]] : [];
       });
     },
+    eraseAgentStores,
     cloudErase: async (cleanup, currentOperationId) => {
       await assertNoBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account-deletion verification requires the PostgreSQL agent-store administration URL"), cleanup);
       return nukeUserCloudSide({ ...cleanup, currentOperationId }, cloudCleanup);
@@ -4123,6 +4164,7 @@ function buildSuspendCustomerHandler(
         uid,
         deletionId,
         now: Date.now(),
+        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(db, uid, deletionId, proof),
       }),
     markSuspended: (deletionId) => markSuspendedAndReleaseErasure(db, deletionId, Date.now()),
     now: () => Date.now(),
@@ -4316,6 +4358,8 @@ export async function callUnmountRpc(
     tag?: string;
     timeoutMs?: number;
     allowUnready?: boolean;
+    migrationId?: string;
+    agentStoreErasure?: import("@octogee/shared/types/fleet-controller").AgentStoreUnmountCoverage;
   },
 ): Promise<void> {
   const {
@@ -4328,8 +4372,8 @@ export async function callUnmountRpc(
   } = opts;
 
   const url = await resolveGatewayUrlFromFirestore(db, gatewayId, { allowUnready: opts.allowUnready === true });
-  const migrationId = `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const body = JSON.stringify({ migrationId, slug });
+  const migrationId = opts.migrationId ?? `${tag}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const body = JSON.stringify({ migrationId, slug, ...(opts.agentStoreErasure ? { agentStoreErasure: opts.agentStoreErasure } : {}) });
   const signature = signFleetRequest(
     privateKey,
     gatewayScopedJobId(migrationId, gatewayId),
@@ -4366,7 +4410,19 @@ export async function callUnmountRpc(
     const text = await resp.text().catch(() => "<no body>");
     throw new Error(`unmount failed: ${resp.status} ${text.slice(0, 200)}`);
   }
+  if (opts.agentStoreErasure) assertExactCustomerUnmountResponse(await resp.json(), migrationId, slug, opts.agentStoreErasure);
   log(`[${tag}] unmount RPC ok gatewayId=${gatewayId} slug=${slug}`);
+}
+
+function assertExactCustomerUnmountResponse(value: unknown, migrationId: string, slug: string, coverage: import("@octogee/shared/types/fleet-controller").AgentStoreUnmountCoverage): void {
+  const response = value as import("@octogee/shared/types/fleet-controller").UnmountResponse | null;
+  const confirmed = response?.agentStoreErasure;
+  const expectedIds = [...coverage.agentIds].sort();
+  if (response?.migrationId !== migrationId || response.slug !== slug || confirmed?.podUid !== coverage.podUid ||
+      !Array.isArray(confirmed.agentIds) || confirmed.agentIds.length !== expectedIds.length ||
+      [...confirmed.agentIds].sort().some((id, index) => id !== expectedIds[index])) {
+    throw new Error("unmount did not confirm exact customer Native cleanup and source pod");
+  }
 }
 
 async function resolveGatewayUrlFromFirestore(

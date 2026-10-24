@@ -291,12 +291,18 @@ export interface ImportResponse {
     /** Set when the activation committed but a post-commit step could not be confirmed. */
     verificationPending?: string;
 }
+export interface AgentStoreUnmountCoverage {
+    podUid: string;
+    agentIds: string[];
+}
 export interface UnmountRequestBody extends MigrationRequestBody {
+    agentStoreErasure?: AgentStoreUnmountCoverage;
 }
 export interface UnmountResponse {
     migrationId: string;
     slug: string;
     unmounted: boolean;
+    agentStoreErasure?: AgentStoreUnmountCoverage;
 }
 export interface RestoreMigrationRequestBody extends MigrationRequestBody {
     uid: string;

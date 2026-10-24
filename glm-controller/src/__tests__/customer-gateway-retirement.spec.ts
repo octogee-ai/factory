@@ -144,6 +144,22 @@ function recoveryOperation(): Record<string, unknown> {
 }
 
 describe("owned customer gateway retirement", () => {
+  it("preserves completed retirement before removing its source records", async () => {
+    const operationId = "delete-retire-delete-1-builder-alice";
+    const roots = { "builder-alice": retiredRoot(operationId) };
+    const operations = { [operationId]: { ...retirementOperation("succeeded"), completedAt: 90 } };
+    const { db } = harness(roots, operations);
+    const preserveRetirementProof = vi.fn(async proof => {
+      expect(roots["builder-alice"]).toBeDefined();
+      expect(operations[operationId]).toBeDefined();
+      expect(proof).toEqual({ gatewayId: "builder-alice", operationId, version: 1, completedAt: 90, runtime: "cluster" });
+    });
+    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, preserveRetirementProof })).resolves.toBe("retired");
+    expect(preserveRetirementProof).toHaveBeenCalledTimes(1);
+    expect(roots).toEqual({});
+    expect(operations).toEqual({});
+  });
+
   it("follows the recorded placement retirement operation after it succeeds", async () => {
     const operationId = "placement-retire-owner-builder-alice";
     const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
