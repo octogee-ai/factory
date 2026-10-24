@@ -21,7 +21,7 @@ function restorationOutcome(
   if (result.code === 0 && record(payload) && payload.agentId === expected.agentId &&
       payload.workspace === expected.workspace && payload.agentDir === expected.agentDir) return "restored";
   if (result.code === 1 && record(payload) && payload.ok === false && record(payload.error) &&
-      payload.error.type === "cli_error" && payload.error.message === `Agent "${expected.agentId}" already exists.`) {
+      payload.error.type === "cli_error" && payload.error.message === `agent "${expected.agentId}" already exists`) {
     return "already-configured";
   }
   throw new Error(`Native carried-agent restoration failed for ${expected.agentId} (exit ${result.code})`);

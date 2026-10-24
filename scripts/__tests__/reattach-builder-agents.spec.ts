@@ -44,7 +44,7 @@ it.each(["already-configured", "refused", "wrong-receipt", "wrong-roster", "anch
       }
       return mode === "already-configured" || mode === "refused"
         ? { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error",
-          message: mode === "already-configured" ? `Agent "${f.agentId}" already exists.` : "deletion cleanup is still pending" } }) }
+          message: mode === "already-configured" ? `agent "${f.agentId}" already exists` : "deletion cleanup is still pending" } }) }
         : { code: 0, stdout: JSON.stringify({ agentId: mode === "wrong-receipt" ? "other-agent" : f.agentId,
           workspace: f.workspace, agentDir: f.agentDir }) };
     });
@@ -61,6 +61,38 @@ it.each(["already-configured", "refused", "wrong-receipt", "wrong-roster", "anch
     expect(run).toHaveBeenCalledTimes(["wrong-roster", "gate-lost", "invalid-json"].includes(mode) ? 1 : 2);
   },
 );
+
+it.each([
+  ["successful exit", 0, false, "cli_error", "exact"],
+  ["different exit", 2, false, "cli_error", "exact"],
+  ["successful envelope", 1, true, "cli_error", "exact"],
+  ["different error type", 1, false, "rpc_error", "exact"],
+  ["foreign agent", 1, false, "cli_error", "foreign"],
+  ["additional refusal", 1, false, "cli_error", "additional"],
+  ["obsolete duplicate message", 1, false, "cli_error", "obsolete"],
+  ["missing error", 1, false, "cli_error", "missing"],
+  ["invalid JSON", 1, false, "cli_error", "invalid"],
+] as const)("refuses an unproven Native duplicate receipt: %s", async (_name, code, ok, type, mode) => {
+  const f = await fixture();
+  const before = await fs.readFile(f.destinationPath);
+  const duplicate = `agent "${f.agentId}" already exists`;
+  const message = mode === "foreign" ? 'agent "octogee-other-coach" already exists'
+    : mode === "additional" ? `${duplicate}; restoration is blocked`
+      : mode === "obsolete" ? `Agent "${f.agentId}" already exists.` : duplicate;
+  const run = vi.fn(async (args: string[]) => args[1] === "list"
+    ? { code: 0, stdout: JSON.stringify([{ id: f.agentId, workspace: f.workspace, agentDir: f.agentDir }]) }
+    : { code, stdout: mode === "invalid" ? "not JSON" : JSON.stringify({ ok,
+      ...(mode === "missing" ? {} : { error: { type, message } }),
+    }) });
+  const log = vi.fn();
+
+  await expect(reattachBuilderAgents({ stores: [f], env: { OPENCLAW_STATE_DIR: f.root }, run, log,
+    assertHeld: async () => {},
+  })).rejects.toThrow(/Native/);
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(log).not.toHaveBeenCalled();
+  expect(await fs.readFile(f.destinationPath)).toEqual(before);
+});
 
 it("refuses a missing carried anchor before invoking Native", async () => {
   const f = await fixture();
@@ -115,7 +147,7 @@ it.each(["noncanonical-agent-dir", "missing-workspace", "duplicate-roster", "ros
       ? { code: 0, stdout: JSON.stringify(mode === "duplicate-roster" ? [
         { id: projectId, workspace, agentDir }, { id: projectId, workspace, agentDir },
       ] : []) }
-      : { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: `Agent "${projectId}" already exists.` } }) });
+      : { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: `agent "${projectId}" already exists` } }) });
     const before = await fs.readFile(destinationPath);
     await expect(reattachBuilderAgents({ stores: [{ agentId: projectId, destinationPath }], env: { OPENCLAW_STATE_DIR: f.root }, run,
       log: vi.fn(), assertHeld: async () => { if (!held) throw new Error("target hold lost"); },
@@ -171,7 +203,7 @@ it.each(["disabled", "workspace-changed"] as const)("rechecks current project au
   const run = vi.fn(async (args: string[]) => {
     if (args[1] === "list") return { code: 0, stdout: JSON.stringify(registered ? [{ id: agentId, workspace, agentDir }] : []) };
     if (registered) return { code: 1, stdout: JSON.stringify({ ok: false,
-      error: { type: "cli_error", message: `Agent "${agentId}" already exists.` } }) };
+      error: { type: "cli_error", message: `agent "${agentId}" already exists` } }) };
     registered = true;
     enabled = false;
     return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
@@ -207,7 +239,7 @@ it.each(["missing-authority", "wrong-workspace", "noncanonical-agent-dir"] as co
     { id: f.agentId, workspace: f.workspace, agentDir: f.agentDir },
     { id: agentId, workspace: mode === "wrong-workspace" ? path.join(f.workspace, "other") : workspace, agentDir },
   ]) } : { code: 1, stdout: JSON.stringify({ ok: false,
-    error: { type: "cli_error", message: `Agent "${args[2]}" already exists.` } }) });
+    error: { type: "cli_error", message: `agent "${args[2]}" already exists` } }) });
   await expect(reattachBuilderAgents({ stores: [f, { agentId, destinationPath }], env: { OPENCLAW_STATE_DIR: f.root }, run,
     log: vi.fn(), assertHeld: async () => {},
     resolveCarriedProjectWorkspace: mode === "missing-authority" ? undefined : async () => workspace,
@@ -222,7 +254,7 @@ it("preserves configured custom-agent restoration without project authority", as
   const resolveCarriedProjectWorkspace = vi.fn(async () => null);
   const run = vi.fn(async (args: string[]) => args[1] === "list"
     ? { code: 0, stdout: JSON.stringify([{ id: agentId, workspace: f.workspace, agentDir: f.agentDir }]) }
-    : { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: `Agent "${agentId}" already exists.` } }) });
+    : { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: `agent "${agentId}" already exists` } }) });
   await expect(reattachBuilderAgents({ stores: [{ agentId, destinationPath: f.destinationPath }], env: { OPENCLAW_STATE_DIR: f.root },
     run, log: vi.fn(), assertHeld: async () => {}, resolveCarriedProjectWorkspace })).resolves.toBeUndefined();
   expect(resolveCarriedProjectWorkspace).not.toHaveBeenCalled();
