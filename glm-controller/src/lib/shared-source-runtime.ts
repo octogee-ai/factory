@@ -1,3 +1,4 @@
+import { assertSourceRecoveryDiscovery } from './shared-source-discovery.js';
 import { managementHealthDriverSource } from './runtime-restart-driver.js';
 import { isDeepStrictEqual } from 'node:util';
 import { FieldValue, type DocumentData, type Transaction } from 'firebase-admin/firestore';
@@ -185,6 +186,18 @@ function assertSourceManagementPod(input: SourceRecovery, pod: Row, namespace: s
   if (input.managementRecovery && (pod.metadata.uid !== input.managementRecovery.podUid || pod.metadata.name !== input.managementRecovery.podName ||
     pod.metadata.namespace !== namespace)) throw new Error('source management Pod custody changed');
 }
+async function preflightNewPostgresSource(request: {
+  deps: SharedPodRecoveryDeps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; ownFence: Row;
+}): Promise<void> {
+  const { deps, op, input, ctx, pod, ownFence } = request;
+  if (!input.postgresAgentStores || Object.keys(ownFence).length !== 0) return;
+  await ctx.assertActiveClaim!();
+  await deps.db.runTransaction(async tx => { await authority(deps, tx, op, input); }, { readOnly: true });
+  await assertSourceRecoveryDiscovery(deps, pod, input.postgresAgentStores);
+  await ctx.assertActiveClaim!();
+  const currentPod = await json(deps, ['get', 'pod', pod.metadata.name]);
+  if (currentPod.metadata?.uid !== pod.metadata.uid || currentPod.metadata.deletionTimestamp) throw new Error('source discovery Pod custody changed');
+}
 export async function recoverSharedSourceRuntime(deps: SharedPodRecoveryDeps, op: Operation, ctx: OperationContext): Promise<void> {
   const input = sourceRecovery(op, deps.sourceSha), gatewayId = op.input.gatewayId as string;
   if (!ctx.assertActiveClaim) throw new Error('source recovery operation claim is unavailable');
@@ -199,6 +212,7 @@ export async function recoverSharedSourceRuntime(deps: SharedPodRecoveryDeps, op
   const ownFence = object((await deps.db.doc(`gateways/${gatewayId}`).get()).data()?.runtimeRestartFence);
   const workload = input.postgresAgentStores ? await captureSourceRecoveryWorkload(deps, gatewayId, pod,
     ownsPausedSourceWorkload(ownFence, op, input)) : undefined;
+  await preflightNewPostgresSource({ deps, op, input, ctx, pod, ownFence });
   await reserve(deps, op, input, pod, workload);
   const saved = await dispatch(deps, op, input, pod);
   if (workload) await pinSourceRecoveryImages(deps, workload, input.images, saved.target.originalImages, async () => {

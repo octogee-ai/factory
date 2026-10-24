@@ -1038,7 +1038,10 @@ describe('journaled Shared source schema repair', () => {
     const events: string[] = [];
     let acknowledgment: 'full' | 'partial' | 'error' | 'none' = 'full';
     let afterEffect: ((event: string) => void) | undefined;
-    const runKubectl = vi.fn(async (args: string[]) => {
+    const runKubectl = vi.fn(async (args: string[], options?: { stdin?: string; timeoutMs?: number }) => {
+      if (options?.stdin?.includes('sourceRecoveryDiscoveryPreflight')) return {
+        code: 0, stdout: JSON.stringify({ version: 1, podUid: h.pod.metadata.uid, agentIds: captured.postgresAgentStores!.map(store => store.agentId).sort() }), stderr: '',
+      };
       if (args.includes('exec')) {
         events.push('management-health');
         expect(root.runtimeRestartFence.doctor.verifiedAgentIds).toEqual(captured.postgresAgentStores!.map(store => store.agentId));
@@ -1092,6 +1095,46 @@ describe('journaled Shared source schema repair', () => {
     return { ...h, deps: { ...h.deps, runKubectl }, deployment, replicaSet, events, captured,
       setAcknowledgment: (value: typeof acknowledgment) => { acknowledgment = value; }, onEffect: (effect: (event: string) => void) => { afterEffect = effect; } };
   }
+  it('refuses foreign discovery before reserving or changing the retained PostgreSQL source', async () => {
+    const h = await postgresSourceHarness(), before = structuredClone(h.store);
+    const run = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async (args, options) => {
+      if (options?.stdin?.includes('sourceRecoveryDiscoveryPreflight')) return { code: 1, stdout: '', stderr: 'source discovery requires stale local store resolution: octogee-foreign-coach' };
+      return run(args, options);
+    });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source discovery requires stale local store resolution');
+    expect(h.store).toEqual(before); expect(h.events).toEqual([]);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
+  it('can retry the same source operation after a pre-reservation discovery refusal without a spent Doctor fence', async () => {
+    const h = await postgresSourceHarness(), run = h.deps.runKubectl.getMockImplementation()!;
+    let blocked = true;
+    h.deps.runKubectl.mockImplementation(async (args, options) => {
+      if (blocked && options?.stdin?.includes('sourceRecoveryDiscoveryPreflight')) return { code: 1, stdout: '', stderr: 'foreign directory' };
+      return run(args, options);
+    });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('stale local store resolution');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+    blocked = false;
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.events.filter(event => event === 'doctor-ack')).toHaveLength(1);
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+  });
+  it.each(['claim', 'pod', 'authority'])('refuses %s loss during local discovery before any reservation or image change', async race => {
+    const h = await postgresSourceHarness(), run = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async (args, options) => {
+      const result = await run(args, options);
+      if (options?.stdin?.includes('sourceRecoveryDiscoveryPreflight')) {
+        if (race === 'claim') h.store['glmOperations/recover'].cancellationRequestedAt = 10;
+        if (race === 'pod') h.pod.metadata.uid = 'recreated-pod';
+        if (race === 'authority') h.store['gateways/shared-1'].retirementClaim = { operationId: 'retire' };
+      }
+      return result;
+    });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined(); expect(h.events).toEqual([]);
+    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
+  });
   it('repairs retained PostgreSQL source images through the handler and journals a desired release only after full Doctor and health proof', async () => {
     const h = await postgresSourceHarness(), before = structuredClone(h.store), volumes = structuredClone(h.pod.spec.volumes);
     const handler = createRestartGatewayHandler({ kubeOps: {} as never, namespace: h.deps.namespace, resolveLiveRevisionId: async () => null,
@@ -1127,9 +1170,9 @@ describe('journaled Shared source schema repair', () => {
   });
   it('keeps PostgreSQL repair fenced on a failed fresh management probe despite a complete Doctor acknowledgment', async () => {
     const h = await postgresSourceHarness(), original = h.deps.runKubectl.getMockImplementation()!;
-    h.deps.runKubectl.mockImplementation(async args => {
-      const result = await original(args);
-      return args.includes('exec') ? { ...result, code: 1, stdout: '', stderr: 'management health unavailable' } : result;
+    h.deps.runKubectl.mockImplementation(async (args, options) => {
+      const result = await original(args, options);
+      return args.includes('exec') && !options?.stdin?.includes('sourceRecoveryDiscoveryPreflight') ? { ...result, code: 1, stdout: '', stderr: 'management health unavailable' } : result;
     });
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source management health unconfirmed');
     expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt).toBeGreaterThan(0);
