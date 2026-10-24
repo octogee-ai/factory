@@ -274,8 +274,9 @@ function isLevelTriggeredContinuousPlacement(
 }
 
 function isFencedManagementHealthFailure(op: OperationCompletionInput["op"], error: string): boolean {
-  const source = op.input?.sourceRecovery as { managementRecovery?: unknown } | undefined;
-  return op.kind === "restart-gateway" && source?.managementRecovery !== undefined &&
+  const source = op.input?.sourceRecovery as { managementRecovery?: unknown; postgresAgentStores?: unknown } | undefined;
+  const ownedSource = source?.managementRecovery !== undefined || Array.isArray(source?.postgresAgentStores) && source.postgresAgentStores.length > 0;
+  return op.kind === "restart-gateway" && ownedSource &&
     error === "source management health unconfirmed; outcome remains fenced";
 }
 

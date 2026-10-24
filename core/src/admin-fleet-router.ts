@@ -5887,7 +5887,7 @@ router.post(
           throw new SharedSourceRecoveryConflict("source recovery predecessor immutable build changed");
         }
       }
-      const input = { gatewayId, sourceRecovery: { sourceSha, ...source, ...(supersede ? { supersede } : {}), images: {
+      const input = { gatewayId, sourceRecovery: { sourceSha, ...source, ...(source.postgresAgentStores ? { payload } : {}), ...(supersede ? { supersede } : {}), images: {
         gateway: `${payload.imageRepository}:${payload.imageTag}`,
         "gateway-edge": `${payload.gatewayEdgeImage!.imageRepository}:${payload.gatewayEdgeImage!.imageTag}`,
       } } };

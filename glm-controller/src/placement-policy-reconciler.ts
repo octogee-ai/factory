@@ -1,3 +1,5 @@
+import { postgresImportMaintenanceFailureMatches, type SourceRecoveryAssignment } from "@octogee/core/shared-source-recovery";
+import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { isDeepStrictEqual } from 'node:util';
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const eventLogger = createServiceLogger("cowboy");
@@ -3633,19 +3635,79 @@ function proofRows(value: unknown): Array<Record<string, unknown>> {
 function sourceRepairProofParts(repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput) {
   const source = record(record(repair.input)?.sourceRecovery) ?? {}, completed = record(repair.sourceRuntimeRecovery) ?? {};
   const management = record(source.managementRecovery) ?? {};
-  return { source, completed,
+  const postgres = source.postgresAgentStores !== undefined;
+  return { source, completed, postgres,
     assignment: proofRows(source.assignments).find(row => row.uid === request.uid) ?? {},
-    failure: proofRows(management.failures).find(row => row.operationId === request.operationId) ?? {},
-    released: proofRows(completed.releasedPlacements), marker: proofRows(management.users).find(row => row.uid === request.uid)?.migration };
+    failure: proofRows(postgres ? source.failedExports : management.failures).find(row => row.operationId === request.operationId) ?? {},
+    released: proofRows(completed.releasedPlacements), marker: postgres ? null : proofRows(management.users).find(row => row.uid === request.uid)?.migration };
 }
-function repairedPlacementProofMatches(data: Record<string, unknown>, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
-  const proof = record(data.sourceRuntimeRecovery), { source, completed, assignment, failure, released, marker } = sourceRepairProofParts(repair, request);
+function capturedPostgresRosterMatches(source: Record<string, unknown>): boolean {
+  const assignments = proofRows(source.assignments), stores = proofRows(source.postgresAgentStores);
+  return [stores.length > 0, assignments.length > 0,
+    stores.every(store => {
+      const owner = assignments.find(row => row.uid === store.uid);
+      return owner && store.slug === owner.slug && store.assignmentEpoch === owner.assignmentEpoch &&
+        typeof store.agentId === "string" && typeof owner.slug === "string" && agentIdBelongsToSlug(store.agentId, owner.slug) &&
+        typeof store.storeId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(store.storeId) &&
+        typeof store.schema === "string" && /^[a-z_][a-z0-9_]{0,62}$/.test(store.schema);
+    }),
+    assignments.every(owner => stores.some(store => store.uid === owner.uid && store.agentId === owner.agentId)),
+    new Set(stores.map(store => store.agentId)).size === stores.length, new Set(stores.map(store => store.storeId)).size === stores.length,
+    new Set(stores.map(store => store.schema)).size === stores.length].every(Boolean);
+}
+
+function completedPostgresPlacementReleasesMatch(source: Record<string, unknown>, completed: Record<string, unknown>): boolean {
+  const assignments = proofRows(source.assignments), failures = proofRows(source.failedExports), released = proofRows(completed.releasedPlacements);
+  const expectedReleased = failures.map(failed => {
+    const owner = assignments.find(row => row.uid === record(failed.input)?.uid);
+    return { operationId: failed.operationId, uid: owner?.uid, assignmentEpoch: owner?.assignmentEpoch, marker: null };
+  });
+  return [failures.length === assignments.length,
+    isDeepStrictEqual([...released].sort((a, b) => String(a.operationId).localeCompare(String(b.operationId))),
+      [...expectedReleased].sort((a, b) => String(a.operationId).localeCompare(String(b.operationId)))),
+    new Set(failures.map(row => row.operationId)).size === failures.length,
+    new Set(failures.map(row => record(row.input)?.uid)).size === assignments.length &&
+      failures.every(row => assignments.some(owner => owner.uid === record(row.input)?.uid) && typeof row.operationId === "string" && !row.operationId.includes("/"))].every(Boolean);
+}
+
+function completedPostgresDoctorMatches(input: { source: Record<string, unknown>; completed: Record<string, unknown>; repairId: unknown }): boolean {
+  const { source, completed, repairId } = input, doctor = record(completed.doctor) ?? {};
+  const expectedIds = proofRows(source.postgresAgentStores).map(store => store.agentId).sort();
+  return [Array.isArray(doctor.verifiedAgentIds) && isDeepStrictEqual([...doctor.verifiedAgentIds].sort(), expectedIds),
+    doctor.requestId === repairId, Number.isSafeInteger(doctor.startedAt) && Number(doctor.startedAt) > 0,
+    Number.isSafeInteger(doctor.completedAt) && Number(doctor.completedAt) >= Number(doctor.startedAt) && Number(doctor.completedAt) <= Number(completed.completedAt),
+    typeof doctor.releaseKey === "string" && doctor.releaseKey.length > 0].every(Boolean);
+}
+
+function completedPostgresImageMatches(source: Record<string, unknown>, completed: Record<string, unknown>): boolean {
+  const doctor = record(completed.doctor) ?? {}, installed = record(completed.installedImage) ?? {}, images = record(source.images) ?? {};
+  const digest = typeof images.gateway === "string" ? /@(sha256:[a-f0-9]{64})$/.exec(images.gateway)?.[1] : undefined;
+  return [typeof completed.podUid === "string" && completed.podUid.length > 0 && installed.podUid === completed.podUid,
+    digest !== undefined && typeof installed.gatewayImageId === "string" && installed.gatewayImageId.endsWith("@" + digest),
+    Number.isSafeInteger(installed.verifiedAt) && Number(installed.verifiedAt) > 0 && Number(installed.verifiedAt) <= Number(doctor.startedAt),
+    typeof record(completed.managementHealth)?.bootId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(String(record(completed.managementHealth)?.bootId))].every(Boolean);
+}
+
+export function repairedPostgresPlacementProofMatches(data: Record<string, unknown>, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const { source, completed, assignment, failure, postgres } = sourceRepairProofParts(repair, request);
+  if (!postgres) return false;
+  const original = { ...data }; delete original.sourceRuntimeRecovery;
+  return [capturedPostgresRosterMatches(source), typeof source.sourceSha === "string" && /^[a-f0-9]{40}$/.test(source.sourceSha),
+    assignment.uid === request.uid, postgresImportMaintenanceFailureMatches(original, request.operationId, assignment as unknown as SourceRecoveryAssignment, request.fromGatewayId),
+    isDeepStrictEqual(failure, { operationId: request.operationId, input: original.input, startedAt: original.startedAt,
+      completedAt: original.completedAt, error: original.error, steps: original.steps }),
+    completedPostgresPlacementReleasesMatch(source, completed), completedPostgresDoctorMatches({ source, completed, repairId: repair.id }),
+    completedPostgresImageMatches(source, completed)].every(Boolean);
+}
+
+export function repairedPlacementProofMatches(data: Record<string, unknown>, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  const proof = record(data.sourceRuntimeRecovery), { source, completed, assignment, failure, released, marker, postgres } = sourceRepairProofParts(repair, request);
   const original = { ...data }; delete original.sourceRuntimeRecovery;
   return [repair.kind === 'restart-gateway', ['running', 'succeeded'].includes(String(repair.status)), repair.cancellationRequestedAt === undefined,
     record(repair.input)?.gatewayId === request.fromGatewayId, completed.gatewayId === request.fromGatewayId,
     Number.isSafeInteger(completed.completedAt), Number(completed.completedAt) > 0,
     assignment.slug === request.builderSlug, source.sourceSha === completed.sourceSha,
-    isDeepStrictEqual(source.images, completed.images), isDeepStrictEqual(failure.receipt, original),
+    isDeepStrictEqual(source.images, completed.images), postgres ? repairedPostgresPlacementProofMatches(data, repair, request) : isDeepStrictEqual(failure.receipt, original),
     isDeepStrictEqual(proof, { operationId: repair.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt: completed.completedAt }),
     released.some(row => isDeepStrictEqual(row, { operationId: request.operationId, uid: request.uid, assignmentEpoch: assignment.assignmentEpoch, marker })),
     record(completed.managementHealth)?.attemptId === repair.id, record(completed.managementHealth)?.health === true,
@@ -3667,6 +3729,61 @@ async function assertCurrentRepairTarget(input: FirestorePlacementPolicyInput, t
     user.data()?.username === request.builderSlug, user.data()?.provisioning?.openclaw?.status === 'complete'].every(Boolean);
   if (!exact) throw new Error('repaired source placement current target authority changed');
 }
+interface RepairedPostgresSourceObservation {
+  source: Record<string, unknown>; runtime: Record<string, unknown>; release: Record<string, unknown>;
+  repair: Record<string, unknown>; request: EnqueuePlacementMigrationInput; now: number;
+}
+
+function postgresRepairSourceRootMatches(source: Record<string, unknown>, adopted: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
+  return [Number.isSafeInteger(adopted.release), Number(adopted.release) > 0,
+    typeof adopted.operationId === "string" && adopted.operationId.length > 0 && !adopted.operationId.includes("/"),
+    source.gatewayId === request.fromGatewayId, source.gatewayClass === "shared", source.ownerUid === null, source.builderSlug === null,
+    ["running", "draining"].includes(String(source.desiredStatus)), source.runtimeRestartFence === undefined, source.retirementClaim == null,
+    source.latestRelease === adopted.release, source.desiredRelease === adopted.release, source.liveRelease === adopted.release].every(Boolean);
+}
+
+function postgresRepairSourceRuntimeMatches(input: {
+  runtime: Record<string, unknown>; adopted: Record<string, unknown>; request: EnqueuePlacementMigrationInput; now: number;
+}): boolean {
+  const { runtime, adopted, request, now } = input, heartbeat = record(runtime.heartbeat) ?? {};
+  const heartbeatAt = millis(heartbeat.lastHeartbeatAt);
+  return [runtime.gatewayId === request.fromGatewayId, runtime.release === adopted.release, runtime.lifecycle === "serving", heartbeat.status === "ready",
+    heartbeatAt !== null && heartbeatAt <= now && now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS].every(Boolean);
+}
+
+function postgresRepairSourcePayloadMatches(input: {
+  release: Record<string, unknown>; captured: Record<string, unknown>; runtime: Record<string, unknown>;
+  adopted: Record<string, unknown>; request: EnqueuePlacementMigrationInput;
+}): boolean {
+  const { release, captured, runtime, adopted, request } = input, helm = record(runtime.helm) ?? {};
+  const payload = release.payload, expected = captured.payload;
+  return [release.gatewayId === request.fromGatewayId && release.release === adopted.release,
+    isReleasePayload(payload) && isReleasePayload(expected) && release.payloadHash === releasePayloadHash(payload) &&
+      releasePayloadHash(payload) === releasePayloadHash(expected) && helm.imageRepository === payload.imageRepository && helm.imageTag === payload.imageTag,
+    isReleasePayload(payload) && record(captured.images)?.gateway === `${payload.imageRepository}:${payload.imageTag}`].every(Boolean);
+}
+
+export function repairedPostgresSourceConverged(input: RepairedPostgresSourceObservation): boolean {
+  const { source, runtime, release, repair, request, now } = input;
+  const completed = record(repair.sourceRuntimeRecovery) ?? {}, captured = record(record(repair.input)?.sourceRecovery) ?? {};
+  const adopted = record(completed.release) ?? {};
+  return [postgresRepairSourceRootMatches(source, adopted, request), postgresRepairSourceRuntimeMatches({ runtime, adopted, request, now }),
+    postgresRepairSourcePayloadMatches({ release, captured, runtime, adopted, request })].every(Boolean);
+}
+
+async function assertCurrentPostgresRepairSource(input: FirestorePlacementPolicyInput, transaction: Transaction, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): Promise<void> {
+  const completed = record(repair.sourceRuntimeRecovery) ?? {}, adopted = record(completed.release) ?? {};
+  const [source, runtime, release] = await Promise.all([
+    transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.fromGatewayId}`)),
+    transaction.get(input.db.doc(`${GLM_GATEWAYS_COLLECTION}/${request.fromGatewayId}`)),
+    transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.fromGatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${adopted.release}`)),
+  ]);
+  if (!projectGatewayDesiredRootForGateway(source.data(), request.fromGatewayId) || !isGatewayRuntimeDoc(runtime.data()) ||
+      !repairedPostgresSourceConverged({ source: source.data() ?? {}, runtime: runtime.data() ?? {}, release: release.data() ?? {}, repair, request, now: input.now() })) {
+    throw new SharedDrainSupersededError(request.fromGatewayId, "the repaired source release has not converged; retry placement after it is ready");
+  }
+}
+
 async function assertRepairedSourcePlacementAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, data: Record<string, unknown>): Promise<void> {
   const proof = record(data.sourceRuntimeRecovery), operationId = proof?.operationId;
   if (typeof operationId !== 'string' || !operationId || operationId.includes('/')) throw new Error('source repair placement receipt is unavailable');
@@ -3677,6 +3794,9 @@ async function assertRepairedSourcePlacementAuthority(input: FirestorePlacementP
   if (assignment.epoch !== proof?.sourceAssignmentEpoch || assignment.slug !== request.builderSlug) throw new Error('source repair assignment changed');
   const sourceImage = record(record(repair.sourceRuntimeRecovery)?.images)?.gateway;
   if (typeof sourceImage !== 'string') throw new Error('source repair image receipt is unavailable');
+  if (record(record(repair.input)?.sourceRecovery)?.postgresAgentStores !== undefined) {
+    await assertCurrentPostgresRepairSource(input, transaction, repair, request);
+  }
   await assertCurrentRepairTarget(input, transaction, request, sourceImage);
 }
 

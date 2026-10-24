@@ -158,7 +158,7 @@ function competingMigration(id: string, row: RecordValue, operationId: string, g
     !pristineQueuedMigration(row);
 }
 
-async function json(deps: Deps, args: string[]): Promise<RecordValue> {
+async function json(deps: Pick<Deps, 'namespace' | 'runKubectl'>, args: string[]): Promise<RecordValue> {
   const result = await deps.runKubectl(['-n', deps.namespace, ...args, '-o', 'json'], { timeoutMs: 15_000 });
   if (result.code !== 0) throw new Error('restore recovery Kubernetes outcome is unresolved');
   return JSON.parse(result.stdout);

@@ -200,6 +200,11 @@ export interface FleetBrokerOpenClawBootClaim {
     sourceDoctor?: {
         requestId: string;
         agentIds: string[];
+        postgresAgentStores?: Array<{
+            agentId: string;
+            storeId: string;
+            schema: string;
+        }>;
     };
 }
 export interface FleetBrokerPreStopFlushStep {

@@ -16,6 +16,21 @@ import {
   verifiedDeletionCompletion,
 } from "../operation-retry";
 
+describe("PostgreSQL source recovery health retries", () => {
+  const error = "source management health unconfirmed; outcome remains fenced";
+  it("retains the owned source recovery beyond the attempt cap only for its exact unavailable health result", () => {
+    const op = { kind: "restart-gateway" as const, startedAt: 1_000, attempts: MAX_OPERATION_ATTEMPTS,
+      input: { gatewayId: "shared-source", sourceRecovery: { postgresAgentStores: [{ agentId: "octogee-alice-coach" }] } } };
+    expect(buildOperationCompletionUpdate({ op, result: { success: false, steps: [], error }, steps: [], now: 2_000 }))
+      .toMatchObject({ status: "pending", attempts: MAX_OPERATION_ATTEMPTS + 1 });
+    for (const unrelated of ["source management health receipt invalid", "source repair is not ready; outcome remains fenced"]) {
+      expect(buildOperationCompletionUpdate({ op, result: { success: false, steps: [], error: unrelated }, steps: [], now: 2_000 }).status).toBe("failed");
+    }
+    expect(buildOperationCompletionUpdate({ op: { ...op, input: { gatewayId: "shared-source", sourceRecovery: {} } },
+      result: { success: false, steps: [], error }, steps: [], now: 2_000 }).status).toBe("failed");
+  });
+});
+
 describe("Gateway credential retirement drain", () => {
   const error = "agent-store credential retirement failed (records preserved for retry): " +
     "Agent-store Gateway shared-0 still has database sessions";

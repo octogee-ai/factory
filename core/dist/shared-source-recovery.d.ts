@@ -15,7 +15,16 @@ export interface SourceRecoveryExport {
     error: string;
     steps: DocumentData[];
 }
+export interface SourceRecoveryAgentStore {
+    uid: string;
+    slug: string;
+    assignmentEpoch: number;
+    agentId: string;
+    storeId: string;
+    schema: string;
+}
 export interface SharedSourceRecoveryAuthority {
+    postgresAgentStores?: SourceRecoveryAgentStore[];
     root: DocumentData;
     assignments: SourceRecoveryAssignment[];
     failedExports: SourceRecoveryExport[];
@@ -23,6 +32,8 @@ export interface SharedSourceRecoveryAuthority {
 }
 export declare class SharedSourceRecoveryConflict extends Error {
 }
+export declare function postgresImportMaintenanceFailureMatches(row: DocumentData, operationId: string, identity: SourceRecoveryAssignment, gatewayId: string): boolean;
+export declare function readPostgresSourceAgentStores(db: Firestore, tx: Transaction, assignments: SourceRecoveryAssignment[]): Promise<SourceRecoveryAgentStore[]>;
 export declare function readSharedSourceRecoveryAuthority(db: Firestore, tx: Transaction, gatewayId: string, ownOperationId?: string, predecessorId?: string): Promise<SharedSourceRecoveryAuthority>;
 export declare function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecoveryAuthority, captured: SharedSourceRecoveryAuthority): void;
 export interface SharedSourceRecoverySupersession {

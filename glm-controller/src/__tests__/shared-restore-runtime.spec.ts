@@ -29,8 +29,9 @@ function harness() {
     'gateways/shared-1/assignments/u': { uid: 'u', slug: 'alice', gatewayId: 'shared-1', epoch: 3, state: 'serving' },
   };
   const value = (row: any, key: string) => key.split('.').reduce((current, part) => current?.[part], row);
+  let autoId = 0;
   const ref = (path: string, filters: any[] = []): any => ({ path, id: path.split('/').at(-1), filters, get: async () => snapshot({ path, filters }),
-    doc: (id: string) => ref(`${path}/${id}`), collection: (name: string) => ref(`${path}/${name}`),
+    doc: (id = `generated-${++autoId}`) => ref(`${path}/${id}`), collection: (name: string) => ref(`${path}/${name}`),
     where: (key: string, comparator: string, match: unknown) => ref(path, [...filters, { key, comparator, match }]) });
   const snapshot = (target: any): any => {
     const updateTime = (row: any) => { const version = JSON.stringify(row); return { version, isEqual: (other: any) => version === other?.version }; };
@@ -41,7 +42,7 @@ function harness() {
   };
   const db = { doc: ref, collection: ref, runTransaction: async (body: any) => {
     const writes: (() => void)[] = [];
-    const result = await body({ get: async (target: any) => snapshot(target), create: (target: any, row: any) => writes.push(() => { expect(store[target.path]).toBeUndefined(); store[target.path] = structuredClone(row); }), update: (target: any, patch: any) => writes.push(() => {
+    const result = await body({ get: async (target: any) => snapshot(target), set: (target: any, row: any) => writes.push(() => { store[target.path] = structuredClone(row); }), create: (target: any, row: any) => writes.push(() => { expect(store[target.path]).toBeUndefined(); store[target.path] = structuredClone(row); }), update: (target: any, patch: any) => writes.push(() => {
       for (const [key, val] of Object.entries(patch)) {
         const parts = key.split('.'); let row = store[target.path];
         for (const part of parts.slice(0, -1)) row = row[part] ??= {};
@@ -1001,6 +1002,209 @@ describe('journaled Shared source schema repair', () => {
       setManagementFailure: (value = true) => { managementFailure = value; }, setChangedAfterProbe: () => { changedAfterProbe = true; },
       setAck: (value: boolean) => { ack = value; }, setWrongImage: () => { wrongImage = true; }, setHealthyWithoutAck: () => { healthyWithoutAck = true; } };
   }
+  async function postgresSourceHarness() {
+    const h = await sourceHarness(true);
+    const root = h.store['gateways/shared-1'];
+    Object.assign(root, { configSchemaVersion: 1, createdAt: 1, createdBy: 'operator', updatedAt: 1, updatedBy: 'operator',
+      profile: 'standard', imageProfile: 'standard', sizingTier: null, gcpProject: null, gatewayContainerSecurityContext: null,
+      serviceAccountName: null, serviceAccount: null, builderAccess: null, modelBrokerLimits: null });
+    const payload = { imageRepository: images.gateway.split(':aaaaaaa')[0]!, imageTag: images.gateway.split('octogee-gateway:')[1]!,
+      gatewayEdgeImage: { imageRepository: images['gateway-edge'].split(':aaaaaaa')[0]!, imageTag: images['gateway-edge'].split('gateway-edge:')[1]! } };
+    for (const [index, slug] of ['jdog99', 'oct01'].entries()) {
+      const uid = `source-${index}`;
+      delete h.store[`users/${uid}`].provisioning.openclaw.migration;
+      const row = Object.values(h.store).find((value: any) => value.input?.uid === uid && value.kind === 'migrate-customer')!;
+      row.error = '/finish-rsync-import/shared-2: 500 ' + JSON.stringify({ error: 'import failed', message:
+        `[import:${slug}] agents.create failed for octogee-${slug}-coach (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)` });
+      row.steps = ['keys-sync-state', 'pre-sync-state', 'target-scheduler-ready', 'wait-for-active-work', 'quiesce-source', 'flush-source',
+        'rollback:scheduler-abort', 'rollback:unmount-target', 'rollback:scheduler-resume', 'rollback:resume-ingress'].map(name => ({ name, status: 'done' }));
+      row.steps.push({ name: 'final-sync-state', status: 'failed', error: row.error });
+      row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
+      h.store[`workspaces/${slug}/projects/orbit`] = { agent: { status: 'ready' } };
+      for (const [agentIndex, agentId] of [`octogee-${slug}-coach`, `octogee-${slug}-proj-orbit-coach`].entries()) {
+        h.store[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: 'shared-1', assignmentEpoch: index + 1,
+          storeId: `00000000-0000-4000-8000-${String(index * 2 + agentIndex + 1).padStart(12, '0')}`, schema: `retained_source_${index}_${agentIndex}` };
+      }
+    }
+    const captured = await h.deps.db.runTransaction(tx => readSharedSourceRecoveryAuthority(h.deps.db, tx, 'shared-1', h.op.id));
+    expect(captured.postgresAgentStores).toHaveLength(4);
+    h.op.input.sourceRecovery = { sourceSha: sha, images, payload, ...captured };
+    h.store['glmOperations/recover'].input = structuredClone(h.op.input);
+    const resource = (name: string, uid: string) => ({ metadata: { name, uid, namespace: 'octogee-test', resourceVersion: '1' },
+      spec: { replicas: 1, paused: false, strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } },
+        template: { spec: { containers: structuredClone(h.pod.spec.containers) } } } });
+    const deployment = resource('octogee-gateway-shared-1', 'deployment-uid'), replicaSet = resource('rs', 'rs-uid');
+    (replicaSet.metadata as any).ownerReferences = [{ controller: true, kind: 'Deployment', uid: 'deployment-uid' }];
+    const events: string[] = [];
+    let acknowledgment: 'full' | 'partial' | 'error' | 'none' = 'full';
+    let afterEffect: ((event: string) => void) | undefined;
+    const runKubectl = vi.fn(async (args: string[]) => {
+      if (args.includes('exec')) {
+        events.push('management-health');
+        expect(root.runtimeRestartFence.doctor.verifiedAgentIds).toEqual(captured.postgresAgentStores!.map(store => store.agentId));
+        expect(root.desiredRelease).toBe(1); expect(root.runtimeRestartFence).toBeDefined();
+        afterEffect?.('management-health');
+        return { code: 0, stdout: JSON.stringify({ version: 1, attemptId: h.op.id, bootId: 'retained-new-image-boot', health: true }), stderr: '' };
+      }
+      const kind = args.includes('deployment') ? 'deployment' : args.includes('replicaset') ? 'replicaset' : 'pod';
+      const value: any = kind === 'deployment' ? deployment : kind === 'replicaset' ? replicaSet : h.pod;
+      if (args.includes('patch')) {
+        const patch = JSON.parse(args[args.indexOf('-p') + 1]);
+        const changed = patch.filter((item: any) => item.op !== 'test');
+        const event = changed.some((item: any) => item.path === '/spec/paused') ? (changed[0].value ? 'pause-deployment' : 'resume-deployment') : `pin-${kind}`;
+        if (event === 'resume-deployment') {
+          expect(root).toMatchObject({ latestRelease: 2, desiredRelease: 2, liveRelease: 1 });
+          expect(root.runtimeRestartFence).toBeUndefined();
+          expect(h.store['gateways/shared-1/releases/2'].payload).toEqual(payload);
+          expect(h.store[`glmOperations/${h.op.id}`].sourceRuntimeRecovery.managementHealth.health).toBe(true);
+          for (const failure of captured.failedExports) expect(h.store[`glmOperations/${failure.operationId}`].sourceRuntimeRecovery.operationId).toBe(h.op.id);
+        } else expect(root.runtimeRestartFence.phase).toBe('dispatched');
+        if (kind === 'pod') {
+          expect(deployment.spec.paused).toBe(true);
+          for (const workload of [deployment, replicaSet]) expect(Object.fromEntries(workload.spec.template.spec.containers.map((c: any) => [c.name, c.image]))).toEqual(images);
+        }
+        for (const item of patch) {
+          const parts = item.path.slice(1).split('/'); let target = value;
+          for (const part of parts.slice(0, -1)) target = target[part];
+          const key = parts.at(-1)!;
+          if (item.op === 'test') expect(target[key]).toEqual(item.value);
+          else target[key] = item.value;
+        }
+        value.metadata.resourceVersion += '-next';
+        if (kind === 'pod') {
+          h.pod.status.conditions = [{ type: 'Ready', status: 'False' }];
+          h.pod.status.containerStatuses = h.pod.spec.containers.map((c: any) => ({ name: c.name, ready: false, imageID: c.image, state: { running: { startedAt: 'new-image' } } }));
+        }
+        events.push(event); afterEffect?.(event);
+      }
+      const fence = root.runtimeRestartFence;
+      if (kind === 'pod' && !args.includes('patch') && fence?.attemptId === h.op.id && fence.installedImage && !fence.doctor.completedAt && acknowledgment !== 'none') {
+        const at = h.deps.now();
+        fence.doctor = { ...fence.doctor, releaseKey: 'actual-reused-image-tag', startedAt: at, completedAt: at,
+          verifiedAgentIds: captured.postgresAgentStores!.map(store => store.agentId).slice(0, acknowledgment === 'partial' ? 1 : undefined),
+          ...(acknowledgment === 'error' ? { error: 'doctor refused retained store' } : {}) };
+        h.pod.status.conditions = [{ type: 'Ready', status: 'True' }];
+        for (const status of h.pod.status.containerStatuses) status.ready = true;
+        events.push('doctor-ack'); afterEffect?.('doctor-ack');
+      }
+      return { code: 0, stdout: JSON.stringify(args.includes('pods') ? { items: [h.pod] } : value), stderr: '' };
+    });
+    return { ...h, deps: { ...h.deps, runKubectl }, deployment, replicaSet, events, captured,
+      setAcknowledgment: (value: typeof acknowledgment) => { acknowledgment = value; }, onEffect: (effect: (event: string) => void) => { afterEffect = effect; } };
+  }
+  it('repairs retained PostgreSQL source images through the handler and journals a desired release only after full Doctor and health proof', async () => {
+    const h = await postgresSourceHarness(), before = structuredClone(h.store), volumes = structuredClone(h.pod.spec.volumes);
+    const handler = createRestartGatewayHandler({ kubeOps: {} as never, namespace: h.deps.namespace, resolveLiveRevisionId: async () => null,
+      now: h.deps.now, log: vi.fn(), recoverSource: (op, ctx) => recoverSharedSourceRuntime(h.deps, op, ctx) });
+    expect(await handler(h.op, h.ctx)).toMatchObject({ success: true });
+    expect(h.events).toEqual(['pause-deployment', 'pin-replicaset', 'pin-deployment', 'pin-pod', 'doctor-ack', 'management-health', 'resume-deployment']);
+    expect(h.pod.metadata.uid).toBe('pod-uid'); expect(h.pod.spec.volumes).toEqual(volumes);
+    for (const [path, row] of Object.entries(before)) if (path.startsWith('users/') || path.startsWith('workspaces/') || path.includes('/assignments/')) expect(h.store[path]).toEqual(row);
+    const rollout = Object.values(h.store).find((row: any) => row.kind === 'rollout')!;
+    expect(rollout).toMatchObject({ status: 'pending', input: { gatewayId: 'shared-1', targetRelease: 2 } });
+    expect(h.store['gateways/shared-1/releases/2']).toMatchObject({ release: 2, sourceRelease: 1, createdBy: h.op.id });
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.doctor.verifiedAgentIds).toEqual(h.captured.postgresAgentStores!.map(store => store.agentId));
+  });
+  it.each(['partial', 'error', 'none'] as const)('keeps PostgreSQL source fenced and Deployment paused after %s Doctor proof', async proof => {
+    const h = await postgresSourceHarness(); h.setAcknowledgment(proof);
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined(); expect(h.deployment.spec.paused).toBe(true);
+    expect(h.store['gateways/shared-1/releases/2']).toBeUndefined(); expect(h.events).not.toContain('management-health'); expect(h.events).not.toContain('resume-deployment');
+  });
+  it.each(['pin-replicaset', 'doctor-ack', 'management-health'])('refuses changed operation claim after %s without clearing the PostgreSQL fence', async stage => {
+    const h = await postgresSourceHarness();
+    h.onEffect(event => { if (event === stage) h.store['glmOperations/recover'].startedAt++; });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined(); expect(h.deployment.spec.paused).toBe(true);
+    expect(h.store['gateways/shared-1/releases/2']).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
+    if (stage === 'pin-replicaset') expect(h.events).not.toContain('pin-pod');
+  });
+  it('retains the PostgreSQL fence when desired root authority changes after fresh management health', async () => {
+    const h = await postgresSourceHarness(); h.onEffect(event => { if (event === 'management-health') h.store['gateways/shared-1'].retirementClaim = { operationId: 'foreign-retirement' }; });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined(); expect(h.deployment.spec.paused).toBe(true);
+    expect(h.store['gateways/shared-1/releases/2']).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
+  });
+  it('keeps PostgreSQL repair fenced on a failed fresh management probe despite a complete Doctor acknowledgment', async () => {
+    const h = await postgresSourceHarness(), original = h.deps.runKubectl.getMockImplementation()!;
+    h.deps.runKubectl.mockImplementation(async args => {
+      const result = await original(args);
+      return args.includes('exec') ? { ...result, code: 1, stdout: '', stderr: 'management health unavailable' } : result;
+    });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source management health unconfirmed');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt).toBeGreaterThan(0);
+    expect(h.deployment.spec.paused).toBe(true); expect(h.store['gateways/shared-1/releases/2']).toBeUndefined();
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
+  });
+  it('refuses an immutable release collision atomically without annotating failed placements or clearing the PostgreSQL fence', async () => {
+    const h = await postgresSourceHarness(), collision = { release: 2, payload: { existing: 'immutable' } };
+    h.store['gateways/shared-1/releases/2'] = structuredClone(collision);
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('refusing to overwrite immutable history');
+    expect(h.store['gateways/shared-1/releases/2']).toEqual(collision);
+    expect(h.store['gateways/shared-1']).toMatchObject({ latestRelease: 1, desiredRelease: 1, liveRelease: 1 });
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined(); expect(h.deployment.spec.paused).toBe(true);
+    for (const failure of h.captured.failedExports) expect(h.store[`glmOperations/${failure.operationId}`].sourceRuntimeRecovery).toBeUndefined();
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
+  });
+  async function postgresSourceSuccessor() {
+    const h = await postgresSourceHarness(); h.setAcknowledgment('none');
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
+    const fence = h.store['gateways/shared-1'].runtimeRestartFence;
+    fence.doctor = { requestId: h.op.id, releaseKey: 'spent-recovery-image', startedAt: fence.installedImage.verifiedAt };
+    const prior = h.store['glmOperations/recover'];
+    Object.assign(prior, { status: 'failed', completedAt: h.deps.now(), error: 'source repair is not ready; outcome remains fenced' });
+    const before = structuredClone(prior), capturedFence = structuredClone(fence);
+    Object.assign(h.op, { id: 'pg-successor', startedAt: h.deps.now() + 1, input: { gatewayId: 'shared-1', sourceRecovery: {
+      ...(before.input.sourceRecovery as any), supersede: { operationId: 'recover', input: before.input, startedAt: before.startedAt,
+        completedAt: before.completedAt, error: before.error, fence: capturedFence },
+    } } });
+    h.store['glmOperations/pg-successor'] = structuredClone(h.op); h.setAcknowledgment('full');
+    h.events.length = 0;
+    return { ...h, before, capturedFence };
+  }
+  it.each(['paused', 'retired', 'gateway-id', 'gateway-class', 'owner', 'builder-slug'])('refuses completed PostgreSQL recovery unpause after %s root mutation', async changed => {
+    const h = await postgresSourceHarness();
+    h.ctx.assertActiveClaim.mockImplementation(async () => {
+      if (!h.store['glmOperations/recover'].sourceRuntimeRecovery) return;
+      const root = h.store['gateways/shared-1'];
+      if (changed === 'paused' || changed === 'retired') root.desiredStatus = changed;
+      if (changed === 'gateway-id') root.gatewayId = 'foreign-shared';
+      if (changed === 'gateway-class') root.gatewayClass = 'builder';
+      if (changed === 'owner') root.ownerUid = 'foreign-owner';
+      if (changed === 'builder-slug') root.builderSlug = 'foreign-builder';
+    });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('completed source recovery release custody changed');
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.completedAt).toBeGreaterThan(0);
+    expect(h.deployment.spec.paused).toBe(true); expect(h.events).not.toContain('resume-deployment');
+  });
+  it('rechecks completed PostgreSQL source lifecycle after the Deployment unpause acknowledgment', async () => {
+    const h = await postgresSourceHarness();
+    h.onEffect(event => { if (event === 'resume-deployment') h.store['gateways/shared-1'].desiredStatus = 'paused'; });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('completed source recovery release custody changed');
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.completedAt).toBeGreaterThan(0);
+  });
+  it('transfers a validated PostgreSQL predecessor paused workload without replacing its Pod or losing its prior failure history', async () => {
+    const h = await postgresSourceSuccessor();
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(h.store['glmOperations/pg-successor'].sourceRuntimeRecovery.workload).toEqual(h.capturedFence.target.workload);
+    expect(h.store['glmOperations/recover']).toEqual({ ...h.before, cancellationRequestedAt: h.deps.now(), sourceRecoverySupersededBy: h.op.id });
+    expect(h.pod.metadata.uid).toBe('pod-uid'); expect(h.deployment.spec.paused).toBe(false);
+    expect(h.events).toEqual(['pin-replicaset', 'pin-deployment', 'doctor-ack', 'management-health', 'resume-deployment']);
+  });
+  it.each(['deployment', 'replicaset', 'fence'])('refuses a changed %s when inheriting a PostgreSQL predecessor pause', async changed => {
+    const h = await postgresSourceSuccessor();
+    if (changed === 'deployment') {
+      h.deployment.metadata.uid = 'replacement-deployment';
+      (h.replicaSet.metadata as any).ownerReferences[0].uid = 'replacement-deployment';
+    }
+    if (changed === 'replicaset') {
+      h.replicaSet.metadata.uid = 'replacement-replicaset'; h.pod.metadata.ownerReferences[0].uid = 'replacement-replicaset';
+    }
+    if (changed === 'fence') h.store['gateways/shared-1'].runtimeRestartFence.target.workload.deploymentUid = 'foreign';
+    const before = structuredClone(h.store);
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
+    expect(h.store).toEqual(before); expect(h.events).toEqual([]); expect(h.deployment.spec.paused).toBe(true);
+  });
   it('requires fresh authenticated management health after Doctor ACK on the preserved source Pod', async () => {
     const h = await sourceHarness(true), before = structuredClone(h.store);
     await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);

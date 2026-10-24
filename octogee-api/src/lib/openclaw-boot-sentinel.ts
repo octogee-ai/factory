@@ -2,6 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import { FieldValue, type DocumentData, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
+import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
+import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
+import type { FleetBrokerOpenClawBootClaim } from "@octogee/shared/types/fleet-broker";
 
 interface OpenClawBootInput {
   gatewayId: string;
@@ -11,7 +14,8 @@ interface OpenClawBootInput {
 }
 
 export interface OpenClawBootSentinelStore {
-  claim(input: OpenClawBootInput): Promise<{ action: "doctor" | "start" | "wait"; sourceDoctor?: { requestId: string; agentIds: string[] } } | null>;
+  claim(input: OpenClawBootInput): Promise<FleetBrokerOpenClawBootClaim | null>;
+  assertDoctor(input: OpenClawBootInput & { requestId: string }): Promise<boolean>;
   complete(input: OpenClawBootInput): Promise<boolean>;
   completeDoctor(input: OpenClawBootInput & { requestId: string; verifiedAgentIds: string[] }): Promise<boolean>;
 }
@@ -77,13 +81,39 @@ async function sourceDoctorContext(db: Firestore, txn: Transaction, input: OpenC
   const op = record((await txn.get(db.doc(`glmOperations/${doctor.requestId}`))).data()), recovery = record(op.input?.sourceRecovery);
   assertSourceRoot(root, recovery.root);
   assertSourceOperation(op, recovery, target, input.gatewayId);
-  return { rootRef, fence, doctor, agentIds: sourceAgentIds(recovery.assignments, target.agents), imageVerified: sourceImageVerified(fence, input.podUid) };
+  const coaches = sourceAgentIds(recovery.assignments, target.agents);
+  const stores = sourcePostgresStores(recovery, target, coaches);
+  if (stores) {
+    const current = await readSharedSourceRecoveryAuthority(db, txn, input.gatewayId, doctor.requestId);
+    assertSharedSourceRecoveryUnchanged(current, recovery as Parameters<typeof assertSharedSourceRecoveryUnchanged>[1]);
+  }
+  return { rootRef, fence, doctor, agentIds: stores ? stores.map(s => s.agentId) : coaches, postgresAgentStores: stores,
+    imageVerified: sourceImageVerified(fence, input.podUid) };
+}
+
+function sourcePostgresStores(recovery: DocumentData, target: DocumentData, coaches: string[]) {
+  if (recovery.postgresAgentStores === undefined) return undefined;
+  const stores = recovery.postgresAgentStores;
+  if (!Array.isArray(stores) || !stores.length || !isDeepStrictEqual(stores, target.postgresAgentStores) ||
+      coaches.some(id => !stores.some(s => s.agentId === id)) ||
+      new Set(stores.map(s => s.agentId)).size !== stores.length || new Set(stores.map(s => s.storeId)).size !== stores.length ||
+      new Set(stores.map(s => s.schema)).size !== stores.length || stores.some(s => {
+        const owner = recovery.assignments.find((a: DocumentData) => a.uid === s.uid);
+        return !owner || owner.slug !== s.slug || owner.assignmentEpoch !== s.assignmentEpoch || !agentIdBelongsToSlug(s.agentId, s.slug) ||
+          typeof s.storeId !== "string" || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(s.storeId) ||
+          typeof s.schema !== "string" || !/^[a-z_][a-z0-9_]{0,62}$/.test(s.schema);
+      })) throw new Error("source Doctor PostgreSQL roster mismatch");
+  return stores.map(s => ({ agentId: s.agentId as string, storeId: s.storeId as string, schema: s.schema as string }));
 }
 
 function sourceDoctorCompleted(context: NonNullable<Awaited<ReturnType<typeof sourceDoctorContext>>>, input: OpenClawBootInput): boolean {
   const { doctor, agentIds } = context;
   return context.imageVerified && Number.isSafeInteger(doctor.startedAt) && doctor.startedAt > 0 && Number.isSafeInteger(doctor.completedAt) &&
     doctor.completedAt >= doctor.startedAt && doctor.releaseKey === input.releaseKey && isDeepStrictEqual(doctor.verifiedAgentIds, agentIds);
+}
+function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sourceDoctorContext>>>) {
+  return { requestId: context.doctor.requestId as string, agentIds: context.agentIds,
+    ...(context.postgresAgentStores ? { postgresAgentStores: context.postgresAgentStores } : {}) };
 }
 
 export function createOpenClawBootSentinelStore(
@@ -100,7 +130,7 @@ export function createOpenClawBootSentinelStore(
         if (context) {
           if (sourceDoctorCompleted(context, input)) return { action: "start" as const };
           if (context.doctor.startedAt !== undefined || context.doctor.completedAt !== undefined) throw new Error("source Doctor attempted without matching success acknowledgement");
-          const sourceDoctor = { requestId: context.doctor.requestId as string, agentIds: context.agentIds };
+          const sourceDoctor = sourceDoctorRequest(context);
           if (!context.imageVerified) return { action: "wait" as const, sourceDoctor };
           txn.update(context.rootRef, {
             "runtimeRestartFence.doctor.startedAt": now(),
@@ -142,6 +172,14 @@ export function createOpenClawBootSentinelStore(
         }
         return { action: "start" };
       });
+    },
+    async assertDoctor(input) {
+      return db.runTransaction(async txn => {
+        const context = await sourceDoctorContext(db, txn, input);
+        if (!context?.imageVerified || context.doctor.requestId !== input.requestId || context.doctor.releaseKey !== input.releaseKey ||
+            !Number.isSafeInteger(context.doctor.startedAt) || context.doctor.startedAt <= 0) throw new Error("source Doctor authority changed");
+        return true;
+      }, { readOnly: true });
     },
     async completeDoctor(input) {
       return db.runTransaction(async (txn) => {

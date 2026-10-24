@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { type GatewayDoc, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { type GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import { type GatewayArtifact } from "./gateway-live-release.js";
@@ -34,3 +34,15 @@ export declare function appendGatewayRelease(db: Firestore, args: AppendGatewayR
     release: number;
     operationId: string | null;
 }>;
+interface RecoveredGatewayReleaseInput {
+    gatewayId: string;
+    operationId: string;
+    claimedStartedAt: number | null;
+    payload: ReleasePayload;
+    now: number;
+}
+export declare function recordRecoveredGatewayRelease(db: Firestore, transaction: Transaction, input: RecoveredGatewayReleaseInput): Promise<{
+    release: number;
+    operationId: string;
+}>;
+export {};

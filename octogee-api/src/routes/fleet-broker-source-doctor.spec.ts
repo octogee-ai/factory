@@ -1,8 +1,12 @@
 import express, { type RequestHandler } from "express";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createOpenClawBootSentinelStore } from "../lib/openclaw-boot-sentinel.js";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
+const recoveryReads = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("@octogee/core/shared-source-recovery", async original => ({
+  ...await original<typeof import("@octogee/core/shared-source-recovery")>(), readSharedSourceRecoveryAuthority: recoveryReads.read,
+}));
 
 const gatewayId = "shared-source", podName = "octogee-gateway-shared-source-abc123-def45", podUid = "source-pod";
 const requestId = "source-repair", sourceSha = "a".repeat(40), digest = "b".repeat(64);
@@ -41,6 +45,43 @@ function fixture() {
 }
 
 describe("source Doctor boot authority", () => {
+  function postgresFixture() {
+    const f = fixture(), recovery = f.data[`glmOperations/${requestId}`].input.sourceRecovery;
+    const stores = [{ ...agent, storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_coach" },
+      { ...agent, agentId: "octogee-alice-proj-demo-coach", storeId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", schema: "owned_project" }];
+    recovery.postgresAgentStores = stores;
+    f.fence().target.postgresAgentStores = structuredClone(stores);
+    const captured = { root: recovery.root, assignments: recovery.assignments, failedExports: [], postgresAgentStores: stores };
+    recovery.failedExports = [];
+    recoveryReads.read.mockResolvedValue(captured);
+    return { ...f, recovery, stores, captured };
+  }
+  it("binds every PostgreSQL project anchor and exposes a read-only current-authority check during Doctor", async () => {
+    const f = postgresFixture();
+    const agentIds = f.stores.map(s => s.agentId);
+    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds,
+      postgresAgentStores: f.stores.map(({ agentId, storeId, schema }) => ({ agentId, storeId, schema })) } });
+    const before = structuredClone(f.fence());
+    await request(f.server).post("/internal/fleet/openclaw-boot/doctor-current").send({ gatewayId, revisionId: gatewayId, releaseKey: input.releaseKey, requestId }).expect(204);
+    expect(f.fence()).toEqual(before);
+    expect(f.fence().doctor.completedAt).toBeUndefined();
+    expect(await f.store.completeDoctor({ ...input, requestId, verifiedAgentIds: agentIds })).toBe(true);
+  });
+  it.each(["owner", "anchor", "roster", "current-custody"])("refuses changed PostgreSQL %s before admitting maintenance", async changed => {
+    const f = postgresFixture();
+    if (changed === "owner") f.stores[1]!.uid = "foreign";
+    if (changed === "anchor") f.stores[1]!.storeId = f.stores[0]!.storeId;
+    if (changed === "roster") f.fence().target.postgresAgentStores.pop();
+    if (changed === "current-custody") recoveryReads.read.mockResolvedValue({ ...f.captured, postgresAgentStores: [] });
+    await expect(f.store.claim(input)).rejects.toThrow();
+    expect(f.fence().doctor.startedAt).toBeUndefined();
+  });
+  it("rejects source custody lost after Doctor starts without publishing success", async () => {
+    const f = postgresFixture(); await f.store.claim(input);
+    recoveryReads.read.mockRejectedValue(new Error("source custody changed"));
+    await expect(f.store.assertDoctor({ ...input, requestId })).rejects.toThrow("source custody changed");
+    expect(f.fence().doctor.completedAt).toBeUndefined();
+  });
   it("repairs and acknowledges a coach on its initial epoch-zero assignment", async () => {
     const f = fixture();
     const initialAgent = { ...agent, assignmentEpoch: 0 };

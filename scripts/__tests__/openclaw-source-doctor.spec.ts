@@ -4,7 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { preflightAgentDatabase } from "../lib/agent-store-preflight.js";
-import { verifySourceDoctorAgentStores } from "../lib/openclaw-source-doctor.js";
+import { repairPostgresSourceDoctorAgentStores, repairSourceDoctorAgentStores, verifyPostgresSourceDoctorAgentStores, verifySourceDoctorAgentStores } from "../lib/openclaw-source-doctor.js";
+import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 import type { OpenClawCommand } from "../lib/openclaw-cli.js";
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
@@ -70,4 +71,327 @@ it("preserves a native refusal reason when the copied-store schema version is in
     foundVersion: null, targetVersion: 25, status: "indeterminate", reason,
   }) });
   await expect(preflightAgentDatabase(file, agentId, run, { env: {} })).rejects.toThrow(reason);
+});
+
+
+async function postgresFixture() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "source-doctor-pg-"))); roots.push(root);
+  const ids = ["octogee-livefixture-coach", "octogee-livefixture-proj-launch-coach", "octogee-foreign-coach"];
+  const expectedAnchors = ids.map((agentId, index) => ({ agentId, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `agent_${index}` }));
+  for (const anchor of expectedAnchors) {
+    const file = path.join(root, "agents", anchor.agentId, "agent/openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const db = new DatabaseSync(file);
+    db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
+    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(anchor.storeId, anchor.schema); db.close();
+  }
+  const metadata = new Map(expectedAnchors.map(anchor => [anchor.schema, { store_id: anchor.storeId, version: 31, role: "agent", agent_id: anchor.agentId, schema_version: 31, history: ["original turn"] }]));
+  const selected = expectedAnchors.slice(0, 2), agentIds = selected.map(store => store.agentId);
+  const assertCurrent = vi.fn(async () => {});
+  const query = vi.fn(async (anchor: { schema: string }) => [metadata.get(anchor.schema)!]);
+  const run = vi.fn<OpenClawCommand>(async (args, { env }) => {
+    expect(env.OPENCLAW_STATE_DIR).not.toBe(root);
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    if (args[0] === "database") return { code: 1, stdout: JSON.stringify({
+      schema: "openclaw.agent-schema-preflight.v1", databasePath: args[2], agentId: args[4],
+      targetVersion: 33, foundVersion: null, status: "indeterminate", requiresWrite: false,
+    }) };
+    expect(args).toEqual(["doctor", "--fix", "--non-interactive"]);
+    expect(env.OPENCLAW_AGENT_STORE_DSN).toBe("postgresql://synthetic/private");
+    const config = JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"));
+    expect(config.database.engine).toBe("sqlite");
+    if (config.agents.entries["octogee-source-doctor-bootstrap"]) {
+      expect(config.database.families).toBeUndefined();
+      return { code: 0, stdout: "" };
+    }
+    expect(config.database.families).toEqual({ agent: { engine: "postgres" } });
+    expect(config.plugins).toEqual({ enabled: false });
+    expect(config.agents.ownership).toBe("explicit");
+    expect(Object.keys(config.agents.entries).sort()).toEqual(agentIds.toSorted());
+    expect((await fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "agents"))).sort()).toEqual(agentIds.toSorted());
+    for (const anchor of selected) { const row = metadata.get(anchor.schema)!; row.version = 33; row.schema_version = 33; }
+    return { code: 0, stdout: "" };
+  });
+  await fs.writeFile(path.join(root, "openclaw.json"), JSON.stringify({ agents: { ownership: "explicit", entries: Object.fromEntries(ids.map(id => [id, { workspace: id }])) } }));
+  const input = { env: { OPENCLAW_STATE_DIR: root, OPENCLAW_AGENT_STORE_DSN: "postgresql://synthetic/private", OPENCLAW_GATEWAY_TOKEN: "excluded" },
+    run, query: query as unknown as typeof import("@octogee/core/agent-postgres").queryAgentStore, assertCurrent, expectedAnchors: selected };
+  return { root, expectedAnchors, metadata, agentIds, input, run, query, assertCurrent };
+}
+
+it("isolates PostgreSQL Doctor from original shared state and foreign agents, preserving anchor UUIDs and history", async () => {
+  const f = await postgresFixture();
+  const originals = await Promise.all(f.expectedAnchors.map(anchor => fs.readFile(path.join(f.root, "agents", anchor.agentId, "agent/openclaw-agent.sqlite"))));
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  expect(f.metadata.get("agent_2")).toMatchObject({ version: 31, schema_version: 31, history: ["original turn"] });
+  for (let index = 0; index < f.expectedAnchors.length; index++) {
+    expect(await fs.readFile(path.join(f.root, "agents", f.expectedAnchors[index]!.agentId, "agent/openclaw-agent.sqlite"))).toEqual(originals[index]);
+    expect(f.metadata.get(f.expectedAnchors[index]!.schema)!.history).toEqual(["original turn"]);
+  }
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "doctor", "doctor"]);
+  expect(f.assertCurrent).toHaveBeenCalled();
+  for (const [, { env }] of f.run.mock.calls) await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each(["owner", "store", "version", "coherence", "duplicate", "anchor-roster", "newer", "sidecar", "claim", "descriptor", "doctor"])("refuses PostgreSQL source repair with %s mismatch", async change => {
+  const f = await postgresFixture(), row = f.metadata.get("agent_0")!;
+  if (change === "owner") row.agent_id = "octogee-foreign-coach";
+  if (change === "store") row.store_id = "00000000-0000-4000-8000-999999999999";
+  if (change === "version") row.version = 0;
+  if (change === "coherence") row.schema_version = 30;
+  if (change === "duplicate") f.query.mockImplementation(async () => [row, row]);
+  if (change === "anchor-roster") f.input.expectedAnchors = f.expectedAnchors.slice(1);
+  if (change === "newer") { row.version = 34; row.schema_version = 34; }
+  if (change === "sidecar") await fs.writeFile(path.join(f.root, "agents", f.agentIds[0]!, "agent/openclaw-agent.sqlite-wal"), "pending");
+  if (change === "claim") f.assertCurrent.mockRejectedValue(new Error("claim changed"));
+  if (change === "descriptor") f.run.mockResolvedValue({ code: 0, stdout: "{}" });
+  if (change === "doctor") { const original = f.run.getMockImplementation()!; f.run.mockImplementation(async (args, options) => args[0] === "doctor" ? { code: 1, stdout: "" } : original(args, options)); }
+  await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow();
+  expect(f.metadata.get("agent_2")!.version).toBe(31);
+});
+
+it("refuses a successful Doctor that did not advance PostgreSQL metadata to the installed Native version", async () => {
+  const f = await postgresFixture(), original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => args[0] === "doctor" ? { code: 0, stdout: "" } : original(args, options));
+  await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("identity/version metadata mismatch");
+});
+
+it("verifies PostgreSQL metadata without treating SQLite schema descriptor as a PostgreSQL check", async () => {
+  const f = await postgresFixture();
+  await expect(verifyPostgresSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("identity/version metadata mismatch");
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database"]);
+});
+
+
+it("requires and upgrades only the fixed reserved service anchor referenced by the original source config", async () => {
+  const f = await postgresFixture();
+  const service = { agentId: "octogee-unmatched-route", storeId: "00000000-0000-4000-8000-000000000099", schema: "agent_service" };
+  const file = path.join(f.root, "agents", service.agentId, "agent/openclaw-agent.sqlite");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file); db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
+  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(service.storeId, service.schema); db.close();
+  await fs.writeFile(path.join(f.root, "openclaw.json"), JSON.stringify({ agents: { ownership: "explicit", entries: Object.fromEntries([...f.agentIds, service.agentId, "octogee-foreign-coach"].map(id => [id, { workspace: id }])) } }));
+  f.metadata.set(service.schema, { store_id: service.storeId, version: 31, role: "agent", agent_id: service.agentId, schema_version: 31, history: ["service history"] });
+  const original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] === "database") return original(args, options);
+    const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+    if (config.agents.entries["octogee-source-doctor-bootstrap"]) return { code: 0, stdout: "" };
+    expect(Object.keys(config.agents.entries).sort()).toEqual([...f.agentIds, service.agentId].sort());
+    for (const id of [...f.agentIds, service.agentId]) { const row = [...f.metadata.values()].find(row => row.agent_id === id)!; row.version = 33; row.schema_version = 33; }
+    return { code: 0, stdout: "" };
+  });
+  const before = await fs.readFile(file);
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  expect(await fs.readFile(file)).toEqual(before);
+  expect(f.metadata.get(service.schema)).toMatchObject({ version: 33, history: ["service history"] });
+  expect(f.metadata.get("agent_2")!.version).toBe(31);
+});
+
+it("refuses a missing configured reserved service anchor before Native mutation", async () => {
+  const f = await postgresFixture();
+  await fs.writeFile(path.join(f.root, "openclaw.json"), JSON.stringify({ agents: { ownership: "explicit", entries: { "octogee-unmatched-route": {} } } }));
+  await expect(repairSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow();
+  expect(f.run).not.toHaveBeenCalled();
+});
+
+
+it("filters only serving agent entries and bindings while retaining config, history, files, and private mode", async () => {
+  const f = await postgresFixture(), configPath = path.join(f.root, "openclaw.json");
+  const config = { gateway: { mode: "local", auth: { mode: "token", token: "retained" } }, channels: { retained: { enabled: true } },
+    agents: { ownership: "explicit", defaults: { model: "retained/model" }, entries: { [f.agentIds[0]!]: { workspace: "owner" }, "octogee-foreign-coach": { workspace: "foreign" } } },
+    bindings: [{ agentId: f.agentIds[0], match: { channel: "owner" } }, { agentId: "octogee-foreign-coach", match: { channel: "foreign" } }] };
+  await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 }); await fs.chmod(configPath, 0o600);
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  const after = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(after).toEqual({ ...config, agents: { ...config.agents, entries: { [f.agentIds[0]!]: config.agents.entries[f.agentIds[0]!] } }, bindings: [config.bindings[0]] });
+  expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+  expect(f.metadata.get("agent_2")!.version).toBe(31);
+});
+
+it("refuses serving config changes made while Doctor was running", async () => {
+  const f = await postgresFixture(), original = f.run.getMockImplementation()!, configPath = path.join(f.root, "openclaw.json");
+  f.run.mockImplementation(async (args, options) => {
+    const result = await original(args, options);
+    if (args[0] === "doctor") await fs.appendFile(configPath, "\n");
+    return result;
+  });
+  await expect(repairSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("serving config changed");
+  const after = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(after.agents.entries["octogee-foreign-coach"]).toBeDefined();
+});
+
+it("accepts canonical PostgreSQL BIGINT strings and refuses unsafe numeric versions", async () => {
+  const f = await postgresFixture();
+  f.query.mockImplementation(async anchor => {
+    const row = f.metadata.get(anchor.schema)!;
+    return [{ ...row, version: String(row.version), schema_version: String(row.schema_version) }] as any;
+  });
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  f.query.mockResolvedValue([{ ...f.metadata.get("agent_0")!, version: "9007199254740993", schema_version: "9007199254740993" }] as any);
+  await expect(verifyPostgresSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("identity/version metadata mismatch");
+});
+
+
+async function sqliteDriftFixture() {
+  const f = await fixture(), legacy = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => args[0] === "doctor" ? { code: 0, stdout: "" } : legacy(args, options));
+  const expectedAnchors = f.agentIds.map((agentId, index) => ({ agentId, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `captured_agent_${index}` }));
+  const configPath = path.join(f.root, "openclaw.json"), originalConfig = JSON.stringify({ agents: { ownership: "explicit", entries: {} }, retained: "unchanged" });
+  await fs.writeFile(configPath, originalConfig, { mode: 0o600 });
+  return { ...f, expectedAnchors, configPath, originalConfig };
+}
+
+it.each([false, true])("refuses SQLite drift under captured PostgreSQL authority before Native effects (%s)", async emptyRoster => {
+  const f = await sqliteDriftFixture();
+  await expect(repairSourceDoctorAgentStores(f.agentIds, { env: f.env, run: f.run,
+    expectedAnchors: emptyRoster ? [] : f.expectedAnchors, assertCurrent: async () => {} })).rejects.toThrow("captured PostgreSQL roster requires PostgreSQL anchors");
+  expect(f.run).not.toHaveBeenCalled();
+  expect(await fs.readFile(f.configPath, "utf8")).toBe(f.originalConfig);
+});
+
+it("cannot acknowledge captured PostgreSQL repair when every local anchor has drifted to SQLite", async () => {
+  const f = await sqliteDriftFixture();
+  const completeOpenClawDoctor = vi.fn(async () => {});
+  const watcher = createOpenClawBootWatcher({ releaseKey: "pinned-native-build", log: () => {},
+    client: { claimOpenClawBoot: async () => ({ action: "doctor", sourceDoctor: { requestId: "repair", agentIds: f.agentIds, postgresAgentStores: f.expectedAnchors } }),
+      assertOpenClawDoctor: async () => {}, completeOpenClawDoctor, completeOpenClawBoot: async () => {} },
+    repairSourceDoctor: (agentIds, options) => repairSourceDoctorAgentStores(agentIds, { ...options, env: f.env, run: f.run }),
+  });
+  await expect(watcher.beforeStart()).rejects.toThrow("captured PostgreSQL roster requires PostgreSQL anchors");
+  expect(f.run).not.toHaveBeenCalled(); expect(completeOpenClawDoctor).not.toHaveBeenCalled();
+  expect(await fs.readFile(f.configPath, "utf8")).toBe(f.originalConfig);
+});
+
+it("preserves true legacy SQLite repair when no PostgreSQL roster was captured", async () => {
+  const f = await sqliteDriftFixture();
+  await repairSourceDoctorAgentStores(f.agentIds, { env: f.env, run: f.run, assertCurrent: async () => {} });
+  expect(f.run.mock.calls[0]![0]).toEqual(["doctor", "--fix", "--non-interactive"]);
+  expect(f.run).toHaveBeenCalledTimes(13);
+  expect(await fs.readFile(f.configPath, "utf8")).toBe(f.originalConfig);
+});
+
+
+async function mattermostSourceFixture() {
+  const f = await postgresFixture();
+  const stale = ["octogee-ceckert-test-coach", "octogee-ceckert-test-proj-hedgeherd-coach", "octogee-ceckert-test-proj-moonlitruins-coach"];
+  const pairs = [[f.agentIds[0]!, "livefixture-coach"], [f.agentIds[1]!, "livefixture-proj-launch"],
+    [stale[0]!, "ceckert-test-coach"], [stale[1]!, "ceckert-test-proj-hedgeherd"], [stale[2]!, "ceckert-test-proj-moonlitruins"]];
+  const config = { agents: { ownership: "explicit", entries: Object.fromEntries([...f.agentIds, ...stale].map(id => [id, { workspace: id }])) },
+    channels: { mattermost: { enabled: true, defaultAccount: "ceckert-test-coach", streaming: { mode: "block" },
+      accounts: Object.fromEntries(pairs.map(([, accountId]) => [accountId!, { enabled: true, botToken: { source: "file", provider: "octogee-mattermost", id: "/" + accountId }, baseUrl: "retained-url" }])) } },
+    bindings: pairs.map(([agentId, accountId]) => ({ agentId, match: { channel: "mattermost", accountId } })) };
+  const configPath = path.join(f.root, "openclaw.json"); await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  return { ...f, stale, pairs, config, configPath };
+}
+
+it("disables stale customer and project Mattermost accounts while preserving authoritative channels and selectors", async () => {
+  const f = await mattermostSourceFixture();
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  const after = JSON.parse(await fs.readFile(f.configPath, "utf8"));
+  for (const [agentId, accountId] of f.pairs) {
+    const before = f.config.channels.mattermost.accounts[accountId!]!;
+    expect(after.channels.mattermost.accounts[accountId!]).toEqual(f.agentIds.includes(agentId!) ? before : { ...before, enabled: false });
+  }
+  expect(after.channels.mattermost.defaultAccount).toBe("ceckert-test-coach");
+  expect(after.channels.mattermost.streaming).toEqual(f.config.channels.mattermost.streaming);
+  expect(after.bindings).toEqual(f.config.bindings.slice(0, 2));
+  expect(f.metadata.get("agent_2")!.version).toBe(31);
+});
+
+it.each(["conflicting-binding", "multiple-owners", "unknown-enabled-account", "implicit-default"])("refuses ambiguous Mattermost %s before Doctor or source config mutation", async change => {
+  const f = await mattermostSourceFixture(), mattermost: any = f.config.channels.mattermost;
+  if (change === "conflicting-binding") f.config.bindings[0]!.agentId = f.stale[0]!;
+  if (change === "multiple-owners") f.config.bindings.push({ agentId: f.stale[0]!, match: { channel: "mattermost", accountId: "livefixture-coach" } });
+  if (change === "unknown-enabled-account") mattermost.accounts.unowned = { enabled: true, botToken: "unknown-owner" };
+  if (change === "implicit-default") { mattermost.baseUrl = "retained-url"; mattermost.botToken = "unowned-default"; }
+  const original = JSON.stringify(f.config); await fs.writeFile(f.configPath, original);
+  await expect(repairSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("Mattermost account ownership");
+  expect(f.run).not.toHaveBeenCalled(); expect(f.query).not.toHaveBeenCalled();
+  expect(await fs.readFile(f.configPath, "utf8")).toBe(original);
+});
+
+it("preserves disabled unowned Mattermost accounts without enabling them", async () => {
+  const f = await mattermostSourceFixture();
+  const accounts: any = f.config.channels.mattermost.accounts;
+  accounts.default = { enabled: false, botToken: "retained-disabled-default" };
+  await fs.writeFile(f.configPath, JSON.stringify(f.config));
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  const after = JSON.parse(await fs.readFile(f.configPath, "utf8"));
+  expect(after.channels.mattermost.accounts.default).toEqual(accounts.default);
+});
+
+
+it("preserves an enabled shared default only when explicitly owned by the retained reserved service", async () => {
+  const f = await mattermostSourceFixture(), service = { agentId: "octogee-unmatched-route", storeId: "00000000-0000-4000-8000-000000000099", schema: "service_owned" };
+  const file = path.join(f.root, "agents", service.agentId, "agent/openclaw-agent.sqlite"); await fs.mkdir(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file); db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
+  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(service.storeId, service.schema); db.close();
+  f.metadata.set(service.schema, { store_id: service.storeId, version: 31, role: "agent", agent_id: service.agentId, schema_version: 31, history: ["service history"] });
+  f.config.agents.entries[service.agentId] = { workspace: "service" };
+  const mattermost: any = f.config.channels.mattermost;
+  mattermost.accounts.default = { enabled: true, botToken: "retained-shared-default" }; mattermost.defaultAccount = "default";
+  f.config.bindings.push({ agentId: service.agentId, match: { channel: "mattermost", accountId: "default" } });
+  f.config.bindings.push({ agentId: service.agentId, match: { channel: "mattermost", accountId: "*" } });
+  const original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] === "database") return original(args, options);
+    const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+    if (config.agents.entries["octogee-source-doctor-bootstrap"]) return { code: 0, stdout: "" };
+    for (const id of [...f.agentIds, service.agentId]) { const row = [...f.metadata.values()].find(row => row.agent_id === id)!; row.version = 33; row.schema_version = 33; }
+    return { code: 0, stdout: "" };
+  });
+  await fs.writeFile(f.configPath, JSON.stringify(f.config));
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  const after = JSON.parse(await fs.readFile(f.configPath, "utf8"));
+  expect(after.channels.mattermost.accounts.default).toEqual(mattermost.accounts.default);
+  expect(after.channels.mattermost.defaultAccount).toBe("default");
+  expect(after.bindings).toContainEqual(f.config.bindings.at(-1));
+  expect(after.channels.mattermost.accounts["ceckert-test-coach"].enabled).toBe(false);
+});
+
+it("does not reactivate accounts belonging to retained but unconfigured project history", async () => {
+  const f = await mattermostSourceFixture(); delete f.config.agents.entries[f.agentIds[1]!];
+  await fs.writeFile(f.configPath, JSON.stringify(f.config));
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  const after = JSON.parse(await fs.readFile(f.configPath, "utf8"));
+  expect(after.channels.mattermost.accounts["livefixture-proj-launch"].enabled).toBe(false);
+  expect(after.bindings).toEqual([f.config.bindings[0]]);
+});
+
+it("refuses an unowned implicit default supplied by the source environment before Doctor", async () => {
+  const f = await mattermostSourceFixture();
+  const config: any = f.config; config.channels.mattermost.baseUrl = "retained-url";
+  await fs.writeFile(f.configPath, JSON.stringify(config));
+  await expect(repairSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, MATTERMOST_BOT_TOKEN: "unowned-default" } })).rejects.toThrow("Mattermost account ownership");
+  expect(f.run).not.toHaveBeenCalled(); expect(f.query).not.toHaveBeenCalled();
+});
+
+
+it("accepts actual Shared account defaults, duplicate peer routes, and the reserved wildcard without claiming foreign accounts", async () => {
+  const f = await mattermostSourceFixture(), service = { agentId: "octogee-unmatched-route", storeId: "00000000-0000-4000-8000-000000000099", schema: "service_owned" };
+  const file = path.join(f.root, "agents", service.agentId, "agent/openclaw-agent.sqlite"); await fs.mkdir(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file); db.exec("CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)");
+  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(service.storeId, service.schema); db.close();
+  f.metadata.set(service.schema, { store_id: service.storeId, version: 31, role: "agent", agent_id: service.agentId, schema_version: 31, history: ["service history"] });
+  f.config.agents.entries[service.agentId] = { workspace: "service" }; delete f.config.agents.entries[f.agentIds[1]!];
+  const mattermost: any = f.config.channels.mattermost; delete mattermost.defaultAccount; delete mattermost.accounts["livefixture-proj-launch"];
+  for (const account of Object.values(mattermost.accounts) as any[]) delete account.enabled;
+  f.config.bindings = f.config.bindings.filter(binding => binding.agentId !== f.agentIds[1]);
+  const peerRoutes = f.config.bindings.map(binding => ({ ...binding, match: { ...binding.match, peer: { kind: "group", id: "synthetic-channel" } } }));
+  f.config.bindings.push(...peerRoutes, { agentId: service.agentId, match: { channel: "mattermost", accountId: "*" } });
+  const original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] === "database") return original(args, options);
+    const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+    if (config.agents.entries["octogee-source-doctor-bootstrap"]) return { code: 0, stdout: "" };
+    for (const id of [...f.agentIds, service.agentId]) { const row = [...f.metadata.values()].find(row => row.agent_id === id)!; row.version = 33; row.schema_version = 33; }
+    return { code: 0, stdout: "" };
+  });
+  await fs.writeFile(f.configPath, JSON.stringify(f.config));
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  const after = JSON.parse(await fs.readFile(f.configPath, "utf8"));
+  expect(after.channels.mattermost.accounts["livefixture-coach"]).toEqual(mattermost.accounts["livefixture-coach"]);
+  for (const id of ["ceckert-test-coach", "ceckert-test-proj-hedgeherd", "ceckert-test-proj-moonlitruins"]) expect(after.channels.mattermost.accounts[id]).toEqual({ ...mattermost.accounts[id], enabled: false });
+  expect(after.bindings).toEqual(f.config.bindings.filter(binding => [f.agentIds[0], service.agentId].includes(binding.agentId)));
+  expect(after.channels.mattermost.defaultAccount).toBeUndefined();
 });

@@ -240,7 +240,7 @@ export type FleetBrokerOpenClawBootAction = "start" | "doctor" | "wait";
 
 export interface FleetBrokerOpenClawBootClaim {
   action: FleetBrokerOpenClawBootAction;
-  sourceDoctor?: { requestId: string; agentIds: string[] };
+  sourceDoctor?: { requestId: string; agentIds: string[]; postgresAgentStores?: Array<{ agentId: string; storeId: string; schema: string }> };
 }
 
 export interface FleetBrokerPreStopFlushStep {

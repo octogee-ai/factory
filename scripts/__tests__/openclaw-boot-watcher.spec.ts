@@ -204,6 +204,29 @@ describe("operator-requested source Doctor", () => {
     const verifySourceDoctor = vi.fn(async () => { order.push("preflight"); });
     return { client, run, verifySourceDoctor, order };
   }
+  it("uses the exact PostgreSQL owner roster and rechecks broker authority instead of running unscoped Doctor", async () => {
+    const f = fixture();
+    const postgresAgentStores = [{ agentId: "octogee-alice-coach", storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_agent" }];
+    f.client.claimOpenClawBoot.mockResolvedValue({ action: "doctor", sourceDoctor: { ...sourceDoctor, postgresAgentStores } });
+    const assertOpenClawDoctor = vi.fn(async () => {});
+    const repairSourceDoctor = vi.fn(async (_ids, options) => { await options.assertCurrent(); });
+    await createOpenClawBootWatcher({ ...f, client: { ...f.client, assertOpenClawDoctor }, repairSourceDoctor, releaseKey: "qualified", log: () => {} }).beforeStart();
+    expect(repairSourceDoctor).toHaveBeenCalledWith(sourceDoctor.agentIds, { expectedAnchors: postgresAgentStores, assertCurrent: expect.any(Function) });
+    expect(assertOpenClawDoctor).toHaveBeenCalledWith({ releaseKey: "qualified", requestId: sourceDoctor.requestId });
+    expect(f.run).not.toHaveBeenCalled();
+    expect(f.verifySourceDoctor).not.toHaveBeenCalled();
+    expect(f.client.completeOpenClawDoctor).toHaveBeenCalledOnce();
+  });
+  it("keeps PostgreSQL startup fenced after authority loss during maintenance", async () => {
+    const f = fixture();
+    f.client.claimOpenClawBoot.mockResolvedValue({ action: "doctor", sourceDoctor: { ...sourceDoctor,
+      postgresAgentStores: [{ agentId: "octogee-alice-coach", storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_agent" }] } });
+    const repairSourceDoctor = vi.fn(async (_ids, options) => { await options.assertCurrent(); });
+    await expect(createOpenClawBootWatcher({ ...f, repairSourceDoctor, client: { ...f.client,
+      assertOpenClawDoctor: vi.fn().mockRejectedValue(new Error("custody changed")) }, releaseKey: "qualified", log: () => {} }).beforeStart()).rejects.toThrow("custody changed");
+    expect(f.run).not.toHaveBeenCalled();
+    expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
+  });
   it("acknowledges the requested repair only after canonical Doctor and every native store preflight", async () => {
     const f = fixture();
     await createOpenClawBootWatcher({ ...f, releaseKey: "observed-image-build", log: () => {} }).beforeStart();

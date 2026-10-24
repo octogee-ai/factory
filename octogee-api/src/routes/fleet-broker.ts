@@ -2707,6 +2707,17 @@ function installOpenClawBootRoutes(
     });
   });
 
+  router.post("/openclaw-boot/doctor-current", async (req, res) => {
+    const bound = boundGateway(req, res);
+    if (!bound) return;
+    const request = openClawBootRequest(bound, req.body), requestId = req.body?.requestId;
+    if (!request || typeof requestId !== "string" || !requestId || requestId.includes("/")) { res.status(403).json(FORBIDDEN); return; }
+    await runBrokered(res, async () => {
+      await store.assertDoctor({ gatewayId: bound.gatewayId, ...request, requestId });
+      res.status(204).end();
+    });
+  });
+
   router.post("/openclaw-boot/doctor-complete", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;

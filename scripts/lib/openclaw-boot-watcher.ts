@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { AgentSchemaFit } from "./agent-store-preflight.js";
 
-import { verifySourceDoctorAgentStores } from "./openclaw-source-doctor.js";
+import { repairSourceDoctorAgentStores, verifySourceDoctorAgentStores } from "./openclaw-source-doctor.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 
 export interface OpenClawBootWatcher {
@@ -43,11 +43,12 @@ function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimO
 }
 
 export function createOpenClawBootWatcher(input: {
-  client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor">;
+  client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor"> & Partial<Pick<FleetBrokerClient, "assertOpenClawDoctor">>;
   releaseKey: string;
   log: (message: string) => void;
   run?: RunCommand;
   verifySourceDoctor?: (agentIds: string[]) => Promise<void>;
+  repairSourceDoctor?: typeof repairSourceDoctorAgentStores;
   inspectBuilderStores?: () => Promise<AgentSchemaFit>;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
@@ -94,12 +95,12 @@ export function createOpenClawBootWatcher(input: {
       if (fit === "repair-required") input.log("[openclaw-boot] configured Builder stores require canonical Doctor before startup");
       else if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
       else input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
-      await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
+      await runClaimedDoctor(input, claim, run);
       if (input.inspectBuilderStores && await input.inspectBuilderStores() !== "exact") {
         throw new Error("configured Builder stores remain incompatible after canonical Doctor");
       }
       if (claim.sourceDoctor) {
-        await (input.verifySourceDoctor ?? verifySourceDoctorAgentStores)(claim.sourceDoctor.agentIds);
+        if (!claim.sourceDoctor.postgresAgentStores) await (input.verifySourceDoctor ?? verifySourceDoctorAgentStores)(claim.sourceDoctor.agentIds);
         await input.client.completeOpenClawDoctor({ releaseKey: input.releaseKey, requestId: claim.sourceDoctor.requestId,
           verifiedAgentIds: claim.sourceDoctor.agentIds });
       }
@@ -113,4 +114,18 @@ export function createOpenClawBootWatcher(input: {
       }
     },
   };
+}
+
+async function runClaimedDoctor(input: Parameters<typeof createOpenClawBootWatcher>[0],
+  claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>, run: RunCommand): Promise<void> {
+  if (!claim.sourceDoctor?.postgresAgentStores) {
+    await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
+    return;
+  }
+  const request = claim.sourceDoctor, assertDoctor = input.client.assertOpenClawDoctor;
+  if (!assertDoctor) throw new Error("PostgreSQL source Doctor authority checks are unavailable");
+  await (input.repairSourceDoctor ?? repairSourceDoctorAgentStores)(request.agentIds, {
+    expectedAnchors: request.postgresAgentStores,
+    assertCurrent: () => assertDoctor({ releaseKey: input.releaseKey, requestId: request.requestId }),
+  });
 }
