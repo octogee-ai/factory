@@ -10,6 +10,7 @@ export interface SourceRecoveryExport { operationId: string; input: DocumentData
 export interface SourceRecoveryAgentStore { uid: string; slug: string; assignmentEpoch: number; agentId: string; storeId: string; schema: string }
 export interface SharedSourceRecoveryAuthority { postgresAgentStores?: SourceRecoveryAgentStore[]; root: DocumentData; assignments: SourceRecoveryAssignment[]; failedExports: SourceRecoveryExport[]; managementRecovery?: ManagementSourceRecovery }
 export class SharedSourceRecoveryConflict extends Error {}
+const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
 const conflict = (message: string): never => { throw new SharedSourceRecoveryConflict(message); };
 
 function rootIdentity(root: DocumentData): DocumentData {
@@ -122,7 +123,8 @@ export async function readPostgresSourceAgentStores(db: Firestore, tx: Transacti
       const data = project.data();
       return projectAgentConfigured(data.agent) && data.commercialLifecycle?.status !== "archived";
     }).map(project => projectAgentId(identity.slug, project.id))];
-    const owned = records.docs.filter(record => record.id !== "_gateway-state").map(record => {
+    const owned = records.docs.filter(record => record.id !== "_gateway-state" &&
+      !(record.id === UNMATCHED_ROUTE_AGENT_ID && record.data().agentId === UNMATCHED_ROUTE_AGENT_ID)).map(record => {
       const row = record.data();
       if (row.agentId !== record.id || !agentIdBelongsToSlug(record.id, identity.slug) || row.gatewayId !== identity.assignment.gatewayId ||
           row.assignmentEpoch !== identity.assignmentEpoch || typeof row.storeId !== "string" ||

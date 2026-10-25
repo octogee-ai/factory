@@ -103,6 +103,46 @@ it.each(["identity", "database"] as const)("captures the fully qualified Postgre
     storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" }]);
   expect(f.rows).toEqual(before);
 });
+it("captures tenant stores from a mixed registry while retaining the old Builder's allocation anchors", async () => {
+  const f = authorityFixture("database");
+  const projectId = "octogee-livefixture-proj-launch-coach";
+  f.rows["workspaces/livefixture/projects/launch"] = { agent: { enabled: true } };
+  f.rows["users/owner/agentStores/" + projectId] = { agentId: projectId, gatewayId: "shared-old", assignmentEpoch: 7,
+    storeId: "00000000-0000-4000-8000-000000000002", schema: "agent_project" };
+  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", gatewayId: "retained-builder", generation: 114,
+    storeId: "00000000-0000-4000-8000-000000000003", schema: "agent_builder_default", recordedAt: 1 };
+  f.rows["users/owner/agentStores/_gateway-state"] = { kind: "gateway-state", gatewayId: "retained-builder", generation: 114,
+    storeId: "00000000-0000-4000-8000-000000000004", schema: "state_builder", recordedAt: 1 };
+  const before = structuredClone(f.rows);
+  const captured = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
+  expect(captured.postgresAgentStores).toEqual([
+    { uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId: identity.agentId, storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" },
+    { uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId: projectId, storeId: "00000000-0000-4000-8000-000000000002", schema: "agent_project" },
+  ]);
+  expect(f.rows).toEqual(before);
+});
+it.each(["missing-agent-id", "foreign-agent-id", "tenant-agent-id", "similar-service-id"])("refuses an unrecognized allocation record with %s without changing it", async changed => {
+  const f = authorityFixture("database"), id = changed === "similar-service-id" ? "octogee-unmatched-route-extra" : "octogee-unmatched-route";
+  f.rows["users/owner/agentStores/" + id] = { agentId: changed === "missing-agent-id" ? undefined : changed === "foreign-agent-id" ? "octogee-foreign-coach" : changed === "tenant-agent-id" ? identity.agentId : id,
+    gatewayId: "retained-builder", generation: 114, storeId: "00000000-0000-4000-8000-000000000003", schema: "agent_builder_default" };
+  const before = structuredClone(f.rows);
+  await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old")).rejects.toThrow("source recovery PostgreSQL anchor custody changed");
+  expect(f.rows).toEqual(before);
+});
+it.each(["foreign-customer", "gateway", "epoch", "agent-id", "store-id", "schema"])("retains current tenant custody validation with allocation records present: %s", async changed => {
+  const f = authorityFixture("database");
+  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", gatewayId: "retained-builder", generation: 114 };
+  const anchor = f.rows["users/owner/agentStores/" + identity.agentId];
+  if (changed === "foreign-customer") f.rows["users/owner/agentStores/octogee-foreign-coach"] = { ...anchor, agentId: "octogee-foreign-coach" };
+  if (changed === "gateway") anchor.gatewayId = "foreign-builder";
+  if (changed === "epoch") anchor.assignmentEpoch++;
+  if (changed === "agent-id") anchor.agentId = "octogee-foreign-coach";
+  if (changed === "store-id") anchor.storeId = "malformed";
+  if (changed === "schema") anchor.schema = "unsafe;schema";
+  const before = structuredClone(f.rows);
+  await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old")).rejects.toThrow("source recovery PostgreSQL anchor custody changed");
+  expect(f.rows).toEqual(before);
+});
 it.each(["pending", "running"])("refuses PostgreSQL recovery while a %s source transfer task retains custody", async status => {
   const f = authorityFixture();
   f.rows["glmMigrationTransferTasks/task"] = { status, sourceGatewayId: "shared-old", targetGatewayId: "other" };
