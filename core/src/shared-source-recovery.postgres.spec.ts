@@ -3,9 +3,9 @@ import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { assertSharedSourceRecoveryPredecessor, postgresImportMaintenanceFailureMatches, readPostgresSourceAgentStores, readSharedSourceRecoveryAuthority, type SourceRecoveryAssignment } from "./shared-source-recovery.js";
 const identity: SourceRecoveryAssignment = { uid: "owner", slug: "livefixture", agentId: "octogee-livefixture-coach", assignmentEpoch: 7,
   assignment: { uid: "owner", slug: "livefixture", gatewayId: "shared-old", state: "serving", epoch: 7 } };
-function fixture() {
+function fixture(migration: "identity" | "database" = "identity") {
   const error = "/finish-rsync-import/shared-new: 500 " + JSON.stringify({ error: "import failed", message:
-    "[import:livefixture] agents.create failed for octogee-livefixture-coach (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)" });
+    `[import:livefixture] agents.create failed for octogee-livefixture-coach (AgentDatabaseMaintenanceRequiredError: Agent ${migration} migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)` });
   const row = { kind: "migrate-customer", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", attempts: 1,
     startedAt: 100, completedAt: 200, rolledBack: true, error,
     input: { uid: "owner", builderSlug: "livefixture", fromGatewayId: "shared-old", toGatewayId: "shared-new", source: "continuous-placement-policy" },
@@ -14,8 +14,20 @@ function fixture() {
       { name: "final-sync-state", status: "failed", error }, ...["scheduler-abort", "unmount-target", "scheduler-resume", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
   return { ...row, attemptHistory: [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }] };
 }
-it("accepts the exact fully rolled-back automatic placement maintenance failure", () => {
-  expect(postgresImportMaintenanceFailureMatches(fixture(), "placement", identity, "shared-old")).toBe(true);
+it.each(["identity", "database"] as const)("accepts the exact fully rolled-back automatic placement %s maintenance failure", migration => {
+  expect(postgresImportMaintenanceFailureMatches(fixture(migration), "placement", identity, "shared-old")).toBe(true);
+});
+it.each(["foreign-agent", "wrong-class", "wrong-message", "trailing-text"])("refuses a current database maintenance receipt with %s", changed => {
+  const row = fixture("database");
+  const failure = JSON.parse(row.error.slice(row.error.indexOf("{")));
+  if (changed === "foreign-agent") failure.message = failure.message.replace("octogee-livefixture-coach", "octogee-foreign-coach");
+  if (changed === "wrong-class") failure.message = failure.message.replace("AgentDatabaseMaintenanceRequiredError", "OtherError");
+  if (changed === "wrong-message") failure.message = failure.message.replace("Agent database migration requires", "Agent database migration needs");
+  if (changed === "trailing-text") failure.message += " ignored";
+  row.error = "/finish-rsync-import/shared-new: 500 " + JSON.stringify(failure);
+  row.steps = row.steps.map(step => step.name === "final-sync-state" ? { ...step, error: row.error } : step);
+  row.attemptHistory[0] = { ...row.attemptHistory[0], error: row.error, steps: structuredClone(row.steps) };
+  expect(postgresImportMaintenanceFailureMatches(row, "placement", identity, "shared-old")).toBe(false);
 });
 it.each(["cutover", "verify", "uid", "source", "target", "foreign-agent", "different-error", "rollback", "abort", "unmount", "resume", "ingress", "claim", "attempt", "duplicate", "restore", "transfer", "v2", "cancelled", "history", "null-body"])("refuses PostgreSQL admission with %s", change => {
   const row: any = fixture();
@@ -65,14 +77,14 @@ it.each(["missing-project", "foreign-owner", "epoch", "agent", "store", "schema"
 });
 
 
-function authorityFixture() {
+function authorityFixture(migration: "identity" | "database" = "identity") {
   const anchor = { agentId: identity.agentId, gatewayId: "shared-old", assignmentEpoch: 7, storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" };
   const rows: Record<string, any> = {
     "gateways/shared-old": { gatewayId: "shared-old", gatewayClass: "shared", ownerUid: null, builderSlug: null, desiredStatus: "draining", liveRelease: 1, desiredRelease: 1, latestRelease: 1 },
     "gateways/shared-old/assignments/owner": identity.assignment,
     "users/owner": { username: "livefixture", provisioning: { openclaw: { gatewayId: "shared-old", status: "complete" } } },
     ["users/owner/agentStores/" + identity.agentId]: anchor,
-    "glmOperations/placement": fixture(),
+    "glmOperations/placement": fixture(migration),
   };
   const reference = (path: string, filters: any[] = []): any => ({ path, filters, doc: (id: string) => reference(`${path}/${id}`),
     collection: (name: string) => reference(`${path}/${name}`), where: (...filter: any[]) => reference(path, [...filters, filter]) });
@@ -84,8 +96,8 @@ function authorityFixture() {
   return { rows, db, tx };
 }
 
-it("captures the fully qualified PostgreSQL source authority without changing historical failed operations", async () => {
-  const f = authorityFixture(), before = structuredClone(f.rows);
+it.each(["identity", "database"] as const)("captures the fully qualified PostgreSQL source authority without changing the %s failed operation", async migration => {
+  const f = authorityFixture(migration), before = structuredClone(f.rows);
   const captured = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
   expect(captured.postgresAgentStores).toEqual([{ uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId: identity.agentId,
     storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" }]);

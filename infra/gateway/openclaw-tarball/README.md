@@ -149,7 +149,93 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 25 frozen-main qualification
+## Current overlay: October 25 PostgreSQL recovery recut
+
+This recut adds the eight-file confirmed PostgreSQL Gateway-owner recovery repair
+to #4782's complete overlay. The selected upstream remains frozen at
+`db38cc1066957e278d529d531160bb2773163682`; the source is
+[`03a98826cae17ab1169508ae9e55cda58b5296a6`](https://github.com/ceckert/openclaw/commit/03a98826cae17ab1169508ae9e55cda58b5296a6),
+published on `fix/global-pg-owner-recovery-fcc-20261025`. Its runtime repair commit,
+`8ac7555572e6a60eaf820b76f5eb848ee37dcb40`, directly follows
+`fcc5ff4e210b5f58122f2646738c86aa6742a294`; the final follow-up only regenerates
+the database worker inventory. All #4782 dependencies, Mattermost
+behavior and other retained patches remain intact. Protocol 4 and canonical
+GLOBAL32/AGENT34 are unchanged. This Octogee change starts from merged #4782,
+`2b1ffca558cf3053408fdb60c9e630b201b0fe2c`.
+
+After a stopped Gateway leaves a PostgreSQL owner lease in another PID namespace,
+ordinary admission correctly refuses to infer death from heartbeat age. The
+existing `gateway recover-lock` command previously refused PostgreSQL state,
+leaving the operator without its advertised recovery path. The repair extends
+that existing inspect/confirm command without adding flags, schema changes,
+grants, dependencies or automatic takeover. Confirmation binds the physical
+anchor, selected connection, namespace, store UUID, exact current schema and full
+lease preimage. It removes only the confirmed owner lease under native custody,
+advisory and row locks; unknown versions refuse before local cleanup. An operator
+must independently prove the old process stopped before confirming. A successful
+operator recovery does not turn a failed automatic rollback into a passing test.
+
+The repair is submitted as [OpenClaw #183623](https://github.com/openclaw/openclaw/pull/183623).
+Its exact upstream-main live Gateway control reproduces the SQLite-only refusal;
+the repaired Gateway preserves original UUIDs, namespace OIDs, six history tables
+and unrelated leases through public confirmation, normal reopening and graceful
+shutdown. Upstream CI run 40199078665 passes. The downstream repair source passes
+21 real PostgreSQL and 51 SQLite/owner cases, scoped types, strict lint, formatting
+and the clean full package build. The final generated-document head also passes
+the full package build, worker-inventory check and channel-metadata check.
+Remove this overlay repair when the selected upstream includes equivalent
+confirmed PostgreSQL recovery and the owning controls pass.
+
+The installed Linux ARM64 package passes the public inspect/confirm operation,
+first offline `agents detach`, normal history reopening and graceful Gateway
+shutdown. Original store UUIDs, namespace OIDs, metadata, six observed history
+tables and unrelated leases remain exact. Both amd64 and arm64 full-plugin
+installer images pass source/package verification, all 874 Mattermost files,
+both patched 15-file npm closures and actual installed inventories. OSV 2.5.1
+reports zero findings for each architecture's 763 physical roots / 571 unique
+name-version pairs under the unchanged policy; existing ignores are unused.
+
+Retained GLOBAL31/AGENT33 data requires the existing stopped-writer Doctor
+workflow to reach GLOBAL32/AGENT34. Online agent admission correctly refuses
+this migration. A separate installed-package proof stops the actual writer,
+runs one public Doctor, reopens both original histories, and verifies exact
+UUIDs, namespace OIDs and all six observed raw history kinds before shutdown.
+This proves canonical maintenance, not automatic online upgrade. Operators must
+use the existing guarded maintenance/recovery owner before resuming an older
+store; installing a new image alone does not establish agent readiness.
+
+Octogee's startup adapter now waits for normal owner release and performs no
+SQL lease deletion. A stale heartbeat or another pod name cannot authorize
+takeover. Separately, the broker derives the current source migration context
+when resuming an assigned, quiescing Barn after target rollback. It retains
+the current claim, lease, epoch, identity and custody checks; the existing source
+runtime still requires every original local anchor before resuming.
+
+The canonical PG16 catalog is regenerated from this exact source; its five
+routines, five triggers and 290 expressions are unchanged. Core builds and all
+71 focused artifact/island contracts pass. Hosted islands are regenerated from
+the same source with no changed UI inputs. API recovery checks pass 204 cases;
+the startup owner and existing boot/surge checks pass 60. The source runtime's
+15 anchor contracts pass; its broader file retains the same 14 failures as the
+unchanged base on this host, with two additional passing source-context cases.
+A fresh complete maintained PostgreSQL run on final Native source passes all
+155 planned targets across eight configurations: 1,333 passed, 43 skipped and
+zero failed in 1,750.96 seconds. The 21 new lock-recovery cases are qualified
+separately. This does not relabel the preceding aggregate or the two failed
+fixture-setup attempts; Native's 25 inherited lint errors also remain separate.
+
+| Package | Write-once object and generation | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-968633b2.tgz#1792949128021128` | 134388873 | `968633b2685d338bed12ebfc3a8d888c497c7740cc048c34d127518ac95dfae2` |
+| mattermost | `openclaw-mattermost-e1623c45.tgz#1792939044881470` | 1255051 | `e1623c45f5b00466cb9fd129c65f72a0042fdb9ea20ba4bdbe89d461d329ac81` |
+
+Complete generation-bound downloads reproduce both hashes. Mattermost reuses
+its unchanged published generation. Complete Gateway configuration/runtime
+qualification is recorded against the final Octogee commit in the PR. Actual
+Builder delivery, live TEST recovery and Barn-to-gateway acceptance require the
+normal main build and deployment; local package proof does not establish them.
+
+## Previous overlay: October 25 frozen-main qualification
 
 This refresh freezes OpenClaw main at
 `db38cc1066957e278d529d531160bb2773163682` for the operator-authorized independent

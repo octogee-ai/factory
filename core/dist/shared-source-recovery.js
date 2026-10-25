@@ -91,9 +91,12 @@ function postgresMaintenanceImportErrorMatches(error, target, slug) {
         return false;
     }
     const messagePrefix = `[import:${slug}] agents.create failed for `;
-    const messageSuffix = " (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)";
     const message = body?.message;
-    return body?.error === "import failed" && typeof message === "string" && message.startsWith(messagePrefix) && message.endsWith(messageSuffix) &&
+    const messageSuffix = [
+        " (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)",
+        " (AgentDatabaseMaintenanceRequiredError: Agent database migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)",
+    ].find(suffix => typeof message === "string" && message.endsWith(suffix));
+    return body?.error === "import failed" && typeof message === "string" && message.startsWith(messagePrefix) && messageSuffix !== undefined &&
         agentIdBelongsToSlug(message.slice(messagePrefix.length, -messageSuffix.length), slug);
 }
 export function postgresImportMaintenanceFailureMatches(row, operationId, identity, gatewayId) {

@@ -44,7 +44,7 @@ import {
   type ComputerHomeStore,
 } from "../lib/computer-home-checkpoint.js";
 import { Router, type Request, type Response } from "express";
-import { FieldValue, type Firestore, type QuerySnapshot } from "firebase-admin/firestore";
+import { FieldValue, type DocumentSnapshot, type Firestore, type QuerySnapshot } from "firebase-admin/firestore";
 
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { parseAgentLook, type AgentLook } from "@octogee/shared/types/agent-look";
@@ -2311,17 +2311,33 @@ async function requireAgentAnchorScope(db: Firestore, req: Request, res: Respons
   if (migrationAnchorRequest(req)) {
     return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);
   }
+  return requireAssignedSharedAgentAnchorScope(db, req, res, bound, { slug: request.slug, gateway });
+}
+
+async function requireAssignedSharedAgentAnchorScope(
+  db: Firestore, req: Request, res: Response, bound: GatewayBinding, { slug, gateway }: { slug: string; gateway: DocumentSnapshot },
+): Promise<SharedAgentAnchorScope | null> {
   const uid = req.body?.uid;
   if (typeof uid !== "string" || !uid || uid.length > 128 || uid.includes("/")) {
     res.status(403).json(FORBIDDEN); return null;
   }
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId);
   const [user, assignment] = await Promise.all([
     db.collection("users").doc(uid).get(),
     gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(uid).get(),
   ]);
-  const scope = sharedAgentAnchorScopeCurrent({ gatewayId: bound.gatewayId, uid, slug: request.slug }, gateway.data(), user.data(), assignment.data());
-  if (!scope || (req.path.endsWith("/report") &&
-      (req.body.assignmentEpoch !== scope.assignmentEpoch || req.body.assignmentState !== scope.assignmentState))) {
+  let scope = sharedAgentAnchorScopeCurrent({ gatewayId: bound.gatewayId, uid, slug }, gateway.data(), user.data(), assignment.data());
+  if (!scope) { res.status(403).json(FORBIDDEN); return null; }
+  const operationId = stringAt(user.data(), "provisioning.openclaw.migration.operationId");
+  if (scope.assignmentState === "quiescing" && operationId) {
+    const migrationScope = await db.runTransaction((txn) => sharedAgentAnchorMigrationScope(db, txn, {
+      gatewayId: bound.gatewayId, slug, migrationId: `mig-${operationId}`,
+    }));
+    if (!migrationScope || migrationScope.uid !== uid) { res.status(403).json(FORBIDDEN); return null; }
+    scope = { ...migrationScope, podName: bound.podName };
+  }
+  if (req.path.endsWith("/report") &&
+      (req.body.assignmentEpoch !== scope.assignmentEpoch || req.body.assignmentState !== scope.assignmentState)) {
     res.status(403).json(FORBIDDEN); return null;
   }
   return { ...scope, podName: bound.podName };

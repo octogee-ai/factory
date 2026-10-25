@@ -4,16 +4,15 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_OWNER_RECOVERY_WAIT_MS,
-  GATEWAY_OWNER_STALE_MS,
+  GATEWAY_OWNER_RELEASE_WAIT_MS,
   prepareGatewayStateStore,
-  recoverDepartedGatewayOwner,
+  waitForGatewayOwnerRelease,
   type StateStoreQuery,
 } from "../lib/gateway-state-store-preparation.js";
 
 const GATEWAY = "jane-s-1a2b3c4d";
 const THIS_POD = `octogee-gateway-${GATEWAY}-7f9c5d8b6-new01`;
-const DEPARTED_POD = `octogee-gateway-${GATEWAY}-7f9c5d8b6-old01`;
+const PREVIOUS_POD = `octogee-gateway-${GATEWAY}-7f9c5d8b6-old01`;
 const anchor = { storeId: "92c817cc-770f-466d-b4a6-4e9b02998363", schema: "octogee_state_92c817cc770f466d" };
 
 function leaseStore(initial: { owner: string; heartbeatAt: number; host: string } | null) {
@@ -30,7 +29,7 @@ function leaseStore(initial: { owner: string; heartbeatAt: number; host: string 
     }
     return [];
   };
-  return { query, deletes, current: () => row, renew: (heartbeatAt: number) => { if (row) row.heartbeatAt = heartbeatAt; } };
+  return { query, deletes, current: () => row, release: () => { row = null; }, renew: (heartbeatAt: number) => { if (row) row.heartbeatAt = heartbeatAt; } };
 }
 
 function clock(start: number) {
@@ -38,53 +37,74 @@ function clock(start: number) {
   return { now: () => time, sleep: async (ms: number) => { time += ms; } };
 }
 
-describe("recoverDepartedGatewayOwner", () => {
+describe("waitForGatewayOwnerRelease", () => {
   it("leaves an absent lease and one held by this pod to OpenClaw", async () => {
     const empty = leaseStore(null);
-    await expect(recoverDepartedGatewayOwner({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: empty.query })).resolves.toBe("absent");
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: empty.query })).resolves.toBe("absent");
     const own = leaseStore({ owner: "o1", heartbeatAt: 0, host: THIS_POD });
-    await expect(recoverDepartedGatewayOwner({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: own.query, ...clock(10 * 60_000) })).resolves.toBe("this-pod");
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: own.query, ...clock(10 * 60_000) })).resolves.toBe("this-pod");
     expect(own.deletes).toEqual([]);
   });
 
   it("refuses to touch a lease held by another gateway's pod", async () => {
     const foreign = leaseStore({ owner: "o1", heartbeatAt: 0, host: "octogee-gateway-other-s-99999999-7f9c5d8b6-x1" });
-    await expect(recoverDepartedGatewayOwner({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: foreign.query, ...clock(10 * 60_000) }))
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: foreign.query, ...clock(10 * 60_000) }))
       .rejects.toThrow(/not a pod of gateway/);
     expect(foreign.deletes).toEqual([]);
     expect(foreign.current()).not.toBeNull();
   });
 
-  it("removes exactly the stale lease of a departed pod of this gateway", async () => {
+  it("preserves an expired foreign lease of this gateway and requires explicit Native recovery", async () => {
     const start = 1_000_000;
-    const departed = leaseStore({ owner: "o1", heartbeatAt: start - GATEWAY_OWNER_STALE_MS - 1, host: DEPARTED_POD });
+    const departed = leaseStore({ owner: "o1", heartbeatAt: start - 10 * 60_000, host: PREVIOUS_POD });
     const logs: string[] = [];
-    await expect(recoverDepartedGatewayOwner({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: (m) => logs.push(m), query: departed.query, ...clock(start) }))
-      .resolves.toBe("recovered");
-    expect(departed.deletes).toEqual([["o1", String(start - GATEWAY_OWNER_STALE_MS - 1)]]);
-    expect(departed.current()).toBeNull();
-    expect(logs.join("\n")).toContain(`departed pod ${DEPARTED_POD}`);
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: (m) => logs.push(m), query: departed.query, ...clock(start) }))
+      .rejects.toThrow(/independent physical-stop proof.*openclaw gateway recover-lock --json.*--confirm/);
+    expect(departed.deletes).toEqual([]);
+    expect(departed.current()).toEqual({ owner: "o1", heartbeatAt: start - 10 * 60_000, host: PREVIOUS_POD });
+    expect(logs.join("\n")).toContain("waiting for the state owner lease");
   });
 
-  it("waits for a recently renewed lease to go stale before removing it", async () => {
+  it("continues only after the previous holder releases its own lease", async () => {
     const start = 1_000_000;
-    const recent = leaseStore({ owner: "o1", heartbeatAt: start - 10_000, host: DEPARTED_POD });
+    const recent = leaseStore({ owner: "o1", heartbeatAt: start - 10_000, host: PREVIOUS_POD });
     const time = clock(start);
-    await expect(recoverDepartedGatewayOwner({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: recent.query, ...time }))
-      .resolves.toBe("recovered");
-    expect(time.now() - (start - 10_000)).toBeGreaterThanOrEqual(GATEWAY_OWNER_STALE_MS);
+    const sleep = async (ms: number) => { await time.sleep(ms); recent.release(); };
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: recent.query, now: time.now, sleep }))
+      .resolves.toBe("absent");
+    expect(recent.deletes).toEqual([]);
     expect(recent.current()).toBeNull();
   });
 
   it("refuses a holder that keeps renewing until the wait ends", async () => {
     const start = 1_000_000;
-    const live = leaseStore({ owner: "o1", heartbeatAt: start, host: DEPARTED_POD });
+    const live = leaseStore({ owner: "o1", heartbeatAt: start, host: PREVIOUS_POD });
     const time = clock(start);
     const sleep = async (ms: number) => { await time.sleep(ms); live.renew(time.now()); };
-    await expect(recoverDepartedGatewayOwner({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: live.query, now: time.now, sleep }))
-      .rejects.toThrow(/refusing to recover a live holder/);
-    expect(time.now() - start).toBeGreaterThanOrEqual(GATEWAY_OWNER_RECOVERY_WAIT_MS);
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: live.query, now: time.now, sleep }))
+      .rejects.toThrow(/independent physical-stop proof/);
+    expect(time.now() - start).toBeGreaterThanOrEqual(GATEWAY_OWNER_RELEASE_WAIT_MS);
     expect(live.current()).not.toBeNull();
+  });
+
+  it("refuses unreadable ownership and propagates database failures", async () => {
+    const unreadable: StateStoreQuery = vi.fn(async () => [{ payload_json: "invalid JSON" }]);
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: unreadable }))
+      .rejects.toThrow(/<unreadable>/);
+    const failure = new Error("database read failed");
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query: async () => { throw failure; } }))
+      .rejects.toBe(failure);
+  });
+
+  it("revalidates foreign gateway ownership after waiting for release", async () => {
+    const previous = leaseStore({ owner: "o1", heartbeatAt: 1, host: PREVIOUS_POD });
+    let moved = false;
+    const query: StateStoreQuery = (selected, sql, values) => moved
+      ? Promise.resolve([{ payload_json: JSON.stringify({ owner: { host: "octogee-gateway-other-s-99999999-7f9c5d8b6-x1" } }) }])
+      : previous.query(selected, sql, values);
+    await expect(waitForGatewayOwnerRelease({ anchor, gatewayId: GATEWAY, hostname: THIS_POD, log: () => {}, query,
+      sleep: async () => { moved = true; } })).rejects.toThrow(/not a pod of gateway/);
+    expect(previous.deletes).toEqual([]);
   });
 });
 
@@ -116,31 +136,31 @@ describe("prepareGatewayStateStore", () => {
   const builderEnv = (root: string) => ({ GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", GATEWAY_ID: GATEWAY, OPENCLAW_STATE_DIR: root });
 
   it("does nothing outside a cluster Builder or for SQLite state", async () => {
-    const recover = vi.fn();
+    const waitForOwner = vi.fn();
     const run = vi.fn();
     const anchored = stateRoot("anchor", false);
-    await prepareGatewayStateStore({ log: () => {}, env: { ...builderEnv(anchored), GATEWAY_RUNTIME_KIND: "gce-vm" }, recover, run });
-    await prepareGatewayStateStore({ log: () => {}, env: { ...builderEnv(anchored), GATEWAY_CLASS: "shared" }, recover, run });
-    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("sqlite", false)), recover, run });
-    expect(recover).not.toHaveBeenCalled();
+    await prepareGatewayStateStore({ log: () => {}, env: { ...builderEnv(anchored), GATEWAY_RUNTIME_KIND: "gce-vm" }, waitForOwner, run });
+    await prepareGatewayStateStore({ log: () => {}, env: { ...builderEnv(anchored), GATEWAY_CLASS: "shared" }, waitForOwner, run });
+    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("sqlite", false)), waitForOwner, run });
+    expect(waitForOwner).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("recovers the owner lease and keeps existing local credentials", async () => {
-    const recover = vi.fn(async () => "recovered" as const);
+  it("keeps existing local credentials after the previous owner releases", async () => {
+    const waitForOwner = vi.fn(async () => "absent" as const);
     const run = vi.fn();
-    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", true)), hostname: THIS_POD, recover, run });
-    expect(recover).toHaveBeenCalledWith(expect.objectContaining({ anchor, gatewayId: GATEWAY, hostname: THIS_POD }));
+    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", true)), hostname: THIS_POD, waitForOwner, run });
+    expect(waitForOwner).toHaveBeenCalledWith(expect.objectContaining({ anchor, gatewayId: GATEWAY, hostname: THIS_POD }));
     expect(run).not.toHaveBeenCalled();
   });
 
   it("rebinds fresh client credentials after the owner lease when they are missing", async () => {
     const order: string[] = [];
-    const recover = vi.fn(async () => { order.push("recover"); return "absent" as const; });
+    const waitForOwner = vi.fn(async () => { order.push("release"); return "absent" as const; });
     const run = vi.fn(async () => { order.push("rebind"); return { code: 0, stdout: "" }; });
     const root = stateRoot("anchor", false);
-    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(root), hostname: THIS_POD, recover, run });
-    expect(order).toEqual(["recover", "rebind"]);
+    await prepareGatewayStateStore({ log: () => {}, env: builderEnv(root), hostname: THIS_POD, waitForOwner, run });
+    expect(order).toEqual(["release", "rebind"]);
     expect(run).toHaveBeenCalledWith(
       ["doctor", "--fix", "--yes", "--non-interactive"],
       { env: builderEnv(root) },
@@ -149,7 +169,18 @@ describe("prepareGatewayStateStore", () => {
 
   it("fails the start when the credential rebind fails", async () => {
     const run = vi.fn(async () => ({ code: 1, stdout: "", stderr: "Gateway owner is still live" }));
-    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), hostname: THIS_POD, recover: async () => "absent", run }))
+    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), hostname: THIS_POD, waitForOwner: async () => "absent", run }))
       .rejects.toThrow(/client credential rebind failed \(exit 1\): Gateway owner is still live/);
+  });
+
+  it("does not run Doctor or rebind credentials while a foreign owner remains", async () => {
+    const departed = leaseStore({ owner: "o1", heartbeatAt: 1, host: PREVIOUS_POD });
+    const time = clock(1_000_000), run = vi.fn(async () => ({ code: 0, stdout: "" }));
+    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), hostname: THIS_POD,
+      waitForOwner: input => waitForGatewayOwnerRelease({ ...input, query: departed.query, ...time }), run }))
+      .rejects.toThrow(/independent physical-stop proof/);
+    expect(run).not.toHaveBeenCalled();
+    expect(departed.deletes).toEqual([]);
+    expect(departed.current()).not.toBeNull();
   });
 });

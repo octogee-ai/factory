@@ -462,7 +462,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   });
 
-  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
+  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "quiescing-source-migration", "quiescing-source-migration-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-import-"));
     const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
     const priorState = process.env.OPENCLAW_STATE_DIR;
@@ -475,9 +475,10 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     ];
     const migrating = mode.startsWith("pre-cutover") || mode === "stale-migration";
     const migration = { migrationId: "mig-move", claimStartedAt: 10, sourceGatewayId: "source", sourceEpoch: 0 };
+    const sourceMigration = mode.startsWith("quiescing-source-migration");
     const quiescing = mode.startsWith("quiescing") || migrating;
-    if (mode === "quiescing-resume" || mode === "pre-cutover" || mode === "stale-migration") await landAgentAnchors(dir, anchors);
-    if (mode === "pre-cutover-partial") await landAgentAnchors(dir, [anchors[0]]);
+    if (mode === "quiescing-resume" || mode === "quiescing-source-migration" || mode === "pre-cutover" || mode === "stale-migration") await landAgentAnchors(dir, anchors);
+    if (mode === "pre-cutover-partial" || mode === "quiescing-source-migration-missing") await landAgentAnchors(dir, [anchors[0]]);
     if (mode === "pre-cutover-local-conflict") await landAgentAnchors(dir, [{ ...anchors[0], storeId: "11111111-2222-4333-8444-555555555555", schema: "octogee_agent_1111111122224333" }]);
     const priorLocalCoach = await fs.readFile(path.join(dir, "agents", anchors[0].agentId, "agent", "openclaw-agent.sqlite")).catch(() => undefined);
     const priorLocalProject = await fs.readFile(path.join(dir, "agents", anchors[1].agentId, "agent", "openclaw-agent.sqlite")).catch(() => undefined);
@@ -501,7 +502,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     });
     const read = vi.fn(async () => {
       if (mode === "stale-migration") throw new Error("migration custody changed");
-      return { ...(migrating && mode !== "pre-cutover-no-claim" ? { migration: mode === "pre-cutover-wrong-claim" ? { ...migration, migrationId: "mig-other" } : migration } : {}), anchors: mode === "pre-cutover-missing-record" ? anchors.slice(0, 1) : anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
+      return { ...((migrating || sourceMigration) && mode !== "pre-cutover-no-claim" ? { migration: mode === "pre-cutover-wrong-claim" ? { ...migration, migrationId: "mig-other" } : migration } : {}), anchors: mode === "pre-cutover-missing-record" ? anchors.slice(0, 1) : anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
     let release!: () => void;
     const recorded = new Promise<void>((resolve) => { release = resolve; });
     let reportStarted!: () => void;
@@ -521,7 +522,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     const observed = activation.catch((error) => error);
     try {
       const refusals: Partial<Record<string, string>> = {
-        "quiescing-missing": "existing local", "stale-migration": "custody changed",
+        "quiescing-missing": "existing local", "quiescing-source-migration-missing": "existing local", "stale-migration": "custody changed",
         "pre-cutover-missing-record": "every recorded agent identity", "pre-cutover-local-conflict": "different identity",
         "pre-cutover-wrong-claim": "migration anchor authority", "pre-cutover-no-claim": "migration anchor authority", "pre-cutover-missing-pg": "is missing",
       };
@@ -543,7 +544,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
         expect(rpc.channelsStart).not.toHaveBeenCalled();
         expect(read).toHaveBeenCalledWith({ ...(migrating ? { migrationId: migration.migrationId } : { uid: "uid-tester10" }), slug: "tester10" });
-        expect(report).toHaveBeenCalledWith({ uid: "uid-tester10", slug: "tester10", ...(migrating ? { migration } : {}), assignmentEpoch: 0, assignmentState: quiescing ? "quiescing" : "serving", anchors, configuredAgentIds: anchors.map((anchor) => anchor.agentId) });
+        expect(report).toHaveBeenCalledWith({ uid: "uid-tester10", slug: "tester10", ...(migrating || sourceMigration ? { migration } : {}), assignmentEpoch: 0, assignmentState: quiescing ? "quiescing" : "serving", anchors, configuredAgentIds: anchors.map((anchor) => anchor.agentId) });
         release();
         await activation;
         expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
