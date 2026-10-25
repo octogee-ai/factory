@@ -33,10 +33,10 @@ async function requireManifest(sha, deps) {
 }
 
 export function trackSubmission(submit, activeBuilds) {
-  const pending = Symbol('unconfirmed Cloud Build submission');
+  const pending = Symbol('unconfirmed Build main dispatch');
   activeBuilds.add(pending);
   const id = submit();
-  if (!id) throw new Error('Cloud Build did not return a build ID; writer lock retained');
+  if (!id) throw new Error('Build main dispatch returned no run ID; writer lock retained');
   activeBuilds.add(id);
   activeBuilds.delete(pending);
   return id;

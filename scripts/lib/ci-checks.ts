@@ -151,8 +151,8 @@ function qualityJobs(paths: string[], full: boolean): CheckJob[] {
   return jobs;
 }
 
-export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false): CheckJob[] {
-  const scope = full ? { jobs: [...ALL_JOBS], everything: true } : resolveScope(paths);
+export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false, deleted: ReadonlySet<string> = new Set()): CheckJob[] {
+  const scope = full ? { jobs: [...ALL_JOBS], everything: true } : resolveScope(paths, deleted);
   const result = group === "quality" ? [] : scope.jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob);
   if (group !== "quality" && desktopPackage && !result.some(job => job.name === JOBS.desktopPackage)) result.push(testJob(JOBS.desktopPackage));
   if (group === "tests") return result;

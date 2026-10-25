@@ -18,7 +18,7 @@ it('builds the local toolchain from source before checking the snapshot', async 
   await import('../ci/local.mjs');
   expect(exec).toHaveBeenCalledWith('/docker', [
     'build', '--platform=linux/amd64', '--file=ci/Dockerfile',
-    '--tag=octogee-ci-local:amd64-inputs', '.',
+    '--tag=octogee-ci-local:amd64-inputs', 'ci',
   ], expect.objectContaining({ cwd: '/snapshot' }));
   expect(spawn.mock.calls[0][1]).toContain('octogee-ci-local:amd64-inputs');
   expect(remove).toHaveBeenCalledOnce();

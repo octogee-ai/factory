@@ -427,3 +427,16 @@ describe("serializeGhaOutputs", () => {
     expect(matrixLine).not.toContain("\n");
   });
 });
+
+describe("resolveScope — deleted paths", () => {
+  it("accepts a deleted file whose ownership entry leaves in the same diff", () => {
+    const removed = ".retired-root-file";
+    expect(() => resolveScope([removed])).toThrow("No CI owner");
+    expect(resolveScope([removed], new Set([removed])).jobs).toEqual([]);
+  });
+
+  it("still runs the owner of a deleted file", () => {
+    const removed = "gateway-edge/src/retired.ts";
+    expect(resolveScope([removed], new Set([removed])).jobs).toContain("gateway-edge");
+  });
+});

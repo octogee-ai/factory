@@ -16,7 +16,7 @@ function dependencies() {
     publish: vi.fn(async () => "sha256:" + "e".repeat(64)),
   };
 }
-describe("Cloud Build main authority", () => {
+describe("Build main authority", () => {
   it.each([{ branch: "topic" }, { checkoutSha: "b".repeat(40) }, { clean: false }])("rejects an unauthorized source before touching artifacts: %j", async invalid => {
     const deps = dependencies();
     await expect(mainBuild({ ...options, ...invalid }, deps)).rejects.toThrow();

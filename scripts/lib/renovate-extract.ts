@@ -62,7 +62,7 @@ function referenceKind(manager: string): string {
   if (manager === "dockerfile") return "dockerfile";
   if (manager === "github-actions") return "github-action";
   if (manager === "helmv3") return "helm-chart";
-  if (["helm-values", "kubernetes", "docker-compose", "cloudbuild"].includes(manager)) return "container-image";
+  if (["helm-values", "kubernetes", "docker-compose"].includes(manager)) return "container-image";
   if (manager.startsWith("terraform")) return "terraform-provider";
   return manager;
 }

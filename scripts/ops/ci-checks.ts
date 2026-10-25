@@ -15,10 +15,15 @@ const git = (...argv: string[]) => execFileSync("/usr/bin/git", argv, { cwd: roo
 const head = git("rev-parse", "--verify", `${value("head") ?? "HEAD"}^{commit}`);
 const base = git("rev-parse", "--verify", `${value("base") ?? "origin/main"}^{commit}`);
 const fork = git("merge-base", base, head);
-const paths = args.includes("--all") ? ["package-lock.json", "ci/"] : git("diff", "--name-only", fork, head).split("\n").filter(Boolean);
-if (!value("head")) paths.push(...git("diff", "--name-only", "HEAD").split("\n").filter(Boolean), ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean));
+const changed = (...argv: string[]) => git("diff", "--name-only", ...argv).split("\n").filter(Boolean);
+const paths = args.includes("--all") ? ["package-lock.json", "ci/"] : changed(fork, head);
+const deleted = new Set(args.includes("--all") ? [] : changed("--diff-filter=D", fork, head));
+if (!value("head")) {
+  paths.push(...changed("HEAD"), ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean));
+  for (const path of changed("--diff-filter=D", "HEAD")) deleted.add(path);
+}
 const full = args.includes("--full") || args.includes("--all");
-const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full), value("lane")).filter(job => !value("check") || job.name === value("check"));
+const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full, deleted), value("lane")).filter(job => !value("check") || job.name === value("check"));
 if (value("check") && !jobs.length) throw new Error(`Check ${value("check")} is not in scope`);
 if (args.includes("--plan")) {
   console.log(JSON.stringify(jobs, null, 2));
