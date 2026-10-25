@@ -268,7 +268,7 @@ function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient
     assignmentRoster: vi.fn(async () => [{ uid: "uid-alice", state: "serving", epoch: 0 }]),
     uidForSlug: vi.fn(async () => "uid-tester10"),
     githubTokenForSync: vi.fn(async () => null),
-    userSnapshot: vi.fn(async () => null),
+    userSnapshot: vi.fn(async () => aliceSnapshot()),
     reconcileProjectCoachMembership: vi.fn(async () => undefined),
     setProvisioningStatus: vi.fn(async () => undefined),
     setRepoUrl: vi.fn(async () => undefined),
@@ -1861,7 +1861,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         configGet: vi.fn(async () => configSnapshot({})),
         agentsCreate: rosterRpc().agentsCreate,
       } as unknown as GatewayRpcClient;
-      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+      const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => null) }), rpc, log: vi.fn() });
 
       await expect(adapter.activateImportedCustomer("tester10", {})).rejects.toThrow(
         /owner Mattermost id is unavailable for tester10/,
@@ -2476,7 +2476,7 @@ describe("broker adapter malformed coach identity quarantine", () => {
       configPatchAndWaitForChange: vi.fn(async () => ({ ok: true })),
     });
     const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
+      client: mkClient({ userSnapshot: vi.fn(async () => aliceSnapshot({ mattermostUserId: null, customerMmUserId: null })) }),
       rpc,
       log: vi.fn(),
     });
@@ -3003,6 +3003,9 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
 
 describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
+    gitMocks.cloneProjectRepo.mockReset().mockResolvedValue(true);
+    gitMocks.customerRepositoryHasCanonicalRemote.mockReset().mockReturnValue(true);
+    gitMocks.projectCheckoutMatchesSource.mockReset().mockReturnValue(true);
     vi.stubEnv("GATEWAY_ID", "default");
     vi.stubEnv("POD_UID", "mount-pod");
     mocks.readActivationManifest.mockReset().mockImplementation((dir, slug) => realReadActivationManifest(dir, slug));
@@ -3408,6 +3411,154 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     await expect(adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" }))
       .rejects.toThrow("unrelated account could not connect");
     expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId: "orbit" })]);
+  });
+
+  it.each([
+    { mode: "mount", source: "gitea" },
+    { mode: "configured Builder", source: "gitea" },
+    { mode: "mount", source: "deferred GitHub" },
+    { mode: "configured Builder", source: "deferred GitHub" },
+    { mode: "mount", source: "deferred GitHub", preCutover: true },
+  ])("prepares a newly discovered $source checkout before Native initialization during $mode", async ({ mode, source, preCutover }) => {
+    if (preCutover) stubBuilderClaim("alice");
+    const projectId = "latecheckout";
+    const agentId = `octogee-alice-proj-${projectId}-coach`;
+    const workspace = path.join(testRuntime.dir, "customers/alice/projects", projectId);
+    await fs.rm(workspace, { recursive: true, force: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", await fs.realpath(testRuntime.dir));
+    const initial = aliceSnapshot({ status: "complete", projectAgents: undefined });
+    const latest = aliceSnapshot({
+      status: "complete",
+      projects: [{ projectSlug: projectId, giteaRepoName: source === "gitea" ? "alice-late-checkout" : null,
+        ...(source === "gitea" ? {} : { repoSource: { provider: "github" as const, owner: "qa", repo: "late-checkout" } }), provisioningState: "active" }],
+      projectAgents: [{ projectId, enabled: true, mmUserId: "bot-late", token: "late-pat", activationId: "late-activation", status: "provisioning" }],
+      channels: [{ scope: "project", projectId, kind: "general", channelId: "late-general" }],
+    });
+    gitMocks.projectCheckoutMatchesSource.mockImplementation((_slug, id) => id !== projectId || fsSync.existsSync(path.join(workspace, "README.md")));
+    gitMocks.customerRepositoryHasCanonicalRemote.mockReturnValue(true);
+    gitMocks.cloneProjectRepo.mockImplementation(async (_slug, id) => {
+      expect(id).toBe(projectId);
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(path.join(workspace, "README.md"), "# Repository source\n");
+      return true;
+    });
+    let config: Record<string, any> = { agents: { entries: {} }, channels: { mattermost: { accounts: {} } }, bindings: [] };
+    await fs.mkdir(path.dirname(OPENCLAW_CONFIG), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot(config)),
+      agentsCreate: vi.fn(async ({ name, workspace: nativeWorkspace }) => {
+        if (name === agentId) {
+          if (source === "gitea") expect(await fs.readFile(path.join(nativeWorkspace, "README.md"), "utf8")).toBe("# Repository source\n");
+          else expect(await fs.readFile(path.join(nativeWorkspace, "AGENTS.md"), "utf8")).toContain("checked out on alice's own");
+        }
+        return { ok: true as const, agentId: name, name, workspace: nativeWorkspace };
+      }),
+      channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [{ accountId: `alice-proj-${projectId}`, running: true, connected: true, lastStartAt: 2 }] } })),
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      const patch = args.buildPatch(config) as Record<string, any>;
+      config = { ...config, ...patch, agents: { ...config.agents, ...patch.agents,
+        entries: { ...config.agents.entries, ...patch.agents?.entries } },
+      channels: { mattermost: { accounts: { ...config.channels.mattermost.accounts, ...patch.channels?.mattermost?.accounts } } } };
+      return { mode: "rpc", attempts: 1 };
+    });
+    const client = mkClient({ userSnapshot: vi.fn(async () => latest) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn(), isBuilderGateway: () => preCutover === true, projectCheckoutScope: () => "workspace-and-projects" });
+    if (mode === "mount") await adapter.applyAddCustomerConfigPatch(initial, { _coachPersonalToken: "pat-1" }, preCutover ? { migrationId: "pre-cutover" } : undefined);
+    else await adapter.reconcileConfiguredBuilderProjectAgents!(initial);
+    expect(rpc.agentsCreate).toHaveBeenCalledWith({ name: agentId, workspace });
+    if (source === "deferred GitHub") {
+      expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
+      expect(client.githubTokenForSync).not.toHaveBeenCalled();
+    }
+    expect(client.reportProjectAgentReadiness).toHaveBeenCalledWith("uid-alice", [expect.objectContaining({ projectId })]);
+  });
+
+  it("refuses a missing authoritative customer snapshot before Native registration", async () => {
+    const client = mkClient({ userSnapshot: vi.fn(async () => null) });
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await expect(adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "pat-1" }))
+      .rejects.toThrow("Customer snapshot unavailable for alice");
+    expect(rpc.agentsCreate).not.toHaveBeenCalled();
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+  });
+
+  it("uses an authoritative empty project roster instead of reviving stale input agents", async () => {
+    const initial = aliceSnapshot({ projectAgents: [{ projectId: "retired", enabled: true, mmUserId: "bot-retired", token: "retired-pat", status: "ready" }] });
+    const latest = aliceSnapshot();
+    const client = mkClient({ userSnapshot: vi.fn(async () => latest) });
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
+    await adapter.applyAddCustomerConfigPatch(initial, { _coachPersonalToken: "pat-1" });
+    expect(rpc.agentsCreate).toHaveBeenCalledOnce();
+    expect(rpc.agentsCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "octogee-alice-coach" }));
+    expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
+    expect(client.reportProjectAgentReadiness).not.toHaveBeenCalled();
+  });
+
+  it.each(["mount", "configured Builder"] as const)("refuses an unprepared fresh project before changing Native runtime during %s", async (mode) => {
+    const snapshot = aliceSnapshot({
+      projects: [{ projectSlug: "unavailable", giteaRepoName: "alice-unavailable", provisioningState: "active" }],
+      projectAgents: [{ projectId: "unavailable", enabled: true, mmUserId: "bot-unavailable", token: "project-pat", status: "provisioning" }],
+    });
+    const config = { agents: { entries: { "octogee-alice-coach": { workspace: "/owner/workspace", tools: { allow: ["owner-tool"] }, identity: { name: "Owner coach" } } } } };
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    gitMocks.projectCheckoutMatchesSource.mockReturnValue(false);
+    gitMocks.cloneProjectRepo.mockRejectedValue(new Error("repository unavailable"));
+    const rpc = mkGatewayRpc(rosterRpc(config));
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
+    const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn(), projectCheckoutScope: () => "workspace-and-projects" });
+
+    const update = mode === "mount"
+      ? adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-1" })
+      : adapter.reconcileConfiguredBuilderProjectAgents!(snapshot);
+    await expect(update).rejects.toThrow("Project checkout is not ready for Native agent registration: unavailable");
+
+    expect(JSON.parse(await fs.readFile(OPENCLAW_CONFIG, "utf8"))).toEqual(config);
+    expect(rpc.agentsCreate).not.toHaveBeenCalled();
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(client.reportProjectAgentReadiness).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("distinguishes pending checkout from authoritative project retirement (enabled: %s)", async (enabled) => {
+    const agentId = "octogee-alice-proj-orbit-coach";
+    const project = { workspace: "/owner/project", tools: { allow: ["owner-tool"] }, identity: { name: "Project owner" } };
+    let config: Record<string, any> = { agents: { entries: { [agentId]: project } }, channels: { mattermost: { accounts: { "alice-proj-orbit": { botToken: "owner-token", baseUrl: "https://owner.example" } } } }, bindings: [] };
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
+    const snapshot = aliceSnapshot({ status: "complete", projectAgents: [{ projectId: "orbit", enabled, mmUserId: "bot-orbit", token: "project-pat", status: "ready" }] });
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => configSnapshot(config)),
+      agentsDelete: vi.fn(async ({ agentId: removed }) => {
+        delete config.agents.entries[removed];
+        return { ok: true as const, agentId: removed, removedBindings: 0 };
+      }),
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(async (args) => {
+      config = mergePatch(config, args.buildPatch(config));
+      return { mode: "rpc", attempts: 1 };
+    });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }), rpc, log: vi.fn() });
+
+    const result = await adapter.reconcileConfiguredBuilderProjectAgents!(snapshot, { withoutProjectIds: ["orbit"] });
+
+    expect(result.appliedFingerprint).toBeUndefined();
+    expect(rpc.agentsCreate).not.toHaveBeenCalled();
+    if (!enabled) {
+      expect(rpc.agentsDelete).toHaveBeenCalledWith({ agentId, deleteFiles: false });
+      expect(rpc.channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-proj-orbit" });
+      expect(config.agents.entries).not.toHaveProperty(agentId);
+      expect(config.channels.mattermost.accounts).not.toHaveProperty("alice-proj-orbit");
+      return;
+    }
+    expect(rpc.agentsDelete).not.toHaveBeenCalled();
+    expect(rpc.channelsStop).not.toHaveBeenCalled();
+    expect(config.agents.entries[agentId]).toMatchObject({ workspace: project.workspace, tools: project.tools });
+    expect(config.channels.mattermost.accounts["alice-proj-orbit"]).toMatchObject({ botToken: "owner-token", baseUrl: "https://owner.example" });
   });
 
   it.each([false, true])("reconciles a configured Builder project without changing its owner (already rostered: %s)", async (rostered) => {
@@ -3929,7 +4080,10 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       return { mode: "rpc", attempts: 1, noop: true };
     });
     const rpc = mkGatewayRpc();
-    const client = mkClient();
+    const client = mkClient({ userSnapshot: vi.fn(async () => aliceSnapshot({
+      channels: [{ scope: "workspace", kind: "general", channelId: "workspace-general" }, { scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" }],
+    })) });
     const adapter = buildBrokeredLifecycleAdapter({
       client,
       rpc,
@@ -4882,7 +5036,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://llm-broker:3010/v1");
     const roster = rosterRpc();
     const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
       rpc: mkGatewayRpc({
         ...roster,
         agentsCreate: vi.fn(async (params: { name: string; workspace: string }) => {
@@ -5345,6 +5499,25 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     expect(userSnapshot).toHaveBeenCalledTimes(1); // second read served from the seeded cache
   });
 
+  it.each([
+    { runtimeScope: "workspace-only", apiScope: "workspace-and-projects", allowed: false },
+    { runtimeScope: "workspace-and-projects", apiScope: "workspace-only", allowed: false },
+    { runtimeScope: "workspace-and-projects", apiScope: "workspace-and-projects", allowed: true },
+  ] as const)("enforces runtime $runtimeScope and API $apiScope on first and cached reads", async ({ runtimeScope, apiScope, allowed }) => {
+    const projects = [{ projectSlug: "camp", giteaRepoName: "tester10-camp", provisioningState: "active" }];
+    const projectAgents = [{ projectId: "camp", enabled: true, mmUserId: "mm", token: "pat" }];
+    const userSnapshot = vi.fn(async () => fullSnapshot({ projectCheckoutScope: apiScope, projects, projectAgents }));
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ userSnapshot }), rpc: mkGatewayRpc(), log: vi.fn(), projectCheckoutScope: () => runtimeScope });
+    const first = await adapter.loadUserSnapshot("uid-tester10");
+    const cached = await adapter.loadUserSnapshot("uid-tester10");
+    expect(first).toEqual(cached);
+    expect(first?.projects).toEqual(allowed ? projects : []);
+    expect(first?.projectCheckoutScope).toBe(allowed ? "workspace-and-projects" : "workspace-only");
+    expect(first?.projectAgents).toEqual(projectAgents);
+    expect(userSnapshot).toHaveBeenCalledOnce();
+    expect(gitMocks.cloneProjectRepo).not.toHaveBeenCalled();
+  });
+
   it("projects migration snapshots to workspace-only before lifecycle restore and fingerprinting", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient(),
@@ -5532,7 +5705,7 @@ describe("buildBrokeredLifecycleAdapter — Vegas project agents", () => {
 
   it("partitions bindings, includes active project agents, and nulls stale project accounts", async () => {
     const adapter = buildBrokeredLifecycleAdapter({
-      client: mkClient(),
+      client: mkClient({ userSnapshot: vi.fn(async () => snapshot) }),
       rpc: mkGatewayRpc(),
       log: vi.fn(),
     });

@@ -670,6 +670,7 @@ function configuredBuilderLifecycleAdapter(input: {
   let mountMarked = false;
   const cloneWorkspaceRepo = input.cloneWorkspaceRepo ?? (async () => true);
   const adapter = {
+    listProjectsNeedingClone: vi.fn(async () => []),
     log: () => undefined,
     isBuilderGateway: () => true,
     isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
@@ -809,7 +810,11 @@ describe("configured Builder surge release", () => {
     expect(readDesiredCustomers).toHaveBeenCalledTimes(2);
   });
 
-  it.each([false, true])("reconciles project accounts before Builder secret readiness and holds failures (reconcile fails: %s)", async (reconcileFails) => {
+  it.each([
+    { reconcileFails: false, pending: false },
+    { reconcileFails: true, pending: false },
+    { reconcileFails: false, pending: true },
+  ])("prepares project checkouts before Builder accounts and readiness (reconcile fails: $reconcileFails, pending: $pending)", async ({ reconcileFails, pending: checkoutPending }) => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     try {
@@ -820,7 +825,10 @@ describe("configured Builder surge release", () => {
         applied.set(slug, fingerprint);
       };
       let projectsReconciled = false;
+      adapter.listProjectsNeedingClone = vi.fn(async () => checkoutPending ? [{ projectSlug: "pending", giteaRepoName: "ceckert-test-pending" }] : []);
+      adapter.cloneProjectRepo = vi.fn(async () => false);
       adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => {
+        expect(adapter.listProjectsNeedingClone).toHaveBeenCalledTimes(2);
         events.push("projects");
         if (reconcileFails) throw new Error("project reconciliation failed");
         projectsReconciled = true;
@@ -870,6 +878,7 @@ describe("configured Builder surge release", () => {
       );
       expect(adapter.reconcileConfiguredBuilderProjectAgents).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ uid: "uid-builder", slug: "ceckert-test" }),
+        { withoutProjectIds: checkoutPending ? ["pending"] : [] },
       );
       expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
       const pending = new Map<string, string>();

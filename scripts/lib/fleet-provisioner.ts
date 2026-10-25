@@ -2479,7 +2479,8 @@ async function selfReleaseConfiguredBuilder(input: {
       const uid = await adapter.uidForSlug(slug);
       const snapshot = uid ? await adapter.loadUserSnapshot(uid) : null;
       if (!snapshot) throw new Error(`configured Builder snapshot is unavailable after OpenClaw start: ${slug}`);
-      await adapter.reconcileConfiguredBuilderProjectAgents(snapshot);
+      const checkouts = await cloneMissingProjects(adapter, slug);
+      await adapter.reconcileConfiguredBuilderProjectAgents(snapshot, { withoutProjectIds: checkouts.pending });
     }
     await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
     await surgeReadiness.release({ targetPodUid });

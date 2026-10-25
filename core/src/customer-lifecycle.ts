@@ -1277,7 +1277,11 @@ async function reconcileCommunityMembershipIfSupported(
   }
 }
 
-function githubCheckoutsHydrateHere(adapter: CustomerLifecycleAdapter, slug: string): boolean {
+type ProjectCheckoutAdapter = Pick<CustomerLifecycleAdapter,
+  "listProjectsNeedingClone" | "cloneProjectRepo" | "seedDeferredProjectWorkspace" |
+  "isBuilderGateway" | "isConfiguredBuilderCustomer" | "log">;
+
+function githubCheckoutsHydrateHere(adapter: ProjectCheckoutAdapter, slug: string): boolean {
   if (!adapter.isBuilderGateway || !adapter.isConfiguredBuilderCustomer) return true;
   return adapter.isBuilderGateway() && adapter.isConfiguredBuilderCustomer(slug);
 }
@@ -1288,7 +1292,7 @@ export interface CloneMissingProjectsOptions {
 }
 
 export async function cloneMissingProjects(
-  adapter: CustomerLifecycleAdapter,
+  adapter: ProjectCheckoutAdapter,
   slug: string,
   options: CloneMissingProjectsOptions = {},
 ): Promise<{ steps: AddCustomerStep[]; pending: string[]; deferred: string[] }> {

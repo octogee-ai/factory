@@ -60,7 +60,7 @@ function mkAdapter(projects: FleetBrokerProjectRestore[], log = vi.fn()) {
     userSnapshot: vi.fn(async () => snapshot(projects)),
   } as unknown as FleetBrokerClient;
   return {
-    adapter: buildBrokeredLifecycleAdapter({ client, rpc: {} as GatewayRpcClient, log }),
+    adapter: buildBrokeredLifecycleAdapter({ client, rpc: {} as GatewayRpcClient, log, projectCheckoutScope: () => "workspace-and-projects" }),
     log,
   };
 }

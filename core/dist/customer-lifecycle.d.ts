@@ -316,11 +316,12 @@ export declare function cloneProjectsFromSnapshot(adapter: CustomerLifecycleAdap
     steps: AddCustomerStep[];
     pending: string[];
 }>;
+type ProjectCheckoutAdapter = Pick<CustomerLifecycleAdapter, "listProjectsNeedingClone" | "cloneProjectRepo" | "seedDeferredProjectWorkspace" | "isBuilderGateway" | "isConfiguredBuilderCustomer" | "log">;
 export interface CloneMissingProjectsOptions {
     githubCheckouts?: "hydrate-here" | "defer";
     signal?: AbortSignal;
 }
-export declare function cloneMissingProjects(adapter: CustomerLifecycleAdapter, slug: string, options?: CloneMissingProjectsOptions): Promise<{
+export declare function cloneMissingProjects(adapter: ProjectCheckoutAdapter, slug: string, options?: CloneMissingProjectsOptions): Promise<{
     steps: AddCustomerStep[];
     pending: string[];
     deferred: string[];
@@ -330,3 +331,4 @@ export declare function removeCustomerFromGateway(adapter: CustomerLifecycleAdap
     currentEvictionBatch?: () => Promise<readonly string[]>;
 }): Promise<RemoveCustomerResult>;
 export declare function pubKeysMatch(a: string, b: string): boolean;
+export {};
