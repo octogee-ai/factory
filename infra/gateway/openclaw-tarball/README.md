@@ -44,7 +44,8 @@ canonical recut, not a parallel runtime update path.
    An isolated Doctor comparison must not need to translate default config keys;
    correct their writers during this recut instead. Keep full Doctor off healthy
    boots, without removing bounded failed-boot recovery or driver-artifact checks.
-4. Commit the final source and build with `pnpm build`. Verify
+4. Commit the final source and run the full build. `pnpm build package` adds
+   `clean:dist` before the same full-build steps, removing E2E/QA artifact residue. Verify
    `dist/build-info.json.commit` equals the clean checkout's HEAD. Use the
    repository-pinned package manager and frozen lockfile. `build:docker` is not
    a substitute: the full build creates the files required by `npm pack`.
@@ -62,7 +63,7 @@ pnpm install --frozen-lockfile
 pnpm tsgo:prod
 pnpm check
 pnpm config:channels:check
-pnpm build
+pnpm build package
 git status --short
 cat dist/build-info.json
 ```
@@ -148,7 +149,146 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 24 session-list replacement readiness
+## Current overlay: October 24 latest-main qualification
+
+This refresh freezes latest OpenClaw main at
+`37a9f0520dc56fb7acfb237a7d53d416562f079f`, selected by the operator for
+independent qualification. The clean overlay source is
+`c7884c98373d67610b454967b21985a7a5bb06f8` on
+[`codex/openclaw-refresh-20261024-latest`](https://github.com/ceckert/openclaw/tree/codex/openclaw-refresh-20261024-latest).
+Octogee starts from main
+`37f683b297c2a8e14f510bbeb9b4473e6ecf916f` in a separate worktree. The current-main PostgreSQL shared-credential fix #4780 is included in this
+image base. Other
+checkouts and running services are preserved. Neither an older green commit
+nor a later moving upstream tip substitutes for this source.
+
+The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40161124788)
+passes security-fast and skips 42 jobs, including build, types and tests.
+The latest inspected successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+qualifies `d8612ec864bb4c872616cfda5340c53803655f5f`, with 154 successes and
+nine skips. It does not qualify this selected tip.
+
+### PostgreSQL candidates and overlay reassessment
+
+Three independently frozen Peter Steinberger PRs are included after actual
+PostgreSQL 18 and SQLite controls:
+
+| Contribution | Exact head | Retained behavior |
+| --- | --- | --- |
+| [#183114](https://github.com/openclaw/openclaw/pull/183114) | `f8c2108cd1a9a01dfe93293c698cfaa6c7238ae4` | Explicit nullable ordering for participant, sandbox and transcript readers. |
+| [#183172](https://github.com/openclaw/openclaw/pull/183172) | `d07d02e48b46daf86487be69bf962e6f271bf3e5` | PostgreSQL predecessor recovery uses `greatest`, SQLite uses `max`; settlement reuses its committed postimage. |
+| [#183184](https://github.com/openclaw/openclaw/pull/183184) | `754e4eef2b5e3df64f54dfa2a48afded5077d24e` | Memory RPC/CLI queries omit unused counts while preserving provider, repair and staleness diagnostics. |
+
+Their immutable base/head diffs match the reviewed inputs. The controls reproduce
+all three PostgreSQL NULL-order failures, recovery error 42883, and excess memory
+worker requests before the patches. The combined owner checks pass 50 correctness
+and entry-write/node-turn tests, 22 real-manager RPC/CLI tests and three extension
+tests. PostgreSQL uses a disposable supported PG18 database, with vector, pg_trgm
+and unaccent; no production data is used. Prior-head upstream conformance is not
+claimed as current combined-source proof.
+
+The stopped I/O-pool conversion #182888 is excluded because all three recorded
+conformance shards fail. Doctor optimization #180184 retains unattributed owner
+failures. Optional #183127/#183204/#182360 performance work is not included
+without complete owner acceptance. Open #183228 vector reuse during database
+port remains unresolved; this build does not claim to fix it.
+
+The requested Astra audit covers all eight submitted OpenClaw PRs, fork proposals
+#5–9, unsubmitted overlay families, the active Mattermost server patch and CUA
+contribution status. Native #181198 already supersedes #178970; native receipt
+identity supersedes fork #7. Neither has duplicate production code in this overlay.
+Old Talk fork #5 is not the current integration: channel-consult handoff, narration
+and browser takeover stay removed. The narrow broker transport and desktop
+ownership hooks retain their current consumers. Native's prepared/ready reload
+split and Gateway-owned account restart backoff remain intact.
+
+The audit retains requester/reviewer and execution-time authority, explicit-grant
+precedence and authoritative empty membership revocation, strict-stop joining of
+startup and retained teardown, bounded failed-boot recovery, existing-only
+PostgreSQL restoration, non-destructive detach and outbound custody, checkpoint
+and Memory descriptor ownership. The table below records their native gaps and
+removal conditions. Sharing uses one effective membership row with explicit
+precedence; it does not claim two independently durable grant sets. Initial unknown
+profile refusal remains distinct from disappearance during synchronization.
+Two always-true cron custody filters are removed after their existing validation
+owners; key/expiry/digest guards remain.
+
+Astra's fresh assessment found no likely/high-impact source defect in the three
+PostgreSQL imports and the session-list follow-up. That source assessment is not
+live acceptance, a CLI review, or full upstream CI clearance. No upstream PR is
+opened, closed or merged by this refresh.
+
+The session-list contribution #182783 gains only its two reviewed follow-ups,
+`94c30b477f7ea3d4ca27257f580c408de8844dd6` and
+`3cdd3f7fa592105d3f7327a2d26b4cb4a5b4f4e6`. A real isolated Node26 Gateway
+reproduces the prior disconnected-reader result, “Prepared plugin generation
+retired” instead of `AbortError`. The repair composes connection and caller
+cancellation before projection-owner preparation, without cancelling the shared
+catalog refresh or blocking ordinary enrichment.
+
+### Qualification and known gaps
+
+Node 26.12.1 and pinned pnpm 12.15.0 install the frozen lockfile. The final clean
+source passes the full `pnpm build`, and its build-info commit matches the source
+SHA above. The build reports a nonblocking CSS budget warning: 1558.2 KiB raw
+against 1558.1 KiB. No budget or native lint threshold was raised.
+
+The retained-boundary run passes 296 tests with one skip across 21 files. The
+combined PostgreSQL conformance run records 1210 passes, 42 skips and four
+failures; it is not an aggregate green result. Three failures came from the
+initial PG18 fixture's insufficient lock capacity and a transaction-aborted
+cascade. Both complete affected files pass all 30 tests with CI's 512-lock,
+1 GiB shared-memory settings. The fourth is an unchanged native EXPLAIN-text
+assertion: PG18 prints `rows=11.00` where it expects `rows=11`; the intended index
+is used. That complete six-test file passes on native main CI's pinned PG17.11
+image. The three targets not reached after the first shard stopped pass all 13
+tests on that same PG17 fixture. Every planned target was exercised. Existing
+file-descriptor and deprecation warnings remain visible in the logs.
+
+Aggregate `pnpm check --base 37a9f0520dc56fb7acfb237a7d53d416562f079f --timed`
+remains red. Production, extension, script and test type lanes and all preflight
+guards pass. Its one overlay unused import is removed and the owning type-aware
+lint check passes; 19 errors remain in files byte-identical to the frozen base
+(14 line-count errors, one promise callback and four unbound-method errors).
+All 386 changed files pass native formatting, channel metadata passes, and all
+eight policy guards pass separately. The final cleanup only removes two unused
+test imports; tested runtime source bytes are unchanged. This does not claim
+full native CI, warning-free output, live tenant acceptance or production rollout.
+
+The final real Node26 Gateway regression passes: a disconnected pending list
+cancels with `AbortError`, a surviving reader waits for successor publication,
+and the replacement retains its policy and persisted session identity. A clean
+package-profile full build follows E2E preparation. The first archive was rejected
+by the upstream import-graph checker for QA-only residue; it was not published.
+The final pair is packed sequentially after the clean build.
+
+The canonical routine, trigger and expression catalog is qualified from this
+source on disposable PostgreSQL 16, matching Terraform's deployment major.
+Catalog, ownership-transfer and recovery checks pass 49 tests; the separate
+shared-auth permission case passes under a non-superuser principal. Hosted island
+consumers pass 185 tests and edge browser/activity/membership consumers pass 278;
+both packages' production typechecks pass.
+
+Both actual Linux `openclaw-full-plugin-installer` targets (amd64 and arm64)
+pass native registry refresh and bundled trust, Parallel's nine-file source match,
+Codex's 188-file source match, and three native-hook imports. Each installed image
+and the independent isolated npm prefix match the exact root/Mattermost pair,
+including all 873 Mattermost files and both 15-file patched npm closures. All 15
+stock npm source dependency files are unchanged after packing. Upstream's root
+tarball import-graph/inventory check passes. All 109 artifact/island/policy and 16
+base-image contracts pass. The hosted bundles are regenerated again from the
+final clean full build.
+
+| Package | Write-once object and generation | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-1759d198.tgz#1792907912943933` | 132543559 | `1759d1986225a0825706b82c045371b0202d3161b5fd813a054b39445c31f2a8` |
+| mattermost | `openclaw-mattermost-fc62ae26.tgz#1792907922379936` | 1251497 | `fc62ae26ef07f761ed551cf1542262e80e7b14cbdc27a855f59b967bb9ca5c48` |
+
+Generation-bound downloads reproduce both complete hashes. The complete Gateway
+image digest and final-head qualification are recorded in the refresh PR, avoiding
+a recursive image-input change solely to record its digest here.
+
+## Previous overlay: October 24 session-list replacement readiness
 
 This recut adds the six-file session-list repair to the qualified October 24
 overlay below. Source `cf149eb8ba23177fbf1992a7ff4f3a7dc47b8b94` is published on
@@ -1127,7 +1267,7 @@ a blanket claim that native OpenClaw is missing voice, browser or thread support
 | Non-destructive agent handoff | Native `agents.delete` purges sessions even with `deleteFiles: false`. Retain durable `agents.detach` until the selected upstream supplies its store-preserving drain/recovery contract; contribution: [#178755](https://github.com/openclaw/openclaw/pull/178755). |
 | Channel-wide Mattermost memory | Native default thread sessions do not share agent memory across a room's threads. The operator-selected channel scope keeps one existing native session per channel while independently authorizing reply/archive roots. Keep it until native channel configuration covers this product behavior; do not merge or delete older thread histories. |
 | Requester, reviewer and execution-time authority | A native approval role alone does not bind another member's action to the current tenant/requester/run. The exact upstream control accepted an unauthorized other-UID review; the retained boundary rejects it. Remove when native public contracts carry and enforce the same current authority across tool and Codex execution. |
-| Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing exposes equivalent independent grant sources. |
+| Explicit versus channel-derived session sharing | A channel membership refresh must not erase an explicit owner grant, and an empty authoritative membership must revoke derived access. Retain the narrow integration until native sharing preserves explicit precedence and authoritative derived-member revocation through the same owner. There is one effective membership row, not two independently durable grant sets. |
 | Durable cron handoff | A job list alone cannot represent held/exported/staged/retired custody, permanent retired fences, failed returns, scratch tombstones or host-bound jobs across a gateway move. New custody lives in native retained plugin KV. Remove when native lifecycle APIs cover that complete handoff contract. |
 | Offline legacy cron import | Existing published fork databases contain two ordered journal/fence tables. Opaque operation IDs cannot identify the latest retirement. The approved reader fingerprints lossless SQLite identities at four named raw-SQL sites, imports relative order and snapshots into native KV, and creates no new schema. Retire it only when no retained source or supported restore can require that import. |
 | Maintenance and reload lifetimes | Queued or superseded work must not borrow expired authority or lose committed reload debt. An identical `config.apply` retry blocked the channel reload it awaited during a real Builder import. Reloader-local claimed waiters are excluded only from that reload’s drain; unrelated work and global admission remain counted. Retain these reproduced lifetime/settlement repairs while preserving native FIFO, cancellation and database owners. Drop each hunk when the selected upstream passes its boundary control, including a late identical retry after startup drains. |
