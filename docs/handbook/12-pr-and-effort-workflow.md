@@ -68,7 +68,7 @@ independent confidence.
 - Branch from freshly fetched `origin/main`; do not inherit unrelated local commits.
 - Preserve unrelated changes in shared worktrees. Prefer a dedicated worktree.
 - Never force-delete a dirty worktree or an unpushed branch.
-- After push, take one CI snapshot (the aggregate Cloud Build check; desktop packaging is explicitly opt-in).
+- After push, take one CI snapshot (the Actions **Required checks** job and the Cloud Build `octogee-linux-pr` check; desktop packaging is explicitly opt-in).
   Read `AGENTS.md` again after updating an existing checkout so CI instructions stay current.
 - After a confirmed squash merge, remove the dedicated worktree and branch.
 

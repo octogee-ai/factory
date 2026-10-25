@@ -252,6 +252,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: ".firebaserc", jobs: [JOBS.tests] },
   { dir: ".terraform-version", jobs: [JOBS.tests] },
   { dir: ".dockerignore", jobs: [JOBS.scripts, JOBS.tests] },
+  { dir: ".gcloudignore.ci", jobs: [] },
   { dir: ".env.example", jobs: [JOBS.scripts] },
   { dir: ".gitattributes", jobs: [JOBS.scripts] },
   { dir: ".gitignore", jobs: [JOBS.scripts, JOBS.tests] },

@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { imageTag } from './local-checks.mjs';
+import { imageTag } from './toolchain-image.mjs';
 import { snapshot } from './snapshot.mjs';
 
 const root = execFileSync('/usr/bin/git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();

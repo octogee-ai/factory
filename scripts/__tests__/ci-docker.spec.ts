@@ -4,7 +4,7 @@ const { exec, spawn, remove } = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(
 vi.mock('node:child_process', () => ({ execFileSync: exec, spawnSync: spawn }));
 vi.mock('node:fs', () => ({ readFileSync: () => 'toolchain inputs' }));
 vi.mock('../ci/snapshot.mjs', () => ({ snapshot: () => ({ source: '/snapshot', remove }) }));
-vi.mock('../ci/local-checks.mjs', () => ({ imageTag: () => 'octogee-ci-local:amd64-inputs' }));
+vi.mock('../ci/toolchain-image.mjs', () => ({ imageTag: () => 'octogee-ci-local:amd64-inputs' }));
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
