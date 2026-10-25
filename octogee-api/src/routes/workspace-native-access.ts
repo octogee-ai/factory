@@ -7,6 +7,8 @@ import { resolveWorkspaceConversation, resolveWorkspaceToolChannel, resolveWorks
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { principalAccess, workspaceScopeFor, type DocumentReader } from "../../../gateway-edge/src/routes/builder/gateways.js";
 
+const MOVING_ASSIGNMENT_STATES = new Set<unknown>(["quiescing", "migrating"]);
+
 function workspaceAccessClaim(req: Request): { gatewayId: string; targetUid?: string } | null {
   const body = req.body;
   const gatewayId = body?.gatewayId;
@@ -43,7 +45,11 @@ export function createWorkspaceNativeAccessRoutes({ db }: { db: Firestore }): Ro
       const access = await principalAccess(scope, req.uid, get);
       if (access.kind === "denied") { res.status(403).json({ error: "forbidden" }); return; }
       const assignment = await db.doc(`gateways/${gatewayId}/assignments/${scope.ownerUid}`).get();
-      if (assignment.data()?.state !== "serving") {
+      const assignmentState = assignment.data()?.state;
+      if (MOVING_ASSIGNMENT_STATES.has(assignmentState)) {
+        res.status(403).json({ error: "workspace_not_serving" }); return;
+      }
+      if (assignmentState !== "serving") {
         res.status(503).json({ error: "workspace_not_serving", retryable: true }); return;
       }
       if (!await targetMemberAllowed(targetUid, scope, get)) {

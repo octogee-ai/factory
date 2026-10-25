@@ -53,6 +53,7 @@ function platformBindingAuthorized(bound: PlatformBinding, path: string): boolea
 // in lockstep with the route manifest createAgentProductivityRoutes exports —
 // exact strings on both sides; this list is never merged or prefix-matched.
 export const SELF_SCOPED_INTERNAL_BROKER_ROUTES = new Set([
+  "/internal/fleet/blob/workspace/upload",
   "/internal/fleet/blob/materialization/read-url",
   "/internal/fleet/blob/materialization/manifest/read-url",
   "/internal/computer/agent-context",

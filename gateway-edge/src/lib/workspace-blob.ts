@@ -1,6 +1,7 @@
 import { db, storage } from "./db.js";
-import { uploadProjectBlobViaBroker } from "./project-blob-upload.js";
+import { uploadProjectBlobViaBroker, uploadWorkspaceBlobViaBroker } from "./project-blob-upload.js";
 import { createHash } from "node:crypto";
+import { isManifestPath } from "@octogee/core/workspace-manifest";
 import { readPlatformFreeConfig } from "./platform-free-config.js";
 import { logger } from "../middleware/logging.js";
 import {
@@ -178,6 +179,23 @@ export async function storeWorkspaceBlob(
   if (options.immutable && process.env.FLEET_BROKER_URL) {
     return uploadProjectBlobViaBroker(process.env.FLEET_BROKER_URL, target, fileBuffer, contentType);
   }
+  if (target.projectSlug === null && ["shared", "builder"].includes(process.env.GATEWAY_CLASS ?? "")) {
+    if (!process.env.FLEET_BROKER_URL) throw new Error("workspace blob upload requires its configured fleet broker");
+    return uploadWorkspaceBlobViaBroker(process.env.FLEET_BROKER_URL, target, filePath, fileBuffer, contentType);
+  }
+  return storeWorkspaceBlobCentrally(target, filePath, fileBuffer, contentType, options);
+}
+
+export async function storeWorkspaceBlobCentrally(
+  target: WorkspaceBlobTarget,
+  filePath: string,
+  fileBuffer: Buffer,
+  mimeType?: string,
+  options: WorkspaceBlobOptions = {},
+): Promise<StoredWorkspaceBlob> {
+  if (!isManifestPath(filePath)) throw new Error("invalid workspace blob path");
+  const ext = getExtension(filePath);
+  const contentType = mimeType || getMimeType(ext);
   const sha256 = options.immutable ? createHash("sha256").update(fileBuffer).digest("hex") : undefined;
   const maxStorageBytes = options.maxStorageBytes ??
     await configuredWorkspaceStorageLimitBytes(target);

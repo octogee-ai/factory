@@ -41,6 +41,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const CAPABILITY_DISABLED = "capability-disabled";
 const INVALID_REQUEST = "invalid-request";
 const ASSIGNMENT_MISSING = "assignment-missing";
+const WORKSPACE_NOT_SERVING = "workspace-not-serving";
+const MOVING_ASSIGNMENT_STATES = new Set<unknown>(["quiescing", "migrating"]);
 
 interface ControlSession {
   uid: string;
@@ -55,6 +57,7 @@ type SessionAccess =
   | { kind: "session-invalid" }
   | { kind: "capability-disabled" }
   | { kind: typeof ASSIGNMENT_MISSING }
+  | { kind: typeof WORKSPACE_NOT_SERVING }
   | { kind: "not-ready" };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -131,7 +134,7 @@ interface ScopedPrincipalAccess {
   scope: { gatewayId: string; workspaceSlug: string; ownerUid: string; perUserIdentity: boolean };
   principal: GatewayPrincipalAccess | null;
   assignmentMissing: boolean;
-  assignmentServing: boolean;
+  assignmentState: unknown;
 }
 
 type GatewayRootAuthorization = NonNullable<ReturnType<typeof gatewayAuthorizationFromRootDocument>>;
@@ -170,7 +173,7 @@ async function storedOwnerScope(
   };
   return {
     scope,
-    assignmentServing: assignment.data()?.state === "serving",
+    assignmentState: assignment.data()?.state,
     assignmentMissing: !owner.exists || !userAssignmentMatchesGateway(
       owner.data(),
       args.gatewayId,
@@ -350,7 +353,10 @@ async function sessionAccessInTransaction(args: {
   }
   const authorization = controlUiAuthorization(root, args.gatewayId, principal);
   if (!authorization) return { kind: CAPABILITY_DISABLED };
-  if (!stored.assignmentServing || !isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
+  if (MOVING_ASSIGNMENT_STATES.has(stored.assignmentState)) {
+    return { kind: WORKSPACE_NOT_SERVING };
+  }
+  if (stored.assignmentState !== "serving" || !isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
     return { kind: "not-ready" };
   }
   return { kind: "allowed", session };
@@ -359,8 +365,8 @@ async function sessionAccessInTransaction(args: {
 function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowed" }>, res: Response): void {
   if (result.kind === "session-invalid") {
     res.status(404).json({ error: "session-invalid" });
-  } else if (result.kind === CAPABILITY_DISABLED) {
-    res.status(403).json({ error: CAPABILITY_DISABLED });
+  } else if (result.kind === CAPABILITY_DISABLED || result.kind === WORKSPACE_NOT_SERVING) {
+    res.status(403).json({ error: result.kind });
   } else if (result.kind === ASSIGNMENT_MISSING) {
     res.status(403).json({ error: ASSIGNMENT_MISSING });
   } else {
@@ -388,6 +394,7 @@ type RedeemResult =
   | { kind: "session-conflict" }
   | { kind: typeof CAPABILITY_DISABLED }
   | { kind: typeof ASSIGNMENT_MISSING }
+  | { kind: typeof WORKSPACE_NOT_SERVING }
   | { kind: "not-ready" }
   | { kind: "redeemed"; redeemed: RedeemableTicket; expiresAt: number };
 
@@ -552,13 +559,17 @@ async function redeemPrincipalFailure(args: {
     return { kind: ASSIGNMENT_MISSING };
   }
   const principal = stored?.principal ?? null;
+  const assignmentState = stored?.assignmentState;
   const authorization = principal && principal.kind !== "denied"
     ? controlUiAuthorization(args.root, gatewayId, principal)
     : null;
   if (!authorization || !principal || principal.kind === "denied") {
     return rejectRedeemPrincipal({ ...args, principal, scope: stored?.scope ?? null });
   }
-  if (!stored?.assignmentServing) return { kind: "not-ready" };
+  if (MOVING_ASSIGNMENT_STATES.has(assignmentState)) {
+    return { kind: WORKSPACE_NOT_SERVING };
+  }
+  if (assignmentState !== "serving") return { kind: "not-ready" };
   return null;
 }
 

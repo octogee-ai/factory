@@ -5,6 +5,8 @@ import type { FileTarget } from "../lib/fileTarget.js";
 const h = vi.hoisted(() => ({
   save: vi.fn(),
   brokerUpload: vi.fn(),
+  workspaceBrokerUpload: vi.fn(),
+  dbDoc: vi.fn(() => { throw new Error("Gateway must not read Firebase Admin"); }),
   getMetadata: vi.fn(),
   delete: vi.fn(),
   getSignedUrl: vi.fn(),
@@ -19,10 +21,10 @@ const h = vi.hoisted(() => ({
   rollbackWorkspaceStorageReservation: vi.fn(),
   releaseWorkspaceStorage: vi.fn(),
 }));
-vi.mock("../lib/project-blob-upload.js", () => ({ uploadProjectBlobViaBroker: h.brokerUpload }));
+vi.mock("../lib/project-blob-upload.js", () => ({ uploadProjectBlobViaBroker: h.brokerUpload, uploadWorkspaceBlobViaBroker: h.workspaceBrokerUpload }));
 
 vi.mock("../lib/db.js", () => ({
-  db: {},
+  db: { doc: h.dbDoc },
   storage: {
     bucket: h.bucket,
   },
@@ -54,7 +56,8 @@ vi.mock("../middleware/logging.js", () => ({
   logger: { warn: h.warn, error: vi.fn(), info: vi.fn() },
 }));
 
-import { removeWorkspaceBlob, storeWorkspaceBlob } from "../lib/workspace-blob.js";
+import { removeWorkspaceBlob, storeWorkspaceBlob, storeWorkspaceBlobCentrally } from "../lib/workspace-blob.js";
+import { manifestObjectPath, parseManifest, serializeManifest } from "@octogee/core/workspace-manifest";
 
 const target: FileTarget = {
   slug: "alice",
@@ -125,6 +128,29 @@ it("saves runtime project assets through the broker without broad cloud credenti
   expect(h.updateManifest).not.toHaveBeenCalled();
 });
 
+it("saves an ordinary Shared workspace binary through its central owner without local Firebase Admin", async () => {
+  vi.stubEnv("GATEWAY_CLASS", "shared");
+  vi.stubEnv("GATEWAY_ID", "shared-alice");
+  vi.stubEnv("FLEET_BROKER_URL", "http://tenant-api");
+  const workspace = { ...target, projectSlug: null, repoName: "workspace", gcsPrefix: "customers/alice" };
+  const contents = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]);
+  h.workspaceBrokerUpload.mockResolvedValue({ gcsPath: "customers/alice/notes/file.bin", size: contents.length });
+  await expect(storeWorkspaceBlob(workspace, "notes/file.bin", contents, "application/octet-stream"))
+    .resolves.toEqual({ gcsPath: "customers/alice/notes/file.bin", size: contents.length });
+  expect(h.workspaceBrokerUpload).toHaveBeenCalledWith("http://tenant-api", workspace, "notes/file.bin", contents, "application/octet-stream");
+  expect(h.dbDoc).not.toHaveBeenCalled();
+  expect(h.bucket).not.toHaveBeenCalled();
+  expect(h.reserveWorkspaceStorage).not.toHaveBeenCalled();
+  expect(h.updateManifest).not.toHaveBeenCalled();
+});
+
+it("refuses a gateway workspace upload without its broker instead of falling back to Firebase Admin", async () => {
+  vi.stubEnv("GATEWAY_CLASS", "shared"); vi.stubEnv("FLEET_BROKER_URL", "");
+  await expect(storeWorkspaceBlob({ ...target, projectSlug: null, gcsPrefix: "customers/alice" }, "notes/file.bin", Buffer.from("data")))
+    .rejects.toThrow("configured fleet broker");
+  expect(h.dbDoc).not.toHaveBeenCalled(); expect(h.bucket).not.toHaveBeenCalled();
+});
+
 it("stores an immutable project asset with create-only semantics and verifies a deduplicated object", async () => {
   const contents = Buffer.from("abc");
   const sha256 = createHash("sha256").update(contents).digest("hex");
@@ -141,6 +167,13 @@ it("stores an immutable project asset with create-only semantics and verifies a 
 });
 
 describe("storeWorkspaceBlob", () => {
+  it.each(["runtime-state/allocations/shared-alice-g1/checkpoint.tar.gz", "notes/runtime-state/file.bin", "notes/__proto__/file.bin", "notes/constructor/file.bin", "notes/prototype/file.bin"])("refuses manifest-reserved paths before quota or GCS effects: %s", async name => {
+    h.updateManifest.mockImplementation(async (prefix, entries) => { parseManifest(manifestObjectPath(prefix), serializeManifest(entries)); });
+    await expect(storeWorkspaceBlobCentrally({ ...target, projectSlug: null, gcsPrefix: "customers/alice" }, name, Buffer.from("data"), "application/octet-stream", { maxStorageBytes: 10 })).rejects.toThrow();
+    expect(h.reserveWorkspaceStorage).not.toHaveBeenCalled(); expect(h.bucket).not.toHaveBeenCalled();
+    expect(h.save).not.toHaveBeenCalled(); expect(h.updateManifest).not.toHaveBeenCalled();
+    expect(h.rollbackWorkspaceStorageReservation).not.toHaveBeenCalled();
+  });
   it("saves non-image blobs to GCS and writes the manifest placeholder", async () => {
     const result = await storeWorkspaceBlob(
       target,

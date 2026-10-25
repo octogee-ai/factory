@@ -190,6 +190,7 @@ export const GATEWAY_CREDENTIAL_ROUTES = new Set([
 
 export const SIDECAR_BROKER_ROUTES = new Set([
   "/internal/fleet/blob/project/upload-url",
+  "/internal/fleet/blob/workspace/upload",
   "/internal/connectors/github-project-clone-access",
   "/internal/openclaw/activity/agent-identity",
   "/internal/workspace-commit/verify-proof",

@@ -110,6 +110,14 @@ export interface ParseMultipartOpts {
   // issue attachments resolve their target from the query string and name the
   // object from the uploaded file itself.
   requireSlugAndPath?: boolean;
+  rejectUnexpectedFields?: boolean;
+}
+
+function multipartUploadError(input: { strict: boolean; unexpected: boolean; truncated: boolean; maxBytes: number; file: Buffer | null; required: boolean; fields: Record<string, string> }): Error | null {
+  if (input.strict && input.unexpected) return new Error("Unexpected multipart field");
+  if (input.truncated) return new UploadTooLargeError(input.maxBytes);
+  if (!input.file || input.required && (!input.fields.slug || !input.fields.path)) return new Error(input.required ? "Missing required fields: slug, path, file" : "Missing file");
+  return null;
 }
 
 export function parseMultipart(
@@ -125,9 +133,12 @@ export function parseMultipart(
     let filename = "";
     let mimeType = "";
     let truncated = false;
+    let unexpectedField = false;
 
     bb.on("field", (name: string, val: string) => {
+      if (Object.hasOwn(fields, name)) unexpectedField = true;
       if (ALLOWED_FIELDS.has(name as AllowedField)) fields[name] = val;
+      else unexpectedField = true;
     });
     bb.on("file", (_name: string, stream: NodeJS.ReadableStream, info: { filename: string; mimeType: string }) => {
       filename = info.filename;
@@ -138,25 +149,20 @@ export function parseMultipart(
       stream.on("end", () => { fileBuffer = Buffer.concat(chunks); });
     });
     bb.on("finish", () => {
-      if (truncated) {
-        reject(new UploadTooLargeError(maxFileBytes));
-        return;
-      }
-      if (!fileBuffer || (requireSlugAndPath && (!fields.slug || !fields.path))) {
-        reject(new Error(requireSlugAndPath ? "Missing required fields: slug, path, file" : "Missing file"));
-        return;
-      }
+      const error = multipartUploadError({ strict: opts.rejectUnexpectedFields === true, unexpected: unexpectedField, truncated, maxBytes: maxFileBytes, file: fileBuffer, required: requireSlugAndPath, fields });
+      if (error) { reject(error); return; }
       const path = fields.path ?? "";
       resolve({
         slug: fields.slug ?? "",
         projectSlug: fields.project || null,
         path,
-        fileBuffer,
+        fileBuffer: fileBuffer!,
         filename: filename || path.split("/").pop() || "file",
         mimeType: mimeType || getMimeType(getExtension(path || filename)),
       });
     });
     bb.on("error", reject);
+    bb.on("filesLimit", () => { unexpectedField = true; });
     const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
     if (rawBody) {
       bb.end(rawBody);

@@ -3,6 +3,11 @@ import { gatewayCredentialHeaders, internalFetch, sidecarBrokerHeaders } from "@
 import type { FleetBrokerBlobSignedUrl } from "@octogee/shared/types/fleet-broker";
 import type { ProjectBlobHydrationClient } from "@octogee/core/project-blob-materialization";
 import type { StoredWorkspaceBlob, WorkspaceBlobTarget } from "./workspace-blob.js";
+import { WorkspaceStorageQuotaError } from "./workspace-storage-quota.js";
+import { MAX_WORKSPACE_BINARY_BYTES } from "@octogee/core/workspace-binary";
+import { isManifestPath } from "@octogee/core/workspace-manifest";
+import { validateFilePath } from "./path-validation.js";
+import { pathHasReservedOrHiddenSegment } from "../routes/workspace/helpers.js";
 
 async function brokerRequest<T>(base: string, route: string, body: object, headers: Record<string, string>): Promise<T> {
   const response = await internalFetch(`${base.replace(/\/$/u, "")}/internal/fleet/blob/${route}`, {
@@ -46,6 +51,38 @@ export async function uploadProjectBlobViaBroker(base: string, target: Workspace
     throw new Error("project asset upload checksum mismatch");
   }
   return { gcsPath, sha256, size: contents.length };
+}
+
+function assertWorkspaceBlobScope(target: WorkspaceBlobTarget, filePath: string, contents: Buffer): void {
+  if (target.projectSlug !== null || target.gcsPrefix !== `customers/${target.slug}` || !isManifestPath(filePath) || validateFilePath(filePath) || pathHasReservedOrHiddenSegment(filePath) || filePath === "projects" || filePath.startsWith("projects/") || contents.length > MAX_WORKSPACE_BINARY_BYTES) throw new Error("invalid workspace blob scope");
+}
+
+type WorkspaceBlobResponse = Partial<StoredWorkspaceBlob> & { code?: string; limitBytes?: number; projectedBytes?: number };
+
+function workspaceBlobRefusal(status: number, result: WorkspaceBlobResponse): Error {
+  if (status === 413 && result.code === "FREE_STORAGE_LIMIT" && typeof result.limitBytes === "number" && Number.isSafeInteger(result.limitBytes) && result.limitBytes >= 0 && typeof result.projectedBytes === "number" && Number.isSafeInteger(result.projectedBytes) && result.projectedBytes >= 0) return new WorkspaceStorageQuotaError(result.limitBytes, result.projectedBytes);
+  return new Error(`workspace blob upload failed: HTTP ${status}`);
+}
+
+function assertWorkspaceBlobAcknowledgement(result: WorkspaceBlobResponse, gcsPath: string, size: number): asserts result is StoredWorkspaceBlob {
+  if (result.gcsPath !== gcsPath || result.size !== size ||
+      result.thumbnailUrl !== undefined && typeof result.thumbnailUrl !== "string" || result.thumbnailError !== undefined && typeof result.thumbnailError !== "string") throw new Error("workspace blob upload acknowledgement mismatch");
+}
+
+export async function uploadWorkspaceBlobViaBroker(base: string, target: WorkspaceBlobTarget, filePath: string, contents: Buffer, mimeType: string): Promise<StoredWorkspaceBlob> {
+  assertWorkspaceBlobScope(target, filePath, contents);
+  const body = new FormData();
+  body.append("slug", target.slug);
+  body.append("path", filePath);
+  body.append("file", new Blob([new Uint8Array(contents)], { type: mimeType }), "workspace-blob");
+  const response = await internalFetch(`${base.replace(/\/$/u, "")}/internal/fleet/blob/workspace/upload`, {
+    method: "POST", headers: await sidecarBrokerHeaders(), body,
+  }, { timeoutMs: 120_000 });
+  const result = await response.json() as WorkspaceBlobResponse;
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("workspace blob upload acknowledgement mismatch");
+  if (!response.ok) throw workspaceBlobRefusal(response.status, result);
+  assertWorkspaceBlobAcknowledgement(result, `${target.gcsPrefix}/${filePath}`, contents.length);
+  return { gcsPath: result.gcsPath, size: result.size, ...(result.thumbnailUrl ? { thumbnailUrl: result.thumbnailUrl } : {}), ...(result.thumbnailError ? { thumbnailError: result.thumbnailError } : {}) };
 }
 
 export function projectBlobHydrationClient(base: string): ProjectBlobHydrationClient {

@@ -25,6 +25,7 @@ export interface ManifestStore {
     read(objectPath: string): Promise<ManifestReadResult | null>;
     write(objectPath: string, contents: string, ifGenerationMatch: string): Promise<void>;
 }
+export declare function isManifestPath(value: string): boolean;
 export declare function parseManifest(objectPath: string, contents: string): Manifest;
 export declare function serializeManifest(manifest: Manifest): string;
 export declare function readManifest(store: ManifestStore, gcsPrefix: string): Promise<Manifest>;

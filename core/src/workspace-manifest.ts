@@ -60,7 +60,7 @@ function manifestPrefix(objectPath: string): string | null {
   return objectPath.slice(0, -MANIFEST_OBJECT_TAIL.length);
 }
 
-function isManifestPath(value: string): boolean {
+export function isManifestPath(value: string): boolean {
   if (value.length === 0 || value.length > 1024 || value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
     return false;
   }

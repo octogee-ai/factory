@@ -1,4 +1,5 @@
 import { sharedAgentAnchorMigrationScope } from "../lib/shared-agent-anchor-migration.js";
+import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
 import { SharedContextPendingError } from "../lib/native-shared-context-job.js";
 import { createGcsSharedContextObjectStore, type SharedContextObjectStore } from "../lib/native-shared-context-object.js";
 import { authorizeSharedContextCheckpoint } from "../lib/native-shared-context-checkpoint.js";
@@ -260,6 +261,7 @@ type ResolveChatIdentity = (
 }>;
 
 interface FleetBrokerRouteDeps {
+  workspaceBlobStore?: WorkspaceBlobStore;
   reconcileCoachProjectMembership?: (input: ProjectCoachMembershipInput) => Promise<ProjectCoachMembershipResult>;
   provisionMattermost?: (input: {
     uid: string;
@@ -4334,5 +4336,10 @@ export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRou
   installVmRuntimeRoutes(router, deps);
   installComputerEgressRoutes(router, deps);
   installAgentRoutes(router, deps);
+  installWorkspaceBlobBrokerRoute(router, { db: deps.db, store: opts.workspaceBlobStore, authorize: async (req, res, slug) => {
+    req.body = { slug };
+    const assigned = await requireAssignedSlug(deps.db, req, res);
+    return assigned ? { uid: assigned.uid, slug: assigned.slug, gatewayId: assigned.bound.gatewayId } : null;
+  } });
   return router;
 }
