@@ -11,6 +11,7 @@ import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 
 const DEFAULT_OPENCLAW_STATE_DIR = "/home/node/.openclaw";
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
+const POSTGRES_DOCTOR_TIMEOUT_MS = 300_000;
 
 async function assertCanonicalSources(agentIds: string[], root: string): Promise<void> {
   for (const agentId of agentIds) {
@@ -335,7 +336,9 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
       await fs.chmod(file, 0o600);
       entries[store.agentId] = { workspace: path.join(privateRoot, "workspaces", store.agentId) };
     }
+    const initializedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
     await fs.writeFile(configPath, JSON.stringify({
+      ...initializedConfig,
       gateway: { mode: "local" }, plugins: { enabled: false },
       agents: { ownership: "explicit", entries },
       database: { engine: "sqlite", families: { agent: { engine: "postgres" } },
@@ -343,7 +346,9 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
     }), { mode: 0o600 });
     await input.assertCurrent();
     assertSourceAnchors(stores);
-    const result = await (input.run ?? runOpenClaw)(["doctor", "--fix", "--non-interactive"], commandOptions);
+    const result = await (input.run ?? runOpenClaw)(["doctor", "--fix", "--non-interactive"], {
+      ...commandOptions, timeoutMs: POSTGRES_DOCTOR_TIMEOUT_MS,
+    });
     await input.assertCurrent();
     assertSourceAnchors(stores);
     if (result.code !== 0) throw new Error(`source PostgreSQL Doctor failed (exit ${result.code}); source remains fenced`);

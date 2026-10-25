@@ -128,8 +128,34 @@ it("isolates PostgreSQL Doctor from original shared state and foreign agents, pr
     expect(f.metadata.get(f.expectedAnchors[index]!.schema)!.history).toEqual(["original turn"]);
   }
   expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "doctor", "doctor"]);
+  expect(f.run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([undefined, undefined, 300_000]);
   expect(f.assertCurrent).toHaveBeenCalled();
   for (const [, { env }] of f.run.mock.calls) await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("retains Native-initialized config metadata while replacing the private bootstrap roster for PostgreSQL repair", async () => {
+  const f = await postgresFixture(), original = f.run.getMockImplementation()!;
+  const meta = { lastTouchedVersion: "2026.10.7", migrations: { modelPolicyAllowlist: true } };
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] === "database") return original(args, options);
+    const configPath = options.env.OPENCLAW_CONFIG_PATH!;
+    const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+    if (config.agents.entries["octogee-source-doctor-bootstrap"]) {
+      const result = await original(args, options);
+      await fs.writeFile(configPath, JSON.stringify({ ...config, meta,
+        agents: { ...config.agents, defaults: { workspace: "bootstrap-only" } } }));
+      return result;
+    }
+    expect(config.meta).toEqual(meta);
+    expect(config.gateway).toEqual({ mode: "local" });
+    expect(config.agents.defaults).toBeUndefined();
+    expect(config.agents.entries["octogee-source-doctor-bootstrap"]).toBeUndefined();
+    expect(config.database.postgres).toEqual({ connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee" });
+    for (const agentId of f.agentIds) expect(config.agents.entries[agentId].workspace).toBe(path.join(options.env.OPENCLAW_STATE_DIR!, "workspaces", agentId));
+    return original(args, options);
+  });
+  await repairSourceDoctorAgentStores(f.agentIds, f.input);
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "doctor", "doctor"]);
 });
 
 it.each(["owner", "store", "version", "coherence", "duplicate", "anchor-roster", "newer", "sidecar", "claim", "descriptor", "doctor"])("refuses PostgreSQL source repair with %s mismatch", async change => {

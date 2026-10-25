@@ -1,22 +1,35 @@
 import { execFile } from "node:child_process";
 
 export interface OpenClawCommandResult { code: number; stdout: string; stderr?: string }
-export interface OpenClawCommandOptions { env: NodeJS.ProcessEnv; signal?: AbortSignal }
+export interface OpenClawCommandOptions { env: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs?: number }
 export type OpenClawCommand = (
   args: string[],
   options: OpenClawCommandOptions,
 ) => Promise<OpenClawCommandResult>;
 
+function hasStdinFailure(error: NodeJS.ErrnoException | undefined): boolean {
+  return error !== undefined && error.code !== "EPIPE";
+}
+
 export const runOpenClaw: OpenClawCommand = (args, options) =>
   new Promise((resolve, reject) => {
-    execFile("/usr/local/bin/openclaw", args, {
-      ...options, timeout: 180_000, maxBuffer: 2 * 1024 * 1024,
+    const { timeoutMs = 180_000, ...commandOptions } = options;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 300_000) {
+      reject(new Error("OpenClaw command timeout must be a positive safe integer no greater than 300000ms"));
+      return;
+    }
+    const started = performance.now();
+    let stdinError: NodeJS.ErrnoException | undefined;
+    const child = execFile("/usr/local/bin/openclaw", args, {
+      ...commandOptions, timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024,
       cwd: options.env.OPENCLAW_STATE_DIR,
     }, (error, stdout, stderr) => {
-      if (error && (error.killed || typeof error.code !== "number")) {
-        reject(new Error(`OpenClaw ${args[0]} command failed (${error.code ?? error.signal ?? "unknown"})`));
+      if ((error && (error.killed || typeof error.code !== "number")) || (!error && hasStdinFailure(stdinError))) {
+        reject(new Error(`OpenClaw ${args[0]} command failed (code=${error?.code ?? "none"}, killed=${Boolean(error?.killed)}, signal=${error?.signal ?? "none"}, elapsedMs=${Math.round(performance.now() - started)}, stdoutBytes=${Buffer.byteLength(stdout)}, stderrBytes=${Buffer.byteLength(stderr)}, stdinCode=${stdinError?.code ?? "none"})`));
       } else {
         resolve({ code: (error?.code as number | undefined) ?? 0, stdout, stderr });
       }
     });
+    child.stdin?.on("error", (error: NodeJS.ErrnoException) => { stdinError = error; });
+    child.stdin?.end();
   });
