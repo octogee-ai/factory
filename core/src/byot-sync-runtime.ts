@@ -563,7 +563,7 @@ export async function restoreOauthStoreForSlug(
       return { restored: false, present: false, providers: [] };
     }
     const providers = Array.from(new Set(creds.map((cred) => cred.provider)));
-    const shared = sharedAuthStoreUsable(ocDir);
+    const shared = await sharedAuthStoreUsable(ocDir);
     const plan = subscriptionRestorePlan(creds, ocDir, shared ? null : coachAgentId);
     const r = await restoreByosubCredentials({
       plan,
@@ -1569,7 +1569,7 @@ export async function purgeCustomerOauthRuntime(
     forceSafeAll,
   );
   const openclawDir = options.openclawDir ?? OPENCLAW_DIR;
-  const sharedProfilesRemoved = sharedAuthStoreUsable(openclawDir) &&
+  const sharedProfilesRemoved = await sharedAuthStoreUsable(openclawDir) &&
     await removeSubscriptionProfiles(sharedAuthAgentDir(openclawDir), SUBSCRIPTION_PROVIDERS);
   const artifacts = await purgeCustomerOauthRuntimeArtifacts({
     openclawDir,

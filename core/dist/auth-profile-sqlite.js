@@ -58,7 +58,7 @@ export const SHARED_MAIN_AGENT_ID = "main";
 const SHARED_STORE_STATE_KEY = "authProfiles.store";
 const SHARED_STATE_STATE_KEY = "authProfiles.state";
 const SHARED_STORE_OWNERSHIP_KEY = "auth.sharedStore";
-export function sharedStateDbPath(agentDir) {
+export function sharedStateDbCandidatePath(agentDir) {
     const resolved = path.resolve(agentDir);
     const agentIdDir = path.dirname(resolved);
     const agentsDir = path.dirname(agentIdDir);
@@ -68,7 +68,11 @@ export function sharedStateDbPath(agentDir) {
         return null;
     }
     const dbPath = path.join(path.dirname(agentsDir), "state", "openclaw.sqlite");
-    if (!fs.existsSync(dbPath))
+    return fs.existsSync(dbPath) ? dbPath : null;
+}
+export function sharedStateDbPath(agentDir) {
+    const dbPath = sharedStateDbCandidatePath(agentDir);
+    if (!dbPath)
         return null;
     const db = openHardenedDatabase(dbPath, { readOnly: true });
     try {
@@ -190,13 +194,19 @@ export function readAuthProfileStore(agentDir) {
     const shared = sharedStateDbPath(agentDir);
     if (shared)
         return readSharedCell(shared, SHARED_STORE_STATE_KEY);
-    return readJsonRow(agentDir, "auth_profile_store", "store_json", "store_key");
+    return readAgentAuthProfileStore(agentDir);
 }
 /** Reads the raw persisted runtime-state payload, or null if absent. */
 export function readAuthProfileState(agentDir) {
     const shared = sharedStateDbPath(agentDir);
     if (shared)
         return readSharedCell(shared, SHARED_STATE_STATE_KEY);
+    return readAgentAuthProfileState(agentDir);
+}
+export function readAgentAuthProfileStore(agentDir) {
+    return readJsonRow(agentDir, "auth_profile_store", "store_json", "store_key");
+}
+export function readAgentAuthProfileState(agentDir) {
     return readJsonRow(agentDir, "auth_profile_state", "state_json", "state_key");
 }
 function withWriteRetry(dbPath, op, label) {
@@ -251,6 +261,9 @@ export function writeAuthProfileStore(agentDir, payload) {
         }, "writeAuthProfileStore shared BEGIN IMMEDIATE");
         return;
     }
+    writeAgentAuthProfileStore(agentDir, payload);
+}
+export function writeAgentAuthProfileStore(agentDir, payload) {
     const dbPath = resolveAuthDbPath(agentDir);
     if (!fs.existsSync(dbPath)) {
         throw new AgentDatabaseNotInitializedError(agentDir);
@@ -282,6 +295,9 @@ export function deleteAuthProfileStore(agentDir) {
         }, "deleteAuthProfileStore shared BEGIN IMMEDIATE");
         return;
     }
+    deleteAgentAuthProfileStore(agentDir);
+}
+export function deleteAgentAuthProfileStore(agentDir) {
     const dbPath = resolveAuthDbPath(agentDir);
     if (!fs.existsSync(dbPath))
         return;

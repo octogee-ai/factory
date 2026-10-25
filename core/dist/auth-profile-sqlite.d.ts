@@ -13,20 +13,25 @@ export declare class AgentDatabaseNotInitializedError extends Error {
 /** Resolves the SQLite database path that stores auth profiles for an agent dir. */
 export declare function resolveAuthDbPath(agentDir: string): string;
 export declare const SHARED_MAIN_AGENT_ID = "main";
+export declare function sharedStateDbCandidatePath(agentDir: string): string | null;
 export declare function sharedStateDbPath(agentDir: string): string | null;
 export declare function sharedAuthStoreUsable(openclawDir: string): boolean;
 /** Reads the raw persisted secrets-store payload, or null if absent. */
 export declare function readAuthProfileStore(agentDir: string): unknown | null;
 /** Reads the raw persisted runtime-state payload, or null if absent. */
 export declare function readAuthProfileState(agentDir: string): unknown | null;
+export declare function readAgentAuthProfileStore(agentDir: string): unknown | null;
+export declare function readAgentAuthProfileState(agentDir: string): unknown | null;
 /**
  * Writes the auth-profile secrets-store row into the agent database openclaw
  * owns. Last-writer-wins on the singleton "primary" key. Throws
  * AgentDatabaseNotInitializedError when openclaw has not created the store yet.
  */
 export declare function writeAuthProfileStore(agentDir: string, payload: unknown): void;
+export declare function writeAgentAuthProfileStore(agentDir: string, payload: unknown): void;
 /**
  * Deletes the auth-profile secrets-store row. Leaves the runtime-state row
  * intact (openclaw owns it). No-op when the database file does not exist.
  */
 export declare function deleteAuthProfileStore(agentDir: string): void;
+export declare function deleteAgentAuthProfileStore(agentDir: string): void;

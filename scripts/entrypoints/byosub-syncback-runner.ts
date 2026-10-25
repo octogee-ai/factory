@@ -37,7 +37,7 @@ async function loadTargets(): Promise<SyncBackTarget[]> {
     return [];
   }
   const agentIds = agentIdsFromConfig(config).filter(isSafeAgentId);
-  if (sharedAuthStoreUsable(OPENCLAW_DIR)) {
+  if (await sharedAuthStoreUsable(OPENCLAW_DIR)) {
     const sharedDir = sharedAuthAgentDir(OPENCLAW_DIR);
     return agentIds
       .filter((agentId) => parseAgentId(agentId).kind === "coach")

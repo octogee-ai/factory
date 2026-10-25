@@ -7,7 +7,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createAgentStoreCredentialProvisioner, createAgentStoreOwnershipTransferer, assertNoBuilderAgentStores, eraseBuilderAgentStores, type AgentStoreErasureTarget } from "./agent-store-credentials.js";
-import { readAuthProfileStore, writeAuthProfileStore, deleteAuthProfileStore } from "./auth-profile-store.js";
+import { readAuthProfileStore, readAuthProfileState, writeAuthProfileStore, deleteAuthProfileStore, sharedAuthStoreUsable } from "./auth-profile-store.js";
 import { purgeCustomerOauthRuntimeArtifacts } from "./byosub-restore.js";
 import { assertTrustedAgentStoreRoutines } from "./agent-store-routines.js";
 
@@ -44,6 +44,69 @@ const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 describe.skipIf(!dsn)("PostgreSQL agent store", () => {
+  it("reads, restores, and removes shared auth in PostgreSQL state without changing its runtime state or legacy agent store", async () => {
+    const client = new pg.Client({ connectionString: dsn }); await client.connect();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "octogee-state-pg-auth-")); roots.push(root);
+    const main = path.join(root, "agents/main/agent"), storeId = randomUUID(), schema = "auth_state_" + randomUUID().replaceAll("-", "");
+    const table = (name: string) => `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(name)}`;
+    const previous = process.env.OPENCLAW_AGENT_STORE_DSN; process.env.OPENCLAW_AGENT_STORE_DSN = dsn;
+    try {
+      await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      await client.query(`CREATE TABLE ${table("openclaw_schema_meta")} (store TEXT PRIMARY KEY, store_id TEXT NOT NULL)`);
+      await client.query(`INSERT INTO ${table("openclaw_schema_meta")} VALUES ('state', $1)`, [storeId]);
+      await client.query(`CREATE TABLE ${table("config_machine_state")} (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms BIGINT NOT NULL)`);
+      await client.query(`INSERT INTO ${table("config_machine_state")} VALUES ('auth.sharedStore', $1, 1), ('authProfiles.store', $2, 1), ('authProfiles.state', $3, 1), ('fixture.history', $4, 1)`, [JSON.stringify({ location: "state-db" }), JSON.stringify({ profiles: { original: "synthetic" } }), JSON.stringify({ state: "retained" }), JSON.stringify({ history: "retained" })]);
+      await fs.mkdir(path.join(root, "state"), { recursive: true }); await fs.mkdir(main, { recursive: true });
+      const anchor = new DatabaseSync(path.join(root, "state/openclaw.sqlite"));
+      anchor.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)");
+      anchor.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(storeId, schema); anchor.close();
+      const stale = new DatabaseSync(path.join(main, "openclaw-agent.sqlite"));
+      stale.exec("CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at BIGINT NOT NULL)");
+      stale.prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)").run(JSON.stringify({ profiles: { stale: "synthetic" } })); stale.close();
+      expect(await sharedAuthStoreUsable(root)).toBe(true);
+      expect(await readAuthProfileStore(main)).toEqual({ profiles: { original: "synthetic" } });
+      expect(await readAuthProfileState(main)).toEqual({ state: "retained" });
+      await writeAuthProfileStore(main, { profiles: { restored: "synthetic" } });
+      expect(await readAuthProfileStore(main)).toEqual({ profiles: { restored: "synthetic" } });
+      await deleteAuthProfileStore(main);
+      expect(await readAuthProfileStore(main)).toBeNull();
+      expect(await readAuthProfileState(main)).toEqual({ state: "retained" });
+      expect((await client.query(`SELECT value_json FROM ${table("config_machine_state")} WHERE state_key = 'fixture.history'`)).rows).toEqual([{ value_json: JSON.stringify({ history: "retained" }) }]);
+      const legacy = new DatabaseSync(path.join(main, "openclaw-agent.sqlite"), { readOnly: true });
+      try { expect(JSON.parse((legacy.prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'").get() as { store_json: string }).store_json)).toEqual({ profiles: { stale: "synthetic" } }); } finally { legacy.close(); }
+      await client.query(`INSERT INTO ${table("config_machine_state")} VALUES ('authProfiles.store', $1, 1)`, ['{"synthetic-private-token":']);
+      await expect(readAuthProfileStore(main)).rejects.toThrow("PostgreSQL auth profile payload is not valid JSON");
+      await client.query(`UPDATE ${table("config_machine_state")} SET value_json = $1 WHERE state_key = 'auth.sharedStore'`, [JSON.stringify({ location: "legacy-main" })]);
+      expect(await sharedAuthStoreUsable(root)).toBe(true);
+      expect(await readAuthProfileStore(main)).toEqual({ profiles: { stale: "synthetic" } });
+      await writeAuthProfileStore(main, { profiles: { legacy: "synthetic" } });
+      expect(await readAuthProfileStore(main)).toEqual({ profiles: { legacy: "synthetic" } });
+      await deleteAuthProfileStore(main); expect(await readAuthProfileStore(main)).toBeNull();
+      await client.query(`UPDATE ${table("config_machine_state")} SET value_json = $1 WHERE state_key = 'auth.sharedStore'`, [JSON.stringify({ location: "state-db" })]);
+      await client.query(`UPDATE ${table("openclaw_schema_meta")} SET store_id = $1 WHERE store = 'state'`, [randomUUID()]);
+      await expect(readAuthProfileStore(main)).rejects.toThrow("state store identity");
+      await client.query(`UPDATE ${table("openclaw_schema_meta")} SET store_id = $1 WHERE store = 'state'`, [storeId]);
+      await client.query(`REVOKE SELECT ON ${table("config_machine_state")} FROM CURRENT_USER`);
+      try {
+        await expect(sharedAuthStoreUsable(root)).rejects.toMatchObject({ code: "42501" });
+        await expect(readAuthProfileStore(main)).rejects.toMatchObject({ code: "42501" });
+      } finally { await client.query(`GRANT SELECT ON ${table("config_machine_state")} TO CURRENT_USER`); }
+      await client.query(`UPDATE ${table("config_machine_state")} SET value_json = $1 WHERE state_key = 'auth.sharedStore'`, ['{"location":"foreign"}']);
+      await expect(sharedAuthStoreUsable(root)).rejects.toThrow("shared auth ownership");
+      await expect(readAuthProfileStore(main)).rejects.toThrow("shared auth ownership");
+      await expect(writeAuthProfileStore(main, {})).rejects.toThrow("shared auth ownership");
+      await expect(deleteAuthProfileStore(main)).rejects.toThrow("shared auth ownership");
+      await client.query(`DELETE FROM ${table("config_machine_state")} WHERE state_key = 'auth.sharedStore'`);
+      await fs.rm(path.join(main, "openclaw-agent.sqlite"));
+      expect(await sharedAuthStoreUsable(root)).toBe(false);
+      expect(await readAuthProfileStore(main)).toBeNull();
+      await client.query(`DROP TABLE ${table("config_machine_state")}`);
+      await expect(sharedAuthStoreUsable(root)).rejects.toMatchObject({ code: "42P01" });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCLAW_AGENT_STORE_DSN; else process.env.OPENCLAW_AGENT_STORE_DSN = previous;
+      await client.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`); await client.end();
+    }
+  });
   it("erases only immutable due-deletion targets and reconciles a committed drop without adopting replacements", async () => {
     const suffix = randomUUID().replaceAll("-", "");
     const builder = { uid: `erase-${suffix}`, slug: `erase-${suffix}` };

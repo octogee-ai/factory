@@ -70,7 +70,7 @@ const SHARED_STORE_STATE_KEY = "authProfiles.store";
 const SHARED_STATE_STATE_KEY = "authProfiles.state";
 const SHARED_STORE_OWNERSHIP_KEY = "auth.sharedStore";
 
-export function sharedStateDbPath(agentDir: string): string | null {
+export function sharedStateDbCandidatePath(agentDir: string): string | null {
   const resolved = path.resolve(agentDir);
   const agentIdDir = path.dirname(resolved);
   const agentsDir = path.dirname(agentIdDir);
@@ -82,7 +82,12 @@ export function sharedStateDbPath(agentDir: string): string | null {
     return null;
   }
   const dbPath = path.join(path.dirname(agentsDir), "state", "openclaw.sqlite");
-  if (!fs.existsSync(dbPath)) return null;
+  return fs.existsSync(dbPath) ? dbPath : null;
+}
+
+export function sharedStateDbPath(agentDir: string): string | null {
+  const dbPath = sharedStateDbCandidatePath(agentDir);
+  if (!dbPath) return null;
   const db = openHardenedDatabase(dbPath, { readOnly: true });
   try {
     const row = db
@@ -206,13 +211,21 @@ function readJsonRow(
 export function readAuthProfileStore(agentDir: string): unknown | null {
   const shared = sharedStateDbPath(agentDir);
   if (shared) return readSharedCell(shared, SHARED_STORE_STATE_KEY);
-  return readJsonRow(agentDir, "auth_profile_store", "store_json", "store_key");
+  return readAgentAuthProfileStore(agentDir);
 }
 
 /** Reads the raw persisted runtime-state payload, or null if absent. */
 export function readAuthProfileState(agentDir: string): unknown | null {
   const shared = sharedStateDbPath(agentDir);
   if (shared) return readSharedCell(shared, SHARED_STATE_STATE_KEY);
+  return readAgentAuthProfileState(agentDir);
+}
+
+export function readAgentAuthProfileStore(agentDir: string): unknown | null {
+  return readJsonRow(agentDir, "auth_profile_store", "store_json", "store_key");
+}
+
+export function readAgentAuthProfileState(agentDir: string): unknown | null {
   return readJsonRow(agentDir, "auth_profile_state", "state_json", "state_key");
 }
 
@@ -276,6 +289,10 @@ export function writeAuthProfileStore(agentDir: string, payload: unknown): void 
     );
     return;
   }
+  writeAgentAuthProfileStore(agentDir, payload);
+}
+
+export function writeAgentAuthProfileStore(agentDir: string, payload: unknown): void {
   const dbPath = resolveAuthDbPath(agentDir);
   if (!fs.existsSync(dbPath)) {
     throw new AgentDatabaseNotInitializedError(agentDir);
@@ -318,6 +335,10 @@ export function deleteAuthProfileStore(agentDir: string): void {
     );
     return;
   }
+  deleteAgentAuthProfileStore(agentDir);
+}
+
+export function deleteAgentAuthProfileStore(agentDir: string): void {
   const dbPath = resolveAuthDbPath(agentDir);
   if (!fs.existsSync(dbPath)) return;
   withWriteRetry(

@@ -3,9 +3,12 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 
 const tmp: string[] = [];
 const originalEnv = { ...process.env };
+const postgresDsn = process.env.OCTOGEE_TEST_POSTGRES_DSN;
 
 function mkHome(config: unknown): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "byosub-syncback-home-"));
@@ -108,6 +111,46 @@ function builderHome(): string {
   process.env.GATEWAY_CLASS = "builder";
   return home;
 }
+
+it.skipIf(!postgresDsn)("syncs rotated credentials from a PostgreSQL shared state anchor without using stale agent stores", async () => {
+  const pg = createRequire(path.resolve(__dirname, "../../core/package.json"))("pg");
+  const client = new pg.Client({ connectionString: postgresDsn });
+  await client.connect();
+  const home = builderHome(), openclaw = path.join(home, ".openclaw");
+  const schema = "shared_auth_" + randomUUID().replaceAll("-", ""), storeId = randomUUID();
+  const table = (name: string) => `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(name)}`;
+  try {
+    await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+    await client.query(`CREATE TABLE ${table("openclaw_schema_meta")} (store TEXT PRIMARY KEY, store_id TEXT NOT NULL)`);
+    await client.query(`INSERT INTO ${table("openclaw_schema_meta")} VALUES ('state', $1)`, [storeId]);
+    await client.query(`CREATE TABLE ${table("config_machine_state")} (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms BIGINT NOT NULL)`);
+    await client.query(`INSERT INTO ${table("config_machine_state")} VALUES ('auth.sharedStore', $1, 1), ('authProfiles.store', $2, 1)`, [JSON.stringify({ location: "state-db" }), JSON.stringify(codexStore("r1-pg", 1_789_736_218))]);
+    fs.mkdirSync(path.join(openclaw, "state"));
+    const anchor = new DatabaseSync(path.join(openclaw, "state/openclaw.sqlite"));
+    anchor.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)");
+    anchor.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(storeId, schema); anchor.close();
+    writeAgentStore(home, "main", codexStore("stale-main", 1_789_736_200));
+    writeAgentStore(home, COACH, codexStore("stale-coach", 1_789_736_200));
+    writeAgentStore(home, PROJECT_AGENT, codexStore("stale-project", 1_789_736_200));
+    process.env.OPENCLAW_AGENT_STORE_DSN = postgresDsn;
+    const { push, sweepOnce } = await loadRunner();
+    const first = await sweepOnce(new Map());
+    expect(pushedTokens(push).map(({ agentId, refresh }) => ({ agentId, refresh }))).toEqual([{ agentId: COACH, refresh: "r1-pg" }]);
+    push.mockClear();
+    const second = await sweepOnce(first.prev);
+    expect(push).not.toHaveBeenCalled();
+    await client.query(`UPDATE ${table("config_machine_state")} SET value_json = $1 WHERE state_key = 'authProfiles.store'`, [JSON.stringify(codexStore("r2-pg", 1_789_740_000))]);
+    await sweepOnce(second.prev);
+    expect(pushedTokens(push).map(({ agentId, refresh }) => ({ agentId, refresh }))).toEqual([{ agentId: COACH, refresh: "r2-pg" }]);
+    push.mockClear();
+    await client.query(`UPDATE ${table("openclaw_schema_meta")} SET store_id = $1 WHERE store = 'state'`, [randomUUID()]);
+    await expect(sweepOnce(second.prev)).rejects.toThrow("state store identity");
+    expect(push).not.toHaveBeenCalled();
+  } finally {
+    await client.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
+    await client.end();
+  }
+});
 
 async function loadRunner() {
   const push = vi.fn(async () => ({ changed: true, destroyed: 0 }));
