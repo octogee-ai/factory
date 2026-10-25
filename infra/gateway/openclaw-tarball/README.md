@@ -149,7 +149,176 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 24 latest-main qualification
+## Current overlay: October 25 frozen-main qualification
+
+This refresh freezes OpenClaw main at
+`db38cc1066957e278d529d531160bb2773163682` for the operator-authorized independent
+qualification. The clean overlay source is
+[`fcc5ff4e210b5f58122f2646738c86aa6742a294`](https://github.com/ceckert/openclaw/commit/fcc5ff4e210b5f58122f2646738c86aa6742a294), published on
+`codex/openclaw-refresh-20261025`; Octogee starts from main
+`4c1b7b38672958781c2079cb5a871a15ed69cb19` in a separate worktree.
+The previous published overlay was
+`c7884c98373d67610b454967b21985a7a5bb06f8` over
+`37a9f0520dc56fb7acfb237a7d53d416562f079f`. This assessment qualifies only the
+frozen source. The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40195796640)
+passes one security-fast job and skips 43 jobs, including build, types and tests.
+The latest inspected successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+qualifies `d8612ec864bb4c872616cfda5340c53803655f5f`, with 154 successes and nine
+skips. It does not qualify this frozen tip.
+
+### Native adoption and retained changes
+
+The three former Peter Steinberger imports are now native and their duplicate
+overlay changes are removed: #183114 nullable ordering, #183172 dialect-correct
+predecessor recovery and settlement postimage reuse, and #183184 removal of unused
+memory counts while preserving diagnostics. Frozen #183114 merge `a05a06d7c388`
+has the same production changes as the previously shipped immutable f8c2108 patch,
+including the `not-null` naming/comment; it is not a newly added index-order fix.
+Native `44347a81cfa` separately supplies explicit nullable failed-ingress/proxy
+ordering and its conformance coverage. Unfrozen follow-up `22ba23054d6` is excluded.
+
+Native #180871 pending-input dismissal retains canonical `OWN_SESSION_WRITE`
+authority and was not a prior overlay patch. Native #181198 supersedes #178970;
+receipt identity supersedes fork #7. Native #183302 resolves the formerly open
+#183228 vector-reuse issue at source. Native #183560 supplies the JSON session-port
+repair. Protocol remains 4; canonical state and agent schemas are now 32 and 34.
+#183127 is also native, with no duplicate overlay import.
+An open contribution is not evidence that its patch remains necessary.
+
+Two additional reviewed imports use immutable heads:
+
+| Contribution | Exact head | Change |
+| --- | --- | --- |
+| [#183398](https://github.com/openclaw/openclaw/pull/183398), xiaopan-xydt | `a1c81243296c1ca2ff0127271704cc82b62a9e26` | Recognize the existing admitted PostgreSQL read-only snapshot scope for cache reuse; writable transactions remain dirty. |
+| [#183598](https://github.com/openclaw/openclaw/pull/183598), Peter Steinberger | `f504f25bd958702ace5d974b8e0d50782e6e73b2` | Reuse relation-scoped catalog attributes while preserving column/default/constraint facts. |
+
+The separate component lane passes 155 owner tests across six files on real PG16.
+The imported PR heads also have inspected PostgreSQL CI shards; neither result is
+the final combined-source aggregate. #183398 has meaningful red controls.
+#183598 preserves catalog facts and reduces full catalog `pg_attribute` scans from
+five to four; this is not a latency claim. Astra found no actionable P0–P2 defect
+in these two exact imports. I/O-pool conversion #182888 is not adopted: its accepted upstream foreground/cold
+latency tradeoff is not silently inherited, and current owner qualification is
+incomplete. Doctor optimization #180184 and broad performance work #183204/#182360
+retain unresolved owner qualification. Draft #183508 is not ready and depends on
+#183443's unmerged canonical schema allocation; #183443/#183547 cannot independently
+claim overlapping state/agent version slots. #183449 has no qualified fix. These
+choices do not claim the native cron absolute-path relocation gap is repaired.
+
+Astra reassessed submitted, fork and unsubmitted overlay families against the
+frozen native owners. Retained boundaries include requester/reviewer authority at
+the effect boundary; explicit-grant precedence and authoritative empty channel
+membership revocation; strict stop joining startup and retained teardown; bounded
+failed-boot recovery; existing-only retained PostgreSQL restoration; nondestructive
+detach and outbound delivery custody; checkpoint, cron migration and Memory
+shadow-descriptor ownership. Their prior removal conditions continue to apply:
+remove a patch when the native owner or a public adapter preserves its concrete
+contract and owning tests. Sharing still uses one effective membership row with
+explicit precedence, not two independently durable grant sets. Early unknown-profile
+refusal remains distinct from disappearance during synchronization. The old broad
+Talk fork proposal does not justify restoring removed handoff/narration/takeover
+features; the retained narrow broker and desktop hooks serve current integration
+contracts. Mattermost server locking and bounded CUA discovery remain separate
+retained contributions without newly claimed live acceptance.
+
+The extracted reload restart helper now preserves native synchronous
+`assertCurrent()` checks and its post-run checkpoint. A real-owner regression runs
+after the original reload lease completes: the old helper performs two database lease
+reads, the repaired helper zero. All 20 reload lease tests pass.
+The earlier nested fixture setup failure supplies no product result.
+
+### Review findings and disposition
+
+The canonical nine-pass source review returned **FINDINGS**, including one P2 in
+projected cron declarations. The old declaration-only Map dropped earlier agents
+when multiple agents shared `memory-core:memory-dreaming-promotion`: matching job
+IDs falsely conflicted, and different IDs left duplicate target projections.
+The existing owner now matches a Set of `[effectiveAgentId, declarationKey]`
+tuples. Ordinary jobs, unrelated agents, legacy-default ownership, standing grants,
+runtime authority, held fences and cutover checks retain their prior boundaries.
+Both real migration regressions fail before the repair; the preserved kernel and
+persistence run passes 43/43 after it. Astra independently reviewed this narrow
+repair with no new actionable P0–P2 finding. The original review status
+remains FINDINGS, with this remediation recorded separately.
+
+The CLI reattachment fixture no longer imports a timeout constant made private
+by native #183254. The public timeout helper receives the same two 100,000 ms
+phase budgets; neither the child guard nor the timeout policy increases.
+
+Real PG16 conformance also exposed native #181802's `json(unknown)` call when cron
+changes a job's enabled state. The owning codec now passes bound JSON text to the
+existing PostgreSQL JSON cast, while SQLite retains its JSON subtype expression.
+The unchanged full two-engine test fails before the repair and passes 2/2 after:
+false/true transitions preserve authored nested fields, scratch and queue behavior.
+No schema, migration, helper API or authority owner changes. Astra reviewed this
+narrow portability fix without an actionable P0–P2 finding; remove it when the
+native codec supplies equivalent portable JSON behavior.
+
+### Qualification status and limits
+
+Node 26.12.1 and pinned pnpm 12.15.0 install the frozen lockfile. The clean full
+`pnpm build package` passes and its build-info matches the source above. Its
+nonblocking CSS warning is 1558.3 KiB against 1558.1 KiB. Final core, UI and
+extension production types pass, as do changed-source formatting, all eight policy
+guards, current worker inventory and channel metadata. No threshold increases.
+
+The retained boundary checks pass 346 tests with one skip across 23 files. A real
+isolated Node26 Gateway passes disconnected-reader cancellation, successor policy
+publication and persisted session identity. Aggregate native checking remains red
+on 25 inherited errors in files byte-identical to frozen db38: 20 line-count
+errors, one promise callback and four unbound methods. The earlier aggregate's
+script/root-test types and preflights pass; the final narrow repairs have their
+own type-aware lint and production type checks. This is not aggregate `pnpm check`
+success or full upstream CI clearance.
+
+The original complete PG16 run at `9b07ae46ad3c01e85a20094d7e26e15813b02e30`
+exercises all 155 planned targets across eight configurations: 1,331 passes,
+43 skips and two failures, the retired CLI import and native cron JSON call.
+On final committed source `fcc5ff4e210b5f58122f2646738c86aa6742a294`, both
+complete affected files pass 6/6 tests with no skips, including fresh executable
+reattachment with history, jobs, migration holds and new writes. Every other
+tracked source byte matches the original aggregate input. The full aggregate
+was not rerun at final head.
+The original aggregate remains failed; component and replay results do not rewrite
+it. No resource failure is hidden and no planned target is omitted.
+
+The canonical agent routine, trigger and expression catalog is regenerated on
+PG16 from this exact source; its definitions are unchanged and provenance advances.
+Catalog, ownership-transfer and recovery tests pass 49 cases serially. An initial
+parallel-file run conflicts in disposable database ACL cleanup; the full serial
+run passes. The shared-auth permission case separately passes under a non-superuser.
+Hosted island consumers pass 185 tests; edge browser/activity/membership consumers
+pass 278. Both production typechecks pass. All ten changed native island inputs
+were inspected; native observer/lifecycle owners remain bundled without an adapter
+change. All 109 artifact/island/policy and 16 base-image contracts pass.
+
+The pair is packed sequentially from the same clean full build. Native
+prepack/postpack restores a clean source; all 15 stock npm dependency files remain
+unchanged. Upstream's root archive inventory/import-graph checker passes. The
+isolated prefix and both actual Linux amd64/arm64 full-plugin-installer images
+match all 874 Mattermost files and both 15-file patched npm closures. Native
+registry refresh/bundled trust, Parallel's ten source-matched files, Codex's 192
+runtime files and three native-hook imports pass on both architectures.
+
+| Package | Write-once object and generation | Bytes | SHA256 |
+| --- | --- | ---: | --- |
+| root | `openclaw-fork-f016a0ea.tgz#1792939035299675` | 134393665 | `f016a0ea4c22effc21011a1fb9b76e5360f3b5cb119515a8acdd03a672e9e8bd` |
+| mattermost | `openclaw-mattermost-e1623c45.tgz#1792939044881470` | 1255051 | `e1623c45f5b00466cb9fd129c65f72a0042fdb9ea20ba4bdbe89d461d329ac81` |
+
+Generation-bound downloads reproduce both complete hashes. The complete
+Gateway image digest and final-head configuration, plugin/hook/worker qualification
+are recorded in the refresh PR, avoiding a recursive image-input change solely to
+record its digest here.
+
+Native Doctor still omits valid per-agent `models.json` providers from one provider
+validation path; standalone tool-schema preparation also skips the captured-agent
+catalog. This diagnostic coverage gap remains visible. Guarded normal-resolution
+probes for this image are recorded separately in the refresh PR; this diagnostic gap is not suppressed by changing valid provider
+catalogs or broadening the strict Doctor comparison. Live provider credential/
+inference acceptance and interactive Desktop behavior are not established by static resolution or source review.
+No source change suppresses these warnings, and no healthy-boot Doctor is added.
+
+## Previous overlay: October 24 latest-main qualification
 
 This refresh freezes latest OpenClaw main at
 `37a9f0520dc56fb7acfb237a7d53d416562f079f`, selected by the operator for
