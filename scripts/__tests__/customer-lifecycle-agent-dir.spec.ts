@@ -224,11 +224,12 @@ describe("customer lifecycle config patch agent directories", () => {
 
   it("broker adapter creates the coach agent dir before adding the customer config", async () => {
     await withRuntimeMock(async ({ agentsDir, applyConfigPatch }) => {
+      const initialSnapshot = { ...brokerSnapshot, status: "provisioning" as const };
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
       const adapter = buildBrokeredLifecycleAdapter({
-        client: mkClient(brokerSnapshot),
+        client: mkClient(initialSnapshot),
         rpc: {
           channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
           channelsStop: vi.fn(async ({ channel, accountId }) => ({
@@ -260,7 +261,7 @@ describe("customer lifecycle config patch agent directories", () => {
         log: vi.fn(),
       });
 
-      await adapter.applyAddCustomerConfigPatch(userSnapshot, { _coachPersonalToken: "pat-1" });
+      await adapter.applyAddCustomerConfigPatch(initialSnapshot, { _coachPersonalToken: "pat-1" });
 
       expect(fsSync.existsSync(path.join(agentsDir, "octogee-alice-coach", "agent"))).toBe(true);
       expect(applyConfigPatch).toHaveBeenCalledTimes(1);
@@ -286,6 +287,7 @@ describe("customer lifecycle config patch agent directories", () => {
       const adapter = buildBrokeredLifecycleAdapter({
         client: mkClient({
           ...brokerSnapshot,
+          status: "provisioning",
           projectAgents: [
             { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
           ],
@@ -303,7 +305,7 @@ describe("customer lifecycle config patch agent directories", () => {
         log: vi.fn(),
       });
 
-      await adapter.applyAddCustomerConfigPatch(userSnapshot, { _coachPersonalToken: "pat-1" });
+      await adapter.applyAddCustomerConfigPatch({ ...userSnapshot, status: "provisioning" }, { _coachPersonalToken: "pat-1" });
 
       expect(workspaces).toEqual([
         path.join(tempRoot, "customers", "alice"),

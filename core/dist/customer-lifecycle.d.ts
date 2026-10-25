@@ -13,6 +13,7 @@ export interface UserSnapshot {
     status: "" | "provisioning" | "complete";
     agentIds: string[];
     nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
+    restoreAuthority?: FleetBrokerUserSnapshot["restoreAuthority"];
     repoUrl: string;
     mattermostUserId: string | null;
     channels: CustomerSnapshot["channels"];
@@ -183,6 +184,8 @@ export interface CustomerLifecycleAdapter {
          *  before the runtime secrets reload that follows the config patch. */
         brokerProfilesReady?: Promise<void>;
         runtimePublication?: AddCustomerOptions["runtimePublication"];
+        beforeRuntimePublish?: () => Promise<void>;
+        migrationId?: string;
     }) => Promise<{
         elapsedMs: number;
         appliedFingerprint?: string;
@@ -228,9 +231,14 @@ export interface CustomerLifecycleAdapter {
     }>>;
     prepareImportDir: (slug: string, mode: CustomerStateImportMode) => Promise<string>;
     prepareKeyImportDir: (slug: string) => Promise<string>;
+    targetMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<{
+        custody: import("./migration-activation-manifest.js").MigrationTargetIdentityCustody;
+        migration: import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchorMigration;
+    }>;
     activateImportedCustomer: (slug: string, opts?: {
         signal?: AbortSignal;
         migrationId?: string;
+        beforeRuntimePublish?: () => Promise<void>;
     }) => Promise<{
         appliedFingerprint: string;
         verificationPending?: string;
@@ -290,11 +298,17 @@ export interface AddCustomerOptions {
         settled: Promise<void>;
         invalidateFingerprint: () => void;
     };
+    beforeRuntimePublish?: () => Promise<void>;
+    migrationId?: string;
     signal?: AbortSignal;
     onSignalCreated?: (signal: AbortSignal) => void;
     onWorkSettled?: (settled: Promise<void>) => void;
 }
 export declare function addCustomerToGateway(adapter: CustomerLifecycleAdapter, uid: string, opts?: AddCustomerOptions): Promise<AddCustomerResult>;
+export declare function prepareCustomerRuntimePublication(options?: {
+    signal?: AbortSignal;
+    beforeRuntimePublish?: () => Promise<void>;
+}): Promise<void>;
 export declare function restoreCustomerRuntimeFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, opts?: AddCustomerOptions): Promise<RestoreCustomerRuntimeResult>;
 export declare function cloneProjectsFromSnapshot(adapter: CustomerLifecycleAdapter, snapshot: UserSnapshot, options?: {
     signal?: AbortSignal;

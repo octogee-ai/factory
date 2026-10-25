@@ -3,6 +3,7 @@ import { SharedContextPendingError } from "../lib/native-shared-context-job.js";
 import { createGcsSharedContextObjectStore, type SharedContextObjectStore } from "../lib/native-shared-context-object.js";
 import { authorizeSharedContextCheckpoint } from "../lib/native-shared-context-checkpoint.js";
 import { nativeSharedContextRestoreHeld } from "@octogee/core/assigned-roster";
+import { readCustomerRestoreAuthoritySnapshot, type FleetStateFirestore } from "@octogee/core/fleet-state";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
@@ -1704,7 +1705,8 @@ interface SnapshotModelDials {
 
 interface LoadSnapshotOptions {
   modelDials: SnapshotModelDials;
-  projectCheckoutScope: FleetBrokerProjectCheckoutScope;
+  gatewayId: string;
+  gatewayData: Record<string, unknown> | undefined;
 }
 
 async function loadSnapshot(
@@ -1713,10 +1715,11 @@ async function loadSnapshot(
   data: Record<string, unknown>,
   options: LoadSnapshotOptions,
 ): Promise<(FleetBrokerUserSnapshot & { greetingPosted: boolean }) | null> {
-  const { modelDials, projectCheckoutScope } = options;
+  const { modelDials } = options;
   const slug = slugFromAssignedUser(data);
   if (!slug || !isValidUsername(slug)) return null;
-  const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig, runtimeReset] = await Promise.all([
+  const projectCheckoutScope = projectCheckoutScopeForGatewayRoot(options.gatewayData, options.gatewayId, uid, slug);
+  const [collectedChannels, projects, projectAgents, coachSecret, agentSnap, sysConfig, runtimeReset, restoreAuthority] = await Promise.all([
     collectChannelBindings(db, slug),
     projectCheckoutScope === "workspace-and-projects"
       ? collectProjects(db, slug)
@@ -1726,6 +1729,7 @@ async function loadSnapshot(
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
     admittedRuntimeReset(db, uid, data),
+    readCustomerRestoreAuthoritySnapshot({ db: db as unknown as FleetStateFirestore }, { uid, slug, gatewayId: options.gatewayId }),
   ]);
   const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
@@ -1739,7 +1743,11 @@ async function loadSnapshot(
     slug,
     ...baseFields,
     greetingPosted: snapshotGreetingPosted(data),
+    runtimeMutationFenced: customerRuntimeMutationFenced(data)
+      || readPath(data, "provisioning.openclaw.migration") !== undefined
+      || nativeSharedContextRestoreHeld(data),
     ...(runtimeReset ? { runtimeReset } : {}),
+    ...(restoreAuthority ? { restoreAuthority } : {}),
     ...(nativeSharedContextRestoreHeld(data) ? { nativeSharedContextRestore: readPath(data, "provisioning.openclaw.nativeSharedContextRestore") as FleetBrokerUserSnapshot["nativeSharedContextRestore"] } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     freeTierModelRef: modelDials.freeTierModelRef,
@@ -2090,13 +2098,9 @@ function installSnapshotRoutes(
         doc.id,
         data,
         {
+          gatewayId: bound.gatewayId,
           modelDials,
-          projectCheckoutScope: projectCheckoutScopeForGatewayRoot(
-            gatewayData,
-            bound.gatewayId,
-            doc.id,
-            slug,
-          ),
+          gatewayData,
         },
       );
       if (snapshot) users.push(snapshot);
@@ -2148,16 +2152,12 @@ function installSnapshotRoutes(
       uid,
       data,
       {
+        gatewayId: bound.gatewayId,
         modelDials: {
           freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
           builderAgentDefault: await deps.resolveBuilderAgentDefault(),
         },
-        projectCheckoutScope: projectCheckoutScopeForGatewayRoot(
-          gatewayData,
-          bound.gatewayId,
-          uid,
-          slug,
-        ),
+        gatewayData,
       },
     );
     if (!snapshot) {

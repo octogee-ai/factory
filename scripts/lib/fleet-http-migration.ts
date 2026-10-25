@@ -115,6 +115,12 @@ import {
   writeActivationManifest,
   assertSourceIdentityCustody,
   captureSourceWorkspaceIdentities,
+  captureTargetWorkspaceIdentities,
+  restoreTargetWorkspaceIdentities,
+  validateTargetWorkspaceIdentities,
+  assertTargetIdentityCustody,
+  type TargetWorkspaceIdentities,
+  type MigrationTargetIdentityCustody,
   readActivationManifest,
 } from "./migration-activation-manifest.js";
 import {
@@ -293,8 +299,14 @@ async function resumeSystemConfigWatchForBuilder(
   await enableSystemConfigWatch(OPENCLAW_DIR, slug, expectedGeneration);
 }
 
-function importedActivationOptions(signal?: AbortSignal, migrationId?: string): { signal?: AbortSignal; migrationId?: string } | undefined {
-  return signal || migrationId ? { ...(signal ? { signal } : {}), ...(migrationId ? { migrationId } : {}) } : undefined;
+function importedActivationOptions(signal?: AbortSignal, migrationId?: string, beforeRuntimePublish?: () => Promise<void>) {
+  return signal || migrationId || beforeRuntimePublish ? { ...(signal ? { signal } : {}), ...(migrationId ? { migrationId } : {}), ...(beforeRuntimePublish ? { beforeRuntimePublish } : {}) } : undefined;
+}
+
+async function importedWorkspaceIdentityRestore(input: { deps: MigrationHandlerDeps; slug: string; migrationId?: string; signal?: AbortSignal; beforeRuntimePublish?: () => Promise<void> }): Promise<(() => Promise<void>) | undefined> {
+  if (input.beforeRuntimePublish) return input.beforeRuntimePublish;
+  if (input.deps.adapter.isBuilderGateway?.() !== false || !input.migrationId) return undefined;
+  return sharedTargetWorkspaceRestore(input.deps, { migrationId: input.migrationId, slug: input.slug, mode: "final", rpcPhase: "finish-rsync-import" }, resolveOpenClawStateDir(), input.signal ?? AbortSignal.timeout(MIGRATION_TRANSFER_TIMEOUT_MS));
 }
 
 async function activateImportedCustomerForMigration(input: {
@@ -304,8 +316,10 @@ async function activateImportedCustomerForMigration(input: {
   migrationId?: string;
   loadStrategy?: MigrationLoadStrategy;
   signal?: AbortSignal;
+  beforeRuntimePublish?: () => Promise<void>;
 }): Promise<string | undefined> {
   const { deps, slug, mode, signal, loadStrategy = "standard" } = input;
+  const beforeRuntimePublish = await importedWorkspaceIdentityRestore(input);
   await ensureMigrationGiteaKey(deps, slug, "target-activation");
   const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
   let deferredCheckouts: string[] = [];
@@ -326,7 +340,7 @@ async function activateImportedCustomerForMigration(input: {
       );
     }
   }
-  const options = importedActivationOptions(signal, input.migrationId);
+  const options = importedActivationOptions(signal, input.migrationId, beforeRuntimePublish);
   const activation = options ? await deps.adapter.activateImportedCustomer(slug, options) : await deps.adapter.activateImportedCustomer(slug);
   if (loadStrategy === "standard") {
     deps.adapter.recordAppliedFingerprint?.(
@@ -724,6 +738,7 @@ function snapshotFromRestoreBody(body: RestoreMigrationRequestBody): UserSnapsho
     tier: snapshot.tier as string,
     gatewayId: snapshot.gatewayId as string,
     status: snapshot.status as UserSnapshot["status"],
+    ...(isRecord(snapshot.restoreAuthority) ? { restoreAuthority: snapshot.restoreAuthority as unknown as UserSnapshot["restoreAuthority"] } : {}),
     agentIds: Array.isArray(snapshot.agentIds)
       ? snapshot.agentIds.filter((id): id is string => typeof id === "string")
       : [],
@@ -786,7 +801,7 @@ export function createRestoreHandler(deps: MigrationHandlerDeps): RequestHandler
             },
             uidForSlug: async (slug) => slug === snapshot.slug ? snapshot.uid : deps.adapter.uidForSlug(slug),
           };
-          const restored = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot);
+          const restored = await restoreCustomerRuntimeFromSnapshot(adapter, snapshot, deps.adapter.isBuilderGateway?.() === false ? { migrationId: body.migrationId } : {});
           recordRestoredConvergence(deps, body.slug, restored);
           return { migrationId: body.migrationId, slug: body.slug, restored: restored.restored, steps: restored.steps };
         });
@@ -2153,18 +2168,101 @@ function recordRestoredConvergence(
   );
 }
 
+function sharedTargetCustody(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, uid: string): MigrationTargetIdentityCustody {
+  const podUid = process.env.POD_UID?.trim();
+  if (!podUid) throw new Error("Shared target identity requires its current pod");
+  const custody = { migrationId: body.migrationId, uid, gatewayId: deps.gatewayId, podUid };
+  assertTargetIdentityCustody(custody, custody);
+  return custody;
+}
+
+async function sharedTargetWorkspaceRestore(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, importDir: string, signal: AbortSignal, stageDir?: string): Promise<(() => Promise<void>) | undefined> {
+  if (deps.adapter.isBuilderGateway?.() !== false) return undefined;
+  signal.throwIfAborted();
+  if (body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) return sharedArchiveWorkspaceRestore({ deps, body, importDir, signal, stageDir });
+  if (body.agentContext) return undefined;
+  return sharedManifestWorkspaceRestore({ deps, body, importDir, signal, stageDir });
+}
+
+type TargetWorkspaceRestoreInput = { deps: MigrationHandlerDeps; body: FinishRsyncImportRequestBody; importDir: string; signal: AbortSignal; stageDir?: string };
+
+async function sharedArchiveWorkspaceRestore({ deps, body, importDir, signal, stageDir }: TargetWorkspaceRestoreInput): Promise<() => Promise<void>> {
+  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) throw new Error("Shared restore policy is missing");
+  const snapshot = await sharedRestoreSnapshot(deps, body, !!stageDir);
+  const custody = sharedTargetCustody(deps, body, snapshot.uid), agentIds = body.agentContext.archive.agentIds;
+  const previous = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: deps.gatewayId, podUid: custody.podUid, request: body, captureOnly: true });
+  let capture = previous?.workspaceIdentities;
+  if (!capture) {
+    if (!stageDir || previous) throw new Error("Shared restoration requires original workspace identity retransmission");
+    capture = await captureTargetWorkspaceIdentities(body.slug, agentIds, stageDir, custody);
+  }
+  assertTargetIdentityCustody(capture, custody);
+  if (stageDir) await writeSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: deps.gatewayId, podUid: custody.podUid, request: body,
+    response: completedImportResponse(body, undefined, body.agentContext.archive), phase: "prepared", workspaceIdentities: capture });
+  const captured = capture;
+  const admitted = await sharedRestoreSnapshot(deps, body, false);
+  if (!isDeepStrictEqual(admitted.nativeSharedContextRestore, snapshot.nativeSharedContextRestore)) throw new Error("Shared workspace identity restore authority changed");
+  signal.throwIfAborted();
+  const assertCurrent = async () => {
+    signal.throwIfAborted();
+    assertTargetIdentityCustody(custody, sharedTargetCustody(deps, body, snapshot.uid));
+    const current = await sharedRestoreSnapshot(deps, body, false);
+    if (!isDeepStrictEqual(current.nativeSharedContextRestore, snapshot.nativeSharedContextRestore)) throw new Error("Shared workspace identity restore authority changed");
+    const retained = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: deps.gatewayId, podUid: custody.podUid, request: body, captureOnly: true });
+    if (retained?.phase !== "installed" || !isDeepStrictEqual(retained.workspaceIdentities, captured)) throw new Error("Shared workspace identity restore capture changed");
+    signal.throwIfAborted();
+  };
+  return () => restoreTargetWorkspaceIdentities(captured, body.slug, agentIds, importDir, { custody, assertCurrent });
+}
+
+async function sharedManifestWorkspaceRestore({ deps, body, importDir, signal, stageDir }: TargetWorkspaceRestoreInput): Promise<() => Promise<void>> {
+  const readAuthority = deps.adapter.targetMigrationIdentityCustody;
+  if (!readAuthority) throw new Error("Shared target requires current migration identity authority");
+  const authority = await readAuthority(body.slug, body.migrationId), custody = authority.custody;
+  assertTargetIdentityCustody(custody, sharedTargetCustody(deps, body, custody.uid));
+  const incoming = await readActivationManifest(stageDir ?? importDir, body.slug);
+  const agentIds = [incoming.agentId, ...incoming.projectAgents.map(agent => agent.agentId)];
+  const previous = stageDir ? await readActivationManifest(importDir, body.slug).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") { return null; } throw error; }) : incoming;
+  const prior = previous?.targetWorkspaceIdentities;
+  let capture: TargetWorkspaceIdentities;
+  if (prior?.migrationId === body.migrationId) {
+    assertTargetIdentityCustody(prior, custody);
+    const withoutCapture = (manifest: typeof incoming) => { const rest = { ...manifest }; delete rest.targetWorkspaceIdentities; return rest; };
+    if (!isDeepStrictEqual(withoutCapture(previous!), withoutCapture(incoming))) throw new Error("Shared target activation manifest changed");
+    capture = validateTargetWorkspaceIdentities(prior, body.slug, agentIds);
+  } else {
+    if (!stageDir) throw new Error("Shared target requires original workspace identity retransmission");
+    capture = await captureTargetWorkspaceIdentities(body.slug, agentIds, stageDir, custody);
+  }
+  const retained = { ...incoming, targetWorkspaceIdentities: capture };
+  if (stageDir) {
+    await writeActivationManifest(importDir, retained);
+    await writeActivationManifest(stageDir, retained);
+  }
+  const assertCurrent = async () => {
+    signal.throwIfAborted();
+    if (!isDeepStrictEqual(await readAuthority(body.slug, body.migrationId), authority)) throw new Error("Shared target migration identity authority changed");
+    assertTargetIdentityCustody(custody, sharedTargetCustody(deps, body, custody.uid));
+    if (!isDeepStrictEqual(await readActivationManifest(importDir, body.slug), retained)) throw new Error("Shared target workspace identity capture changed");
+    signal.throwIfAborted();
+  };
+  await assertCurrent();
+  return () => restoreTargetWorkspaceIdentities(capture, body.slug, agentIds, importDir, { custody, assertCurrent });
+}
+
 async function activateFinishedRsyncImport(input: {
   deps: MigrationHandlerDeps;
   body: FinishRsyncImportRequestBody;
   configTransferMode: MigrationConfigTransferMode;
   loadStrategy: MigrationLoadStrategy;
   signal: AbortSignal;
+  beforeRuntimePublish?: () => Promise<void>;
 }): Promise<string | undefined> {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
   if (body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) {
     const snapshot = await sharedRestoreSnapshot(deps, body, false);
-    const restored = await restoreCustomerRuntimeFromSnapshot(deps.adapter, snapshot, { signal });
+    const restored = await restoreCustomerRuntimeFromSnapshot(deps.adapter, snapshot, { signal, beforeRuntimePublish: input.beforeRuntimePublish });
     recordRestoredConvergence(deps, body.slug, restored);
     deps.adapter.onMounted?.(body.slug);
     return undefined;
@@ -2182,6 +2280,7 @@ async function activateFinishedRsyncImport(input: {
         mode: "final",
         loadStrategy,
         signal,
+        beforeRuntimePublish: input.beforeRuntimePublish,
       });
     }
     deps.adapter.writeMountMarker?.(body.slug);
@@ -2380,10 +2479,12 @@ async function replaySharedAgentContextRestore(deps: MigrationHandlerDeps, body:
   try {
     await withCustomerRemoval(body.slug, async () => {
       await validateAgentContextTransfer(deps, body, "target", mode);
+      if (receipt.phase === "prepared") throw new Error("Prepared Shared context requires full source retransmission");
       await assertInstalledSharedContext(body, receipt.databasePaths);
       if (receipt.phase === "installed") {
         await sharedRestoreSnapshot(deps, body, false);
-        await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal });
+        const beforeRuntimePublish = await sharedTargetWorkspaceRestore(deps, body, resolveOpenClawStateDir(), controller.signal);
+        await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal, beforeRuntimePublish });
         await writeSharedAgentContextRestoreReceipt({ stateDir: resolveOpenClawStateDir(), gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body, response: receipt.response });
       }
     });
@@ -2459,6 +2560,7 @@ async function recoverMissingSharedRestore(deps: MigrationHandlerDeps, body: Fin
     await withCustomerRemoval(body.slug, async () => {
     await validateAgentContextTransfer(deps, body, "target", "final");
     const snapshot = await sharedRecoverySnapshot(deps, body);
+    const beforeRuntimePublish = await sharedTargetWorkspaceRestore(deps, body, resolveOpenClawStateDir(), controller.signal);
     if (!deps.adapter.sharedContextCheckpoint) throw new Error("Shared context checkpoint recovery is unavailable");
     const download = await deps.adapter.sharedContextCheckpoint({ ...snapshot.nativeSharedContextRestore!, checkpoint: recovery.checkpoint }, controller.signal);
     const recovered = await recoverSharedAgentContextCheckpoint({ archive, recovery,
@@ -2468,7 +2570,7 @@ async function recoverMissingSharedRestore(deps: MigrationHandlerDeps, body: Fin
       await assertMatchingSharedContextPreparation({ importDir: resolveOpenClawStateDir(), archiveRoot: recovered.root, agentIds: archive.agentIds, signal: controller.signal });
       await installRecoveredSharedContext(deps, body, recovered.root, controller.signal);
       await markSharedRestoreInstalled(deps, body, resolveOpenClawStateDir());
-      await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal });
+      await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal, beforeRuntimePublish });
       const response = completedImportResponse(body, undefined, archive);
       await writeSharedAgentContextRestoreReceipt({ stateDir: resolveOpenClawStateDir(), gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body, response });
       log(`[migration-rsync] recovered Shared context from pinned native checkpoint slug=${body.slug} archiveId=${archive.archiveId}`);
@@ -2541,6 +2643,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       }
       await withSharedRestoreCustody(body, async () => {
       await validateFinishedImportAdmission(deps, body, mode);
+      const beforeRuntimePublish = mode === "final" ? await sharedTargetWorkspaceRestore(deps, body, session.importDir, controller.signal, session.stageDir) : undefined;
       const sharedAgentContext = await deliverStagedImport({
         deps,
         session,
@@ -2563,6 +2666,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
           configTransferMode,
           loadStrategy,
           signal: controller.signal,
+          beforeRuntimePublish,
         })
         : undefined;
       const activatedAt = Date.now();

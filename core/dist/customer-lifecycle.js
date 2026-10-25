@@ -24,6 +24,11 @@ export async function addCustomerToGateway(adapter, uid, opts = {}) {
         return runUidMountExclusive(uid, opts, (signal, markStep) => addCustomerToGatewayInner(adapter, uid, { ...opts, signal, markStep }));
     });
 }
+export async function prepareCustomerRuntimePublication(options = {}) {
+    options.signal?.throwIfAborted();
+    await options.beforeRuntimePublish?.();
+    options.signal?.throwIfAborted();
+}
 export async function restoreCustomerRuntimeFromSnapshot(adapter, snapshot, opts = {}) {
     return withLogContext({}, async () => {
         setLogContext({ builderSlug: snapshot.slug, category: "lifecycle" });
@@ -139,6 +144,8 @@ async function restoreCustomerRuntimeFromSnapshotInner(adapter, snapshot, opts) 
         signal,
         withoutProjectIds: projectClones.pending,
         runtimePublication: opts.runtimePublication,
+        beforeRuntimePublish: opts.beforeRuntimePublish,
+        migrationId: opts.migrationId,
     });
     steps.push(CONFIG_PATCH);
     throwIfAborted(signal, uid);
@@ -697,6 +704,8 @@ async function provisionMattermostIfMissing(adapter, uid, snapshot, ctx) {
 async function applyConfigPatchAndMount(adapter, snapshot, mmUpdate, options) {
     const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
         signal: options.signal,
+        ...(options.beforeRuntimePublish ? { beforeRuntimePublish: options.beforeRuntimePublish } : {}),
+        ...(options.migrationId ? { migrationId: options.migrationId } : {}),
         byosActive: options.byosActive,
         evictionBatch: options.evictionBatch,
         currentEvictionBatch: options.currentEvictionBatch,

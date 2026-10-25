@@ -161,6 +161,9 @@ function validateManifestShape(value, slug) {
         appliedFingerprint,
         ...workspace,
         projectAgents,
+        ...(value.targetWorkspaceIdentities === undefined ? {} : {
+            targetWorkspaceIdentities: validateTargetWorkspaceIdentities(value.targetWorkspaceIdentities, slug, [workspace, ...projectAgents].map(agent => agent.agentId)),
+        }),
         ...(value.sourceWorkspaceIdentities === undefined ? {} : {
             sourceWorkspaceIdentities: validateSourceWorkspaceIdentities(value.sourceWorkspaceIdentities, [workspace, ...projectAgents]),
         }),
@@ -189,11 +192,16 @@ function identityBytes(file) {
 function validateSourceWorkspaceIdentities(value, agents) {
     validateSourceIdentityCustody(value);
     const raw = value;
-    if (!Array.isArray(raw.files) || raw.files.length !== agents.length || raw.files.length > 16_384) {
+    const files = validateWorkspaceIdentityFiles(raw.files, agents);
+    return { migrationId: value.migrationId, uid: value.uid, gatewayId: value.gatewayId,
+        podUid: value.podUid, epoch: value.epoch, files };
+}
+function validateWorkspaceIdentityFiles(rawFiles, agents) {
+    if (!Array.isArray(rawFiles) || rawFiles.length !== agents.length || rawFiles.length > 16_384) {
         throw new Error("Source workspace identity coverage is invalid");
     }
     const expected = new Set(agents.map(agent => agent.agentId));
-    const files = raw.files.map(file => {
+    return rawFiles.map(file => {
         if (!isRecord(file) || typeof file.agentId !== "string" || !expected.delete(file.agentId)) {
             throw new Error("Source workspace identity agent is invalid");
         }
@@ -201,8 +209,77 @@ function validateSourceWorkspaceIdentities(value, agents) {
         identityBytes(captured);
         return captured;
     });
-    return { migrationId: value.migrationId, uid: value.uid, gatewayId: value.gatewayId,
-        podUid: value.podUid, epoch: value.epoch, files };
+}
+function targetIdentityAgents(slug, agentIds, stateDir) {
+    if (agentIds.length === 0 || agentIds.length > 16_384 || new Set(agentIds).size !== agentIds.length)
+        throw new Error("Target workspace identity coverage is invalid");
+    return agentIds.map(agentId => {
+        const parsed = parseAgentId(agentId);
+        if (parsed.kind === "unknown" || parsed.username !== slug)
+            throw new Error("Target workspace identity agent is foreign");
+        return { agentId, agent: { workspace: path.join(stateDir, "customers", slug, ...(parsed.kind === "project" ? ["projects", parsed.project] : [])) } };
+    });
+}
+export function assertTargetIdentityCustody(expected, actual) {
+    for (const value of [expected, actual]) {
+        if (!isRecord(value) || !["uid", "gatewayId", "podUid"].every(key => typeof value[key] === "string" && /^[A-Za-z0-9_.:-]{1,200}$/u.test(value[key])) ||
+            value.migrationId !== undefined && (typeof value.migrationId !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/u.test(value.migrationId)) ||
+            value.assignmentEpoch !== undefined && (!Number.isSafeInteger(value.assignmentEpoch) || Number(value.assignmentEpoch) < 0) ||
+            value.migrationId === undefined && value.assignmentEpoch === undefined)
+            throw new Error("Target workspace identity custody is invalid");
+    }
+    if (["migrationId", "assignmentEpoch", "uid", "gatewayId", "podUid"].some(key => expected[key] !== actual[key]))
+        throw new Error("Target workspace identity custody changed");
+}
+export function validateTargetWorkspaceIdentities(value, slug, agentIds) {
+    if (!isRecord(value))
+        throw new Error("Target workspace identity capture is missing");
+    const custody = value;
+    assertTargetIdentityCustody(custody, custody);
+    const agents = targetIdentityAgents(slug, agentIds, "/");
+    if (!Array.isArray(value.files) || value.files.length > 16_384)
+        throw new Error("Target workspace identity coverage is invalid");
+    const selectedIds = custody.assignmentEpoch !== undefined && custody.migrationId === undefined && Array.isArray(value.files)
+        ? new Set(value.files.map(file => isRecord(file) ? file.agentId : undefined)) : undefined;
+    const selected = selectedIds ? agents.filter(agent => selectedIds.has(agent.agentId)) : agents;
+    if (selected.length === 0)
+        throw new Error("Target workspace identity coverage is invalid");
+    const files = validateWorkspaceIdentityFiles(value.files, selected);
+    if (Buffer.byteLength(JSON.stringify(value)) > MIGRATION_ACTIVATION_MAX_BYTES)
+        throw new Error("Target workspace identity capture exceeds transfer limit");
+    return { ...(custody.migrationId === undefined ? {} : { migrationId: custody.migrationId }), ...(custody.assignmentEpoch === undefined ? {} : { assignmentEpoch: custody.assignmentEpoch }), uid: custody.uid, gatewayId: custody.gatewayId, podUid: custody.podUid, files };
+}
+export async function captureTargetWorkspaceIdentities(slug, agentIds, stateDir, custody) {
+    assertTargetIdentityCustody(custody, custody);
+    if (await fs.realpath(stateDir) !== stateDir)
+        throw new Error("Target workspace identity root is not canonical");
+    const files = [];
+    let bytesCaptured = 0;
+    for (const agent of targetIdentityAgents(slug, agentIds, stateDir)) {
+        let bytes = null;
+        try {
+            await withIdentityWorkspace(stateDir, slug, agent, async (location) => { bytes = await readSourceIdentity(location); });
+        }
+        catch (error) {
+            if (error.code !== "ENOENT")
+                throw error;
+        }
+        const content = bytes;
+        const file = { agentId: agent.agentId, content: content?.toString("base64") ?? null, sha256: content === null ? null : createHash("sha256").update(content).digest("hex") };
+        bytesCaptured += Buffer.byteLength(JSON.stringify(file));
+        if (bytesCaptured > MIGRATION_ACTIVATION_MAX_BYTES)
+            throw new Error("Target workspace identity capture exceeds transfer limit");
+        files.push(file);
+    }
+    return validateTargetWorkspaceIdentities({ ...custody, files }, slug, agentIds);
+}
+export async function restoreTargetWorkspaceIdentities(value, slug, agentIds, stateDir, options) {
+    const { custody, assertCurrent } = options;
+    const capture = validateTargetWorkspaceIdentities(value, slug, agentIds);
+    assertTargetIdentityCustody(capture, custody);
+    await assertCurrent();
+    await restoreIdentityFiles(targetIdentityAgents(slug, capture.files.map(file => file.agentId), stateDir), slug, stateDir, capture.files, { assertCurrent, allowAbsentWorkspace: true });
+    await assertCurrent();
 }
 export function assertSourceIdentityCustody(expected, actual) {
     validateSourceIdentityCustody(expected);
@@ -306,43 +383,55 @@ export async function captureSourceWorkspaceIdentities(manifest, stateDir, custo
 export async function restoreSourceWorkspaceIdentities(manifest, stateDir, custody, assertCurrent) {
     const captured = validateSourceWorkspaceIdentities(manifest.sourceWorkspaceIdentities, manifestAgents(manifest));
     assertSourceIdentityCustody(captured, custody);
-    const files = new Map(captured.files.map(file => [file.agentId, file]));
-    for (const agent of manifestAgents(manifest))
-        await withIdentityWorkspace(stateDir, manifest.slug, agent, async (location, assertDirectory) => {
-            const bytes = identityBytes(files.get(agent.agentId));
-            const current = await readSourceIdentity(location);
-            if (current === null && bytes === null || current !== null && bytes !== null && current.equals(bytes))
-                return;
-            const temporary = `${location}.${randomUUID()}.tmp`;
-            try {
-                if (bytes !== null) {
-                    const file = await fs.open(temporary, "wx", 0o600);
+    await restoreIdentityFiles(manifestAgents(manifest), manifest.slug, stateDir, captured.files, { assertCurrent });
+}
+async function restoreIdentityFiles(agents, slug, stateDir, captured, options) {
+    const { assertCurrent } = options;
+    const files = new Map(captured.map(file => [file.agentId, file]));
+    for (const agent of agents) {
+        try {
+            await withIdentityWorkspace(stateDir, slug, agent, async (location, assertDirectory) => {
+                const bytes = identityBytes(files.get(agent.agentId));
+                const current = await readSourceIdentity(location);
+                if (current === null && bytes === null || current !== null && bytes !== null && current.equals(bytes))
+                    return;
+                const temporary = `${location}.${randomUUID()}.tmp`;
+                try {
+                    if (bytes !== null) {
+                        const file = await fs.open(temporary, "wx", 0o600);
+                        try {
+                            await file.writeFile(bytes);
+                            await file.sync();
+                        }
+                        finally {
+                            await file.close();
+                        }
+                    }
+                    await assertCurrent();
+                    await assertDirectory();
+                    if (bytes === null)
+                        await fs.unlink(location);
+                    else
+                        await fs.rename(temporary, location);
+                    const directory = await fs.open(path.dirname(location), "r");
                     try {
-                        await file.writeFile(bytes);
-                        await file.sync();
+                        await directory.sync();
                     }
                     finally {
-                        await file.close();
+                        await directory.close();
                     }
                 }
-                await assertCurrent();
-                await assertDirectory();
-                if (bytes === null)
-                    await fs.unlink(location);
-                else
-                    await fs.rename(temporary, location);
-                const directory = await fs.open(path.dirname(location), "r");
-                try {
-                    await directory.sync();
-                }
                 finally {
-                    await directory.close();
+                    await fs.rm(temporary, { force: true });
                 }
-            }
-            finally {
-                await fs.rm(temporary, { force: true });
-            }
-        });
+            });
+        }
+        catch (error) {
+            if (!options.allowAbsentWorkspace || identityBytes(files.get(agent.agentId)) !== null || error.code !== "ENOENT")
+                throw error;
+            await assertCurrent();
+        }
+    }
 }
 function sourceAgents(parsed) {
     const entries = parsed.agents?.entries;

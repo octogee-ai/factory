@@ -27,6 +27,7 @@ export interface UserSnapshot {
   status: "" | "provisioning" | "complete";
   agentIds: string[];
   nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
+  restoreAuthority?: FleetBrokerUserSnapshot["restoreAuthority"];
   repoUrl: string;
   mattermostUserId: string | null;
   channels: CustomerSnapshot["channels"];
@@ -246,6 +247,8 @@ opts?: {
    *  before the runtime secrets reload that follows the config patch. */
   brokerProfilesReady?: Promise<void>;
   runtimePublication?: AddCustomerOptions["runtimePublication"];
+  beforeRuntimePublish?: () => Promise<void>;
+  migrationId?: string;
 },
   ) => Promise<{ elapsedMs: number; appliedFingerprint?: string }>;
   reconcileConfiguredBuilderProjectAgents?: (
@@ -290,9 +293,14 @@ listExportPaths: (slug: string) => Promise<Array<{ cwd: string; path: string }>>
 prepareImportDir: (slug: string, mode: CustomerStateImportMode) => Promise<string>;
 prepareKeyImportDir: (slug: string) => Promise<string>;
 
+  targetMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<{
+    custody: import("./migration-activation-manifest.js").MigrationTargetIdentityCustody;
+    migration: import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchorMigration;
+  }>;
+
   activateImportedCustomer: (
     slug: string,
-    opts?: { signal?: AbortSignal; migrationId?: string },
+    opts?: { signal?: AbortSignal; migrationId?: string; beforeRuntimePublish?: () => Promise<void> },
   ) => Promise<{ appliedFingerprint: string; verificationPending?: string }>;
   recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
 
@@ -415,6 +423,8 @@ export interface AddCustomerOptions {
   currentEvictionBatch?: () => Promise<readonly string[]>;
 
   runtimePublication?: { settled: Promise<void>; invalidateFingerprint: () => void };
+  beforeRuntimePublish?: () => Promise<void>;
+  migrationId?: string;
 
 signal?: AbortSignal;
 
@@ -433,6 +443,12 @@ export async function addCustomerToGateway(
       addCustomerToGatewayInner(adapter, uid, { ...opts, signal, markStep }),
     );
   });
+}
+
+export async function prepareCustomerRuntimePublication(options: { signal?: AbortSignal; beforeRuntimePublish?: () => Promise<void> } = {}): Promise<void> {
+  options.signal?.throwIfAborted();
+  await options.beforeRuntimePublish?.();
+  options.signal?.throwIfAborted();
 }
 
 export async function restoreCustomerRuntimeFromSnapshot(
@@ -584,6 +600,8 @@ async function restoreCustomerRuntimeFromSnapshotInner(
     signal,
     withoutProjectIds: projectClones.pending,
     runtimePublication: opts.runtimePublication,
+    beforeRuntimePublish: opts.beforeRuntimePublish,
+    migrationId: opts.migrationId,
   });
   steps.push(CONFIG_PATCH);
   throwIfAborted(signal, uid);
@@ -1360,10 +1378,14 @@ async function applyConfigPatchAndMount(
     withoutProjectIds?: readonly string[];
     brokerProfilesReady?: Promise<void>;
     runtimePublication?: AddCustomerOptions["runtimePublication"];
+    beforeRuntimePublish?: () => Promise<void>;
+    migrationId?: string;
   },
 ): Promise<string | undefined> {
   const patchResult = await adapter.applyAddCustomerConfigPatch(snapshot, mmUpdate, {
     signal: options.signal,
+    ...(options.beforeRuntimePublish ? { beforeRuntimePublish: options.beforeRuntimePublish } : {}),
+    ...(options.migrationId ? { migrationId: options.migrationId } : {}),
     byosActive: options.byosActive,
     evictionBatch: options.evictionBatch,
     currentEvictionBatch: options.currentEvictionBatch,

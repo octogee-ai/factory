@@ -1,6 +1,7 @@
 import { type GatewayStatus, type NativeSharedAgentContextStage } from "@octogee/shared/types/fleet-controller";
 import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
+import type { FleetBrokerCustomerRestoreAuthority } from "@octogee/shared/types/fleet-broker";
 import { type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
 export interface FleetStateDeps {
     db: FleetStateFirestore;
@@ -93,6 +94,11 @@ export interface CustomerRestoreInput {
     claimStartedAt: number;
     attemptId: string;
 }
+export declare function readCustomerRestoreAuthoritySnapshot(deps: Pick<FleetStateDeps, "db">, scope: {
+    uid: string;
+    slug: string;
+    gatewayId: string;
+}): Promise<FleetBrokerCustomerRestoreAuthority | undefined>;
 export declare function beginCustomerRestore(deps: FleetStateDeps, input: CustomerRestoreInput, options?: {
     resume?: boolean;
 }): Promise<CustomerRestoreInput>;

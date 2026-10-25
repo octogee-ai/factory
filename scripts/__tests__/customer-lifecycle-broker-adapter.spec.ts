@@ -38,7 +38,11 @@ import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard
 import { clearBuilderClaim, stubBuilderClaim, withBuilderClaim } from "./helpers/builder-claim.js";
 import { mattermostAccountSecretRef } from "../lib/mattermost-account-secrets.js";
 import { recordBuilderNativeInitialState } from "../lib/builder-native-initial-state.js";
-import { captureSourceWorkspaceIdentities, writeActivationManifest, readActivationManifest as realReadActivationManifest } from "@octogee/core/migration-activation-manifest";
+import { activationManifestTarPath, captureTargetWorkspaceIdentities, restoreTargetWorkspaceIdentities, captureSourceWorkspaceIdentities, writeActivationManifest, readActivationManifest as realReadActivationManifest } from "@octogee/core/migration-activation-manifest";
+import { createRestoreHandler } from "../lib/fleet-http-migration.js";
+import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
+import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
+import type { Request, Response } from "express";
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -261,6 +265,7 @@ vi.mock("../lib/mattermost-routing-activation.js", () => ({
 function mkClient(overrides: Partial<FleetBrokerClient> = {}): FleetBrokerClient {
   return {
     assignedUsers: vi.fn(async () => []),
+    assignmentRoster: vi.fn(async () => [{ uid: "uid-alice", state: "serving", epoch: 0 }]),
     uidForSlug: vi.fn(async () => "uid-tester10"),
     githubTokenForSync: vi.fn(async () => null),
     userSnapshot: vi.fn(async () => null),
@@ -386,6 +391,7 @@ function aliceSnapshot(
     tier: "standard",
     gatewayId: "default",
     status: "",
+    runtimeMutationFenced: false,
     agentIds: [],
     repoUrl: "",
     mattermostUserId: ALICE_OWNER_MM_ID,
@@ -511,7 +517,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       { accountId: "tester10-proj-orbit", running: true, connected: true },
     ] } })) });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ ...(resuming ? { userSnapshot: vi.fn(async () => ({ uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", status: "complete" }) as FleetBrokerUserSnapshot), assignmentRoster: vi.fn(async () => [{ uid: "uid-tester10", state: quiescing ? "quiescing" as const : "serving" as const, epoch: 0 }]) } : {}), ...(migrating ? { uidForSlug: vi.fn(async () => null) } : {}), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
-    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10", { migrationId: "mig-move" });
+    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId, beforeRuntimePublish: async () => undefined }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10", { migrationId: "mig-move" });
     const observed = activation.catch((error) => error);
     try {
       const refusals: Partial<Record<string, string>> = {
@@ -870,6 +876,262 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
     return { workspace, project, projectId, coachId, originals, manifest, binding, client, rpc, nativeWrite, adapter };
   }
+
+  it.skipIf(process.platform !== "linux")("preserves transferred coach and project persona before Shared target activation routing", async () => {
+    try {
+      const fixture = await sourcePersonaFixture();
+      vi.stubEnv("GATEWAY_ID", "shared-target");
+      vi.stubEnv("POD_UID", "target-pod");
+      const custody = { migrationId: fixture.binding.migrationId, uid: fixture.binding.uid, gatewayId: "shared-target", podUid: "target-pod" };
+      const ids = [fixture.coachId, fixture.projectId];
+      const capture = await captureTargetWorkspaceIdentities("tester10", ids, testRuntime.dir, custody);
+      await writeActivationManifest(testRuntime.dir, { ...fixture.manifest, targetWorkspaceIdentities: capture });
+      await fixture.adapter.activateImportedCustomer("tester10", { migrationId: fixture.binding.migrationId,
+        beforeRuntimePublish: async () => {
+          const retained = await realReadActivationManifest(testRuntime.dir, "tester10");
+          await restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, "tester10", ids, testRuntime.dir, { custody, assertCurrent: async () => undefined });
+        },
+      });
+      expect(fixture.rpc.agentsCreate).toHaveBeenCalledTimes(2);
+      expect(mocks.applyOpenClawActivationManifest).toHaveBeenCalledOnce();
+      for (const [dir, bytes] of fixture.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("does not restore target personas or publish after Native ACKs when the request aborts", async () => {
+    try {
+      const f = await sourcePersonaFixture(), controller = new AbortController();
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => { const value = await f.nativeWrite(params); if (params.name === f.projectId) { controller.abort(new Error("target request cancelled")); } return value; });
+      const beforeRuntimePublish = vi.fn(async () => undefined);
+      await expect(f.adapter.activateImportedCustomer("tester10", { migrationId: f.binding.migrationId, signal: controller.signal, beforeRuntimePublish })).rejects.toThrow("target request cancelled");
+      expect(beforeRuntimePublish).not.toHaveBeenCalled(); expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).not.toEqual(f.originals.get(f.project));
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  async function assignedPersonaFixture() {
+    const f = await sourcePersonaFixture();
+    await fs.unlink(path.join(testRuntime.dir, activationManifestTarPath("tester10")));
+    const snapshot = aliceSnapshot({ uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", status: "complete", runtimeMutationFenced: false, customerMmUserId: TESTER_OWNER_MM_ID, mattermostUserId: TESTER_OWNER_MM_ID,
+      coachIdentity: { name: "Config name differs" }, coachToken: "coach-token", projectAgents: [{ projectId: "persona", enabled: true, status: "ready", token: "project-token", mmUserId: "pppppppppppppppppppppppppp" }] });
+    vi.mocked(f.client.userSnapshot).mockResolvedValue(snapshot);
+    vi.mocked(f.client.assignmentRoster).mockResolvedValue([{ uid: snapshot.uid, state: "serving", epoch: 4 }]);
+    mocks.removeActivationManifest.mockImplementation(async () => { await fs.rm(path.join(testRuntime.dir, activationManifestTarPath("tester10")), { force: true }); });
+    return { ...f, snapshot, mount: (options = {}) => f.adapter.applyAddCustomerConfigPatch(snapshot as never, { _coachPersonalToken: "coach-token" }, options) };
+  }
+
+  function assignedPersonaRoster(f: Awaited<ReturnType<typeof assignedPersonaFixture>>, ids: string[]) {
+    return configSnapshot({ agents: { entries: Object.fromEntries(ids.map(id => [id, {
+      workspace: id === f.coachId ? f.workspace : f.project, agentDir: path.join(testRuntime.dir, "agents", id, "agent"),
+    }])) }, channels: { mattermost: { accounts: { "tester10-coach": {}, "tester10-proj-persona": {} } } } });
+  }
+
+  function assignedRestoreAuthority() {
+    return { uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", fromGatewayId: "builder-source", assignmentEpoch: 4,
+      operationId: "restore-operation", migrationId: "mig-restore-operation", claimStartedAt: 123, attemptId: "restore-attempt", phase: "dispatched" as const, dispatchedAt: 125, dispatchClaimStartedAt: 123 };
+  }
+
+  it.skipIf(process.platform !== "linux")("signed Shared restore captures converged Git bytes before actual Native creation", async () => {
+    try {
+      const f = await assignedPersonaFixture();
+      const snapshot = { ...f.snapshot, repoUrl: "git@gitea:octogee/tester10-workspace.git", projectAgents: [], projects: [], restoreAuthority: assignedRestoreAuthority(), runtimeMutationFenced: true };
+      vi.mocked(f.client.userSnapshot).mockResolvedValue(snapshot);
+      const original = Buffer.from("# Restored from durable Git\r\n- Name: Authored restored name 🐙\r\n");
+      const adapter = { ...f.adapter, hasCustomerSshKey: () => true, readLocalCustomerPubKey: () => "ssh-ed25519 TEST", readGiteaCustomerPubKeys: async () => ["ssh-ed25519 TEST"], createGiteaUser: async () => undefined,
+        ensureGiteaOrg: async () => undefined, hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => { await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), original); return true; },
+        removePartialWorkspace: async () => undefined,
+        ensureCustomerDirectories: () => undefined, writeCustomerTemplateFiles: async () => undefined, blobSyncForSlug: async () => undefined,
+        restoreByosubForAgent: async () => ({ restored: false, present: false }), isBuilderGateway: () => false };
+      const body = { migrationId: snapshot.restoreAuthority.migrationId, uid: snapshot.uid, slug: snapshot.slug, snapshot };
+      const rawBody = JSON.stringify(body), signature = signFleetRequest(FLEET_KEY_PAIR.privateKey, gatewayScopedJobId(body.migrationId, "shared-source"), rawBody);
+      const req = { header: () => signature, params: { gatewayId: "shared-source" }, rawBody } as unknown as Request;
+      let status: number | undefined, payload: unknown;
+      const res = { status(code: number) { status = code; return this; }, json(value: unknown) { payload = value; return this; } } as unknown as Response;
+      await createRestoreHandler({ gatewayId: "shared-source", publicKey: FLEET_KEY_PAIR.publicKey, adapter, log: vi.fn() })(req, res, vi.fn());
+      expect(status, JSON.stringify(payload)).toBe(200);
+      expect(f.rpc.agentsCreate).toHaveBeenCalledOnce();
+      expect(await fs.readFile(path.join(f.workspace, "IDENTITY.md"))).toEqual(original);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["missing", "claim", "operation", "epoch"])("refuses Shared restore when current attested authority is %s", async mode => {
+    try {
+      const f = await assignedPersonaFixture(), restoreAuthority = assignedRestoreAuthority();
+      const snapshot = { ...f.snapshot, restoreAuthority, runtimeMutationFenced: true };
+      vi.mocked(f.client.userSnapshot).mockResolvedValue(mode === "missing" ? f.snapshot : snapshot);
+      if (mode !== "missing") vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+        const result = await f.nativeWrite(params);
+        const next = { ...restoreAuthority, ...(mode === "claim" ? { claimStartedAt: 124 } : mode === "operation" ? { operationId: "successor" } : { assignmentEpoch: 5 }) };
+        vi.mocked(f.client.userSnapshot).mockResolvedValue({ ...snapshot, restoreAuthority: next });
+        return result;
+      });
+      await expect(f.mount({ migrationId: restoreAuthority.migrationId })).rejects.toThrow(/authority/);
+      expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+      if (mode === "missing") expect(f.rpc.agentsCreate).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("preserves restored authored personas during ordinary complete Shared cold mount", async () => {
+    try {
+      const f = await assignedPersonaFixture();
+      await f.mount();
+      expect(f.rpc.agentsCreate).toHaveBeenCalledTimes(2);
+      for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+      await expect(fs.access(path.join(testRuntime.dir, activationManifestTarPath("tester10")))).rejects.toThrow();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("retains only missing-agent originals across a late create and duplicate mount retry", async () => {
+    try {
+      const f = await assignedPersonaFixture();
+      const rostered = [f.coachId];
+      vi.mocked(f.rpc.configGet).mockImplementation(async () => assignedPersonaRoster(f, rostered));
+      let late!: () => Promise<void>, failed = false;
+      const currentCoach = Buffer.from("# Coach edited while already live\n- Name: Live author\n");
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+        if (params.name === f.coachId) { await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), currentCoach); throw new OpenclawWireError("rpc-error", `agent "${params.name}" already exists`); }
+        if (!failed) { failed = true; late = async () => { await f.nativeWrite(params); rostered.push(f.projectId); }; throw new Error("create response timed out"); }
+        throw new OpenclawWireError("rpc-error", `agent "${params.name}" already exists`);
+      });
+      await expect(f.mount()).rejects.toThrow("create response timed out");
+      expect((await realReadActivationManifest(testRuntime.dir, "tester10")).targetWorkspaceIdentities?.files.map(file => file.agentId)).toEqual([f.projectId]);
+      await late();
+      await f.mount();
+      expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).toEqual(f.originals.get(f.project));
+      expect(await fs.readFile(path.join(f.workspace, "IDENTITY.md"))).toEqual(currentCoach);
+      expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each([false, true])("ordinary reconcile preserves live edits after successful import (retained verification manifest: %s)", async retained => {
+    try {
+      const f = await assignedPersonaFixture();
+      const capture = await captureTargetWorkspaceIdentities("tester10", [f.coachId, f.projectId], testRuntime.dir, { migrationId: "mig-incoming", uid: f.snapshot.uid, gatewayId: "shared-source", podUid: "source-pod" });
+      const manifest = { ...f.manifest, targetWorkspaceIdentities: capture };
+      await writeActivationManifest(testRuntime.dir, manifest);
+      await f.adapter.activateImportedCustomer("tester10", { migrationId: "mig-incoming", beforeRuntimePublish: async () => {
+        await restoreTargetWorkspaceIdentities(capture, "tester10", [f.coachId, f.projectId], testRuntime.dir, { custody: capture, assertCurrent: async () => undefined });
+      } });
+      await expect(fs.access(path.join(testRuntime.dir, activationManifestTarPath("tester10")))).rejects.toThrow();
+      if (retained) await writeActivationManifest(testRuntime.dir, manifest);
+      vi.mocked(f.rpc.configGet).mockImplementation(async () => assignedPersonaRoster(f, [f.coachId, f.projectId]));
+      const edited = Buffer.from("# Identity\n- Name: Legitimate later author\n");
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => { if (params.name === f.projectId) { await fs.writeFile(path.join(f.project, "IDENTITY.md"), edited); } throw new OpenclawWireError("rpc-error", `agent "${params.name}" already exists`); });
+      await f.mount();
+      expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).toEqual(edited);
+      await expect(fs.access(path.join(testRuntime.dir, activationManifestTarPath("tester10")))).rejects.toThrow();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each([false, true])("source resume preserves originals retained by an interrupted ordinary Shared mount (project absent: %s)", async absent => {
+    try {
+      const f = await assignedPersonaFixture();
+      if (absent) {
+        await fs.unlink(path.join(f.project, "IDENTITY.md"));
+        vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+          if (params.name !== f.projectId) return f.nativeWrite(params);
+          await fs.writeFile(path.join(f.project, "IDENTITY.md"), "- Name: Native-created project\n");
+          return { ok: true, agentId: params.name, name: params.name, workspace: params.workspace };
+        });
+      }
+      routingActivationMocks.capture.mockRejectedValueOnce(new Error("mount routing baseline interrupted"));
+      await expect(f.mount()).rejects.toThrow("mount routing baseline interrupted");
+      const retained = await realReadActivationManifest(testRuntime.dir, "tester10");
+      expect(retained.sourceWorkspaceIdentities).toBeUndefined();
+      expect(retained.targetWorkspaceIdentities).toMatchObject({ uid: f.snapshot.uid, gatewayId: "shared-source", podUid: "source-pod", assignmentEpoch: 4 });
+      expect(retained.targetWorkspaceIdentities!.migrationId).toBeUndefined();
+      for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).not.toEqual(bytes);
+      vi.mocked(f.client.assignmentRoster).mockResolvedValue([{ uid: f.snapshot.uid, state: "quiescing", epoch: 4 }]);
+      vi.mocked(f.rpc.configGet).mockImplementation(async () => assignedPersonaRoster(f, [f.coachId, f.projectId]));
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => { throw new OpenclawWireError("rpc-error", `agent "${params.name}" already exists`); });
+      vi.mocked(f.rpc.agentsCreate).mockClear();
+      mocks.applyOpenClawActivationManifest.mockResolvedValue({ routingActivationRequired: false, elapsedMs: 0 });
+      await f.adapter.resumeCustomer("tester10", { migrationId: "mig-after-interrupted-mount" });
+      expect(f.rpc.agentsCreate).toHaveBeenCalledTimes(2);
+      expect(f.rpc.channelsStart).toHaveBeenCalled();
+      await expect(fs.access(path.join(testRuntime.dir, activationManifestTarPath("tester10")))).rejects.toThrow();
+      for (const [dir, bytes] of f.originals) {
+        if (absent && dir === f.project) await expect(fs.access(path.join(dir, "IDENTITY.md"))).rejects.toThrow();
+        else expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["uid", "gatewayId", "podUid", "assignmentEpoch", "migrationId"] as const)("refuses a normal mount capture with foreign %s before source resume effects", async key => {
+    try {
+      const f = await assignedPersonaFixture();
+      const capture = await captureTargetWorkspaceIdentities("tester10", [f.coachId, f.projectId], testRuntime.dir, { uid: f.snapshot.uid, gatewayId: "shared-source", podUid: "source-pod", assignmentEpoch: 4 });
+      const retained = { ...f.manifest, targetWorkspaceIdentities: { ...capture, [key]: key === "assignmentEpoch" ? 5 : "foreign" } };
+      delete retained.sourceWorkspaceIdentities;
+      await writeActivationManifest(testRuntime.dir, retained);
+      vi.mocked(f.rpc.configGet).mockImplementation(async () => assignedPersonaRoster(f, [f.coachId, f.projectId]));
+      vi.mocked(f.client.assignmentRoster).mockResolvedValue([{ uid: f.snapshot.uid, state: "quiescing", epoch: 4 }]);
+      await expect(f.adapter.resumeCustomer("tester10", { migrationId: "mig-after-interrupted-mount" })).rejects.toThrow(/custody changed|migration-bound/);
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled(); expect(f.rpc.channelsStart).not.toHaveBeenCalled();
+      expect(secretMocks.materializeActivationManifestSecret).not.toHaveBeenCalled();
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled(); expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect((await realReadActivationManifest(testRuntime.dir, "tester10")).targetWorkspaceIdentities).toEqual(retained.targetWorkspaceIdentities);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["absent", "fenced", "unknown", "epoch", "pod", "successor"])("refuses assigned workspace restoration before publication when authority changes: %s", async mode => {
+    try {
+      const f = await assignedPersonaFixture();
+      if (mode === "absent") vi.mocked(f.client.assignmentRoster).mockResolvedValue([]);
+      else if (mode === "fenced") vi.mocked(f.client.userSnapshot).mockResolvedValue({ ...f.snapshot, runtimeMutationFenced: true });
+      else if (mode === "unknown") vi.mocked(f.client.userSnapshot).mockResolvedValue({ ...f.snapshot, runtimeMutationFenced: undefined });
+      else vi.mocked(f.rpc.agentsCreate).mockImplementation(async params => {
+        const result = await f.nativeWrite(params);
+        if (mode === "epoch") vi.mocked(f.client.assignmentRoster).mockResolvedValue([{ uid: f.snapshot.uid, state: "serving", epoch: 5 }]);
+        if (mode === "pod") vi.stubEnv("POD_UID", "successor-pod");
+        if (mode === "successor") { const manifest = await realReadActivationManifest(testRuntime.dir, "tester10"); await writeActivationManifest(testRuntime.dir, { ...manifest, appliedFingerprint: "successor" }); }
+        return result;
+      });
+      await expect(f.mount()).rejects.toThrow(/authority|capture changed|unfenced serving/);
+      expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+      expect(routingActivationMocks.activateAfterPatch).not.toHaveBeenCalled();
+      if (mode === "absent" || mode === "fenced" || mode === "unknown") expect(f.rpc.agentsCreate).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["uid", "gatewayId", "podUid", "assignmentEpoch"] as const)("refuses foreign retained %s before intact-roster cleanup", async key => {
+    try {
+      const f = await assignedPersonaFixture();
+      const binding = { uid: f.snapshot.uid, gatewayId: "shared-source", podUid: "source-pod", assignmentEpoch: 4 };
+      const capture = await captureTargetWorkspaceIdentities("tester10", [f.projectId], testRuntime.dir, binding);
+      const changed = { ...capture, [key]: key === "assignmentEpoch" ? 5 : "foreign" };
+      await writeActivationManifest(testRuntime.dir, { ...f.manifest, targetWorkspaceIdentities: changed });
+      vi.mocked(f.rpc.configGet).mockImplementation(async () => assignedPersonaRoster(f, [f.coachId, f.projectId]));
+      await expect(f.mount()).rejects.toThrow("custody changed");
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled(); expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+      expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("refuses Shared migration activation without a target identity witness before Native effects", async () => {
+    try {
+      const f = await sourcePersonaFixture();
+      await expect(f.adapter.activateImportedCustomer("tester10", { migrationId: f.binding.migrationId })).rejects.toThrow("original workspace identity witness");
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled();
+      expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
+      for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(["current", "missing-migration", "serving", "changed-epoch"])("reads explicit Shared target migration authority without an assigned-owner fallback: %s", async mode => {
+    vi.stubEnv("GATEWAY_ID", "shared-target"); vi.stubEnv("POD_UID", "target-pod");
+    try {
+      const readAgentAnchors = vi.fn(async () => ({ anchors: [], assignment: { uid: "uid-tester10", epoch: mode === "changed-epoch" ? 5 : 4, state: mode === "serving" ? "serving" : "quiescing" },
+        ...(mode === "missing-migration" ? {} : { migration: { migrationId: "mig-target", sourceGatewayId: "builder-source", sourceEpoch: 4, claimStartedAt: 123 } }) }));
+      const client = mkClient({ uidForSlug: vi.fn(async () => { throw new Error("must not use assigned-owner shortcut"); }), readAgentAnchors: readAgentAnchors as never });
+      const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+      const proof = adapter.targetMigrationIdentityCustody!("tester10", "mig-target");
+      if (mode === "current") await expect(proof).resolves.toMatchObject({ custody: { uid: "uid-tester10", gatewayId: "shared-target", podUid: "target-pod", migrationId: "mig-target" } });
+      else await expect(proof).rejects.toThrow("authority changed");
+      expect(readAgentAnchors).toHaveBeenCalledExactlyOnceWith({ slug: "tester10", migrationId: "mig-target" });
+      expect(client.uidForSlug).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
 
   it.skipIf(process.platform !== "linux")("preserves exact authored coach and project persona before rollback routing resumes", async () => {
     try {
@@ -2740,6 +3002,10 @@ describe("buildBrokeredLifecycleAdapter remove config patch", () => {
 
 describe("buildBrokeredLifecycleAdapter add config patch", () => {
   beforeEach(() => {
+    vi.stubEnv("GATEWAY_ID", "default");
+    vi.stubEnv("POD_UID", "mount-pod");
+    mocks.readActivationManifest.mockReset().mockImplementation((dir, slug) => realReadActivationManifest(dir, slug));
+    mocks.removeActivationManifest.mockReset().mockImplementation(async (dir, slug) => { await fs.rm(path.join(dir, activationManifestTarPath(slug)), { force: true }); });
     patchMocks.applyConfigPatch.mockClear();
     brokerCatalogMocks.materializeBrokerProfilesForAgents.mockClear();
     routingActivationMocks.pending = false;
@@ -2904,9 +3170,12 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
       projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot-orbit", token: "project-pat", status: "ready" }],
     });
-    const config = { agents: { entries: keyedRoster(["octogee-alice-coach", projectId]) } };
+    const config = { agents: { entries: {
+      "octogee-alice-coach": { workspace: path.join(testRuntime.dir, "customers/alice"), agentDir: path.join(testRuntime.dir, "agents/octogee-alice-coach/agent") },
+      [projectId]: { workspace: path.join(testRuntime.dir, "customers/alice/projects/orbit"), agentDir: path.join(testRuntime.dir, "agents", projectId, "agent") },
+    } } };
     const rpc = mkGatewayRpc(rosterRpc(config));
-    const client = mkClient();
+    const client = mkClient({ userSnapshot: vi.fn(async () => snapshot) });
     const adapter = buildBrokeredLifecycleAdapter({ client, rpc, log: vi.fn() });
     adapter.seedUserSnapshotForMigration!(snapshot);
     let patch: Record<string, any>;
@@ -2940,7 +3209,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     const coachId = "octogee-alice-coach";
     const projectId = "octogee-alice-proj-orbit-coach";
     let config: Record<string, any> = {
-      agents: { entries: { [coachId]: { workspace: path.join(testRuntime.dir, "customers/alice") } } },
+      agents: { entries: { [coachId]: { workspace: path.join(testRuntime.dir, "customers/alice"), agentDir: path.join(testRuntime.dir, "agents", coachId, "agent") } } },
       channels: { mattermost: { accounts: { "alice-coach": {
         botToken: { source: "file", provider: "octogee-mattermost", id: "/alice-coach" }, allowFrom: [ALICE_OWNER_MM_ID],
       } } } },
@@ -2975,7 +3244,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       configGet: vi.fn(async () => configSnapshot(config)),
       agentsCreate: vi.fn(async ({ name, workspace }) => {
         if (!config.agents.entries[name]) {
-          config.agents.entries[name] = { workspace };
+          config.agents.entries[name] = { workspace, agentDir: path.join(testRuntime.dir, "agents", name, "agent") };
           await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify(config));
         }
         return { ok: true, agentId: name, name, workspace };
@@ -3237,7 +3506,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       channels: [{ scope: "project", projectId: "orbit", kind: "general", channelId: "orbit-general" }],
     });
     const config = {
-      agents: { entries: { "octogee-alice-coach": {}, [agentId]: { workspace: path.join(testRuntime.dir, "customers/alice/projects/orbit") } } },
+      agents: { entries: { "octogee-alice-coach": { workspace: path.join(testRuntime.dir, "customers/alice"), agentDir: path.join(testRuntime.dir, "agents/octogee-alice-coach/agent") }, [agentId]: { workspace: path.join(testRuntime.dir, "customers/alice/projects/orbit"), agentDir: path.join(testRuntime.dir, "agents", agentId, "agent") } } },
       channels: { mattermost: { accounts: { "alice-coach": { allowFrom: [ALICE_OWNER_MM_ID] }, [accountId]: {} } } },
       bindings: [{ agentId, match }, { agentId, match: { ...match, peer: { kind: "group", id: "orbit-general" } } }],
     };
@@ -4905,6 +5174,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
 
 describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-heal)", () => {
   beforeEach(() => modelCredentialMocks.syncModelCredentialsForCustomer.mockClear());
+  afterEach(() => vi.unstubAllEnvs());
 
   function fullSnapshot(overrides: Partial<FleetBrokerUserSnapshot> = {}): FleetBrokerUserSnapshot {
     return {
@@ -5155,7 +5425,11 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
   });
 
   it("shares the lifecycle config cache with model convergence after the mount patch", async () => {
+    vi.stubEnv("GATEWAY_ID", "default");
+    vi.stubEnv("POD_UID", "cache-test-pod");
+    await fs.rm(path.join(testRuntime.dir, activationManifestTarPath("tester10")), { force: true });
     const snapshot = fullSnapshot({
+      runtimeMutationFenced: false,
       coachToken: "pat-tester10",
       coachMmUserId: "mm-tester10-coach",
       mattermostUserId: TESTER_OWNER_MM_ID,
@@ -5171,6 +5445,7 @@ describe("buildBrokeredLifecycleAdapter byot re-assert (db-less LLM-auth self-he
     const adapter = buildBrokeredLifecycleAdapter({
       client: mkClient({
         userSnapshot: vi.fn(async () => snapshot),
+        assignmentRoster: vi.fn(async () => [{ uid: snapshot.uid, state: "serving", epoch: 0 }]),
       }),
       rpc,
       log: vi.fn(),

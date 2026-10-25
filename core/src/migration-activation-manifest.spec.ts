@@ -18,6 +18,8 @@ import {
   readActivationManifest,
   writeActivationManifest,
   captureSourceWorkspaceIdentities,
+  captureTargetWorkspaceIdentities,
+  restoreTargetWorkspaceIdentities,
   restoreSourceWorkspaceIdentities,
   type MigrationActivationManifest,
 } from "./migration-activation-manifest";
@@ -1402,11 +1404,60 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
     await expect(captureSourceWorkspaceIdentities(f.value, f.root, custody)).rejects.toThrow("limit");
   });
 
+  it("retains target persona bytes and absence with distinct target custody and final no-op authorization", async () => {
+    const f = await source(), ids = [f.value.agentId, f.value.projectAgents[0].agentId];
+    const binding = { migrationId: "mig-target", uid: "uid-alice", gatewayId: "shared-target", podUid: "target-pod" };
+    const bytes = Buffer.from("# Authored target\r\n- Name: Human 🐙\r\n");
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), bytes);
+    const capture = await captureTargetWorkspaceIdentities("alice", ids, f.root, binding);
+    await writeActivationManifest(f.root, { ...f.value, targetWorkspaceIdentities: capture });
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), "Native machine Name");
+    await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), "Native-created persona");
+    const retained = await readActivationManifest(f.root, "alice");
+    const current = vi.fn(async () => undefined);
+    await restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, "alice", ids, f.root, { custody: binding, assertCurrent: current });
+    expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).toEqual(bytes);
+    await expect(fs.stat(path.join(f.workspace, "IDENTITY.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(current).toHaveBeenCalledTimes(4);
+    await expect(restoreTargetWorkspaceIdentities(capture, "alice", ids, f.root, { custody: binding, assertCurrent: async () => { throw new Error("target claim changed"); } })).rejects.toThrow("claim changed");
+    expect((await readActivationManifest(f.root, "alice")).targetWorkspaceIdentities).toEqual(capture);
+  });
+
+  it.each(["pod", "agent", "hash", "symlink", "root"])("refuses unsafe target identity capture or replay: %s", async mode => {
+    const f = await source(), ids = [f.value.agentId, f.value.projectAgents[0].agentId];
+    const binding = { migrationId: "mig-target", uid: "uid-alice", gatewayId: "shared-target", podUid: "target-pod" };
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), "original");
+    const capture = await captureTargetWorkspaceIdentities("alice", ids, f.root, binding);
+    if (mode === "pod") capture.podUid = "foreign-pod";
+    if (mode === "agent") capture.files[1].agentId = "octogee-bob-coach";
+    if (mode === "hash") capture.files[1].sha256 = "0".repeat(64);
+    if (mode === "symlink") { await fs.unlink(path.join(f.project, "IDENTITY.md")); await fs.symlink(path.join(f.workspace, "IDENTITY.md"), path.join(f.project, "IDENTITY.md")); }
+    const result = mode === "symlink" || mode === "root"
+      ? captureTargetWorkspaceIdentities("alice", ids, mode === "root" ? path.join(f.root, "missing") : f.root, binding)
+      : restoreTargetWorkspaceIdentities(capture, "alice", ids, f.root, { custody: binding, assertCurrent: async () => undefined });
+    await expect(result).rejects.toThrow();
+  });
+
+  it("restores only missing-agent target captures without rewriting a live coach", async () => {
+    const f = await source(), ids = [f.value.agentId, f.value.projectAgents[0].agentId];
+    const binding = { assignmentEpoch: 4, uid: "uid-alice", gatewayId: "shared-target", podUid: "target-pod" };
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), "authored project");
+    const capture = await captureTargetWorkspaceIdentities("alice", [ids[1]], f.root, binding);
+    await writeActivationManifest(f.root, { ...f.value, targetWorkspaceIdentities: capture });
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), "Native Name");
+    await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), "live coach edit");
+    const retained = await readActivationManifest(f.root, "alice");
+    await restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, "alice", ids, f.root, { custody: binding, assertCurrent: async () => undefined });
+    expect(await fs.readFile(path.join(f.project, "IDENTITY.md"), "utf8")).toBe("authored project");
+    expect(await fs.readFile(path.join(f.workspace, "IDENTITY.md"), "utf8")).toBe("live coach edit");
+  });
+
   it("keeps source identity captures out of the Native config RPC payload", async () => {
     const f = await source();
     const original = Buffer.from("private source identity bytes that belong only in the retained manifest");
     await fs.writeFile(path.join(f.project, "IDENTITY.md"), original);
     const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    captured.targetWorkspaceIdentities = await captureTargetWorkspaceIdentities("alice", [captured.agentId, ...captured.projectAgents.map(agent => agent.agentId)], f.root, { migrationId: "mig-target", uid: custody.uid, gatewayId: "shared-target", podUid: "target-pod" });
     const patches: object[] = [];
     await applyOpenClawActivationManifest(captured, {
       rpc: { configGet: async () => ({ config: {}, hash: "before" }), configPatch: async patch => { patches.push(patch); return { hash: "after" }; } } as never,
@@ -1414,6 +1465,7 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
     });
     expect(patches.length).toBeGreaterThan(0);
     expect(JSON.stringify(patches)).not.toContain("sourceWorkspaceIdentities");
+    expect(JSON.stringify(patches)).not.toContain("targetWorkspaceIdentities");
     expect(JSON.stringify(patches)).not.toContain(original.toString("base64"));
     expect(JSON.stringify(patches)).not.toContain(custody.podUid);
   });

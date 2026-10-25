@@ -37,6 +37,18 @@ export interface MigrationSourceIdentityCustody {
   epoch: number;
 }
 
+export interface MigrationTargetIdentityCustody {
+  migrationId?: string;
+  assignmentEpoch?: number;
+  uid: string;
+  gatewayId: string;
+  podUid: string;
+}
+
+export interface TargetWorkspaceIdentities extends MigrationTargetIdentityCustody {
+  files: SourceWorkspaceIdentity[];
+}
+
 interface SourceWorkspaceIdentity {
   agentId: string;
   content: string | null;
@@ -66,6 +78,7 @@ export interface MigrationActivationManifest {
   bindings: unknown[];
   projectAgents: MigrationActivationManifestProjectAgent[];
   sourceWorkspaceIdentities?: SourceWorkspaceIdentities;
+  targetWorkspaceIdentities?: TargetWorkspaceIdentities;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -245,6 +258,9 @@ function validateManifestShape(
     appliedFingerprint,
     ...workspace,
     projectAgents,
+    ...(value.targetWorkspaceIdentities === undefined ? {} : {
+      targetWorkspaceIdentities: validateTargetWorkspaceIdentities(value.targetWorkspaceIdentities, slug, [workspace, ...projectAgents].map(agent => agent.agentId)),
+    }),
     ...(value.sourceWorkspaceIdentities === undefined ? {} : {
       sourceWorkspaceIdentities: validateSourceWorkspaceIdentities(value.sourceWorkspaceIdentities, [workspace, ...projectAgents]),
     }),
@@ -276,11 +292,17 @@ function identityBytes(file: SourceWorkspaceIdentity): Buffer | null {
 function validateSourceWorkspaceIdentities(value: unknown, agents: readonly { agentId: string }[]): SourceWorkspaceIdentities {
   validateSourceIdentityCustody(value);
   const raw = value as unknown as Record<string, unknown>;
-  if (!Array.isArray(raw.files) || raw.files.length !== agents.length || raw.files.length > 16_384) {
+  const files = validateWorkspaceIdentityFiles(raw.files, agents);
+  return { migrationId: value.migrationId, uid: value.uid, gatewayId: value.gatewayId,
+    podUid: value.podUid, epoch: value.epoch, files };
+}
+
+function validateWorkspaceIdentityFiles(rawFiles: unknown, agents: readonly { agentId: string }[]): SourceWorkspaceIdentity[] {
+  if (!Array.isArray(rawFiles) || rawFiles.length !== agents.length || rawFiles.length > 16_384) {
     throw new Error("Source workspace identity coverage is invalid");
   }
   const expected = new Set(agents.map(agent => agent.agentId));
-  const files = raw.files.map(file => {
+  return rawFiles.map(file => {
     if (!isRecord(file) || typeof file.agentId !== "string" || !expected.delete(file.agentId)) {
       throw new Error("Source workspace identity agent is invalid");
     }
@@ -288,8 +310,69 @@ function validateSourceWorkspaceIdentities(value: unknown, agents: readonly { ag
     identityBytes(captured);
     return captured;
   });
-  return { migrationId: value.migrationId, uid: value.uid, gatewayId: value.gatewayId,
-    podUid: value.podUid, epoch: value.epoch, files };
+
+}
+
+function targetIdentityAgents(slug: string, agentIds: readonly string[], stateDir: string) {
+  if (agentIds.length === 0 || agentIds.length > 16_384 || new Set(agentIds).size !== agentIds.length) throw new Error("Target workspace identity coverage is invalid");
+  return agentIds.map(agentId => {
+    const parsed = parseAgentId(agentId);
+    if (parsed.kind === "unknown" || parsed.username !== slug) throw new Error("Target workspace identity agent is foreign");
+    return { agentId, agent: { workspace: path.join(stateDir, "customers", slug, ...(parsed.kind === "project" ? ["projects", parsed.project] : [])) } };
+  });
+}
+
+export function assertTargetIdentityCustody(expected: MigrationTargetIdentityCustody, actual: MigrationTargetIdentityCustody): void {
+  for (const value of [expected, actual]) {
+    if (!isRecord(value) || !["uid", "gatewayId", "podUid"].every(key =>
+      typeof value[key] === "string" && /^[A-Za-z0-9_.:-]{1,200}$/u.test(value[key] as string)) ||
+      value.migrationId !== undefined && (typeof value.migrationId !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/u.test(value.migrationId)) ||
+      value.assignmentEpoch !== undefined && (!Number.isSafeInteger(value.assignmentEpoch) || Number(value.assignmentEpoch) < 0) ||
+      value.migrationId === undefined && value.assignmentEpoch === undefined) throw new Error("Target workspace identity custody is invalid");
+  }
+  if (["migrationId", "assignmentEpoch", "uid", "gatewayId", "podUid"].some(key => expected[key as keyof MigrationTargetIdentityCustody] !== actual[key as keyof MigrationTargetIdentityCustody])) throw new Error("Target workspace identity custody changed");
+}
+
+export function validateTargetWorkspaceIdentities(value: unknown, slug: string, agentIds: readonly string[]): TargetWorkspaceIdentities {
+  if (!isRecord(value)) throw new Error("Target workspace identity capture is missing");
+  const custody = value as unknown as MigrationTargetIdentityCustody;
+  assertTargetIdentityCustody(custody, custody);
+  const agents = targetIdentityAgents(slug, agentIds, "/");
+  if (!Array.isArray(value.files) || value.files.length > 16_384) throw new Error("Target workspace identity coverage is invalid");
+  const selectedIds = custody.assignmentEpoch !== undefined && custody.migrationId === undefined && Array.isArray(value.files)
+    ? new Set(value.files.map(file => isRecord(file) ? file.agentId : undefined)) : undefined;
+  const selected = selectedIds ? agents.filter(agent => selectedIds.has(agent.agentId)) : agents;
+  if (selected.length === 0) throw new Error("Target workspace identity coverage is invalid");
+  const files = validateWorkspaceIdentityFiles(value.files, selected);
+  if (Buffer.byteLength(JSON.stringify(value)) > MIGRATION_ACTIVATION_MAX_BYTES) throw new Error("Target workspace identity capture exceeds transfer limit");
+  return { ...(custody.migrationId === undefined ? {} : { migrationId: custody.migrationId }), ...(custody.assignmentEpoch === undefined ? {} : { assignmentEpoch: custody.assignmentEpoch }), uid: custody.uid, gatewayId: custody.gatewayId, podUid: custody.podUid, files };
+}
+
+export async function captureTargetWorkspaceIdentities(slug: string, agentIds: readonly string[], stateDir: string, custody: MigrationTargetIdentityCustody): Promise<TargetWorkspaceIdentities> {
+  assertTargetIdentityCustody(custody, custody);
+  if (await fs.realpath(stateDir) !== stateDir) throw new Error("Target workspace identity root is not canonical");
+  const files: SourceWorkspaceIdentity[] = [];
+  let bytesCaptured = 0;
+  for (const agent of targetIdentityAgents(slug, agentIds, stateDir)) {
+    let bytes: Buffer | null = null;
+    try { await withIdentityWorkspace(stateDir, slug, agent, async location => { bytes = await readSourceIdentity(location); }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const content = bytes as Buffer | null;
+    const file = { agentId: agent.agentId, content: content?.toString("base64") ?? null, sha256: content === null ? null : createHash("sha256").update(content).digest("hex") };
+    bytesCaptured += Buffer.byteLength(JSON.stringify(file));
+    if (bytesCaptured > MIGRATION_ACTIVATION_MAX_BYTES) throw new Error("Target workspace identity capture exceeds transfer limit");
+    files.push(file);
+  }
+  return validateTargetWorkspaceIdentities({ ...custody, files }, slug, agentIds);
+}
+
+export async function restoreTargetWorkspaceIdentities(value: TargetWorkspaceIdentities, slug: string, agentIds: readonly string[], stateDir: string, options: { custody: MigrationTargetIdentityCustody; assertCurrent: () => Promise<void> }): Promise<void> {
+  const { custody, assertCurrent } = options;
+  const capture = validateTargetWorkspaceIdentities(value, slug, agentIds);
+  assertTargetIdentityCustody(capture, custody);
+  await assertCurrent();
+  await restoreIdentityFiles(targetIdentityAgents(slug, capture.files.map(file => file.agentId), stateDir), slug, stateDir, capture.files, { assertCurrent, allowAbsentWorkspace: true });
+  await assertCurrent();
 }
 
 export function assertSourceIdentityCustody(expected: MigrationSourceIdentityCustody, actual: MigrationSourceIdentityCustody): void {
@@ -378,8 +461,14 @@ export async function captureSourceWorkspaceIdentities(manifest: MigrationActiva
 export async function restoreSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody, assertCurrent: () => Promise<void>): Promise<void> {
   const captured = validateSourceWorkspaceIdentities(manifest.sourceWorkspaceIdentities, manifestAgents(manifest));
   assertSourceIdentityCustody(captured, custody);
-  const files = new Map(captured.files.map(file => [file.agentId, file]));
-  for (const agent of manifestAgents(manifest)) await withIdentityWorkspace(stateDir, manifest.slug, agent, async (location, assertDirectory) => {
+  await restoreIdentityFiles(manifestAgents(manifest), manifest.slug, stateDir, captured.files, { assertCurrent });
+}
+
+async function restoreIdentityFiles(agents: readonly { agentId: string; agent: Record<string, unknown> }[], slug: string, stateDir: string, captured: readonly SourceWorkspaceIdentity[], options: { assertCurrent: () => Promise<void>; allowAbsentWorkspace?: boolean }): Promise<void> {
+  const { assertCurrent } = options;
+  const files = new Map(captured.map(file => [file.agentId, file]));
+  for (const agent of agents) {
+    try { await withIdentityWorkspace(stateDir, slug, agent, async (location, assertDirectory) => {
     const bytes = identityBytes(files.get(agent.agentId)!);
     const current = await readSourceIdentity(location);
     if (current === null && bytes === null || current !== null && bytes !== null && current.equals(bytes)) return;
@@ -396,7 +485,11 @@ export async function restoreSourceWorkspaceIdentities(manifest: MigrationActiva
       const directory = await fs.open(path.dirname(location), "r");
       try { await directory.sync(); } finally { await directory.close(); }
     } finally { await fs.rm(temporary, { force: true }); }
-  });
+    }); } catch (error) {
+      if (!options.allowAbsentWorkspace || identityBytes(files.get(agent.agentId)!) !== null || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await assertCurrent();
+    }
+  }
 }
 
 function sourceAgents(parsed: {

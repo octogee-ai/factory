@@ -366,6 +366,8 @@ function clearWorkspaceMigrationMarker(txn, deps, uid) {
         [WORKSPACE_MIGRATION_MARKER_PATH]: deps.deleteField(),
     });
 }
+class CustomerRestoreAuthorityUnavailableError extends Error {
+}
 function assertRestoreUnfenced(user) {
     if (customerRestoreFencePresent(user))
         throw new Error("customer restore outcome is unresolved");
@@ -376,7 +378,7 @@ function assertCustomerRestoreInput(input) {
     if (![input.uid, input.slug, input.gatewayId, input.fromGatewayId, input.operationId, input.attemptId].every(value => typeof value === "string" && value.length > 0) ||
         !Number.isSafeInteger(input.assignmentEpoch) || input.assignmentEpoch < 0 ||
         !Number.isSafeInteger(input.claimStartedAt) || input.claimStartedAt <= 0) {
-        throw new Error("customer restore identity is invalid");
+        throw new CustomerRestoreAuthorityUnavailableError("customer restore identity is invalid");
     }
 }
 function customerRestoreAssignmentAllowed(assignment, openclaw, operation, input) {
@@ -398,7 +400,7 @@ async function readCustomerRestoreAuthority(deps, txn, input) {
         txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId)),
     ]);
     if (Object.hasOwn(recordOrEmpty(gatewaySnapshot.data()), "runtimeRestartFence"))
-        throw new Error("gateway runtime restart outcome is unresolved");
+        throw new CustomerRestoreAuthorityUnavailableError("gateway runtime restart outcome is unresolved");
     const user = userSnapshot.data();
     const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
     const operation = recordOrEmpty(operationSnapshot.data());
@@ -421,8 +423,8 @@ async function readCustomerRestoreAuthority(deps, txn, input) {
         customerRestoreAssignmentAllowed(assignment, openclaw, operation, input),
     ].every(Boolean);
     if (!exact)
-        throw new Error("customer restore authority changed");
-    return { userRef, operationRef, user, openclaw, operation };
+        throw new CustomerRestoreAuthorityUnavailableError("customer restore authority changed");
+    return { userRef, operationRef, user, openclaw, operation, gateway: recordOrEmpty(gatewaySnapshot.data()) };
 }
 function hasPriorCustomerRestoreWork(operation) {
     const histories = Array.isArray(operation.attemptHistory) ? operation.attemptHistory : [];
@@ -459,10 +461,47 @@ function resumedRestoreIntent(current, input) {
         typeof prior.attemptId === "string" && prior.attemptId.trim().length > 0 &&
         ["attemptId", "claimStartedAt", "dispatchedAt", "dispatchClaimStartedAt"].every(key => fence[key] === prior[key]);
     if (!exact)
-        throw new Error("customer restore resumption does not own the dispatch intent");
+        throw new CustomerRestoreAuthorityUnavailableError("customer restore resumption does not own the dispatch intent");
     if (Object.hasOwn(current.openclaw, "sourceTransferFence"))
-        throw new Error("customer source transfer outcome is unresolved");
+        throw new CustomerRestoreAuthorityUnavailableError("customer source transfer outcome is unresolved");
     return { ...input, attemptId: prior.attemptId, dispatchClaimStartedAt: dispatchClaimStartedAt };
+}
+export async function readCustomerRestoreAuthoritySnapshot(deps, scope) {
+    return deps.db.runTransaction(async (txn) => {
+        const user = (await txn.get(deps.db.collection("users").doc(scope.uid))).data();
+        if (!customerRestoreFencePresent(user))
+            return undefined;
+        const openclaw = recordOrEmpty(recordOrEmpty(user?.provisioning).openclaw);
+        const fence = recordOrEmpty(openclaw.restoreFence);
+        const operationId = fence.operationId;
+        if (typeof operationId !== "string" || !operationId || operationId.includes("/")) {
+            throw new CustomerRestoreAuthorityUnavailableError("customer restore authority is malformed");
+        }
+        const operation = recordOrEmpty((await txn.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId))).data());
+        const input = {
+            ...scope, operationId,
+            fromGatewayId: fence.fromGatewayId,
+            assignmentEpoch: fence.assignmentEpoch,
+            attemptId: fence.attemptId,
+            claimStartedAt: operation.startedAt,
+        };
+        const current = await readCustomerRestoreAuthority(deps, txn, input);
+        if (current.gateway.gatewayClass !== "shared")
+            throw new CustomerRestoreAuthorityUnavailableError("customer restore authority requires its assigned Shared gateway");
+        const intent = recordOrEmpty(current.operation.restoreAttempt);
+        if (fence.claimStartedAt !== input.claimStartedAt || intent.claimStartedAt !== input.claimStartedAt) {
+            throw new CustomerRestoreAuthorityUnavailableError("customer restore authority has not resumed under its current claim");
+        }
+        const resumed = resumedRestoreIntent(current, input);
+        return {
+            ...resumed, phase: "dispatched", migrationId: `mig-${operationId}`,
+            dispatchedAt: intent.dispatchedAt,
+        };
+    }).catch((error) => {
+        if (error instanceof CustomerRestoreAuthorityUnavailableError)
+            return undefined;
+        throw error;
+    });
 }
 export async function beginCustomerRestore(deps, input, options = {}) {
     return deps.db.runTransaction(async (txn) => {

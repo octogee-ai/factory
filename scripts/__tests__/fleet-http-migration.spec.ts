@@ -71,9 +71,10 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
+import { readSharedAgentContextRestoreReceipt, writeSharedAgentContextRestoreReceipt } from "../lib/shared-agent-context-restore-receipt.js";
 import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
 import { OPENCLAW_DIR } from "../lib/config.js";
-import { readActivationManifest, activationManifestTarPath } from "../lib/migration-activation-manifest.js";
+import { readActivationManifest, writeActivationManifest, activationManifestTarPath } from "../lib/migration-activation-manifest.js";
 
 const spawnMock = vi.fn();
 const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -251,6 +252,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     ...everythingElseThrows,
     log: vi.fn(),
     uidForSlug: vi.fn(async () => "uid-chris"),
+    targetMigrationIdentityCustody: vi.fn(async (slug, migrationId) => sharedTargetAuthority(slug, migrationId)),
     resumeCustomer: vi.fn(async () => undefined),
     sourceMigrationIdentityCustody: vi.fn(async (_slug, migrationId) => ({ migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 })),
     exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "chris") }, projectAgents: [], mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
@@ -298,6 +300,20 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
 
 const TARGET_CERTIFICATE_PEM = "-----BEGIN CERTIFICATE-----\nTUlHUkFUSU9O\n-----END CERTIFICATE-----\n";
 const RSYNC_DAEMON_LOOPBACK_PORT = 41873;
+
+function sharedTargetAuthority(slug: string, migrationId: string) {
+  if (!process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
+  return { custody: { uid: `uid-${slug}`, gatewayId: GATEWAY_ID, podUid: process.env.POD_UID!, migrationId },
+    migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 } };
+}
+
+async function writeSharedTargetManifest(root: string, workspaceRoot: string, migrationId?: string) {
+  const authority = sharedTargetAuthority("chris", migrationId ?? "stage-only");
+  await writeActivationManifest(root, { version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace: path.join(workspaceRoot, "customers/chris") },
+    mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }], projectAgents: [],
+    ...(migrationId ? { targetWorkspaceIdentities: { ...authority.custody, files: [{ agentId: "octogee-chris-coach", content: null, sha256: null }] } } : {}),
+  });
+}
 
 function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandlerDeps {
   return {
@@ -1139,6 +1155,20 @@ describe("createRestoreHandler", () => {
     expect(getStatus()).toBe(401);
   });
 
+  it("passes signed Shared restore scope through the post-Git roster publication owner", async () => {
+    const applyAddCustomerConfigPatch = vi.fn(async () => ({ elapsedMs: 1 }));
+    const adapter = mkAdapter({ isBuilderGateway: () => false, hasCustomerSshKey: () => true,
+      readLocalCustomerPubKey: () => "ssh-ed25519 TEST", readGiteaCustomerPubKeys: async () => ["ssh-ed25519 TEST"], ensureGiteaOrg: async () => undefined,
+      hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => true, ensureCustomerDirectories: () => undefined,
+      writeCustomerTemplateFiles: async () => undefined, blobSyncForSlug: async () => undefined,
+      restoreByosubForAgent: async () => ({ restored: false, present: false }), applyAddCustomerConfigPatch });
+    const body = { migrationId: "mig-postcutover-restore", uid: "uid-chris", slug: "chris", snapshot: RESTORE_SNAPSHOT };
+    const response = mkResponse();
+    await createRestoreHandler(mkDeps({ adapter }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+    expect(response.getStatus(), JSON.stringify(response.getBody())).toBe(200);
+    expect(applyAddCustomerConfigPatch).toHaveBeenCalledWith(expect.anything(), null, expect.objectContaining({ migrationId: body.migrationId }));
+  });
+
   it("restores runtime state from the controller-provided durable snapshot and leaves the mount marker intact", async () => {
     const customersDir = await fs.mkdtemp(path.join(os.tmpdir(), "restore-marker-"));
     let watcherFenced = false;
@@ -1769,7 +1799,7 @@ describe("queued-rsync migration control handlers", () => {
       "chris",
       "ssh-ed25519 TARGET chris@gateway",
     );
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { migrationId: body.migrationId });
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
     expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
     );
@@ -1785,6 +1815,20 @@ describe("queued-rsync migration control handlers", () => {
     expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", "fp-chris");
     expect(onMounted).toHaveBeenCalledWith("chris");
     expect(getBody()).toMatchObject({ migrationId: "mig-1", slug: "chris", imported: true });
+  });
+
+  it("refuses a direct Shared activation without retained original identities before Native or key effects", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "direct-shared-target-")); migrationTempRoots.push(root); vi.stubEnv("OPENCLAW_STATE_DIR", root); vi.stubEnv("POD_UID", "target-pod");
+    const adapter = mkAdapter({ isBuilderGateway: () => false, targetMigrationIdentityCustody: async () => ({
+      custody: { uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod", migrationId: "mig-direct-missing" },
+      migration: { migrationId: "mig-direct-missing", claimStartedAt: 123, sourceGatewayId: "builder-source", sourceEpoch: 4 },
+    }) });
+    const body = { migrationId: "mig-direct-missing", slug: "chris" };
+    const response = mkResponse();
+    await createActivateImportHandler(mkDeps({ adapter }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(adapter.createGiteaUser).not.toHaveBeenCalled();
   });
 
   it("does not activate a standard migration while a project checkout is still missing", async () => {
@@ -1815,6 +1859,8 @@ describe("queued-rsync migration control handlers", () => {
   });
 
   it("activates a standard migration when the only missing checkout is a GitHub project that hydrates on the owner's Builder runtime", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "direct-shared-github-")); migrationTempRoots.push(root); vi.stubEnv("OPENCLAW_STATE_DIR", root); vi.stubEnv("POD_UID", "shared-target-pod");
+    await writeSharedTargetManifest(root, root, "mig-github-deferred");
     const cloneProjectRepo = vi.fn(async () => false);
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => false),
@@ -1839,7 +1885,7 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { migrationId: body.migrationId });
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
     expect(getBody()).toMatchObject({ migrationId: "mig-github-deferred", slug: "chris", imported: true });
   });
 
@@ -1870,7 +1916,7 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(cloneProjectRepo).not.toHaveBeenCalled();
-    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", { migrationId: body.migrationId });
+    expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
     expect(recordAppliedFingerprint).toHaveBeenCalledWith("chris", pendingCloneAppliedFingerprint("fp-chris"));
     expect(getBody()).toMatchObject({ migrationId: "mig-github-owner-runtime", slug: "chris", imported: true });
   });
@@ -3382,6 +3428,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     adapter?: Partial<CustomerLifecycleAdapter>;
     deps?: Partial<MigrationHandlerDeps>;
   }): Promise<{ deps: MigrationHandlerDeps; stageDir: string }> {
+    if (input.adapter?.isBuilderGateway?.() === false && !process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
     const adapter = mkAdapter({
       prepareImportDir: vi.fn(async () => input.importDir),
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
@@ -3420,6 +3467,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       .find((arg) => arg.startsWith("--config="))!
       .slice("--config=".length);
     const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf-8"))![1]!;
+    if (input.adapter?.isBuilderGateway?.() === false && !input.agentContext) await writeSharedTargetManifest(stageDir, input.importDir);
     return { deps, stageDir };
   }
 
@@ -3649,6 +3697,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
 
     const liveDatabase = path.join(importDir, CARRIED_STORE);
     const final = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter, deps: { procRoot } });
+    expect(final.stageDir).toBe(pre.stageDir);
     await stageSnapshot(final.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('pre'), ('final')"));
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
 
@@ -3821,15 +3870,79 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     return { stateDir, archive, destinationPath };
   }
 
+  it.each(["success", "late-writer", "claim-loss", "capture-loss", "absence"])("preserves the staged Shared activation personas across %s", async mode => {
+    const importDir = await mkTempRoot(); vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
+    const migrationId = `mig-target-persona-${mode}`, projectId = "octogee-chris-proj-persona-coach";
+    const workspace = path.join(importDir, "customers/chris"), project = path.join(workspace, "projects/persona");
+    const originals = new Map([[workspace, Buffer.from("# Coach\r\n- Name: Human coach 🐙\r\n")], [project, Buffer.from("# Project\n- Name: Human project\nNotes.\n")]]);
+    const authority = { custody: { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod" }, migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 } };
+    let currentAuthority = authority, lateWrite: (() => Promise<void>) | undefined;
+    let calls = 0, published = false;
+    const adapter: Partial<CustomerLifecycleAdapter> = { isBuilderGateway: () => false, releaseAgent: async () => undefined,
+      targetMigrationIdentityCustody: vi.fn(async () => currentAuthority),
+      activateImportedCustomer: vi.fn(async (_slug, opts) => {
+        calls++;
+        expect(opts?.beforeRuntimePublish).toBeTypeOf("function");
+        const writeNative = async () => {
+          for (const [dir] of originals) { await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, "IDENTITY.md"), "- Name: machine-agent-id\n"); }
+        };
+        if (mode === "late-writer" && calls === 1) { lateWrite = writeNative; throw new Error("Native create client timed out"); }
+        await writeNative();
+        if (mode === "claim-loss") currentAuthority = { ...authority, migration: { ...authority.migration, claimStartedAt: 124 } };
+        if (mode === "capture-loss") { const value = await readActivationManifest(importDir, "chris"); value.targetWorkspaceIdentities!.podUid = "foreign-pod"; await writeActivationManifest(importDir, value); }
+        await opts!.beforeRuntimePublish!();
+        for (const [dir, bytes] of originals) {
+          if (mode === "absence" && dir === project) await expect(fs.stat(path.join(dir, "IDENTITY.md"))).rejects.toMatchObject({ code: "ENOENT" });
+          else expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
+        }
+        published = true;
+        return { appliedFingerprint: "target-persona" };
+      }),
+    };
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('original')"));
+    for (const [dir, bytes] of originals) { const target = path.join(stageDir, path.relative(importDir, dir)); await fs.mkdir(target, { recursive: true }); if (mode !== "absence" || dir !== project) await fs.writeFile(path.join(target, "IDENTITY.md"), bytes); }
+    await writeActivationManifest(stageDir, { version: 2, slug: "chris", appliedFingerprint: "target-persona", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace, identity: { name: "Config differs" } }, mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }], projectAgents: [{ agentId: projectId, accountId: "chris-proj-persona", agent: { id: projectId, workspace: project }, mattermostAccount: { botToken: "synthetic-project-token" }, bindings: [{ agentId: projectId, match: { channel: "mattermost", accountId: "chris-proj-persona" } }] }] });
+    spawnMock.mockImplementation(await realMigrationSpawn());
+    const result = await finishImport(deps, migrationId);
+    if (mode === "late-writer") {
+      expect(result.getStatus()).toBe(500); expect(published).toBe(false); expect(lateWrite).toBeTypeOf("function");
+      await lateWrite!();
+      await expect(fs.access(stageDir)).rejects.toThrow();
+      const retained = await readActivationManifest(importDir, "chris");
+      const body = { migrationId, slug: "chris" }, retry = mkResponse();
+      await createActivateImportHandler(deps)(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), retry.res, vi.fn());
+      expect(retry.getStatus(), JSON.stringify(retry.getBody())).toBe(200);
+      expect((await readActivationManifest(importDir, "chris")).targetWorkspaceIdentities).toEqual(retained.targetWorkspaceIdentities);
+      expect(calls).toBe(2); expect(published).toBe(true);
+    } else if (mode === "claim-loss" || mode === "capture-loss") {
+      expect(result.getStatus()).toBe(500); expect(published).toBe(false); expect(deps.adapter.onMounted).not.toHaveBeenCalled();
+      for (const [dir] of originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"), "utf8")).toBe("- Name: machine-agent-id\n");
+    } else { expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200); expect(published).toBe(true); }
+  });
+
   it("retains current customer memory across archived Shared return and retained Native activation", async () => {
     const input = await archivedContextFixture(), sharedDir = await mkTempRoot(), procRoot = await mkTempRoot();
     const note = "memory/qa-20261019-4530-fresh.md", contents = "Synthetic customer memory created after activation.\n";
+    const persona = Buffer.from("# Coach\r\n- **Name:** Authored coach differs from machine ID\r\nPersonal notes. 🐙\r\n");
+    await fs.writeFile(path.join(input.stateDir, "customers/chris/IDENTITY.md"), persona);
     await fs.mkdir(path.join(input.stateDir, "customers/chris/memory"), { recursive: true });
     await fs.writeFile(path.join(input.stateDir, "customers/chris", note), contents);
     const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
     vi.stubEnv("OPENCLAW_STATE_DIR", sharedDir);
     const returned = await prepareImport({ migrationId: "memory-return", importDir: sharedDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: sharedRestoreAdapter(sharedDir, input.archive, "memory-return"), deps: { procRoot } });
+      adapter: { ...sharedRestoreAdapter(sharedDir, input.archive, "memory-return"),
+        applyAddCustomerConfigPatch: vi.fn(async (_snapshot, _mm, opts) => {
+          expect(rowCount(path.join(sharedDir, CARRIED_STORE))).toBe(1);
+          const file = path.join(sharedDir, "customers/chris/IDENTITY.md");
+          expect(await fs.readFile(file)).toEqual(persona);
+          const text = await fs.readFile(file, "utf8");
+          await fs.writeFile(file, text.replace(/^- \*?\*?Name:\*?\*?.*$/mu, "- Name: octogee-chris-coach"));
+          expect(opts?.beforeRuntimePublish).toBeTypeOf("function");
+          await opts?.beforeRuntimePublish?.();
+          return { elapsedMs: 1 };
+        }),
+      }, deps: { procRoot } });
     const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     spawnMock.mockImplementationOnce((command: string, args: string[], options: import("node:child_process").SpawnOptions) => {
       const password = args.indexOf("--password-file");
@@ -3877,6 +3990,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(installed.getStatus(), JSON.stringify(installed.getBody())).toBe(200);
     expect(await fs.readFile(path.join(sharedDir, "customers/chris", note), "utf8")).toBe(contents);
     expect(rowCount(path.join(sharedDir, CARRIED_STORE))).toBe(1);
+    expect(await fs.readFile(path.join(sharedDir, "customers/chris/IDENTITY.md"))).toEqual(persona);
     expect(rowCount(input.destinationPath)).toBe(2);
     const nextRetained = { ...retainedContext, archiveId: "memory-reactivation-shared" };
     const target = builderTargetImport(async () => true);
@@ -3944,6 +4058,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   });
 
   function sharedRestoreAdapter(importDir: string, archive: NativeSharedAgentContextArchive, migrationId: string): Partial<CustomerLifecycleAdapter> {
+    if (!process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
     return {
       isBuilderGateway: () => false,
       hasCustomerAgentRuntime: () => false,
@@ -4128,7 +4243,61 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
   });
 
-  it("resumes activation after installed Shared context without overwriting a newer turn", async () => {
+  it("retains Shared restore originals after a late Native writer and missing-session duplicate retry", async () => {
+    const input = await archivedContextFixture(), importDir = await mkTempRoot();
+    vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
+    const migrationId = "restore-persona-late", policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
+    const persona = Buffer.from("# Coach\r\n- Name: Human original 🐙\r\n"), file = path.join(importDir, "customers/chris/IDENTITY.md");
+    let lateWrite: (() => Promise<void>) | undefined, published = false;
+    const applyAddCustomerConfigPatch = vi.fn(async (_snapshot, _mm, opts) => {
+      if (applyAddCustomerConfigPatch.mock.calls.length === 1) { lateWrite = () => fs.writeFile(file, "- Name: machine-agent-id\n"); throw new Error("Native create client timed out"); }
+      await opts?.beforeRuntimePublish?.();
+      expect(await fs.readFile(file)).toEqual(persona); published = true;
+      return { elapsedMs: 1 };
+    });
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
+      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId), applyAddCustomerConfigPatch } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('original')"));
+    await fs.mkdir(path.join(stageDir, "customers/chris"), { recursive: true }); await fs.writeFile(path.join(stageDir, "customers/chris/IDENTITY.md"), persona);
+    spawnMock.mockImplementation(await realMigrationSpawn());
+    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex"), body: FinishRsyncImportRequestBody = { migrationId, slug: "chris", mode: "final", rpcPhase: "finish-rsync-import", agentContext: policy, targetCertificateSha256: certificate };
+    const first = await finishImport(deps, migrationId, "final", policy, certificate);
+    expect(first.getStatus()).toBe(500); expect(published).toBe(false);
+    const retained = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: body });
+    expect(retained?.phase).toBe("installed"); expect(retained?.workspaceIdentities?.files[0].content).toBe(persona.toString("base64"));
+    const renewed = { ...body, targetCertificateSha256: "0".repeat(64) };
+    await expect(readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: renewed })).rejects.toThrow("completion identity changed");
+    expect((await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: renewed, captureOnly: true }))?.workspaceIdentities).toEqual(retained?.workspaceIdentities);
+    const changed = structuredClone(retained!.workspaceIdentities!); changed.podUid = "foreign-pod";
+    await expect(writeSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: body, response: retained!.response, phase: "installed", workspaceIdentities: changed })).rejects.toThrow("original workspace identity capture changed");
+
+    await expect(fs.access(stageDir)).rejects.toThrow(); await lateWrite!();
+    const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('newer turn')"); db.close();
+    const retry = await finishImport(deps, migrationId, "final", policy, certificate);
+    expect(retry.getStatus(), JSON.stringify(retry.getBody())).toBe(200); expect(published).toBe(true); expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(2);
+    const completed = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: body });
+    expect(completed?.workspaceIdentities).toEqual(retained?.workspaceIdentities);
+    const repeated = await finishImport(deps, migrationId, "final", policy, certificate);
+    expect(repeated.getStatus()).toBe(200); expect(applyAddCustomerConfigPatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses prepared-only Shared identity capture without full source retransmission", async () => {
+    const input = await archivedContextFixture(), importDir = await mkTempRoot();
+    vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
+    const migrationId = "restore-persona-prepared", policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy, adapter: sharedRestoreAdapter(importDir, input.archive, migrationId) });
+    await stageSnapshot(stageDir, () => undefined);
+    upgradeStoresMock.mockRejectedValueOnce(new Error("pre-install upgrade interrupted"));
+    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
+    const first = await finishImport(deps, migrationId, "final", policy, certificate);
+    expect(first.getStatus()).toBe(500);
+    const retry = await finishImport(deps, migrationId, "final", policy, certificate);
+    expect(retry.getStatus()).toBe(500); expect(retry.getBody()).toMatchObject({ message: "Prepared Shared context requires full source retransmission" });
+    expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
+  });
+
+  it("refuses replacement-pod replay of installed Shared identity custody without overwriting a newer turn", async () => {
     const input = await archivedContextFixture(), importDir = await mkTempRoot();
     vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
     let admitted = false;
@@ -4150,9 +4319,10 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('later-shared-turn')"); db.close();
     vi.stubEnv("POD_UID", "replacement-shared-pod-with-installed-context");
     const retry = await finishImport(deps, "restore-installed-retry", "final", policy, certificate);
-    expect(retry.getStatus(), JSON.stringify(retry.getBody())).toBe(200);
+    expect(retry.getStatus()).toBe(500);
+    expect(retry.getBody()).toMatchObject({ message: "Target workspace identity custody changed" });
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(2);
-    expect(applyAddCustomerConfigPatch).toHaveBeenCalledTimes(2);
+    expect(applyAddCustomerConfigPatch).toHaveBeenCalledTimes(1);
   });
 
   it("refuses an ordinary SQLite sidecar even when its bytes match the archive preparation", async () => {
@@ -4167,7 +4337,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe("matching wal state");
   });
 
-  it.each(["fresh", "matching-partial", "repairable-schema", "foreign-file", "mutated-file", "database", "wal", "shm", "journal", "configured", "mounted"])("recovers pinned Shared context with %s target preparation", async variant => {
+  it.each(["fresh", "matching-partial", "repairable-schema", "foreign-file", "mutated-file", "database", "wal", "shm", "journal", "configured", "mounted"])("refuses agents-only checkpoint recovery without original workspace identity: %s", async variant => {
     const input = await archivedContextFixture(), importDir = await mkTempRoot(), checkpointRoot = await mkTempRoot();
     vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
     vi.stubEnv("POD_UID", "replacement-shared-pod");
@@ -4221,36 +4391,16 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       return actualRename(from, to);
     });
     const result = await finishImport(deps, "restore-after-pod-loss", "final", { mode: "restore-shared", archive: input.archive }, "c".repeat(64), { checkpoint });
-    if (variant === "configured" || variant === "mounted") {
-      expect(result.getStatus()).toBe(500);
-      expect(result.getBody()).toMatchObject({ message: "Shared context recovery requires an unwired and unmounted customer runtime" });
-      expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
-      expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
-      return;
-    }
-    if (prohibited || variant === "mutated-file") {
-      expect(result.getStatus()).toBe(500);
-      expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
-      expect(await fs.readFile(prohibited ?? nonDatabase, "utf8")).toBe(prohibited ? "existing state" : "different context");
-      if (variant !== "database") expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
-      return;
-    }
-    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
-    expect(upgradeStoresMock).toHaveBeenCalledOnce();
+    expect(result.getStatus()).toBe(500);
+    if (variant === "configured" || variant === "mounted") expect(result.getBody()).toMatchObject({ message: "Shared context recovery requires an unwired and unmounted customer runtime" });
+    else expect(result.getBody()).toMatchObject({ message: "Shared restoration requires original workspace identity retransmission" });
+    expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(sharedContextCheckpoint).not.toHaveBeenCalled();
+    expect(upgradeStoresMock).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId, CARRIED_STORE))).toEqual(originalDatabase);
-    if (variant === "repairable-schema") {
-      const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); expect(db.prepare("PRAGMA user_version").get().user_version).toBe(25); db.close();
-    }
-    if (variant === "matching-partial") expect(await fs.readFile(nonDatabase, "utf8")).toBe("shared-memory");
-    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
-    expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
-    expect(sharedContextCheckpoint).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ archiveId: input.archive.archiveId, checkpoint }), expect.any(AbortSignal));
+    if (prohibited || variant === "mutated-file") expect(await fs.readFile(prohibited ?? nonDatabase, "utf8")).toBe(prohibited ? "existing state" : "different context");
+    if (variant !== "database") expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
     await expect(fs.access(path.join(importDir, "desktop-home"))).rejects.toThrow();
-    const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('later-turn')"); db.close();
-    const replay = await finishImport(deps, "restore-after-pod-loss", "final", { mode: "restore-shared", archive: input.archive }, "c".repeat(64), { checkpoint });
-    expect(replay.getStatus()).toBe(200);
-    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(2);
-    expect(sharedContextCheckpoint).toHaveBeenCalledOnce();
   });
 
   it.each(["pre", "final"] as const)("preserves retained native history during %s activation and archives only authoritative final Shared state", async mode => {
@@ -5610,6 +5760,7 @@ describe("prepared migration staging", () => {
     expect((await finish("pre")).getStatus()).toBe(200);
     expect(await prepare("final")).toBe(stageDir);
     await fs.rm(path.join(stageDir, "customers/chris/projects/deleted-repo"), { recursive: true });
+    await writeSharedTargetManifest(stageDir, importDir);
     const completed = await finish("final");
     expect(completed.getBody()).toEqual({ migrationId, slug: "chris", imported: true });
     expect(completed.getStatus()).toBe(200);

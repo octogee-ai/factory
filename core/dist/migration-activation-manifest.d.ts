@@ -11,6 +11,16 @@ export interface MigrationSourceIdentityCustody {
     podUid: string;
     epoch: number;
 }
+export interface MigrationTargetIdentityCustody {
+    migrationId?: string;
+    assignmentEpoch?: number;
+    uid: string;
+    gatewayId: string;
+    podUid: string;
+}
+export interface TargetWorkspaceIdentities extends MigrationTargetIdentityCustody {
+    files: SourceWorkspaceIdentity[];
+}
 interface SourceWorkspaceIdentity {
     agentId: string;
     content: string | null;
@@ -37,8 +47,16 @@ export interface MigrationActivationManifest {
     bindings: unknown[];
     projectAgents: MigrationActivationManifestProjectAgent[];
     sourceWorkspaceIdentities?: SourceWorkspaceIdentities;
+    targetWorkspaceIdentities?: TargetWorkspaceIdentities;
 }
 export declare function activationManifestTarPath(slug: string): string;
+export declare function assertTargetIdentityCustody(expected: MigrationTargetIdentityCustody, actual: MigrationTargetIdentityCustody): void;
+export declare function validateTargetWorkspaceIdentities(value: unknown, slug: string, agentIds: readonly string[]): TargetWorkspaceIdentities;
+export declare function captureTargetWorkspaceIdentities(slug: string, agentIds: readonly string[], stateDir: string, custody: MigrationTargetIdentityCustody): Promise<TargetWorkspaceIdentities>;
+export declare function restoreTargetWorkspaceIdentities(value: TargetWorkspaceIdentities, slug: string, agentIds: readonly string[], stateDir: string, options: {
+    custody: MigrationTargetIdentityCustody;
+    assertCurrent: () => Promise<void>;
+}): Promise<void>;
 export declare function assertSourceIdentityCustody(expected: MigrationSourceIdentityCustody, actual: MigrationSourceIdentityCustody): void;
 export declare function captureSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody): Promise<MigrationActivationManifest>;
 export declare function restoreSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody, assertCurrent: () => Promise<void>): Promise<void>;

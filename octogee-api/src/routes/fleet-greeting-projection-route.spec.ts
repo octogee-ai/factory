@@ -16,7 +16,15 @@ function harness(bound: BoundTenant | null, greeting: unknown) {
     get: async () => collection ? { docs: [], empty: true } : { exists: Object.hasOwn(docs, path), data: () => docs[path] },
     set: writes, update: writes, delete: writes,
   });
-  const db = { doc: (path: string) => ref(path), collection: (path: string) => ref(path, true) } as unknown as Firestore;
+  const transaction = {
+    get: (target: { get: () => Promise<unknown> }) => target.get(),
+    create: writes, set: writes, update: writes, delete: writes,
+  };
+  const db = {
+    doc: (path: string) => ref(path),
+    collection: (path: string) => ref(path, true),
+    runTransaction: (work: (txn: typeof transaction) => Promise<unknown>) => work(transaction),
+  } as unknown as Firestore;
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {

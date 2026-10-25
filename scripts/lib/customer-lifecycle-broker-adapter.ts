@@ -1,3 +1,5 @@
+import { parseAgentId } from "@octogee/shared/types/identity";
+import { prepareCustomerRuntimePublication } from "./customer-lifecycle.js";
 import { prepareSharedCustomerAgentAnchors } from "./agent-anchor-record.js";
 import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
 import { prepareBuilderProjectAssets } from "./builder-project-assets.js";
@@ -22,6 +24,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type {
   FleetBrokerProjectCheckoutScope,
+  FleetBrokerAssignmentRosterEntry,
   FleetBrokerUserSnapshot,
 } from "../../shared/types/fleet-broker.js";
 import {
@@ -178,6 +181,13 @@ import {
   assertSourceIdentityCustody,
   restoreSourceWorkspaceIdentities,
   captureSourceWorkspaceIdentities,
+  captureTargetWorkspaceIdentities,
+  restoreTargetWorkspaceIdentities,
+  assertTargetIdentityCustody,
+  writeActivationManifest,
+  type MigrationTargetIdentityCustody,
+  type TargetWorkspaceIdentities,
+  type MigrationActivationManifest,
   type MigrationSourceIdentityCustody,
 } from "./migration-activation-manifest.js";
 import { assertNotHeld, type HeldPathOptions, matchUnder, PROC_ROOT } from "./held-files.js";
@@ -519,6 +529,7 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     status: snapshot.status,
     agentIds: snapshot.agentIds,
     nativeSharedContextRestore: snapshot.nativeSharedContextRestore,
+    restoreAuthority: snapshot.restoreAuthority,
     repoUrl: snapshot.repoUrl,
     mattermostUserId: snapshot.mattermostUserId,
     channels: snapshot.channels,
@@ -1042,6 +1053,137 @@ function buildCoachAgentEntry(
   return agentEntry;
 }
 
+async function missingAssignedIdentityAgents(ctx: BrokerCtx, expected: readonly Record<string, unknown>[]): Promise<string[]> {
+  const current = await freshRosterConfig(ctx) as { agents?: { entries?: Record<string, Record<string, unknown>>; list?: Array<Record<string, unknown>> } };
+  const roster = current.agents?.entries ? Object.entries(current.agents.entries).map(([id, agent]): Record<string, unknown> => ({ ...agent, id })) : current.agents?.list ?? [];
+  const missing: string[] = [];
+  for (const agent of expected) {
+    const matches = roster.filter(value => value.id === agent.id);
+    if (matches.length === 0) missing.push(String(agent.id));
+    else if (matches.length !== 1 || matches[0].workspace !== agent.workspace || agent.agentDir !== undefined && matches[0].agentDir !== agent.agentDir) throw new Error("Assigned Shared Native roster identity changed");
+  }
+  return missing;
+}
+
+interface AssignedWorkspaceIdentityInput {
+  snapshot: UserSnapshot;
+  brokerSnapshot: FleetBrokerUserSnapshot;
+  agentEntry: Record<string, unknown>;
+  projectAgentEntries: Record<string, unknown>[];
+  accountEntry: object;
+  projectAccounts: Record<string, unknown>;
+  accountTokens: Record<string, unknown>;
+  bindings: Array<{ agentId?: unknown }>;
+  callOpts: AddCustomerConfigPatchOptions;
+}
+
+function currentAssignedIdentityOwner(input: { current: FleetBrokerUserSnapshot | null; snapshot: UserSnapshot; assigned: FleetBrokerAssignmentRosterEntry[]; gatewayId?: string; podUid?: string }): boolean {
+  const { current, snapshot, assigned, gatewayId, podUid } = input;
+  return !!gatewayId && !!podUid && current?.uid === snapshot.uid && current.slug === snapshot.slug && current.gatewayId === gatewayId && current.status === "complete" && assigned.length === 1 &&
+    Number.isSafeInteger(assigned[0].epoch) && assigned[0].epoch >= 0 && current.nativeSharedContextRestore === undefined;
+}
+
+function assertAssignedIdentityMode(input: AssignedWorkspaceIdentityInput, current: FleetBrokerUserSnapshot, assigned: FleetBrokerAssignmentRosterEntry): void {
+  if (input.callOpts?.migrationId) {
+    const restore = current.restoreAuthority;
+    if (!restore || restore.migrationId !== input.callOpts.migrationId || restore.uid !== input.snapshot.uid || restore.slug !== input.snapshot.slug || restore.gatewayId !== current.gatewayId || restore.assignmentEpoch !== assigned.epoch) throw new Error("Shared restore identity authority is missing or changed");
+  } else if (assigned.state !== "serving" || current.restoreAuthority !== undefined || current.runtimeMutationFenced !== false) throw new Error("Ordinary Shared identity capture requires unfenced serving custody");
+}
+
+async function readAssignedWorkspaceIdentityAuthority(ctx: BrokerCtx, input: AssignedWorkspaceIdentityInput) {
+  input.callOpts?.signal?.throwIfAborted();
+  const { snapshot } = input;
+  const [current, assignments] = await Promise.all([ctx.client.userSnapshot(snapshot.uid), ctx.client.assignmentRoster()]);
+  const assigned = assignments.filter(value => value.uid === snapshot.uid);
+  const gatewayId = process.env.GATEWAY_ID?.trim(), podUid = process.env.POD_UID?.trim();
+  if (!currentAssignedIdentityOwner({ current, snapshot, assigned, gatewayId, podUid })) throw new Error("Assigned Shared workspace identity authority changed");
+  assertAssignedIdentityMode(input, current!, assigned[0]);
+  const custody: MigrationTargetIdentityCustody = { ...(input.callOpts?.migrationId ? { migrationId: input.callOpts.migrationId } : {}), uid: snapshot.uid, gatewayId: gatewayId!, podUid: podUid!, assignmentEpoch: assigned[0].epoch };
+  return { custody, restoreAuthority: current!.restoreAuthority };
+}
+
+function assignedWorkspaceIdentityManifest(input: AssignedWorkspaceIdentityInput): MigrationActivationManifest {
+  const { snapshot } = input;
+  const agentId = String(input.agentEntry.id);
+  return { version: 2, slug: snapshot.slug, appliedFingerprint: snapshotConfigFingerprint(input.brokerSnapshot), agentId, accountId: `${snapshot.slug}-coach`, agent: input.agentEntry,
+    mattermostAccount: { ...input.accountEntry, botToken: input.accountTokens[`${snapshot.slug}-coach`] }, bindings: input.bindings.filter(binding => binding.agentId === agentId), projectAgents: input.projectAgentEntries.map(agent => {
+      const parsed = parseAgentId(String(agent.id));
+      if (parsed.kind !== "project" || parsed.username !== snapshot.slug) throw new Error("Assigned Shared identity project is foreign");
+      const accountId = `${snapshot.slug}-proj-${parsed.project}`;
+      return { agentId: String(agent.id), accountId, agent, mattermostAccount: { ...(input.projectAccounts[accountId] as object), botToken: input.accountTokens[accountId] }, bindings: input.bindings.filter(binding => binding.agentId === agent.id) };
+    }) };
+}
+
+async function optionalAssignedIdentityManifest(slug: string): Promise<MigrationActivationManifest | null> {
+  try { return await readActivationManifest(OPENCLAW_DIR, slug); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { return null; } throw error; }
+}
+
+type AssignedIdentityAuthority = Awaited<ReturnType<typeof readAssignedWorkspaceIdentityAuthority>>;
+
+function assignedIdentityCurrent(ctx: BrokerCtx, input: AssignedWorkspaceIdentityInput, authority: AssignedIdentityAuthority, retained: MigrationActivationManifest | null) {
+  return async () => {
+    if (!isDeepStrictEqual(await readAssignedWorkspaceIdentityAuthority(ctx, input), authority)) throw new Error("Assigned Shared workspace identity authority changed");
+    if (!isDeepStrictEqual(await optionalAssignedIdentityManifest(input.snapshot.slug), retained)) throw new Error("Assigned Shared workspace identity capture changed");
+    input.callOpts?.signal?.throwIfAborted();
+  };
+}
+
+function assertAssignedCaptureBinding(capture: TargetWorkspaceIdentities, authority: AssignedIdentityAuthority): void {
+  assertTargetIdentityCustody(capture, { ...(capture.migrationId ? { migrationId: capture.migrationId } : {}),
+    ...(capture.assignmentEpoch === undefined ? {} : { assignmentEpoch: authority.custody.assignmentEpoch }), uid: authority.custody.uid, gatewayId: authority.custody.gatewayId, podUid: authority.custody.podUid });
+}
+
+function assignedCaptureIsCurrentMount(capture: TargetWorkspaceIdentities | undefined, custody: MigrationTargetIdentityCustody): boolean {
+  return capture !== undefined && capture.migrationId === custody.migrationId && capture.assignmentEpoch === custody.assignmentEpoch;
+}
+
+async function retainAssignedIdentityCapture(ctx: BrokerCtx, input: AssignedWorkspaceIdentityInput, state: { authority: AssignedIdentityAuthority; previous: MigrationActivationManifest | null; missing: string[] }): Promise<MigrationActivationManifest> {
+  const { authority, previous, missing } = state;
+  const capture = previous?.targetWorkspaceIdentities;
+  if (capture) {
+    const custody = { ...authority.custody };
+    if (input.callOpts?.migrationId && capture.assignmentEpoch === undefined) delete custody.assignmentEpoch;
+    assertTargetIdentityCustody(capture, custody);
+    const ids = [String(input.agentEntry.id), ...input.projectAgentEntries.map(agent => String(agent.id))];
+    if (!isDeepStrictEqual([previous.agentId, ...previous.projectAgents.map(agent => agent.agentId)].sort(), ids.sort())) throw new Error("Assigned Shared identity roster changed");
+    return previous;
+  }
+  if (previous) throw new Error("Assigned Shared identity capture cannot replace an unfinished migration manifest");
+  const retained = { ...assignedWorkspaceIdentityManifest(input), targetWorkspaceIdentities: await captureTargetWorkspaceIdentities(input.snapshot.slug, missing, resolveOpenClawStateDir(), authority.custody) };
+  await assignedIdentityCurrent(ctx, input, authority, null)();
+  await writeActivationManifest(OPENCLAW_DIR, retained);
+  return retained;
+}
+
+async function assignedWorkspaceIdentityRestore(ctx: BrokerCtx, input: Omit<AssignedWorkspaceIdentityInput, "brokerSnapshot"> & { brokerSnapshot: FleetBrokerUserSnapshot | null }): Promise<{ restore: () => Promise<void>; complete: () => Promise<void> } | undefined> {
+  if (ctx.isBuilderGateway() || input.callOpts?.beforeRuntimePublish || input.brokerSnapshot?.status !== "complete") return undefined;
+  const scoped = { ...input, brokerSnapshot: input.brokerSnapshot };
+  const authority = await readAssignedWorkspaceIdentityAuthority(ctx, scoped);
+  const ids = [String(input.agentEntry.id), ...input.projectAgentEntries.map(agent => String(agent.id))];
+  const previous = await optionalAssignedIdentityManifest(input.snapshot.slug), capture = previous?.targetWorkspaceIdentities;
+  const missing = input.callOpts?.migrationId ? ids : await missingAssignedIdentityAgents(ctx, [input.agentEntry, ...input.projectAgentEntries]);
+  if (capture) assertAssignedCaptureBinding(capture, authority);
+  const sameMount = assignedCaptureIsCurrentMount(capture, authority.custody);
+  if (!input.callOpts?.migrationId && missing.length === 0 && !sameMount) {
+    const assertCurrent = assignedIdentityCurrent(ctx, scoped, authority, previous);
+    return { restore: assertCurrent, complete: async () => { await assertCurrent(); if (previous) await removeActivationManifest(OPENCLAW_DIR, input.snapshot.slug); } };
+  }
+  const retained = await retainAssignedIdentityCapture(ctx, scoped, { authority, previous, missing });
+  const assertCurrent = assignedIdentityCurrent(ctx, scoped, authority, retained);
+  await assertCurrent();
+  return { restore: () => restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, input.snapshot.slug, ids, resolveOpenClawStateDir(), { custody: retained.targetWorkspaceIdentities!, assertCurrent }),
+    complete: async () => { await assertCurrent(); await removeActivationManifest(OPENCLAW_DIR, input.snapshot.slug); } };
+}
+
+async function prepareAssignedCustomerRuntimePublication(callOpts: AddCustomerConfigPatchOptions, assigned: Awaited<ReturnType<typeof assignedWorkspaceIdentityRestore>>): Promise<void> {
+  await prepareCustomerRuntimePublication({ ...callOpts, beforeRuntimePublish: assigned?.restore ?? callOpts?.beforeRuntimePublish });
+}
+
+async function completeAssignedWorkspaceIdentity(assigned: Awaited<ReturnType<typeof assignedWorkspaceIdentityRestore>>): Promise<void> {
+  await assigned?.complete();
+}
+
 async function applyAddCustomerConfigPatch(
   ctx: BrokerCtx,
   snapshot: UserSnapshot,
@@ -1114,6 +1256,8 @@ async function applyAddCustomerConfigPatch(
   let routingActivationRequired = mattermostRoutingActivationPending(OPENCLAW_DIR);
   const routingActivationReason = `[add:${snapshot.slug}] account-level Mattermost binding changed`;
   const customerAgentEntries = [agentEntry, ...projectAgentEntries];
+  const accountTokens = Object.fromEntries([[accountId, coachPat], ...projectAgents.map(agent => [`${snapshot.slug}-proj-${agent.projectId}`, agent.token])]);
+  const assignedIdentity = await assignedWorkspaceIdentityRestore(ctx, { snapshot, brokerSnapshot, agentEntry, projectAgentEntries, accountEntry, projectAccounts, accountTokens, bindings, callOpts });
   await callOpts?.brokerProfilesReady;
   const reportSharedAnchors = await prepareCustomerSharedAnchors(ctx, {
     uid: snapshot.uid, slug: snapshot.slug, agentIds: brokerAgentIds,
@@ -1132,6 +1276,7 @@ async function applyAddCustomerConfigPatch(
   const pendingProjectAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
   routingActivationRequired = markPendingProjectActivations(routingActivationReason, pendingProjectAccountIds, routingActivationBaseline)
     || routingActivationRequired;
+  await prepareAssignedCustomerRuntimePublication(callOpts, assignedIdentity);
   const startedAt = Date.now();
   let configBefore: unknown;
   const configPatch = await applyConfigPatch(
@@ -1227,6 +1372,7 @@ async function applyAddCustomerConfigPatch(
     }),
   });
   for (const slug of evictionSlugs) ctx.configRemovedForEviction.add(slug);
+  await completeAssignedWorkspaceIdentity(assignedIdentity);
   return {
     elapsedMs: Date.now() - startedAt,
     ...(brokerSnapshot
@@ -1644,6 +1790,7 @@ async function sourceIdentityForResume(ctx: BrokerCtx, manifest: Awaited<ReturnT
     assertSourceIdentityCustody(manifest.sourceWorkspaceIdentities, custody);
     await captureSourceWorkspaceIdentities(manifest, resolveOpenClawStateDir(), custody);
   } else {
+    const assignedCapture = assignedCaptureForSourceResume(manifest, custody);
     const current = await freshRosterConfig(ctx) as { agents?: { entries?: Record<string, Record<string, unknown>>; list?: Array<Record<string, unknown>> } };
     const roster: Array<Record<string, unknown>> = current.agents?.entries ? Object.entries(current.agents.entries).map(([id, agent]) => ({ ...agent, id })) : current.agents?.list ?? [];
     for (const entry of [manifest, ...manifest.projectAgents]) {
@@ -1654,8 +1801,17 @@ async function sourceIdentityForResume(ctx: BrokerCtx, manifest: Awaited<ReturnT
         throw new Error("Source rollback without an identity capture requires its intact Native roster");
       }
     }
+    if (assignedCapture) await assertSourceResumeCurrent(ctx, manifest, custody);
   }
   return custody;
+}
+
+function assignedCaptureForSourceResume(manifest: MigrationActivationManifest, custody: MigrationSourceIdentityCustody): TargetWorkspaceIdentities | undefined {
+  const capture = manifest.targetWorkspaceIdentities;
+  if (!capture) return undefined;
+  if (capture.migrationId !== undefined || capture.assignmentEpoch === undefined) throw new Error("Source rollback cannot consume a migration-bound target identity capture");
+  assertTargetIdentityCustody(capture, { uid: custody.uid, gatewayId: custody.gatewayId, podUid: custody.podUid, assignmentEpoch: custody.epoch });
+  return capture;
 }
 
 async function assertSourceResumeCurrent(ctx: BrokerCtx, manifest: Awaited<ReturnType<typeof readActivationManifest>>, custody: MigrationSourceIdentityCustody): Promise<void> {
@@ -1666,19 +1822,34 @@ async function assertSourceResumeCurrent(ctx: BrokerCtx, manifest: Awaited<Retur
 }
 
 async function restoreSourceIdentityAfterRoster(ctx: BrokerCtx, manifest: Awaited<ReturnType<typeof readActivationManifest>>, safeManifest: Awaited<ReturnType<typeof readActivationManifest>>, custody: MigrationSourceIdentityCustody | undefined): Promise<void> {
-  if (!custody || !safeManifest.sourceWorkspaceIdentities) return;
-  await assertSourceResumeCurrent(ctx, manifest, custody);
-  await restoreSourceWorkspaceIdentities(safeManifest, resolveOpenClawStateDir(), custody, async () => {
-    await assertSourceResumeCurrent(ctx, manifest, custody);
-  });
+  if (!custody) return;
+  const assertCurrent = () => assertSourceResumeCurrent(ctx, manifest, custody);
+  if (safeManifest.sourceWorkspaceIdentities) {
+    await assertCurrent();
+    await restoreSourceWorkspaceIdentities(safeManifest, resolveOpenClawStateDir(), custody, assertCurrent);
+  } else {
+    const capture = assignedCaptureForSourceResume(manifest, custody);
+    if (capture) await restoreTargetWorkspaceIdentities(capture, manifest.slug, activationManifestAgentIds(manifest), resolveOpenClawStateDir(), { custody: capture, assertCurrent });
+  }
+}
+
+function sharedImportWithoutIdentityWitness(ctx: BrokerCtx, opts: { resumeExistingSharedCustody?: boolean; migrationId?: string; beforeRuntimePublish?: () => Promise<void> }): boolean {
+  return !ctx.isBuilderGateway() && !opts.resumeExistingSharedCustody && !!opts.migrationId && !opts.beforeRuntimePublish;
+}
+
+function importedRosterNeedsAcknowledgement(manifest: MigrationActivationManifest, sourceIdentity: MigrationSourceIdentityCustody | undefined): boolean {
+  return !sourceIdentity || manifest.sourceWorkspaceIdentities !== undefined || manifest.targetWorkspaceIdentities !== undefined;
 }
 
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
-  opts: { signal?: AbortSignal; resumeExistingSharedCustody?: boolean; migrationId?: string } | undefined,
+  opts: { signal?: AbortSignal; resumeExistingSharedCustody?: boolean; migrationId?: string; beforeRuntimePublish?: () => Promise<void> } | undefined,
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
   opts ??= {};
+  if (sharedImportWithoutIdentityWitness(ctx, opts)) {
+    throw new Error("Shared migration activation requires an original workspace identity witness");
+  }
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const sourceIdentity = await sourceIdentityForResume(ctx, manifest, opts);
   const configuredBuilder = isConfiguredGatewayBuilder(slug);
@@ -1714,7 +1885,7 @@ async function activateImportedCustomer(
     logPrefix: `[import:${slug}]`,
     purpose: "import",
   });
-  if (!sourceIdentity || safeManifest.sourceWorkspaceIdentities) {
+  if (importedRosterNeedsAcknowledgement(safeManifest, sourceIdentity)) {
     await ensureCustomerRosterAgents(ctx, [
       safeManifest.agent,
       ...safeManifest.projectAgents.map((entry) => entry.agent),
@@ -1747,6 +1918,7 @@ async function activateImportedCustomer(
     accountIds,
   );
   if (sourceIdentity) await assertSourceResumeCurrent(ctx, manifest, sourceIdentity);
+  await prepareCustomerRuntimePublication(opts);
   const patch = await applyOpenClawActivationManifest(safeManifest, {
     rpc: ctx.rpc,
     cache: ctx.configCache,
@@ -2226,6 +2398,16 @@ export function buildBrokeredLifecycleAdapter(
     prepareImportDir: (slug, mode) => openClawRuntimeUpdateGuard.run(() =>
       prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`))),
     prepareKeyImportDir,
+    targetMigrationIdentityCustody: async (slug, migrationId) => {
+      if (ctx.isBuilderGateway() || !migrationId) throw new Error("Shared target migration authority is required");
+      const current = await ctx.client.readAgentAnchors({ slug, migrationId });
+      const gatewayId = process.env.GATEWAY_ID?.trim(), podUid = process.env.POD_UID?.trim();
+      if (!gatewayId || !podUid || current.migration?.migrationId !== migrationId || !current.assignment?.uid || current.assignment.state !== "quiescing" ||
+          current.assignment.epoch !== current.migration.sourceEpoch || !Number.isSafeInteger(current.migration.claimStartedAt) || current.migration.claimStartedAt <= 0) {
+        throw new Error("Shared target migration authority changed");
+      }
+      return { custody: { migrationId, uid: current.assignment.uid, gatewayId, podUid }, migration: current.migration };
+    },
     activateImportedCustomer: (slug, callOpts) =>
       openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {
         signal: callOpts?.signal,

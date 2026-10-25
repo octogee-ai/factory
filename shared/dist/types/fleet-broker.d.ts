@@ -224,6 +224,20 @@ export interface FleetBrokerPreStopFlushEvent {
     reason: "prestop";
     result?: FleetBrokerPreStopFlushResult;
 }
+export interface FleetBrokerCustomerRestoreAuthority {
+    uid: string;
+    slug: string;
+    gatewayId: string;
+    fromGatewayId: string;
+    assignmentEpoch: number;
+    operationId: string;
+    claimStartedAt: number;
+    attemptId: string;
+    phase: "dispatched";
+    dispatchedAt: number;
+    dispatchClaimStartedAt: number;
+    migrationId: string;
+}
 export interface FleetBrokerUserSnapshot {
     uid: string;
     slug: string;
@@ -232,6 +246,8 @@ export interface FleetBrokerUserSnapshot {
     status: FleetBrokerProvisioningStatus;
     agentIds: string[];
     runtimeReset?: FleetBrokerCustomerRuntimeReset;
+    restoreAuthority?: FleetBrokerCustomerRestoreAuthority;
+    runtimeMutationFenced?: boolean;
     nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
     repoUrl: string;
     mattermostUserId: string | null;

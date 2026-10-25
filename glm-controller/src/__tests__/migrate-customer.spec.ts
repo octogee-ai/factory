@@ -12,7 +12,8 @@ import {
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import { buildOperationCompletionUpdate, classifyOperationFailure } from "../operation-retry";
-import { PendingCustomerRestoreError } from "../operation-context";
+import { assertCustomerRestoreSettled, createOperationContext, PendingCustomerRestoreError } from "../operation-context";
+import { builderReturnOperationId } from "@octogee/core/builder-activation-lease";
 import type { NativeReturnPark, NativeSourcePark } from "../lib/native-computer-return";
 
 const SOURCE_SYSTEM_CONFIG_COMMIT = "a".repeat(40);
@@ -859,6 +860,59 @@ describe("native computer return", () => {
     expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
   });
 
+  it.each([true, false])("resumes the original source after pre-cutover persona refusal only with target cleanup confirmed: %s", async (cleanupConfirmed) => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    const missingWitness = "Shared import has no original workspace identity witness";
+    const order: string[] = [];
+    const assignment = { gatewayId: "gw-blue", epoch: 4, state: "serving" };
+    vi.mocked(h.deps.setAssignmentState).mockImplementation(async request => {
+      expect(request.gatewayId).toBe(assignment.gatewayId);
+      expect(request.epoch).toBe(assignment.epoch);
+      assignment.state = request.state;
+      order.push(`assignment:${request.state}`);
+    });
+    vi.mocked(h.client.transferState).mockImplementation(async request => {
+      if (request.mode === "final") {
+        expect(request).toMatchObject({ includeActivationManifest: true });
+        expect(request.agentContext).toBeUndefined();
+        expect(assignment.state).toBe("quiescing");
+        order.push("final-import-refused");
+        throw new MigrationRpcError(missingWitness, { status: 500 });
+      }
+      return { migrationId: request.migrationId, slug: request.slug, imported: true };
+    });
+    vi.mocked(h.client.abortImport).mockImplementation(async request => { order.push(`abort:${request.gatewayId}`); });
+    vi.mocked(h.client.unmount).mockImplementation(async request => {
+      order.push(`unmount:${request.gatewayId}`);
+      if (!cleanupConfirmed) throw new MigrationTransportError("target cleanup outcome unknown");
+      return { ...request, unmounted: true };
+    });
+    const scheduler = h.client.scheduler;
+    h.client.scheduler = vi.fn(async request => {
+      order.push(`scheduler:${request.gatewayId}:${request.phase}`);
+      return scheduler(request);
+    });
+    vi.mocked(h.client.resume).mockImplementation(async request => { order.push(`resume:${request.gatewayId}`); });
+
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+
+    expect(result).toMatchObject({ success: false, rolledBack: cleanupConfirmed, error: expect.stringContaining(missingWitness) });
+    expect(h.client.abortImport).toHaveBeenCalledExactlyOnceWith({ migrationId: "mig-op-1", gatewayId: "gw-green", slug: "alice", mode: "final" });
+    expect(h.client.unmount).toHaveBeenCalledExactlyOnceWith({ migrationId: "mig-op-1", gatewayId: "gw-green", slug: "alice" });
+    expect(order).toEqual([
+      "assignment:quiescing", "final-import-refused", "abort:gw-green", "unmount:gw-green",
+      ...(cleanupConfirmed ? ["scheduler:gw-green:abort", "scheduler:gw-blue:resume", "resume:gw-blue", "assignment:serving"] : []),
+    ]);
+    expect(assignment).toEqual({ gatewayId: "gw-blue", epoch: 4, state: cleanupConfirmed ? "serving" : "quiescing" });
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(native.requestCheckpoint).not.toHaveBeenCalled();
+    expect(native.park).not.toHaveBeenCalled();
+    expect(h.client.restoreTarget).not.toHaveBeenCalled();
+    expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
+    expect(h.deps.prepareNativeSharedContextRestore).not.toHaveBeenCalled();
+  });
+
   describe("checkpoint release readiness", () => {
     const handoff = { migrationId: "mig-op-1:scheduler:1", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice" };
     const op = () => mkOp({ attempts: 1, schedulerHandoff: handoff, input: {
@@ -1179,6 +1233,57 @@ describe("native computer return", () => {
       expect(h.ctx.withCustomerRestoreFence).toHaveBeenCalledWith(expect.objectContaining({ resume: true }), expect.any(Function));
       expect(h.client.restoreTarget).toHaveBeenCalledWith(expect.objectContaining({ resume: true, uid: "uid-alice", gatewayId: "gw-green" }));
       expect(h.ctx.assertCustomerRestoreSettled).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps a replacement-pod restore fenced and pending across repeated missing-persona-witness refusals after cutover", async () => {
+      const h = recovery();
+      const native = nativeReturn(h);
+      const missingWitness = "Shared restore has no original workspace identity witness";
+      const id = builderReturnOperationId("gw-blue", 1);
+      const scope = { uid: "uid-alice", slug: "alice", gatewayId: "gw-green", fromGatewayId: "gw-blue", assignmentEpoch: 7 };
+      const restoreAttempt = { ...scope, operationId: id, attemptId: "restore-before-pod-loss", phase: "dispatched", claimStartedAt: 3_000, dispatchedAt: 3_100 };
+      const acknowledge = vi.fn(async () => undefined);
+      const begin = vi.fn(async (input: Parameters<NonNullable<OperationContext["withCustomerRestoreFence"]>>[0]) => {
+        expect(input).toEqual({ ...scope, resume: true });
+        return acknowledge;
+      });
+      vi.mocked(h.client.restoreTarget).mockImplementation(async request => {
+        expect(request).toMatchObject({ uid: scope.uid, slug: scope.slug, gatewayId: scope.gatewayId, migrationId: `mig-${id}`, resume: true });
+        expect(request.snapshot).toMatchObject({ uid: scope.uid, slug: scope.slug, gatewayId: scope.gatewayId, status: "complete" });
+        throw new MigrationRpcError(missingWitness, { status: 500 });
+      });
+
+      for (const attempts of [4, 5]) {
+        const op = mkOp({ id, origin: "automatic", attempts, cutoverCommittedAt: 100, input: {
+          uid: scope.uid, builderSlug: scope.slug, fromGatewayId: scope.fromGatewayId, toGatewayId: scope.gatewayId, source: "builder-activation-lease",
+        } });
+        const { ctx, steps } = createOperationContext({
+          opId: id, assertActiveClaim: h.ctx.assertActiveClaim, persist: vi.fn(async () => undefined), log: vi.fn(),
+          customerRestore: { begin, assertSettled: async () => assertCustomerRestoreSettled(op, restoreAttempt) },
+        });
+        const result = await createMigrateCustomerHandler(h.deps)(op, ctx);
+        expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining(`native return completion pending: status 503: ${missingWitness}`) });
+        expect(steps).toContainEqual(expect.objectContaining({ name: "restore-target", status: "failed", error: missingWitness }));
+        const completion = buildOperationCompletionUpdate({ op, result, steps, now: 6_000 });
+        expect(completion).toMatchObject({ status: "pending", startedAt: null, attempts: attempts + 1 });
+        expect(completion.error).toEqual(expect.stringContaining(missingWitness));
+        expect(() => assertCustomerRestoreSettled(op, restoreAttempt)).toThrow(PendingCustomerRestoreError);
+      }
+
+      expect(h.client.restoreTarget).toHaveBeenCalledTimes(2);
+      expect(begin).toHaveBeenCalledTimes(2);
+      expect(acknowledge).not.toHaveBeenCalled();
+      expect(h.deps.readUser).toHaveBeenCalledWith(scope.uid);
+      expect(h.deps.commitCutover).not.toHaveBeenCalled();
+      expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+      expect(h.client.resume).not.toHaveBeenCalled();
+      expect(h.client.transferState).not.toHaveBeenCalled();
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.client.scheduler).not.toHaveBeenCalled();
+      expect(h.client.verifyTarget).not.toHaveBeenCalled();
+      expect(native.releaseWriterHold).not.toHaveBeenCalled();
+      expect(native.park).not.toHaveBeenCalled();
+      expect(native.acknowledgeCompletedSchedulerHandoff).not.toHaveBeenCalled();
     });
 
     it("does not accept ready state after an ambiguous earlier restore", async () => {
