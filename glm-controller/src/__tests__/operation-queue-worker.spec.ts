@@ -216,6 +216,76 @@ function buildDeps(
 }
 
 describe("gateway operation queue — enqueue instead of reject (glmOperations wiring)", () => {
+  it("rolls a Builder ahead of its untouched idle return blocked by another Shared migration", async () => {
+    const returnId = "builder-return-builder-a-g2";
+    const blockedReturn = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic",
+      createdBy: "glm-controller-placement-policy", createdAt: 2,
+      input: { uid: "alice", builderSlug: "alice", source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } });
+    const olderMigration = baseOp({ id: "older-shared-move", kind: "migrate-customer", createdAt: 1,
+      nextAttemptAt: Date.now() + 60_000, input: { fromGatewayId: "shared-source", toGatewayId: "shared-target" } });
+    const rollout = baseOp({ id: "operator-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
+    const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
+    const { db, store } = createFakeGlmOperationsDb({ [returnId]: blockedReturn, "older-shared-move": olderMigration, "operator-roll": rollout }, {
+      gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" } },
+      runtimes: { "builder-a": { runtime: "cluster" } },
+    });
+
+    await processOperation(rollout as unknown as Operation, db.collection(GLM_OPERATIONS_COLLECTION).doc("operator-roll"), buildDeps(db, { rollout: handler }));
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(store.get("operator-roll")?.status).toBe("succeeded");
+    expect(store.get(returnId)).toEqual(blockedReturn);
+    expect(store.get("older-shared-move")).toEqual(olderMigration);
+  });
+
+  it("runs the older return when an intervening Shared rollout blocks the operator Builder roll", async () => {
+    const returnId = "builder-return-builder-a-g2";
+    const returning = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
+      input: { source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } });
+    const sharedRoll = baseOp({ id: "shared-roll", createdAt: 2, input: { gatewayId: "shared-target" } });
+    const builderRoll = baseOp({ id: "builder-roll", origin: "operator", createdAt: 3, input: { gatewayId: "builder-a" } });
+    const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
+    const { db, store } = createFakeGlmOperationsDb({ [returnId]: returning, "shared-roll": sharedRoll, "builder-roll": builderRoll }, {
+      gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" }, "shared-target": { gatewayId: "shared-target", gatewayClass: "shared" } },
+      runtimes: { "builder-a": { runtime: "cluster" }, "shared-target": { runtime: "cluster" } },
+    });
+
+    await processOperation(returning as unknown as Operation, db.collection(GLM_OPERATIONS_COLLECTION).doc(returnId), buildDeps(db, { "migrate-customer": handler }));
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(store.get(returnId)?.status).toBe("succeeded");
+    expect(store.get("shared-roll")).toEqual(sharedRoll);
+    expect(store.get("builder-roll")).toEqual(builderRoll);
+  });
+
+  it.each([
+    { name: "running return", returning: { status: "running", startedAt: 10 } },
+    { name: "earlier claim", returning: { firstStartedAt: 10 } },
+    { name: "prior attempt", returning: { attempts: 1, attemptHistory: [{ attempt: 1 }] } },
+    { name: "source step", returning: { steps: [{ name: "quiesce-source", status: "done" }] } },
+    { name: "transfer dispatch", returning: { sourceTransferExecution: { status: "dispatched" } } },
+    { name: "scheduler custody", returning: { schedulerHandoff: { migrationId: "original" } } },
+    { name: "released scheduler custody", returning: { schedulerHandoffReleased: true } },
+    { name: "migration state", returning: { customerMigrationV2: { phase: "initialized" } } },
+    { name: "cancellation", returning: { cancellationRequestedAt: 10 } },
+    { name: "retained output", returning: { output: { configCleanup: { migrationId: "original" } } } },
+    { name: "automatic rollout", rollout: { origin: "automatic" } },
+    { name: "Shared target rollout", rollout: { input: { gatewayId: "shared-target" } } },
+  ])("keeps queue exclusion for $name", async ({ returning, rollout }) => {
+    const returnId = "builder-return-builder-a-g2";
+    const blockedReturn = { ...baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
+      input: { source: "builder-activation-lease", fromGatewayId: "builder-a", toGatewayId: "shared-target" } }), ...returning };
+    const queuedRoll = { ...baseOp({ id: "operator-roll", origin: "operator", createdAt: 2, input: { gatewayId: "builder-a" } }), ...rollout };
+    const handler: OperationHandler = vi.fn(async () => ({ success: true, steps: [] }));
+    const { db, store } = createFakeGlmOperationsDb({ [returnId]: blockedReturn, "operator-roll": queuedRoll });
+
+    await processOperation(queuedRoll as unknown as Operation, db.collection(GLM_OPERATIONS_COLLECTION).doc("operator-roll"), buildDeps(db, { rollout: handler }));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(store.get("operator-roll")?.status).toBe("pending");
+    expect(store.get(returnId)).toEqual(blockedReturn);
+  });
+
   it("does not execute an audit record from a pending scan or snapshot", async () => {
     const rolloutHandler: OperationHandler = vi.fn(async () => ({ steps: [], success: true }));
     const { db, store } = createFakeGlmOperationsDb(

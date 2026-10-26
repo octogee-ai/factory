@@ -710,7 +710,7 @@ describe("POST /gateways/:id/deploy", () => {
         gatewayEdgeImage: { imageTag: `aaaaaaa-oc2026.8.1@sha256:${"e".repeat(64)}` },
       },
     });
-    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(opsIn(store, "rollout")).toMatchObject([{ origin: "operator", input: { gatewayId: "gw-alice" } }]);
     expect(authority.resolveManifest).toHaveBeenCalledWith(manifest.sourceSha);
   });
 
@@ -1038,7 +1038,7 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
         .imageTag,
     ).toBe("abc1234");
     expect(store.get("gateways/gamma")).toMatchObject({ latestRelease: 3, desiredRelease: 2 });
-    expect(opsIn(store, "rollout")).toHaveLength(1);
+    expect(opsIn(store, "rollout")).toMatchObject([{ origin: "operator", input: { gatewayId: "gamma" } }]);
   });
 
   it("rejects rolling back a standby Builder because standbys ride the platform release", async () => {

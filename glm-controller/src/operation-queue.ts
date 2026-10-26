@@ -1,5 +1,6 @@
 import { hasBuilderActivationTargetRollback } from './builder-activation-roll-recovery.js';
-import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
+import { isBuilderActivateOperationIdFor, isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
+import type { Operation } from "@octogee/shared/types/glm";
 import { serialFleetOperationsConflict, type RolloutLane } from "@octogee/core/fleet-operation-lock";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 
@@ -16,6 +17,8 @@ export function isSeriallyExclusiveKind(kind: string): boolean {
 }
 
 export interface OperationRef {
+  origin?: string;
+  unstartedBuilderReturn?: boolean;
   schedulerHandoff?: unknown;
   id: string;
   kind: string;
@@ -102,17 +105,11 @@ export interface PendingOperationRef extends OperationRef {
   nextAttemptAt?: number | null;
 }
 
-export interface OperationClaimCandidate {
-  rolloutLane?: RolloutLane;
-  id: string;
-  kind: string;
+export interface OperationClaimCandidate extends OperationRef {
   status: string;
   createdAt: number;
   queuedAt?: number;
   nextAttemptAt?: number | null;
-  input?: Record<string, unknown>;
-  customerMigrationV2?: OperationRef["customerMigrationV2"];
-  cutoverCommittedAt?: number;
 }
 
 export interface OperationClaimDecisionInput {
@@ -168,6 +165,64 @@ function recoveryYieldsToTargetRoll(recovery: OperationRef, rollout: OperationRe
     rollout.kind === "rollout" && rollout.input?.gatewayId === target;
 }
 
+function absentOrEmpty(value: unknown): boolean {
+  return value === undefined || Array.isArray(value) && value.length === 0;
+}
+
+function hasNoInvocationHistory(operation: Operation): boolean {
+  return operation.startedAt === null && operation.completedAt === null &&
+    (operation.firstStartedAt === undefined || operation.firstStartedAt === null) &&
+    [operation.attempts, operation.resumeCount].every(value => value === undefined || value === 0) &&
+    (operation.rolledBack === undefined || operation.rolledBack === false) &&
+    Array.isArray(operation.steps) && operation.steps.length === 0 &&
+    absentOrEmpty(operation.attemptHistory) && absentOrEmpty(operation.progress);
+}
+
+function hasNoRuntimeEffects(operation: Operation): boolean {
+  return !("cancellationRequestedAt" in operation) &&
+    [operation.lastResumedAt, operation.lastProgressAt, operation.error, operation.output,
+      operation.customerMigrationV2, operation.sourceTransferExecution, operation.schedulerHandoff,
+      operation.schedulerHandoffReleased, operation.schedulerHandoffReleasedAt, operation.schedulerHandoffLost,
+      operation.cutoverCommittedAt].every(value => value === undefined);
+}
+
+export function isUnstartedBuilderReturn(operation: Operation): boolean {
+  const source = inputString(operation.input, "fromGatewayId");
+  const target = inputString(operation.input, "toGatewayId");
+  return operation.kind === MIGRATE_CUSTOMER_KIND && operation.status === "pending" &&
+    operation.origin === "automatic" && operation.input?.source === "builder-activation-lease" &&
+    isBuilderReturnOperationIdFor(operation.id, source) && target?.startsWith("shared-") === true &&
+    operation.input.recoverSourceOnly === undefined && hasNoInvocationHistory(operation) && hasNoRuntimeEffects(operation);
+}
+
+function returnMatchesOperatorRoll(returning: OperationRef, rollout: OperationRef): boolean {
+  return returning.unstartedBuilderReturn === true && rollout.kind === "rollout" && rollout.origin === "operator" &&
+    returning.input?.fromGatewayId === rollout.input?.gatewayId;
+}
+
+function blocksOperatorPriorityRoll(rollout: PendingOperationRef, pending: PendingOperationRef, now: number): boolean {
+  if (rolloutWaitsForBuilderActivation(rollout, pending)) return true;
+  return !returnMatchesOperatorRoll(pending, rollout) && !recoveryYieldsToTargetRoll(pending, rollout) &&
+    !isBackingOffReleasedOperation(pending, now) && operationsConflict(rollout, pending) &&
+    compareOperationQueueOrder(pending, rollout) < 0;
+}
+
+function eligibleOperatorPriorityRolls(input: OperationClaimDecisionInput): ReadonlySet<string> {
+  const byId = new Map(input.pendingOpsSameKind.map(operation => [operation.id, operation]));
+  byId.set(input.op.id, input.op);
+  const pending = [...byId.values()];
+  return new Set(pending.filter(rollout =>
+    rollout.kind === "rollout" && rollout.origin === "operator" &&
+    (typeof rollout.nextAttemptAt !== "number" || rollout.nextAttemptAt <= input.now) &&
+    findSerialConflict(rollout, input.runningOpsSameKind) === null &&
+    !pending.some(peer => peer.id !== rollout.id && blocksOperatorPriorityRoll(rollout, peer, input.now)),
+  ).map(rollout => rollout.id));
+}
+
+function unstartedReturnYieldsToOperatorRoll(returning: OperationRef, rollout: OperationRef, eligible: ReadonlySet<string>): boolean {
+  return eligible.has(rollout.id) && returnMatchesOperatorRoll(returning, rollout);
+}
+
 function isPendingBuilderActivation(operation: OperationRef): boolean {
   return operation.kind === MIGRATE_CUSTOMER_KIND &&
     operation.input?.source === "builder-activation-lease" &&
@@ -191,6 +246,7 @@ function findOlderPendingSameScope(
   candidate: PendingOperationRef,
   pendingOpsSameKind: ReadonlyArray<PendingOperationRef>,
   now: number,
+  eligibleRolls: ReadonlySet<string>,
 ): SerialConflict | null {
   const older = pendingOpsSameKind
     .filter(
@@ -198,6 +254,7 @@ function findOlderPendingSameScope(
         pending.id !== candidate.id &&
         !rolloutWaitsForBuilderActivation(pending, candidate) &&
         !recoveryYieldsToTargetRoll(pending, candidate) &&
+        !unstartedReturnYieldsToOperatorRoll(pending, candidate, eligibleRolls) &&
         !placementMoveYieldsToBuilderActivation(pending, candidate) &&
         !isBackingOffReleasedOperation(pending, now) &&
         operationsConflict(candidate, pending) &&
@@ -225,11 +282,12 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
+  const eligibleRolls = eligibleOperatorPriorityRolls(input);
   const activation = pendingOpsSameKind.find((pending) =>
     rolloutWaitsForBuilderActivation(op, pending) || placementMoveYieldsToBuilderActivation(op, pending) ||
-    recoveryYieldsToTargetRoll(op, pending));
+    recoveryYieldsToTargetRoll(op, pending) || unstartedReturnYieldsToOperatorRoll(op, pending, eligibleRolls));
   if (activation) return { outcome: "queue", waitingOn: describeWaitingOn(activation) };
-  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now);
+  const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now, eligibleRolls);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };
   return { outcome: "claim" };
 }
