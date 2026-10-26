@@ -1,3 +1,4 @@
+ARG CUA_DRIVER_IMAGE=octogee-cua-driver
 FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS gateway-core-system
 
 ARG NPM_VERSION=12.2.1
@@ -61,30 +62,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
-FROM rust:1.99.1-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS cua-driver-builder
-
-ARG CUA_SOURCE_SHA=6d6c734c127025fb39ad5d585a10382808b39dc1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates git pkg-config libx11-dev libxi-dev libxtst-dev \
-      libxkbcommon-dev libssl-dev libwayland-dev libxdo-dev libgtk-3-dev \
-      libclang-dev clang cmake \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /src
-RUN git init && git remote add origin https://github.com/trycua/cua.git \
-    && git config core.sparseCheckout true \
-    && printf 'libs/cua-driver/\n/libs/cua/Cargo.toml\n/libs/cua/crates/cua-telemetry/\n' > .git/info/sparse-checkout \
-    && git fetch --depth=1 --filter=blob:none origin "$CUA_SOURCE_SHA" \
-    && git checkout --detach FETCH_HEAD \
-    && test "$(git rev-parse HEAD)" = "$CUA_SOURCE_SHA"
-COPY infra/gateway/cua-desktop-discovery.patch /tmp/cua-desktop-discovery.patch
-RUN git apply --check /tmp/cua-desktop-discovery.patch && git apply /tmp/cua-desktop-discovery.patch
-WORKDIR /src/libs/cua-driver/rust
-RUN cargo test --locked -p platform-linux --lib wayland::tests --features portal-input \
-    && cargo test --locked -p platform-linux --lib list_windows_tests --features portal-input \
-    && cargo build --locked --release -p cua-driver-sdk --features portal-input \
-    && mkdir /out \
-    && install -m 755 target/release/libcua_driver_sdk.so /out/ \
-    && printf '{"version":"0.36.0","sourceCommit":"%s","sourceTag":"cua-driver-rs-v0.36.0","repository":"https://github.com/trycua/cua","desktopDiscoveryPatchSha256":"%s"}\n' "$CUA_SOURCE_SHA" "$(sha256sum /tmp/cua-desktop-discovery.patch | cut -d' ' -f1)" > /out/octogee-patch.json
+FROM ${CUA_DRIVER_IMAGE} AS cua-driver-builder
 
 FROM gateway-core-system AS openclaw-installer
 

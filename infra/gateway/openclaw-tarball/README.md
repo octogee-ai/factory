@@ -1708,10 +1708,13 @@ preservation remain removed. No replacement admin RPC is needed.
 
 ## Native CUA desktop-discovery preservation
 
-`Dockerfile.base` builds the Linux SDK from the official
+`Dockerfile.cua-driver` builds the Linux SDK from the official
 [CUA 0.36.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.36.0),
 exact source `6d6c734c127025fb39ad5d585a10382808b39dc1`, with
-`cua-desktop-discovery.patch`. The published modifier fix is already present,
+`cua-desktop-discovery.patch`, into the `octogee-cua-driver:inputs-<hash>`
+image keyed by that Dockerfile and patch. `Dockerfile.base` consumes it as the
+`cua-driver-builder` stage through the `CUA_DRIVER_IMAGE` build context, so a
+base rebuild for any other reason reuses the compiled driver. The published modifier fix is already present,
 so the older modifier-only fork is not used. Rust and the other CLI/tool pins
 remain unchanged.
 
@@ -1743,7 +1746,8 @@ and a patch digest. It first validates the original SDK against OpenClaw's
 native artifact manifest, then replaces only that architecture's SDK digest in
 the plugin and its single compiled manifest. Other binary/platform pins remain
 unchanged. `octogee-patch.json` records the source, patch and installed library
-digest. The CUA source and patch remain immutable base-fingerprint inputs.
+digest. The CUA Dockerfile and patch remain immutable base-fingerprint inputs,
+so a driver change still rebuilds the base.
 
 OpenClaw owns the matched dependency/lock/artifact pins; Octogee owns this
 discovery preservation and adapted skills. Remove the builder and installer

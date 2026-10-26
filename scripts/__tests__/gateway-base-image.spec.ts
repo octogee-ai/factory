@@ -62,6 +62,7 @@ function gatewayImageArgs(): Record<string, Record<string, string>> {
   const { target } = gatewayBakePlan({
     repository: "us-central1-docker.pkg.dev/octogee/octogee",
     sha: "a".repeat(40),
+    cuaDriver: `inputs-${"f".repeat(64)}`,
     base,
     builderBase: `${base}-builder-${"c".repeat(12)}`,
     toolchain: { lockSha256: "d".repeat(64), groupsSha256: "e".repeat(64) },
@@ -405,5 +406,19 @@ describe("gateway base image", () => {
     expect(gate).toContain('test ! -e "$global_root/@sparticuz/chromium"');
     expect(gate).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
     expect(gate).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
+  });
+});
+
+describe("CUA driver image", () => {
+  it("compiles the driver in its own input-keyed image and consumes it through a named context", () => {
+    const base = readRepoFile("infra/gateway/Dockerfile.base");
+    const driver = readRepoFile("infra/gateway/Dockerfile.cua-driver");
+    expect(base).toMatch(/^ARG CUA_DRIVER_IMAGE=octogee-cua-driver$/mu);
+    expect(base).toContain("FROM ${CUA_DRIVER_IMAGE} AS cua-driver-builder");
+    expect(base).toContain("COPY --from=cua-driver-builder /out/ /tmp/cua-driver-patch/");
+    expect(base).not.toContain("cargo build");
+    expect(driver).toMatch(/^FROM rust:\d+\.\d+\.\d+-slim-bookworm@sha256:[0-9a-f]{64} AS cua-driver-builder$/mu);
+    expect(driver).toContain("cargo build --locked --release -p cua-driver-sdk --features portal-input");
+    expect(driver).toMatch(/^FROM scratch\nCOPY --from=cua-driver-builder \/out\/ \/out\/$/mu);
   });
 });
