@@ -5,7 +5,7 @@
   "description": "Pinned post-readiness developer tool payload for Builder gateways",
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.302",
+    "@anthropic-ai/claude-code": "2.1.303",
     "@openai/codex": "0.163.0",
     "@sparticuz/chromium": "153.0.0",
     "firebase-tools": "15.34.0",
@@ -15,7 +15,7 @@
     "typescript": "7.0.2"
   },
   "allowScripts": {
-    "@anthropic-ai/claude-code@2.1.302": true,
+    "@anthropic-ai/claude-code@2.1.303": true,
     "esbuild@0.28.2": true,
     "pnpm@12.15.0": true,
     "protobufjs@7.6.6": true,
