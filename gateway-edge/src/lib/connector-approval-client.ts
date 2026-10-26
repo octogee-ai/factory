@@ -35,6 +35,14 @@ export function connectorApprovalRpc(db: Firestore, env: NodeJS.ProcessEnv = pro
   };
 }
 
+function calendarReminderDetail(kind: string, preview: Record<string, unknown>): string {
+  if (kind !== "calendar-create") return "";
+  if (preview.reminders !== undefined && preview.reminders !== "default" && preview.reminders !== "none") {
+    throw new Error("Calendar reminder policy is malformed");
+  }
+  return `Reminders: ${preview.reminders === "none" ? "No reminders" : "Calendar defaults"}\n\n`;
+}
+
 export async function requestConnectorApproval(db: Firestore, rpc: ConnectorApprovalRpc, input: {
   ownerUid: string; gatewayId: string; agentId: string; kind: string; digest: string; preview: Record<string, unknown>; actionUrl: string;
 }): Promise<{ nativeApprovalId: string; expiresAtMs: number }> {
@@ -50,7 +58,7 @@ export async function requestConnectorApproval(db: Firestore, rpc: ConnectorAppr
   const preview = JSON.stringify(input.preview, null, 2);
   const detail = preview.length <= 12_000 ? preview : "This preview exceeds the native display limit. Open the full review link before approving.";
   const result = await rpc({ operation: "create", gatewayId: input.gatewayId, ownerUid: input.ownerUid, agentId: input.agentId,
-    title: `Connector: ${input.kind}`, detail: `${detail}\n\nExact action SHA256: ${input.digest}\nFull review: ${input.actionUrl}`,
+    title: `Connector: ${input.kind}`, detail: `${calendarReminderDetail(input.kind, input.preview)}${detail}\n\nExact action SHA256: ${input.digest}\nFull review: ${input.actionUrl}`,
     actionUrl: input.actionUrl, coachChannelId }) as { id?: string; expiresAtMs?: number };
   if (!result.id?.startsWith("plugin:") || !Number.isSafeInteger(result.expiresAtMs)) throw new Error("Malformed native approval acceptance");
   return { nativeApprovalId: result.id, expiresAtMs: result.expiresAtMs! };

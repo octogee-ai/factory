@@ -284,12 +284,15 @@ function optionalCalendarFields(preview: Record<string, unknown>): Record<string
 function projectCalendarPreview(kind: ProductivityActionKind, preview: Record<string, unknown>): Record<string, unknown> {
   const optional = ["summary", "description", "location", "start", "end", "timeZone", "attendees"];
   if (kind === "calendar-create") {
-    exactKeys(preview, ["summary", "start", "end", "attendees"], ["description", "location", "timeZone"]);
+    exactKeys(preview, ["summary", "start", "end", "attendees"], ["description", "location", "timeZone", "reminders"]);
+    if (preview.reminders !== undefined && preview.reminders !== "default" && preview.reminders !== "none") {
+      throw new Error("canonical productivity approval preview is malformed");
+    }
     const result = optionalCalendarFields(preview);
     if (result.start === undefined || result.end === undefined || result.summary === undefined) {
       throw new Error("canonical productivity approval preview is malformed");
     }
-    return result;
+    return { ...result, reminders: preview.reminders ?? "default" };
   }
   const currentOptional = ["currentSummary", "currentStart", "currentEnd", "currentTimeZone"];
   exactKeys(

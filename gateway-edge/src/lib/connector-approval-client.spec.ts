@@ -50,6 +50,22 @@ describe("connector approval native creation", () => {
     await expect(requestConnectorApproval(h.db, h.rpc, h.input)).rejects.toThrow("Canonical Coach DM");
     expect(h.rpc).not.toHaveBeenCalled();
   });
+  it.each(["none", "default", undefined])("discloses %s reminders even when the native event preview exceeds the display limit", async reminders => {
+    const h = harness();
+    await requestConnectorApproval(h.db, h.rpc, { ...h.input, kind: "calendar-create",
+      preview: { description: "x".repeat(13_000), ...(reminders === undefined ? {} : { reminders }) } });
+    const detail = h.rpc.mock.calls[0][0].detail;
+    expect(detail).toContain(reminders === "none" ? "Reminders: No reminders" : "Reminders: Calendar defaults");
+    expect(detail).toContain("exceeds the native display limit");
+    expect(detail).toContain(h.input.digest);
+    expect(detail).toContain(h.input.actionUrl);
+  });
+  it("refuses an invalid Calendar reminder preview before requesting native approval", async () => {
+    const h = harness();
+    await expect(requestConnectorApproval(h.db, h.rpc, { ...h.input, kind: "calendar-create", preview: { reminders: "email" } }))
+      .rejects.toThrow("reminder policy");
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
   it("makes the native display limit explicit instead of silently truncating a long message", async () => {
     const h = harness(); h.input.preview.subject = "x".repeat(20_000);
     await requestConnectorApproval(h.db, h.rpc, h.input);
