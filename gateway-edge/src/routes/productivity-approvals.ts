@@ -1,6 +1,6 @@
 /* eslint-disable sonarjs/no-duplicate-string */
 import { parseGoogleGrantApproval } from "../lib/google-grant-approval.js";
-import { applyNativeGoogleGrantApproval } from "../lib/native-google-grant-approval.js";
+import { approvalDecision, recordApprovalDecision } from "../lib/productivity-approval-decision.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { type Firestore } from "firebase-admin/firestore";
@@ -11,8 +11,9 @@ import { isProjectRecipeId } from "@octogee/shared/types/project";
 
 import { db as defaultDb } from "../lib/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { logger } from "../middleware/logging.js";
 import { connectorApprovalBinding, connectorApprovalRpc, readConnectorApproval, type ConnectorApprovalRpc } from "../lib/connector-approval-client.js";
-import { NativeConnectorApprovalAccessError, nativeApprovalViewState, type NativeApprovalSnapshot } from "../lib/native-connector-approval.js";
+import { NativeConnectorApprovalAccessError } from "../lib/native-connector-approval.js";
 
 const PRODUCTIVITY_APPROVALS_COLLECTION = "productivityApprovals";
 const NOT_FOUND = { error: "not_found" } as const;
@@ -540,13 +541,12 @@ function projectActionPreview(kind: ProductivityActionKind, value: unknown): Rec
   throw new Error("canonical productivity approval action is unsupported");
 }
 
-function projectedApprovalState(data: Record<string, unknown>, native: NativeApprovalSnapshot | null, approvalExpiresAt: number, now: number): ApprovalState | "expired" {
+function projectedApprovalState(data: Record<string, unknown>, approvalExpiresAt: number, now: number): ApprovalState | "expired" {
   const executionLeaseExpiresAt = timestampMillis(data.executionLeaseExpiresAt);
   let state: ApprovalState | "expired" = data.state as ApprovalState;
   if (data.state === "prepared") {
-    if (!native) throw new Error("Prepared approval requires a native decision");
-    state = nativeApprovalViewState(native);
-    if (state === "pending" && approvalExpiresAt <= now) state = "expired";
+    const decision = approvalDecision(data);
+    state = decision?.state ?? (approvalExpiresAt <= now ? "expired" : "pending");
   }
   else if (
     data.state === "executing"
@@ -555,8 +555,8 @@ function projectedApprovalState(data: Record<string, unknown>, native: NativeApp
   return state;
 }
 
-function projectApproval(id: string, data: Record<string, unknown>, native: NativeApprovalSnapshot | null, now: number): ProductivityApprovalView {
-  const approvalExpiresAt = native?.expiresAtMs ?? timestampMillis(data.approvalExpiresAt);
+function projectApproval(id: string, data: Record<string, unknown>, now: number): ProductivityApprovalView {
+  const approvalExpiresAt = timestampMillis(data.approvalExpiresAt);
   const action = record(data.action);
   if (
     !(data.state === "prepared" || isApprovalState(data.state))
@@ -570,7 +570,7 @@ function projectApproval(id: string, data: Record<string, unknown>, native: Nati
   const kind = action.kind as ProductivityActionKind;
   return {
     approvalId: id,
-    state: projectedApprovalState(data, native, approvalExpiresAt, now),
+    state: projectedApprovalState(data, approvalExpiresAt, now),
     action: { kind },
     preview: projectActionPreview(kind, data.preview),
     reason: typeof data.reason === "string" ? data.reason : null,
@@ -594,6 +594,34 @@ async function loadAuthorizedApproval(
   return data;
 }
 
+interface Reviewer { uid: string; authorization: string; authTime: number | null }
+
+function reviewerOf(req: Request): Reviewer {
+  return { uid: req.uid!, authorization: req.headers.authorization ?? "", authTime: req.authTime ?? null };
+}
+
+async function requireReviewerAuthority(deps: Deps, data: Record<string, unknown>, reviewer: Reviewer): Promise<void> {
+  if (data.ownerUid === reviewer.uid) return;
+  await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data), { uid: reviewer.uid, authorization: reviewer.authorization });
+}
+
+async function mirrorNativeDecision(deps: Deps, approvalId: string, data: Record<string, unknown>, reviewer: Reviewer, state: "approved" | "denied"): Promise<void> {
+  try {
+    await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data),
+      { uid: reviewer.uid, authorization: reviewer.authorization }, state === "approved" ? "allow-once" : "deny");
+  } catch (error) {
+    logger.warn("productivity approval native mirror failed", { approvalId, state, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function respondWithAccessError(res: Response, next: NextFunction, error: unknown): void {
+  if (error instanceof NativeConnectorApprovalAccessError) {
+    res.status(error.status).set("cache-control", "no-store").json({ error: error.code });
+    return;
+  }
+  next(error);
+}
+
 async function preview(deps: Deps, req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const approvalId = typeof req.params.approvalId === "string" ? req.params.approvalId : "";
@@ -602,22 +630,13 @@ async function preview(deps: Deps, req: Request, res: Response, next: NextFuncti
       res.status(404).json(NOT_FOUND);
       return;
     }
-    if (data.ownerUid === req.uid && isApprovalState(data.state)) {
-      res.set("cache-control", "no-store").json(projectApproval(approvalId, data, null, deps.now()));
-      return;
-    }
     if (data.state === "prepared" && !data.nativeApprovalId) {
       res.status(409).json({ error: "approval_preparing" }); return;
     }
-    const native = await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data), { uid: req.uid!, authorization: req.headers.authorization ?? "" });
-    const updated = await applyNativeGoogleGrantApproval(deps.db, approvalId, data, native);
-    res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, native, deps.now()));
+    await requireReviewerAuthority(deps, data, reviewerOf(req));
+    res.set("cache-control", "no-store").json(projectApproval(approvalId, data, deps.now()));
   } catch (error) {
-    if (error instanceof NativeConnectorApprovalAccessError) {
-      res.status(error.status).set("cache-control", "no-store").json({ error: error.code });
-      return;
-    }
-    next(error);
+    respondWithAccessError(res, next, error);
   }
 }
 
@@ -640,20 +659,19 @@ async function respondToApproval(
       res.status(404).json(NOT_FOUND);
       return;
     }
-    if (data.ownerUid === req.uid && isApprovalState(data.state)) {
-      res.set("cache-control", "no-store").json(projectApproval(approvalId, data, null, deps.now()));
-      return;
+    if (data.state === "prepared" && !data.nativeApprovalId) {
+      res.status(409).json({ error: "approval_preparing" }); return;
     }
-    const native = await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data),
-      { uid: req.uid!, authorization: req.headers.authorization ?? "" }, targetState === "approved" ? "allow-once" : "deny");
-    const updated = await applyNativeGoogleGrantApproval(deps.db, approvalId, data, native);
-    res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, native, deps.now()));
+    const reviewer = reviewerOf(req);
+    await requireReviewerAuthority(deps, data, reviewer);
+    const now = deps.now();
+    const { data: updated, recorded } = await recordApprovalDecision(deps.db, approvalId, {
+      state: targetState, reviewerUid: reviewer.uid, reviewerAuthTime: reviewer.authTime, nowMs: now,
+    });
+    if (recorded) await mirrorNativeDecision(deps, approvalId, updated, reviewer, targetState);
+    res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, now));
   } catch (error) {
-    if (error instanceof NativeConnectorApprovalAccessError) {
-      res.status(error.status).set("cache-control", "no-store").json({ error: error.code });
-      return;
-    }
-    next(error);
+    respondWithAccessError(res, next, error);
   }
 }
 

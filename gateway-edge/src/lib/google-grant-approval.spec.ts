@@ -75,7 +75,7 @@ describe("Google grant approval lifecycle", () => {
       { ...h.preview.permissions[0], resourceIds: ["prior-file"] },
       h.preview.permissions[0],
     ]);
-    expect(h.tx.set.mock.calls[0][1].nativeApprovalId).toBe("plugin:grant-review");
+    expect(h.tx.set.mock.calls[0][1].approvalId).toBe("plugin:grant-review");
     expect(h.tx.set.mock.calls[0][1]).not.toHaveProperty("approvedBy");
   });
   it("cannot regrant access using a request issued before revocation", async () => {

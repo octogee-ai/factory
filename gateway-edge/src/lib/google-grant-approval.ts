@@ -73,7 +73,7 @@ export async function applyGoogleGrantApproval(
   tx: Transaction,
   ownerUid: string,
   value: unknown,
-  nativeApprovalId: string,
+  approvalId: string,
 ): Promise<boolean> {
   const request = parseGoogleGrantApproval(value);
   const grantRef = db.doc(
@@ -116,7 +116,7 @@ export async function applyGoogleGrantApproval(
     connectionEpoch: request.connectionEpoch,
     membershipEpoch: request.membershipEpoch,
     permissions,
-    nativeApprovalId,
+    approvalId,
     updatedAt: FieldValue.serverTimestamp(),
   });
   return true;

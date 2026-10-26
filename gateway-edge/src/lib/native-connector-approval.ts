@@ -70,7 +70,7 @@ export async function runNativeConnectorApproval(command: NativeConnectorCommand
       if (agent.kind !== "coach") throw new Error("Connector approval requires a coach");
       const result = await call("plugin.approval.request", {
         pluginId: CONNECTOR_APPROVAL_PLUGIN, agentId: command.agentId,
-        title: command.title, description: `Review the exact action before approving: ${command.actionUrl}`,
+        title: command.title, description: `Approve or deny in Octogee; this inbox entry is a notification only: ${command.actionUrl}`,
         detail: command.detail, severity: "warning", allowedDecisions: ["allow-once", "deny"],
         timeoutMs: CONNECTOR_APPROVAL_TIMEOUT_MS, twoPhase: true,
         turnSourceChannel: "mattermost", turnSourceAccountId: `${agent.username}-coach`,
