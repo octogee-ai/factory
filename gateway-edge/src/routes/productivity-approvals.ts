@@ -1,6 +1,6 @@
 /* eslint-disable sonarjs/no-duplicate-string */
 import { parseGoogleGrantApproval } from "../lib/google-grant-approval.js";
-import { approvalDecision, recordApprovalDecision } from "../lib/productivity-approval-decision.js";
+import { approvalDecision, honorNativeDenial, recordApprovalDecision } from "../lib/productivity-approval-decision.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { type Firestore } from "firebase-admin/firestore";
@@ -608,12 +608,17 @@ async function requireReviewerAuthority(deps: Deps, data: Record<string, unknown
   await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data), { uid: reviewer.uid, authorization: reviewer.authorization });
 }
 
-async function mirrorNativeDecision(deps: Deps, approvalId: string, data: Record<string, unknown>, reviewer: Reviewer, state: "approved" | "denied"): Promise<void> {
+function withNativeDenial(deps: Deps, approvalId: string, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return honorNativeDenial(deps.db, approvalId, data,
+    () => readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data)), deps.now);
+}
+
+async function mirrorNativeDenial(deps: Deps, approvalId: string, data: Record<string, unknown>, reviewer: Reviewer): Promise<void> {
   try {
     await readConnectorApproval(deps.nativeRpc, connectorApprovalBinding(data),
-      { uid: reviewer.uid, authorization: reviewer.authorization }, state === "approved" ? "allow-once" : "deny");
+      { uid: reviewer.uid, authorization: reviewer.authorization }, "deny");
   } catch (error) {
-    logger.warn("productivity approval native mirror failed", { approvalId, state, error: error instanceof Error ? error.message : String(error) });
+    logger.warn("productivity approval native denial mirror failed", { approvalId, error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -637,7 +642,8 @@ async function preview(deps: Deps, req: Request, res: Response, next: NextFuncti
       res.status(409).json({ error: "approval_preparing" }); return;
     }
     await requireReviewerAuthority(deps, data, reviewerOf(req));
-    res.set("cache-control", "no-store").json(projectApproval(approvalId, data, deps.now()));
+    const current = await withNativeDenial(deps, approvalId, data);
+    res.set("cache-control", "no-store").json(projectApproval(approvalId, current, deps.now()));
   } catch (error) {
     respondWithAccessError(res, next, error);
   }
@@ -667,11 +673,12 @@ async function respondToApproval(
     }
     const reviewer = reviewerOf(req);
     await requireReviewerAuthority(deps, data, reviewer);
+    await withNativeDenial(deps, approvalId, data);
     const now = deps.now();
     const { data: updated, recorded } = await recordApprovalDecision(deps.db, approvalId, {
       state: targetState, reviewerUid: reviewer.uid, reviewerAuthTime: reviewer.authTime, nowMs: now,
     });
-    if (recorded) await mirrorNativeDecision(deps, approvalId, updated, reviewer, targetState);
+    if (recorded && targetState === "denied") await mirrorNativeDenial(deps, approvalId, updated, reviewer);
     res.set("cache-control", "no-store").json(projectApproval(approvalId, updated, now));
   } catch (error) {
     respondWithAccessError(res, next, error);

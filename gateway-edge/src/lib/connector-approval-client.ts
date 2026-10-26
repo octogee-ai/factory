@@ -65,7 +65,7 @@ export async function requestConnectorApproval(db: Firestore, rpc: ConnectorAppr
 }
 
 export async function readConnectorApproval(rpc: ConnectorApprovalRpc, binding: ConnectorApprovalBinding,
-  reviewer?: { uid: string; authorization: string }, decision?: "allow-once" | "deny"): Promise<NativeApprovalSnapshot> {
+  reviewer?: { uid: string; authorization: string }, decision?: "deny"): Promise<NativeApprovalSnapshot> {
   const command: NativeConnectorCommand = decision && reviewer
     ? { ...binding, operation: "resolve", nativeId: binding.nativeApprovalId, reviewerUid: reviewer.uid, decision }
     : { ...binding, operation: "get", nativeId: binding.nativeApprovalId, ...(reviewer ? { reviewerUid: reviewer.uid } : {}) };

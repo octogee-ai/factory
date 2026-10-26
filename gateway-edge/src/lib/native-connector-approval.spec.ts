@@ -14,11 +14,11 @@ function harness(scopes = ["operator.approvals"]) {
 describe("native connector approval authority", () => {
   it("uses a delegated reviewer's native identity, never the service identity, for a Builder decision", async () => {
     const h = harness();
-    await runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "allow-once" },
+    await runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "deny" },
       { ...h, builder: true });
     expect(h.openUser).toHaveBeenCalledWith("delegate", identity.gatewayId);
     expect(h.openService).not.toHaveBeenCalled();
-    expect(h.call).toHaveBeenLastCalledWith("approval.resolve", { id: nativeId, kind: "plugin", decision: "allow-once" });
+    expect(h.call).toHaveBeenLastCalledWith("approval.resolve", { id: nativeId, kind: "plugin", decision: "deny" });
     expect(h.client.close).toHaveBeenCalled();
   });
 
@@ -32,7 +32,7 @@ describe("native connector approval authority", () => {
 
   it("keeps Shared decisions owner-bound", async () => {
     const h = harness();
-    await expect(runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "allow-once" },
+    await expect(runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "deny" },
       { ...h, builder: false })).rejects.toThrow("Shared approval");
     expect(h.openService).not.toHaveBeenCalled();
   });
@@ -40,7 +40,7 @@ describe("native connector approval authority", () => {
   it("honors native visibility or revoked-role refusal without falling back to the service identity", async () => {
     const h = harness();
     h.call.mockResolvedValue({ ok: false, reason: "approval not found or not authorized" });
-    await expect(runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "allow-once" },
+    await expect(runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "deny" },
       { ...h, builder: true })).rejects.toThrow("not authorized");
     expect(h.call).toHaveBeenCalledTimes(1);
     expect(h.call).toHaveBeenCalledWith("approval.get", { id: nativeId });
@@ -56,13 +56,13 @@ describe("native connector approval authority", () => {
     expect(h.call).toHaveBeenCalledTimes(1);
   });
 
-  it("requests native delivery to the canonical Coach DM and only allows a one-time decision", async () => {
+  it("requests native delivery to the canonical Coach DM offering only Deny, with approval in Octogee", async () => {
     const h = harness();
     h.call.mockResolvedValue({ ok: true, result: { status: "accepted", id: nativeId, expiresAtMs: 12345 } });
     await runNativeConnectorApproval({ ...identity, operation: "create", title: "Send email", detail: "Exact preview", actionUrl: "https://app.octogee.com/settings?productivityApproval=test", coachChannelId: "c".repeat(26) },
       { ...h, builder: false });
     expect(h.call).toHaveBeenCalledWith("plugin.approval.request", expect.objectContaining({
-      allowedDecisions: ["allow-once", "deny"], twoPhase: true, timeoutMs: 600_000,
+      allowedDecisions: ["deny"], twoPhase: true, timeoutMs: 600_000,
       turnSourceChannel: "mattermost", turnSourceTo: `channel:${"c".repeat(26)}`,
       turnSourceAccountId: "alice-coach", description: expect.stringContaining("https://app.octogee.com"),
     }));
@@ -73,7 +73,7 @@ describe("native connector approval authority", () => {
     const denied = { ...pending, status: "denied", decision: "deny" };
     h.call.mockResolvedValueOnce({ ok: true, result: { approval: pending } })
       .mockResolvedValueOnce({ ok: true, result: { applied: false, approval: denied } });
-    const result = await runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "allow-once" }, { ...h, builder: true });
+    const result = await runNativeConnectorApproval({ ...identity, operation: "resolve", nativeId, reviewerUid: "delegate", decision: "deny" }, { ...h, builder: true });
     expect(result).toEqual({ applied: false, approval: denied });
   });
 });

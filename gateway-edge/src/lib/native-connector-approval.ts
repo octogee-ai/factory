@@ -12,7 +12,7 @@ interface Binding { gatewayId: string; ownerUid: string; agentId: string }
 export type NativeConnectorCommand = Binding & (
   | { operation: "create"; title: string; detail: string; actionUrl: string; coachChannelId: string }
   | { operation: "get"; nativeId: string; reviewerUid?: string }
-  | { operation: "resolve"; nativeId: string; reviewerUid: string; decision: "allow-once" | "deny" }
+  | { operation: "resolve"; nativeId: string; reviewerUid: string; decision: "deny" }
 );
 export interface NativeApprovalSnapshot {
   id: string;
@@ -70,8 +70,8 @@ export async function runNativeConnectorApproval(command: NativeConnectorCommand
       if (agent.kind !== "coach") throw new Error("Connector approval requires a coach");
       const result = await call("plugin.approval.request", {
         pluginId: CONNECTOR_APPROVAL_PLUGIN, agentId: command.agentId,
-        title: command.title, description: `Approve or deny in Octogee; this inbox entry is a notification only: ${command.actionUrl}`,
-        detail: command.detail, severity: "warning", allowedDecisions: ["allow-once", "deny"],
+        title: command.title, description: `Approve in Octogee. You can deny here or there: ${command.actionUrl}`,
+        detail: command.detail, severity: "warning", allowedDecisions: ["deny"],
         timeoutMs: CONNECTOR_APPROVAL_TIMEOUT_MS, twoPhase: true,
         turnSourceChannel: "mattermost", turnSourceAccountId: `${agent.username}-coach`,
         turnSourceTo: `channel:${command.coachChannelId}`,

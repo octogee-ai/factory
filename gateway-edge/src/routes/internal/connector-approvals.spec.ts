@@ -15,7 +15,7 @@ import { createInternalConnectorApprovalRouter } from "./connector-approvals.js"
 const keys = generateKeyPairSync("ed25519");
 const secret = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 const gatewayId = "b-alice";
-const command = { operation: "resolve", gatewayId, ownerUid: "alice", agentId: "octogee-alice-coach", nativeId: "plugin:approval", reviewerUid: "delegate", decision: "allow-once" };
+const command = { operation: "resolve", gatewayId, ownerUid: "alice", agentId: "octogee-alice-coach", nativeId: "plugin:approval", reviewerUid: "delegate", decision: "deny" };
 function app() {
   const server = express(); server.use(express.json());
   server.use("/api/g/:gatewayId/internal/connector-approvals", createInternalConnectorApprovalRouter());
@@ -53,6 +53,11 @@ describe("API-signed connector approval bridge", () => {
   it("rejects a signed identity that does not match the verified Firebase principal", async () => {
     h.identity.mockResolvedValue({ uid: "someone-else", gatewayId });
     expect((await send()).status).toBe(403);
+    expect(h.run).not.toHaveBeenCalled();
+  });
+  it("refuses to resolve a connector approval to allow, because approval happens only in Octogee", async () => {
+    const body = { purpose: "connector-approval", command: { ...command, decision: "allow-once" }, authorization: "Bearer firebase-token" };
+    expect((await send(body)).status).toBe(400);
     expect(h.run).not.toHaveBeenCalled();
   });
   it("does not accept an operation addressed to another gateway", async () => {

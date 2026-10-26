@@ -20,7 +20,7 @@ function validCommand(value: unknown): value is NativeConnectorCommand {
   if (typeof input.nativeId !== "string" || !input.nativeId.startsWith("plugin:")) return false;
   if (input.operation === "get") return input.reviewerUid === undefined || typeof input.reviewerUid === "string";
   return input.operation === "resolve" && typeof input.reviewerUid === "string" && Boolean(input.reviewerUid)
-    && ["allow-once", "deny"].includes(String(input.decision));
+    && input.decision === "deny";
 }
 
 export function createInternalConnectorApprovalRouter() {
