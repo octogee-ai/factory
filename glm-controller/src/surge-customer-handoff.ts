@@ -834,8 +834,12 @@ async function unreserveSourcelessTarget(
 async function releaseSourcelessSharedTarget(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
-  context: { targetPod: SurgePod; ownedBy: string },
+  context: { targetPod: SurgePod; targetHealth: SurgePodHealth; ownedBy: string; assignments: readonly SurgeAssignment[] },
 ): Promise<void> {
+  if (!targetMountedAssignedCustomers(context.assignments, context.targetHealth.mountedCustomers)) {
+    deps.log(`[surge-handoff] sourceless Shared target is missing its assigned mounted roster gateway=${input.gatewayId} target=${context.targetPod.name}`);
+    return;
+  }
   try {
     await releaseTargetWithConfirmation(deps, {
       gatewayId: input.gatewayId,
@@ -877,6 +881,15 @@ function sourceForTransfer(
   return source.pod;
 }
 
+function assertSourceMountedRoster(assignments: readonly SurgeAssignment[], mountedCustomers: readonly string[], gatewayId: string): void {
+  const assigned = new Set(assignments.map(assignment => assignment.slug));
+  const unassigned = mountedCustomers.find(slug => !assigned.has(slug));
+  if (unassigned) throw new Error(`source mounted customer ${unassigned} has no assignment on ${gatewayId}`);
+  const mounted = new Set(mountedCustomers);
+  const unmounted = assignments.find(assignment => !mounted.has(assignment.slug));
+  if (unmounted) throw new Error(`source has unmounted assigned customer ${unmounted.slug} on ${gatewayId}`);
+}
+
 async function migrateAssignedState(
   deps: SurgeCustomerHandoffDeps,
   context: {
@@ -902,20 +915,8 @@ async function migrateAssignedState(
   }
   const assignmentBySlug = new Map(assignments.map((assignment) => [assignment.slug, assignment]));
   const configTransferMode = configTransferModeFor(input);
-  const unassignedMount = sourceHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
-  if (unassignedMount) {
-    throw new Error(`source mounted customer ${unassignedMount} has no assignment on ${input.gatewayId}`);
-  }
-  const mounted = new Set(sourceHealth.mountedCustomers);
-  for (const assignment of assignments) {
-    if (!mounted.has(assignment.slug)) {
-      deps.log(
-        `[surge-handoff] retaining unmounted assignment without transfer ` +
-        `gateway=${input.gatewayId} uid=${assignment.uid} slug=${assignment.slug}`,
-      );
-    }
-  }
-  await waitForSourceAssignments(deps, { ...context, assignments: assignments.filter((assignment) => mounted.has(assignment.slug)) });
+  assertSourceMountedRoster(assignments, sourceHealth.mountedCustomers, input.gatewayId);
+  await waitForSourceAssignments(deps, { ...context, assignments });
   if (targetHealth.mountedCustomers.length > 0) {
     if (configTransferMode === "configured-builder-system-config") {
       const foreignMount = targetHealth.mountedCustomers.find((slug) => !assignmentBySlug.has(slug));
@@ -947,7 +948,7 @@ async function migrateAssignedState(
   }
   await transferAssignments(deps, {
     input,
-    assignments: assignments.filter((assignment) => mounted.has(assignment.slug)),
+    assignments,
     sourcePod,
     targetPod,
     ownedBy,
@@ -1085,6 +1086,11 @@ async function migrateAssignmentsAndReleaseTarget(
   },
 ): Promise<void> {
   const { input, assignments, sourcePod, targetPod, ownedBy, observedPodUids } = context;
+  if (!configuredBuilderProcessGateRequired(input)) {
+    const sourceHealth = await deps.readPodHealth(sourcePod, input.gatewayId);
+    if (!sourceHealth) throw new Error(`source health unavailable before handoff on ${input.gatewayId}`);
+    assertSourceMountedRoster(assignments, sourceHealth.mountedCustomers, input.gatewayId);
+  }
   await restoreAbandonedSurgeAssignments(
     deps,
     input.gatewayId,
@@ -1134,7 +1140,7 @@ async function migrateAssignmentsAndReleaseTarget(
         cause: error,
       });
     }
-    if (!targetReleaseAttempted || configuredBuilderProcessGateRequired(input)) {
+    if (sourceDrainSlugs.length > 0 && (!targetReleaseAttempted || configuredBuilderProcessGateRequired(input))) {
       await resumeDrainedSource(deps, {
         gatewayId: input.gatewayId, operationId: ownedBy, sourcePod, slugs: sourceDrainSlugs, cause: error,
       });
@@ -1224,7 +1230,8 @@ async function tendSourcelessTarget(
         slugs: sourceAssignments.map((assignment) => assignment.slug),
       });
     } else if (input.requiresCustomerMigration) {
-      await releaseSourcelessSharedTarget(deps, input, { targetPod: target, ownedBy });
+      const sourceAssignments = assignments ?? await deps.readAssignments(input.gatewayId);
+      await releaseSourcelessSharedTarget(deps, input, { targetPod: target, targetHealth, ownedBy, assignments: sourceAssignments });
     }
   } else if (source.kind === "waiting" && configuredBuilderProcessGateRequired(input)) {
     const sourceAssignments = assignments ?? await deps.readAssignments(input.gatewayId);
@@ -1351,6 +1358,13 @@ async function standDownForSupersedingRelease(
     return { ready: false };
   }
   const assignments = await deps.readAssignments(input.gatewayId);
+  if (!configuredBuilderProcessGateRequired(input)) {
+    const servingHealth = source.kind === "missing" ? targetHealth : healthByUid.get(source.pod.uid);
+    if (!servingHealth || !targetMountedAssignedCustomers(assignments, servingHealth.mountedCustomers)) {
+      deps.log(`[surge-handoff] retaining Shared admission during queued rollout without its assigned mounted roster gateway=${input.gatewayId}`);
+      return { ready: false };
+    }
+  }
   await restoreAbandonedSurgeAssignments(
     deps,
     input.gatewayId,
@@ -1537,6 +1551,15 @@ async function observeSurgePass(
   const target = selectTarget(pods, healthByUid, input.desiredImageTag);
   if (!target) {
     const assignments = await deps.readAssignments(input.gatewayId);
+    if (!configuredBuilderProcessGateRequired(input)) {
+      const source = pods[0];
+      const health = source ? healthByUid.get(source.uid) : undefined;
+      if (pods.length !== 1 || !physicalPodsProjected({ pods, observedPodUids }) || !source?.ready || source.terminating ||
+          health?.status !== "ready" || !targetMountedAssignedCustomers(assignments, health.mountedCustomers)) {
+        deps.log(`[surge-handoff] retaining Shared admission without a complete mounted source gateway=${input.gatewayId}`);
+        return null;
+      }
+    }
     await restoreAbandonedSurgeAssignments(
       deps,
       input.gatewayId,

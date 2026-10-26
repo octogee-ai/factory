@@ -12,6 +12,7 @@ fi
 # (KeyError in the re-sync block → `set -e` exit). Same pattern as
 # OPENCLAW_GATEWAY_TOKEN (L57) and GATEWAY_ID (L92).
 export OPENCLAW_DIR=/home/node/.openclaw
+export OPENCLAW_STATE_DIR="$OPENCLAW_DIR"
 TEMPLATES_DIR="${OCTOGEE_TEMPLATES_DIR:-/octogee/templates}"
 TSX=/octogee/scripts/node_modules/.bin/tsx
 GATEWAY_CLASS_EFFECTIVE="${GATEWAY_CLASS:-}"
@@ -273,7 +274,7 @@ else
   fi
 fi
 
-# ── Expose staged plugin roots beside the active config ────────────────────
+# ── Prepare canonical plugin roots ─────────────────────────────────────────
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   OPENCLAW_CONFIG_DIR=$(dirname "$OPENCLAW_CONFIG_PATH")
   if [ "$OPENCLAW_CONFIG_DIR" != "$OPENCLAW_DIR" ]; then
@@ -289,6 +290,10 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
           printf '/%s\n' "$runtime_name" >> "$OPENCLAW_CONFIG_DIR/.git/info/exclude"
       fi
       if [ -L "$runtime_root" ]; then
+        if [ "$(readlink "$runtime_root")" != "$OPENCLAW_DIR/$runtime_name" ]; then
+          log "FATAL: unrecognized system_config runtime alias: ${runtime_name}"
+          exit 1
+        fi
         rm "$runtime_root"
       elif [ -e "$runtime_root" ]; then
         if [ -z "$RUNTIME_ROOT_QUARANTINE" ]; then
@@ -297,9 +302,8 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
         mv "$runtime_root" "$RUNTIME_ROOT_QUARANTINE/$runtime_name"
         log "Existing system_config runtime root quarantined: ${runtime_name}"
       fi
-      ln -s "$OPENCLAW_DIR/$runtime_name" "$runtime_root"
     done
-    log "Plugin roots linked beside durable system_config"
+    log "Config-adjacent plugin aliases retired"
   fi
 fi
 

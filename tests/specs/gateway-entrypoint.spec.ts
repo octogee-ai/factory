@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -29,6 +29,64 @@ describe("infra/gateway/entrypoint.sh — no permanent platform persona", () => 
     expect(entrypoint).not.toMatch(/bootstrap-mac-ops|MAC_OPS|MM_BOT_USERNAME/);
     expect(entrypoint).not.toMatch(/OPERATOR_AGENT_(?:ID|SLUG)|octogee-ops-/);
     expect(entrypoint).not.toMatch(/workspace\/ops/);
+  });
+});
+
+describe("Builder plugin-root preparation", () => {
+  it("retires config-adjacent aliases without touching their runtime targets", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "plugin-roots-"));
+    try {
+      const config = path.join(root, "system_config");
+      mkdirSync(config);
+      for (const name of ["npm", "extensions"]) {
+        mkdirSync(path.join(root, name));
+        writeFileSync(path.join(root, name, "retained"), name);
+        symlinkSync(path.join(root, name), path.join(config, name));
+      }
+      const run = preparePluginRoots(root);
+      expect(run.status, run.stderr).toBe(0);
+      for (const name of ["npm", "extensions"]) {
+        expect(lstatSync(path.join(config, name), { throwIfNoEntry: false })).toBeUndefined();
+        expect(readFileSync(path.join(root, name, "retained"), "utf8")).toBe(name);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("refuses an unrecognized alias without replacing or following it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "plugin-roots-"));
+    try {
+      const config = path.join(root, "system_config"), unowned = path.join(root, "customer-plugins");
+      mkdirSync(config);
+      mkdirSync(unowned);
+      writeFileSync(path.join(unowned, "retained"), "customer data");
+      symlinkSync(unowned, path.join(config, "npm"));
+      const run = preparePluginRoots(root);
+      expect(run.status).not.toBe(0);
+      expect(readlinkSync(path.join(config, "npm"))).toBe(unowned);
+      expect(readFileSync(path.join(unowned, "retained"), "utf8")).toBe("customer data");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+function preparePluginRoots(root: string) {
+  const start = entrypoint.indexOf('if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then', entrypoint.indexOf("# ── Prepare canonical plugin roots"));
+  const end = entrypoint.indexOf('\nchmod 600 "$OPENCLAW_CONFIG_PATH"', start);
+  return spawnSync("sh", ["-c", `set -e\nlog() { printf '%s\\n' "$*"; }\n${entrypoint.slice(start, end)}`], {
+    encoding: "utf8",
+    env: { ...process.env, GATEWAY_CLASS_EFFECTIVE: "builder", BUILDER_CLAIMED: "0", OPENCLAW_DIR: root, OPENCLAW_CONFIG_PATH: path.join(root, "system_config", "openclaw.json") },
+  });
+}
+
+describe("Gateway startup state authority", () => {
+  it.each([undefined, "/unexpected-state"])("pins preparation children to the canonical state when inherited state is %s", (inheritedState) => {
+    const setup = entrypoint.slice(0, entrypoint.indexOf("# Consistent ISO timestamp logging"));
+    const configPath = "/home/node/.openclaw/system_config/openclaw.json";
+    const run = spawnSync("sh", ["-c", `${setup}\n"$1" -e 'process.stdout.write(JSON.stringify({state:process.env.OPENCLAW_STATE_DIR,config:process.env.OPENCLAW_CONFIG_PATH}))'`, "_", process.execPath], {
+      encoding: "utf8",
+      env: { ...process.env, GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "", OPENCLAW_STATE_DIR: inheritedState, OPENCLAW_CONFIG_PATH: configPath },
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual({ state: "/home/node/.openclaw", config: configPath });
   });
 });
 
@@ -137,11 +195,11 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     );
   });
 
-  it("exposes image-staged plugin roots beside the nested durable config", () => {
+  it("prepares canonical plugin roots before Native startup", () => {
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
     const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
     const pluginRootsIdx = entrypoint.indexOf(
-      "Expose staged plugin roots beside the active config",
+      "Prepare canonical plugin roots",
     );
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
     const openclawIdx = entrypoint.indexOf("openclaw gateway run");
@@ -151,9 +209,6 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(pluginRootsIdx).toBeLessThan(watcherIdx);
     expect(pluginRootsIdx).toBeLessThan(openclawIdx);
     expect(entrypoint).toMatch(/for runtime_name in npm extensions/);
-    expect(entrypoint).toMatch(
-      /ln -s "\$OPENCLAW_DIR\/\$runtime_name" "\$runtime_root"/,
-    );
     expect(entrypoint).toMatch(/\.git\/info\/exclude/);
     expect(entrypoint).toMatch(/git -C "\$OPENCLAW_CONFIG_DIR" ls-files/);
     expect(entrypoint).toMatch(/mktemp -d/);

@@ -670,7 +670,7 @@ describe("surge customer handoff", () => {
     expect(h.events.at(-1)).toBe("release:target-uid");
   });
 
-  it("gates but does not transfer an assigned customer that the source never mounted", async () => {
+  it("preserves the source when an assigned customer is absent from its mounted roster", async () => {
     const pods = [oldPod, targetPod];
     const targetMountedCustomers: string[] = [];
     const h = harness({
@@ -688,30 +688,52 @@ describe("surge customer handoff", () => {
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
       stateMigration: MIGRATE_STATE,
-    })).resolves.toEqual({ ready: false });
+    })).rejects.toThrow("source has unmounted assigned customer posthog-smoke-v0");
 
-    expect(h.events).toEqual([
-      "assignment:u1:quiescing",
-      "quiesce:alice",
-      "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
-      "assignment:u2:quiescing",
-      "release:target-uid",
-    ]);
+    expect(h.events).toEqual([]);
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.assignments().every(item => item.state === "serving")).toBe(true);
+  });
 
-    pods.splice(0, pods.length, { ...targetPod, ready: true });
-    targetMountedCustomers.push("alice", "posthog-smoke-v0");
+  it("does not release an empty target after failed rollback removes the source mounted roster", async () => {
+    const sourceMountedCustomers = ["alice"];
+    const h = harness({ assignments: [assignment("u1", "alice")], sourceMountedCustomers,
+      transferError: new Error("anchor admission refused") });
+    vi.mocked(h.deps.resumeSourceIngress).mockRejectedValue(new Error("resume admission refused"));
+    const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("resume admission refused");
+    sourceMountedCustomers.splice(0);
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("source has unmounted assigned customer alice");
+    expect(h.deps.transfer).toHaveBeenCalledOnce();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
+  });
+
+  it("keeps a sourceless Shared target held when its assigned customer is absent", async () => {
+    const h = harness({ pods: [targetPod], assignments: [assignment("u1", "alice", {
+      state: "quiescing", updatedByOperationId: "surge-default-target-uid",
+    })], targetMountedCustomers: [] });
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
-      gatewayId: "default",
-      desiredImageTag: "new-sha",
-      requiresCustomerMigration: true,
-      stateMigration: MIGRATE_STATE,
-    })).resolves.toEqual({ ready: true });
-    expect(h.events.slice(-2)).toEqual([
-      "assignment:u1:serving",
-      "assignment:u2:serving",
-    ]);
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0].state).toBe("quiescing");
+  });
+
+  it.each([false, true])("retains Shared admission during a queued rollout with an incomplete serving roster (source present=%s)", async sourcePresent => {
+    const h = harness({ pods: sourcePresent ? [oldPod, targetPod] : [targetPod], sourceMountedCustomers: [],
+      assignments: [assignment("u1", "alice", { state: "quiescing", updatedByOperationId: "surge-default-target-uid" })],
+      targetMountedCustomers: [] });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", supersedingImageTag: "next-sha",
+      requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    })).resolves.toEqual({ ready: false });
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.markAssignment).not.toHaveBeenCalled();
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0].state).toBe("quiescing");
   });
 
   it("fails closed when the source mounts a customer without an assignment", async () => {
@@ -938,6 +960,21 @@ describe("surge customer handoff", () => {
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual([]);
+  });
+
+  it.each([false, true])("retains an abandoned Shared gate without a mounted source (target present=%s)", async targetPresent => {
+    const h = harness({ pods: targetPresent ? [oldPod, targetPod] : [oldPod], sourceMountedCustomers: [],
+      assignments: [assignment("u1", "alice", { state: "quiescing", updatedByOperationId: abandonedOperationId })] });
+    const run = reconcileSurgeCustomerHandoff(h.deps, {
+      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    });
+    if (targetPresent) await expect(run).rejects.toThrow("source has unmounted assigned customer alice");
+    else await expect(run).resolves.toEqual({ ready: false });
+    expect(h.deps.markAssignment).not.toHaveBeenCalled();
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.events).toEqual([]);
+    expect(h.assignments()[0]).toMatchObject({ state: "quiescing", updatedByOperationId: abandonedOperationId });
   });
 
   it("reclaims an abandoned surge gate before retrying the verified handoff", async () => {
