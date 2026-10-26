@@ -9,7 +9,7 @@
 #
 # Mirror of gateway-edge's build pattern: rootDir=.. so tsc emits
 # dist/octogee-api/src/ alongside dist/gateway-edge/src/ (the routes).
-FROM node:26-slim@sha256:f5da0a865cd28d1731e98c901355b4f3192a526a397f9f5a52607940c3b63caf AS builder
+FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS builder
 WORKDIR /octogee-api
 
 # Packed internal directory dependencies must be present at their declared sibling paths.
@@ -46,7 +46,7 @@ RUN npm run build
 # Project code runs only in this deliberately narrow image. It contains the
 # fixed runner wrapper, archive validator, npm, and JSZip—no API routes, core
 # runtime, cloud SDKs, platform credentials, or production dependency tree.
-FROM node:26-slim@sha256:f5da0a865cd28d1731e98c901355b4f3192a526a397f9f5a52607940c3b63caf AS project-runner
+FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS project-runner
 WORKDIR /runner
 ARG NPM_VERSION=12.1.0
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
@@ -59,7 +59,7 @@ USER node
 ENTRYPOINT ["node", "dist/octogee-api/src/project-runner.js"]
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:26-slim@sha256:f5da0a865cd28d1731e98c901355b4f3192a526a397f9f5a52607940c3b63caf
+FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec
 WORKDIR /octogee-api
 ARG NPM_VERSION=12.1.0
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
