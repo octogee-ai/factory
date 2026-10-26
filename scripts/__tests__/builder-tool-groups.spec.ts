@@ -42,7 +42,7 @@ describe("Builder tool groups", () => {
       "@sparticuz/chromium": "153.0.0",
       "firebase-tools": "15.34.0",
       "npm-check-updates": "23.1.1",
-      "pnpm": "12.14.0",
+      "pnpm": "12.15.0",
       "tsx": "4.23.15",
       "typescript": "7.0.2",
     });
@@ -68,12 +68,12 @@ describe("Builder tool groups", () => {
     ]);
     expect(manifest.standaloneTools).toEqual({
       gcloud: {
-        version: "588.0.0",
-        sha256: "e38ceac43022bb5a4d94d5a4a9c9c51f90f28c910b59a018ae07011e220c4412",
+        version: "590.0.1",
+        sha256: "d1ae7be7e12c4e7d8286fab4774f5441020aca89dc7793ddacbace8d11d20f06",
       },
-      gh: { version: "2.102.0" },
-      helm: { version: "4.3.0" },
-      terraform: { version: "1.16.5" },
+      gh: { version: "2.102.1" },
+      helm: { version: "4.3.1" },
+      terraform: { version: "1.16.7" },
       yq: { version: "4.54.1" },
     });
   });
