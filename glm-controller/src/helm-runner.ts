@@ -773,7 +773,10 @@ export function createHelmSubprocessRunner(deps: HelmSubprocessRunnerDeps): Helm
     },
 
     async readDeployedInstance({ namespace, gatewayId }) {
-      return readInstanceValue(deps, namespace, releaseNameForGateway(gatewayId));
+      const release = releaseNameForGateway(gatewayId);
+      const status = await getReleaseStatus(deps, namespace, release);
+      if (status === null || status === "uninstalled") return null;
+      return readInstanceValue(deps, namespace, release);
     },
 
     async upsertInstance(opts) {

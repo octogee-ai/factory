@@ -236,8 +236,9 @@ describe("helm-runner helpers", () => {
 });
 
 describe("createHelmSubprocessRunner — readDeployedInstances", () => {
-  it("reads one known gateway release without listing the fleet", async () => {
+  it.each(["deployed", "failed", "pending-install", "pending-upgrade", "pending-rollback", "uninstalling"])("reads a %s gateway release without listing the fleet", async (status) => {
     const { runHelm, calls } = mockSubprocess([
+      { stdout: JSON.stringify({ info: { status } }) },
       {
         stdout: JSON.stringify({
           gatewayId: "default",
@@ -254,6 +255,8 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
     });
 
     expect(calls).toEqual([[
+      "status", "octogee-gw-default", "-n", "octogee-test", "-o", "json",
+    ], [
       "get",
       "values",
       "octogee-gw-default",
@@ -267,6 +270,36 @@ describe("createHelmSubprocessRunner — readDeployedInstances", () => {
       image: { repository: REPO, tag: "abc1234" },
       gatewayId: "default",
     });
+  });
+
+  it.each([
+    { name: "missing", stdout: "", stderr: "Error: release: not found", code: 1 },
+    { name: "uninstalled", stdout: JSON.stringify({ info: { status: "uninstalled" } }), stderr: "", code: 0 },
+  ])("does not read retained values for a $name gateway release", async (status) => {
+    const calls: string[][] = [];
+    const runHelm: HelmSubprocess = async (args) => {
+      calls.push(args);
+      return args[0] === "status" ? status : {
+        stdout: JSON.stringify({ gatewayId: "default", imageTag: "abc1234", image: { repository: REPO } }),
+        stderr: "", code: 0,
+      };
+    };
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.readDeployedInstance({ namespace: "octogee-test", gatewayId: "default" })).resolves.toBeNull();
+    expect(calls).toEqual([["status", "octogee-gw-default", "-n", "octogee-test", "-o", "json"]]);
+  });
+
+  it.each([
+    { name: "invalid JSON", stdout: "not-json", stderr: "", code: 0, error: /could not parse JSON/ },
+    { name: "missing status", stdout: "{}", stderr: "", code: 0, error: /info.status missing/ },
+    { name: "permission denied", stdout: "", stderr: "Error: forbidden", code: 1, error: /forbidden/ },
+  ])("rejects $name without treating the gateway release as absent", async ({ error, ...status }) => {
+    const { runHelm, calls } = mockSubprocess([status]);
+    const runner = createHelmSubprocessRunner({ runHelm, log: vi.fn() });
+
+    await expect(runner.readDeployedInstance({ namespace: "octogee-test", gatewayId: "default" })).rejects.toThrow(error);
+    expect(calls).toEqual([["status", "octogee-gw-default", "-n", "octogee-test", "-o", "json"]]);
   });
 
   it("filters helm list to octogee-gw-* releases and pulls each release's values", async () => {
