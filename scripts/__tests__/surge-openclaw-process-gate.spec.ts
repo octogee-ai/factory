@@ -458,6 +458,80 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { inspection.mockRestore(); }
   });
 
+  it.each(["retry", "cancel"] as const)("retains failed Builder database admission for an explicit %s", async scenario => {
+    stubBuilderClaim("ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const readiness = createSurgeReadinessGate(openclawDir, "target-pod");
+    const request = { migrationId: "surge-admission-retry", slug: "ceckert-test", targetPodUid: "target-pod" };
+    const children: FakeChild[] = [];
+    const credentials = path.join(openclawDir, "synthetic-client-credentials");
+    const prepareDatabases = vi.fn(async () => {
+      if (prepareDatabases.mock.calls.length === 1) {
+        await fs.writeFile(credentials, "rebound");
+        throw new Error("Doctor interrupted after credential rebind");
+      }
+      expect(await fs.readFile(credentials, "utf8")).toBe("rebound");
+    });
+    const supervisor = await startSurgeOpenClawSupervisor({
+      openclawDir, podUid: request.targetPodUid, socketPath, log: () => undefined,
+      readinessReleased: readiness.released,
+      prepareTarget: async () => undefined, prepareDatabases,
+      bootWatcher: { beforeStart: async () => undefined, healthy: async () => undefined },
+      spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+      probeHealthz: healthzOf(children), healthTimeoutMs: 100,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    const adapter = {
+      isBuilderGateway: () => true,
+      isConfiguredBuilderCustomer: (slug: string) => slug === request.slug,
+      configuredBuilderOverlayPresent: () => true,
+      listLocalCustomerSlugs: () => [request.slug], customerMountMarked: () => true,
+      hasWorkspaceGitDir: () => true, hasGitRemote: () => true,
+    } as unknown as CustomerLifecycleAdapter;
+    const waitForGatewayReady = vi.fn(async () => {
+      expect(await client.status()).toMatchObject({ role: "target", mode: "permitted", phase: "running", ...request });
+      expect(await readiness.released()).toBe(false);
+      expect(prepareDatabases).toHaveBeenCalledTimes(2);
+    });
+    const wiring = createBuilderSurgeGateWiring({
+      openclawDir, adapter, processGate: client, surgeReadiness: readiness, log: () => undefined,
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
+      attachConfiguredBuilderBeforeOpenClaw: async () => request.slug,
+      waitForGatewayHealthy: async () => undefined, waitForGatewayReady,
+    });
+    try {
+      await client.hydrate(request);
+      await expect(wiring.releaseSurgeReadiness(request)).rejects.toThrow("Doctor interrupted after credential rebind");
+      expect(children).toHaveLength(0);
+      expect(waitForGatewayReady).not.toHaveBeenCalled();
+      await expect(client.status()).resolves.toEqual({ version: 1, podUid: request.targetPodUid,
+        role: "target", mode: "held", phase: "held", ...request });
+      expect(await readiness.released()).toBe(false);
+
+      if (scenario === "cancel") {
+        await expect(wiring.unreserveSurgeTarget(request)).resolves.toMatchObject({
+          role: "normal", mode: "held", phase: "held", terminalTarget: request,
+        });
+        await expect(wiring.releaseSurgeReadiness(request)).rejects.toThrow("not reserved by this migration");
+        expect(prepareDatabases).toHaveBeenCalledOnce();
+        expect(children).toHaveLength(0);
+        expect(await readiness.released()).toBe(false);
+        return;
+      }
+      await wiring.releaseSurgeReadiness(request);
+      expect(prepareDatabases).toHaveBeenCalledTimes(2);
+      expect(children).toHaveLength(1);
+      expect(waitForGatewayReady).toHaveBeenCalledOnce();
+      expect(await readiness.released()).toBe(true);
+      await expect(client.status()).resolves.toMatchObject({ role: "normal", mode: "permitted", phase: "running", terminalTarget: request });
+    } finally {
+      await supervisor.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps Builder self-release alive when a permitted first boot fails before health", async () => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");

@@ -1786,6 +1786,33 @@ describe("configured Builder surge release", () => {
     }
   });
 
+  it.each(["podUid", "targetPodUid", "migrationId", "slug"] as const)("does not preserve a failed target with mismatched %s", async field => {
+    stubBuilderClaim("ceckert-test");
+    vi.stubEnv("POD_UID", "target-pod");
+    const request = { migrationId: "mig-builder", slug: "ceckert-test", targetPodUid: "target-pod" };
+    const initial: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "held", ...request };
+    let state = initial;
+    const processGate = {
+      status: async () => state,
+      claimTargetCompletion: async () => state,
+      rehold: vi.fn(async () => { throw new Error("reservation identity changed"); }),
+    } as unknown as SurgeOpenClawProcessSupervisorClient;
+    const { adapter } = configuredBuilderLifecycleAdapter();
+    const wiring = createBuilderSurgeGateWiring({
+      adapter, processGate, surgeReadiness: {} as SurgeReadinessGate,
+      waitForGatewayHealthy: async () => undefined, waitForGatewayReady: async () => undefined,
+      log: () => undefined, provisioning: createProvisioningCounter().provisioning,
+      attachConfiguredBuilderBeforeOpenClaw: async () => {
+        state = { ...initial, [field]: "different" };
+        throw new Error("attach failed");
+      },
+    });
+    try {
+      await expect(wiring.releaseSurgeReadiness(request)).rejects.toThrow("could not be returned to hold");
+      expect(processGate.rehold).toHaveBeenCalledExactlyOnceWith(request);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("finishes explicit cancellation while failure cleanup is already finalizing", async () => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");

@@ -6,7 +6,7 @@ import type { Request, Response } from "express";
 import { createBuilderSurgeGateWiring, createStartupReadinessHandler, createSurgeReadinessHandler, createToolchainReadinessHandler } from "../lib/fleet-provisioner.js";
 import type { CustomerLifecycleAdapter } from "../lib/customer-lifecycle.js";
 import { writeActivationManifest, type MigrationActivationManifest } from "../lib/migration-activation-manifest.js";
-import type { SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
+import { createSurgeOpenClawProcessGate, type SurgeOpenClawProcessSupervisorClient } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
 import { hasMountedMarker, writeMigratingInPin, writeMountedMarker } from "../lib/local-coach-wired.js";
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
@@ -61,11 +61,20 @@ async function preparationFixture() {
     cloneProjectRepo,
   } as unknown as CustomerLifecycleAdapter;
   const attach = vi.fn(async () => { writeMountedMarker(customersDir, request.slug); return request.slug; });
-  const state = { version: 1, podUid: request.targetPodUid, role: "target", mode: "held", phase: "held", ...request };
+  const gate = createSurgeOpenClawProcessGate(root);
+  const identity = { ...request, podUid: request.targetPodUid };
+  await gate.ensure({ podUid: identity.podUid, readinessReleased: false });
+  await gate.hydrateTarget(identity);
   const processGate = {
-    status: vi.fn(async () => state), claimTargetCompletion: vi.fn(async () => state),
-    permit: vi.fn(async () => state), releaseTarget: vi.fn(async () => state),
-    rehold: vi.fn(async () => state),
+    status: vi.fn(async () => (await gate.read())!),
+    claimTargetCompletion: vi.fn(() => gate.claimTargetCompletion(identity)),
+    permit: vi.fn(async () => {
+      await gate.permitTarget(identity);
+      return gate.markRunning(identity);
+    }),
+    releaseTarget: vi.fn(() => gate.settleTargetCompletion(identity)),
+    rehold: vi.fn(() => gate.reholdTarget(identity)),
+    finalizeTargetCancellation: vi.fn(() => gate.finalizeTargetCancellation(identity)),
   } as unknown as SurgeOpenClawProcessSupervisorClient;
   const ready = vi.fn(async () => undefined);
   const wiring = createBuilderSurgeGateWiring({
@@ -86,9 +95,10 @@ describe("offline Builder preparation", () => {
 
     writeMigratingInPin(fixture.customersDir, request.slug);
     expect(hasMountedMarker(fixture.customersDir, request.slug)).toBe(false);
+    const permit = fixture.processGate.permit;
     fixture.processGate.permit = vi.fn(async () => {
       expect(hasMountedMarker(fixture.customersDir, request.slug)).toBe(true);
-      return await fixture.processGate.status();
+      return permit(request);
     });
 
     await fixture.wiring.releaseSurgeReadiness(request);
@@ -109,6 +119,12 @@ describe("offline Builder preparation", () => {
     expect(fixture.processGate.releaseTarget).not.toHaveBeenCalled();
     expect(fixture.ready).not.toHaveBeenCalled();
     expect(fixture.processGate.rehold).toHaveBeenCalledExactlyOnceWith(request);
+    await vi.waitFor(async () => expect(await fixture.processGate.status()).toEqual({
+      version: 1, podUid: request.targetPodUid, role: "normal", mode: "held", phase: "held", terminalTarget: request,
+    }));
+    await expect(fixture.wiring.releaseSurgeReadiness(request)).rejects.toThrow("not reserved by this migration");
+    expect(fixture.processGate.permit).not.toHaveBeenCalled();
+    expect(fixture.ready).not.toHaveBeenCalled();
   });
 
   it.each(["hasWorkspaceGitDir", "hasGitRemote"] as const)("rechecks prepared workspace state before startup: %s", async (probe) => {
@@ -119,9 +135,10 @@ describe("offline Builder preparation", () => {
       fixture.adapter[probe] = () => true;
       return request.slug;
     });
+    const permit = fixture.processGate.permit;
     fixture.processGate.permit = vi.fn(async () => {
       expect(fixture.adapter[probe](request.slug)).toBe(true);
-      return await fixture.processGate.status();
+      return permit(request);
     });
 
     await fixture.wiring.releaseSurgeReadiness(request);

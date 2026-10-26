@@ -2677,6 +2677,9 @@ async function reholdFailedBuilderTarget(input: {
   waitForActiveProvisioningDrain: () => Promise<void>;
 }): Promise<void> {
   if (input.release.cancelled) return;
+  const current = await input.processGate.status();
+  if (current.podUid === input.request.targetPodUid && reservedBuilderTargetMatches(current, input.request) &&
+      current.mode === "held" && current.phase === "held") return;
   const state = await input.processGate.rehold(input.request);
   if (state.phase === "cancelling" && !input.release.cancelled) {
     scheduleBuilderTargetHoldFinalization(input);
