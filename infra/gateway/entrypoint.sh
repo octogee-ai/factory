@@ -53,8 +53,22 @@ supervise_runner() {
   _name="$1"; shift
   _restart_delay_ms="$1"; shift
   (
+    _supervisor_pid=""
+    stop_supervisor() {
+      trap '' TERM INT
+      _supervisor_status=0
+      if [ -n "$_supervisor_pid" ]; then
+        kill -TERM "$_supervisor_pid" 2>/dev/null || true
+        wait "$_supervisor_pid" || _supervisor_status=$?
+      fi
+      exit "$_supervisor_status"
+    }
+    trap stop_supervisor TERM INT
     while true; do
-      $SUPERVISE "$_name" "--restart-delay-ms=${_restart_delay_ms}" "$@" || true
+      $SUPERVISE "$_name" "--restart-delay-ms=${_restart_delay_ms}" "$@" &
+      _supervisor_pid=$!
+      wait "$_supervisor_pid" || true
+      _supervisor_pid=""
       log "supervise-runner[$_name] exited — restarting in 5s..."
       sleep 5
     done
@@ -75,7 +89,11 @@ shutdown() {
   trap '' TERM INT
   log "entrypoint: received SIGTERM — forwarding to children"
   kill -TERM 0 2>/dev/null || true
-  exit 0
+  _shutdown_status=0
+  if [ -n "${OPENCLAW_PID:-}" ]; then
+    wait "$OPENCLAW_PID" || _shutdown_status=$?
+  fi
+  exit "$_shutdown_status"
 }
 trap shutdown TERM INT
 
@@ -430,6 +448,7 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   supervise_runner github-cli-auth 5000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/github-cli-auth-hydrate.ts
   log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
+  OPENCLAW_PID=$!
   # shellcheck disable=SC2086
   supervise_runner builder-runtime-state-snapshotter 5000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
 else

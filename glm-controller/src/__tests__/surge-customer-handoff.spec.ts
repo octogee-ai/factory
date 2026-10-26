@@ -1,234 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
-import {
-  reconcileSurgeCustomerHandoff,
-  assertSurgeAssignmentCoverage,
-  SurgeOpenClawProcessEndpointMissingError,
-  type SurgeAssignment,
-  type SurgeCustomerHandoffDeps,
-  type SurgePod,
-  type SurgePodHealth,
-} from "../surge-customer-handoff.js";
-import { decideRollStateMigration } from "../roll-state-migration.js";
-import type { OperationStatus } from "@octogee/shared/types/glm";
+import { reconcileSurgeCustomerHandoff, assertSurgeAssignmentCoverage,
+  type SurgeAssignment, type SurgePod, type SurgePodHealth } from "../surge-customer-handoff.js";
+import { MIGRATE_STATE, CROSS_VERSION, oldPod, targetPod, abandonedPodUid, abandonedOperationId,
+  otherGatewayOperationId, assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff.js";
 
-const MIGRATE_STATE = decideRollStateMigration({
-  sourceOpenclawVersion: "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
-  targetOpenclawVersion: "2026.7.2-beta.7",
-  targetOpenclawSourceSha: "a".repeat(40),
-});
-const CROSS_VERSION = decideRollStateMigration({
-  sourceOpenclawVersion: "2026.7.1",
-  targetOpenclawVersion: "2026.7.2-beta.7",
-});
-
-const oldPod: SurgePod = {
-  uid: "old-uid",
-  name: "gateway-old",
-  podIP: "10.0.0.1",
-  ready: true,
-  terminating: false,
-  crashLooping: false,
-};
-const targetPod: SurgePod = {
-  uid: "target-uid",
-  name: "gateway-new",
-  podIP: "10.0.0.2",
-  ready: false,
-  terminating: false,
-  crashLooping: false,
-};
-const abandonedPodUid = "11111111-2222-4333-8444-555555555555";
-const abandonedOperationId = `surge-default-${abandonedPodUid}`;
-const otherGatewayOperationId = `surge-default-blue-${abandonedPodUid}`;
-
-function assignment(
-  uid: string,
-  slug: string,
-  overrides: Partial<SurgeAssignment> = {},
-): SurgeAssignment {
-  return {
-    uid,
-    slug,
-    state: "serving",
-    epoch: 1,
-    updatedByOperationId: null,
-    ...overrides,
-  };
-}
-
-function harness(input: {
-  pods?: SurgePod[];
-  unreachableUids?: string[];
-  evictionBudgetSpent?: boolean;
-  observedPodUids?: string[];
-  assignments?: SurgeAssignment[];
-  targetReleased?: boolean;
-  transferError?: Error;
-  transferErrorSlug?: string;
-  discardError?: Error;
-  markErrorUid?: string;
-  releaseErrorBeforeCommit?: Error;
-  releaseErrorBeforeCommitOnce?: boolean;
-  releaseErrorAfterCommit?: Error;
-  targetVersion?: string;
-  sourceMountedCustomers?: string[];
-  targetMountedCustomers?: string[];
-  ownerOperations?: Record<string, { status: OperationStatus; sourceRecoveryPending?: boolean } | null>;
-  bootingUids?: string[];
-  prelaunchByUid?: Record<string, SurgePodHealth["prelaunchState"]>;
-  targetPrelaunchStateAfterRelease?: SurgePodHealth["prelaunchState"];
-  fleetSignatureCapabilityByUid?: Record<string, SurgePodHealth["fleetSignatureCapability"]>;
-  resumeSourceError?: Error;
-  stopSourceError?: Error;
-  stopSourceLegacy?: boolean;
-  holdTargetError?: Error;
-  holdTargetErrorFromCall?: number;
-  digestByPodUid?: Record<string, { fileCount: number; totalBytes: number; sha256: string }>;
-  wait?: (ms: number) => Promise<void>;
-} = {}) {
-  const events: string[] = [];
-  let assignments = input.assignments ?? [assignment("u1", "alice"), assignment("u2", "bob")];
-  let targetReleased = input.targetReleased === true;
-  let sourceHeld = false;
-  let targetReleaseCalls = 0;
-  const operationId = "surge-default-target-uid";
-  const deps: SurgeCustomerHandoffDeps = {
-    reportMigrationProgress: vi.fn(async () => undefined),
-    recordMigrationProgress: vi.fn(async () => undefined),
-    listPods: vi.fn(async () => {
-      const pods = input.pods ?? [oldPod, targetPod];
-      return {
-        pods,
-        observedPodUids: input.observedPodUids ?? pods.map((pod) => pod.uid),
-      };
-    }),
-    readPodHealth: vi.fn(async (pod) => input.unreachableUids?.includes(pod.uid) ? null : ({
-      status: input.bootingUids?.includes(pod.uid) ? "booting" as const : "ready" as const,
-      version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
-      fleetSignatureCapability: input.fleetSignatureCapabilityByUid?.[pod.uid] ?? "gateway-scoped",
-      handoffReleased: pod.uid === targetPod.uid && targetReleased,
-      prelaunchState: (
-        pod.uid === targetPod.uid &&
-        targetReleaseCalls > 0 &&
-        input.targetPrelaunchStateAfterRelease !== undefined
-          ? input.targetPrelaunchStateAfterRelease
-          : input.prelaunchByUid?.[pod.uid]
-      ) ??
-        (pod.uid !== targetPod.uid && sourceHeld ? "held" : "none"),
-      mountedCustomers: pod.uid === targetPod.uid
-        ? input.targetMountedCustomers ?? []
-        : input.sourceMountedCustomers ?? assignments.map((item) => item.slug),
-    })),
-    deleteCrashLoopingPod: vi.fn(async ({ pod }) => {
-      events.push(`delete-pod:${pod.uid}`);
-    }),
-    claimCrashLoopEviction: vi.fn(async () => (
-      input.evictionBudgetSpent ? { allowed: false, count: 3, budget: 3 } : { allowed: true, count: 1, budget: 3 }
-    )),
-    stopSourceOpenClaw: vi.fn(async ({ sourcePod, slug }) => {
-      events.push(`stop-source:${sourcePod.uid}:${slug}`);
-      if (input.stopSourceLegacy) {
-        throw new SurgeOpenClawProcessEndpointMissingError(
-          `pod ${sourcePod.name} lacks the required surge OpenClaw hold endpoint`,
-        );
-      }
-      if (input.stopSourceError) throw input.stopSourceError;
-      sourceHeld = true;
-    }),
-    resumeSourceOpenClaw: vi.fn(async ({ sourcePod, slug }) => {
-      events.push(`resume-source:${sourcePod.uid}:${slug}`);
-      if (input.resumeSourceError) throw input.resumeSourceError;
-      sourceHeld = false;
-    }),
-    holdTargetOpenClaw: vi.fn(async ({ targetPod: pod, slug }) => {
-      events.push(`hold-target:${pod.uid}:${slug}`);
-      const call = events.filter((event) => event.startsWith("hold-target:")).length;
-      if (input.holdTargetError && call >= (input.holdTargetErrorFromCall ?? 1)) {
-        throw input.holdTargetError;
-      }
-    }),
-    unreserveTargetOpenClaw: vi.fn(async ({ targetPod: pod, slug }) => {
-      events.push(`unreserve-target:${pod.uid}:${slug}`);
-    }),
-    readAssignments: vi.fn(async () => assignments),
-    markAssignment: vi.fn(async ({ uid, state, updatedByOperationId, expected }) => {
-      events.push(`assignment:${uid}:${state}`);
-      if (input.markErrorUid === uid && state === "quiescing") {
-        throw new Error("assignment write failed");
-      }
-      const current = assignments.find((item) => item.uid === uid);
-      if (
-        current?.state !== expected.state ||
-        current.updatedByOperationId !== expected.updatedByOperationId
-      ) {
-        throw new Error("assignment ownership changed");
-      }
-      assignments = assignments.map((item) => item.uid === uid
-        ? { ...item, state, updatedByOperationId }
-        : item);
-    }),
-    waitForSourceIdle: vi.fn(async () => undefined),
-    resumeSourceIngress: vi.fn(async () => undefined),
-    quiesce: vi.fn(async ({ slug }) => {
-      events.push(`quiesce:${slug}`);
-    }),
-    flush: vi.fn(async ({ pod, slug, reason }) => {
-      events.push(`flush:${pod.uid}:${slug}:${reason}`);
-      return reason === "migration-final"
-        ? { systemConfigCommit: "a".repeat(40) }
-        : {};
-    }),
-    transfer: vi.fn(async ({ slug }) => {
-      events.push(`transfer:${slug}`);
-      if (input.transferError && (!input.transferErrorSlug || input.transferErrorSlug === slug)) {
-        throw input.transferError;
-      }
-    }),
-    discardTargetCustomer: vi.fn(async ({ slug }) => {
-      events.push(`discard:${slug}`);
-      if (input.discardError) throw input.discardError;
-    }),
-    readDurableSessionDigest: vi.fn(async ({ pod, slug }) => {
-      events.push(`digest:${pod.uid}:${slug}`);
-      return input.digestByPodUid?.[pod.uid] ?? {
-        fileCount: 2,
-        totalBytes: 20,
-        sha256: "a".repeat(64),
-      };
-    }),
-    releaseTarget: vi.fn(async ({ pod }) => {
-      events.push(`release:${pod.uid}`);
-      targetReleaseCalls += 1;
-      if (input.releaseErrorBeforeCommit && (
-        input.releaseErrorBeforeCommitOnce !== true || targetReleaseCalls === 1
-      )) {
-        throw input.releaseErrorBeforeCommit;
-      }
-      if (input.releaseErrorAfterCommit) {
-        targetReleased = true;
-        throw input.releaseErrorAfterCommit;
-      }
-      targetReleased = true;
-    }),
-    wait: input.wait,
-    readOwnerOperation: vi.fn(async (id: string) => (
-      input.ownerOperations && id in input.ownerOperations
-        ? input.ownerOperations[id]
-        : { status: "running" as OperationStatus }
-    )),
-    log: vi.fn(),
-  };
-  return {
-    deps,
-    events,
-    assignments: () => assignments,
-    operationId,
-    setTargetReleased: (released: boolean) => {
-      targetReleased = released;
-    },
-  };
-}
+const harness = (input: Parameters<typeof createSurgeHandoffHarness>[1] = {}) => createSurgeHandoffHarness(vi.fn, input);
 
 describe("surge customer handoff", () => {
   it("keeps source ingress closed when a shared target release has an unknown outcome", async () => {
@@ -808,6 +585,35 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual(["assignment:u1:serving"]);
   });
 
+  it("settles a Ready completed target without retrying its terminal attempt", async () => {
+    const h = harness({ pods: [{ ...targetPod, ready: true }], targetReleased: true,
+      assignments: [assignment("u1", "alice")], targetMountedCustomers: ["alice"],
+      terminalTargetByUid: { [targetPod.uid]: { migrationId: "surge-default-target-uid", slug: "alice", targetPodUid: targetPod.uid } } });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha",
+      requiresCustomerMigration: true, disposableBuilderGateway: true, stateMigration: MIGRATE_STATE }))
+      .resolves.toEqual({ ready: true });
+    expect(h.events).toEqual([]);
+    expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
+  });
+
+  it("waits for a completed target to become Ready without requiring a different pod", async () => {
+    const pods = [{ ...targetPod }], booting = [targetPod.uid];
+    const phases: Record<string, SurgePodHealth["prelaunchState"]> = { [targetPod.uid]: "starting" };
+    const h = harness({ pods, bootingUids: booting, prelaunchByUid: phases, targetReleased: true,
+      assignments: [assignment("u1", "alice")], targetMountedCustomers: ["alice"],
+      terminalTargetByUid: { [targetPod.uid]: { migrationId: "surge-default-target-uid", slug: "alice", targetPodUid: targetPod.uid } } });
+    const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: true, stateMigration: MIGRATE_STATE };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+    expect(h.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("waiting for a replacement pod"));
+    pods[0] = { ...targetPod, ready: true };
+    booting.splice(0);
+    phases[targetPod.uid] = "serving";
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: true });
+    expect(h.events).toEqual([]);
+    expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
+  });
+
   it("does not mark a source-less released replacement ready until every assigned customer is mounted", async () => {
     const h = harness({
       pods: [{ ...targetPod, ready: true }],
@@ -1270,6 +1076,43 @@ describe("surge customer handoff", () => {
       "assignment:u1:serving",
     ]);
     expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+  });
+
+  it.each(["old-image", "source-held", "source-unready", "source-terminating", "source-missing-roster", "source-migrating",
+    "target-starting", "target-hydrated", "target-released", "target-mounted", "target-migrating", "target-terminating",
+    "missing-held-proof", "false-held-proof", "wrong-terminal-slug", "quiescing-assignment", "third-observed-uid",
+    "budget-spent", "changed-after-budget", "epoch-after-budget", "owner-after-budget", "source-name-after-budget"])("refuses cancelled-target replacement when %s", async fault => {
+    const pods = [{ ...oldPod }, { ...targetPod }];
+    const assigned = assignment("u1", "alice", fault === "quiescing-assignment" ? { state: "quiescing", updatedByOperationId: "foreign" } : {});
+    const h = harness({ pods, observedPodUids: fault === "third-observed-uid" ? [oldPod.uid, targetPod.uid, "pending"] : undefined,
+      assignments: [assigned],
+      evictionBudgetSpent: fault === "budget-spent" });
+    if (fault === "source-unready") pods[0].ready = false;
+    if (fault === "source-terminating") pods[0].terminating = true;
+    if (fault === "target-terminating") pods[1].terminating = true;
+    vi.mocked(h.deps.readPodHealth).mockImplementation(async pod => ({
+      status: pod.uid === oldPod.uid ? "ready" : "booting", version: pod.uid === oldPod.uid ? "old-sha" : "new-sha",
+      fleetSignatureCapability: "gateway-scoped", handoffReleased: pod.uid === targetPod.uid && fault === "target-released",
+      prelaunchState: pod.uid === oldPod.uid ? fault === "source-held" ? "held" : "serving" :
+        fault === "target-starting" ? "starting" : fault === "target-hydrated" ? "hydrated" : "held",
+      mountedCustomers: pod.uid === oldPod.uid ? fault === "source-missing-roster" ? [] : ["alice"] : fault === "target-mounted" ? ["alice"] : [],
+      migratingIn: (pod.uid === oldPod.uid && fault === "source-migrating") || (pod.uid === targetPod.uid && fault === "target-migrating") ? ["alice"] : [],
+      ...(pod.uid === targetPod.uid ? { terminalTarget: { migrationId: h.operationId, targetPodUid: pod.uid,
+        slug: fault === "wrong-terminal-slug" ? "bob" : "alice",
+        ...(fault === "missing-held-proof" ? {} : { processHeld: fault !== "false-held-proof" }) } } : {}),
+    }));
+    if (["changed-after-budget", "epoch-after-budget", "owner-after-budget", "source-name-after-budget"].includes(fault)) vi.mocked(h.deps.claimCrashLoopEviction).mockImplementation(async () => {
+      if (fault === "changed-after-budget") pods[0].ready = false;
+      if (fault === "epoch-after-budget") assigned.epoch += 1;
+      if (fault === "owner-after-budget") assigned.updatedByOperationId = "another-operation";
+      if (fault === "source-name-after-budget") pods[0].name = "another-source";
+      return { allowed: true, count: 1, budget: 3 };
+    });
+    await reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+      disposableBuilderGateway: fault !== "old-image", stateMigration: MIGRATE_STATE });
+    expect(h.deps.deleteCancelledTarget).not.toHaveBeenCalled();
+    expect(h.deps.waitForSourceIdle).not.toHaveBeenCalled();
+    expect(h.events).toEqual([]);
   });
 
   it("discards every target customer touched when a later transfer fails", async () => {

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { Firestore, Transaction } from "firebase-admin/firestore";
+import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
 import { assertSharedSourceRecoveryPredecessor, postgresImportMaintenanceFailureMatches, readPostgresSourceAgentStores, readSharedSourceRecoveryAuthority, type SourceRecoveryAssignment } from "./shared-source-recovery.js";
 const identity: SourceRecoveryAssignment = { uid: "owner", slug: "livefixture", agentId: "octogee-livefixture-coach", assignmentEpoch: 7,
   assignment: { uid: "owner", slug: "livefixture", gatewayId: "shared-old", state: "serving", epoch: 7 } };
@@ -156,8 +156,34 @@ it("allows unrelated active housekeeping and transfer tasks", async () => {
 });
 
 
-async function spentPostgresPredecessorFixture() {
-  const f = authorityFixture(), source = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
+function addPostgresSourceRoster(f: ReturnType<typeof authorityFixture>): void {
+  for (const [index, slug] of ["secondfixture", "thirdfixture", "fourthfixture"].entries()) {
+    const uid = `owner-${index}`, operationId = `placement-${index}`, agentId = `octogee-${slug}-coach`;
+    f.rows[`gateways/shared-old/assignments/${uid}`] = { uid, slug, gatewayId: "shared-old", state: "serving", epoch: index + 8 };
+    f.rows[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: "shared-old", status: "complete" } } };
+    f.rows[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: "shared-old", assignmentEpoch: index + 8,
+      storeId: `00000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`, schema: `agent_owner_${index}` };
+    const row = fixture("database");
+    row.error = row.error.replaceAll("livefixture", slug);
+    Object.assign(row.input, { uid, builderSlug: slug });
+    Object.assign(row.schedulerHandoff, { uid, slug, migrationId: `mig-${operationId}:scheduler:1:claim:${row.startedAt}` });
+    row.steps = row.steps.map(step => "error" in step ? { ...step, error: row.error } : step);
+    row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
+    f.rows[`glmOperations/${operationId}`] = row;
+  }
+  for (const [index, project] of ["launch", "second", "third"].entries()) {
+    const uid = index === 2 ? "owner-0" : identity.uid, slug = index === 2 ? "secondfixture" : identity.slug;
+    const agentId = `octogee-${slug}-proj-${project}-coach`;
+    f.rows[`workspaces/${slug}/projects/${project}`] = { agent: { enabled: true } };
+    f.rows[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: "shared-old", assignmentEpoch: index === 2 ? 8 : 7,
+      storeId: `00000000-0000-4000-8000-${String(index + 5).padStart(12, "0")}`, schema: `agent_project_${index}` };
+  }
+  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", gatewayId: "retained-builder", generation: 9 };
+}
+async function spentPostgresPredecessorFixture(fullRoster = false) {
+  const f = authorityFixture();
+  if (fullRoster) addPostgresSourceRoster(f);
+  const source = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
   const images = { gateway: "registry/gateway:aaaaaaaa@sha256:" + "a".repeat(64), "gateway-edge": "registry/edge:aaaaaaaa@sha256:" + "b".repeat(64) };
   const sourceSha = "c".repeat(40), operationId = "spent-pg-repair";
   const row = { kind: "restart-gateway", status: "failed", startedAt: 300, completedAt: 600,
@@ -182,5 +208,68 @@ it.each(["anchor", "schema", "epoch", "missing-roster"])("refuses a spent Postgr
   if (change === "schema") f.source.postgresAgentStores![0]!.schema = "different_store";
   if (change === "epoch") { f.source.assignments[0]!.assignmentEpoch++; f.source.postgresAgentStores![0]!.assignmentEpoch++; }
   if (change === "missing-roster") delete f.source.postgresAgentStores;
+  expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow();
+});
+
+async function completedPostgresPredecessorFixture() {
+  const f = await spentPostgresPredecessorFixture(true);
+  return { ...f, fence: { ...f.fence, doctor: { ...f.fence.doctor, completedAt: 550,
+    verifiedAgentIds: f.source.postgresAgentStores!.map(store => store.agentId) } } };
+}
+it("admits an exact successful seven-tenant Doctor ACK after failed readiness without rewriting that ACK", async () => {
+  const f = await completedPostgresPredecessorFixture(), before = structuredClone(f);
+  expect(f.source.assignments).toHaveLength(4);
+  expect(f.source.postgresAgentStores).toHaveLength(7);
+  expect(f.fence.doctor.verifiedAgentIds).not.toContain("octogee-unmatched-route");
+  expect(f.fence.doctor.releaseKey).not.toBe(f.row.input.sourceRecovery.sourceSha);
+  expect(assertSharedSourceRecoveryPredecessor(f)).toEqual({ operationId: f.operationId, input: f.row.input,
+    startedAt: f.row.startedAt, completedAt: f.row.completedAt, error: f.row.error, fence: f.fence });
+  expect(f).toEqual(before);
+});
+const invalidCompletedDoctors: Array<[string, (doctor: DocumentData) => void]> = [
+  ["failed", doctor => { doctor.error = "Doctor refused"; }],
+  ["before-start", doctor => { doctor.completedAt = doctor.startedAt - 1; }],
+  ["after-failure", doctor => { doctor.completedAt = 601; }],
+  ["fractional-completion", doctor => { doctor.completedAt = 550.5; }],
+  ["missing-completion", doctor => { delete doctor.completedAt; }],
+  ["missing-roster", doctor => { delete doctor.verifiedAgentIds; }],
+  ["foreign-request", doctor => { doctor.requestId = "another-recovery"; }],
+  ["missing-release", doctor => { delete doctor.releaseKey; }],
+  ["empty-release", doctor => { doctor.releaseKey = ""; }],
+  ["whitespace-release", doctor => { doctor.releaseKey = " "; }],
+  ["overlong-release", doctor => { doctor.releaseKey = "r".repeat(513); }],
+  ["unknown-field", doctor => { doctor.ready = true; }],
+  ["partial-roster", doctor => { doctor.verifiedAgentIds.pop(); }],
+  ["empty-roster", doctor => { doctor.verifiedAgentIds = []; }],
+  ["foreign-agent", doctor => { doctor.verifiedAgentIds[0] = "octogee-foreign-coach"; }],
+  ["extra-agent", doctor => { doctor.verifiedAgentIds.push("octogee-other-coach"); }],
+  ["fallback-agent", doctor => { doctor.verifiedAgentIds.push("octogee-unmatched-route"); }],
+  ["duplicate-agent", doctor => { doctor.verifiedAgentIds[1] = doctor.verifiedAgentIds[0]; }],
+  ["reordered-roster", doctor => { doctor.verifiedAgentIds.reverse(); }],
+];
+it.each(invalidCompletedDoctors)("refuses a completed PostgreSQL predecessor with %s Doctor proof", async (_name, change) => {
+  const f = await completedPostgresPredecessorFixture();change(f.fence.doctor);
+  const before = structuredClone(f);
+  expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow("source recovery predecessor is unavailable");
+  expect(f).toEqual(before);
+});
+it("refuses a coach-only ACK when the captured tenant roster also owns project stores", async () => {
+  const f = await completedPostgresPredecessorFixture();
+  f.fence.doctor.verifiedAgentIds = f.source.assignments.map(assignment => assignment.agentId);
+  expect(f.fence.doctor.verifiedAgentIds).toHaveLength(4);
+  expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow("source recovery predecessor is unavailable");
+});
+it.each(["anchor", "schema", "epoch", "input", "image", "pod", "clock", "cancelled", "running", "completed-recovery"])("retains completed Doctor predecessor %s custody guards", async change => {
+  const f = await completedPostgresPredecessorFixture();
+  if (change === "anchor") f.source.postgresAgentStores![0]!.storeId = "00000000-0000-4000-8000-999999999999";
+  if (change === "schema") f.source.postgresAgentStores![0]!.schema = "different_schema";
+  if (change === "epoch") f.source.assignments[0]!.assignmentEpoch++;
+  if (change === "input") f.fence.target.sourceSha = "d".repeat(40);
+  if (change === "image") f.fence.installedImage.gatewayImageId = "foreign";
+  if (change === "pod") f.fence.installedImage.podUid = "another-pod";
+  if (change === "clock") f.fence.installedImage.verifiedAt = 501;
+  if (change === "cancelled") Object.assign(f.row, { cancellationRequestedAt: 599 });
+  if (change === "running") f.row.status = "running";
+  if (change === "completed-recovery") Object.assign(f.row, { sourceRuntimeRecovery: {} });
   expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow();
 });

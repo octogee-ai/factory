@@ -181,17 +181,27 @@ export async function prepareConfiguredBuilderTarget(
   await run(tsx, ["/octogee/scripts/entrypoints/clean-builder-project-placeholders.ts"], { env: builderEnv });
 }
 
+async function awaitHealthOrShutdown<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+  signal.throwIfAborted();
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => { onAbort = () => reject(signal.reason); });
+  signal.addEventListener("abort", onAbort, { once: true });
+  try { return await Promise.race([work(), aborted]); }
+  finally { signal.removeEventListener("abort", onAbort); }
+}
+
 async function waitForHealth(input: {
   child: () => SpawnedOpenClaw | null;
   probe: () => Promise<boolean>;
   sleep: (ms: number) => Promise<void>;
   timeoutMs: number;
+  signal: AbortSignal;
 }): Promise<void> {
   const deadline = Date.now() + input.timeoutMs;
   while (Date.now() < deadline) {
-    if (await input.probe()) return;
+    if (await awaitHealthOrShutdown(input.signal, input.probe)) return;
     if (!input.child()) throw new Error("OpenClaw exited before becoming healthy");
-    await input.sleep(250);
+    await awaitHealthOrShutdown(input.signal, () => input.sleep(250));
   }
   throw new Error(`OpenClaw did not become healthy within ${input.timeoutMs}ms`);
 }
@@ -272,10 +282,12 @@ function supervisorRequestListener(
   };
 }
 
-async function waitForExit(child: SpawnedOpenClaw): Promise<void> {
-  await new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-    child.once("error", () => resolve());
+interface OpenClawChildExit { code: number | null; signal: NodeJS.Signals | null }
+
+async function waitForExit(child: SpawnedOpenClaw): Promise<OpenClawChildExit> {
+  return new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+    child.once("error", () => resolve({ code: null, signal: null }));
   });
 }
 
@@ -283,14 +295,15 @@ async function waitForExitOrTimeout(
   child: SpawnedOpenClaw,
   timeoutMs: number,
   sleep: (ms: number) => Promise<void>,
-): Promise<boolean> {
+): Promise<OpenClawChildExit | null> {
   return Promise.race([
-    waitForExit(child).then(() => true),
-    sleep(timeoutMs).then(() => false),
+    waitForExit(child),
+    sleep(timeoutMs).then(() => null),
   ]);
 }
 
 interface StartPermittedOpenClawChildOptions {
+  signal: AbortSignal;
   before: SurgeOpenClawProcessGateState;
   child: { get: () => SpawnedOpenClaw | null; set: (next: SpawnedOpenClaw | null) => void };
   current: () => Promise<SurgeOpenClawProcessGateState>;
@@ -315,16 +328,22 @@ interface StartPermittedOpenClawChildOptions {
 async function preparePermittedOpenClawChild(
   opts: StartPermittedOpenClawChildOptions,
 ): Promise<SurgeOpenClawProcessGateState> {
+  opts.signal.throwIfAborted();
   await opts.reapOrphanedOpenClaw();
+  opts.signal.throwIfAborted();
   if (opts.prepare || opts.before.role === "target") await opts.prepareTarget();
+  opts.signal.throwIfAborted();
   const afterPreparation = await opts.current();
+  opts.signal.throwIfAborted();
   if (afterPreparation.mode !== "permitted") {
     throw new Error("surge OpenClaw process was held during target preparation");
   }
   await opts.prepareDatabases();
+  opts.signal.throwIfAborted();
   if ((await opts.current()).mode !== "permitted") {
     throw new Error("surge OpenClaw process was held during database preparation");
   }
+  opts.signal.throwIfAborted();
   return afterPreparation;
 }
 
@@ -334,7 +353,9 @@ async function startPermittedOpenClawChild(
   let retriedPreHealthExit = false;
   for (;;) {
     const afterPreparation = await preparePermittedOpenClawChild(opts);
+    opts.signal.throwIfAborted();
     await opts.bootWatcher.beforeStart();
+    opts.signal.throwIfAborted();
     const spawned = opts.spawnOpenClaw();
     opts.child.set(spawned);
     let healthy = false;
@@ -365,9 +386,10 @@ async function startPermittedOpenClawChild(
         probe: opts.probeHealthz,
         sleep: opts.sleep,
         timeoutMs: opts.timeoutMs,
+        signal: opts.signal,
       });
     } catch (error) {
-      if (exitedBeforeHealth && !retriedPreHealthExit) {
+      if (exitedBeforeHealth && !retriedPreHealthExit && !opts.signal.aborted) {
         await exitCleanup;
         retriedPreHealthExit = true;
         continue;
@@ -375,15 +397,17 @@ async function startPermittedOpenClawChild(
       throw error;
     }
     if (opts.child.get() !== spawned) {
-      if (exitedBeforeHealth && !retriedPreHealthExit) {
+      if (exitedBeforeHealth && !retriedPreHealthExit && !opts.signal.aborted) {
         await exitCleanup;
         retriedPreHealthExit = true;
         continue;
       }
       throw new Error("OpenClaw exited before becoming healthy");
     }
+    opts.signal.throwIfAborted();
     healthy = true;
     await opts.bootWatcher.healthy();
+    opts.signal.throwIfAborted();
     return opts.gate.markRunning({ podUid: opts.podUid, migrationId: afterPreparation.migrationId });
   }
 }
@@ -525,6 +549,47 @@ async function selfReleaseStandbyReadiness(
   opts.log("[surge-openclaw] standby Builder boot: no migration owns this pod, so readiness is self-released");
 }
 
+async function readOwnedSurgeGate(gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>, "read">, podUid: string): Promise<SurgeOpenClawProcessGateState> {
+  const state = await gate.read();
+  if (!state || state.podUid !== podUid) throw new Error("surge OpenClaw process gate disappeared or belongs to another pod");
+  return state;
+}
+
+function closeSupervisorServer(server: http.Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  });
+}
+
+function assertSuccessfulOpenClawExit(exit: OpenClawChildExit | undefined): void {
+  if (exit && (exit.code !== 0 || exit.signal !== null)) {
+    throw new Error(`OpenClaw shutdown exited with code ${exit.code}, signal ${exit.signal}`);
+  }
+}
+
+function terminalSupervisorStop(input: {
+  shutdown: AbortController; stopChild: (requireSuccess?: boolean) => Promise<void>; settle: () => Promise<void>;
+  forgetChildPid: () => Promise<void>; server: http.Server; socketPath: string;
+}): () => Promise<void> {
+  let stopped: Promise<void> | undefined;
+  return () => {
+    input.shutdown.abort(new Error("surge OpenClaw supervisor is shutting down"));
+    stopped ??= (async () => {
+      const errors: unknown[] = [];
+      const finish = async (work: () => Promise<void>) => {
+        try { await work(); } catch (error) { errors.push(error); }
+      };
+      await finish(() => input.stopChild(true));
+      await finish(input.settle);
+      await finish(input.forgetChildPid);
+      await finish(() => closeSupervisorServer(input.server));
+      await finish(() => fs.rm(input.socketPath, { force: true }));
+      if (errors.length) throw new AggregateError(errors, `surge shutdown failed: ${errors.map(errorMessage).join("; ")}`);
+    })();
+    return stopped;
+  };
+}
+
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
@@ -544,6 +609,8 @@ export async function startSurgeOpenClawSupervisor(
   let stopping = false;
   let starting: Promise<SurgeOpenClawProcessGateState> | null = null;
   let serial = Promise.resolve();
+  const shutdown = new AbortController();
+  let stoppingChild: Promise<OpenClawChildExit | undefined> | null = null;
 
   const { recordChildPid, forgetChildPid, recordedChildPid } = childPidFile(pidPath);
 
@@ -557,47 +624,52 @@ export async function startSurgeOpenClawSupervisor(
   });
 
   const runSerial = <T>(work: () => Promise<T>): Promise<T> => {
-    const result = serial.then(work, work);
+    const admitted = () => { shutdown.signal.throwIfAborted();return work(); };
+    const result = serial.then(admitted, admitted);
     serial = result.then(() => undefined, () => undefined);
     return result;
   };
 
-  const current = async (): Promise<SurgeOpenClawProcessGateState> => {
-    const state = await gate.read();
-    if (!state || state.podUid !== opts.podUid) {
-      throw new Error("surge OpenClaw process gate disappeared or belongs to another pod");
-    }
-    return state;
-  };
+  const current = () => readOwnedSurgeGate(gate, opts.podUid);
 
-  const stopChild = async (): Promise<void> => {
+  const stopActiveChild = async (): Promise<OpenClawChildExit | undefined> => {
     const active = child;
     if (!active) return;
     stopping = true;
     try {
       active.kill("SIGTERM");
-      if (!(await waitForExitOrTimeout(active, stopGraceMs, sleep))) {
+      let exit = await waitForExitOrTimeout(active, stopGraceMs, sleep);
+      if (!exit) {
         opts.log(`[surge-openclaw] OpenClaw ignored SIGTERM for ${stopGraceMs}ms; killing its process group`);
         if (active.pid === undefined || !signalProcessGroup(active.pid, "SIGKILL")) active.kill("SIGKILL");
-        await waitForExit(active);
+        exit = await waitForExit(active);
       }
       if (child === active) child = null;
       await forgetChildPid();
+      return exit;
     } finally {
       stopping = false;
     }
   };
+  const stopChild = async (requireSuccess: boolean = false): Promise<void> => {
+    stoppingChild ??= stopActiveChild().finally(() => { stoppingChild = null; });
+    const exit = await stoppingChild;
+    if (requireSuccess) assertSuccessfulOpenClawExit(exit);
+  };
 
   const startChild = async (prepare: boolean = false): Promise<SurgeOpenClawProcessGateState> => {
+    shutdown.signal.throwIfAborted();
     if (starting) return starting;
     const work = (async () => {
       const before = await current();
+      shutdown.signal.throwIfAborted();
       if (before.mode !== "permitted") {
         throw new Error("surge OpenClaw process is held");
       }
       if (child) return before;
       await gate.markStarting({ podUid: opts.podUid, migrationId: before.migrationId });
       return startPermittedOpenClawChild({
+        signal: shutdown.signal,
         before,
         child: {
           get: () => child,
@@ -605,7 +677,7 @@ export async function startSurgeOpenClawSupervisor(
         },
         current,
         forgetChildPid,
-        isStopping: () => stopping,
+        isStopping: () => stopping || shutdown.signal.aborted,
         log: opts.log,
         onUnexpectedChildExit: opts.onUnexpectedChildExit,
         podUid: opts.podUid,
@@ -738,13 +810,7 @@ export async function startSurgeOpenClawSupervisor(
   return {
     socketPath,
     state: current,
-    async stop() {
-      await runSerial(stopChild);
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      await fs.rm(socketPath, { force: true });
-    },
+    stop: terminalSupervisorStop({ shutdown, stopChild, settle: () => serial, forgetChildPid, server, socketPath }),
   };
 }
 
@@ -792,8 +858,9 @@ async function main(): Promise<void> {
       process.exit(1);
     },
   });
+  let stopPromise: Promise<void> | undefined;
   const stop = () => {
-    supervisor.stop().then(
+    stopPromise ??= supervisor.stop().then(
       () => process.exit(0),
       (error) => {
         runtimeLogger.error(`[surge-openclaw] supervisor stop failed: ${errorMessage(error)}`);
@@ -801,8 +868,8 @@ async function main(): Promise<void> {
       },
     );
   };
-  process.once("SIGTERM", stop);
-  process.once("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  process.on("SIGINT", stop);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

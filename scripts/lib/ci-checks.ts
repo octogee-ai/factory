@@ -96,7 +96,7 @@ export function vitestOptions(script: string, emulated: boolean, concurrentLanes
 }
 
 function installsFor(directory: string): string[] {
-  if (directory === "tests") return ["scripts", "shared", directory];
+  if (directory === "tests") return ["scripts", "shared", "glm-controller", directory];
   if (directory === "octogee-api") return ["gateway-edge", "shared", directory];
   if (["app", "artifact-worker", "functions", "gateway-edge"].includes(directory)) return ["shared", directory];
   if (directory === "glm-controller") return ["scripts", directory];

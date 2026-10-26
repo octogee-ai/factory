@@ -175,11 +175,20 @@ advisory and row locks; unknown versions refuse before local cleanup. An operato
 must independently prove the old process stopped before confirming. A successful
 operator recovery does not turn a failed automatic rollback into a passing test.
 
-The repair is submitted as [OpenClaw #183623](https://github.com/openclaw/openclaw/pull/183623).
-Its exact upstream-main live Gateway control reproduces the SQLite-only refusal;
-the repaired Gateway preserves original UUIDs, namespace OIDs, six history tables
-and unrelated leases through public confirmation, normal reopening and graceful
-shutdown. Upstream CI run 40199078665 passes. The downstream repair source passes
+The repair merged as [OpenClaw #183623](https://github.com/openclaw/openclaw/pull/183623)
+at `557e702a26b0bbb5ab6b73c3003c426f156d9e8f`. Its final integrated head,
+`8948c95b9b57017c9f5132c3ab02c84dcf5a69f0`, passes
+[CI run 40242056694](https://github.com/openclaw/openclaw/actions/runs/40242056694):
+58 successful jobs and 29 skipped, including all three PostgreSQL conformance
+shards. This merge is outside the frozen upstream base, so the overlay remains
+necessary for this recut. Reassess equivalent native behavior on the next selected base.
+
+The independently built downstream control against exact upstream main reproduces
+the SQLite-only refusal. The repaired Gateway preserves original UUIDs, namespace
+OIDs, six history tables and unrelated leases through public confirmation, normal
+reopening and graceful shutdown. The supporting contributor CI run 40199078665
+passed at `ffc9a33b574f17bfb640c4f025d5fb4bb820d82b`; it is not final integrated-head
+live evidence. The downstream repair source passes
 21 real PostgreSQL and 51 SQLite/owner cases, scoped types, strict lint, formatting
 and the clean full package build. The final generated-document head also passes
 the full package build, worker-inventory check and channel-metadata check.

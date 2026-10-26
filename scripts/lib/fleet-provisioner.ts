@@ -1189,15 +1189,20 @@ async function probeFleetReadiness(
 export function createSurgeReadinessHandler(input: {
   surgeReadiness: SurgeReadinessGate;
   readiness: FleetReadinessInput;
-  prelaunchState?: () => Promise<BuilderPrelaunchState>;
+  prelaunchState?: (state?: SurgeOpenClawProcessGateState) => Promise<BuilderPrelaunchState>;
+  processGateState?: () => Promise<SurgeOpenClawProcessGateState | undefined>;
   log: (message: string) => void;
 }): express.RequestHandler {
   return async (_req, res) => {
     try {
       const handoffReleased = await input.surgeReadiness.released();
+      const gate = await input.processGateState?.();
       const prelaunchState = input.prelaunchState
-        ? await input.prelaunchState()
+        ? await input.prelaunchState(gate)
         : "none";
+      const terminalTarget = gate?.terminalTarget ? { ...gate.terminalTarget,
+        processHeld: gate.podUid === process.env.POD_UID?.trim() && gate.role === "normal" && gate.mode === "held" && gate.phase === "held",
+      } : undefined;
       const processSettled = prelaunchState === "none" || prelaunchState === "serving";
       const readiness = await probeFleetReadiness(input.readiness, handoffReleased, processSettled);
       res.status(readiness.ready ? 200 : 503).json({
@@ -1205,6 +1210,7 @@ export function createSurgeReadinessHandler(input: {
         runtimeStatus: input.readiness.runtime.status,
         handoffReleased,
         prelaunchState,
+        ...(terminalTarget ? { terminalTarget } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2067,9 +2073,10 @@ async function clearInheritedBuilderMountProof(
 async function builderPrelaunchState(
   adapter: CustomerLifecycleAdapter,
   processGate: Pick<SurgeOpenClawProcessSupervisorClient, "status"> | null,
+  observedState?: SurgeOpenClawProcessGateState,
 ): Promise<BuilderPrelaunchState> {
   if (!processGate || configuredBuilderSlug(adapter) === null) return "none";
-  const state = await processGate.status();
+  const state = observedState ?? await processGate.status();
   if (state.mode === "held") {
     return state.role === "target" && configuredBuilderMountProven(adapter)
       ? "hydrated"
@@ -3086,7 +3093,8 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
   app.get("/surge-ready", createSurgeReadinessHandler({
     surgeReadiness,
     readiness,
-    prelaunchState: () => builderPrelaunchState(wrappedAdapter, builderProcessGate),
+    prelaunchState: (state) => builderPrelaunchState(wrappedAdapter, builderProcessGate, state),
+    processGateState: async () => builderProcessGate?.status(),
     log: opts.log,
   }));
 

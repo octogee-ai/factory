@@ -330,13 +330,17 @@ describe("infra/gateway/entrypoint.sh — supervised in-pod runners + metrics", 
     expect(entrypoint).toMatch(/SUPERVISE=[^\n]*supervise-runner\.ts/);
   });
 
-  it("forwards SIGTERM to the whole process group so a pod restart is clean", () => {
+  it("forwards SIGTERM to the process group and joins OpenClaw before returning its status", () => {
     const shutdownIdx = entrypoint.indexOf("shutdown() {");
     const trapIdx = entrypoint.indexOf("trap shutdown TERM INT");
     const fleetIdx = entrypoint.indexOf("supervise_runner fleet-controller");
     const shutdown = entrypoint.slice(shutdownIdx, trapIdx);
     expect(shutdown).toMatch(/kill -TERM 0/);
-    expect(shutdown).toMatch(/exit 0/);
+    const wait = 'wait "$OPENCLAW_PID" || _shutdown_status=$?';
+    const exit = 'exit "$_shutdown_status"';
+    expect(shutdown).toContain(wait);
+    expect(shutdown).toContain(exit);
+    expect(shutdown.indexOf(wait)).toBeLessThan(shutdown.indexOf(exit));
     expect(trapIdx).toBeLessThan(fleetIdx);
     expect(entrypoint.match(/trap shutdown TERM INT/g)).toHaveLength(1);
     expect(gatewayDeployment).toMatch(/kind:\s*Deployment/);

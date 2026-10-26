@@ -6,11 +6,22 @@ browser_pid=""
 panel_pid=""
 restart_browser=0
 cleanup() {
+  local exit_status=$? signal_failed=0
   trap '' TERM INT
   for pid in "${children[@]}" "$browser_pid" "$panel_pid" "$reopen_pid"; do
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then kill -TERM "$pid"; fi
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      if ! kill -TERM "$pid" 2>/dev/null; then
+        if kill -0 "$pid" 2>/dev/null; then
+          echo "hobby-desktop: could not stop owned process $pid" >&2
+          signal_failed=1
+        else
+          echo "hobby-desktop: owned process $pid exited before termination" >&2
+        fi
+      fi
+    fi
   done
   wait || true
+  if (( signal_failed && exit_status == 0 )); then exit 1; fi
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -72,7 +83,7 @@ openbox --config-file "$desktop_config/rc.xml" &
 children+=("$!")
 /usr/local/bin/octo-desktop-control &
 children+=("$!")
-HOME=/home/node /usr/local/bin/entrypoint.sh &
+HOME=/home/node setsid /usr/local/bin/entrypoint.sh &
 children+=("$!")
 OPENCLAW_STATE_DIR="$HOME/.openclaw-desktop" OPENCLAW_CONFIG_PATH="$HOME/.openclaw-desktop/openclaw.json" \
   OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}" \

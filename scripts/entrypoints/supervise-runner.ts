@@ -81,8 +81,10 @@ export async function runSuperviseRunner(argv: string[] = process.argv.slice(2))
   }
 
   let stopping = false;
+  let lastExitCode = 0;
   const activeChild: ActiveChildRef = { current: null };
   const stop = (): void => {
+    if (stopping) return;
     stopping = true;
     activeChild.current?.kill("SIGTERM");
   };
@@ -94,8 +96,15 @@ export async function runSuperviseRunner(argv: string[] = process.argv.slice(2))
     name: parsed.name,
     restartDelayMs: parsed.restartDelayMs,
     shouldStop: () => stopping,
-    spawn: () => spawnSupervisedChild(parsed, activeChild),
+    spawn: () => {
+      const child = spawnSupervisedChild(parsed, activeChild);
+      return { waitForExit: async () => {
+        lastExitCode = await child.waitForExit();
+        return lastExitCode;
+      } };
+    },
   });
+  if (stopping) process.exitCode = lastExitCode;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

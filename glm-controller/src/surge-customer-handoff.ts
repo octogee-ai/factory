@@ -42,6 +42,7 @@ export interface SurgePodHealth {
   prelaunchState: SurgePrelaunchState;
   mountedCustomers: readonly string[];
   migratingIn?: readonly string[];
+  terminalTarget?: { migrationId: string; slug: string; targetPodUid: string; processHeld?: boolean };
 }
 
 export interface SurgeAssignment {
@@ -102,6 +103,7 @@ export interface SurgeCustomerHandoffDeps {
   recordMigrationProgress: (input: { gatewayId: string; uid: string; event: MigrationProgressRecord }) => Promise<unknown>;
   listPods: (gatewayId: string) => Promise<SurgePodSnapshot>;
   readPodHealth: (pod: SurgePod, gatewayId: string) => Promise<SurgePodHealth | null>;
+  deleteCancelledTarget: (input: { gatewayId: string; pod: SurgePod }) => Promise<void>;
   deleteCrashLoopingPod: (input: { gatewayId: string; pod: SurgePod }) => Promise<void>;
   claimCrashLoopEviction: (input: { gatewayId: string; imageTag: string; pod: SurgePod }) => Promise<CrashLoopEvictionClaim>;
   readAssignments: (gatewayId: string) => Promise<SurgeAssignment[]>;
@@ -214,6 +216,10 @@ function configuredBuilderProcessGateRequired(
 
 function prelaunchTransferEligible(health: SurgePodHealth): boolean {
   return health.prelaunchState === "held" || health.prelaunchState === "hydrated";
+}
+
+function terminalTargetAttemptMatches(health: SurgePodHealth, target: SurgePod, owner: string): boolean {
+  return health.terminalTarget?.migrationId === owner && health.terminalTarget.targetPodUid === target.uid;
 }
 
 async function stopSourceOpenClaw(
@@ -1355,6 +1361,70 @@ async function standDownForSupersedingRelease(
   return { ready: false };
 }
 
+function physicalPodsProjected(snapshot: SurgePodSnapshot): boolean {
+  return snapshot.observedPodUids.length === snapshot.pods.length &&
+    new Set(snapshot.observedPodUids).size === snapshot.observedPodUids.length &&
+    snapshot.observedPodUids.every(uid => snapshot.pods.some(pod => pod.uid === uid));
+}
+
+function builderPodObservationIncomplete(input: Pick<ReconcileSurgeCustomerHandoffInput, "disposableBuilderGateway">, snapshot: SurgePodSnapshot): boolean {
+  return configuredBuilderProcessGateRequired(input) && !physicalPodsProjected(snapshot);
+}
+
+function replacementPodMatches(pod: SurgePod | undefined, identity: Pick<SurgePod, "uid" | "name">, ready: boolean): pod is SurgePod {
+  return pod !== undefined && [pod.uid === identity.uid, pod.name === identity.name, pod.ready === ready, !pod.terminating].every(Boolean);
+}
+
+function replacementSourceServing(health: SurgePodHealth | null): health is SurgePodHealth {
+  return health !== null && [health.status === "ready", health.prelaunchState === "serving",
+    health.fleetSignatureCapability === "gateway-scoped", (health.migratingIn?.length ?? 0) === 0].every(Boolean);
+}
+
+function cancelledTargetHeld(health: SurgePodHealth | null, pod: SurgePod, ownedBy: string): health is SurgePodHealth {
+  return health !== null && [health.fleetSignatureCapability === "gateway-scoped", health.prelaunchState === "held",
+    !health.handoffReleased, health.terminalTarget?.processHeld === true, terminalTargetAttemptMatches(health, pod, ownedBy),
+    health.mountedCustomers.length === 0, (health.migratingIn?.length ?? 0) === 0].every(Boolean);
+}
+
+async function replaceCancelledTarget(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+  target: SurgePod,
+  source: SurgeSourceSelection,
+  ownedBy: string,
+): Promise<void> {
+  if (!configuredBuilderProcessGateRequired(input) || source.kind !== "ready") return;
+  const sourceIdentity = { uid: source.pod.uid, name: source.pod.name }, targetIdentity = { uid: target.uid, name: target.name };
+  const eligible = async (): Promise<{ pod: SurgePod; assignments: string } | null> => {
+    const snapshot = await deps.listPods(input.gatewayId);
+    if (!physicalPodsProjected(snapshot) || snapshot.pods.length !== 2 || sourceIdentity.uid === targetIdentity.uid) return null;
+    const predecessor = snapshot.pods.find(pod => pod.uid === sourceIdentity.uid);
+    const cancelled = snapshot.pods.find(pod => pod.uid === targetIdentity.uid);
+    if (!replacementPodMatches(predecessor, sourceIdentity, true) || !replacementPodMatches(cancelled, targetIdentity, false)) return null;
+    const [sourceHealth, targetHealth] = await Promise.all([
+      deps.readPodHealth(predecessor, input.gatewayId), deps.readPodHealth(cancelled, input.gatewayId),
+    ]);
+    if (!replacementSourceServing(sourceHealth) || !cancelledTargetHeld(targetHealth, cancelled, ownedBy)) return null;
+    const assignments = await deps.readAssignments(input.gatewayId);
+    if (assignments.length === 0 || assignments.some(assignment => assignment.state !== "serving") ||
+        !assignments.some(assignment => assignment.slug === targetHealth.terminalTarget?.slug) ||
+        !targetMountedAssignedCustomers(assignments, sourceHealth.mountedCustomers)) return null;
+    return { pod: cancelled, assignments: JSON.stringify(assignments.map(({ uid, slug, epoch, state, updatedByOperationId }) =>
+      ({ uid, slug, epoch, state, updatedByOperationId })).sort((left, right) => left.uid.localeCompare(right.uid))) };
+  };
+  const before = await eligible();
+  if (!before) return;
+  const claim = await deps.claimCrashLoopEviction({ gatewayId: input.gatewayId, imageTag: input.desiredImageTag, pod: target });
+  if (!claim.allowed) {
+    deps.log(`[surge-handoff] cancelled target replacement budget spent gateway=${input.gatewayId} target=${target.name} image=${input.desiredImageTag} budget=${claim.budget}`);
+    return;
+  }
+  const cancelled = await eligible();
+  if (!cancelled || cancelled.assignments !== before.assignments) return;
+  await deps.deleteCancelledTarget({ gatewayId: input.gatewayId, pod: cancelled.pod });
+  deps.log(`[surge-handoff] deleted cancelled held target gateway=${input.gatewayId} target=${cancelled.pod.name} uid=${cancelled.pod.uid} replacement=${claim.count}/${claim.budget}`);
+}
+
 async function evictCrashLoopingSurgeTargets(
   deps: SurgeCustomerHandoffDeps,
   input: ReconcileSurgeCustomerHandoffInput,
@@ -1462,6 +1532,16 @@ export async function reconcileSurgeCustomerHandoff(
       });
     }
     if (settled) return settled;
+    if (terminalTargetAttemptMatches(targetHealth, target, ownedBy)) {
+      await replaceCancelledTarget(scoped, input, target, source, ownedBy);
+      scoped.log(`[surge-handoff] target attempt is terminal; waiting for a replacement pod gateway=${input.gatewayId} target=${target.name}`);
+      return { ready: false };
+    }
+
+    if (builderPodObservationIncomplete(input, { pods, observedPodUids })) {
+      scoped.log(`[surge-handoff] waiting for observed pod identities to settle gateway=${input.gatewayId}`);
+      return { ready: false };
+    }
 
     let assignments: SurgeAssignment[] | null = null;
     if (input.requiresCustomerMigration && input.ownerlessOperatorPrewarm === true) {

@@ -28,7 +28,7 @@ interface KubectlResult {
   code: number;
 }
 
-export type SurgeKubectl = (args: string[]) => Promise<KubectlResult>;
+export type SurgeKubectl = (args: string[], opts?: { stdin?: string; timeoutMs?: number }) => Promise<KubectlResult>;
 
 interface PodList {
   items?: Array<{
@@ -127,6 +127,13 @@ export async function deleteSurgePod(
       `kubectl delete surge pod ${pod.name} failed: ${result.stderr.trim() || result.stdout.trim()}`,
     );
   }
+}
+
+export async function deleteCancelledSurgePod(runKubectl: SurgeKubectl, namespace: string, pod: SurgePod): Promise<void> {
+  const result = await runKubectl(["-n", namespace, "delete",
+    `--raw=/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/${encodeURIComponent(pod.name)}`, "-f", "-"],
+  { stdin: JSON.stringify({ apiVersion: "v1", kind: "DeleteOptions", preconditions: { uid: pod.uid } }) });
+  if (result.code !== 0) throw new Error(`kubectl delete cancelled surge pod ${pod.name} uid=${pod.uid} failed: ${result.stderr.trim() || result.stdout.trim()}`);
 }
 
 export const POD_SESSION_DIGEST_SCRIPT = [
@@ -497,6 +504,19 @@ async function resolveSurgeFleetState(input: {
   };
 }
 
+function parseTerminalTarget(value: unknown, pod: SurgePod): SurgePodHealth["terminalTarget"] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid terminal target from pod=${pod.name}`);
+  const record = value as Record<string, unknown>;
+  if (typeof record.migrationId !== "string" || !record.migrationId || record.migrationId.length > 512 ||
+      typeof record.slug !== "string" || !isValidUsername(record.slug) || record.targetPodUid !== pod.uid ||
+      (record.processHeld !== undefined && typeof record.processHeld !== "boolean")) {
+    throw new Error(`invalid terminal target from pod=${pod.name}`);
+  }
+  return { migrationId: record.migrationId, slug: record.slug, targetPodUid: pod.uid,
+    ...(record.processHeld !== undefined ? { processHeld: record.processHeld } : {}) };
+}
+
 function parseSurgePodHealth(input: {
   pod: SurgePod;
   health: Record<string, unknown>;
@@ -506,6 +526,7 @@ function parseSurgePodHealth(input: {
   reportLegacySignaturePod: (pod: SurgePod, version: string) => string;
 }): SurgePodHealth {
   const prelaunchState = parsePrelaunchState(input.ready.prelaunchState);
+  const terminalTarget = parseTerminalTarget(input.ready.terminalTarget, input.pod);
   if (
     (input.health.status !== "booting" && input.health.status !== "ready") ||
     typeof input.state?.version !== "string" ||
@@ -524,6 +545,7 @@ function parseSurgePodHealth(input: {
     fleetSignatureCapability: input.fleetSignatureCapability,
     handoffReleased: input.ready.handoffReleased,
     prelaunchState,
+    ...(terminalTarget ? { terminalTarget } : {}),
     mountedCustomers: [...new Set(input.state.customers)],
     ...(input.state.migratingIn ? { migratingIn: [...new Set(input.state.migratingIn)] } : {}),
   };

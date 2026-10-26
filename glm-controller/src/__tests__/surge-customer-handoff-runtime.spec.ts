@@ -13,6 +13,7 @@ import {
   SURGE_RSYNC_FINISH_TIMEOUT_MS,
   SURGE_RSYNC_PUSH_TIMEOUT_MS,
   createSurgePodTransport,
+  deleteCancelledSurgePod,
   parseSurgePodSnapshot,
   readPodDurableSessionDigest,
 } from "../surge-customer-handoff-runtime.js";
@@ -186,6 +187,16 @@ describe("surge handoff Kubernetes projection", () => {
       ],
       observedPodUids: ["old", "new", "gone", "pending"],
     });
+  });
+
+  it.each([0, 1])("deletes only the exact cancelled target UID (exit %s)", async code => {
+    const runKubectl = vi.fn(async () => ({ code, stdout: "", stderr: code ? "UID precondition failed" : "" }));
+    const result = deleteCancelledSurgePod(runKubectl, "octogee-test", target);
+    if (code) await expect(result).rejects.toThrow("UID precondition failed");
+    else await expect(result).resolves.toBeUndefined();
+    expect(runKubectl).toHaveBeenCalledExactlyOnceWith([
+      "-n", "octogee-test", "delete", "--raw=/api/v1/namespaces/octogee-test/pods/new-pod", "-f", "-",
+    ], { stdin: JSON.stringify({ apiVersion: "v1", kind: "DeleteOptions", preconditions: { uid: target.uid } }) });
   });
 
   it("marks a Running pod whose container sits in CrashLoopBackOff", () => {
@@ -1098,6 +1109,27 @@ describe("surge handoff direct pod transport", () => {
       prelaunchState: "hydrated",
     });
   });
+
+  it.each(["valid", "held", "false-held", "invalid-held", "foreign-pod", "missing-migration", "invalid-slug", "malformed"] as const)(
+    "accepts only pod-bound terminal target readiness: %s", async (mode) => {
+      const terminalTarget: unknown = mode === "malformed" ? "terminal" : {
+        migrationId: mode === "missing-migration" ? "" : "surge-gw-a-new",
+        slug: mode === "invalid-slug" ? "../alice" : "alice",
+        targetPodUid: mode === "foreign-pod" ? "old" : target.uid,
+        ...(["held", "false-held", "invalid-held"].includes(mode) ? { processHeld: mode === "invalid-held" ? "true" : mode === "held" } : {}),
+      };
+      const fetch = vi.fn(async (input: FetchInput) => {
+        const url = String(input);
+        if (url.endsWith("/health")) return new Response(JSON.stringify({ status: "ready", podUid: target.uid, startedAt: 1 }));
+        if (url.includes("/fleet-state/")) return new Response(JSON.stringify({ status: "ready", version: "new", customers: [] }));
+        return new Response(JSON.stringify({ handoffReleased: false, openclawUp: false, prelaunchState: "held", terminalTarget }), { status: 503 });
+      }) as unknown as typeof globalThis.fetch;
+      const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+      const health = await transport.readPodHealth(target, GATEWAY_ID);
+      if (["valid", "held", "false-held"].includes(mode)) expect(health).toMatchObject({ status: "booting", terminalTarget });
+      else expect(health).toBeNull();
+    },
+  );
 
   it("uses the native full-operation deadline for target unreserve", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;

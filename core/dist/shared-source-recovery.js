@@ -266,9 +266,9 @@ function failedPredecessorMatches(row, gatewayId) {
         row.cancellationRequestedAt === undefined, row.sourceRuntimeRecovery === undefined, row.sourceRecoverySupersededBy === undefined,
         input.sourceRecovery !== undefined, input.restoreRecovery === undefined].every(Boolean);
 }
-function spentDoctorMatches(row, fence) {
+function startedDoctorMatches(row, fence) {
     const doctor = fence.doctor ?? {}, proof = fence.installedImage ?? {}, target = fence.target ?? {}, gatewayImage = target.images?.gateway;
-    return [Object.keys(doctor).length === 3, doctor.completedAt === undefined, doctor.verifiedAgentIds === undefined, doctor.error === undefined,
+    return [doctor.error === undefined,
         Number.isSafeInteger(doctor.startedAt), doctor.startedAt > 0, typeof doctor.releaseKey === "string", Boolean(doctor.releaseKey),
         Number.isSafeInteger(fence.startedAt), fence.startedAt >= row.startedAt,
         Number.isSafeInteger(proof.verifiedAt), proof.verifiedAt >= fence.startedAt, proof.verifiedAt <= doctor.startedAt,
@@ -276,17 +276,29 @@ function spentDoctorMatches(row, fence) {
         typeof gatewayImage === "string" && /@sha256:[a-f0-9]{64}$/.test(gatewayImage),
         typeof proof.gatewayImageId === "string" && proof.gatewayImageId.endsWith(`@${String(gatewayImage).split("@")[1]}`)].every(Boolean);
 }
-function predecessorDoctorMatches(row, fence) {
+function spentDoctorMatches(row, fence) {
+    const doctor = fence.doctor ?? {};
+    return Object.keys(doctor).length === 3 && doctor.completedAt === undefined && doctor.verifiedAgentIds === undefined && startedDoctorMatches(row, fence);
+}
+function completedPostgresDoctorMatches(row, fence, source) {
+    const doctor = fence.doctor ?? {}, agentIds = source.postgresAgentStores?.map(store => store.agentId);
+    return [Array.isArray(agentIds) && agentIds.length > 0, Object.keys(doctor).length === 5,
+        Number.isSafeInteger(doctor.completedAt), doctor.completedAt >= doctor.startedAt, doctor.completedAt <= row.completedAt,
+        typeof doctor.releaseKey === "string" && doctor.releaseKey.trim() === doctor.releaseKey && doctor.releaseKey.length <= 512,
+        isDeepStrictEqual(doctor.verifiedAgentIds, agentIds), startedDoctorMatches(row, fence)].every(Boolean);
+}
+function predecessorDoctorMatches(row, fence, source) {
     if (row.error === "another source operation is active") {
         return Object.keys(fence.doctor ?? {}).length === 1 && row.input?.sourceRecovery?.supersede === undefined;
     }
-    return row.error === "source repair is not ready; outcome remains fenced" && spentDoctorMatches(row, fence);
+    return row.error === "source repair is not ready; outcome remains fenced" &&
+        (spentDoctorMatches(row, fence) || completedPostgresDoctorMatches(row, fence, source));
 }
 function predecessorFenceMatches(request) {
     const { operationId, source } = request, fence = request.fence ?? {}, input = request.input ?? {}, doctor = fence.doctor ?? {}, target = fence.target ?? {};
     return [ownedSourceFence({ ...source.root, runtimeRestartFence: fence }, operationId, source.assignments), fence.phase === "dispatched",
         typeof target.podUid === "string", Boolean(target.podUid), typeof target.podName === "string", Boolean(target.podName),
-        predecessorDoctorMatches(request.row, fence), doctor.requestId === operationId,
+        predecessorDoctorMatches(request.row, fence, source), doctor.requestId === operationId,
         target.sourceSha === input.sourceSha, isDeepStrictEqual(target.images, input.images),
         isDeepStrictEqual(target.failedExportOperationIds, source.failedExports.map(r => r.operationId))].every(Boolean);
 }

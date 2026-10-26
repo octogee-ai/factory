@@ -1189,11 +1189,12 @@ describe('journaled Shared source schema repair', () => {
     for (const failure of h.captured.failedExports) expect(h.store[`glmOperations/${failure.operationId}`].sourceRuntimeRecovery).toBeUndefined();
     expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
   });
-  async function postgresSourceSuccessor() {
+  async function postgresSourceSuccessor(completedDoctor = false) {
     const h = await postgresSourceHarness(); h.setAcknowledgment('none');
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
     const fence = h.store['gateways/shared-1'].runtimeRestartFence;
-    fence.doctor = { requestId: h.op.id, releaseKey: 'spent-recovery-image', startedAt: fence.installedImage.verifiedAt };
+    fence.doctor = { requestId: h.op.id, releaseKey: 'spent-recovery-image', startedAt: fence.installedImage.verifiedAt,
+      ...(completedDoctor ? { completedAt: h.deps.now(), verifiedAgentIds: h.captured.postgresAgentStores!.map((store: { agentId: string }) => store.agentId) } : {}) };
     const prior = h.store['glmOperations/recover'];
     Object.assign(prior, { status: 'failed', completedAt: h.deps.now(), error: 'source repair is not ready; outcome remains fenced' });
     const before = structuredClone(prior), capturedFence = structuredClone(fence);
@@ -1233,6 +1234,23 @@ describe('journaled Shared source schema repair', () => {
     expect(h.store['glmOperations/recover']).toEqual({ ...h.before, cancellationRequestedAt: h.deps.now(), sourceRecoverySupersededBy: h.op.id });
     expect(h.pod.metadata.uid).toBe('pod-uid'); expect(h.deployment.spec.paused).toBe(false);
     expect(h.events).toEqual(['pin-replicaset', 'pin-deployment', 'doctor-ack', 'management-health', 'resume-deployment']);
+  });
+  it('requires a distinct Doctor ACK after superseding completed Doctor with failed runtime readiness', async () => {
+    const h = await postgresSourceSuccessor(true), oldDoctor = structuredClone(h.capturedFence.doctor);
+    h.setAcknowledgment('none');
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor).toEqual({ requestId: 'pg-successor' });
+    expect(h.store['glmOperations/pg-successor'].sourceRuntimeRecovery).toBeUndefined();
+    expect(h.store['glmOperations/pg-successor'].input.sourceRecovery.supersede.fence.doctor).toEqual(oldDoctor);
+    expect(h.events).not.toContain('doctor-ack'); expect(h.events).not.toContain('resume-deployment');
+    h.setAcknowledgment('full');
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    const doctor = h.store['glmOperations/pg-successor'].sourceRuntimeRecovery.doctor;
+    expect(doctor.requestId).toBe('pg-successor');
+    expect(doctor.completedAt).toBeGreaterThan(oldDoctor.completedAt);
+    expect(doctor.verifiedAgentIds).toEqual(h.captured.postgresAgentStores!.map((store: { agentId: string }) => store.agentId));
+    expect(h.store['glmOperations/pg-successor'].input.sourceRecovery.supersede.fence.doctor).toEqual(oldDoctor);
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
   });
   it.each(['deployment', 'replicaset', 'fence'])('refuses a changed %s when inheriting a PostgreSQL predecessor pause', async changed => {
     const h = await postgresSourceSuccessor();

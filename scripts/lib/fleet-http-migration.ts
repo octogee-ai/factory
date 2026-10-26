@@ -214,7 +214,13 @@ async function releaseAgentForImport(
   activation: ConfiguredBuilderActivation | null,
   agentId: string,
   log: (message: string, fields?: LogContext) => void,
+  heldTarget?: BuilderImportTarget,
 ): Promise<void> {
+  if (heldTarget) {
+    await assertSystemConfigImportHeld(deps, heldTarget);
+    log(`[migration-rsync] OpenClaw is held for this boot; replacing ${agentId}'s database offline`);
+    return;
+  }
   if (activation && !activation.live) {
     if (!deps.surgeTargetOpenClawHeld) {
       throw new Error(`cannot replace agent ${agentId}'s database: Builder target has no process gate status`);
@@ -1992,8 +1998,10 @@ async function validateStagedRsyncImport(
   return null;
 }
 
+type BuilderImportTarget = { migrationId: string; slug: string; targetPodUid: string };
+
 interface ConfiguredBuilderActivation {
-  request: { migrationId: string; slug: string; targetPodUid: string };
+  request: BuilderImportTarget;
   live: boolean;
 }
 
@@ -2015,6 +2023,30 @@ async function configuredBuilderActivationRequest(
   }
   const request = { migrationId: body.migrationId, slug: body.slug, targetPodUid };
   return { request, live: await deps.surgeTargetLive(request) };
+}
+
+async function assertSystemConfigImportHeld(
+  deps: MigrationHandlerDeps,
+  request: BuilderImportTarget,
+): Promise<void> {
+  if (process.env.POD_UID?.trim() !== request.targetPodUid ||
+    deps.adapter.isBuilderGateway?.() !== true || deps.adapter.isConfiguredBuilderCustomer?.(request.slug) !== true ||
+    await deps.surgeTargetOpenClawHeld?.(request) !== true) {
+    throw new Error("system-config import requires its reserved Builder target to remain held");
+  }
+}
+
+async function systemConfigImportTarget(
+  deps: MigrationHandlerDeps,
+  body: MigrationRequestBody,
+  configTransferMode: MigrationConfigTransferMode,
+): Promise<BuilderImportTarget | undefined> {
+  if (configTransferMode !== BUILDER_SYSTEM_CONFIG_TRANSFER) return undefined;
+  const targetPodUid = process.env.POD_UID?.trim();
+  if (!targetPodUid) throw new Error("system-config import requires its current Builder pod");
+  const request = { migrationId: body.migrationId, slug: body.slug, targetPodUid };
+  await assertSystemConfigImportHeld(deps, request);
+  return request;
 }
 
 function liveImportAdmission(deps: MigrationHandlerDeps, activation: ConfiguredBuilderActivation): Promise<LiveImportAdmission | null> {
@@ -2323,6 +2355,7 @@ interface StagedImportInput {
   slug: string;
   mode: MigrationTransferMode;
   activation: ConfiguredBuilderActivation | null;
+  heldTarget?: BuilderImportTarget;
   signal: AbortSignal;
   log: (msg: string, fields?: LogContext) => void;
 }
@@ -2362,10 +2395,14 @@ async function carriedProjectWorkspace(input: StagedImportInput, agentId: string
   return path.join(input.session.importDir, "customers", input.slug, "projects", parsed.project);
 }
 
-async function heldBuilderActivation(input: StagedImportInput): Promise<ConfiguredBuilderActivation | null> {
+async function heldBuilderImport(input: StagedImportInput): Promise<BuilderImportTarget | null> {
+  if (input.heldTarget) {
+    await assertSystemConfigImportHeld(input.deps, input.heldTarget);
+    return input.heldTarget;
+  }
   const activation = input.activation;
   if (!activation || activation.live) return null;
-  return await input.deps.surgeTargetOpenClawHeld?.(activation.request) === true ? activation : null;
+  return await input.deps.surgeTargetOpenClawHeld?.(activation.request) === true ? activation.request : null;
 }
 
 async function deliverStagedImport(input: StagedImportInput): Promise<NativeSharedAgentContextArchive | undefined> {
@@ -2389,16 +2426,16 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
   const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
   try {
-    const offlineActivation = await heldBuilderActivation(input);
-    if (!offlineActivation || retained) await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+    const offlineTarget = await heldBuilderImport(input);
+    if (!offlineTarget || retained) await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     if (retained) return archiveRetainedImport(input, prepared, retained);
     await installPreparedAgentStores({
       prepared,
-      releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log),
+      releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log, input.heldTarget),
       procRoot: deps.procRoot ?? PROC_ROOT,
       log,
     });
-    if (offlineActivation) {
+    if (offlineTarget) {
       await reattachBuilderAgents({
         stores: prepared.stores,
         env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
@@ -2407,7 +2444,7 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
         signal: input.signal,
         log,
         assertHeld: async () => {
-          if (await deps.surgeTargetOpenClawHeld?.(offlineActivation.request) !== true) {
+          if (await deps.surgeTargetOpenClawHeld?.(offlineTarget) !== true) {
             throw new Error("Native Builder restoration requires the migration target to remain held");
           }
         },
@@ -2650,6 +2687,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         slug: body.slug,
         mode,
         activation: await configuredBuilderActivationRequest(deps, body, mode, configTransferMode),
+        heldTarget: await systemConfigImportTarget(deps, body, configTransferMode),
         signal: controller.signal,
         log,
       });

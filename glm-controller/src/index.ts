@@ -134,6 +134,7 @@ import { pruneSurgeOrphanAssignments } from "./surge-orphan-assignment.js";
 import {
   createSurgePodTransport,
   deleteSurgePod,
+  deleteCancelledSurgePod,
   listSurgePods,
   readPodDurableSessionDigest,
 } from "./surge-customer-handoff-runtime.js";
@@ -2588,6 +2589,7 @@ function buildSurgeHandoffDeps(input: {
         log,
       }),
     }),
+    deleteCancelledTarget: ({ pod }) => deleteCancelledSurgePod(runKubectl, NAMESPACE, pod),
     deleteCrashLoopingPod: ({ pod }) => deleteSurgePod(runKubectl, NAMESPACE, pod),
     claimCrashLoopEviction: ({ gatewayId, imageTag, pod }) =>
       claimCrashLoopEviction(db, { gatewayId, imageTag, pod, now: Date.now() }),

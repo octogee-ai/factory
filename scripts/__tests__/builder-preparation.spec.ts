@@ -194,6 +194,31 @@ describe("Builder startup during a held handoff", () => {
       probeHealthz: vi.fn(async () => false), brokerProfilesSettled: () => false, dashboardBridgeReady: () => false,
     };
   }
+  it("reports the process gate's terminal target while keeping customer readiness closed", async () => {
+    vi.stubEnv("POD_UID", "foreign-pod");
+    const r = response(), input = readiness();
+    const terminalTarget = { migrationId: "surge-builder-target-pod", slug: "alice", targetPodUid: "target-pod" };
+    await createSurgeReadinessHandler({ readiness: input, prelaunchState: async () => "held",
+      processGateState: async () => ({ version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget }), surgeReadiness: { released: async () => false } as SurgeReadinessGate,
+      log: vi.fn() })({} as Request, r.res, vi.fn());
+    expect(r.status).toHaveBeenCalledWith(503);
+    expect(r.json).toHaveBeenCalledWith(expect.objectContaining({ ready: false, terminalTarget: { ...terminalTarget, processHeld: false } }));
+    expect(input.probeHealthz).not.toHaveBeenCalled();
+  });
+  it.each(["held", "stopping", "starting", "foreign-pod"] as const)("reports deletion authority only from one settled current supervisor snapshot: %s", async mode => {
+    vi.stubEnv("POD_UID", "target-pod");
+    const r = response(), input = readiness();
+    const terminalTarget = { migrationId: "surge-builder-target-pod", slug: "alice", targetPodUid: "target-pod" };
+    const snapshot = { version: 1 as const, podUid: mode === "foreign-pod" ? "foreign" : "target-pod", role: "normal" as const,
+      mode: mode === "starting" ? "permitted" as const : "held" as const,
+      phase: mode === "foreign-pod" ? "held" as const : mode, terminalTarget };
+    const status = vi.fn(async () => snapshot), prelaunchState = vi.fn(async state => state?.mode === "held" ? "held" as const : "starting" as const);
+    await createSurgeReadinessHandler({ readiness: input, prelaunchState, processGateState: status,
+      surgeReadiness: { released: async () => false } as SurgeReadinessGate, log: vi.fn() })({} as Request, r.res, vi.fn());
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(prelaunchState).toHaveBeenCalledExactlyOnceWith(snapshot);
+    expect(r.json).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: { ...terminalTarget, processHeld: mode === "held" } }));
+  });
   it.each(["held", "hydrated"] as const)("keeps a healthy %s process gate alive while customer readiness stays closed", async phase => {
     const r = response(), input = readiness();
     await createStartupReadinessHandler({ readiness: input, prelaunchState: async () => phase, log: vi.fn() })({} as Request, r.res, vi.fn());

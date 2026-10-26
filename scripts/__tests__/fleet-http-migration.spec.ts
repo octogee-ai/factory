@@ -2868,6 +2868,7 @@ describe("queued-rsync migration control handlers", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     stubBuilderClaim("chris");
+    vi.stubEnv("POD_UID", "builder-pod");
     const mounted: string[] = [];
     const onMounted = vi.fn((slug: string) => {
       if (!mounted.includes(slug)) mounted.push(slug);
@@ -2875,6 +2876,7 @@ describe("queued-rsync migration control handlers", () => {
     const markCustomerMigratingIn = vi.fn();
     const adapter = mkAdapter({
       isBuilderGateway: vi.fn(() => true),
+      isConfiguredBuilderCustomer: vi.fn(slug => slug === "chris"),
       configuredBuilderOverlayPresent: vi.fn(() => true),
       hasCustomerSshKey: vi.fn(() => true),
       readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 LOCAL chris@gateway"]),
@@ -2907,6 +2909,10 @@ describe("queued-rsync migration control handlers", () => {
       migrationRsyncPort: 30873,
       waitForRsyncReady: vi.fn(async () => undefined),
       getMountedCustomers: () => mounted,
+      surgeTargetOpenClawHeld: vi.fn(async request => {
+        expect(request).toEqual({ migrationId: "mig-builder-finish", slug: "chris", targetPodUid: "builder-pod" });
+        return true;
+      }),
     });
     const prepareBody: PrepareRsyncImportRequestBody = {
       migrationId: "mig-builder-finish",
@@ -3299,11 +3305,11 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       return mkFakeChild({ exitCode: 0 });
     });
     const { handler, req } = pushRsync(stateDir, "mig-carry-snapshot", { runOpenClaw });
-    const { res, getStatus } = mkResponse();
+    const { res, getStatus, getBody } = mkResponse();
 
     await handler(req, res, vi.fn());
 
-    expect(getStatus()).toBe(200);
+    expect(getStatus(), JSON.stringify(getBody())).toBe(200);
     expect(runOpenClaw).not.toHaveBeenCalled();
     expect(snapshotCarried).toBe(true);
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
@@ -3425,6 +3431,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     daemon: ReturnType<typeof mkFakeChild>;
     agentContext?: NativeAgentContextTransfer;
     mode?: "pre" | "final";
+    configTransferMode?: PrepareRsyncImportRequestBody["configTransferMode"];
     adapter?: Partial<CustomerLifecycleAdapter>;
     deps?: Partial<MigrationHandlerDeps>;
   }): Promise<{ deps: MigrationHandlerDeps; stageDir: string }> {
@@ -3451,6 +3458,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       slug: "chris",
       rpcPhase: "prepare-rsync-import",
       mode: input.mode ?? "final",
+      ...(input.configTransferMode ? { configTransferMode: input.configTransferMode } : {}),
       ...(input.agentContext ? { agentContext: input.agentContext } : {}),
       transferUser: "migration",
       transferKey: "c".repeat(64),
@@ -4691,6 +4699,62 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(rowCount(previous)).toBe(2);
     await expect(fs.access(`${previous}-wal`)).rejects.toThrow();
     expect(deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
+  });
+
+  it.each(["held", "missing-status", "permitted", "foreign-owner", "pod-changed", "hold-lost"])("protects an occupied system-config Builder store (%s)", async boundary => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const configPath = path.join(importDir, "openclaw.json");
+    const config = { agents: { list: [{ id: "octogee-chris-coach",
+      workspace: path.join(importDir, "customers/chris"),
+      agentDir: path.join(importDir, "agents/octogee-chris-coach/agent") }] } };
+    await fs.writeFile(configPath, JSON.stringify(config));
+    vi.stubEnv("OPENCLAW_DIR", importDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    stubBuilderClaim("chris");
+    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('previous')"));
+    const workspaceFile = path.join(importDir, "customers/chris/README.md");
+    await fs.mkdir(path.dirname(workspaceFile), { recursive: true });
+    await fs.writeFile(workspaceFile, "original workspace");
+    const held = vi.fn(async () => true);
+    if (boundary === "permitted") held.mockResolvedValue(false);
+    if (boundary === "hold-lost") held.mockResolvedValue(false).mockResolvedValueOnce(true);
+    if (boundary === "pod-changed") held.mockImplementationOnce(async () => { vi.stubEnv("POD_UID", "foreign-pod"); return true; });
+    const target = builderTargetImport(boundary === "missing-status" ? undefined : held);
+    if (boundary === "foreign-owner") target.adapter.isConfiguredBuilderCustomer = () => false;
+    const releaseAgent = vi.fn(async () => { throw new Error("OpenClaw workspace identities are not initialized for this boot"); });
+    const migrationId = "mig-system-config-occupied-held";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      configTransferMode: "configured-builder-system-config",
+      adapter: { ...target.adapter, releaseAgent, applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1 })),
+        writeMountMarker: vi.fn(), onMounted: vi.fn() }, deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+    const carriedWorkspace = path.join(stageDir, "customers/chris/README.md");
+    await fs.mkdir(path.dirname(carriedWorkspace), { recursive: true });
+    await fs.writeFile(carriedWorkspace, "carried workspace");
+    spawnMock.mockImplementation(await realMigrationSpawn());
+    const body: FinishRsyncImportRequestBody = { migrationId, slug: "chris", rpcPhase: "finish-rsync-import",
+      mode: "final", configTransferMode: "configured-builder-system-config" };
+    const response = mkResponse();
+
+    await createFinishRsyncImportHandler(deps)(mkRequest(body, {
+      signature: signForPod(migrationId, JSON.stringify(body)),
+    }), response.res, vi.fn());
+
+    expect(response.getStatus(), JSON.stringify(response.getBody())).toBe(boundary === "held" ? 200 : 500);
+    if (boundary !== "missing-status" && boundary !== "foreign-owner") {
+      expect(held).toHaveBeenCalledWith({ migrationId, slug: "chris", targetPodUid: "builder-pod" });
+    }
+    expect(releaseAgent).not.toHaveBeenCalled();
+    expect(rowCount(previous)).toBe(boundary === "held" ? 2 : 1);
+    expect(await fs.readFile(workspaceFile, "utf8")).toBe(boundary === "held" ? "carried workspace" : "original workspace");
+    if (boundary !== "held") expect(deps.runOpenClaw).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(config);
+    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+    expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
+    expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+    expect(deps.adapter.writeMountMarker).not.toHaveBeenCalled();
+    expect(deps.adapter.onMounted).not.toHaveBeenCalled();
   });
 
   it("still refuses to replace a held Builder target's database while a process holds it", async () => {
