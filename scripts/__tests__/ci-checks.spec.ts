@@ -13,12 +13,12 @@ function fakeNode(version: string): string {
   return `${bin}:${process.env.PATH}`;
 }
 import { ALL_JOBS, UNIT_PACKAGES } from "../lib/scope/manifest.js";
-import { CHECK_LANES, checkPlan, checkSeconds, executeChecks, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
+import { CHECK_LANES, checkPlan, checkSeconds, executeChecks, jobLabel, jobSeconds, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions } from "../lib/ci-checks.js";
 
 describe("portable Linux PR checks", () => {
   it("runs every registered test on a global change, leaving installer construction out of default CI", () => {
     const plan = checkPlan(["package-lock.json"], "tests");
-    expect(plan.map(job => job.name).sort()).toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
+    expect([...new Set(plan.map(job => job.name))].sort()).toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
     for (const pkg of UNIT_PACKAGES) {
       expect(plan.find(job => job.name === pkg.name)).toMatchObject({
         directory: pkg.dir, nodeVersion: pkg.nodeVersion ?? 24,
@@ -78,7 +78,7 @@ describe("portable Linux PR checks", () => {
   });
 
   it("runs every test job on a full run, whatever the diff", () => {
-    expect(checkPlan(["docs/INDEX.md"], "tests", false, true).map(job => job.name).sort())
+    expect([...new Set(checkPlan(["docs/INDEX.md"], "tests", false, true).map(job => job.name))].sort())
       .toEqual(ALL_JOBS.filter(name => name !== "desktop-package").sort());
   });
 
@@ -133,21 +133,31 @@ describe("portable Linux PR checks", () => {
   it.each(["package-lock.json", "gateway-edge/src/index.ts", "docs/INDEX.md"])("partitions every required check exactly once: %s", path => {
     const jobs = checkPlan([path]);
     const lanes = CHECK_LANES.flatMap(lane => selectCheckLane(jobs, lane));
-    expect(lanes.map(job => job.name).sort()).toEqual(jobs.map(job => job.name).sort());
-    expect(new Set(lanes.map(job => job.name)).size).toBe(lanes.length);
+    expect(lanes.map(jobLabel).sort()).toEqual(jobs.map(jobLabel).sort());
+    expect(new Set(lanes.map(jobLabel)).size).toBe(lanes.length);
     expect(selectCheckLane(jobs, "emulators").every(job => job.name.endsWith("-emulator") || job.name === "firestore-rules")).toBe(true);
     expect(selectCheckLane(jobs, "quality").map(job => job.name)).toEqual(checkPlan([path], "quality").map(job => job.name));
   });
 
   const unitLanes = CHECK_LANES.filter(lane => lane.startsWith("units-"));
   const laneSeconds = (jobs: ReturnType<typeof checkPlan>) =>
-    unitLanes.map(lane => selectCheckLane(jobs, lane).reduce((sum, job) => sum + checkSeconds(job.name), 0));
+    unitLanes.map(lane => selectCheckLane(jobs, lane).reduce((sum, job) => sum + jobSeconds(job), 0));
 
   it("balances a full run's unit lanes by measured check time", () => {
     const jobs = checkPlan(["package-lock.json"], "tests").filter(job => unitLanes.some(lane => selectCheckLane([job], lane).length));
-    const weights = jobs.map(job => checkSeconds(job.name));
+    const weights = jobs.map(job => jobSeconds(job));
     const evenShare = weights.reduce((sum, value) => sum + value, 0) / unitLanes.length;
     expect(Math.max(...laneSeconds(jobs))).toBeLessThanOrEqual(Math.max(Math.max(...weights), evenShare) * 1.1);
+  });
+
+  it("shards the app suite across two unit lanes and typechecks it once", () => {
+    const jobs = checkPlan(["app/src/App.tsx"], "tests");
+    const shards = jobs.filter(job => job.name === "app");
+    expect(shards.map(job => job.shard)).toEqual([{ index: 1, total: 2 }, { index: 2, total: 2 }]);
+    expect(shards.map(job => job.commands)).toEqual([["npm run typecheck", "npm test"], ["npm test"]]);
+    expect(shards.map(jobSeconds)).toEqual([checkSeconds("app") / 2, checkSeconds("app") / 2]);
+    expect(unitLanes.filter(lane => selectCheckLane(jobs, lane).some(job => job.name === "app"))).toHaveLength(2);
+    expect(vitestOptions("vitest run", false, 1, 4, shards[1].shard)).toBe(" -- --maxWorkers=4 --shard=2/2");
   });
 
   it("spreads a partial plan's unit checks across separate lanes", () => {

@@ -112,7 +112,9 @@ and does not mount host cloud credentials. It requires Docker, network access
 for dependency/tool downloads, and enough disk and memory for the selected lane.
 On Apple Silicon it uses x86 emulation, so it is slower than a native runner.
 
-GitHub Actions runs three unit lanes, an emulator lane, and a quality lane.
+GitHub Actions runs three unit lanes, an emulator lane, and a quality lane. The app
+suite, the longest single check, is sharded in two across unit lanes; the first shard
+also typechecks the app.
 The aggregate **Required checks** succeeds only when all five pass. PR checks
 have read-only repository access and no deployment identity. Image builds,
 desktop packaging, and live TEST checks are separate operator workflows; see

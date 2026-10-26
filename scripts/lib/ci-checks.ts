@@ -9,6 +9,7 @@ export interface CheckJob {
   installs: string[];
   commands: string[];
   matchGatewayImageNpm?: boolean;
+  shard?: { index: number; total: number };
 }
 
 const emulatorDirectories: Partial<Record<JobKey, string>> = {
@@ -52,15 +53,26 @@ export function checkSeconds(name: string): number {
   return MEASURED_CHECK_SECONDS[name as JobKey] ?? 5;
 }
 
+const APP_SHARDS = 2;
+type ShardedJob = Pick<CheckJob, "name" | "shard">;
+export const jobLabel = (job: ShardedJob): string => (job.shard ? `${job.name} ${job.shard.index}/${job.shard.total}` : job.name);
+export const jobSeconds = (job: ShardedJob): number => checkSeconds(job.name) / (job.shard?.total ?? 1);
+
+function appShards(job: CheckJob): CheckJob[] {
+  return Array.from({ length: APP_SHARDS }, (_, i) => ({
+    ...job, shard: { index: i + 1, total: APP_SHARDS }, commands: i === 0 ? job.commands : job.commands.filter(command => command === "npm test"),
+  }));
+}
+
 function unitLaneAssignments(jobs: CheckJob[]): Map<string, string> {
   const units = jobs.filter(job => unitNames.has(job.name))
-    .sort((a, b) => checkSeconds(b.name) - checkSeconds(a.name) || (a.name < b.name ? -1 : 1));
+    .sort((a, b) => jobSeconds(b) - jobSeconds(a) || (jobLabel(a) < jobLabel(b) ? -1 : 1));
   const loads = UNIT_LANES.map(lane => ({ lane, seconds: 0 }));
   const assignments = new Map<string, string>();
   for (const job of units) {
     const lightest = loads.reduce((min, load) => load.seconds < min.seconds ? load : min);
-    lightest.seconds += checkSeconds(job.name);
-    assignments.set(job.name, lightest.lane);
+    lightest.seconds += jobSeconds(job);
+    assignments.set(jobLabel(job), lightest.lane);
   }
   return assignments;
 }
@@ -70,7 +82,7 @@ export function selectCheckLane(jobs: CheckJob[], lane = "all"): CheckJob[] {
   if (!CHECK_LANES.some(value => value === lane)) throw new Error(`Unknown CI lane: ${lane}`);
   const units = unitLaneAssignments(jobs);
   return jobs.filter(job => {
-    const unit = units.get(job.name);
+    const unit = units.get(jobLabel(job));
     if (unit) return lane === unit;
     const emulator = job.name === JOBS.firestoreRules || job.name.endsWith("-emulator");
     return lane === (emulator ? "emulators" : "quality");
@@ -89,10 +101,11 @@ export function dependencyInstaller(): (job: CheckJob, install: (directory: stri
   };
 }
 
-export function vitestOptions(script: string, emulated: boolean, concurrentLanes = 1, cpus = availableParallelism()): string {
+export function vitestOptions(script: string, emulated: boolean, concurrentLanes = 1, cpus = availableParallelism(), shard?: CheckJob["shard"]): string {
   if (!script.includes("vitest") || script.includes("emulators:exec")) return "";
-  if (emulated) return " -- --testTimeout=60000 --hookTimeout=60000 --maxWorkers=2";
-  return ` -- --maxWorkers=${Math.max(1, Math.floor(cpus / concurrentLanes))}`;
+  const sharded = shard ? ` --shard=${shard.index}/${shard.total}` : "";
+  if (emulated) return ` -- --testTimeout=60000 --hookTimeout=60000 --maxWorkers=2${sharded}`;
+  return ` -- --maxWorkers=${Math.max(1, Math.floor(cpus / concurrentLanes))}${sharded}`;
 }
 
 function installsFor(directory: string): string[] {
@@ -153,7 +166,7 @@ function qualityJobs(paths: string[], full: boolean): CheckJob[] {
 
 export function checkPlan(paths: string[], group: "tests" | "quality" | "all" = "all", desktopPackage = false, full = false, deleted: ReadonlySet<string> = new Set()): CheckJob[] {
   const scope = full ? { jobs: [...ALL_JOBS], everything: true } : resolveScope(paths, deleted);
-  const result = group === "quality" ? [] : scope.jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob);
+  const result = group === "quality" ? [] : scope.jobs.filter(name => desktopPackage || name !== JOBS.desktopPackage).map(testJob).flatMap(job => (job.name === JOBS.app ? appShards(job) : [job]));
   if (group !== "quality" && desktopPackage && !result.some(job => job.name === JOBS.desktopPackage)) result.push(testJob(JOBS.desktopPackage));
   if (group === "tests") return result;
   return [...result, ...qualityJobs(paths, scope.everything)];

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkPlan, executeChecks, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
+import { checkPlan, executeChecks, jobLabel, nodeVersionCheck, selectCheckLane, dependencyInstaller, vitestOptions, type CheckJob } from "../lib/ci-checks.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const args = process.argv.slice(2);
@@ -30,7 +30,7 @@ if (args.includes("--plan")) {
 } else {
   const prepare = dependencyInstaller();
   await executeChecks(jobs, async (job: CheckJob) => {
-    console.log(`\n== ${job.name} ==`);
+    console.log(`\n== ${jobLabel(job)} ==`);
     const nodeBin = process.env[`CI_NODE_${job.nodeVersion}_BIN`] ?? `/opt/node${job.nodeVersion}/bin`;
     const path = existsSync(nodeBin) ? `${nodeBin}${delimiter}${process.env.PATH}` : process.env.PATH;
     const env = { ...process.env, PATH: path, CI: "true", CI_BASE_SHA: base, CI_HEAD_SHA: head, CI_REPO_ROOT: root, CI_INCLUDE_WORKING_TREE: String(!value("head")) };
@@ -45,7 +45,7 @@ if (args.includes("--plan")) {
     prepare(job, directory => run("npm ci --no-audit --no-fund", resolve(root, directory)));
     for (const command of job.commands) {
       const script = command === "npm test" ? JSON.parse(readFileSync(resolve(root, job.directory, "package.json"), "utf8")).scripts?.test : "";
-      const options = vitestOptions(script, process.env.CI_EMULATED === "true", concurrentLanes);
+      const options = vitestOptions(script, process.env.CI_EMULATED === "true", concurrentLanes, undefined, job.shard);
       run(command + options, resolve(root, job.directory));
     }
   });
