@@ -211,7 +211,9 @@ describe("operator-requested source Doctor", () => {
     const assertOpenClawDoctor = vi.fn(async () => {});
     const repairSourceDoctor = vi.fn(async (_ids, options) => { await options.assertCurrent(); });
     await createOpenClawBootWatcher({ ...f, client: { ...f.client, assertOpenClawDoctor }, repairSourceDoctor, releaseKey: "qualified", log: () => {} }).beforeStart();
-    expect(repairSourceDoctor).toHaveBeenCalledWith(sourceDoctor.agentIds, { expectedAnchors: postgresAgentStores, assertCurrent: expect.any(Function) });
+    expect(repairSourceDoctor).toHaveBeenCalledWith(sourceDoctor.agentIds, { expectedAnchors: postgresAgentStores, assertCurrent: expect.any(Function),
+      diagnostics: { requestId: sourceDoctor.requestId, releaseKey: "qualified", log: expect.any(Function) },
+    });
     expect(assertOpenClawDoctor).toHaveBeenCalledWith({ releaseKey: "qualified", requestId: sourceDoctor.requestId });
     expect(f.run).not.toHaveBeenCalled();
     expect(f.verifySourceDoctor).not.toHaveBeenCalled();

@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { preflightAgentDatabase } from "../lib/agent-store-preflight.js";
 import { repairPostgresSourceDoctorAgentStores, repairSourceDoctorAgentStores, verifyPostgresSourceDoctorAgentStores, verifySourceDoctorAgentStores } from "../lib/openclaw-source-doctor.js";
 import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
-import type { OpenClawCommand } from "../lib/openclaw-cli.js";
+import { OpenClawCommandError, type OpenClawCommand } from "../lib/openclaw-cli.js";
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 async function fixture(version = 25) {
@@ -420,4 +420,105 @@ it("accepts actual Shared account defaults, duplicate peer routes, and the reser
   for (const id of ["ceckert-test-coach", "ceckert-test-proj-hedgeherd", "ceckert-test-proj-moonlitruins"]) expect(after.channels.mattermost.accounts[id]).toEqual({ ...mattermost.accounts[id], enabled: false });
   expect(after.bindings).toEqual(f.config.bindings.filter(binding => [f.agentIds[0], service.agentId].includes(binding.agentId)));
   expect(after.channels.mattermost.defaultAccount).toBeUndefined();
+});
+
+
+it("seals failed PostgreSQL command output on retained HOME before disposable cleanup and never logs it", async () => {
+  const f = await postgresFixture(), home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "doctor-retained-home-")));
+  roots.push(home);
+  const log = vi.fn(), original = f.run.getMockImplementation()!;
+  let commandRoot = "";
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] === "doctor") {
+      const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+      if (!config.agents.entries["octogee-source-doctor-bootstrap"]) {
+        commandRoot = options.env.OPENCLAW_STATE_DIR!;
+        throw new OpenClawCommandError("sanitized timeout", "private-doctor-progress", "private-doctor-error");
+      }
+    }
+    return original(args, options);
+  });
+  const remove = fs.rm.bind(fs), cleanup = vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
+    if (file === commandRoot && commandRoot) {
+      expect(await fs.readFile(path.join(home, ".octogee-source-doctor-diagnostics/slot-0/stdout.bin"), "utf8")).toBe("private-doctor-progress");
+      expect(await fs.stat(commandRoot)).toBeDefined();
+    }
+    return remove(file, options);
+  });
+  try {
+    await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input,
+      env: { ...f.input.env, HOME: home }, diagnostics: { requestId: "private-request", releaseKey: "private-release", log },
+    })).rejects.toThrow("sanitized timeout");
+    await expect(fs.stat(commandRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    const metadata = JSON.parse(await fs.readFile(path.join(home, ".octogee-source-doctor-diagnostics/slot-0/metadata.json"), "utf8"));
+    expect(metadata).toMatchObject({ status: "failed", sealed: true });
+    expect(metadata.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "postgres-doctor", status: "failed" }),
+      expect.objectContaining({ phase: "private-cleanup", status: "passed" }),
+    ]));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private-doctor");
+    expect(f.metadata.get("agent_0")!.version).toBe(31);
+  } finally { cleanup.mockRestore(); }
+});
+
+it.each(["linked-root", "writable-home"])("refuses unsafe diagnostics before any Native source Doctor command: %s", async change => {
+  const f = await postgresFixture(), home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "doctor-unsafe-home-")));
+  roots.push(home);
+  if (change === "linked-root") await fs.symlink(f.root, path.join(home, ".octogee-source-doctor-diagnostics"));
+  else await fs.chmod(home, 0o777);
+  await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
+    diagnostics: { requestId: "request", releaseKey: "release", log: () => {} },
+  })).rejects.toThrow("unsafe");
+  expect(f.run).not.toHaveBeenCalled();
+});
+
+
+it.each(["bootstrap", "postgres-doctor"])("retains numeric Native refusal output privately in %s", async phase => {
+  const f = await postgresFixture(), home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "doctor-refusal-home-")));
+  roots.push(home);
+  const original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] === "doctor") {
+      const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+      const bootstrap = Boolean(config.agents.entries["octogee-source-doctor-bootstrap"]);
+      if (bootstrap === (phase === "bootstrap")) return { code: 141, stdout: "private-refusal", stderr: "private-stderr" };
+    }
+    return original(args, options);
+  });
+  const error = await repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
+    diagnostics: { requestId: "request", releaseKey: "release", log: () => {} },
+  }).catch((failure: unknown) => failure);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain("exit 141");
+  expect((error as Error).message).not.toContain("private-refusal");
+  expect(await fs.readFile(path.join(home, ".octogee-source-doctor-diagnostics/slot-0/stdout.bin"), "utf8")).toBe("private-refusal");
+  expect(f.metadata.get("agent_0")!.version).toBe(31);
+});
+
+it("keeps successful command evidence and refuses completion when private cleanup fails", async () => {
+  const f = await postgresFixture(), home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "doctor-cleanup-home-")));
+  roots.push(home);
+  let commandRoot = "";
+  const original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    const result = await original(args, options);
+    if (args[0] === "doctor") {
+      const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+      if (!config.agents.entries["octogee-source-doctor-bootstrap"]) { commandRoot = options.env.OPENCLAW_STATE_DIR!; return { ...result, stdout: "private-success" }; }
+    }
+    return result;
+  });
+  const remove = fs.rm.bind(fs), cleanup = vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
+    if (file === commandRoot && commandRoot) throw new Error("private-cleanup-error");
+    return remove(file, options);
+  });
+  try {
+    await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
+      diagnostics: { requestId: "request", releaseKey: "release", log: () => {} },
+    })).rejects.toThrow("source Doctor private cleanup failed");
+    expect(await fs.readFile(path.join(home, ".octogee-source-doctor-diagnostics/slot-0/stdout.bin"), "utf8")).toBe("private-success");
+    const metadata = JSON.parse(await fs.readFile(path.join(home, ".octogee-source-doctor-diagnostics/slot-0/metadata.json"), "utf8"));
+    expect(metadata).toMatchObject({ status: "failed", sealed: true });
+    expect(metadata.phases.at(-1)).toMatchObject({ phase: "private-cleanup", status: "failed" });
+  } finally { cleanup.mockRestore(); if (commandRoot) await fs.rm(commandRoot, { recursive: true, force: true }); }
 });

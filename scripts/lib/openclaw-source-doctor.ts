@@ -1,4 +1,4 @@
-import * as fs from "node:fs/promises";
+import fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import { createHash } from "node:crypto";
 import { writeOpenClawConfig } from "@octogee/core/config";
@@ -8,6 +8,8 @@ import * as os from "node:os";
 import { readPostgresAgentAnchor, queryAgentStore, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { preflightAgentDatabase } from "./agent-store-preflight.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+
+import { runWithSourceDoctorDiagnostics, type SourceDoctorDiagnosticContext } from "./source-doctor-diagnostics.js";
 
 const DEFAULT_OPENCLAW_STATE_DIR = "/home/node/.openclaw";
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
@@ -63,6 +65,7 @@ export async function verifySourceDoctorAgentStores(agentIds: string[], input: {
 
 
 export interface PostgresSourceDoctorOptions {
+  diagnostics?: SourceDoctorDiagnosticContext;
   env?: NodeJS.ProcessEnv;
   run?: OpenClawCommand;
   expectedSchemaVersion?: number;
@@ -303,12 +306,18 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
       if (sidecar) throw new Error(`source Doctor PostgreSQL anchor is not closed: ${store.agentId}`);
     }
   }
-  const privateRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "source-doctor-postgres-")));
-  const configPath = path.join(privateRoot, "openclaw.json");
-  try {
-    const expectedSchemaVersion = await installedAgentSchemaVersion(privateRoot, agentIds[0]!, input);
+  const home = env.HOME || os.homedir();
+  const workspaces = [servingConfig.config.agents.defaults, ...Object.values(servingConfig.config.agents.entries)]
+    .map(value => sourceConfigObject(value)?.workspace).filter((value): value is string => typeof value === "string")
+    .map(value => value.startsWith("~/") ? path.join(home, value.slice(2)) : value);
+  await runWithSourceDoctorDiagnostics({ home,
+    excludedRoots: [await fs.realpath(env.OPENCLAW_STATE_DIR || env.OPENCLAW_DIR || DEFAULT_OPENCLAW_STATE_DIR), servingConfig.file, ...workspaces],
+    context: input.diagnostics, run: input.run ?? runOpenClaw,
+  }, async ({ root: privateRoot, run, phase, seal }) => {
+    const configPath = path.join(privateRoot, "openclaw.json");
+    const expectedSchemaVersion = await phase("descriptor", () => installedAgentSchemaVersion(privateRoot, agentIds[0]!, { ...input, run }));
     const bound = { ...input, expectedSchemaVersion };
-    await verifyPostgresSourceMetadata(stores, bound, false);
+    await phase("pre-metadata", () => verifyPostgresSourceMetadata(stores, bound, false));
     const commandOptions = { env: {
       PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1",
       OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath,
@@ -321,42 +330,43 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
     }), { mode: 0o600 });
     await input.assertCurrent();
     assertSourceAnchors(stores);
-    const initialized = await (input.run ?? runOpenClaw)(["doctor", "--fix", "--non-interactive"], commandOptions);
+    const initialized = await phase("bootstrap", () => run(["doctor", "--fix", "--non-interactive"], commandOptions));
     await input.assertCurrent();
     assertSourceAnchors(stores);
     if (initialized.code !== 0) throw new Error(`source Doctor private initialization failed (exit ${initialized.code})`);
-    await fs.rm(path.join(privateRoot, "agents"), { recursive: true, force: true });
-    const entries: Record<string, { workspace: string }> = {};
-    for (const store of stores) {
+    await phase("copy-anchors", async () => {
+      await fs.rm(path.join(privateRoot, "agents"), { recursive: true, force: true });
+      const entries: Record<string, { workspace: string }> = {};
+      for (const store of stores) {
+        await input.assertCurrent();
+        assertSourceAnchors(stores);
+        const file = path.join(privateRoot, "agents", store.agentId, "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+        await fs.copyFile(store.file, file, fs.constants.COPYFILE_EXCL);
+        await fs.chmod(file, 0o600);
+        entries[store.agentId] = { workspace: path.join(privateRoot, "workspaces", store.agentId) };
+      }
+      const initializedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+      await fs.writeFile(configPath, JSON.stringify({
+        ...initializedConfig,
+        gateway: { mode: "local" }, plugins: { enabled: false },
+        agents: { ownership: "explicit", entries },
+        database: { engine: "sqlite", families: { agent: { engine: "postgres" } },
+          postgres: { connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee" } },
+      }), { mode: 0o600 });
       await input.assertCurrent();
       assertSourceAnchors(stores);
-      const file = path.join(privateRoot, "agents", store.agentId, "agent", "openclaw-agent.sqlite");
-      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-      await fs.copyFile(store.file, file, fs.constants.COPYFILE_EXCL);
-      await fs.chmod(file, 0o600);
-      entries[store.agentId] = { workspace: path.join(privateRoot, "workspaces", store.agentId) };
-    }
-    const initializedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
-    await fs.writeFile(configPath, JSON.stringify({
-      ...initializedConfig,
-      gateway: { mode: "local" }, plugins: { enabled: false },
-      agents: { ownership: "explicit", entries },
-      database: { engine: "sqlite", families: { agent: { engine: "postgres" } },
-        postgres: { connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee" } },
-    }), { mode: 0o600 });
-    await input.assertCurrent();
-    assertSourceAnchors(stores);
-    const result = await (input.run ?? runOpenClaw)(["doctor", "--fix", "--non-interactive"], {
-      ...commandOptions, timeoutMs: POSTGRES_DOCTOR_TIMEOUT_MS,
     });
+    const result = await phase("postgres-doctor", () => run(["doctor", "--fix", "--non-interactive"], {
+      ...commandOptions, timeoutMs: POSTGRES_DOCTOR_TIMEOUT_MS,
+    }));
+    await seal(result);
     await input.assertCurrent();
     assertSourceAnchors(stores);
     if (result.code !== 0) throw new Error(`source PostgreSQL Doctor failed (exit ${result.code}); source remains fenced`);
-    await verifyPostgresSourceMetadata(stores, bound, true);
-    await narrowServingConfig(servingConfig, stores, bound, servingProjection);
-  } finally {
-    await fs.rm(privateRoot, { recursive: true, force: true });
-  }
+    await phase("post-metadata", () => verifyPostgresSourceMetadata(stores, bound, true));
+    await phase("serving-projection", () => narrowServingConfig(servingConfig, stores, bound, servingProjection));
+  });
 }
 
 

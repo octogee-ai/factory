@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { COMPUTER_HOME_CHECKPOINT_MAX_BYTES } from "@octogee/shared/types/glm";
 import {
   DESKTOP_HOME_PATHS,
@@ -7,6 +12,9 @@ import {
   checkpointHome,
   homeScope,
   restoreHome,
+  tarCreateArgs,
+  tarExtractArgs,
+  findDirtyArgs,
   type HomeCheckpointDeps,
   type HomeScope,
 } from "../../lib/vm-gateway-agent/home-checkpoint";
@@ -131,7 +139,7 @@ describe("checkpointHome", () => {
     const h = fakeHome({ dirty: false });
     expect(await checkpointHome(h.deps, h.scope, { force: false })).toEqual({ status: "clean" });
     expect(h.shell).toEqual([
-      "find /srv/octogee/volumes/data ( -path /srv/octogee/volumes/data/.octogee/toolchains/npm-cache ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
+      "find /srv/octogee/volumes/data ( -path /srv/octogee/volumes/data/.octogee/toolchains/npm-cache -o -path /srv/octogee/volumes/data/.octogee-source-doctor-diagnostics ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
       "find /srv/octogee/desktop-home ( -path /srv/octogee/desktop-home/.local/share/mise -o -path /srv/octogee/desktop-home/.cache/mise -o -path /srv/octogee/desktop-home/.npm -o -path /srv/octogee/desktop-home/.config/octogee-chromium/Default/Cache -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonLock -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonCookie -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonSocket -o -path /srv/octogee/desktop-home/.config/octogee-chromium/DevToolsActivePort -o -path /srv/octogee/desktop-home/.ssh/authorized_keys -o -path /srv/octogee/desktop-home/.ssh/authorized_keys.metadata ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
     ]);
     expect(h.fetches).toEqual([]);
@@ -274,7 +282,7 @@ describe("restoreHome", () => {
     expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "restored", name: NAME, size: 2048 });
     expect(h.fetches[1]).toMatchObject({ url: "https://storage.example/download", init: { method: "GET" } });
     expect(h.shell).toEqual([
-      "tar --extract --gzip --numeric-owner --same-owner --same-permissions --anchored --exclude=desktop-home/.cache/mise --exclude=desktop-home/.npm --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
+      "tar --extract --gzip --numeric-owner --same-owner --same-permissions --anchored --exclude=desktop-home/.cache/mise --exclude=desktop-home/.npm --exclude=data/.octogee-source-doctor-diagnostics --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
     ]);
     expect(h.touched).toEqual([{ path: "/srv/octogee/home-restore.pending", at: 1_700_000_000_000 }, { path: "/srv/octogee/home-checkpoint.marker", at: 1_700_000_000_000 }]);
     expect(h.removed).toEqual(["/srv/octogee/home-restore.pending", "/tmp/octogee-home-restore-xyz"]);
@@ -319,4 +327,73 @@ describe("required disposable home restore", () => {
     expect(await restoreHome(h.deps, h.scope)).toMatchObject({ status: "restored" });
   });
 
+});
+
+
+describe.runIf(process.platform === "linux")("private SourceDoctor diagnostics checkpoint boundary", () => {
+  const run = promisify(execFile);
+  const diagnosticPath = ".octogee-source-doctor-diagnostics";
+  async function fixture() {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "home-diagnostics-"));
+    const data = path.join(root, "data"), desktop = path.join(root, "desktop-home");
+    const privateFile = path.join(data, diagnosticPath, "slot-0", "stdout.bin");
+    const persona = path.join(data, ".openclaw", "customers", "alice", "AGENTS.md");
+    const userFile = path.join(data, "Documents", diagnosticPath, "notes.txt");
+    const adjacentFile = path.join(data, diagnosticPath + "-user", "notes.txt");
+    const desktopFile = path.join(desktop, "Documents", "notes.txt");
+    for (const [file, contents] of [[privateFile, "operator-private-output"], [persona, "original persona"],
+      [userFile, "user file with the same directory name"], [adjacentFile, "adjacent user directory"], [desktopFile, "desktop notes"]]) {
+      await fs.mkdir(path.dirname(file!), { recursive: true });await fs.writeFile(file!, contents!);
+    }
+    const scope: HomeScope = { slug: "alice", dataDir: data, desktopDir: desktop,
+      marker: path.join(root, "marker"), restorePending: path.join(root, "restore-pending") };
+    return { root, data, scope, privateFile, persona, userFile };
+  }
+
+  it("creates an archive without operator output while preserving persona and similarly named user files", async () => {
+    const f = await fixture();
+    try {
+      const archive = path.join(f.root, "checkpoint.tar.gz");
+      await run("tar", tarCreateArgs(archive, f.scope));
+      const listed = (await run("tar", ["--list", "--gzip", `--file=${archive}`])).stdout;
+      expect(listed).not.toContain(`data/${diagnosticPath}/`);
+      expect(listed).toContain(`data/Documents/${diagnosticPath}/notes.txt`);
+      expect(listed).toContain(`data/${diagnosticPath}-user/notes.txt`);
+      const restored = path.join(f.root, "restored");await fs.mkdir(restored);
+      await run("tar", ["--extract", "--gzip", `--file=${archive}`, `--directory=${restored}`]);
+      expect(await fs.readFile(path.join(restored, "data/.openclaw/customers/alice/AGENTS.md"), "utf8")).toBe("original persona");
+      expect(await fs.readFile(path.join(restored, "desktop-home/Documents/notes.txt"), "utf8")).toBe("desktop notes");
+    } finally { await fs.rm(f.root, { recursive: true, force: true }); }
+  });
+
+  it("does not import operator output even when an incoming archive contains it", async () => {
+    const f = await fixture();
+    try {
+      const archive = path.join(f.root, "incoming.tar.gz");
+      await run("tar", ["--create", "--gzip", `--file=${archive}`, "-C", f.root, "data", "desktop-home"]);
+      expect((await run("tar", ["--list", "--gzip", `--file=${archive}`])).stdout).toContain(`data/${diagnosticPath}/slot-0/stdout.bin`);
+      const restored = path.join(f.root, "restored");await fs.mkdir(restored);
+      await run("tar", tarExtractArgs(archive, restored));
+      await expect(fs.lstat(path.join(restored, "data", diagnosticPath))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(restored, "data/.openclaw/customers/alice/AGENTS.md"), "utf8")).toBe("original persona");
+      expect(await fs.readFile(path.join(restored, `data/Documents/${diagnosticPath}/notes.txt`), "utf8")).toBe("user file with the same directory name");
+      expect(await fs.readFile(path.join(restored, `data/${diagnosticPath}-user/notes.txt`), "utf8")).toBe("adjacent user directory");
+    } finally { await fs.rm(f.root, { recursive: true, force: true }); }
+  });
+
+  it("ignores diagnostic-only changes but detects similarly named customer files", async () => {
+    const f = await fixture();
+    try {
+      const old = new Date("2020-01-01T00:00:00Z"), marker = new Date("2021-01-01T00:00:00Z"), changed = new Date("2022-01-01T00:00:00Z");
+      const entries = await fs.readdir(f.data, { recursive: true });
+      for (const relative of entries) await fs.utimes(path.join(f.data, relative), old, old);
+      await fs.utimes(f.data, old, old);await fs.writeFile(f.scope.marker, "marker");await fs.utimes(f.scope.marker, marker, marker);
+      await fs.utimes(f.privateFile, changed, changed);await fs.utimes(path.join(f.data, diagnosticPath), changed, changed);
+      expect((await run("find", findDirtyArgs(f.data, f.scope.marker, true))).stdout).toBe("");
+      await fs.utimes(f.userFile, changed, changed);
+      expect((await run("find", findDirtyArgs(f.data, f.scope.marker, true))).stdout.trim()).toBe(f.userFile);
+      await fs.utimes(f.userFile, old, old);await fs.unlink(f.persona);
+      expect((await run("find", findDirtyArgs(f.data, f.scope.marker, true))).stdout.trim()).toBe(path.dirname(f.persona));
+    } finally { await fs.rm(f.root, { recursive: true, force: true }); }
+  });
 });

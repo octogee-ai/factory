@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { execFile, type ExecFileException, type ExecFileOptions } from "node:child_process";
-import { runOpenClaw } from "../lib/openclaw-cli.js";
+import { inspect } from "node:util";
+import { OpenClawCommandError, runOpenClaw } from "../lib/openclaw-cli.js";
 
 vi.mock("node:child_process", async importOriginal => {
   const real = await importOriginal<typeof import("node:child_process")>();
@@ -18,6 +19,9 @@ vi.mock("node:child_process", async importOriginal => {
       process.stderr.write("private-error-é");
       process.on("SIGTERM", () => process.exit(141));
       setInterval(() => {}, 1000);
+    } else if (mode === "signalBytes") {
+      process.stdout.write(Buffer.from([255, 0, 195, 40]), () =>
+        process.stderr.write(Buffer.from([254, 0]), () => process.kill(process.pid, "SIGTERM")));
     } else if (mode === "signal") {
       process.kill(process.pid, "SIGTERM");
     } else if (mode === "closedStdinSuccess" || mode === "closedStdinFailure") {
@@ -28,11 +32,11 @@ vi.mock("node:child_process", async importOriginal => {
   return {
     ...real,
     execFile: vi.fn((file: string, args: string[], options: ExecFileOptions,
-      callback: (error: ExecFileException | null, stdout: string, stderr: string) => void) => {
+      callback: (error: ExecFileException | null, stdout: Buffer, stderr: Buffer) => void) => {
       expect(file).toBe("/usr/local/bin/openclaw");
       expect(options.timeout).toBe(args[0] === "configuredTimeout" ? 300_000 : 180_000);
       expect(options).not.toHaveProperty("timeoutMs");
-      const child = real.execFile(process.execPath, ["-e", fixture, args[0]], { ...options, timeout: 2500, encoding: "utf8" }, (error, stdout, stderr) => {
+      const child = real.execFile(process.execPath, ["-e", fixture, args[0]], { ...options, timeout: 2500, encoding: "buffer" }, (error, stdout, stderr) => {
         if (args[0] === "closedStdinSuccess" || args[0] === "closedStdinFailure") {
           child.stdin?.emit("error", Object.assign(new Error("private pipe detail"), { code: args[0] === "closedStdinSuccess" ? "EPIPE" : "ECONNRESET" }));
         }
@@ -83,6 +87,18 @@ describe("noninteractive OpenClaw command", () => {
     expect(message).toContain(`stderrBytes=${Buffer.byteLength("private-error-é")}`);
     expect(message).not.toContain("private-output");
     expect(message).not.toContain("private-error");
+    const failure = error as OpenClawCommandError;
+    expect(typeof failure.readOutput).toBe("function");
+    expect(failure.readOutput()).toEqual({ stdout: Buffer.from("private-output-é"), stderr: Buffer.from("private-error-é") });
+    expect(inspect(error, { showHidden: true })).not.toContain("private-output");
+    expect(JSON.stringify(error)).not.toContain("private-output");
+    expect(JSON.stringify(error)).not.toContain("private-error");
+  });
+
+  it("retains exact non-UTF8 terminal bytes privately", async () => {
+    const error = await runOpenClaw(["signalBytes"], { env: process.env }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(OpenClawCommandError);
+    expect((error as OpenClawCommandError).readOutput()).toEqual({ stdout: Buffer.from([255, 0, 195, 40]), stderr: Buffer.from([254, 0]) });
   });
 
   it("reports actual signal termination separately from a timeout kill", async () => {

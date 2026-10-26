@@ -1239,6 +1239,22 @@ async function tendSourcelessTarget(
   }
 }
 
+async function recoverCancelledTargetSource(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+  context: SurgePassObservation & { source: SurgeSourceSelection; ownedBy: string },
+): Promise<void> {
+  if (!configuredBuilderProcessGateRequired(input) || builderPodObservationIncomplete(input, context)) return;
+  if (context.source.kind === "ready") {
+    await recoverReadyCancelledTargetSource(deps, input, context);
+    return;
+  }
+  if (context.source.kind !== "waiting") return;
+  const assignments = await deps.readAssignments(input.gatewayId);
+  assertAssignmentsAvailable(assignments, context.ownedBy);
+  await tendSourcelessTarget(deps, input, { ...context, assignments });
+}
+
 // A held prelaunch target is legitimately NotReady with OpenClaw down, so it
 // enters the handoff; every other NotReady target, and a released marker beside
 // a normal gate, waits. A Ready target has already been handed off and only
@@ -1384,6 +1400,46 @@ function cancelledTargetHeld(health: SurgePodHealth | null, pod: SurgePod, owned
   return health !== null && [health.fleetSignatureCapability === "gateway-scoped", health.prelaunchState === "held",
     !health.handoffReleased, health.terminalTarget?.processHeld === true, terminalTargetAttemptMatches(health, pod, ownedBy),
     health.mountedCustomers.length === 0, (health.migratingIn?.length ?? 0) === 0].every(Boolean);
+}
+
+async function recoverReadyCancelledTargetSource(
+  deps: SurgeCustomerHandoffDeps,
+  input: ReconcileSurgeCustomerHandoffInput,
+  context: SurgePassObservation & { source: SurgeSourceSelection; ownedBy: string },
+): Promise<void> {
+  if (context.source.kind !== "ready") return;
+  const sourceIdentity = { ...context.source.pod }, targetIdentity = { ...context.target };
+  const observe = async () => {
+    const snapshot = await deps.listPods(input.gatewayId);
+    if (!physicalPodsProjected(snapshot) || snapshot.pods.length !== 2 || sourceIdentity.uid === targetIdentity.uid) return null;
+    const source = snapshot.pods.find(pod => pod.uid === sourceIdentity.uid);
+    const target = snapshot.pods.find(pod => pod.uid === targetIdentity.uid);
+    if (!replacementPodMatches(source, sourceIdentity, true) || !replacementPodMatches(target, targetIdentity, false)) return null;
+    const [sourceHealth, targetHealth] = await Promise.all([
+      deps.readPodHealth(source, input.gatewayId), deps.readPodHealth(target, input.gatewayId),
+    ]);
+    if (!replacementSourceServing(sourceHealth) || !cancelledTargetHeld(targetHealth, target, context.ownedBy) ||
+        !gatewayHeartbeatMatchesImageTag(targetHealth.version, input.desiredImageTag)) return null;
+    const assignments = await deps.readAssignments(input.gatewayId);
+    const owned = assignments.filter(row => row.state === "quiescing" && row.updatedByOperationId === context.ownedBy);
+    if (owned.length === 0 || assignments.some(row => row.state !== "serving" && !owned.includes(row)) ||
+        !assignments.some(row => row.slug === targetHealth.terminalTarget?.slug) ||
+        !targetMountedAssignedCustomers(assignments, sourceHealth.mountedCustomers)) return null;
+    return { sourcePod: { ...source }, assignments: owned.map(row => ({ ...row })), fingerprint: JSON.stringify({
+      source: [source.uid, source.name, source.podIP, source.image, sourceHealth.version],
+      target: [target.uid, target.name, target.podIP, target.image, targetHealth.version],
+      assignments: assignments.map(({ uid, slug, epoch, state, updatedByOperationId }) =>
+        ({ uid, slug, epoch, state, updatedByOperationId })).sort((left, right) => left.uid.localeCompare(right.uid)),
+    }) };
+  };
+  const before = await observe();
+  if (!before) return;
+  await resumeDrainedSource(deps, { gatewayId: input.gatewayId, operationId: context.ownedBy,
+    sourcePod: before.sourcePod, slugs: before.assignments.map(row => row.slug),
+    cause: new Error("cancelled target rollback admission recovery") });
+  const after = await observe();
+  if (!after || after.fingerprint !== before.fingerprint) return;
+  await restoreOwnedAssignments(deps, input.gatewayId, after.assignments, context.ownedBy);
 }
 
 async function replaceCancelledTarget(
@@ -1533,6 +1589,7 @@ export async function reconcileSurgeCustomerHandoff(
     }
     if (settled) return settled;
     if (terminalTargetAttemptMatches(targetHealth, target, ownedBy)) {
+      await recoverCancelledTargetSource(scoped, input, { ...observation, source, ownedBy });
       await replaceCancelledTarget(scoped, input, target, source, ownedBy);
       scoped.log(`[surge-handoff] target attempt is terminal; waiting for a replacement pod gateway=${input.gatewayId} target=${target.name}`);
       return { ready: false };

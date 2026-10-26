@@ -125,6 +125,7 @@ async function runClaimedDoctor(input: Parameters<typeof createOpenClawBootWatch
   const request = claim.sourceDoctor, assertDoctor = input.client.assertOpenClawDoctor;
   if (!assertDoctor) throw new Error("PostgreSQL source Doctor authority checks are unavailable");
   await (input.repairSourceDoctor ?? repairSourceDoctorAgentStores)(request.agentIds, {
+    diagnostics: { requestId: request.requestId, releaseKey: input.releaseKey, log: input.log },
     expectedAnchors: request.postgresAgentStores,
     assertCurrent: () => assertDoctor({ releaseKey: input.releaseKey, requestId: request.requestId }),
   });
