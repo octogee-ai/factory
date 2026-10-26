@@ -39,6 +39,7 @@ export declare function assertSharedSourceRecoveryUnchanged(current: SharedSourc
 export interface SharedSourceRecoverySupersession {
     operationId: string;
     input: DocumentData;
+    inputFingerprint: string;
     startedAt: number;
     completedAt: number;
     error: string;

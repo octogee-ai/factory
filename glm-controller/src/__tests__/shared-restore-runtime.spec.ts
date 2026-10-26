@@ -1,7 +1,7 @@
 import { enqueuePlacementMigration, continuousPlacementMigrationOperationId } from '../placement-policy-reconciler.js';
 import { createRestartGatewayHandler } from '../handlers/restart-gateway.js';
 import { buildOperationCompletionUpdate, MAX_OPERATION_ATTEMPTS, MAX_OPERATION_ATTEMPT_HISTORY, classifyOperationFailure } from '../operation-retry.js';
-import { readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
+import { assertSharedSourceRecoveryPredecessor, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
 import { recoverSharedSourceRuntime } from "../lib/shared-source-runtime.js";
 import { describe, expect, it, vi } from 'vitest';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -1199,8 +1199,8 @@ describe('journaled Shared source schema repair', () => {
     Object.assign(prior, { status: 'failed', completedAt: h.deps.now(), error: 'source repair is not ready; outcome remains fenced' });
     const before = structuredClone(prior), capturedFence = structuredClone(fence);
     Object.assign(h.op, { id: 'pg-successor', startedAt: h.deps.now() + 1, input: { gatewayId: 'shared-1', sourceRecovery: {
-      ...(before.input.sourceRecovery as any), supersede: { operationId: 'recover', input: before.input, startedAt: before.startedAt,
-        completedAt: before.completedAt, error: before.error, fence: capturedFence },
+      ...(before.input.sourceRecovery as any), supersede: assertSharedSourceRecoveryPredecessor({ gatewayId: 'shared-1',
+        operationId: 'recover', row: before, fence: capturedFence, source: before.input.sourceRecovery }),
     } } });
     h.store['glmOperations/pg-successor'] = structuredClone(h.op); h.setAcknowledgment('full');
     h.events.length = 0;
@@ -1443,8 +1443,8 @@ describe('journaled Shared source schema repair', () => {
     const nextSha = 'd'.repeat(40), nextImages = { gateway: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:ddddddd@sha256:${'e'.repeat(64)}`,
       'gateway-edge': `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:ddddddd@sha256:${'f'.repeat(64)}` };
     Object.assign(h.op, { id: 'successor', startedAt: 500, input: { gatewayId: 'shared-1', sourceRecovery: { ...before.input.sourceRecovery,
-      sourceSha: nextSha, images: nextImages, supersede: { operationId: 'recover', input: before.input,
-        startedAt: before.startedAt, completedAt: before.completedAt, error: before.error, fence: oldFence } } } });
+      sourceSha: nextSha, images: nextImages, supersede: assertSharedSourceRecoveryPredecessor({ gatewayId: 'shared-1',
+        operationId: 'recover', row: before, fence: oldFence, source: before.input.sourceRecovery }) } } });
     h.store['glmOperations/successor'] = structuredClone(h.op); h.deps.sourceSha = nextSha; h.setAck(true);
     return { ...h, before, oldOp, oldFence };
   }
@@ -1465,8 +1465,8 @@ describe('journaled Shared source schema repair', () => {
     prior.completedAt = fence.startedAt + 20;
     Object.assign(fence.doctor, { startedAt: fence.startedAt + 10, releaseKey: 'actual-baked-source-key' });
     fence.installedImage = { podUid: 'pod-uid', gatewayImageId: h.pod.status.containerStatuses[0].imageID, verifiedAt: fence.startedAt + 5 };
-    h.op.input.sourceRecovery.supersede = { operationId: 'recover', input: structuredClone(prior.input), startedAt: prior.startedAt,
-      completedAt: prior.completedAt, error: prior.error, fence: structuredClone(fence) };
+    h.op.input.sourceRecovery.supersede = assertSharedSourceRecoveryPredecessor({ gatewayId: 'shared-1',
+      operationId: 'recover', row: prior, fence: structuredClone(fence), source: prior.input.sourceRecovery });
     h.store['glmOperations/successor'] = structuredClone(h.op);
     return { ...h, before: structuredClone(prior) };
   }
@@ -1477,12 +1477,15 @@ describe('journaled Shared source schema repair', () => {
     expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
     expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
   });
-  it.each(['running', 'acknowledged', 'changed-start', 'changed-image'])('refuses changed spent source %s without clearing its fence', async change => {
+  it.each(['running', 'acknowledged', 'changed-start', 'changed-image', 'nested-history', 'immediate-input', 'fingerprint'])('refuses changed spent source %s without clearing its fence', async change => {
     const h = await spentSourceSuccessor();
     if (change === 'running') h.store['glmOperations/recover'].status = 'running';
     if (change === 'acknowledged') h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt = Date.now();
     if (change === 'changed-start') h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt++;
     if (change === 'changed-image') h.store['gateways/shared-1'].runtimeRestartFence.installedImage.gatewayImageId = 'foreign';
+    if (change === 'nested-history') h.store['glmOperations/recover'].input.sourceRecovery.supersede.history = 'changed';
+    if (change === 'immediate-input') h.store['glmOperations/recover'].input.sourceRecovery.operatorContext = 'changed';
+    if (change === 'fingerprint') h.op.input.sourceRecovery.supersede.inputFingerprint = '0'.repeat(64);
     const before = structuredClone(h.store);
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
     expect(h.store).toEqual(before);

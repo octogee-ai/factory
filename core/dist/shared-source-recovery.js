@@ -3,6 +3,7 @@ import { projectAgentConfigured } from "@octogee/shared/types/project";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { managementExportMatches, managementUserMatches, managementPodIdentity } from "./shared-source-management-recovery.js";
 import { isDeepStrictEqual } from "node:util";
+import { operationAuditMutationFingerprint } from "./operation-audit.js";
 export class SharedSourceRecoveryConflict extends Error {
 }
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
@@ -310,7 +311,10 @@ export function assertSharedSourceRecoveryPredecessor(request) {
     assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports,
         ...(source.managementRecovery ? { managementRecovery: source.managementRecovery } : {}),
         ...(source.postgresAgentStores ? { postgresAgentStores: source.postgresAgentStores } : {}) }, input);
-    return { operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
+    const capturedInput = { ...row.input, sourceRecovery: { ...input } };
+    delete capturedInput.sourceRecovery.supersede;
+    return { operationId, input: capturedInput, inputFingerprint: operationAuditMutationFingerprint(row.input),
+        startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
 }
 export async function readSharedSourceRecoverySupersession(db, tx, gatewayId, operationId) {
     const [root, prior, source] = await Promise.all([tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.doc(`glmOperations/${operationId}`)),

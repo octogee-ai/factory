@@ -4,6 +4,7 @@ import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { managementExportMatches, managementUserMatches, managementPodIdentity, type ManagementSourceRecovery } from "./shared-source-management-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
+import { operationAuditMutationFingerprint } from "./operation-audit.js";
 
 export interface SourceRecoveryAssignment { uid: string; slug: string; agentId: string; assignmentEpoch: number; assignment: DocumentData }
 export interface SourceRecoveryExport { operationId: string; input: DocumentData; startedAt: number; completedAt: number; error: string; steps: DocumentData[] }
@@ -239,7 +240,7 @@ export function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecover
 }
 
 export interface SharedSourceRecoverySupersession {
-  operationId: string; input: DocumentData; startedAt: number; completedAt: number; error: string; fence: DocumentData;
+  operationId: string; input: DocumentData; inputFingerprint: string; startedAt: number; completedAt: number; error: string; fence: DocumentData;
 }
 function failedPredecessorMatches(row: DocumentData, gatewayId: string): boolean {
   const input = row.input ?? {};
@@ -295,7 +296,10 @@ export function assertSharedSourceRecoveryPredecessor(request: {
   assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports,
     ...(source.managementRecovery ? { managementRecovery: source.managementRecovery } : {}),
     ...(source.postgresAgentStores ? { postgresAgentStores: source.postgresAgentStores } : {}) }, input);
-  return { operationId, input: row.input, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
+  const capturedInput = { ...row.input, sourceRecovery: { ...input } };
+  delete capturedInput.sourceRecovery.supersede;
+  return { operationId, input: capturedInput, inputFingerprint: operationAuditMutationFingerprint(row.input),
+    startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
 }
 export async function readSharedSourceRecoverySupersession(db: Firestore, tx: Transaction, gatewayId: string, operationId: string): Promise<{
   source: SharedSourceRecoveryAuthority; supersede: SharedSourceRecoverySupersession;

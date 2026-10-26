@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
+import { Firestore as FirestoreClient } from "firebase-admin/firestore";
 import { assertSharedSourceRecoveryPredecessor, postgresImportMaintenanceFailureMatches, readPostgresSourceAgentStores, readSharedSourceRecoveryAuthority, type SourceRecoveryAssignment } from "./shared-source-recovery.js";
+import { buildOperationAuditIntent, operationAuditMutationFingerprint } from "./operation-audit.js";
 const identity: SourceRecoveryAssignment = { uid: "owner", slug: "livefixture", agentId: "octogee-livefixture-coach", assignmentEpoch: 7,
   assignment: { uid: "owner", slug: "livefixture", gatewayId: "shared-old", state: "serving", epoch: 7 } };
 function fixture(migration: "identity" | "database" = "identity") {
@@ -199,6 +201,7 @@ async function spentPostgresPredecessorFixture(fullRoster = false) {
 it("admits an exact spent PostgreSQL Doctor predecessor while retaining its captured anchor roster", async () => {
   const f = await spentPostgresPredecessorFixture(), before = structuredClone(f);
   expect(assertSharedSourceRecoveryPredecessor(f)).toEqual({ operationId: f.operationId, input: f.row.input,
+    inputFingerprint: operationAuditMutationFingerprint(f.row.input),
     startedAt: f.row.startedAt, completedAt: f.row.completedAt, error: f.row.error, fence: f.fence });
   expect(f).toEqual(before);
 });
@@ -223,8 +226,67 @@ it("admits an exact successful seven-tenant Doctor ACK after failed readiness wi
   expect(f.fence.doctor.verifiedAgentIds).not.toContain("octogee-unmatched-route");
   expect(f.fence.doctor.releaseKey).not.toBe(f.row.input.sourceRecovery.sourceSha);
   expect(assertSharedSourceRecoveryPredecessor(f)).toEqual({ operationId: f.operationId, input: f.row.input,
+    inputFingerprint: operationAuditMutationFingerprint(f.row.input),
     startedAt: f.row.startedAt, completedAt: f.row.completedAt, error: f.row.error, fence: f.fence });
   expect(f).toEqual(before);
+});
+it("keeps repeated seven-agent source recovery audit admission within Firestore document depth", async () => {
+  const f = await completedPostgresPredecessorFixture();
+  const client = new FirestoreClient({ projectId: "synthetic-source-recovery-depth" });
+  let operationId = f.operationId, row: DocumentData = structuredClone(f.row), fence: DocumentData = structuredClone(f.fence);
+  const sizes: number[] = [], depths: number[] = [];
+  const depth = (value: unknown): number => value && typeof value === "object"
+    ? 1 + Math.max(0, ...Object.values(value).map(depth)) : 0;
+  try {
+    for (let generation = 0; generation < 32; generation++) {
+      const before = structuredClone({ row, fence });
+      const supersede = assertSharedSourceRecoveryPredecessor({ ...f, operationId, row, fence });
+      const source = row.input.sourceRecovery;
+      const input = { gatewayId: f.gatewayId, sourceRecovery: { ...f.source, sourceSha: source.sourceSha,
+        images: source.images, supersede } };
+      const audit = buildOperationAuditIntent({ actor: "synthetic-operator", forced: false,
+        what: "repair Shared source before export", why: "synthetic repeated failed readiness",
+        target: { gatewayId: f.gatewayId }, preActionStatus: f.source.root, mutation: input,
+        idempotencyKey: `synthetic-source-recovery-${String(generation).padStart(2, "0")}`, now: () => 1_000 + generation * 100 });
+      expect(() => client.batch().create(client.doc(`operationAudits/${audit.id}`), audit.document),
+        `source recovery generation ${generation}`).not.toThrow();
+      const operation = { kind: "restart-gateway", status: "pending", createdBy: "synthetic-operator",
+        createdAt: 1_000 + generation * 100, startedAt: null, completedAt: null, input, steps: [], gatewayId: f.gatewayId };
+      expect(() => client.batch().create(client.doc(`glmOperations/recovery-${generation}`), operation)).not.toThrow();
+      if (generation > 1) {
+        sizes.push(JSON.stringify(audit.document).length, JSON.stringify(operation).length);
+        depths.push(depth(audit.document), depth(operation));
+      }
+      expect({ row, fence }).toEqual(before);
+      operationId = `synthetic-recovery-${String(generation).padStart(2, "0")}`;
+      const startedAt = 1_000 + generation * 100;
+      row = { ...row, startedAt, completedAt: startedAt + 90, input };
+      fence = { ...fence, attemptId: operationId, auditId: operationId, startedAt: startedAt + 1,
+        doctor: { ...fence.doctor, requestId: operationId, startedAt: startedAt + 3, completedAt: startedAt + 5 },
+        installedImage: { ...fence.installedImage, verifiedAt: startedAt + 2 } };
+    }
+    expect(new Set(sizes.filter((_size, index) => index % 2 === 0)).size).toBe(1);
+    expect(new Set(sizes.filter((_size, index) => index % 2 === 1)).size).toBe(1);
+    expect(new Set(depths.filter((_depth, index) => index % 2 === 0)).size).toBe(1);
+    expect(new Set(depths.filter((_depth, index) => index % 2 === 1)).size).toBe(1);
+  } finally {
+    await client.terminate();
+  }
+});
+it("captures existing nested predecessor input without copying or losing its integrity", async () => {
+  const f = await completedPostgresPredecessorFixture();
+  const row: DocumentData = structuredClone(f.row);
+  row.input.sourceRecovery.supersede = { operationId: "legacy-parent", input: { sourceRecovery: {
+    supersede: { operationId: "legacy-ancestor", input: { immutableHistory: "original" } },
+  } } };
+  const before = structuredClone(row), captured = assertSharedSourceRecoveryPredecessor({ ...f, row });
+  expect(captured.input.sourceRecovery.supersede).toBeUndefined();
+  expect(captured.inputFingerprint).toBe(operationAuditMutationFingerprint(before.input));
+  expect(row).toEqual(before);
+  row.input.sourceRecovery.supersede.input.sourceRecovery.supersede.input.immutableHistory = "changed";
+  const changed = assertSharedSourceRecoveryPredecessor({ ...f, row });
+  expect(changed.input).toEqual(captured.input);
+  expect(changed.inputFingerprint).not.toBe(captured.inputFingerprint);
 });
 const invalidCompletedDoctors: Array<[string, (doctor: DocumentData) => void]> = [
   ["failed", doctor => { doctor.error = "Doctor refused"; }],

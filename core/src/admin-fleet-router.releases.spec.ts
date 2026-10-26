@@ -10,6 +10,7 @@ import {
   ERR_STANDBY_RIDES_PLATFORM_RELEASE,
 } from "./admin-fleet-router.js";
 import { readSharedSourceRecoveryAuthority } from './shared-source-recovery.js';
+import { operationAuditMutationFingerprint } from './operation-audit.js';
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,
@@ -1766,12 +1767,17 @@ describe('POST /gateways/:id/recover-source', () => {
     (h.fence as any).installedImage = { podUid: h.fence.target.podUid, gatewayImageId: h.fence.target.images.gateway, verifiedAt: 540 };
     return h;
   }
+  function predecessorCapture(operationId: string, row: any, fence: unknown) {
+    const input = structuredClone(row.input);
+    delete input.sourceRecovery.supersede;
+    return { operationId, input, inputFingerprint: operationAuditMutationFingerprint(row.input),
+      startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
+  }
   it('journals an explicit once-only retry for a terminal spent Doctor without acknowledging or changing its nested history', async () => {
     const h = await spentSourceRepair(), before = structuredClone(h.prior), oldFence = structuredClone(h.fence);
     await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
     const next = opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending') as any;
-    expect(next.input.sourceRecovery.supersede).toEqual({ operationId: h.id, input: before.input,
-      startedAt: before.startedAt, completedAt: before.completedAt, error: before.error, fence: oldFence });
+    expect(next.input.sourceRecovery.supersede).toEqual(predecessorCapture(h.id, before, oldFence));
     expect(h.prior).toEqual(before); expect(h.fence).toEqual(oldFence);
   });
   it.each(['running', 'acknowledged', 'image-proof', 'clock', 'different-error'])('refuses spent source continuation with %s', async change => {
@@ -1788,8 +1794,7 @@ describe('POST /gateways/:id/recover-source', () => {
     const h = await failedSourceRepair(), before = structuredClone(h.prior), fence = structuredClone(h.fence);
     await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
     const next = opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending') as any;
-    expect(next.input.sourceRecovery.supersede).toEqual({ operationId: h.id, input: before.input,
-      startedAt: before.startedAt, completedAt: before.completedAt, error: before.error, fence });
+    expect(next.input.sourceRecovery.supersede).toEqual(predecessorCapture(h.id, before, fence));
     expect(h.prior).toEqual(before); expect(h.store.get('gateways/shared-0')!.runtimeRestartFence).toEqual(fence);
   });
   it.each([false, true])('binds a new immutable family while refusing changed native source (%s)', async changedNative => {
