@@ -36,17 +36,18 @@ const unitNames: ReadonlySet<string> = new Set([...UNIT_PACKAGES.map(pkg => pkg.
 
 const MEASURED_CHECK_SECONDS: Partial<Record<JobKey, number>> = {
   [JOBS.app]: 540,
-  [JOBS.scripts]: 157,
-  [JOBS.gatewayEdge]: 103,
-  [JOBS.octogeeApi]: 93,
+  [JOBS.scripts]: 220,
+  [JOBS.octogeeApi]: 140,
+  [JOBS.tests]: 140,
+  [JOBS.core]: 140,
+  [JOBS.gatewayEdge]: 135,
   [JOBS.desktopPackage]: 90,
-  [JOBS.tests]: 72,
-  [JOBS.glmController]: 39,
-  [JOBS.site]: 36,
-  [JOBS.core]: 27,
-  [JOBS.functions]: 10,
-  [JOBS.shared]: 6,
-  [JOBS.desktop]: 6,
+  [JOBS.glmController]: 65,
+  [JOBS.site]: 50,
+  [JOBS.functions]: 17,
+  [JOBS.desktop]: 15,
+  [JOBS.obsidianConnect]: 15,
+  [JOBS.shared]: 10,
 };
 
 export function checkSeconds(name: string): number {
