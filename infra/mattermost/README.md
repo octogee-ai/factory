@@ -1,6 +1,6 @@
 # Mattermost thread persistence fix
 
-The pinned image retains Mattermost Team Edition 11.11.1's web assets, plugins,
+The pinned image retains Mattermost Team Edition 11.11.3's web assets, plugins,
 and runtime configuration, replacing only the server binary with
 [the concurrent thread-reply fix](https://github.com/ceckert/mattermost/pull/3).
 The source commit and downloaded source checksum are fixed in `Dockerfile`.
@@ -25,9 +25,9 @@ Build the Linux AMD64 image from the repository root:
 
 ```sh
 docker buildx build --platform linux/amd64 --load --provenance=false \
-  -t octogee-mattermost:11.11.1-0c674ac infra/mattermost
+  -t octogee-mattermost:11.11.3-dccab62 infra/mattermost
 docker run --rm --platform linux/amd64 --entrypoint /mattermost/bin/mattermost \
-  octogee-mattermost:11.11.1-0c674ac version
+  octogee-mattermost:11.11.3-dccab62 version
 ```
 
 For a registry build, use `--push` with a new immutable tag and retain build
