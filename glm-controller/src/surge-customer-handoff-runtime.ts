@@ -6,6 +6,7 @@ import {
   type MigrationConfigTransferMode,
   SIGNATURE_HEADER,
   type PrepareRsyncImportResponse,
+  type SchedulerMigrationResult,
 } from "@octogee/shared/types/fleet-controller";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
 import { isValidUsername } from "@octogee/shared/types/identity";
@@ -433,6 +434,7 @@ export type SurgePodTransport = Pick<
   | "readPodHealth"
   | "quiesce"
   | "waitForSourceIdle"
+  | "scheduler"
   | "resumeSourceIngress"
   | "stopSourceOpenClaw"
   | "resumeSourceOpenClaw"
@@ -802,6 +804,23 @@ async function quiesceSurgeSource(
   if (response.drained !== true) throw new Error(`invalid quiesce response from pod=${sourcePod.name}`);
 }
 
+async function migrateSurgeScheduler(
+  control: SurgeControlCall,
+  { gatewayId, pod, operationId, ...body }: Parameters<NonNullable<SurgeCustomerHandoffDeps["scheduler"]>>[0],
+): Promise<SchedulerMigrationResult> {
+  const response = await control(pod, gatewayId, "scheduler", {
+    operationId,
+    body: { ...body, migrationId: operationId },
+  }) as unknown as SchedulerMigrationResult;
+  if (response.operationId !== operationId || response.phase !== body.phase ||
+      !Array.isArray(response.agentIds) || response.agentIds.some(id => typeof id !== "string" || !id) ||
+      (response.agentIds.length === 0 && body.phase !== "resume" && body.phase !== "abort") ||
+      response.drained !== true || (body.phase === "export" && response.snapshot === undefined)) {
+    throw new Error(`scheduler ${body.phase} did not prove a drained matching operation on pod=${pod.name}`);
+  }
+  return response;
+}
+
 export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePodTransport {
   const fetchImpl = opts.fetch ?? globalThis.fetch;
   const randomKey = opts.randomKey ?? (() => randomBytes(32).toString("hex"));
@@ -881,6 +900,8 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       reportRejectedSignaturePod,
       log: opts.log,
     }, pod, gatewayId),
+
+    scheduler: input => migrateSurgeScheduler(control, input),
 
     quiesce: (input) => quiesceSurgeSource(control, input),
     waitForSourceIdle: (input) => quiesceSurgeSource(control, input),

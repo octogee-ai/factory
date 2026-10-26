@@ -75,32 +75,32 @@ describe("scheduled migration handoff scope", () => {
 });
 
 
-it("resumes a fence a failed earlier attempt left held before holding for the new one", async () => {
+it("refuses a foreign held fence without inferring that its earlier attempt failed", async () => {
+  const foreignFence = new Error('/scheduler/shared-0: 500 {"error":"scheduler migration failed","message":"Cron agent octogee-alice-coach is held for migration mig-placement-190929cbf8f86906bee813bffa1a4157:scheduler:1"}');
   const rpc = {
     configGet: vi.fn(async () => ({ config: {} })),
     schedulerMigration: vi.fn()
-      .mockRejectedValueOnce(new Error('/scheduler/shared-0: 500 {"error":"scheduler migration failed","message":"Cron agent octogee-alice-coach is held for migration mig-placement-190929cbf8f86906bee813bffa1a4157:scheduler:1"}'))
+      .mockRejectedValueOnce(foreignFence)
       .mockResolvedValueOnce({ operationId: "mig-placement-190929cbf8f86906bee813bffa1a4157:scheduler:1", phase: "resume", agentIds: ["octogee-alice-coach"], drained: true })
       .mockResolvedValueOnce({ operationId: "handoff-2", phase: "hold", agentIds: ["octogee-alice-coach"], drained: true }),
   };
-  await expect(migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], { operationId: "handoff-2", phase: "hold" })).resolves.toMatchObject({ drained: true, operationId: "handoff-2" });
+  await expect(migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], { operationId: "handoff-2", phase: "hold" })).rejects.toBe(foreignFence);
   expect(rpc.schedulerMigration.mock.calls.map(([request]) => request)).toEqual([
-    { operationId: "handoff-2", phase: "hold", agentIds: ["octogee-alice-coach"] },
-    { operationId: "mig-placement-190929cbf8f86906bee813bffa1a4157:scheduler:1", phase: "resume", agentIds: ["octogee-alice-coach"] },
     { operationId: "handoff-2", phase: "hold", agentIds: ["octogee-alice-coach"] },
   ]);
 });
 
-it("does not take over a fence the kernel refuses to resume, such as a staged handoff", async () => {
+it("preserves the original foreign-fence failure without probing whether Native would resume it", async () => {
+  const foreignFence = new Error("Cron agent octogee-alice-coach is held for migration other-op:scheduler:1");
   const rpc = {
     configGet: vi.fn(async () => ({ config: {} })),
     schedulerMigration: vi.fn()
-      .mockRejectedValueOnce(new Error("Cron agent octogee-alice-coach is held for migration other-op:scheduler:1"))
+      .mockRejectedValueOnce(foreignFence)
       .mockRejectedValueOnce(new Error("Cannot resume staged cron migration")),
   };
   await expect(migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], { operationId: "handoff-2", phase: "hold" }))
-    .rejects.toThrow(/held for migration other-op:scheduler:1.*Cannot resume staged/su);
-  expect(rpc.schedulerMigration).toHaveBeenCalledTimes(2);
+    .rejects.toBe(foreignFence);
+  expect(rpc.schedulerMigration).toHaveBeenCalledExactlyOnceWith({ operationId: "handoff-2", phase: "hold", agentIds: ["octogee-alice-coach"] });
 });
 
 it("keeps the old /scheduler contract for an older controller: hold drains before it answers", async () => {

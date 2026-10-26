@@ -193,6 +193,7 @@ export interface MarkAssignmentStateParams {
     expected?: {
         state: AssignmentState;
         updatedByOperationId: string | null;
+        updatedAt?: number;
     };
     automatic?: boolean;
 }

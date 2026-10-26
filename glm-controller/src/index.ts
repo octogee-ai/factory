@@ -2605,6 +2605,7 @@ function buildSurgeHandoffDeps(input: {
         slug: assignment.slug,
         state: assignment.state,
         epoch: assignment.epoch,
+        updatedAt: assignment.updatedAt,
         updatedByOperationId: assignment.updatedByOperationId,
       }));
       const assignedUsers = userSnapshot.docs.map((doc) => {

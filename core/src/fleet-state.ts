@@ -1746,6 +1746,7 @@ export interface MarkAssignmentStateParams {
   expected?: {
     state: AssignmentState;
     updatedByOperationId: string | null;
+    updatedAt?: number;
   };
   automatic?: boolean;
 }
@@ -1766,35 +1767,44 @@ export async function markAssignmentState(
     const ref = assignmentRef(deps.db, params.gatewayId, params.uid);
     const snap = await txn.get(ref);
     if (!snap.exists) {
+      if (params.expected?.updatedAt !== undefined) throw new Error("source assignment changed before roster state update");
       if (!params.createIfMissing) return;
       createMissingAssignment(txn, ref, deps, params);
       return;
     }
     const assignment = snap.data();
     assertAssignmentStateUpdateMatches(assignment, params);
+    const updatesClock = params.updatedByOperationId || params.expected?.updatedAt !== undefined;
+    const updatedAt = nextAssignmentStateClock(deps, updatesClock ? assignment?.updatedAt : undefined);
     txn.update(ref, {
       state: params.state,
-      ...(params.updatedByOperationId
-        ? {
-            updatedAt: deps.now ? deps.now().getTime() : Date.now(),
-            updatedByOperationId: params.updatedByOperationId,
-          }
-        : {}),
+      ...(updatesClock ? { updatedAt } : {}),
+      ...(params.updatedByOperationId ? { updatedByOperationId: params.updatedByOperationId } : {}),
     });
-    writeWorkspaceMigrationMarkerForState(txn, deps, params);
+    writeWorkspaceMigrationMarkerForState(txn, deps, params, updatedAt);
   });
+}
+
+function nextAssignmentStateClock(deps: FleetStateDeps, previous: unknown = 0): number {
+  if (typeof previous !== "number" || !Number.isSafeInteger(previous) || previous < 0) {
+    throw new Error("source assignment clock is invalid");
+  }
+  const updatedAt = Math.max(deps.now ? deps.now().getTime() : Date.now(), previous + 1);
+  if (!Number.isSafeInteger(updatedAt) || updatedAt <= 0) throw new Error("source assignment clock is invalid");
+  return updatedAt;
 }
 
 function writeWorkspaceMigrationMarkerForState(
   txn: FleetStateTxn,
   deps: FleetStateDeps,
   params: MarkAssignmentStateParams,
+  updatedAt: number,
 ): void {
   if (params.state === "quiescing") {
     txn.update(deps.db.collection("users").doc(params.uid), {
       [WORKSPACE_MIGRATION_MARKER_PATH]: workspaceMigrationMarker(
         params.updatedByOperationId,
-        deps.now ? deps.now().getTime() : Date.now(),
+        updatedAt,
       ),
     });
     return;
@@ -1817,6 +1827,7 @@ function createMissingAssignment(
   if (!exactBinding) {
     throw new Error("unassigned source quiesce requires an exact operation binding");
   }
+  const updatedAt = nextAssignmentStateClock(deps);
   txn.set(ref, {
     uid: params.uid,
     slug: params.slug,
@@ -1824,10 +1835,10 @@ function createMissingAssignment(
     source: MIGRATE_CUSTOMER_OPERATION_KIND,
     state: params.state,
     epoch: params.epoch,
-    updatedAt: deps.now ? deps.now().getTime() : Date.now(),
+    updatedAt,
     updatedByOperationId: params.updatedByOperationId,
   });
-  writeWorkspaceMigrationMarkerForState(txn, deps, params);
+  writeWorkspaceMigrationMarkerForState(txn, deps, params, updatedAt);
 }
 
 function assertAssignmentStateUpdateMatches(
@@ -1846,10 +1857,15 @@ function assertAssignmentStateUpdateMatches(
     !params.createIfMissing || current.updatedByOperationId === params.updatedByOperationId,
     params.expected === undefined || (
       current.state === params.expected.state &&
-      currentOwner === params.expected.updatedByOperationId
+      currentOwner === params.expected.updatedByOperationId &&
+      assignmentClockMatches(current.updatedAt, params.expected.updatedAt)
     ),
   ].every(Boolean);
   if (!exact) throw new Error("source assignment changed before roster state update");
+}
+
+function assignmentClockMatches(current: unknown, expected: number | undefined): boolean {
+  return expected === undefined || Number.isSafeInteger(expected) && expected > 0 && current === expected;
 }
 
 function assignmentRef(

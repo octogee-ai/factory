@@ -704,7 +704,7 @@ describe("surge customer handoff", () => {
     const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE };
     await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("resume admission refused");
     sourceMountedCustomers.splice(0);
-    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("source has unmounted assigned customer alice");
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("resume admission refused");
     expect(h.deps.transfer).toHaveBeenCalledOnce();
     expect(h.deps.releaseTarget).not.toHaveBeenCalled();
     expect(h.assignments()[0].state).toBe("quiescing");
@@ -985,6 +985,11 @@ describe("surge customer handoff", () => {
       })],
     });
 
+    const readHealth = h.deps.readPodHealth;
+    h.deps.readPodHealth = vi.fn(async (...args) => {
+      const health = (await readHealth(...args))!;
+      return args[0].uid === targetPod.uid ? health : { ...health, handoffReleased: true, prelaunchState: "serving" };
+    });
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
@@ -1023,6 +1028,11 @@ describe("surge customer handoff", () => {
       })],
     });
 
+    const readHealth = h.deps.readPodHealth;
+    h.deps.readPodHealth = vi.fn(async (...args) => {
+      const health = (await readHealth(...args))!;
+      return args[0].uid === targetPod.uid ? health : { ...health, handoffReleased: true, prelaunchState: "serving" };
+    });
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
@@ -1045,7 +1055,7 @@ describe("surge customer handoff", () => {
     });
   });
 
-  it("reopens an abandoned surge gate while Kubernetes replaces the missing target", async () => {
+  it("reopens an abandoned Shared gate after exact Native custody resumes on its sole source", async () => {
     const h = harness({
       pods: [oldPod],
       assignments: [assignment("u1", "alice", {
@@ -1054,6 +1064,8 @@ describe("surge customer handoff", () => {
       })],
     });
 
+    const readHealth = h.deps.readPodHealth;
+    h.deps.readPodHealth = vi.fn(async (...args) => ({ ...(await readHealth(...args))!, handoffReleased: true, prelaunchState: "serving" }));
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
@@ -1092,7 +1104,7 @@ describe("surge customer handoff", () => {
     });
   });
 
-  it("reopens an abandoned surge gate after the replacement becomes the only pod", async () => {
+  it("retains an abandoned Shared gate without matching scheduler custody after pod replacement", async () => {
     const h = harness({
       pods: [{ ...targetPod, ready: true }],
       targetReleased: true,
@@ -1103,17 +1115,18 @@ describe("surge customer handoff", () => {
       })],
     });
 
+    h.deps.scheduler = vi.fn(async () => { throw new Error("Cron migration must acquire hold before this phase"); });
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
       stateMigration: MIGRATE_STATE,
-    })).resolves.toEqual({ ready: true });
+    })).rejects.toThrow("must acquire hold");
 
-    expect(h.events).toEqual(["assignment:u1:serving"]);
+    expect(h.events).toEqual([]);
     expect(h.assignments()[0]).toMatchObject({
-      state: "serving",
-      updatedByOperationId: h.operationId,
+      state: "quiescing",
+      updatedByOperationId: abandonedOperationId,
     });
   });
 
@@ -1151,7 +1164,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("reclaims a lease whose owning operation is no longer running", async () => {
+  it("retains Native custody when an unrelated operation is no longer running", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
@@ -1167,20 +1180,11 @@ describe("surge customer handoff", () => {
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
       stateMigration: MIGRATE_STATE,
-    })).resolves.toEqual({ ready: false });
+    })).rejects.toThrow("foreign assignment gate");
 
-    expect(h.events).toEqual([
-      "assignment:u1:serving",
-      "assignment:u1:quiescing",
-      "quiesce:alice",
-      "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
-      "release:target-uid",
-    ]);
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
-      "owner=placement-f061f700711dbdec1d7f8f2add33d1d3: owning operation is failed",
-    ));
+    expect(h.events).toEqual([]);
+    expect(h.deps.scheduler).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
   });
 
   it("does not reopen a terminal migration's source gate before native recovery", async () => {
@@ -1193,7 +1197,7 @@ describe("surge customer handoff", () => {
     expect(h.assignments()[0].state).toBe("quiescing");
   });
 
-  it("reclaims a lease whose owning operation no longer exists", async () => {
+  it("retains Native custody when an unrelated operation no longer exists", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice", {
         state: "quiescing",
@@ -1207,12 +1211,11 @@ describe("surge customer handoff", () => {
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
       stateMigration: MIGRATE_STATE,
-    })).resolves.toEqual({ ready: false });
+    })).rejects.toThrow("foreign assignment gate");
 
-    expect(h.events[0]).toBe("assignment:u1:serving");
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
-      "owner=placement-deleted: owning operation no longer exists",
-    ));
+    expect(h.events).toEqual([]);
+    expect(h.deps.scheduler).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
   });
 
   it("refuses a foreign migration gate", async () => {
@@ -2039,7 +2042,7 @@ describe("crash-looping surge target self-heal", () => {
     expect(unreachable.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
 
     const readyButFlagged = harness({ pods: [{ ...oldPod, crashLooping: true }, targetPod] });
-    await reconcileSurgeCustomerHandoff(readyButFlagged.deps, input);
+    await expect(reconcileSurgeCustomerHandoff(readyButFlagged.deps, input)).rejects.toThrow("scheduler physical custody changed");
     expect(readyButFlagged.deps.deleteCrashLoopingPod).not.toHaveBeenCalled();
   });
 });

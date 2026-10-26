@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
+import { gatewayScopedJobId, verifyFleetRequest } from "@octogee/core/fleet-signature";
+import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
@@ -411,6 +413,49 @@ function requestThroughFetch(fetch: typeof globalThis.fetch): typeof import("nod
 }
 
 describe("surge handoff direct pod transport", () => {
+  it.each(["hold", "export", "stage", "activate", "resume", "retire", "abort"] as const)("sends scheduler %s to the exact pod with gateway-bound migration authority", async phase => {
+    const operationId = "surge-scheduler-exact-clock";
+    const agentIds = ["octogee-alice-coach", "octogee-alice-proj-orbit-coach"];
+    const snapshot = { version: 1, operationId, agentIds, jobs: [], scratch: [] };
+    const result = { operationId, phase, agentIds, drained: true, ...(phase === "export" ? { snapshot } : {}) };
+    const fetch = vi.fn(async (_url: FetchInput, _init?: RequestInit) => new Response(JSON.stringify(result)));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+    const body = { migrationId: operationId, slug: "alice", phase, agentIds,
+      ...(phase === "stage" ? { snapshot } : {}) };
+    await expect(transport.scheduler!({ gatewayId: GATEWAY_ID, pod: target, slug: "alice", operationId, phase, agentIds,
+      ...(phase === "stage" ? { snapshot } : {}) })).resolves.toEqual(result);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("http://10.0.0.2:3003/scheduler/gw-a", expect.objectContaining({ method: "POST", signal: expect.any(AbortSignal) }));
+    const init = fetch.mock.calls[0]![1]!;
+    expect(JSON.parse(String(init.body))).toEqual(body);
+    const signature = new Headers(init.headers).get(SIGNATURE_HEADER)!;
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(operationId, GATEWAY_ID), String(init.body), signature)).toBe(true);
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId("stale-clock", GATEWAY_ID), String(init.body), signature)).toBe(false);
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, gatewayScopedJobId(operationId, "foreign-gateway"), String(init.body), signature)).toBe(false);
+  });
+
+  it.each([
+    { operationId: "foreign-attempt" }, { phase: "hold" }, { drained: false }, { drained: "true" },
+    { agentIds: [] }, { agentIds: [""] }, { agentIds: [1] },
+  ])("refuses an unconfirmed scheduler ACK %j", async invalid => {
+    const response = { operationId: "scheduler-clock", phase: "activate", drained: true, agentIds: ["octogee-alice-coach"], ...invalid };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response)));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+    await expect(transport.scheduler!({ gatewayId: GATEWAY_ID, pod: target, slug: "alice", operationId: "scheduler-clock", phase: "activate" })).rejects.toThrow(/scheduler activate/u);
+  });
+
+  it("requires a snapshot in the matching scheduler export ACK", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ operationId: "scheduler-clock", phase: "export", drained: true, agentIds: ["octogee-alice-coach"] })));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+    await expect(transport.scheduler!({ gatewayId: GATEWAY_ID, pod: source, slug: "alice", operationId: "scheduler-clock", phase: "export" })).rejects.toThrow(/scheduler export/u);
+  });
+
+  it.each(["abort", "resume"] as const)("accepts an empty-scope scheduler %s ACK for an attempt that never acquired custody", async phase => {
+    const result = { operationId: "scheduler-clock", phase, drained: true, agentIds: [] };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(result)));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });
+    await expect(transport.scheduler!({ gatewayId: GATEWAY_ID, pod: source, slug: "alice", operationId: "scheduler-clock", phase })).resolves.toEqual(result);
+  });
+
   it.each(["quiesce", "waitForSourceIdle"] as const)("treats HTTP 200 drained:false as pending for %s", async (method) => {
     const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ drained: false, runningCount: 1 }), { status: 200 }));
     const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch, log: vi.fn() });

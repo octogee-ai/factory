@@ -42,6 +42,7 @@ export function assignment(
     slug,
     state: "serving",
     epoch: 1,
+    updatedAt: 1,
     updatedByOperationId: null,
     ...overrides,
   };
@@ -98,7 +99,7 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
       status: input.bootingUids?.includes(pod.uid) ? "booting" as const : "ready" as const,
       version: pod.uid === targetPod.uid ? input.targetVersion ?? "new-sha" : "old-sha",
       fleetSignatureCapability: input.fleetSignatureCapabilityByUid?.[pod.uid] ?? "gateway-scoped",
-      handoffReleased: pod.uid === targetPod.uid && targetReleased,
+      handoffReleased: pod.uid === targetPod.uid ? targetReleased : true,
       terminalTarget: input.terminalTargetByUid?.[pod.uid],
       prelaunchState: (
         pod.uid === targetPod.uid &&
@@ -153,16 +154,22 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
       const current = assignments.find((item) => item.uid === uid);
       if (
         current?.state !== expected.state ||
-        current.updatedByOperationId !== expected.updatedByOperationId
+        current.updatedByOperationId !== expected.updatedByOperationId ||
+        expected.updatedAt !== undefined && current.updatedAt !== expected.updatedAt
       ) {
         throw new Error("assignment ownership changed");
       }
       assignments = assignments.map((item) => item.uid === uid
-        ? { ...item, state, updatedByOperationId }
+        ? { ...item, state, updatedByOperationId, updatedAt: (item.updatedAt ?? 0) + 1 }
         : item);
     }),
     waitForSourceIdle: spy(async () => undefined),
     resumeSourceIngress: spy(async () => undefined),
+    scheduler: spy(async request => ({
+      operationId: request.operationId, phase: request.phase, drained: true,
+      agentIds: request.agentIds ?? [`octogee-${request.slug}-coach`],
+      ...(request.phase === "export" ? { snapshot: { version: 1, operationId: request.operationId, agentIds: request.agentIds ?? [`octogee-${request.slug}-coach`], jobs: [], scratch: [] } } : {}),
+    })),
     quiesce: spy(async ({ slug }) => {
       events.push(`quiesce:${slug}`);
     }),
