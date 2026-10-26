@@ -37,10 +37,10 @@ describe("Builder tool groups", () => {
       manifest.groups.flatMap((group) => Object.entries(group.npmPackages ?? {})),
     );
     expect(npmPackages).toEqual({
-      "@anthropic-ai/claude-code": "2.1.303",
-      "@openai/codex": "0.163.0",
+      "@anthropic-ai/claude-code": "2.1.310",
+      "@openai/codex": "0.164.0",
       "@sparticuz/chromium": "153.0.0",
-      "firebase-tools": "15.34.0",
+      "firebase-tools": "15.34.1",
       "npm-check-updates": "23.1.1",
       "pnpm": "12.15.0",
       "tsx": "4.23.15",
@@ -63,7 +63,7 @@ describe("Builder tool groups", () => {
     expect(manifest.pythonPackages).toEqual([
       "PyYAML==6.0.3",
       "beautifulsoup4==4.15.0",
-      "pandas==3.0.6",
+      "pandas==3.1.0",
       "matplotlib==3.11.2",
     ]);
     expect(manifest.standaloneTools).toEqual({
@@ -71,9 +71,9 @@ describe("Builder tool groups", () => {
         version: "590.0.1",
         sha256: "d1ae7be7e12c4e7d8286fab4774f5441020aca89dc7793ddacbace8d11d20f06",
       },
-      gh: { version: "2.102.1" },
+      gh: { version: "2.103.2" },
       helm: { version: "4.3.1" },
-      terraform: { version: "1.16.7" },
+      terraform: { version: "1.17.0" },
       yq: { version: "4.54.1" },
     });
   });
