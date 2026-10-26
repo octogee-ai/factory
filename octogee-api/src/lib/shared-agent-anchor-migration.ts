@@ -6,10 +6,25 @@ import { GLM_OPERATIONS_COLLECTION, readSchedulerMigrationIdentity, type Custome
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, customerRuntimeMutationFenced, projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerAgentAnchorMigration } from "@octogee/shared/types/fleet-broker";
+import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 
-export async function sharedAgentAnchorMigrationScope(
-  db: Firestore, txn: Transaction, request: { gatewayId: string; slug: string; migrationId: unknown; expected?: FleetBrokerAgentAnchorMigration },
-) {
+interface AgentAnchorMigrationRequest {
+  gatewayId: string;
+  slug: string;
+  migrationId: unknown;
+  podUid?: string;
+  expected?: FleetBrokerAgentAnchorMigration;
+}
+
+const POD_UID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function sharedAgentAnchorMigrationScope(db: Firestore, txn: Transaction, request: AgentAnchorMigrationRequest) {
+  const { migrationId } = request;
+  if (typeof migrationId === "string" && migrationId.startsWith("surge-")) return sharedSurgeAgentAnchorScope(db, txn, request);
+  return sharedCrossGatewayAgentAnchorScope(db, txn, request);
+}
+
+async function sharedCrossGatewayAgentAnchorScope(db: Firestore, txn: Transaction, request: AgentAnchorMigrationRequest) {
   const { gatewayId, slug, migrationId, expected } = request;
   if (!validMigrationId(migrationId)) return null;
   const operationId = migrationId.slice(4);
@@ -38,6 +53,64 @@ export async function sharedAgentAnchorMigrationScope(
   const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: operation.startedAt, sourceGatewayId, sourceEpoch: assigned.epoch };
   if (!migrationAuthorityMatches(migration, expected)) return null;
   return { gatewayId, uid: input.uid as string, slug, assignmentEpoch: assigned.epoch as number, assignmentState: "quiescing" as const, migration };
+}
+
+async function sharedSurgeAgentAnchorScope(
+  db: Firestore, txn: Transaction, request: AgentAnchorMigrationRequest,
+) {
+  const { gatewayId, slug, migrationId, podUid, expected } = request;
+  if (!podUid || !POD_UID_SHAPE.test(podUid) ||
+      migrationId !== `surge-${gatewayId}-${podUid}`) return null;
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const [gateway, assignments] = await Promise.all([
+    txn.get(gatewayRef), txn.get(gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).where("slug", "==", slug).limit(2)),
+  ]);
+  if (!sharedSurgeGatewayCurrent(gateway.data(), gatewayId) || assignments.size !== 1) return null;
+  const assignment = assignments.docs[0]!, assigned = assignment.data(), uid = assignment.id;
+  if (!sharedSurgeAssignmentCurrent(assigned, uid, request)) return null;
+  const data = (await txn.get(db.collection("users").doc(uid))).data();
+  if (!sharedSurgeCustomerCurrent(data, request)) return null;
+  const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: assigned.updatedAt, sourceGatewayId: gatewayId, sourceEpoch: assigned.epoch };
+  if (!migrationAuthorityMatches(migration, expected)) return null;
+  return { gatewayId, uid, slug, assignmentEpoch: assigned.epoch as number, assignmentState: "quiescing" as const, migration };
+}
+
+export async function sharedAssignedSourceSurgeAnchorScope(
+  db: Firestore, txn: Transaction, request: AgentAnchorMigrationRequest & { uid: string },
+) {
+  const { gatewayId, slug, migrationId, podUid, uid, expected } = request;
+  const prefix = `surge-${gatewayId}-`;
+  const targetPodUid = typeof migrationId === "string" && migrationId.startsWith(prefix) ? migrationId.slice(prefix.length) : "";
+  if (!podUid || !POD_UID_SHAPE.test(podUid) || !POD_UID_SHAPE.test(targetPodUid) || podUid === targetPodUid || !validDocumentId(uid)) return null;
+  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
+  const [gateway, assignment, user] = await Promise.all([
+    txn.get(gatewayRef), txn.get(gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(uid)), txn.get(db.collection("users").doc(uid)),
+  ]);
+  const assigned = assignment.data();
+  if (!sharedSurgeGatewayCurrent(gateway.data(), gatewayId) || !assigned || !sharedSurgeAssignmentCurrent(assigned, uid, request) ||
+      !sharedSurgeCustomerCurrent(user.data(), request)) return null;
+  const sourceSurge: FleetBrokerAgentAnchorMigration = { migrationId: migrationId as string, claimStartedAt: assigned.updatedAt, sourceGatewayId: gatewayId, sourceEpoch: assigned.epoch };
+  if (!migrationAuthorityMatches(sourceSurge, expected)) return null;
+  return { gatewayId, uid, slug, assignmentEpoch: assigned.epoch as number, assignmentState: "quiescing" as const, sourceSurge };
+}
+
+function sharedSurgeGatewayCurrent(data: DocumentData | undefined, gatewayId: string): boolean {
+  const root = projectGatewayDesiredRootForGateway(data, gatewayId);
+  return [root?.gatewayClass === "shared", ["running", "draining"].includes(root?.desiredStatus ?? ""),
+    root?.retirementClaim == null, data?.runtimeRestartFence == null].every(Boolean);
+}
+
+function sharedSurgeAssignmentCurrent(assigned: DocumentData, uid: string, { gatewayId, slug, migrationId }: AgentAnchorMigrationRequest): boolean {
+  return [validDocumentId(uid), assigned.uid === uid, assigned.slug === slug, assigned.gatewayId === gatewayId,
+    assigned.state === "quiescing", assigned.updatedByOperationId === migrationId,
+    Number.isSafeInteger(assigned.epoch), assigned.epoch >= 0, Number.isSafeInteger(assigned.updatedAt), assigned.updatedAt > 0].every(Boolean);
+}
+
+function sharedSurgeCustomerCurrent(data: DocumentData | undefined, { gatewayId, slug, migrationId }: AgentAnchorMigrationRequest): boolean {
+  const openclaw = data?.provisioning?.openclaw, marker = readWorkspaceMigrationMarker(openclaw);
+  return [!customerRuntimeMutationFenced(data), slugFromAssignedUser(data) === slug, openclaw?.gatewayId === gatewayId,
+    openclaw?.status === "complete", marker?.state === "moving", marker?.operationId === migrationId,
+    Number.isSafeInteger(marker?.startedAt), (marker?.startedAt ?? 0) > 0].every(Boolean);
 }
 
 function migrationOperationCurrent(operation: DocumentData, input: DocumentData, gatewayId: string): boolean {

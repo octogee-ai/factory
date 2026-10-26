@@ -2438,6 +2438,7 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
     if (offlineTarget) {
       await reattachBuilderAgents({
         stores: prepared.stores,
+        diagnosticIdentity: offlineTarget,
         env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
         run: deps.runOpenClaw,
         resolveCarriedProjectWorkspace: agentId => carriedProjectWorkspace(input, agentId),

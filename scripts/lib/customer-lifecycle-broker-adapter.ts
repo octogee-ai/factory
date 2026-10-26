@@ -335,7 +335,9 @@ async function prepareCustomerSharedAnchors(ctx: BrokerCtx, input: {
   if (ctx.isBuilderGateway() || !postgresAgentStoreConfigured()) return undefined;
   const uid = input.uid ?? await ctx.client.uidForSlug(input.slug);
   if (!uid && !input.migrationId) throw new Error(`Shared imported agent anchors require an assigned owner for ${input.slug}`);
-  return prepareSharedCustomerAgentAnchors({ ...input, uid: uid ?? undefined, migrationId: uid ? undefined : input.migrationId, stateDir: resolveOpenClawStateDir(), broker: ctx.client });
+  const surgeTarget = process.env.GATEWAY_ID && process.env.POD_UID &&
+    input.migrationId === `surge-${process.env.GATEWAY_ID}-${process.env.POD_UID}`;
+  return prepareSharedCustomerAgentAnchors({ ...input, uid: uid ?? undefined, migrationId: uid && !surgeTarget ? undefined : input.migrationId, stateDir: resolveOpenClawStateDir(), broker: ctx.client });
 }
 
 async function releaseAgentsAndInvalidateCache(

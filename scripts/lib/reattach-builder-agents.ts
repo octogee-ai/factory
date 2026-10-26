@@ -3,6 +3,7 @@ import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { parseAgentId } from "../../shared/types/identity.js";
 import type { PreparedAgentStore } from "./agent-store-snapshot.js";
 import { runOpenClaw, type OpenClawCommand, type OpenClawCommandResult } from "./openclaw-cli.js";
+import { captureCarriedAgentRosterFailure, type CarriedAgentDiagnosticIdentity } from "./carried-agent-diagnostics.js";
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -69,6 +70,7 @@ export async function reattachBuilderAgents(input: {
   signal?: AbortSignal;
   run?: OpenClawCommand;
   resolveCarriedProjectWorkspace?: ProjectWorkspaceResolver;
+  diagnosticIdentity?: CarriedAgentDiagnosticIdentity;
   log: (message: string) => void;
 }): Promise<void> {
   if (input.stores.length === 0) return;
@@ -95,7 +97,13 @@ export async function reattachBuilderAgents(input: {
   const listed = await run(["agents", "list", "--json"], { env: input.env, signal: input.signal });
   await assertCurrent();
   assertAnchors(stores);
-  if (listed.code !== 0) throw new Error(`Native carried-agent roster inspection failed (exit ${listed.code})`);
+  if (listed.code !== 0) {
+    try {
+      const captured = await captureCarriedAgentRosterFailure({ env: input.env, identity: input.diagnosticIdentity, result: listed });
+      input.log(`[migration-rsync] carried-agent roster diagnostics retained slot=${captured.slot} identity=${captured.identity}`);
+    } catch { input.log("[migration-rsync] carried-agent roster diagnostics unavailable"); }
+    throw new Error(`Native carried-agent roster inspection failed (exit ${listed.code})`);
+  }
   const roster = nativeJson(listed.stdout);
   if (!Array.isArray(roster)) throw new Error("Native carried-agent roster is not an array");
   const registrations = [];

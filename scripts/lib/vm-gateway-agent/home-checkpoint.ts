@@ -21,6 +21,7 @@ export const HOME_VOLUME_NAME = "data";
 export const HOME_CHECKPOINT_INTERVAL_MS = 30 * 60_000;
 export const HOME_TOOLCHAIN_CACHE = ".octogee/toolchains/npm-cache";
 const SOURCE_DOCTOR_DIAGNOSTICS_HOME_PATH = ".octogee-source-doctor-diagnostics";
+const CARRIED_AGENT_DIAGNOSTICS_HOME_PATH = ".octogee-carried-agent-diagnostics";
 export const HOME_CHECKPOINT_MARKER = "home-checkpoint.marker";
 export const HOME_RESTORE_PENDING = "home-restore.pending";
 export const HOME_METADATA_AUTHORIZATION = [".ssh/authorized_keys", ".ssh/authorized_keys.metadata"] as const;
@@ -108,6 +109,7 @@ export function tarCreateArgs(archive: string, scope: HomeScope): string[] {
     ...HOME_DESKTOP_RUNTIME_PATHS.filter(path => path !== ".local/share/mise" || scope.desktopToolsRebuildable).map((path) => `--exclude=desktop-home/${path}`),
     `--exclude=data/${HOME_TOOLCHAIN_CACHE}`,
     `--exclude=data/${SOURCE_DOCTOR_DIAGNOSTICS_HOME_PATH}`,
+    `--exclude=data/${CARRIED_AGENT_DIAGNOSTICS_HOME_PATH}`,
     ...HOME_METADATA_AUTHORIZATION.map((path) => `--exclude=desktop-home/${path}`),
     "-C", `${scope.dataDir}/..`, "data",
     "-C", `${scope.desktopDir}/..`,
@@ -119,11 +121,12 @@ export function tarExtractArgs(archive: string, dataDir: string): string[] {
   return ["--extract", "--gzip", "--numeric-owner", "--same-owner", "--same-permissions", "--anchored",
     ...HOME_DESKTOP_TOOL_PATHS.filter(path => path !== ".local/share/mise").map(path => `--exclude=desktop-home/${path}`),
     `--exclude=data/${SOURCE_DOCTOR_DIAGNOSTICS_HOME_PATH}`,
+    `--exclude=data/${CARRIED_AGENT_DIAGNOSTICS_HOME_PATH}`,
     `--file=${archive}`, `--directory=${dataDir}`];
 }
 
 export function findDirtyArgs(dataDir: string, marker: string, toolchainCache: boolean = false, desktopToolsRebuildable = false): string[] {
-  const excluded = toolchainCache ? [`${dataDir}/${HOME_TOOLCHAIN_CACHE}`, `${dataDir}/${SOURCE_DOCTOR_DIAGNOSTICS_HOME_PATH}`]
+  const excluded = toolchainCache ? [`${dataDir}/${HOME_TOOLCHAIN_CACHE}`, `${dataDir}/${SOURCE_DOCTOR_DIAGNOSTICS_HOME_PATH}`, `${dataDir}/${CARRIED_AGENT_DIAGNOSTICS_HOME_PATH}`]
     : [...HOME_DESKTOP_RUNTIME_PATHS.filter(path => path !== ".local/share/mise" || desktopToolsRebuildable), ...HOME_METADATA_AUTHORIZATION].map((path) => `${dataDir}/${path}`);
   const prune = excluded.flatMap((path, index) => index === 0 ? ["-path", path] : ["-o", "-path", path]);
   return [dataDir, "(", ...prune, ")", "-prune", "-o", "-newer", marker, "-print", "-quit"];

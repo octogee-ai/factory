@@ -462,7 +462,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   });
 
-  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "quiescing-source-migration", "quiescing-source-migration-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
+  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "quiescing-source-migration", "quiescing-source-migration-missing", "quiescing-source-surge", "quiescing-source-surge-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-known-surge", "pre-cutover-known-surge-missing-record", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-import-"));
     const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
     const priorState = process.env.OPENCLAW_STATE_DIR;
@@ -474,11 +474,14 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       { agentId: "octogee-tester10-proj-orbit-coach", storeId: "3313965d-1e56-4006-9d9c-1b0289fafcfa", schema: "octogee_agent_3313965d1e564006" },
     ];
     const migrating = mode.startsWith("pre-cutover") || mode === "stale-migration";
-    const migration = { migrationId: "mig-move", claimStartedAt: 10, sourceGatewayId: "source", sourceEpoch: 0 };
+    const knownSurge = mode.startsWith("pre-cutover-known-surge");
+    if (knownSurge) { vi.stubEnv("GATEWAY_ID", "shared-target"); vi.stubEnv("POD_UID", "target-pod"); }
     const sourceMigration = mode.startsWith("quiescing-source-migration");
+    const sourceSurge = mode.startsWith("quiescing-source-surge");
+    const migration = { migrationId: knownSurge ? "surge-shared-target-target-pod" : sourceSurge ? "surge-shared-source-foreign-pod" : "mig-move", claimStartedAt: 10, sourceGatewayId: knownSurge ? "shared-target" : "source", sourceEpoch: 0 };
     const quiescing = mode.startsWith("quiescing") || migrating;
-    if (mode === "quiescing-resume" || mode === "quiescing-source-migration" || mode === "pre-cutover" || mode === "stale-migration") await landAgentAnchors(dir, anchors);
-    if (mode === "pre-cutover-partial" || mode === "quiescing-source-migration-missing") await landAgentAnchors(dir, [anchors[0]]);
+    if (mode === "quiescing-resume" || mode === "quiescing-source-migration" || mode === "quiescing-source-surge" || mode === "pre-cutover" || mode === "stale-migration") await landAgentAnchors(dir, anchors);
+    if (mode === "pre-cutover-partial" || mode === "quiescing-source-migration-missing" || mode === "quiescing-source-surge-missing") await landAgentAnchors(dir, [anchors[0]]);
     if (mode === "pre-cutover-local-conflict") await landAgentAnchors(dir, [{ ...anchors[0], storeId: "11111111-2222-4333-8444-555555555555", schema: "octogee_agent_1111111122224333" }]);
     const priorLocalCoach = await fs.readFile(path.join(dir, "agents", anchors[0].agentId, "agent", "openclaw-agent.sqlite")).catch(() => undefined);
     const priorLocalProject = await fs.readFile(path.join(dir, "agents", anchors[1].agentId, "agent", "openclaw-agent.sqlite")).catch(() => undefined);
@@ -502,7 +505,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     });
     const read = vi.fn(async () => {
       if (mode === "stale-migration") throw new Error("migration custody changed");
-      return { ...((migrating || sourceMigration) && mode !== "pre-cutover-no-claim" ? { migration: mode === "pre-cutover-wrong-claim" ? { ...migration, migrationId: "mig-other" } : migration } : {}), anchors: mode === "pre-cutover-missing-record" ? anchors.slice(0, 1) : anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
+      return { ...((migrating || sourceMigration) && mode !== "pre-cutover-no-claim" ? { migration: mode === "pre-cutover-wrong-claim" ? { ...migration, migrationId: "mig-other" } : migration } : {}), anchors: mode === "pre-cutover-missing-record" || mode === "pre-cutover-known-surge-missing-record" ? anchors.slice(0, 1) : anchors, assignment: { uid: "uid-tester10", epoch: 0, state: quiescing ? "quiescing" as const : "serving" as const } }; });
     let release!: () => void;
     const recorded = new Promise<void>((resolve) => { release = resolve; });
     let reportStarted!: () => void;
@@ -517,13 +520,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       { accountId: "tester10-coach", running: true, connected: true },
       { accountId: "tester10-proj-orbit", running: true, connected: true },
     ] } })) });
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ ...(resuming ? { userSnapshot: vi.fn(async () => ({ uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", status: "complete" }) as FleetBrokerUserSnapshot), assignmentRoster: vi.fn(async () => [{ uid: "uid-tester10", state: quiescing ? "quiescing" as const : "serving" as const, epoch: 0 }]) } : {}), ...(migrating ? { uidForSlug: vi.fn(async () => null) } : {}), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
-    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId, beforeRuntimePublish: async () => undefined }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10", { migrationId: "mig-move" });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ ...(resuming ? { userSnapshot: vi.fn(async () => ({ uid: "uid-tester10", slug: "tester10", gatewayId: "shared-source", status: "complete" }) as FleetBrokerUserSnapshot), assignmentRoster: vi.fn(async () => [{ uid: "uid-tester10", state: quiescing ? "quiescing" as const : "serving" as const, epoch: 0 }]) } : {}), ...(migrating && !knownSurge ? { uidForSlug: vi.fn(async () => null) } : {}), readAgentAnchors: read, reportAgentAnchors: report }), rpc, log: vi.fn(), isBuilderGateway: () => false });
+    const activation = migrating ? adapter.activateImportedCustomer("tester10", { migrationId: migration.migrationId, beforeRuntimePublish: async () => undefined }) : mode === "activate" ? adapter.activateImportedCustomer("tester10") : adapter.resumeCustomer("tester10", { migrationId: migration.migrationId });
     const observed = activation.catch((error) => error);
     try {
       const refusals: Partial<Record<string, string>> = {
-        "quiescing-missing": "existing local", "quiescing-source-migration-missing": "existing local", "stale-migration": "custody changed",
-        "pre-cutover-missing-record": "every recorded agent identity", "pre-cutover-local-conflict": "different identity",
+        "quiescing-missing": "existing local", "quiescing-source-migration-missing": "existing local", "quiescing-source-surge-missing": "existing local", "stale-migration": "custody changed",
+        "pre-cutover-missing-record": "every recorded agent identity", "pre-cutover-known-surge-missing-record": "every recorded agent identity", "pre-cutover-local-conflict": "different identity",
         "pre-cutover-wrong-claim": "migration anchor authority", "pre-cutover-no-claim": "migration anchor authority", "pre-cutover-missing-pg": "is missing",
       };
       const refusal = refusals[mode];
@@ -543,7 +546,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
         expect(report).toHaveBeenCalledOnce();
         expect(mocks.applyOpenClawActivationManifest).not.toHaveBeenCalled();
         expect(rpc.channelsStart).not.toHaveBeenCalled();
-        expect(read).toHaveBeenCalledWith({ ...(migrating ? { migrationId: migration.migrationId } : { uid: "uid-tester10" }), slug: "tester10" });
+        expect(read).toHaveBeenCalledWith({ ...(migrating ? { migrationId: migration.migrationId, ...(knownSurge ? { uid: "uid-tester10" } : {}) } : { uid: "uid-tester10" }), slug: "tester10" });
         expect(report).toHaveBeenCalledWith({ uid: "uid-tester10", slug: "tester10", ...(migrating || sourceMigration ? { migration } : {}), assignmentEpoch: 0, assignmentState: quiescing ? "quiescing" : "serving", anchors, configuredAgentIds: anchors.map((anchor) => anchor.agentId) });
         release();
         await activation;
@@ -552,7 +555,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       }
     } finally {
       release(); await observed;
-      if (resuming) vi.unstubAllEnvs();
+      if (resuming || knownSurge) vi.unstubAllEnvs();
       if (priorState === undefined) delete process.env.OPENCLAW_STATE_DIR;
       else process.env.OPENCLAW_STATE_DIR = priorState;
       if (priorConfig) await fs.writeFile(OPENCLAW_CONFIG, priorConfig);

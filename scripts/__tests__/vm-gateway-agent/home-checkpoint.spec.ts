@@ -139,7 +139,7 @@ describe("checkpointHome", () => {
     const h = fakeHome({ dirty: false });
     expect(await checkpointHome(h.deps, h.scope, { force: false })).toEqual({ status: "clean" });
     expect(h.shell).toEqual([
-      "find /srv/octogee/volumes/data ( -path /srv/octogee/volumes/data/.octogee/toolchains/npm-cache -o -path /srv/octogee/volumes/data/.octogee-source-doctor-diagnostics ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
+      "find /srv/octogee/volumes/data ( -path /srv/octogee/volumes/data/.octogee/toolchains/npm-cache -o -path /srv/octogee/volumes/data/.octogee-source-doctor-diagnostics -o -path /srv/octogee/volumes/data/.octogee-carried-agent-diagnostics ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
       "find /srv/octogee/desktop-home ( -path /srv/octogee/desktop-home/.local/share/mise -o -path /srv/octogee/desktop-home/.cache/mise -o -path /srv/octogee/desktop-home/.npm -o -path /srv/octogee/desktop-home/.config/octogee-chromium/Default/Cache -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonLock -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonCookie -o -path /srv/octogee/desktop-home/.config/octogee-chromium/SingletonSocket -o -path /srv/octogee/desktop-home/.config/octogee-chromium/DevToolsActivePort -o -path /srv/octogee/desktop-home/.ssh/authorized_keys -o -path /srv/octogee/desktop-home/.ssh/authorized_keys.metadata ) -prune -o -newer /srv/octogee/home-checkpoint.marker -print -quit",
     ]);
     expect(h.fetches).toEqual([]);
@@ -282,7 +282,7 @@ describe("restoreHome", () => {
     expect(await restoreHome(h.deps, h.scope)).toEqual({ status: "restored", name: NAME, size: 2048 });
     expect(h.fetches[1]).toMatchObject({ url: "https://storage.example/download", init: { method: "GET" } });
     expect(h.shell).toEqual([
-      "tar --extract --gzip --numeric-owner --same-owner --same-permissions --anchored --exclude=desktop-home/.cache/mise --exclude=desktop-home/.npm --exclude=data/.octogee-source-doctor-diagnostics --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
+      "tar --extract --gzip --numeric-owner --same-owner --same-permissions --anchored --exclude=desktop-home/.cache/mise --exclude=desktop-home/.npm --exclude=data/.octogee-source-doctor-diagnostics --exclude=data/.octogee-carried-agent-diagnostics --file=/tmp/octogee-home-restore-xyz/home.tar.gz --directory=/tmp/octogee-home-restore-xyz/staged",
     ]);
     expect(h.touched).toEqual([{ path: "/srv/octogee/home-restore.pending", at: 1_700_000_000_000 }, { path: "/srv/octogee/home-checkpoint.marker", at: 1_700_000_000_000 }]);
     expect(h.removed).toEqual(["/srv/octogee/home-restore.pending", "/tmp/octogee-home-restore-xyz"]);
@@ -330,9 +330,8 @@ describe("required disposable home restore", () => {
 });
 
 
-describe.runIf(process.platform === "linux")("private SourceDoctor diagnostics checkpoint boundary", () => {
+describe.runIf(process.platform === "linux").each([".octogee-source-doctor-diagnostics", ".octogee-carried-agent-diagnostics"])("private diagnostics checkpoint boundary: %s", (diagnosticPath) => {
   const run = promisify(execFile);
-  const diagnosticPath = ".octogee-source-doctor-diagnostics";
   async function fixture() {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "home-diagnostics-"));
     const data = path.join(root, "data"), desktop = path.join(root, "desktop-home");

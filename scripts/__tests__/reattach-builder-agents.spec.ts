@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { reattachBuilderAgents } from "../lib/reattach-builder-agents.js";
+import { captureCarriedAgentRosterFailure, CARRIED_AGENT_DIAGNOSTICS_DIRECTORY } from "../lib/carried-agent-diagnostics.js";
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
@@ -258,4 +259,87 @@ it("preserves configured custom-agent restoration without project authority", as
   await expect(reattachBuilderAgents({ stores: [{ agentId, destinationPath: f.destinationPath }], env: { OPENCLAW_STATE_DIR: f.root },
     run, log: vi.fn(), assertHeld: async () => {}, resolveCarriedProjectWorkspace })).resolves.toBeUndefined();
   expect(resolveCarriedProjectWorkspace).not.toHaveBeenCalled();
+});
+
+
+it("privately retains the failed held-roster command output without restoring agents or exposing output", async () => {
+  const f = await fixture(), home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "roster-home-")));
+  roots.push(home);
+  const before = await fs.readFile(f.destinationPath), log = vi.fn();
+  const run = vi.fn(async () => ({ code: 1, stdout: "private stdout synthetic-token", stderr: "private stderr synthetic-secret" }));
+  const identity = { migrationId: "surge-synthetic-target", slug: "chris", targetPodUid: "synthetic-target" };
+  await expect(reattachBuilderAgents({ stores: [f], env: { HOME: home, OPENCLAW_STATE_DIR: f.root },
+    diagnosticIdentity: identity, run, log, assertHeld: async () => {} })).rejects.toThrow("Native carried-agent roster inspection failed (exit 1)");
+  expect(run).toHaveBeenCalledTimes(1);
+  const directory = path.join(home, ".octogee-carried-agent-diagnostics", "slot-0");
+  expect(await fs.readFile(path.join(directory, "stdout.bin"), "utf8")).toBe("private stdout synthetic-token");
+  expect(await fs.readFile(path.join(directory, "stderr.bin"), "utf8")).toBe("private stderr synthetic-secret");
+  expect((await fs.stat(path.dirname(directory))).mode & 0o777).toBe(0o700);
+  expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+  for (const name of ["stdout.bin", "stderr.bin", "metadata.json"]) expect((await fs.stat(path.join(directory, name))).mode & 0o777).toBe(0o600);
+  const metadata = JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8"));
+  expect(metadata).toMatchObject({ version: 1, exitCode: 1, stdout: { bytes: 30 }, stderr: { bytes: 31 } });
+  expect(JSON.stringify(metadata)).not.toMatch(/synthetic-token|synthetic-secret|surge-synthetic-target|synthetic-target/);
+  expect(JSON.stringify(log.mock.calls)).not.toMatch(/synthetic-token|synthetic-secret|private stdout|private stderr/);
+  expect(await fs.readFile(f.destinationPath)).toEqual(before);
+});
+
+async function diagnosticFixture() {
+  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "carried-diagnostics-"))); roots.push(home);
+  const state = path.join(home, ".openclaw"); await fs.mkdir(state, { mode: 0o700 });
+  const root = path.join(home, CARRIED_AGENT_DIAGNOSTICS_DIRECTORY);
+  return { home, state, root, input: { env: { HOME: home, OPENCLAW_STATE_DIR: state },
+    identity: { migrationId: "synthetic-migration", slug: "chris", targetPodUid: "synthetic-pod" },
+    result: { code: 1, stdout: "original", stderr: "private failure" } } };
+}
+
+it("bounds retained failure output to four exclusive slots without overwriting earlier evidence", async () => {
+  const f = await diagnosticFixture();
+  for (let i = 0; i < 4; i++) await captureCarriedAgentRosterFailure({ ...f.input, result: { ...f.input.result, stdout: String(i) } });
+  await expect(captureCarriedAgentRosterFailure(f.input)).rejects.toThrow("full");
+  expect(await fs.readFile(path.join(f.root, "slot-0/stdout.bin"), "utf8")).toBe("0");
+  expect(await fs.readdir(f.root)).toHaveLength(4);
+});
+
+it.each(["root-link", "home-link", "root-mode", "slot-link", "file-link", "hardlink", "unknown", "oversize-input", "oversize-retained", "overlap"])(
+  "refuses unsafe private roster evidence storage: %s", async change => {
+    const f = await diagnosticFixture();
+    if (change === "home-link") {
+      const link = f.home + "-link"; roots.push(link); await fs.symlink(f.home, link); f.input.env.HOME = link;
+    } else if (change === "overlap") {
+      await fs.mkdir(f.root, { mode: 0o700 }); f.input.env.OPENCLAW_STATE_DIR = f.home;
+    } else if (change === "oversize-input") {
+      f.input.result.stderr = "x".repeat(2 * 1024 * 1024 + 1);
+    } else {
+      await fs.mkdir(f.root, { mode: 0o700 });
+      if (change === "root-link") {
+        await fs.rmdir(f.root); await fs.symlink(f.state, f.root);
+      } else if (change === "root-mode") await fs.chmod(f.root, 0o755);
+      else if (change === "unknown") await fs.writeFile(path.join(f.root, "unknown"), "private", { mode: 0o600 });
+      else {
+        const slot = path.join(f.root, "slot-0");
+        if (change === "slot-link") await fs.symlink(f.state, slot);
+        else {
+          await fs.mkdir(slot, { mode: 0o700 });
+          const file = path.join(slot, "stdout.bin"), outside = path.join(f.home, "private-outside");
+          await fs.writeFile(outside, "untouched", { mode: 0o600 });
+          if (change === "file-link") await fs.symlink(outside, file);
+          else if (change === "hardlink") await fs.link(outside, file);
+          else await fs.writeFile(file, "x".repeat(2 * 1024 * 1024 + 1), { mode: 0o600 });
+        }
+      }
+    }
+    await expect(captureCarriedAgentRosterFailure(f.input)).rejects.toThrow(/carried-agent diagnostics/);
+    if (await fs.access(path.join(f.home, "private-outside")).then(() => true, () => false)) {
+      expect(await fs.readFile(path.join(f.home, "private-outside"), "utf8")).toBe("untouched");
+    }
+  },
+);
+
+it("keeps the import refusal and raw output private when evidence storage is unavailable", async () => {
+  const f = await fixture(), log = vi.fn(), run = vi.fn(async () => ({ code: 1, stdout: "private-secret", stderr: "private-token" }));
+  await expect(reattachBuilderAgents({ stores: [f], env: { OPENCLAW_STATE_DIR: f.root }, run, log,
+    assertHeld: async () => {} })).rejects.toThrow("Native carried-agent roster inspection failed (exit 1)");
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(log).toHaveBeenCalledExactlyOnceWith("[migration-rsync] carried-agent roster diagnostics unavailable");
 });
