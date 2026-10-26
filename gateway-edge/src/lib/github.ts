@@ -56,8 +56,9 @@ async function fetchGithubJson(
   url: string,
   token: string | undefined,
   body?: unknown,
-  notFoundMessage?: string,
+  options: { notFoundMessage?: string; signal?: AbortSignal } = {},
 ): Promise<unknown> {
+  const { notFoundMessage, signal } = options;
   const upperMethod = method.toUpperCase();
   const cacheable = upperMethod === "GET" && body === undefined;
   const cacheKey = cacheable ? githubConditionalCacheKey(url, token) : null;
@@ -66,6 +67,7 @@ async function fetchGithubJson(
   const send = (useValidator: boolean) =>
     fetch(url, {
       method: upperMethod,
+      ...(signal ? { signal } : {}),
       headers: {
         ...githubHeaders(token),
         ...(useValidator && cached ? { "If-None-Match": cached.etag } : {}),
@@ -125,7 +127,7 @@ export async function githubContentsApi(
   ref?: string,
 ): Promise<unknown> {
   const url = githubContentsUrl(owner, repo, path) + (ref ? `?ref=${encodeURIComponent(ref)}` : "");
-  return fetchGithubJson("GET", url, token, undefined, "GitHub API 404");
+  return fetchGithubJson("GET", url, token, undefined, { notFoundMessage: "GitHub API 404" });
 }
 
 export async function githubCommitsApi(
@@ -176,8 +178,9 @@ export async function githubJson(
   url: string,
   token: string | undefined,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<unknown> {
-  return fetchGithubJson(method, url, token, body);
+  return fetchGithubJson(method, url, token, body, { signal });
 }
 
 export const GITHUB_ISSUES_PER_PAGE = 100;

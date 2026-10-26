@@ -29,6 +29,7 @@ import internalByotSyncRoutes from "./routes/internal/byot-sync.js";
 import internalConnectorRoutes from "./routes/internal/connectors.js";
 import { createInternalComputerRouter, resolveComputerControlUrl } from "./routes/internal/computer.js";
 import { createAgentImportsRouter } from "./routes/agent-imports.js";
+import { createAgentExportsRouter } from "./routes/agent-exports.js";
 import { createAgentImportRuntime, invokeLocalOpenClaw } from "./lib/agent-import-runtime.js";
 import { startDesktopNodePairing } from "./lib/desktop-node-pairing.js";
 import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
@@ -316,6 +317,10 @@ function mountSidecarLocalitySurface(app: Express, options: {
     localGatewayId: () => process.env.GATEWAY_ID ?? null,
   }));
   mountApi(app, "/agent-imports", agentImportsLocality);
+  const agentExportsLocality = Router({ mergeParams: true });
+  agentExportsLocality.use(requireAuthenticatedUid);
+  agentExportsLocality.use(createAgentExportsRouter());
+  mountApi(app, "/agent-exports", agentExportsLocality);
   mountApi(app, "/workspace-roles", createWorkspaceRolesRouter());
   mountApi(app, "/terminal", createTerminalRouter({
     localGatewayId: () => process.env.GATEWAY_ID ?? null,

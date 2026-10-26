@@ -22,6 +22,7 @@ interface StoreDeps {
   tokenPath?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -86,7 +87,7 @@ async function brokerError(response: Response): Promise<Error> {
 
 function validRecord(value: unknown, id: string): AgentImportRecord {
   const data = object(value);
-  if (data?.id !== id || typeof data.uid !== "string" || typeof data.status !== "string") {
+  if (data?.kind === "authored-agent-export" || data?.id !== id || typeof data.uid !== "string" || typeof data.status !== "string") {
     throw new Error("agent import broker returned an invalid record");
   }
   return data as unknown as AgentImportRecord;
@@ -147,7 +148,7 @@ export function createAgentImportStore(deps: StoreDeps) {
       ...init,
       headers,
       redirect: "error",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: deps.signal ? AbortSignal.any([deps.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     }, {
       tokenPath: deps.tokenPath,
       fetchImpl: deps.fetchImpl,
@@ -173,6 +174,10 @@ export function createAgentImportStore(deps: StoreDeps) {
   });
 
   return {
+    async exportRequest(pathname: string, init: RequestInit = {}): Promise<unknown> {
+      if (!pathname.startsWith("/exports/")) throw new Error("invalid authored export broker path");
+      return jsonRequest(pathname, init);
+    },
     async authorize(intent: AgentImportAuthorizationIntent): Promise<{
       slug: string;
       gatewayId: string;

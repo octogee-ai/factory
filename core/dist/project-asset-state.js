@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { manifestObjectPath, parseManifest, serializeManifest } from "./workspace-manifest.js";
 const PROJECT_MANIFEST = "manifest.json";
+const PROJECT_STATE_DIRECTORY = ".octogee-state";
+const PROJECT_ASSET_OWNER_ERROR = "project asset materialization owner differs";
 async function projectFile(root, directory, name, use, createDirectory = true) {
     const parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
@@ -86,7 +88,7 @@ export async function initializeProjectAssetManifest(root, prefix, manifest) {
     await projectFile(root, ".files", PROJECT_MANIFEST, file => file.write(contents, true));
 }
 export async function withProjectAssetManifest(root, prefix, use) {
-    return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, async (readyFile) => {
+    return projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.json`, async (readyFile) => {
         const receipt = await readyFile.read();
         const state = receipt === null ? null : JSON.parse(receipt);
         if (state !== null && (state.version !== 1 || prefix !== `customers/${state.slug}/projects/${state.project}`))
@@ -112,13 +114,27 @@ export async function withProjectAssetManifest(root, prefix, use) {
         });
     }, false);
 }
+export async function readMaterializedProjectAssets(root, prefix, location = { parent: path.dirname(root), name: path.basename(root) }) {
+    const identity = await projectCheckoutIdentity(root, false);
+    if (identity === null)
+        return {};
+    return projectFile(location.parent, PROJECT_STATE_DIRECTORY, `${location.name}.assets.json`, async (file) => {
+        const contents = await file.read();
+        if (contents === null)
+            return {};
+        const state = JSON.parse(contents);
+        if (state.version !== 1 || state.prefix !== prefix)
+            throw new Error(PROJECT_ASSET_OWNER_ERROR);
+        return parseManifest(manifestObjectPath(prefix), JSON.stringify(state.identity === identity ? state.files : {}));
+    }, false);
+}
 export async function withMaterializedProjectAssets(root, prefix, use) {
     const identity = await projectCheckoutIdentity(root, true);
-    return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.assets.json`, async (file) => {
+    return projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.assets.json`, async (file) => {
         const contents = await file.read();
         const state = contents === null ? { version: 1, prefix, files: {} } : JSON.parse(contents);
         if (state.version !== 1 || state.prefix !== prefix)
-            throw new Error("project asset materialization owner differs");
+            throw new Error(PROJECT_ASSET_OWNER_ERROR);
         const current = state.identity === identity;
         const files = parseManifest(manifestObjectPath(prefix), JSON.stringify(current ? state.files : {}));
         const before = serializeManifest(files);
@@ -134,7 +150,7 @@ export async function writeProjectRestoreReady(root, slug, project) {
     const checkout = (await projectCheckoutIdentity(root, true));
     const manifest = await projectFile(root, ".files", PROJECT_MANIFEST, file => file.read(), false);
     const identity = projectAssetVersion(checkout, manifest);
-    await projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, file => file.write(JSON.stringify({ version: 1, slug, project, checkout, identity })));
+    await projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.json`, file => file.write(JSON.stringify({ version: 1, slug, project, checkout, identity })));
 }
 export async function readProjectRestoreReady(root, slug, project) {
     return await readProjectRestoreState(root, slug, project) === "ready";
@@ -143,7 +159,7 @@ export async function readProjectRestoreState(root, slug, project) {
     const checkout = await projectCheckoutIdentity(root, false);
     if (checkout === null)
         return "unrestored";
-    return projectFile(path.dirname(root), ".octogee-state", `${path.basename(root)}.json`, async (file) => {
+    return projectFile(path.dirname(root), PROJECT_STATE_DIRECTORY, `${path.basename(root)}.json`, async (file) => {
         const contents = await file.read();
         if (contents === null)
             return "unrestored";

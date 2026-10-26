@@ -1,3 +1,4 @@
+import { registerAgentExportBrokerRoutes } from "./agent-export-broker.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { randomUUID } from "node:crypto";
@@ -62,7 +63,7 @@ export interface AgentImportBrokerDeps {
   featurePolicy?: FeaturePolicy;
 }
 
-interface OwnerContext {
+export interface OwnerContext {
   uid: string;
   slug: string;
   gatewayId: string;
@@ -159,7 +160,7 @@ function authenticatedUid(req: Request, res: Response, bound: GatewayBinding): s
 
 function importId(req: Request, res: Response): string | null {
   const value = req.params.importId;
-  if (typeof value !== "string" || !IMPORT_ID_RE.test(value)) {
+  if (typeof value !== "string" || value.startsWith("export-") || !IMPORT_ID_RE.test(value)) {
     res.status(404).json({ error: "not_found" });
     return null;
   }
@@ -168,7 +169,7 @@ function importId(req: Request, res: Response): string | null {
 
 function ownedPayload(value: unknown, context: OwnerContext): JsonObject | null {
   const payload = object(value);
-  return payload?.uid === context.uid && payload.slug === context.slug
+  return payload?.kind !== "authored-agent-export" && payload?.uid === context.uid && payload.slug === context.slug
     ? payload
     : null;
 }
@@ -664,6 +665,7 @@ export function createAgentImportBrokerRoutes(deps: AgentImportBrokerDeps): Rout
     }
   });
 
+  registerAgentExportBrokerRoutes(router, deps, context);
   registerAccessRoutes(router, deps);
   registerRecordRoutes(router, deps);
   registerPlanRoutes(router, deps);
