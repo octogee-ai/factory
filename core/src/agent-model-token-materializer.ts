@@ -84,7 +84,6 @@ export interface OpenRouterBrokerModelsJson {
   providers: Record<string, {
     api: "openai-completions";
     baseUrl: string;
-    apiKey: string;
     models: OpenRouterBrokerModelConfig[];
   }>;
 }
@@ -220,7 +219,6 @@ export function openRouterBrokerCatalogJson(
       [OPENROUTER_BROKER_PROVIDER_ID]: {
         api: "openai-completions",
         baseUrl: input.baseUrl,
-        apiKey: OPENROUTER_BROKER_PROFILE_ID,
         models: input.models.map(openRouterBrokerModelConfig),
       },
     },
@@ -352,7 +350,6 @@ export function upsertOpenRouterBrokerCatalog(
 ): boolean {
   return upsertPlatformBrokerCatalog(agentDir, input, {
     providerId: OPENROUTER_BROKER_PROVIDER_ID,
-    profileId: OPENROUTER_BROKER_PROFILE_ID,
     marker: OPENROUTER_PLATFORM_MARKER,
     api: "openai-completions",
   });
@@ -364,7 +361,6 @@ export function upsertOpenAiBrokerCatalog(
 ): boolean {
   return upsertPlatformBrokerCatalog(agentDir, input, {
     providerId: OPENAI_BROKER_PROVIDER_ID,
-    profileId: OPENAI_BROKER_PROFILE_ID,
     marker: OPENAI_PLATFORM_MARKER,
     api: "openai-responses",
   });
@@ -378,7 +374,6 @@ function upsertPlatformBrokerCatalog(
   input: OpenRouterBrokerCatalogInput,
   ids: {
     providerId: string;
-    profileId: string;
     marker: string;
     api: "openai-completions" | "openai-responses";
   },
@@ -390,7 +385,6 @@ function upsertPlatformBrokerCatalog(
   const desired = {
     api: ids.api,
     baseUrl: input.baseUrl,
-    apiKey: ids.profileId,
     models: input.models.map((model) =>
       openRouterBrokerModelConfig(model),
     ),

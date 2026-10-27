@@ -4110,3 +4110,26 @@ describe("syncByotForCustomer — tools convergence wiring", () => {
     expect(applyCoachToolsConvergenceFn).not.toHaveBeenCalled();
   });
 });
+
+
+it("rewrites platform catalogs without credential markers during customer OAuth cleanup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "authless-purge-catalog-"));
+  const id = "octogee-tester-70-coach";
+  vi.stubEnv("OPENROUTER_BASE_URL", "http://broker.invalid/openrouter/v1");
+  vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://broker.invalid/openai/v1");
+  try {
+    seedAgent(root, id);
+    const file = path.join(codexAgentDir(root, id), "models.json");
+    fs.writeFileSync(file, JSON.stringify({ providers: Object.fromEntries(["platform-openrouter", "platform-openai"].map(provider => [provider, { apiKey: provider + ":default", models: [] }])) }));
+    await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
+      config: { agents: { entries: { [id]: {} } } }, openclawDir: root, homeDir: path.join(root, "home"),
+      rpc: { sessionsList: async () => ({ sessions: [] }), sessionsReset: async () => ({ ok: true }), close: async () => {} } as never,
+      applyConfigPatch: async () => ({ mode: "rpc", attempts: 1, noop: true }),
+    });
+    const providers = JSON.parse(fs.readFileSync(file, "utf8")).providers;
+    for (const provider of ["platform-openrouter", "platform-openai"]) {
+      expect(providers[provider]).not.toHaveProperty("apiKey");
+      expect(providers[provider].models.length).toBeGreaterThan(0);
+    }
+  } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); }
+});

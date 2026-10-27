@@ -51,7 +51,6 @@ import {
 } from "./config.js";
 import {
   openAiCatalogInputForBaseUrl,
-  OPENAI_BROKER_PROFILE_ID,
   openRouterCatalogInputForBaseUrl,
   openRouterBrokerCatalogJson,
   openRouterBrokerModelConfig,
@@ -1752,7 +1751,6 @@ function customerBrokerModelProviders(): Record<string, unknown> {
     providers["platform-openai"] = {
       api: "openai-responses",
       baseUrl: input.baseUrl,
-      apiKey: OPENAI_BROKER_PROFILE_ID,
       models: input.models.map(openRouterBrokerModelConfig),
     };
   }

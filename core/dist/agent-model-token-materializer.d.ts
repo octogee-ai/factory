@@ -54,7 +54,6 @@ export interface OpenRouterBrokerModelsJson {
     providers: Record<string, {
         api: "openai-completions";
         baseUrl: string;
-        apiKey: string;
         models: OpenRouterBrokerModelConfig[];
     }>;
 }

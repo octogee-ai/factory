@@ -251,7 +251,7 @@ describe("agent-model-token catalogs", () => {
     );
     expect(
       JSON.stringify(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))),
-    ).toContain(`"apiKey":"${OPENROUTER_BROKER_PROFILE_ID}"`);
+    ).not.toContain("apiKey");
     expect(
       JSON.stringify(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))),
     ).not.toContain("byok-alice-openrouter");
@@ -331,14 +331,13 @@ describe("model-readiness: openrouter catalog upsert", () => {
     ],
   };
 
-  it("writes ALL catalog models under the platform-openrouter provider with the agent's broker token", () => {
+  it("writes all OpenRouter catalog models without embedding credential data", () => {
     expect(upsertOpenRouterBrokerCatalog(agentDir, CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENROUTER_BROKER_PROVIDER_ID];
     expect(provider).toMatchObject({
       api: "openai-completions",
       baseUrl: CATALOG.baseUrl,
-      apiKey: OPENROUTER_BROKER_PROFILE_ID,
       models: [
         {
           id: "z-ai/glm-5.2",
@@ -385,12 +384,12 @@ describe("model-readiness: openai catalog upsert", () => {
     models: [{ model: "gpt-5.4-mini", contextTokens: 400_000 }],
   };
 
-  it("writes catalog models under platform-openai with the agent's openai broker token", () => {
+  it("writes OpenAI catalog models without embedding credential data", () => {
     expect(upsertOpenAiBrokerCatalog(agentDir, CATALOG)).toBe(true);
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     const provider = models.providers[OPENAI_BROKER_PROVIDER_ID];
     expect(provider.api).toBe("openai-responses");
-    expect(provider.apiKey).toBe(OPENAI_BROKER_PROFILE_ID);
+    expect(provider).not.toHaveProperty("apiKey");
     expect(provider.models.map((m: { id: string }) => m.id)).toEqual(["gpt-5.4-mini"]);
   });
 
@@ -793,5 +792,24 @@ describe("openRouterCatalogInputForBaseUrl", () => {
         reasoning: true,
       }));
     }
+  });
+});
+
+
+describe("broker catalogs leave credential ownership to native profiles", () => {
+  it.each([
+    ["platform-openrouter", upsertOpenRouterBrokerCatalog],
+    ["platform-openai", upsertOpenAiBrokerCatalog],
+  ] as const)("removes the obsolete %s credential marker while preserving unrelated providers", (provider, upsert) => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-authless-catalog-"));
+    try {
+      const foreign = { apiKey: "user-owned-key", models: [{ id: "user-owned-model" }] };
+      const file = path.join(agentDir, "models.json");
+      fs.writeFileSync(file, JSON.stringify({ providers: { [provider]: { apiKey: provider + ":default", models: [] }, foreign } }));
+      upsert(agentDir, { baseUrl: "http://broker.invalid/v1", models: [{ model: "catalog-model" }] });
+      const providers = JSON.parse(fs.readFileSync(file, "utf8")).providers;
+      expect(providers[provider]).not.toHaveProperty("apiKey");
+      expect(providers.foreign).toEqual(foreign);
+    } finally { fs.rmSync(agentDir, { recursive: true, force: true }); }
   });
 });

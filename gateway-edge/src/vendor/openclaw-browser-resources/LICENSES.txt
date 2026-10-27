@@ -1,4 +1,4 @@
-OpenClaw source 55c4bd0a587258d7d9611b4d2cca17bfcb82806f
+OpenClaw source b60195e7556d96e2c7973eba14623f7dcb508c94
 
 MIT License
 

@@ -154,13 +154,12 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 The daily refresh freezes latest fetched OpenClaw main at
 `bd111bf8e030fd5abddeb89d70d8abdc63467f86`. It independently qualifies that exact
 snapshot; no older green commit or later tip is substituted. The clean overlay is
-[`55c4bd0a587258d7d9611b4d2cca17bfcb82806f`](https://github.com/ceckert/openclaw/commit/55c4bd0a587258d7d9611b4d2cca17bfcb82806f),
-published on `codex/openclaw-refresh-qualified-20261026`. Octogee starts from main
-`6fb740ad203e8fdea50bf98903e76d9a463afc34` in an isolated checkout; current main
-`0e787dca55e467a166cb92562b3317b03c219190` is merged before complete-image
-qualification, preserving its input-keyed CUA build. The previous
-publication was `03a98826cae17ab1169508ae9e55cda58b5296a6` over
-`db38cc1066957e278d529d531160bb2773163682`.
+[`b60195e7556d96e2c7973eba14623f7dcb508c94`](https://github.com/ceckert/openclaw/commit/b60195e7556d96e2c7973eba14623f7dcb508c94),
+published on `codex/gateway-pg-secrets-reload-20261026`. This follow-up starts from
+Octogee main `a2cff0a1ad8b9c152a02ec6f3b5f44c2cb4601ca` in an isolated checkout.
+Its preceding `55c4bd0a587258d7d9611b4d2cca17bfcb82806f` package exposed the
+running Builder reload failure described below during TEST deployment. The frozen
+native base, dependency lockfile, CUA input and other overlay families remain unchanged.
 
 The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40388028999)
 is cancelled with zero jobs, so supplies no qualification. The latest inspected
@@ -181,6 +180,16 @@ still checks that closing unrelated agent databases does not invalidate a prepar
 plugin artifact; it is coverage, not an unadopted production fix. MCP stdio cleanup,
 Mattermost server locking and bounded CUA discovery have no retained production
 delta in OpenClaw. Canonical schemas are GLOBAL34/AGENT37; protocol remains 4.
+
+Cluster Builders use PostgreSQL for GLOBAL and agent state. Native web-provider
+secret preparation synchronously read a cold installed-plugin index, causing
+`secrets.reload` to fail at the main-thread PostgreSQL guard. The async owner now
+awaits native's existing worker-backed index reader, preserving its validation,
+managed-install recovery and publication checks. A real PostgreSQL conformance
+control with the Builder's `parallel-free` provider fails before this two-line fix
+and passes afterward; the existing web-secret/reload suites pass 40 cases. Astra
+reviewed the exact red, green and patch. The preceding overlay has the same defect;
+restoring the removed PostgreSQL patches would not repair it.
 
 Astra reviewed all retained families against native behavior and current Octogee
 consumers, then reviewed the remediation. It identified a P2 target-profile
@@ -238,6 +247,7 @@ An open contribution or an existing fork consumer alone does not justify a patch
 | Local checkpoint and credential snapshots | Native backup/restore owners publish paired SQLite state exclusively into fresh targets; PG agents retain anchors, not fictional remote rollback. Installation authority is sanitized. | Native public checkpoint supplies equivalent paired-state, no-replace and retained-PG guarantees, or the authorized recovery consumer is removed. |
 | Cron migration custody | Held/exported/staged/activated ownership, retired fences, hash-bound chunks and drain are beyond ordinary native CRUD. Projection identity includes effective agent plus declaration. | Native migration provides equivalent activation, rollback, drain and two-engine round trip. |
 | Retained legacy cron/state inputs | Fingerprints/order/schema checks admit only recognized retained formats and refuse unknown partial schemas; native canonical schemas remain authoritative. | Those retained inputs are unsupported or native adopts their exact migration. |
+| PostgreSQL web-secret index reads | Cold GLOBAL state makes native's synchronous installed-index read fail during Builder `secrets.reload`; the existing async reader owns worker access and validation. | Native awaits the worker-backed reader here and the same cold-GLOBAL/provider conformance control passes without this overlay. |
 | PostgreSQL cron enabled JSON | Native's SQLite JSON-value assumption fails PG bound enabled updates; the codec uses each engine's existing JSON expression. | Native equivalent passes both-engine false/true transitions without losing authored fields. |
 | Memory shadow database retirement | Physical admission must retire before unlinking shadow files, preventing writes through live descriptors. | Native owns equivalent descriptor/late-owner retirement. |
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
@@ -249,48 +259,53 @@ An open contribution or an existing fork consumer alone does not justify a patch
 ### Qualification and explicit limits
 
 Pinned pnpm 12.15.0 installs the frozen lockfile under Node 26.12.1. The clean full
-`pnpm build package` passes; its build-info matches `55c4bd0a587258d7d9611b4d2cca17bfcb82806f`. Root and Mattermost
-are packed sequentially from that one packaging build. Native tarball inventory
-and import-graph checks pass, and prepack/postpack leave the source clean.
+`pnpm build package` passes; its build-info matches `b60195e7556d96e2c7973eba14623f7dcb508c94`.
+Root and Mattermost are packed sequentially from that build. Native tarball
+inventory/import-graph checks pass; prepack/postpack leave the source clean.
 
-Final `pnpm check` remains **failed** with 23 lint errors, all in files byte-identical
-to the frozen native base. Its generated preflights and core/UI/extension,
-script and root-test typechecks pass. The three rebase-created lint errors were
-fixed. This is not aggregate native CI clearance.
+`pnpm check` remains **failed** with 23 lint errors, all in files byte-identical
+to the frozen native base. Generated preflights and core/UI/extension, script and
+root-test typechecks pass. This is not aggregate native CI clearance.
+The current PostgreSQL reload regression passes, as do 40 affected native web-secret,
+model-publication and lifecycle tests. Regenerated islands pass 69 host-consumer
+and coexistence cases; their shared chunks have unchanged content after generated
+chunk references are normalized.
 
-Affected boundary checks include the 25 membership and 11 participant-label cases,
-and all 70 reclamation/lifetime/admission/file-copy cases. The native five-second
-negative control fails at the intended checkpoint expiry. Canonical PG routine,
-trigger and expression provenance is regenerated from this exact source; all 50
-Octogee catalog/transfer/recovery tests pass against a separate PG16 fixture.
-The first competing run's three timeouts remain recorded; the isolated replay
-uses unchanged timeouts. App consumers pass 83 cases and app/edge production types
-pass. Local edge tests report 4 failed files (37 cases), 335 passed files and 8
-skips; Darwin rejects their `/dev/fd/<directory>/...` operations. Linux CI must
-resolve that platform gap; no filesystem guard is weakened.
-
-The local full native PG16 run is incomplete: the first attempt exhausted fixture lock
-slots; the final run was interrupted after Docker storage became read-only and
-connections failed. The new whole-archive suite also requires database-creation
-privilege beyond the restricted fixture role. Its isolated admin replay passed
-three cases before the same storage failure. Neither aggregate is reported green.
+The unchanged overlay families retain their preceding qualification: 25 membership,
+11 participant-label and 70 reclamation/lifetime/admission/file-copy cases, with
+the five-second native reclamation negative control failing at checkpoint expiry.
+The preceding isolated full native PG16 qualification passed 1,343 tests with 40
+skips over nine shards; this follow-up does not claim a new whole-suite PG run.
+Canonical PostgreSQL routine, trigger and expression provenance is regenerated
+from this exact source against a separate PG16 fixture; all definitions remain
+unchanged. Final-head Linux CI verifies affected Octogee packages separately.
 
 An isolated npm prefix passes exact build-info, all 874 Mattermost files, both
 15-file patched npm closures, Parallel's ten source-matched files, Codex's 193
 runtime files, native bundled trust/registry refresh and three hook imports.
 The actual Linux amd64 full-plugin-installer passes those same installed-byte,
 source-match, registry and native-hook gates using the current input-keyed CUA
-image. The initial local architecture builds failed on read-only Docker storage;
-those attempts do not establish arm64 success. The installed prefix advisory
-query covers 764 package instances and returns no matching known advisories.
-Complete-image checks remain separate required gates. Final-head Linux CI,
-strict isolated Doctor comparisons through real Shared/Builder writers, installed
-plugins/hooks/Memory/Skills and the published image digest are recorded in the
-refresh PR. No healthy-boot full Doctor or fleet deployment is added.
+image. This recut qualifies Linux amd64; arm64 remains unqualified. The dependency
+lockfile and patched npm closure are unchanged from the preceding installed-prefix
+advisory inventory. Complete-image qualification remains a separate required gate:
+real Shared/Builder writers, strict isolated Doctor comparisons, installed
+plugins/hooks/Memory/Skills and the published image digest belong in the PR.
+Platform model catalogs omit credential fields. The former profile-ID strings
+were interpreted as plaintext by native Doctor when a profile write had deferred,
+creating conflicting credentials. Both normal catalog updates and OAuth cleanup
+replace their owned catalog definitions without those markers. Authentication
+continues through native broker-profile materialization; conflicting credentials
+remain refused.
+
+The running-Gateway check additionally materializes broker profiles, exercises
+public `secrets.reload` and verifies public model catalogs. That isolated check
+uses native channel suppression; live channel readiness is verified during
+TEST/PROD convergence. Bounded failed-boot recovery and the normal operator
+deployment path remain in place.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-c2d38d22.tgz#1793052836914540` | 134785554 | `c2d38d226835f1234ef221c829c0655cb092bb1f8922e1191df37f3c3bc34397` |
+| root | `openclaw-fork-e8395f6c.tgz#1793071774174106` | 134787427 | `e8395f6c63f78a4f01fa5a586e17b0fcaddd61d8f8f2b0bdbb641ded9b4be1b5` |
 | mattermost | `openclaw-mattermost-e1623c45.tgz#1792939044881470` | 1255051 | `e1623c45f5b00466cb9fd129c65f72a0042fdb9ea20ba4bdbe89d461d329ac81` |
 
 Generation-bound downloads reproduce both complete hashes. The unchanged
@@ -306,7 +321,8 @@ live provider credentials/inference or interactive desktop acceptance.
 
 ### Upstream contributions
 
-Contribution status is distinct from retention. #178755 (detach) and #178973
+Contribution status is distinct from retention. This refresh has not submitted
+the worker-backed web-secret fix upstream. #178755 (detach) and #178973
 (local checkpoint) remain draft/open; #181951 (retained PG refusal) and #182783
 (session-list reload) remain open. #178970 remains open but native #181198
 supersedes it. Previously adopted #181201, #181676, #183114, #183172 and #183184
