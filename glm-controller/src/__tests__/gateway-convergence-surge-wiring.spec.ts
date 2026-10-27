@@ -174,6 +174,32 @@ describe("gateway convergence surge wiring", () => {
     }));
   });
 
+  it.each([null, 2])("publishes a verified draining release with prior live release %s", async (liveRelease) => {
+    const current = { ...gateway(), desiredStatus: "draining" as const, liveRelease };
+    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(reconcileSurgeHandoff, current), gateway: current, artifact,
+      runtime: { ...runtime(artifact.imageTag), lifecycle: "provisioning" },
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "mark-live" });
+    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({ requiresCustomerMigration: false }));
+  });
+
+  it.each([
+    { ready: false, version: artifact.imageTag, status: "ready" },
+    { ready: true, version: "other-build", status: "ready" },
+    { ready: true, version: artifact.imageTag, status: "booting" },
+  ])("holds an unverified draining publication: %j", async ({ ready, version, status }) => {
+    const current = { ...gateway(), desiredStatus: "draining" as const, liveRelease: null };
+    await expect(refineGatewayConvergenceAction({
+      passDeps: passDeps(vi.fn(async () => ({ ready })), current), gateway: current, artifact,
+      runtime: { ...runtime(version), lifecycle: "provisioning", heartbeat: { ...runtime(version).heartbeat, status } } as GatewayRuntimeDoc,
+      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
+      action: { kind: "steady" },
+    })).resolves.toEqual({ kind: "steady" });
+  });
+
   it("does not start a new handoff for a fully converged draining gateway", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: true }));
     const drainingGateway = {
@@ -186,7 +212,7 @@ describe("gateway convergence surge wiring", () => {
       passDeps: passDeps(reconcileSurgeHandoff, drainingGateway),
       gateway: drainingGateway,
       artifact,
-      runtime: runtime("def5678-oc2026.7.1"),
+      runtime: { ...runtime("def5678-oc2026.7.1"), lifecycle: "serving" },
       helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
       action: { kind: "steady" },
     })).resolves.toEqual({ kind: "steady" });

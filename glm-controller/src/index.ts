@@ -1052,6 +1052,12 @@ function reconcileGatewaySurgeHandoff(input: {
   });
 }
 
+function gatewayNeedsLiveVerification(gateway: DurableGateway, runtime: GatewayRuntimeDoc | undefined): boolean {
+  if (gateway.desiredStatus === "running") return true;
+  return gateway.desiredStatus === "draining" &&
+    (gateway.liveRelease !== gateway.desiredRelease || runtime?.lifecycle !== "serving");
+}
+
 export async function refineGatewayConvergenceAction(input: {
   passDeps: Pick<GatewayConvergencePassDeps, "db" | "reconcileSurgeHandoff">;
   gateway: DurableGateway;
@@ -1075,7 +1081,7 @@ export async function refineGatewayConvergenceAction(input: {
     action,
   } = input;
   if (action.kind !== "steady" || !artifact) return action;
-  if (gateway.desiredStatus !== "running" && !requiresSurgeCustomerMigration(gateway)) return action;
+  if (!gatewayNeedsLiveVerification(gateway, runtime)) return action;
   if (!(await gatewayDesiredRootPresent(passDeps.db, gateway.gatewayId))) {
     return { kind: "steady" };
   }
@@ -1337,7 +1343,9 @@ export async function markGatewayLive(
       rootSnap.exists ? rootSnap.data() : undefined,
       gateway.gatewayId,
     );
-    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease)) return false;
+    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease) ||
+      root?.desiredStatus !== gateway.desiredStatus || rootSnap.data()?.runtimeRestartFence !== undefined ||
+      rootSnap.data()?.retirementClaim != null) return false;
     if (prelaunchRefresh) {
       const runtime = await txn.get(glmRef);
       if (!root || !runtimeMatchesPrelaunchRelease(root, runtime.data(), gatewayImageFor(root, artifact)) ||

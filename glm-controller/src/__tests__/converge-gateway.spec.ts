@@ -134,6 +134,7 @@ describe("planGatewayConvergence", () => {
 
   it("does not advertise a paused zero-pod release as a serving runtime", () => {
     expect(markLiveRuntimePatch(gateway({ desiredStatus: "paused" }))).toBeNull();
+    expect(markLiveRuntimePatch(gateway({ desiredStatus: "draining" }))).toEqual({ lifecycle: "serving", release: 2 });
     expect(markLiveRuntimePatch(gateway({ desiredStatus: "running" }))).toEqual({
       lifecycle: "serving",
       release: 2,

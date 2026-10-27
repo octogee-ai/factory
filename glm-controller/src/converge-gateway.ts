@@ -137,7 +137,7 @@ export type GatewayConvergenceAction =
 export function markLiveRuntimePatch(
   gateway: DurableGateway,
 ): Pick<GatewayRuntimeDoc, "lifecycle" | "release"> | null {
-  return gateway.desiredStatus === "running"
+  return gateway.desiredStatus === "running" || gateway.desiredStatus === "draining"
     ? { lifecycle: "serving", release: gateway.desiredRelease }
     : null;
 }
