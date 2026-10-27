@@ -30,6 +30,30 @@ describe("trusted agent-store routine definitions", () => {
     expect(agentStoreExpressionFingerprint({ ...expression, definition: definition.replace("(store)", "(store_id)") }, "tenant")).not.toBe(expected);
   });
 
+  it.each([
+    { relname: "cache_entries", name: "idx_agent_cache_expiry", definition: "CREATE INDEX idx_agent_cache_expiry ON tenant.cache_entries USING btree (scope, expires_at NULLS FIRST, key) WHERE (expires_at IS NOT NULL)" },
+    { relname: "session_nodes", name: "idx_agent_session_nodes_archived_at", definition: "CREATE INDEX idx_agent_session_nodes_archived_at ON tenant.session_nodes USING btree (archived_at NULLS FIRST, session_key) WHERE (archived_at IS NOT NULL)" },
+    { relname: "session_nodes", name: "idx_agent_session_nodes_label", definition: "CREATE INDEX idx_agent_session_nodes_label ON tenant.session_nodes USING btree (label NULLS FIRST, session_key) WHERE (label IS NOT NULL)" },
+    { relname: "session_nodes", name: "idx_agent_session_nodes_status", definition: "CREATE INDEX idx_agent_session_nodes_status ON tenant.session_nodes USING btree (status NULLS FIRST, session_key) WHERE (status IS NOT NULL)" },
+    { relname: "session_transcript_active_events", name: "idx_agent_transcript_active_messages", definition: "CREATE UNIQUE INDEX idx_agent_transcript_active_messages ON tenant.session_transcript_active_events USING btree (session_id, message_position NULLS FIRST) WHERE (message_position IS NOT NULL)" },
+    { relname: "session_windows", name: "idx_agent_session_windows_conversation", definition: "CREATE INDEX idx_agent_session_windows_conversation ON tenant.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)" },
+    { relname: "transcript_event_identities", name: "idx_agent_transcript_message_idempotency", definition: "CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency ON tenant.transcript_event_identities USING btree (session_id, message_idempotency_key NULLS FIRST) WHERE (message_idempotency_key IS NOT NULL)" },
+])("accepts native $name null ordering only when its predicate excludes nulls", original => {
+    const expression = { ...original, kind: "index" };
+    const expected = (trusted.expressions as Record<string, string>)[`index:${original.relname}:${original.name}`];
+    expect(agentStoreExpressionFingerprint(expression, "tenant")).toBe(expected);
+    expect(agentStoreExpressionFingerprint({ ...expression, definition: original.definition.replace(" NULLS FIRST", "") }, "tenant")).toBe(expected);
+    for (const change of [
+      { definition: original.definition.replace("IS NOT NULL", "IS NULL") },
+      { definition: original.definition.replace(/ WHERE .+$/, "") },
+      { definition: original.definition.replace(" NULLS FIRST", " DESC NULLS FIRST") },
+      { definition: original.definition.replace(" USING btree (", " USING btree (foreign_key, ") },
+      { definition: original.definition.replace("tenant.", "victim.") },
+      { definition: original.definition.replace(" USING btree (", " USING btree (public.leak(key), ") },
+      { kind: "constraint" }, { relname: "other" }, { name: "other" },
+    ]) expect(agentStoreExpressionFingerprint({ ...expression, ...change }, "tenant")).not.toBe(expected);
+  });
+
   it.each([1, 1536, 3072, 16000])("accepts the native vector trigger at %i dimensions", dimensions => {
     expect(agentStoreRoutineFingerprint(vectorRoutine(dimensions), "tenant")).toBe(trusted.routines.memory_index_chunks_vec_sync);
   });

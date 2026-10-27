@@ -317,6 +317,9 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
         await shared.query(`CREATE TABLE ${object(schema!, "session_nodes")} (session_key TEXT PRIMARY KEY, entry_json TEXT)`);
         await shared.query(`INSERT INTO ${object(schema!, "session_nodes")} VALUES ('history', '{"providerOverride":"openai-codex","modelOverride":"unsafe-model","sessionId":"original-session"}')`);
         await shared.query(`CREATE TABLE ${object(schema!, "auth_profile_store")} (store_key TEXT PRIMARY KEY, store_json TEXT, updated_at BIGINT)`);
+        await shared.query(`CREATE TABLE ${object(schema!, "cache_entries")} (scope TEXT, expires_at BIGINT, key TEXT)`);
+        await shared.query(`CREATE INDEX idx_agent_cache_expiry ON ${object(schema!, "cache_entries")} (scope, expires_at NULLS FIRST, key) WHERE expires_at IS NOT NULL`);
+        await shared.query(`INSERT INTO ${object(schema!, "cache_entries")} VALUES ('retained', 1, 'history')`);
       }
       const standbyId = `standby-${suffix}`;
       const standbyDsn = await provision({ gatewayClass: "builder", gatewayId: standbyId, token: "synthetic-standby-password" }, async () => {});
@@ -335,6 +338,8 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
         expect(claimedDsn).toBe(standbyDsn);
         await transfer(aliceBuilder, "builder");
         expect((await standby.query(`SELECT * FROM ${object(aliceSchema, "session_nodes")}`)).rowCount).toBe(1);
+        expect((await standby.query(`SELECT key FROM ${object(aliceSchema, "cache_entries")}`)).rows).toEqual([{ key: "history" }]);
+        await expect(shared.query(`SELECT * FROM ${object(aliceSchema, "cache_entries")}`)).rejects.toMatchObject({ code: "42501" });
         const claimed = new pg.Client({ connectionString: claimedDsn }); await claimed.connect();
         try {
           expect((await claimed.query(`SELECT * FROM ${object(standbySchema, "control_state")}`)).rows).toEqual([{ value: "preserve-unclaimed-state" }]);
@@ -572,6 +577,41 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
       await moving?.catch(() => {});
       await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
       await racer.end(); await source.end(); await admin.end();
+    }
+  });
+
+  it.each([
+    { table: "cache_entries", name: "idx_agent_cache_expiry", unique: false, keys: "scope, expires_at, key", column: "expires_at" },
+    { table: "session_nodes", name: "idx_agent_session_nodes_archived_at", unique: false, keys: "archived_at, session_key", column: "archived_at" },
+    { table: "session_nodes", name: "idx_agent_session_nodes_label", unique: false, keys: "label, session_key", column: "label" },
+    { table: "session_nodes", name: "idx_agent_session_nodes_status", unique: false, keys: "status, session_key", column: "status" },
+    { table: "session_transcript_active_events", name: "idx_agent_transcript_active_messages", unique: true, keys: "session_id, message_position", column: "message_position" },
+    { table: "session_windows", name: "idx_agent_session_windows_conversation", unique: false, keys: "primary_conversation_id", column: "primary_conversation_id" },
+    { table: "transcript_event_identities", name: "idx_agent_transcript_message_idempotency", unique: true, keys: "session_id, message_idempotency_key", column: "message_idempotency_key" },
+])("admits PostgreSQL native $name null ordering and refuses changed predicates", async fixture => {
+    const pool = new pg.Pool({ connectionString: dsn, max: 1 });
+    const client = await pool.connect();
+    const schema = `null_order_${randomUUID().replaceAll("-", "")}`;
+    const table = `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(fixture.table)}`;
+    const index = `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(fixture.name)}`;
+    const columns = fixture.keys.split(", ").map(column => `${pg.escapeIdentifier(column)} TEXT`).join(", ");
+    const keys = fixture.keys.split(", ").map(column => pg.escapeIdentifier(column));
+    try {
+      await client.query("BEGIN");
+      await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      await client.query(`CREATE TABLE ${table} (${columns})`);
+      for (const ordering of ["NULLS FIRST", "NULLS LAST"]) {
+        const ordered = keys.map(key => key === pg.escapeIdentifier(fixture.column) ? `${key} ${ordering}` : key).join(", ");
+        await client.query(`CREATE ${fixture.unique ? "UNIQUE " : ""}INDEX ${pg.escapeIdentifier(fixture.name)} ON ${table} (${ordered}) WHERE ${pg.escapeIdentifier(fixture.column)} IS NOT NULL`);
+        await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
+        await client.query(`DROP INDEX ${index}`);
+      }
+      await client.query(`CREATE ${fixture.unique ? "UNIQUE " : ""}INDEX ${pg.escapeIdentifier(fixture.name)} ON ${table} (${keys.join(", ")}) WHERE ${pg.escapeIdentifier(fixture.column)} IS NULL`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).rejects.toThrow(`untrusted expression index:${fixture.table}:${fixture.name}`);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+      await pool.end();
     }
   });
 

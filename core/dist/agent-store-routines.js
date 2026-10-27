@@ -31,8 +31,20 @@ export const agentStoreExpressionsQuery = `WITH relations AS (
   UNION ALL SELECT 'index', r.relname, i.relname, pg_catalog.pg_get_indexdef(x.indexrelid)
     FROM relations r JOIN pg_catalog.pg_index x ON x.indrelid = r.oid JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
   ORDER BY kind, relname, name`;
+const NULL_EXCLUDED_INDEX_DEFINITIONS = new Set([
+    "CREATE INDEX idx_agent_cache_expiry ON $schema.cache_entries USING btree (scope, expires_at NULLS FIRST, key) WHERE (expires_at IS NOT NULL)",
+    "CREATE INDEX idx_agent_session_nodes_archived_at ON $schema.session_nodes USING btree (archived_at NULLS FIRST, session_key) WHERE (archived_at IS NOT NULL)",
+    "CREATE INDEX idx_agent_session_nodes_label ON $schema.session_nodes USING btree (label NULLS FIRST, session_key) WHERE (label IS NOT NULL)",
+    "CREATE INDEX idx_agent_session_nodes_status ON $schema.session_nodes USING btree (status NULLS FIRST, session_key) WHERE (status IS NOT NULL)",
+    "CREATE UNIQUE INDEX idx_agent_transcript_active_messages ON $schema.session_transcript_active_events USING btree (session_id, message_position NULLS FIRST) WHERE (message_position IS NOT NULL)",
+    "CREATE INDEX idx_agent_session_windows_conversation ON $schema.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+    "CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency ON $schema.transcript_event_identities USING btree (session_id, message_idempotency_key NULLS FIRST) WHERE (message_idempotency_key IS NOT NULL)",
+]);
 export function agentStoreExpressionFingerprint(expression, schema) {
     let definition = expression.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
+    if (expression.kind === "index" && NULL_EXCLUDED_INDEX_DEFINITIONS.has(definition)) {
+        definition = definition.replace(" NULLS FIRST", "");
+    }
     if (expression.kind === "default" && expression.relname === "memory_index_chunks_vec" && expression.name === "embedding_bits") {
         definition = definition.replace(/::bit\(([1-9]\d{0,4})\)/g, (cast, dimensions) => Number(dimensions) <= 16_000 ? "::bit($dimensions)" : cast);
     }
