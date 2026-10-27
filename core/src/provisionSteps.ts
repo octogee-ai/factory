@@ -346,7 +346,7 @@ function buildProvisioningSnapshot(
     status: "complete",
     version: "v1",
     slug: ctx.slug,
-    agentIds: allAgentIds,
+    ...(allAgentIds.length > 0 ? { agentIds: FieldValue.arrayUnion(...allAgentIds) } : {}),
     activatedAgents: ["coach"],
     customerDir: ctx.customerDir,
     provisionedAt: FieldValue.serverTimestamp(),
@@ -509,7 +509,7 @@ async function updateUserWorkspaceEntry(
     .get();
   if (!wsSnap.empty) {
     await wsSnap.docs[0].ref.update({
-      "provisioning.openclaw": provisioningObj,
+      ...Object.fromEntries(Object.entries(provisioningObj).map(([key, value]) => [`provisioning.openclaw.${key}`, value])),
       updatedAt: FieldValue.serverTimestamp(),
     });
   }

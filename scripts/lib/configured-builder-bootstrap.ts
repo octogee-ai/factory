@@ -27,7 +27,7 @@ interface ConfiguredBuilderBootstrapDependencies {
     | "uidForSlug"
     | "provisionMattermost"
     | "setMattermostFields"
-    | "setAgentIds"
+    | "ensureAgentIds"
   >;
   writeSecrets?: typeof updateMattermostAccountSecrets;
   writeDesk?: (desktopHome: string, desk: FleetBrokerConfiguredBuilderDesk) => Promise<{ written: boolean }>;
@@ -96,7 +96,7 @@ export async function hydrateConfiguredBuilderBootstrap(
     if (!uid) throw new Error(`configured builder ${input.slug} has no assigned uid`);
     const mmUpdate = await client.provisionMattermost(uid);
     await client.setMattermostFields(uid, mmUpdate);
-    await client.setAgentIds(uid, [`octogee-${input.slug}-coach`]);
+    await client.ensureAgentIds(uid, [`octogee-${input.slug}-coach`]);
     bootstrap = await client.configuredBuilderBootstrap(input.slug);
   }
   if (!matchesConfiguredBuilder(bootstrap, input.slug)) {

@@ -72,7 +72,7 @@ function mkClient(snapshot: FleetBrokerUserSnapshot): FleetBrokerClient {
     setRepoUrl: vi.fn(async () => undefined),
     provisionMattermost: vi.fn(async () => ({})),
     setMattermostFields: vi.fn(async () => undefined),
-    setAgentIds: vi.fn(async () => undefined),
+    ensureAgentIds: vi.fn(async () => undefined),
     setMounted: vi.fn(async () => undefined),
     recordReconcileError: vi.fn(async () => undefined),
     clearReconcileError: vi.fn(async () => undefined),

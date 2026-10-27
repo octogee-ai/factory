@@ -3136,9 +3136,11 @@ function installProvisioningRoutes(
       return;
     }
     await runBrokered(res, async () => {
-      await db.collection("users").doc(assigned.uid).update({
-        "provisioning.openclaw.agentIds": agentIds,
-      });
+      if (agentIds.length > 0) {
+        await db.collection("users").doc(assigned.uid).update({
+          "provisioning.openclaw.agentIds": FieldValue.arrayUnion(...agentIds),
+        });
+      }
       res.status(204).end();
     });
   });

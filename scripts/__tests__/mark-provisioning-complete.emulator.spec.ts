@@ -6,7 +6,7 @@ process.env.FIRESTORE_EMULATOR_HOST ??= "127.0.0.1:8088";
 process.env.FIREBASE_PROJECT_ID ??= "octogee-test";
 
 const { deleteApp, getApps, initializeApp } = await import("firebase-admin/app");
-const { getFirestore } = await import("firebase-admin/firestore");
+const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
 if (getApps().length === 0) initializeApp({ projectId: "octogee-test" });
 const db = getFirestore();
 
@@ -344,5 +344,25 @@ describe("markProvisioningComplete — per-user workspaces subcollection", () =>
       .collection("workspaces")
       .get();
     expect(wsSnap.empty).toBe(true);
+  });
+});
+
+
+describe("coach completion preserves project authorization", () => {
+  it("keeps existing project IDs in the user and workspace mirror across retries and retirement", async () => {
+    const { uid, slug } = freshIds();
+    const coach = `octogee-${slug}-coach`, project = `octogee-${slug}-proj-orbit-coach`;
+    await seedUser(uid, { username: slug, provisioning: { openclaw: { agentIds: [project] } } });
+    const workspace = db.doc(`users/${uid}/workspaces/mirror`);
+    await workspace.set({ workspaceSlug: slug, provisioning: { openclaw: { agentIds: [project], gatewayId: "retained-gateway" } } });
+    for (let i = 0; i < 2; i++) await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [coach]);
+    await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), []);
+    for (const path of [`users/${uid}`, workspace.path]) {
+      expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([project, coach]);
+    }
+    expect((await readDoc(workspace.path))?.provisioning.openclaw.gatewayId).toBe("retained-gateway");
+    for (const path of [`users/${uid}`, workspace.path]) await db.doc(path).update({ "provisioning.openclaw.agentIds": FieldValue.arrayRemove(project) });
+    await markProvisioningComplete(baseCtx(uid, slug), fullMmUpdate(slug), [coach]);
+    for (const path of [`users/${uid}`, workspace.path]) expect((await readDoc(path))?.provisioning.openclaw.agentIds).toEqual([coach]);
   });
 });

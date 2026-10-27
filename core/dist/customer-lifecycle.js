@@ -337,7 +337,7 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
     if (snapshot.status !== "complete") {
         markStep("claim-slot");
         await adapter.setProvisioningStatus(uid, "provisioning");
-        await adapter.setAgentIds(uid, [`octogee-${slug}-coach`]);
+        await adapter.ensureAgentIds(uid, [`octogee-${slug}-coach`]);
         steps.push("claim-slot");
     }
     const brokerProfilesReady = startBrokerProfiles(adapter, slug);
@@ -742,7 +742,7 @@ async function markCompleteIfNeeded(adapter, uid, snapshot, newCustomer, mmUpdat
         await adapter.provisionCoachAutomation({ slug: snapshot.slug, coachChannelId });
     }
     const coachAgentId = `octogee-${snapshot.slug}-coach`;
-    await adapter.setAgentIds(uid, [coachAgentId]);
+    await adapter.ensureAgentIds(uid, [coachAgentId]);
     await adapter.setProvisioningStatus(uid, "complete");
     return ["mark-complete"];
 }

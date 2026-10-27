@@ -2339,8 +2339,8 @@ export function buildBrokeredLifecycleAdapter(
       await opts.client.setMattermostFields(uid, mmUpdate);
       invalidateSnapshot(ctx, uid);
     },
-    setAgentIds: async (uid, agentIds) => {
-      await opts.client.setAgentIds(uid, agentIds);
+    ensureAgentIds: async (uid, agentIds) => {
+      await opts.client.ensureAgentIds(uid, agentIds);
       invalidateSnapshot(ctx, uid);
     },
 

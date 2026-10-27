@@ -95,7 +95,7 @@ function makeAdapter(state: MockState): CustomerLifecycleAdapter {
     provisionCoachAutomation: async () => record("provisionCoachAutomation"),
     setRepoUrl: async (_uid, repoUrl) => write("provisioning.git.repoUrl", repoUrl),
     setMattermostFields: async (_uid, fields) => write("mattermost.*", fields),
-    setAgentIds: async (_uid, agentIds) =>
+    ensureAgentIds: async (_uid, agentIds) =>
       write("provisioning.openclaw.agentIds", agentIds),
 
     hasCustomerDir: () => state.disk.customerDir,
@@ -2798,7 +2798,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     provisionCoachAutomation: false,
     setRepoUrl: false,
     setMattermostFields: false,
-    setAgentIds: false,
+    ensureAgentIds: false,
     hasCustomerDir: false,
     hasWorkspaceGitDir: false,
     hasGitRemote: false,

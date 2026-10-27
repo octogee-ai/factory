@@ -134,7 +134,7 @@ export interface CustomerLifecycleAdapter {
     }) => Promise<void>;
     setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;
     setMattermostFields: (uid: string, fields: MmUpdate) => Promise<void>;
-    setAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
+    ensureAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
     hasCustomerDir: (slug: string) => boolean;
     hasWorkspaceGitDir: (slug: string) => boolean;
     hasGitRemote: (slug: string) => boolean;

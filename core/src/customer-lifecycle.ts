@@ -164,7 +164,7 @@ export interface CustomerLifecycleAdapter {
   provisionCoachAutomation: (customer: { slug: string; coachChannelId: string }) => Promise<void>;
   setRepoUrl: (uid: string, repoUrl: string) => Promise<void>;
   setMattermostFields: (uid: string, fields: MmUpdate) => Promise<void>;
-  setAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
+  ensureAgentIds: (uid: string, agentIds: string[]) => Promise<void>;
 
   hasCustomerDir: (slug: string) => boolean;
   hasWorkspaceGitDir: (slug: string) => boolean;
@@ -861,7 +861,7 @@ async function addCustomerToGatewayInner(
   if (snapshot.status !== "complete") {
     markStep("claim-slot");
     await adapter.setProvisioningStatus(uid, "provisioning");
-    await adapter.setAgentIds(uid, [`octogee-${slug}-coach`]);
+    await adapter.ensureAgentIds(uid, [`octogee-${slug}-coach`]);
     steps.push("claim-slot");
   }
 
@@ -1440,7 +1440,7 @@ async function markCompleteIfNeeded(
     await adapter.provisionCoachAutomation({ slug: snapshot.slug, coachChannelId });
   }
   const coachAgentId = `octogee-${snapshot.slug}-coach`;
-  await adapter.setAgentIds(uid, [coachAgentId]);
+  await adapter.ensureAgentIds(uid, [coachAgentId]);
   await adapter.setProvisioningStatus(uid, "complete");
   return ["mark-complete"];
 }

@@ -145,7 +145,7 @@ export interface FleetBrokerClient {
   provisionMattermost(uid: string): Promise<FleetBrokerMattermostUpdate>;
   setMattermostFields(uid: string, mmUpdate: FleetBrokerMattermostUpdate): Promise<void>;
   ensureCommunityMembership(uid: string): Promise<void>;
-  setAgentIds(uid: string, agentIds: string[]): Promise<void>;
+  ensureAgentIds(uid: string, agentIds: string[]): Promise<void>;
   setMounted(uid: string, mounted: boolean): Promise<void>;
   reportProjectAgentReadiness(uid: string, projects: FleetBrokerProjectAgentReadiness[]): Promise<void>;
   acknowledgeRuntimeReset(uid: string, operationId: string, generation: number): Promise<void>;
@@ -498,7 +498,7 @@ export function createFleetBrokerClient(
     ensureCommunityMembership(uid) {
       return postNoContent("/internal/fleet/ensure-community-membership", { gatewayId, uid });
     },
-    setAgentIds(uid, agentIds) {
+    ensureAgentIds(uid, agentIds) {
       return postNoContent("/internal/fleet/set-agent-ids", { gatewayId, uid, agentIds });
     },
     reportProjectAgentReadiness(uid, projects) {

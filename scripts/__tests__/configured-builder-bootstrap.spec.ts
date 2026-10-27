@@ -207,7 +207,7 @@ describe("configured builder bootstrap", () => {
       setMattermostFields: vi.fn(async () => {
         calls.push("set-mattermost");
       }),
-      setAgentIds: vi.fn(async () => {
+      ensureAgentIds: vi.fn(async () => {
         calls.push("set-agents");
       }),
     };
@@ -232,7 +232,7 @@ describe("configured builder bootstrap", () => {
     expect(client.setMattermostFields).toHaveBeenCalledWith("uid-alice", {
       "mattermost.teamId": "team-alice",
     });
-    expect(client.setAgentIds).toHaveBeenCalledWith("uid-alice", ["octogee-alice-coach"]);
+    expect(client.ensureAgentIds).toHaveBeenCalledWith("uid-alice", ["octogee-alice-coach"]);
     expect(writeSecrets).toHaveBeenCalledWith("/tmp/openclaw", {
       removePrefixes: ["alice-proj-"],
       set: { "alice-coach": "coach-token" },
@@ -253,7 +253,7 @@ describe("configured builder bootstrap", () => {
         uidForSlug: vi.fn().mockResolvedValue(null),
         provisionMattermost,
         setMattermostFields: vi.fn(),
-        setAgentIds: vi.fn(),
+        ensureAgentIds: vi.fn(),
       }),
     })).rejects.toThrow("configured builder alice has no assigned uid");
     expect(provisionMattermost).not.toHaveBeenCalled();
@@ -275,7 +275,7 @@ describe("configured builder bootstrap", () => {
         uidForSlug,
         provisionMattermost: vi.fn(),
         setMattermostFields: vi.fn(),
-        setAgentIds: vi.fn(),
+        ensureAgentIds: vi.fn(),
       }),
     })).rejects.toThrow(message);
     expect(uidForSlug).not.toHaveBeenCalled();
@@ -304,7 +304,7 @@ describe("configured builder bootstrap", () => {
         uidForSlug: vi.fn().mockResolvedValue("uid-alice"),
         provisionMattermost: vi.fn().mockResolvedValue({}),
         setMattermostFields: vi.fn().mockResolvedValue(undefined),
-        setAgentIds: vi.fn().mockResolvedValue(undefined),
+        ensureAgentIds: vi.fn().mockResolvedValue(undefined),
       }),
       writeSecrets,
     })).rejects.toThrow("configured builder bootstrap identity mismatch");
