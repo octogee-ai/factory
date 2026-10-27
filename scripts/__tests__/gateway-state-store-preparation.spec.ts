@@ -154,7 +154,7 @@ describe("prepareGatewayStateStore", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("rebinds fresh client credentials after the owner lease when they are missing", async () => {
+  it("allows five minutes to rebind missing client credentials after the owner lease", async () => {
     const order: string[] = [];
     const waitForOwner = vi.fn(async () => { order.push("release"); return "absent" as const; });
     const run = vi.fn(async () => { order.push("rebind"); return { code: 0, stdout: "" }; });
@@ -163,7 +163,7 @@ describe("prepareGatewayStateStore", () => {
     expect(order).toEqual(["release", "rebind"]);
     expect(run).toHaveBeenCalledWith(
       ["doctor", "--fix", "--yes", "--non-interactive"],
-      { env: builderEnv(root) },
+      { env: builderEnv(root), timeoutMs: 300_000 },
     );
   });
 

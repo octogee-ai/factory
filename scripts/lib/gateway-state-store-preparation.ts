@@ -86,7 +86,7 @@ export async function prepareGatewayStateStore(input: {
   input.log("[state-store] local client credentials are missing for the PostgreSQL state store; rebinding fresh local credentials (local clients pair again)");
   const result = await (input.run ?? runOpenClaw)(
     ["doctor", "--fix", "--yes", "--non-interactive"],
-    { env },
+    { env, timeoutMs: 300_000 },
   );
   if (result.code !== 0) {
     throw new Error(`client credential rebind failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}`);
