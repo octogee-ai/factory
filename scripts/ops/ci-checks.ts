@@ -22,7 +22,7 @@ if (!value("head")) {
   paths.push(...changed("HEAD"), ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean));
   for (const path of changed("--diff-filter=D", "HEAD")) deleted.add(path);
 }
-const full = args.includes("--full") || args.includes("--all");
+const full = args.includes("--all");
 const jobs = selectCheckLane(checkPlan(paths, group as "all" | "tests" | "quality", value("check") === "desktop-package", full, deleted), value("lane")).filter(job => !value("check") || job.name === value("check"));
 if (value("check") && !jobs.length) throw new Error(`Check ${value("check")} is not in scope`);
 if (args.includes("--plan")) {
