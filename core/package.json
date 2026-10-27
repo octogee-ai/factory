@@ -745,7 +745,7 @@
   "overrides": {
     "brace-expansion@>=2.0.0 <3.0.0": "2.1.7",
     "fast-xml-parser": "^5.10.1",
-    "qs": "^6.16.0",
+    "qs": "^6.17.0",
     "uuid": "^11.1.1",
     "postcss": "8.5.25"
   },
