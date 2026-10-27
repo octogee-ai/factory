@@ -45,8 +45,8 @@ const target: SurgePod = {
   crashLooping: false,
 };
 
-const LOCAL_CORE_PORTABLE_PLAN = fileURLToPath(new URL(
-  "../../node_modules/@octogee/core/dist/local-coach-wired.js",
+const LOCAL_CORE_DIST = fileURLToPath(new URL(
+  "../../node_modules/@octogee/core/dist/",
   import.meta.url,
 ));
 
@@ -59,9 +59,9 @@ function runBuilderDigest(
     [
       "--input-type=module",
       "-e",
-      POD_SESSION_DIGEST_SCRIPT.replace(
-        "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js",
-        LOCAL_CORE_PORTABLE_PLAN,
+      POD_SESSION_DIGEST_SCRIPT.replaceAll(
+        "/octogee/scripts/node_modules/@octogee/core/dist/",
+        LOCAL_CORE_DIST,
       ),
       "alice",
       "configured-builder-system-config",
@@ -350,6 +350,36 @@ describe("surge handoff Kubernetes projection", () => {
       expect(targetDigest).toEqual(sourceDigest);
 
       fs.writeFileSync(path.join(targetState, "customers", "alice", "notes.md"), "changed");
+      expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
+    } finally {
+      fs.rmSync(sourceState, { recursive: true, force: true });
+      fs.rmSync(targetState, { recursive: true, force: true });
+    }
+  });
+
+  it("skips Codex databases the transfer re-materializes from SQLite backups", () => {
+    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
+    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
+    try {
+      writeConfiguredBuilderCustomerState(sourceState);
+      writeConfiguredBuilderCustomerState(targetState);
+      const sourceCodexHome = path.join(sourceState, "agents", "octogee-alice-coach", "agent", "codex-home");
+      const targetCodexHome = path.join(targetState, "agents", "octogee-alice-coach", "agent", "codex-home");
+      fs.mkdirSync(sourceCodexHome, { recursive: true });
+      fs.mkdirSync(targetCodexHome, { recursive: true });
+      fs.writeFileSync(path.join(sourceCodexHome, "state_5.sqlite"), "header page");
+      fs.writeFileSync(path.join(sourceCodexHome, "state_5.sqlite-wal"), "uncheckpointed pages");
+      fs.writeFileSync(path.join(sourceCodexHome, "logs_2.sqlite-journal"), "rollback journal");
+      fs.writeFileSync(path.join(sourceCodexHome, "logs_2.sqlite"), "live logs");
+      fs.writeFileSync(path.join(targetCodexHome, "state_5.sqlite"), "header page with folded WAL");
+      for (const home of [sourceCodexHome, targetCodexHome]) {
+        fs.writeFileSync(path.join(home, "installation_id"), "install-1");
+      }
+
+      const sourceDigest = runBuilderDigest(sourceState);
+      expect(runBuilderDigest(targetState)).toEqual(sourceDigest);
+
+      fs.writeFileSync(path.join(targetCodexHome, "installation_id"), "install-2");
       expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
     } finally {
       fs.rmSync(sourceState, { recursive: true, force: true });
