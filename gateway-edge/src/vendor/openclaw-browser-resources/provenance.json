@@ -1,7 +1,7 @@
 {
-  "source": "b60195e7556d96e2c7973eba14623f7dcb508c94",
+  "source": "8b575ce4fa111785aef9763011e54395563cb1a8",
   "inputs": {
-    "sha256": "3c871f4e2a9e8834d6187d187ae4e3c6c6279e7c3faaf782f0002ba8a2acc751",
+    "sha256": "179cc183363a152aeae8dc45ab2c3b495edc04bd338c28ab7b30375b52533e6e",
     "files": [
       "octogee/app/openclaw-browser/entry.ts",
       "octogee/app/openclaw-browser/media.ts",
@@ -16,9 +16,12 @@
       "octogee/app/openclaw-islands/mermaid-assets.mjs",
       "octogee/app/openclaw-islands/provenance.mjs",
       "octogee/app/openclaw-islands/solid-runtime.mjs",
+      "octogee/app/openclaw-islands/theme-backgrounds.mjs",
       "octogee/app/openclaw-tool-icons/entry.ts",
       "octogee/app/openclaw-workbench/entry.ts",
-      "octogee/app/openclaw-workbench/theme-bootstrap.template.js"
+      "octogee/app/openclaw-workbench/theme-bootstrap.template.js",
+      "octogee/app/package-lock.json",
+      "octogee/app/package.json"
     ]
   },
   "entry": "ui/src/lib/chat/browser-tab-preview.ts",

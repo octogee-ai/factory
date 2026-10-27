@@ -149,95 +149,71 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 26 frozen main
+## Current overlay: October 27 frozen main
 
-The daily refresh freezes latest fetched OpenClaw main at
-`bd111bf8e030fd5abddeb89d70d8abdc63467f86`. It independently qualifies that exact
-snapshot; no older green commit or later tip is substituted. The clean overlay is
-[`b60195e7556d96e2c7973eba14623f7dcb508c94`](https://github.com/ceckert/openclaw/commit/b60195e7556d96e2c7973eba14623f7dcb508c94),
-published on `codex/gateway-pg-secrets-reload-20261026`. This follow-up starts from
-Octogee main `a2cff0a1ad8b9c152a02ec6f3b5f44c2cb4601ca` in an isolated checkout.
-Its preceding `55c4bd0a587258d7d9611b4d2cca17bfcb82806f` package exposed the
-running Builder reload failure described below during TEST deployment. The frozen
-native base, dependency lockfile, CUA input and other overlay families remain unchanged.
+This daily refresh freezes latest fetched OpenClaw main at
+`43dc38e6c1370e7682156b8a84ed6fc1abfaa0b7`. It independently qualifies that exact
+tip, without substituting an older green commit or chasing a later tip. The clean
+overlay is [`8b575ce4fa111785aef9763011e54395563cb1a8`](https://github.com/ceckert/openclaw/commit/8b575ce4fa111785aef9763011e54395563cb1a8),
+on `codex/openclaw-refresh-20261027`. The isolated Octogee checkout starts from
+main `c7d5dd19330b3da3cf8ba05d9d0fba65e9c23a9a`.
 
-The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40388028999)
-is cancelled with zero jobs, so supplies no qualification. The latest inspected
-successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
-is for older `d8612ec864bb4c872616cfda5340c53803655f5f`: 154 jobs pass and nine
-skip. Its skips are Node24 compatibility, PR fail-fast, Android screenshots, check
+The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40521188258)
+passes security-fast and skips 42 jobs, including build, PostgreSQL, UI, native-app
+and ordinary test lanes. It is not full runtime qualification. The most recent successful
+[full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+is older `d8612ec864bb4c872616cfda5340c53803655f5f`: 154 jobs pass and nine skip.
+Those skips are Node24 compatibility, PR fail-fast, Android screenshots, check
 plan, iOS device-family screenshots, the conditional additional-extension/shared
-SDK declaration job, iOS release E2E, iOS screenshot evidence, and full-release
-child evidence sealing. Those results do not qualify the selected tip.
+SDK declaration job, iOS release E2E, iOS screenshot evidence and full-release
+child evidence sealing. Those results do not qualify this selected tip.
 
-### Native adoption and review corrections
+### Native adoption and overlay reassessment
 
-Native now owns PostgreSQL operator recovery (#183623), admitted read-only cache
-reuse (#183398), and relation-scoped catalog attribute reuse (#183598). Their
-duplicate production patches are removed. Native shared keyed plugin-preparation
-sessions also replace the old close-resource implementation patch. One regression
-still checks that closing unrelated agent databases does not invalidate a prepared
-plugin artifact; it is coverage, not an unadopted production fix. MCP stdio cleanup,
-Mattermost server locking and bounded CUA discovery have no retained production
-delta in OpenClaw. Canonical schemas are GLOBAL34/AGENT37; protocol remains 4.
+Native invitation-only visibility and linked-session membership propagation now
+own the prepared read/projection path. The overlay no longer resolves those same
+targets again. Eleven previously patched files now match native exactly, including
+sharing authorization, source custody, describe, mutation and several read owners.
+The channel-member exception still belongs at core effect admission: current
+Octogee members deliberately use `sessions.others: none`; channel membership must
+admit their channel work without disclosing other sessions. An explicit role
+still caps mutation, authoritative empty membership revokes access, and pending
+work rechecks its original session incarnation and live caller.
 
-Cluster Builders use PostgreSQL for GLOBAL and agent state. Native web-provider
-secret preparation synchronously read a cold installed-plugin index, causing
-`secrets.reload` to fail at the main-thread PostgreSQL guard. The async owner now
-awaits native's existing worker-backed index reader, preserving its validation,
-managed-install recovery and publication checks. A real PostgreSQL conformance
-control with the Builder's `parallel-free` provider fails before this two-line fix
-and passes afterward; the existing web-secret/reload suites pass 40 cases. Astra
-reviewed the exact red, green and patch. The preceding overlay has the same defect;
-restoring the removed PostgreSQL patches would not repair it.
+Native also supplies the declaration library previously added for
+`Promise.withResolvers`; that overlay is dropped. The expired fast-uri cooldown
+exception is removed; pinned pnpm still accepts the frozen lockfile. GLOBAL35 and
+AGENT37 remain native's canonical schemas; protocol remains 4. Previously adopted
+PostgreSQL recovery/cache/catalog fixes and native plugin preparation are not
+reintroduced. MCP cleanup, Mattermost server locking, CUA discovery, hosted cron
+extension points and avatar-denial caching have no retained production delta
+in OpenClaw core.
 
-Astra reviewed all retained families against native behavior and current Octogee
-consumers, then reviewed the remediation. It identified a P2 target-profile
-lifetime defect: membership sync held a released profile list across awaited
-preparation. The handler now retains native `prepareUserProfileCatalog`, rechecks
-the exact canonical target ID at each addition commit guard and releases in
-`finally`. A real native profile merge reproduces the failure before the fix;
-all 25 owning tests pass afterward. Removals can still revoke obsolete derived
-rows. Caller, provenance, session-incarnation and explicit-grant boundaries remain.
+The cold PostgreSQL web-secret path still calls the synchronous installed-plugin
+index reader in this frozen base. The overlay keeps the existing async,
+worker-backed owner and its cold-GLOBAL/provider conformance regression. The cron
+enabled JSON codec still needs its engine-specific expression. Native's five-second
+reclamation decision cap still differs from the retained bounded ten-second,
+worker-visible monotonic deadline. Authorization, strict stop, transfer, delivery
+custody, checkpoint and recovery boundaries retain their owning tests and removal
+conditions below.
 
-Three other overlays are removed: unused hosted cron UI extension points and
-their orphan test; the ineffective assistant-media `cfg`-only hunk; and avatar
-denial caching/retry changes. Native already deletes failed avatar entries and
-notifies consumers after authentication restoration. Current media consumers use
-source-only URLs; session-bound member-media access remains unsupported rather
-than being silently broadened.
-
-The participant-label helper remains an active full-Dashboard `/chat` fix. Native
-renders an opaque observation ID even when loaded history supplies the matching
-sender's name. A mounted native control fails that assertion; all 11 retained
-cases pass, including namespace mismatch, authoritative labels and replaced
-sessions. Identity and stored metadata are unchanged.
-
-Voice relay validation follows native's moved SDK lifecycle owner. Reload waiting
-roots use native's shared work-admission state, rather than a duplicate async
-context. The public agent protocol schema is split coherently to satisfy the line
-limit; validators, channel metadata, worker inventory and config baseline are
-regenerated. Native package declaration emit needs `ES2024.Promise` for its own
-`Promise.withResolvers`; only that library fragment is added, without a runtime
-polyfill or target change.
-
-The final desktop authority run exposed two stale test-only fragments: an unused
-undefined fixture return and a cancellation test already covered by native's
-pairing-revocation cases. Both are removed; all 82 desktop authority/service/host/
-node cases pass. Astra reviewed this final cleanup. Its exact delta from the
-predecessor is 14 test-line deletions in one file, with no production changes.
-The complete native PG result in the PR uses byte-identical runtime and PG test
-inputs; this desktop test is outside all 153 planned PG targets.
+The retained Dashboard label projection still uses matching same-session history
+without changing identity or stored metadata. All 11 label cases pass. Reload
+fixtures now use native's current harness and notification type, with exact
+identity, restart and coalescing assertions retained; 35 cases and all four owning
+Gateway test type partitions pass. These fixture corrections change no runtime
+behavior.
 
 ### Retained boundaries and removal conditions
 
-The following are current retention decisions, not blanket runtime certification.
-An open contribution or an existing fork consumer alone does not justify a patch.
+Retention decisions distinguish reproduced bugs from approved product behavior.
+Contribution status alone does not justify a patch.
 
 | Family | Native gap or approved behavior; why the owner is here | Remove when |
 | --- | --- | --- |
 | Requester identity and single approval reviewer | Public requester facts must survive queued/follow-up execution; one reviewer and live client authority must remain valid through the final native/Codex continuation. An adapter cannot own core effect admission. | Native public propagation, single capture and revocation semantics pass delayed/held continuation controls. |
-| Channel membership sync and disclosure | Restrictive members need channel access with explicit-grant precedence, authoritative empty-set revocation, prepared membership reads and publication invalidation. Broadening `sessions.others` would weaken the boundary. | Native authoritative membership methods and read/projection owners provide equivalent revocation and incarnation checks. |
+| Channel membership sync and disclosure | Native now owns invitation-only and linked-session membership filtering. Octogee retains its approved `none`-policy channel-member access, authoritative empty-set sync, explicit-grant precedence and publication invalidation; invitation-only visibility does not replace that mutation contract. Native prepared membership facts replace the overlay target lookup callbacks. | Native authoritative membership methods and read/projection owners provide equivalent revocation and incarnation checks. |
 | Mattermost channel session scope | Approved `threadSessionScope: channel` keeps one session per channel while preserving reply roots in both directions. Current writers deliberately select this product behavior. | Native supports that option, or the product explicitly adopts thread sessions and adapts membership/consumers. |
 | Channel startup and strict stop | Channel startup must not borrow invoking identity; strict stop joins startup and running work, retains physical cleanup ownership, and retires only removed accounts. | Native proves hung-startup joins, late-stop retry and active-sibling preservation. |
 | Reload admission, supersession and settlement | Scoped reference-counted waiting roots, supersession wakeups and model/service debt prevent dropped work or a falsely settled baseline. Native synchronous and post-wait checkpoints remain. | Native owns equivalent held-root, late-join, superseded-tail and post-commit settlement behavior. |
@@ -253,82 +229,68 @@ An open contribution or an existing fork consumer alone does not justify a patch
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
 | Final-reply notification | Activity tools require terminal final-content classification, not agent-completion inference. Only the public observer flag is retained; delivery custody is native. | Native supplies equivalent classification or the observer is removed. |
 | Dashboard participant labels | Current same-session history supplies a human label missing from native observation projection. This is presentation, with no access/identity mutation. | Native projects equivalent labels or the embedded native chat consumer is removed. |
-| Dependency and npm packaging | Exact fast-uri/npm pins and the disposable npm distribution patch need installed-byte verification; version equality does not qualify nested dependencies. | Stock/native installed closures contain the fixes and the dependency gate passes. The release-age exclusion expires at `2026-10-26T22:51:36.634Z`. |
+| Dependency and npm packaging | Exact fast-uri/npm pins and the disposable npm distribution patch need installed-byte verification; version equality does not qualify nested dependencies. | Stock/native installed closures contain the fixes and the dependency gate passes. The expired fast-uri release-age exception is removed. |
 | Generated schemas, inventories and test support | Describe retained APIs and canonical native owners, not independent features. | Regeneration after the owning feature's removal eliminates them. |
 
 ### Qualification and explicit limits
 
-Pinned pnpm 12.15.0 installs the frozen lockfile under Node 26.12.1. The clean full
-`pnpm build package` passes; its build-info matches `b60195e7556d96e2c7973eba14623f7dcb508c94`.
-Root and Mattermost are packed sequentially from that build. Native tarball
-inventory/import-graph checks pass; prepack/postpack leave the source clean.
+Pinned pnpm 12.15.0 accepts the frozen lockfile under Node 26.12.1 without the
+expired URI exception. The clean full `pnpm build package` and matching build-info
+are required for the final source above. Root and Mattermost are packed
+sequentially from that exact build; native archive inventory/import-graph checks
+and clean prepack/postpack restoration are required before publication.
 
-`pnpm check` remains **failed** with 23 lint errors, all in files byte-identical
-to the frozen native base. Generated preflights and core/UI/extension, script and
-root-test typechecks pass. This is not aggregate native CI clearance.
-The current PostgreSQL reload regression passes, as do 40 affected native web-secret,
-model-publication and lifecycle tests. Regenerated islands pass 69 host-consumer
-and coexistence cases; their shared chunks have unchanged content after generated
-chunk references are normalized.
+Aggregate `pnpm check` is **failed**: 26 lint errors are in files byte-identical to
+the frozen native base. Its generated preflights, production core/UI/extensions,
+scripts and root tooling/test types pass. The four affected Gateway test type
+partitions pass separately. No aggregate native CI clearance is claimed.
 
-The unchanged overlay families retain their preceding qualification: 25 membership,
-11 participant-label and 70 reclamation/lifetime/admission/file-copy cases, with
-the five-second native reclamation negative control failing at checkpoint expiry.
-The preceding isolated full native PG16 qualification passed 1,343 tests with 40
-skips over nine shards; this follow-up does not claim a new whole-suite PG run.
-Canonical PostgreSQL routine, trigger and expression provenance is regenerated
-from this exact source against a separate PG16 fixture; all definitions remain
-unchanged. Final-head Linux CI verifies affected Octogee packages separately.
+Boundary qualification includes 366 Gateway cases for strict stop, reload,
+desktop authority, disclosure and transfer, plus the retained requester/reviewer,
+membership, reclamation, cron, plugin, Memory and voice suites. The final affected reload
+fixture suites pass 35 cases. The isolated core catalog/transfer/recovery
+suites pass 64 cases against a fresh, ordinary PostgreSQL16 owner. Native routine,
+trigger and expression definitions regenerate unchanged from this source.
+The broader native PostgreSQL run and its exact counts are recorded in the PR;
+its source differs only in test fixtures outside every planned PG target, with
+all runtime bytes and PG test inputs unchanged.
 
-An isolated npm prefix passes exact build-info, all 874 Mattermost files, both
-15-file patched npm closures, Parallel's ten source-matched files, Codex's 193
-runtime files, native bundled trust/registry refresh and three hook imports.
-The actual Linux amd64 full-plugin-installer passes those same installed-byte,
-source-match, registry and native-hook gates using the current input-keyed CUA
-image. This recut qualifies Linux amd64; arm64 remains unqualified. The dependency
-lockfile and patched npm closure are unchanged from the preceding installed-prefix
-advisory inventory. Complete-image qualification remains a separate required gate:
-real Shared/Builder writers, strict isolated Doctor comparisons, installed
-plugins/hooks/Memory/Skills and the published image digest belong in the PR.
-Platform model catalogs omit credential fields. The former profile-ID strings
-were interpreted as plaintext by native Doctor when a profile write had deferred,
-creating conflicting credentials. Both normal catalog updates and OAuth cleanup
-replace their owned catalog definitions without those markers. Authentication
-continues through native broker-profile materialization; conflicting credentials
-remain refused.
+Hosted islands regenerate from this same built source. Native palette variables
+and color mixes resolve to opaque browser chrome colors during generation, with
+CSS cascade precedence preserved. All 128 host-consumer and pre-paint theme
+cases pass; provenance/pin, license, package/base-image and final-head Linux CI
+remain separate gates. An isolated installed prefix verifies all 874 Mattermost
+files, both 15-file patched npm closures, Parallel's ten source-matched files,
+Codex's 183 runtime files, native registry/bundled trust and three hook imports.
+The source-owned root Undici pin is 8.12.3; npm's separate patched nested closure
+retains Undici 6.29.1 and ip-address 10.7.4.
 
-The running-Gateway check additionally materializes broker profiles, exercises
-public `secrets.reload` and verifies public model catalogs. That isolated check
-uses native channel suppression; live channel readiness is verified during
-TEST/PROD convergence. Bounded failed-boot recovery and the normal operator
-deployment path remain in place.
+The actual Linux amd64 full-plugin-installer passes native registry, bundled
+trust, source-match, three hook imports and complete installed-byte checks.
+Complete Shared/Builder image results, published digest and real-writer/strict
+Doctor/hooks/Memory/Skills proof belong in the PR. Image digests stay out of this recursive build input. Arm64,
+live provider inference and interactive desktop acceptance are not claimed.
+Full Doctor remains off healthy boots; bounded failed-boot recovery and driver
+artifact checks remain. Native per-agent provider/tool-schema Doctor warnings
+stay visible; separate no-network native model-resolution probes must cover the
+authored catalogs without translating config keys or hiding those warnings.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-e8395f6c.tgz#1793071774174106` | 134787427 | `e8395f6c63f78a4f01fa5a586e17b0fcaddd61d8f8f2b0bdbb641ded9b4be1b5` |
-| mattermost | `openclaw-mattermost-e1623c45.tgz#1792939044881470` | 1255051 | `e1623c45f5b00466cb9fd129c65f72a0042fdb9ea20ba4bdbe89d461d329ac81` |
+| root | `openclaw-fork-543c2c5e.tgz#1793114916311419` | 135264994 | `543c2c5e1af204e3a224674acb65a6d455d1903d71addd3d9912eb1a6775a399` |
+| mattermost | `openclaw-mattermost-f2c67dde.tgz#1793114925810656` | 1255687 | `f2c67ddeb1bb39e4bc5eb227852f53260c3559e32b451277000ac4ca34cccf9d` |
 
-Generation-bound downloads reproduce both complete hashes. The unchanged
-Mattermost object is reused only after its full generation-bound verification.
-The complete image digest belongs in the PR, avoiding a recursive build input.
-
-Native Doctor still omits valid per-agent `models.json` providers from one
-provider validation path and cannot prepare their model-specific tool-schema
-inspection. Its unknown-provider and tool-schema warnings remain visible. The
-complete-image qualification therefore also probes native normal model resolution
-against each authored catalog with network access forbidden; this does not claim
-live provider credentials/inference or interactive desktop acceptance.
+Generation-bound readbacks must reproduce both complete hashes before object
+pins and mirrored aliases are accepted. Hash-addressed objects are write-once.
 
 ### Upstream contributions
 
-Contribution status is distinct from retention. This refresh has not submitted
-the worker-backed web-secret fix upstream. #178755 (detach) and #178973
-(local checkpoint) remain draft/open; #181951 (retained PG refusal) and #182783
-(session-list reload) remain open. #178970 remains open but native #181198
-supersedes it. Previously adopted #181201, #181676, #183114, #183172 and #183184
-are not reimported. This frozen base additionally contains #183398, #183598 and
-#183623, so their former duplicate patches are dropped. None of these statuses
-certifies the entire overlay or future upstream main.
+#178755 (detach) and #178973 (local checkpoint) remain draft/open. #181951
+(retained PG refusal) and #182783 (session-list reload) remain open. #178970 is
+still open but native #181198 already supersedes it. Previously adopted #181201,
+#181676, #183114, #183172, #183184, #183398, #183598 and #183623 are not
+reimported. The worker-backed web-secret fix has not been submitted upstream.
+These statuses are separate from retention and runtime qualification.
 
 ## Native CUA desktop-discovery preservation
 
