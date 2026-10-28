@@ -4,16 +4,16 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { exportAgentStoreSnapshots, prepareAgentStoreSnapshots, findPortableAgentStores } from "../lib/agent-store-snapshot.js";
+import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(agentId = "octogee-alice-coach") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "postgres-agent-handoff-")));
   roots.push(root);
-  const agentId = "octogee-alice-coach";
   const relative = `agents/${agentId}/agent`;
   await fs.mkdir(path.join(root, relative), { recursive: true });
   const file = path.join(root, relative, "openclaw-agent.sqlite");
@@ -38,6 +38,29 @@ it("detaches before carrying a PostgreSQL anchor and adopts it without a SQLite 
     expect({ ...adopted.prepare("SELECT store_id, schema FROM openclaw_engine_anchor").get() }).toEqual(identity);
   } finally { adopted.close(); }
   expect(await fs.readFile(file)).toEqual(await fs.readFile(prepared.stores[0]!.restoredPath));
+});
+
+it("exports a multi-agent customer without queueing detaches behind the serialized runtime deadline", async () => {
+  const agents = await Promise.all(Array.from({ length: 5 }, (_, index) => fixture(`octogee-alice-project-${index}`)));
+  const stageDir = path.join(agents[0]!.root, "stage");
+  const guard = new OpenClawRuntimeUpdateGuard();
+  const detached: string[] = [];
+  const detachAgent = vi.fn((agentId: string) => guard.run(async () => {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    detached.push(agentId);
+  }, { timeoutMs: 1 }));
+  await exportAgentStoreSnapshots({
+    sources: agents.map(agent => ({ cwd: agent.root, path: `agents/${agent.agentId}` })),
+    exportRoot: stageDir,
+    detachAgent,
+  });
+  expect(detached).toEqual(agents.map(agent => agent.agentId));
+  const prepared = await prepareAgentStoreSnapshots({ stageDir, importDir: path.join(agents[0]!.root, "target"), migrationId: "multi-agent" });
+  expect(prepared.stores).toHaveLength(agents.length);
+  for (const agent of agents) {
+    const carried = prepared.stores.find(store => store.agentId === agent.agentId)!;
+    expect(await fs.readFile(carried.restoredPath)).toEqual(await fs.readFile(agent.file));
+  }
 });
 
 it.each(["missing", "failed"])("does not carry an anchor when detach is %s", async mode => {

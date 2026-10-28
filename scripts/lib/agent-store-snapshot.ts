@@ -92,7 +92,8 @@ export async function exportAgentStoreSnapshots(
 ): Promise<Array<{ cwd: string; path: string }>> {
   const stores = await findPortableAgentStores(input.sources);
   if (stores.length === 0) return exportCodexStoreSnapshots(input);
-  const carried = await mapConcurrently(stores, async (store) => {
+  const carried: Array<{ cwd: string; path: string }> = [];
+  for (const store of stores) {
     const file = path.join(store.sourceAgentDir, AGENT_STORE_BASENAME);
     const anchor = readPostgresAgentAnchor(file);
     input.signal?.throwIfAborted();
@@ -117,8 +118,8 @@ export async function exportAgentStoreSnapshots(
       database: { role: "agent", agentId: store.agentId, engine: "postgres", ...anchor },
       artifact: { path: SNAPSHOT_ARTIFACT_BASENAME, sha256: await sha256OfFile(artifact), sizeBytes: (await fs.stat(artifact)).size },
     }), { mode: 0o600 });
-    return { cwd: input.exportRoot, path: relative };
-  });
+    carried.push({ cwd: input.exportRoot, path: relative });
+  }
   return [...carried, ...await exportCodexStoreSnapshots(input)];
 }
 
