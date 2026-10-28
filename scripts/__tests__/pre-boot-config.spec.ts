@@ -484,18 +484,24 @@ describe("applyPreBootPatches — MM env sync", () => {
 describe("applyPreBootPatches — Mattermost runtime", () => {
   it.each([undefined, "steer", "collect", "followup", "interrupt"])("uses native Mattermost steering without changing other channel policy (%s)", (mattermostMode) => {
     const config: any = {
-      channels: { mattermost: { replyToMode: "all", threadSessionScope: "channel", streaming: { mode: "block", preview: { toolProgress: true } }, commands: { native: false } } },
-      messages: { queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
+      channels: { mattermost: { replyToMode: "all", threadSessionScope: "channel", streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } }, commands: { native: false } } },
+      messages: { ackReactionScope: "all", queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
     };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "steer");
     expect(config.messages.queue).toEqual({ mode: "steer", debounceMs: 250, byChannel: { slack: "collect", mattermost: "steer" } });
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
   });
 
-  it("selects native Mattermost steering for an existing channel without message settings", () => {
+  it("selects native Mattermost steering and ack reactions for an existing channel without message settings", () => {
     const config: any = { channels: { mattermost: { commands: { native: false } } } };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(true);
-    expect(config.messages).toEqual({ queue: { byChannel: { mattermost: "steer" } } });
+    expect(config.messages).toEqual({ ackReactionScope: "all", queue: { byChannel: { mattermost: "steer" } } });
+  });
+
+  it("keeps an explicit ack reaction scope", () => {
+    const config: any = { channels: { mattermost: {} }, messages: { ackReactionScope: "off" } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    expect(config.messages.ackReactionScope).toBe("off");
   });
 
   it("leaves native reply and streaming preferences untouched", () => {
@@ -510,12 +516,16 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.agents.defaults.verboseDefault).toBe("off");
   });
 
-  it("defaults room replies to threads and block previews without direct-message overrides", () => {
+  it("defaults room replies to threads and compact progress previews without direct-message overrides", () => {
     const config: any = { channels: { mattermost: {} } };
     applyPreBootPatches(config, {});
     expect(config.channels.mattermost.replyToMode).toBe("all");
     expect(config.channels.mattermost).not.toHaveProperty("replyToModeByChatType");
-    expect(config.channels.mattermost.streaming).toEqual({ mode: "block", preview: { toolProgress: true } });
+    expect(config.channels.mattermost.streaming).toEqual({
+      mode: "progress",
+      preview: { toolProgress: true },
+      progress: { toolProgress: true },
+    });
     expect(config.channels.mattermost.threadSessionScope).toBe("channel");
   });
 
@@ -543,11 +553,15 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     const log = vi.fn();
     expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(true);
     expect(config.channels.mattermost.streaming).toEqual({
-      mode: "block", chunkMode: "newline", preview: { toolProgress: true, commandText: "status" },
+      mode: "progress",
+      chunkMode: "newline",
+      preview: { toolProgress: true, commandText: "status" },
+      progress: { toolProgress: true },
     });
     expect(config.channels.mattermost.accounts.inherited).not.toHaveProperty("streaming");
     expect(config.channels.mattermost.accounts.custom.streaming).toEqual({ mode: "off", preview: { toolProgress: false } });
-    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.mode=block");
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.mode=progress");
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.progress.toolProgress=true");
     expect(log).toHaveBeenCalledWith("set channels.mattermost.streaming.preview.toolProgress=true");
     expect(applyMattermostPreBootPatches(config, { GATEWAY_CLASS: gatewayClass }, log)).toBe(false);
   });
@@ -1017,13 +1031,13 @@ describe("applyPreBootPatches — memory search embeddings", () => {
 describe("applyMattermostPreBootPatches — non-object preservation", () => {
   it("does not replace existing non-object account or commands values", () => {
     const config: any = {
-      messages: { queue: { byChannel: { mattermost: "steer" } } },
+      messages: { ackReactionScope: "all", queue: { byChannel: { mattermost: "steer" } } },
       channels: {
         mattermost: {
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
           baseUrl: "${MM_URL}",
-          streaming: { mode: "block", preview: { toolProgress: true } },
+          streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
           commands: "legacy-commands",
           threadSessionScope: "channel",
           accounts: {
@@ -1118,7 +1132,7 @@ describe("applyPreBootPatches — plugin config", () => {
 describe("applyPreBootPatches — no-change reporting", () => {
   it("returns false when nothing in the config needs touching", () => {
     const config: any = {
-      messages: { queue: { byChannel: { mattermost: "steer" } } },
+      messages: { ackReactionScope: "all", queue: { byChannel: { mattermost: "steer" } } },
       agents: {
         defaults: {
           models: Object.fromEntries(modelCatalogForProvider("anthropic").map(({ id }) => [id, {}])),
@@ -1137,13 +1151,14 @@ describe("applyPreBootPatches — no-change reporting", () => {
           replyToModeByChatType: { direct: "all" },
           actions: { reactions: true },
           streaming: {
-            mode: "block",
+            mode: "progress",
             chunkMode: "newline",
             block: { enabled: true },
             preview: {
               toolProgress: true,
               commandText: "raw",
             },
+            progress: { toolProgress: true },
           },
           baseUrl: "${MM_URL}",
           commands: { native: false },

@@ -138,9 +138,9 @@ function applyMattermostStreamingDefaults(
   let changed = false;
   const streaming = ensureNullishObjectProperty(mattermost, "streaming");
   if (streaming && streaming.mode === undefined) {
-    streaming.mode = "block";
+    streaming.mode = "progress";
     changed = true;
-    logFn("set channels.mattermost.streaming.mode=block");
+    logFn("set channels.mattermost.streaming.mode=progress");
   }
   const preview = streaming ? ensureNullishObjectProperty(streaming, "preview") : null;
   if (preview && preview.toolProgress === undefined) {
@@ -148,7 +148,55 @@ function applyMattermostStreamingDefaults(
     changed = true;
     logFn("set channels.mattermost.streaming.preview.toolProgress=true");
   }
+  const progress =
+    streaming && preview?.toolProgress !== false
+      ? ensureNullishObjectProperty(streaming, "progress")
+      : null;
+  if (progress && progress.toolProgress === undefined) {
+    progress.toolProgress = true;
+    changed = true;
+    logFn("set channels.mattermost.streaming.progress.toolProgress=true");
+  }
 
+  return changed;
+}
+
+function applyMattermostAckReactionDefaults(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void,
+): boolean {
+  const messages = ensureNullishObjectProperty(config, "messages");
+  if (!messages || messages.ackReactionScope !== undefined) return false;
+  messages.ackReactionScope = "all";
+  logFn("set messages.ackReactionScope=all");
+  return true;
+}
+
+function disableMattermostNativeCommands(
+  container: Record<string, unknown>,
+  configPath: string,
+  logFn: (msg: string) => void,
+): boolean {
+  const commands = ensureNullishObjectProperty(container, "commands");
+  if (!commands || commands.native === false) return false;
+  commands.native = false;
+  logFn(`forced ${configPath}.commands.native=false`);
+  return true;
+}
+
+function applyMattermostAccountPatches(
+  mattermost: Record<string, unknown>,
+  logFn: (msg: string) => void,
+): boolean {
+  const configuredAccounts = objectProperty(mattermost, "accounts");
+  if (!configuredAccounts) return false;
+  let changed = false;
+  for (const [accountId, account] of Object.entries(configuredAccounts)) {
+    if (!isPlainObject(account)) continue;
+    const configPath = `channels.mattermost.accounts.${accountId}`;
+    changed = applyMattermostAccountSessionPolicy(account, configPath, logFn) || changed;
+    changed = disableMattermostNativeCommands(account, configPath, logFn) || changed;
+  }
   return changed;
 }
 
@@ -168,6 +216,7 @@ export function applyMattermostPreBootPatches(
   }
 
   changed = applyMattermostStreamingDefaults(mattermost, logFn) || changed;
+  changed = applyMattermostAckReactionDefaults(config, logFn) || changed;
 
   if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
     mattermost.baseUrl = MM_URL_PLACEHOLDER;
@@ -175,26 +224,8 @@ export function applyMattermostPreBootPatches(
     logFn(`restored channels.mattermost.baseUrl to the MM_URL placeholder`);
   }
 
-  const commands = ensureNullishObjectProperty(mattermost, "commands");
-  if (commands && commands.native !== false) {
-    commands.native = false;
-    changed = true;
-    logFn(`forced channels.mattermost.commands.native=false (slash commands disabled)`);
-  }
-
-  const configuredAccounts = objectProperty(mattermost, "accounts");
-  if (!configuredAccounts) return changed;
-  for (const [accountId, account] of Object.entries(configuredAccounts)) {
-    if (!isPlainObject(account)) continue;
-    changed = applyMattermostAccountSessionPolicy(account, `channels.mattermost.accounts.${accountId}`, logFn) || changed;
-    const accountCommands = ensureNullishObjectProperty(account, "commands");
-    if (accountCommands && accountCommands.native !== false) {
-      accountCommands.native = false;
-      changed = true;
-      logFn(`forced commands.native=false on accounts.${accountId}`);
-    }
-  }
-  return changed;
+  changed = disableMattermostNativeCommands(mattermost, "channels.mattermost", logFn) || changed;
+  return applyMattermostAccountPatches(mattermost, logFn) || changed;
 }
 
 function accountRouteKey(accountId: string, agentId: string): string {

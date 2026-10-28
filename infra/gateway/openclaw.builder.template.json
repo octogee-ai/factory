@@ -170,7 +170,7 @@
         "mattermost": "steer"
       }
     },
-    "ackReactionScope": "group-mentions",
+    "ackReactionScope": "all",
     "groupChat": {
       "visibleReplies": "automatic"
     }
@@ -187,14 +187,15 @@
     "mattermost": {
       "replyToMode": "all",
       "streaming": {
-        "mode": "block",
-        "preview": { "toolProgress": true }
+        "mode": "progress",
+        "preview": { "toolProgress": true },
+        "progress": { "toolProgress": true }
       },
       "enabled": true,
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
-      "actions": { "reactions": true },
+      "actions": { "reactions": true, "messages": true, "search": true },
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },
