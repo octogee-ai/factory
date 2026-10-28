@@ -154,9 +154,12 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 This refresh freezes latest fetched OpenClaw main at
 `d5f7d57eff508f815ef03f6560ca12b2b3d4aa0a`. It independently qualifies that exact
 tip without substituting an older green commit or following newer commits. The
-clean overlay is [`8c5ec056f0b36959a78df0aa11d7664884efb2b1`](https://github.com/ceckert/openclaw/commit/8c5ec056f0b36959a78df0aa11d7664884efb2b1)
-on `codex/openclaw-refresh-20261028`. The isolated Octogee checkout starts from
-main `2463ed511dc58189ec9a8b050c877c1038fe5444`.
+clean overlay is [`ebf32b25df5693f3f2ebca7c81d88df84e621dcc`](https://github.com/ceckert/openclaw/commit/ebf32b25df5693f3f2ebca7c81d88df84e621dcc)
+on `octogee-overlay-20261028-mattermost-parity`: the October 28 overlay
+[`8c5ec056f0b36959a78df0aa11d7664884efb2b1`](https://github.com/ceckert/openclaw/commit/8c5ec056f0b36959a78df0aa11d7664884efb2b1)
+plus the two open Mattermost channel contributions below, carried as their own
+commits on the same selected base. The isolated Octogee checkout starts from
+main `6d98ecdf3c3551c0cb4525a183d350d70042dc7c`.
 
 The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40704141760)
 was cancelled without reporting jobs. It supplies no runtime qualification. The
@@ -215,6 +218,23 @@ schema input now has its missing generated catalog: two table descriptors and
 one fingerprint, with no canonical SQLite or PostgreSQL DDL change. Historical
 fixtures use native Template/version restoration; all 36 retained recovery
 controls pass.
+
+### Carried Mattermost channel contributions
+
+Two open upstream pull requests ride on the frozen base as unmodified feature
+commits: [#186891](https://github.com/openclaw/openclaw/pull/186891) (inbound
+parity: acknowledgement reactions, channel system events, join introductions
+and compact tool progress) and [#186893](https://github.com/openclaw/openclaw/pull/186893)
+(message actions and multi-file sends). They are approved Builder channel
+behavior that the current Mattermost pre-boot defaults already select, not a
+reproduced native bug and not a fork-only API; Octogee consumers use only the
+public Mattermost configuration they add. The overlay adds two housekeeping
+commits this base needs and the PRs do not change: the bundled channel
+metadata and config-doc baseline regenerated for the new schema keys, and the
+`SAFETY`/`mock-isolation` notes plus pruned assertion baseline that the
+preflight ratchets require. Runtime bytes are the PR commits' own. Remove each
+family when the selected base contains the merged behavior and the Mattermost
+consumer controls pass; an open PR or a newer main containing it is not enough.
 
 ### Retained boundaries and removal conditions
 
@@ -277,8 +297,8 @@ inference and interactive desktop acceptance are not claimed.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-a54d9795.tgz#1793201158489723` | 137495784 | `a54d9795224b46678abc55cf315804703164ac50a81b5fbec309443e8bfc8645` |
-| mattermost | `openclaw-mattermost-9540114c.tgz#1793201178409853` | 1257462 | `9540114cd4c5d8fd87cf83884e01a3ca88749a1449e2b1783970300ff1608a6d` |
+| root | `openclaw-fork-0abfd77d.tgz#1793209433965738` | 137486009 | `0abfd77dfe92e2c23301f2244c7d91671001daacb812b2a3d554876986c83056` |
+| mattermost | `openclaw-mattermost-7ddd6253.tgz#1793209437799591` | 1264830 | `7ddd625377ee7ebee12a2b813be81b8da7f0718f823a384c5cbb8c06a3f5f22f` |
 
 Generation-bound readbacks must reproduce both complete hashes before pins and
 mirrored aliases are accepted. Hash-addressed objects are write-once. Image
@@ -286,10 +306,12 @@ digests belong in the PR, outside this recursive build input.
 
 ### Upstream contributions
 
-#178755 (detach) and #178973 (local checkpoint) remain draft/open; #181951
-(retained PG refusal) remains open. #182783 is closed unmerged because merged
-#186296 adopted it into this selected base. #178970 remains open but native
-#181198 already supersedes it. Previously adopted PostgreSQL recovery, cache,
+#186891 (Mattermost inbound parity) and #186893 (Mattermost message actions)
+are open and carried on this base as described above; remove each when the
+selected base contains it. #178755 (detach) and #178973 (local checkpoint)
+remain draft/open; #181951 (retained PG refusal) remains open. #182783 is
+closed unmerged because merged #186296 adopted it into this selected base.
+#178970 remains open but native #181198 already supersedes it. Previously adopted PostgreSQL recovery, cache,
 catalog and plugin-preparation fixes are not reintroduced. The worker-backed
 web-secret fix has not been submitted upstream. Contribution status is separate
 from necessity and runtime qualification.

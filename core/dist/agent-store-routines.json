@@ -1,5 +1,5 @@
 {
-    "sourceSha": "8c5ec056f0b36959a78df0aa11d7664884efb2b1",
+    "sourceSha": "ebf32b25df5693f3f2ebca7c81d88df84e621dcc",
     "routines": {
         "memory_index_chunks_search_sync": "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd",
         "memory_index_chunks_vec_sync": "aa3fd60d05de31bd95264d5c8d33e060f12c3d92520718dab3d988c53714c74a",
