@@ -643,6 +643,24 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("modelsAuthRefresh", () => {
+    it("refreshes the selected agent's native auth snapshot", async () => {
+      let captured: unknown;
+      server.setHandler("models.authRefresh", params => {
+        captured = params;
+        return { ok: true, payload: { refreshed: true } };
+      });
+
+      await expect(client.modelsAuthRefresh({ agentId: "octogee-a-coach" })).resolves.toEqual({ refreshed: true });
+      expect(captured).toEqual({ agentId: "octogee-a-coach" });
+    });
+
+    it.each([null, {}, { refreshed: false }])("rejects an unacknowledged refresh: %j", async payload => {
+      server.setHandler("models.authRefresh", () => ({ ok: true, payload }));
+      await expect(client.modelsAuthRefresh({ agentId: "octogee-a-coach" })).rejects.toMatchObject({ code: "invalid-response" });
+    });
+  });
+
   describe("gatewayRestartRequest", () => {
     it("requests a safe gateway restart through the OpenClaw RPC", async () => {
       let captured: any;

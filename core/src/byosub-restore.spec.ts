@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { createHash } from "node:crypto";
 import {
   restoreByosubCredentials,
   agentIdsFromConfig,
@@ -948,6 +949,121 @@ describe("restoreByosubCredentials", () => {
     });
     expect(fs.existsSync(targetPath)).toBe(false);
     expect(logs.join("\n")).toMatch(/octogee-a-coach|skip|conservative/i);
+  });
+
+  it.each([1, Date.now() - 60_000])("replaces an expired Codex profile (%s) with a fresh reconnect while preserving broker profiles", async expires => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    const brokers = canonicalAuthProfiles(agentId);
+    writeAuthProfileStore(agentDir, { version: 1, profiles: {
+      ...brokers,
+      [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+        type: "oauth", provider: "openai", access: "old-access", refresh: "old-refresh", expires,
+      },
+    } });
+    const credential = JSON.parse(codexBlob());
+    credential.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    const fetchSecret = vi.fn(async () => JSON.stringify(credential));
+
+    const result = await restoreByosubCredentials({
+      plan: [{ agentId, provider: "openai", secretName: "byosub-a-openai", openclawDir: oc }],
+      fetchSecret,
+    });
+
+    expect(result).toEqual({ restored: 1, failed: 0, skipped: 0 });
+    expect(fetchSecret).toHaveBeenCalledTimes(1);
+    expect(readAuthProfileStore(agentDir)).toMatchObject({ profiles: {
+      ...brokers,
+      [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+        access: credential.tokens.access_token, refresh: credential.tokens.refresh_token,
+      },
+    } });
+  });
+
+  it.each(["same", "expired", "unknown-expiry"])("preserves an expired runtime profile when the stored credential is %s", async candidate => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    const credential = JSON.parse(codexBlob());
+    if (candidate !== "unknown-expiry") {
+      credential.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) + (candidate === "expired" ? -60 : 3600) });
+    }
+    const live = { version: 1, profiles: {
+      [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+        type: "oauth", provider: "openai", expires: 1,
+        access: candidate === "same" ? credential.tokens.access_token : "live-access",
+        refresh: "runtime-rotated-refresh",
+      },
+    } };
+    writeAuthProfileStore(agentDir, live);
+
+    const result = await restoreByosubCredentials({
+      plan: [{ agentId, provider: "openai", secretName: "byosub-a-openai", openclawDir: oc }],
+      fetchSecret: async () => JSON.stringify(credential),
+    });
+
+    expect(result).toEqual({ restored: 0, failed: 0, skipped: 1 });
+    expect(readAuthProfileStore(agentDir)).toEqual(live);
+  });
+
+  it.each(["pending", "failed-same-generation", "failed-new-login"])("respects the native refresh fence: %s", async state => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    const credential = JSON.parse(codexBlob());
+    credential.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    const digest = (kind: string, secret: string) => createHash("sha256").update(JSON.stringify([
+      "openclaw.oauth-refresh-generation", 1, OPENAI_CODEX_DEFAULT_PROFILE_ID, "openai", kind, secret,
+    ])).digest("hex");
+    const prefix = `openclaw-oauth-refresh-fence:v1:${"a".repeat(32)}:${state === "pending" ? "" : "failed:"}`;
+    const live = { version: 1, profiles: {
+      [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+        type: "oauth", provider: "openai", expires: 1,
+        access: `${prefix}access:${digest("access", "original-access")}`,
+        refresh: `${prefix}refresh:${digest("refresh", state === "failed-new-login" ? "old-refresh" : credential.tokens.refresh_token)}`,
+      },
+    } };
+    writeAuthProfileStore(agentDir, live);
+
+    const result = await restoreByosubCredentials({
+      plan: [{ agentId, provider: "openai", secretName: "byosub-a-openai", openclawDir: oc }],
+      fetchSecret: async () => JSON.stringify(credential),
+    });
+
+    const restored = state === "failed-new-login";
+    expect(result).toEqual({ restored: Number(restored), failed: 0, skipped: Number(!restored) });
+    expect(readAuthProfileStore(agentDir)).toMatchObject(restored ? { profiles: {
+      [OPENAI_CODEX_DEFAULT_PROFILE_ID]: { access: credential.tokens.access_token, refresh: credential.tokens.refresh_token },
+    } } : live);
+  });
+
+  it("preserves a credential rotated while the replacement is being fetched", async () => {
+    const oc = mkTmp();
+    const agentId = "octogee-a-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    const profile = { type: "oauth", provider: "openai", access: "old", refresh: "old", expires: 1 };
+    writeAuthProfileStore(agentDir, { version: 1, profiles: { [OPENAI_CODEX_DEFAULT_PROFILE_ID]: profile } });
+    const rotated = { version: 1, profiles: { [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+      ...profile, access: "runtime-access", refresh: "runtime-refresh", expires: Date.now() + 3600_000,
+    } } };
+
+    const result = await restoreByosubCredentials({
+      plan: [{ agentId, provider: "openai", secretName: "byosub-a-openai", openclawDir: oc }],
+      fetchSecret: async () => {
+        writeAuthProfileStore(agentDir, rotated);
+        const credential = JSON.parse(codexBlob());
+        credential.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+        return JSON.stringify(credential);
+      },
+    });
+
+    expect(result).toEqual({ restored: 0, failed: 0, skipped: 1 });
+    expect(readAuthProfileStore(agentDir)).toEqual(rotated);
   });
 
   it("restores Codex from Secret Manager when only unrelated profiles exist and CODEX_HOME is missing", async () => {

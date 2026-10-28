@@ -1802,12 +1802,22 @@ function syncActions(deps?: SyncByotForCustomerDeps): SyncByotActions {
 }
 
 async function applyRestoredOauthRuntimeAllowlist(
+  slug: string,
   restore: OauthStoreRestoreResult,
   actions: SyncByotActions,
   codexAppServer: CodexAppServerPatch,
 ): Promise<OauthRuntimeModelAllowlistResult> {
   if (!restore.present) return { patched: false, changed: false, restartRequired: false };
-  return actions.applyOauthRuntimeModelAllowlist(restore.providers ?? [], codexAppServer);
+  const result = await actions.applyOauthRuntimeModelAllowlist(restore.providers ?? [], codexAppServer);
+  if (restore.providers?.includes("openai")) {
+    const rpc = createGatewayRpc({ allowLegacyGatewayTokenFallback: true, connectTimeoutMs: 10_000, callTimeoutMs: 10_000 });
+    try {
+      await rpc.modelsAuthRefresh({ agentId: `octogee-${slug}-coach` });
+    } finally {
+      await rpc.close();
+    }
+  }
+  return result;
 }
 
 async function requestRestartIfRequired(
@@ -1892,6 +1902,7 @@ async function syncStandardByotState(
     : await actions.applyByotState(slug, desired.input);
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(
+    slug,
     restore,
     actions,
     STANDARD_CODEX_APP_SERVER,
@@ -1928,6 +1939,7 @@ async function syncBuilderByotState(
   const restore = await restoreOauthIfNeeded(slug, desired, actions);
   const catalog = await materializePlatformCatalog(slug, actions);
   const runtimePatched = await applyRestoredOauthRuntimeAllowlist(
+    slug,
     restore,
     actions,
     BUILDER_CODEX_APP_SERVER,

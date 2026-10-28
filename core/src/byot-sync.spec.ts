@@ -8,20 +8,22 @@ const CODEX_DEFAULT_MODEL = codexRuntimeConfig().model;
 const CLAUDE_CLI_DEFAULT_MODEL = claudeCliRuntimeConfig().model;
 import { describe, it, test, expect, beforeEach, afterEach, vi } from "vitest";
 
-const { gatewayRestartRequestSpy, secretsReloadSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
+const { gatewayRestartRequestSpy, secretsReloadSpy, modelsAuthRefreshSpy, closeSpy, createGatewayRpcSpy } = vi.hoisted(() => {
   const gatewayRestartRequestSpy = vi.fn(async () => ({ status: "requested" }));
   const secretsReloadSpy = vi.fn(async () => ({ ok: true, warningCount: 0 }));
+  const modelsAuthRefreshSpy = vi.fn(async () => ({ refreshed: true }));
   const closeSpy = vi.fn(async () => {});
   const createGatewayRpcSpy = vi.fn(() => ({
     gatewayRestartRequest: gatewayRestartRequestSpy,
     secretsReload: secretsReloadSpy,
+    modelsAuthRefresh: modelsAuthRefreshSpy,
     close: closeSpy,
     configGet: vi.fn(),
     configPatch: vi.fn(),
     channelsStatus: vi.fn(),
     isGatewayUp: vi.fn(async () => true),
   }));
-  return { gatewayRestartRequestSpy, secretsReloadSpy, closeSpy, createGatewayRpcSpy };
+  return { gatewayRestartRequestSpy, secretsReloadSpy, modelsAuthRefreshSpy, closeSpy, createGatewayRpcSpy };
 });
 
 vi.mock("./gateway-rpc", () => ({
@@ -3002,6 +3004,35 @@ describe("shared gateway — per-customer broker-token materialization", () => {
 });
 
 describe("operator gateway — runtime sync stays narrow", () => {
+  it("refreshes native OpenAI auth after restore and on a retry that preserves the already restored credential", async () => {
+    modelsAuthRefreshSpy.mockClear();
+    modelsAuthRefreshSpy.mockRejectedValueOnce(new Error("native auth refresh unavailable"));
+    const requestGatewayRestart = vi.fn(async () => true);
+    const restoreOauthStoreForSlug = vi.fn()
+      .mockResolvedValueOnce({ restored: true, present: true, providers: ["openai"] })
+      .mockResolvedValue({ restored: false, present: true, providers: ["openai"] });
+    const deps = {
+      isBuilderGateway: () => true,
+      restoreOauthStoreForSlug,
+      materializePlatformBrokerSurfaces: vi.fn(async () => false),
+      applyOauthRuntimeModelAllowlist: vi.fn(async () => ({ patched: false, changed: false, restartRequired: false })),
+      applyCoachModelPatch: vi.fn(async () => false),
+      applyAgentModelOverrides: vi.fn(async () => false),
+      requestGatewayRestart,
+      triggerSecretsReload: vi.fn(async () => {}),
+      hasPendingPlatformCatalogRestart: () => false,
+    };
+    const user = { ...ON, systemConfig: { byot: { provider: "openai-codex" } } };
+
+    await expect(syncByotForCustomer(user, deps)).rejects.toThrow("native auth refresh unavailable");
+    expect(modelsAuthRefreshSpy).toHaveBeenCalledWith({ agentId: "octogee-tester-70-coach" });
+    expect(requestGatewayRestart).not.toHaveBeenCalled();
+
+    await syncByotForCustomer(user, deps);
+    expect(modelsAuthRefreshSpy).toHaveBeenCalledTimes(2);
+    expect(requestGatewayRestart).not.toHaveBeenCalled();
+  });
+
   it("restoreOauthStoreForSlug: materializes owner BYOS credentials on operator gateways", async () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-byos-"));
     seedAgent(openclawDir, "octogee-tester-70-coach");

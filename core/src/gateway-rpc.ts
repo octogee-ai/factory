@@ -338,6 +338,7 @@ export interface GatewayRpcClient {
   channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
   channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
   secretsReload(): Promise<SecretsReloadResult>;
+  modelsAuthRefresh(params: { agentId: string }): Promise<{ refreshed: true }>;
   brokerProfilesMaterialize(params: { agentIds: string[] }): Promise<{ ok: true }>;
   degradedSecretsStatus?(): Promise<DegradedSecretOwner[]>;
   gatewayRestartRequest(params: { reason: string; skipDeferral?: boolean }): Promise<GatewayRestartRequestResult>;
@@ -1015,6 +1016,13 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
 
     channelsStop: (params) => stopChannels(call, params),
     channelsStart: (params) => startChannels(call, params),
+    async modelsAuthRefresh(params) {
+      const payload = await call("models.authRefresh", params);
+      if (!payload || typeof payload !== "object" || (payload as { refreshed?: unknown }).refreshed !== true) {
+        throw new OpenclawWireError(INVALID_RESPONSE, "models.authRefresh did not acknowledge refreshed credentials");
+      }
+      return { refreshed: true };
+    },
     gatewayRestartRequest: (params) => requestGatewayRestart(call, params),
 
     async sessionsList(params) {

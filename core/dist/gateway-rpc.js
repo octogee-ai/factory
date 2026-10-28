@@ -562,6 +562,13 @@ export function createGatewayRpc(opts = {}) {
         channelsStatusConnectionGeneration: statusConnection.connectionGeneration,
         channelsStop: (params) => stopChannels(call, params),
         channelsStart: (params) => startChannels(call, params),
+        async modelsAuthRefresh(params) {
+            const payload = await call("models.authRefresh", params);
+            if (!payload || typeof payload !== "object" || payload.refreshed !== true) {
+                throw new OpenclawWireError(INVALID_RESPONSE, "models.authRefresh did not acknowledge refreshed credentials");
+            }
+            return { refreshed: true };
+        },
         gatewayRestartRequest: (params) => requestGatewayRestart(call, params),
         async sessionsList(params) {
             const payload = await call("sessions.list", params);

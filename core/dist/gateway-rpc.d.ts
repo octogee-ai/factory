@@ -226,6 +226,11 @@ export interface GatewayRpcClient {
     channelsStop(params: GatewayChannelOperationParams): Promise<GatewayChannelStopResult>;
     channelsStart(params: GatewayChannelOperationParams): Promise<GatewayChannelStartResult>;
     secretsReload(): Promise<SecretsReloadResult>;
+    modelsAuthRefresh(params: {
+        agentId: string;
+    }): Promise<{
+        refreshed: true;
+    }>;
     brokerProfilesMaterialize(params: {
         agentIds: string[];
     }): Promise<{

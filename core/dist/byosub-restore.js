@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { readPostgresAgentAnchor, writeAgentStore } from "./agent-postgres.js";
 import { buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, CLAUDE_CLI_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
@@ -544,17 +545,21 @@ async function alignCodexProfileProvider(agentDir, store, onAligned) {
     await writeAuthProfileStore(agentDir, store);
     onAligned();
 }
-async function writeMergedAuthProfileStore(agentDir, next) {
+async function writeMergedAuthProfileStore(agentDir, next, acceptExisting) {
     const nextProfiles = profileStoreProfiles(next);
+    const existing = await readAuthProfileStore(agentDir);
+    if (acceptExisting && !acceptExisting(existing))
+        return false;
     if (!nextProfiles) {
         await writeAuthProfileStore(agentDir, next);
-        return;
+        return true;
     }
-    const existingProfiles = profileStoreProfiles(await readAuthProfileStore(agentDir));
+    const existingProfiles = profileStoreProfiles(existing);
     await writeAuthProfileStore(agentDir, {
         ...next,
         profiles: { ...(existingProfiles ?? {}), ...nextProfiles },
     });
+    return true;
 }
 async function restoreClaudeCliCredential(opts) {
     const nativeTarget = opts.nativeHomeDir
@@ -584,8 +589,36 @@ async function restoreClaudeCliCredential(opts) {
         throw err;
     }
 }
-async function restoreCodexCredential(payload, agentDir) {
-    await writeMergedAuthProfileStore(agentDir, buildCodexAuthProfilesStore(payload));
+function codexProfile(store) {
+    const profile = profileStoreProfiles(store)?.[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+    return profile && typeof profile === "object" ? profile : {};
+}
+function codexProfileExpired(store) {
+    const { expires } = codexProfile(store);
+    return typeof expires === "number" && Number.isFinite(expires) && expires > 0 && expires <= Date.now();
+}
+function canReplaceExpiredCodexCredential(current, next) {
+    const before = codexProfile(current);
+    const after = codexProfile(next);
+    if (typeof after.expires !== "number" || after.expires <= Date.now() || before.access === after.access)
+        return false;
+    if (typeof before.refresh !== "string")
+        return false;
+    if (!before.refresh.startsWith("openclaw-oauth-refresh-fence:v1:"))
+        return before.refresh !== after.refresh;
+    const failed = /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:([a-f0-9]{64})$/u.exec(before.refresh);
+    if (!failed)
+        return false;
+    const generation = createHash("sha256").update(JSON.stringify([
+        "openclaw.oauth-refresh-generation", 1, OPENAI_CODEX_DEFAULT_PROFILE_ID, before.provider, "refresh", after.refresh,
+    ])).digest("hex");
+    return failed[1] !== generation;
+}
+async function restoreCodexCredential(payload, agentDir, compare) {
+    const next = buildCodexAuthProfilesStore(payload);
+    return writeMergedAuthProfileStore(agentDir, next, compare
+        ? current => codexProfileExpired(current) && canReplaceExpiredCodexCredential(current, next)
+        : undefined);
 }
 export function removeStaleCodexAuthJson(openclawDir, agentId) {
     const authJson = codexAuthJsonPath(openclawDir, agentId);
@@ -596,6 +629,9 @@ export function removeStaleCodexAuthJson(openclawDir, agentId) {
     return removed;
 }
 async function planCodexRestore(item, agentDir, log) {
+    if (removeStaleCodexAuthJson(item.openclawDir, item.agentId)) {
+        log(`byosub: removed the stale codex-home auth.json for ${item.agentId} (OpenClaw reads only its auth store)`);
+    }
     const store = await readAuthProfileStore(agentDir);
     const usableCodexProfilePresent = hasUsableCodexDefaultProfile(store);
     await alignCodexProfileProvider(agentDir, store, () => {
@@ -607,7 +643,7 @@ async function planCodexRestore(item, agentDir, log) {
         profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
         now: Date.now(),
     });
-    return { action, store };
+    return usableCodexProfilePresent && codexProfileExpired(store) ? "compare" : action;
 }
 export async function restoreByosubCredentials(opts) {
     const log = opts.logFn ?? (() => { });
@@ -617,18 +653,15 @@ export async function restoreByosubCredentials(opts) {
     for (const item of opts.plan) {
         const agentDir = codexAgentDir(item.openclawDir, item.agentId);
         let codexAction;
-        if (item.provider === "openai") {
-            if (removeStaleCodexAuthJson(item.openclawDir, item.agentId)) {
-                log(`byosub: removed the stale codex-home auth.json for ${item.agentId} (OpenClaw reads only its auth store)`);
-            }
-            ({ action: codexAction } = await planCodexRestore(item, agentDir, log));
-            if (codexAction === "skip") {
-                skipped++;
-                log(`byosub: ${item.agentId} healthy on-disk credential — conservative skip (openclaw owns it; not clobbering)`);
-                continue;
-            }
-        }
         try {
+            if (item.provider === "openai") {
+                codexAction = await planCodexRestore(item, agentDir, log);
+                if (codexAction === "skip") {
+                    skipped++;
+                    log(`byosub: ${item.agentId} healthy on-disk credential — conservative skip (openclaw owns it; not clobbering)`);
+                    continue;
+                }
+            }
             const payload = await opts.fetchSecret(item.secretName);
             if (item.provider === "anthropic") {
                 const { nativeRestored } = await restoreClaudeCliCredential({
@@ -642,7 +675,12 @@ export async function restoreByosubCredentials(opts) {
                 log(`byosub: restored claude-cli credential for ${item.agentId}${nativeRestored ? " (native Claude CLI credential restored)" : ""}`);
                 continue;
             }
-            await restoreCodexCredential(payload, agentDir);
+            const restoredProfile = await restoreCodexCredential(payload, agentDir, codexAction === "compare");
+            if (!restoredProfile) {
+                skipped++;
+                log(`byosub: ${item.agentId} expired credential preserved — no fresh replacement generation`);
+                continue;
+            }
             restored++;
             log(`byosub: restored ${item.provider} credential for ${item.agentId}`);
         }
