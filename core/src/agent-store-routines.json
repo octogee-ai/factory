@@ -1,18 +1,26 @@
 {
-  "sourceSha": "8b575ce4fa111785aef9763011e54395563cb1a8",
+  "sourceSha": "8c5ec056f0b36959a78df0aa11d7664884efb2b1",
   "routines": {
+    "memory_index_chunks_search_sync": "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd",
     "memory_index_chunks_vec_sync": "aa3fd60d05de31bd95264d5c8d33e060f12c3d92520718dab3d988c53714c74a",
+    "memory_index_sources_search_sync": "15a2ecb7072612e551b0340b3f4bb46411d4c7b3b907fe16cb7173142dc4d86e",
     "openclaw_session_conversations_trigger": "51062b9356fe3ddd2477d84bae1f51627d0a31ca3b6d31e6d4901c18f6d566a7",
     "openclaw_session_entry_snapshots_trigger": "77eb0676607a410b3084a24b7698c488c68d8edc5785e1628379e1713cf7b6b6",
     "openclaw_transcript_navigation_check": "2dae4274e8b37eeaae16c21c326eb6af04da129a98556fac1dde2aabb02a8315",
-    "openclaw_vector": "6d15f06e4043912e47051b44bddf295369217ea17c9fd4879425f265080bbfa6"
+    "openclaw_vector": "6d15f06e4043912e47051b44bddf295369217ea17c9fd4879425f265080bbfa6",
+    "session_transcript_fts_search_sync": "1e8d50cc932c9e724f478c161cb70b0ab9676b15b01ff42c4915ca968518b040",
+    "standing_intents_search_sync": "c240be82342c4a2e7e69be29914dc71bdb8f238966697b4c946621b227ac9e67"
   },
   "triggers": {
+    "memory_index_chunks_search_sync": "1081a126b16c6f87007d985135c259ce6a811d3174e8e1be0fc6ba54b8921684",
     "memory_index_chunks_vec_sync": "3d0aedf870bc73d12aa0ad20bd6869950d83ff2d117206825f95d6dfed5a9af8",
+    "memory_index_sources_search_sync": "8504f55d729897fe1c63e0fd16ff3d707aa493ad79fd6bce05c10d0d0500a8d7",
     "session_conversations_route_context_invalidate_after_update": "2809a6a1f4e2b477452b97c529b90e8e6128c4ba67e79edf7aa2e279697e02d1",
     "session_entry_snapshots_after_delete": "966ebfac18ff14c9912e1c54e34c63b906a87aba32e895e803b62f7a565d940e",
     "session_entry_snapshots_after_insert": "7277c5555cf5d70bf187b983647a9a358081f6d33006a5b7ee78646764fc1afc",
-    "session_entry_snapshots_after_update": "9bbe855ee53cf452606fe67283a9ea9e3a0a3767daeeff30c8fb6b0d37a88bf4"
+    "session_entry_snapshots_after_update": "9bbe855ee53cf452606fe67283a9ea9e3a0a3767daeeff30c8fb6b0d37a88bf4",
+    "session_transcript_fts_search_sync": "ac0363dd199c3f51dbe9d8fdacfc6ad55adcecde1ac9c1e13819797ce47f82ad",
+    "standing_intents_search_sync": "f9108b5bb08e2f6e1217764d099e25ac488f89a04241e23fe51845d251a59019"
   },
   "expressions": {
     "constraint:acp_parent_stream_events:acp_parent_stream_events_pkey": "80fe34cc8212a0556890c7a097926aa8123e7dc7c36e600f5bd35d5eb04e5949",
@@ -181,17 +189,14 @@
     "default:board_widgets:grant_state": "37ae7b2af3ee35b392e7f3d42d7ec1df67377d0cfd19d0f92650fc454340c122",
     "default:board_widgets:manifest": "b65de1d0754af2859d4709324767598daa0d378c2a23f1c32f7ec0c8f05dd5ea",
     "default:context_engine_turn_outbox:attempt_count": "a7c2898edc89413fb2280bd3718fe35acb37d72f0ef7b867fe123061581bda53",
-    "default:memory_index_chunks:openclaw_search": "bfc3529148db7767c4bc0d6e8dfd5a09fca059a1ef114df17cfc1780bda1c042",
     "default:memory_index_chunks:source": "c2a32639047387503fa0010f848657f5d7bfd62362071eb8922f02096d2b9bcd",
     "default:memory_index_chunks_vec:embedding_bits": "0a8ee6bfc28b1a53e3317f1e4cdcbdcbd9cbd5f1e978826c6aeca8790cae5a74",
-    "default:memory_index_sources:openclaw_search": "e45e6b36df5f07991109084d0c0cb5197c275182f92eda309c2c23363c812374",
     "default:memory_index_sources:source": "f7b88324cae75698034351ecfa42690447e4d9ae35c604e372030d77087351f2",
     "default:session_conversations:role": "d195086f740128d2269ceecc90a355a293401d3a5aa9e9b585de4647e9058536",
     "default:session_nodes:entry_valid": "293f697d41a578ece759bfa8e96e719c5d8f14a1db8c17b2efc1b614385038ee",
     "default:session_nodes:has_optional_references": "a6f8c982e213a435978253ce11755478ff8283207ee809dd83155890304e835a",
     "default:session_nodes:snapshot_revision": "168c8d7519ebc9cfb1ee067c07b84eef061c06f5562b4fc388231228c535c230",
     "default:session_transcript_archives:publish_attempts": "ddf538972143acade61a4be3675e208de24bee19bcbf495886e487937c1342e6",
-    "default:session_transcript_fts:openclaw_search": "850c7e118a06ce5e20d58c683dabbbcdb0e768c600bf274c8107c5ef23e5c723",
     "default:session_transcript_index_state:active_event_count": "042bcc9841c8af26b08d4121d68ed6cde6bf0394af242223c558b8e4ce8817e7",
     "default:session_transcript_index_state:active_message_count": "19a88a49245a88c149bb1acc2e6f3011a946900053aa17809a66c551e5f24d66",
     "default:session_transcript_index_state:needs_rebuild": "0a30c9f6f698a64c94513bd3cbb9c6a4f5d9187f85275e08cfd190251fc32048",
@@ -200,7 +205,6 @@
     "default:session_windows:session_scope": "37e5c0222ea3394228fce176553eacc0e6a1b89dea71b9c946e9ca5641eacb9d",
     "default:standing_intents:cooldown_seconds": "f35fce0fc203dd816b4247b5b3314992aace8cca5b3cc711cb19a7dcb6ca9624",
     "default:standing_intents:fire_count": "bc2690e5ad87290707852258bb2a3033d733cacfcd352c24845255d095d81dfa",
-    "default:standing_intents:openclaw_search": "5e7874b410436e9fa8989d115221657480ec946a82cfa4db4f7ed0ea8f32b45a",
     "default:transcript_events:navigation_display": "88c7941040d6b5be7f88b4cb45279c905487e6729fc24e061af66a6bb8935043",
     "default:transcript_events:navigation_valid": "6a56a98e582be71ffbced98db41d98e3d488332f4e8f22ce9e26c06bd9707af7",
     "index:acp_parent_stream_events:acp_parent_stream_events_pkey": "01a0109742c83ba8f465c10e46c56e7bba9b77423d467b4134d3e4b40187e75f",
