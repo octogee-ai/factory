@@ -1,6 +1,6 @@
 import { sourceTransferBlocksRelease } from '../lib/source-transfer-execution.js';
 import type { RetainedSourceContext } from '../lib/retained-source-transfer.js';
-import type { MigrationProgressRecord, SourceTransferExecution, GatewayVmHomeCheckpoint } from '@octogee/shared/types/glm';
+import type { MigrationProgressRecord, SourceTransferExecution } from '@octogee/shared/types/glm';
 import type { PrepareMigrationAgentStores } from "../migration-agent-stores.js";
 import { createMigrationProgress } from "../migration-progress.js";
 import { operationScopedLog, withOperationLogScope } from "../operation-log-scope.js";
@@ -16,12 +16,8 @@ import {
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   type MigrationProgressRequestBody,
-  type ImportResponse,
-  type NativeAgentContextTransfer,
-  type NativeSharedAgentContextStage,
 } from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput, NativeReturnPark, NativeSourcePark } from "../lib/native-computer-return.js";
-import type { NativeAgentContextTransferInput } from "../lib/native-agent-context-transfer.js";
 import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
 import type {
   CustomerMigrationV2GatewayRootFence,
@@ -40,7 +36,6 @@ import type {
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import { computerPreemptionError } from "../operation-retry.js";
 import { MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
-import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import { sharedRecoveryTargetCleaned, type WorkspaceMigrationPreparationParams, type WorkspaceMigrationRecoveryParams, type WorkspaceMigrationSourcePreparationParams } from "@octogee/core/fleet-state";
 import {
   advanceCustomerMigrationV2,
@@ -58,15 +53,8 @@ import {
   type ReportedStep,
   type TargetSystemConfigConvergence,
 } from "@octogee/core/fleet-migration-runner";
-import {
-  decideRollStateMigration,
-  openclawVersionFromGatewayImageTag,
-  type RollStateMigrationDecision,
-} from "../roll-state-migration.js";
 
-const MIGRATE_STATE = "migrate-state";
 const RETAINED_POD = "retained-pod";
-const PROVISION_FRESH = "provision-fresh";
 const COACH_ATTACH_POLL_MS = 5_000;
 
 // At most one migration per target gateway at a time. Enforced durably, before
@@ -96,11 +84,6 @@ export interface MigrateCustomerDeps {
   recordMigrationProgress: (input: { operation: Operation; event: MigrationProgressRecord }) => Promise<void>;
   recoverNativeReturnSource?: OperationHandler;
   prepareNativeComputerReturn: (input: NativeComputerReturnInput) => Promise<NativeComputerReturn | null>;
-  prepareNativeAgentContextTransfer: (input: NativeAgentContextTransferInput) => Promise<NativeAgentContextTransfer | null>;
-  acknowledgeNativeAgentContextTransfer: (input: NativeAgentContextTransferInput, policy: NativeAgentContextTransfer, result: ImportResponse) => Promise<void>;
-  acknowledgeNativeSharedContextStage: (input: NativeAgentContextTransferInput, policy: NativeAgentContextTransfer, stage: NativeSharedAgentContextStage) => Promise<void>;
-  prepareNativeSharedContextRestore: (input: NativeAgentContextTransferInput) => Promise<{ stage: NativeSharedAgentContextStage; completed: boolean; checkpoint?: GatewayVmHomeCheckpoint } | null>;
-  acknowledgeNativeSharedContextRestore: (input: NativeAgentContextTransferInput, stage: NativeSharedAgentContextStage, result: ImportResponse) => Promise<void>;
   retireNativeSchedulerBeforeStage: (input: NativeSchedulerRetirementInput, scheduler: MigrationClient["scheduler"]) => Promise<void>;
 
   readUser: (uid: string) => Promise<UserGatewayInfo | null>;
@@ -110,18 +93,9 @@ export interface MigrateCustomerDeps {
     toGatewayId: string,
   ) => Promise<FleetBrokerUserSnapshot | null>;
 
-  /** The openclaw version a live gateway reports through its heartbeat. */
-  readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
   readGatewaySystemConfigCommit: (gatewayId: string) => Promise<string | null>;
 
-  readGatewayReleaseArtifact: (
-    gatewayId: string,
-    release: number,
-  ) => Promise<GatewayArtifact | null>;
-
-  commitCutover: (commit: CutoverCommit & { automatic?: boolean; nativeSharedContextHold?: {
-    operationId: string; claimedStartedAt: number; migrationId: string; stage: NativeSharedAgentContextStage;
-  } }) => Promise<void>;
+  commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
   resolveGatewayUrl: (gatewayId: string, options?: { allowUnready: boolean }) => Promise<string>;
 
@@ -288,7 +262,6 @@ async function initializeMigrationV2(
   assertRootOwner(targetRootFence, uid, slug, "target");
   const state: CustomerMigrationV2State = {
     phase: "initialized",
-    strategy: MIGRATE_STATE,
     operationId: op.id,
     migrationId,
     uid,
@@ -315,7 +288,6 @@ function ordinaryV2ScopeChanged(
     ? op.input.fromGatewayId
     : null;
   return [
-    (state.strategy ?? MIGRATE_STATE) !== MIGRATE_STATE,
     state.operationId !== op.id,
     state.migrationId !== migrationId,
     state.uid !== uid,
@@ -698,14 +670,9 @@ interface PreparedMigration {
   targets: MigrationTargets;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   urls: Map<string, string>;
-  stateMigration: RollStateMigrationDecision;
 }
 
-// OpenClaw state does not survive a version change, so a cross-version move
-// carries none: the source flushes its durable work, the cutover flips the
-// roster, and the destination's own reconcile mounts the customer from
-// Firestore/Gitea/Mattermost like any other assigned customer.
-interface FreshProvision {
+interface NativeReturnProvision {
   deps: MigrateCustomerDeps;
   ctx: OperationContext;
   op: Operation;
@@ -714,24 +681,23 @@ interface FreshProvision {
   uid: string;
   slug: string;
   migrationId: string;
-  stateMigration: RollStateMigrationDecision;
   automatic: boolean;
-  nativeReturn?: NativeComputerReturn | null;
+  nativeReturn: NativeComputerReturn;
 }
 
 type SourceAssignment = Omit<Parameters<MigrateCustomerDeps["setAssignmentState"]>[0], "state" | "createIfMissing">;
 
-async function provisionCustomerOnTarget(input: FreshProvision): Promise<OperationResult> {
+async function runNativeReturn(input: NativeReturnProvision): Promise<OperationResult> {
   const { deps, targets, uid, slug, migrationId, automatic } = input;
   const ctx = destinationProgressContext(input);
   deps.log(
     `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
-    `${input.nativeReturn ? "native-return" : "provision-fresh"} (${input.stateMigration.reason})`,
+    "native-return",
   );
-  const handoff = input.nativeReturn ? await persistNativeReturnHandoff(input) : null;
-  const client = await gatewayClient(deps, handoff ? [targets.fromGatewayId, targets.toGatewayId] : [targets.fromGatewayId]);
+  const handoff = await persistNativeReturnHandoff(input);
+  const client = await gatewayClient(deps, [targets.fromGatewayId, targets.toGatewayId]);
   const step = async (name: string, action: () => Promise<unknown>): Promise<void> => {
-    await reportFreshStep(deps, ctx, name, action);
+    await reportNativeReturnStep(deps, ctx, name, action);
   };
   const sourceAssignment: SourceAssignment = {
     gatewayId: targets.fromGatewayId,
@@ -744,7 +710,7 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
   let sourceFenced = false;
   try {
     await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
-    if (input.nativeReturn) await step("keys-sync-state", () => client.transferState({
+    await step("keys-sync-state", () => client.transferState({
       migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "keys",
     }));
     await step("wait-for-active-work", () => client.quiesce({ migrationId, gatewayId: targets.fromGatewayId, slug, timeoutMs: 30_000, stopMattermost: false }));
@@ -755,7 +721,7 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
       createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
     });
     sourceFenced = true;
-    await closeSourceForFreshProvision(input, client, step, handoff);
+    await closeSourceForNativeReturnProvision(input, client, step, handoff);
     await step("cutover-firestore", async () => {
       await deps.commitCutover({
         uid,
@@ -769,53 +735,41 @@ async function provisionCustomerOnTarget(input: FreshProvision): Promise<Operati
     });
   } catch (error) {
     if (error instanceof MigrationDrainPendingError) {
-      return deferFreshProvision(input, client, sourceAssignment, handoff, sourceFenced);
+      return deferNativeReturnProvision(input, client, sourceAssignment, handoff, sourceFenced);
     }
-    if (input.nativeReturn) {
-      const settled = await settleNativeReturnAfterFailure(input, ctx, input.nativeReturn, handoff);
-      if (settled) return settled;
-    }
-    return rollbackFreshProvision({ deps, ctx, native: input.nativeReturn, client, handoff, sourceAssignment, migrationId, slug, error, toGatewayId: targets.toGatewayId });
+    const settled = await settleNativeReturnAfterFailure(input, ctx, input.nativeReturn, handoff);
+    if (settled) return settled;
+    return rollbackNativeReturnProvision({ deps, ctx, client, handoff, sourceAssignment, migrationId, slug, error, toGatewayId: targets.toGatewayId });
   }
-  if (input.nativeReturn) return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, uid, migrationId, slug, handoff, operation: input.op });
-  await discardSourceFootprint(deps, ctx, {
-    client,
-    migrationId,
-    gatewayId: targets.fromGatewayId,
-    slug,
-  });
-  return { steps: [], success: true, rolledBack: false };
+  return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, uid, migrationId, slug, handoff, operation: input.op });
 }
 
-async function deferFreshProvision(
-  input: FreshProvision,
+async function deferNativeReturnProvision(
+  input: NativeReturnProvision,
   client: MigrationClient,
   sourceAssignment: SourceAssignment,
   handoff: SchedulerHandoffState | null,
   sourceFenced: boolean,
 ): Promise<OperationResult> {
   const { deps, targets, uid, slug, migrationId, operationId } = input;
-  await input.nativeReturn?.release();
+  await input.nativeReturn.release();
   if (sourceFenced && handoff) {
-    const failure = await reopenSourceScheduler(deps, client, handoff, input.nativeReturn ? input.ctx : undefined);
+    const failure = await reopenSourceScheduler(deps, client, handoff, input.ctx);
     if (failure) return { steps: [], success: false, rolledBack: false, error: failure };
   }
-  if (input.nativeReturn) {
-    try {
-      await runReleasedNativeSource(deps, input.ctx, targets.fromGatewayId, slug,
-        () => client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug }));
-    } catch (error) {
-      return failure(`native return deferral pending: ${errorMessage(error)}`, false);
-    }
+  try {
+    await runReleasedNativeSource(deps, input.ctx, targets.fromGatewayId, slug,
+      () => client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug }));
+  } catch (error) {
+    return failure(`native return deferral pending: ${errorMessage(error)}`, false);
   }
   if (sourceFenced) await restoreSourceServing(deps, { ...sourceAssignment, state: "serving", createIfMissing: false });
-  if (!input.nativeReturn) await client.resume({ migrationId, gatewayId: targets.fromGatewayId, slug });
   await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId, phase: "waiting" });
   return { steps: [], success: false, waitingForBuilderIdle: true, rolledBack: false };
 }
 
-async function closeSourceForFreshProvision(
-  input: FreshProvision,
+async function closeSourceForNativeReturnProvision(
+  input: NativeReturnProvision,
   client: MigrationClient,
   step: (name: string, action: () => Promise<unknown>) => Promise<void>,
   handoff: SchedulerHandoffState | null,
@@ -827,15 +781,15 @@ async function closeSourceForFreshProvision(
     slug,
     ...(handoff ? { schedulerHandoff: true, schedulerMigrationId: handoff.migrationId, retainNonportable: true } : {}),
   }));
-  if (!input.nativeReturn?.checkpointRequested) {
+  if (!input.nativeReturn.checkpointRequested) {
     await step("flush-source", () => client.flushGateway({
       migrationId,
       gatewayId: targets.fromGatewayId,
       slug,
-      reason: input.nativeReturn ? "native-return" : "migration-final",
+      reason: "native-return",
     }));
   }
-  if (input.nativeReturn) await step("transfer-agent-store", async () => {
+  await step("transfer-agent-store", async () => {
     const transferred = await client.transferState({
       migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId,
       mode: "final", includeActivationManifest: true,
@@ -845,11 +799,11 @@ async function closeSourceForFreshProvision(
     }
   });
   if (handoff) await step("stage-scheduler", () => stagePortableSchedules(input.deps, client, handoff));
-  if (input.nativeReturn) await step("request-native-checkpoint", input.nativeReturn.requestCheckpoint);
+  await step("request-native-checkpoint", input.nativeReturn.requestCheckpoint);
 }
 
 async function settleNativeReturnAfterFailure(
-  input: FreshProvision,
+  input: NativeReturnProvision,
   ctx: OperationContext,
   native: NativeComputerReturn,
   handoff: SchedulerHandoffState | null,
@@ -866,10 +820,9 @@ async function settleNativeReturnAfterFailure(
   return null;
 }
 
-async function rollbackFreshProvision(input: {
+async function rollbackNativeReturnProvision(input: {
   deps: MigrateCustomerDeps;
   ctx: OperationContext;
-  native?: NativeComputerReturn | null;
   client: MigrationClient;
   handoff: SchedulerHandoffState | null;
   sourceAssignment: SourceAssignment;
@@ -879,43 +832,30 @@ async function rollbackFreshProvision(input: {
   toGatewayId: string;
 }): Promise<OperationResult> {
   const { deps, client, handoff, migrationId, slug } = input;
-  if (input.native) {
-    try {
-      await input.ctx.assertActiveClaim?.();
-      await client.abortImport({ migrationId, gatewayId: input.toGatewayId, slug, mode: "final" });
-      await client.unmount({ migrationId, gatewayId: input.toGatewayId, slug });
-    } catch (error) {
-      return failure(`${errorMessage(input.error)}; Target agent-store cleanup pending: ${errorMessage(error)}`, false);
-    }
+  try {
+    await input.ctx.assertActiveClaim?.();
+    await client.abortImport({ migrationId, gatewayId: input.toGatewayId, slug, mode: "final" });
+    await client.unmount({ migrationId, gatewayId: input.toGatewayId, slug });
+  } catch (error) {
+    return failure(`${errorMessage(input.error)}; Target agent-store cleanup pending: ${errorMessage(error)}`, false);
   }
   const cause = errorMessage(input.error);
   if (handoff) {
     const abortFailed = await abortStagedSchedules(deps, client, handoff);
     if (abortFailed) return failure(`${cause}; ${abortFailed}`, false);
   }
-  if (input.native) {
-    try {
-      if (handoff) {
-        const unreleased = await reopenSourceScheduler(deps, client, handoff, input.ctx);
-        if (unreleased) return failure(`${cause}; ${unreleased}`, false);
-      }
-      await runReleasedNativeSource(deps, input.ctx, input.sourceAssignment.gatewayId, slug,
-        () => client.resume({ migrationId, gatewayId: input.sourceAssignment.gatewayId, slug }));
-      await restoreSourceServing(deps, { ...input.sourceAssignment, state: "serving", createIfMissing: false });
-      return { steps: [], success: false, error: cause, rolledBack: true };
-    } catch (error) {
-      return failure(`${cause}; native return source recovery pending: ${errorMessage(error)}`, false);
+  try {
+    if (handoff) {
+      const unreleased = await reopenSourceScheduler(deps, client, handoff, input.ctx);
+      if (unreleased) return failure(`${cause}; ${unreleased}`, false);
     }
+    await runReleasedNativeSource(deps, input.ctx, input.sourceAssignment.gatewayId, slug,
+      () => client.resume({ migrationId, gatewayId: input.sourceAssignment.gatewayId, slug }));
+    await restoreSourceServing(deps, { ...input.sourceAssignment, state: "serving", createIfMissing: false });
+    return { steps: [], success: false, error: cause, rolledBack: true };
+  } catch (error) {
+    return failure(`${cause}; native return source recovery pending: ${errorMessage(error)}`, false);
   }
-  await restoreSourceServing(deps, {
-    ...input.sourceAssignment,
-    state: "serving",
-    createIfMissing: false,
-  });
-  const unreleased = handoff ? await reopenSourceScheduler(deps, client, handoff) : null;
-  await client.resume({ migrationId, gatewayId: input.sourceAssignment.gatewayId, slug });
-  if (unreleased) return failure(`${cause}; ${unreleased}`, false);
-  return { steps: [], success: false, error: cause, rolledBack: true };
 }
 
 async function persistNativeReturnHandoff(input: {
@@ -1001,12 +941,11 @@ async function reopenSourceScheduler(
   deps: MigrateCustomerDeps,
   client: MigrationClient,
   handoff: SchedulerHandoffState,
-  ctx?: OperationContext,
+  ctx: OperationContext,
 ): Promise<string | null> {
   try {
     const resume = () => client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "resume" });
-    if (ctx) await runReleasedNativeSource(deps, ctx, handoff.fromGatewayId, handoff.slug, resume);
-    else await resume();
+    await runReleasedNativeSource(deps, ctx, handoff.fromGatewayId, handoff.slug, resume);
     return null;
   } catch (resumeError) {
     const message = `scheduler fence ${handoff.migrationId} on ${handoff.fromGatewayId} not released: ${errorMessage(resumeError)}`;
@@ -1067,7 +1006,7 @@ function destinationProgressContext(
   };
 }
 
-async function reportFreshStep<T>(
+async function reportNativeReturnStep<T>(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   name: string,
@@ -1086,33 +1025,6 @@ async function reportFreshStep<T>(
   }
   await ctx.reportStep(reportedToOperationStep({ name, status: "done" }, deps.now()));
   return result;
-}
-
-// Post-cutover cleanup: the destination already owns the customer, so a source
-// that cannot be reached stays a stale local footprint for Cowboy's eviction
-// sweep rather than failing a migration that has already landed.
-async function discardSourceFootprint(
-  deps: MigrateCustomerDeps,
-  ctx: OperationContext,
-  input: {
-    client: MigrationClient;
-    migrationId: string;
-    gatewayId: string;
-    slug: string;
-  },
-): Promise<void> {
-  try {
-    await reportFreshStep(deps, ctx, "unmount-source", () => input.client.unmount({
-      migrationId: input.migrationId,
-      gatewayId: input.gatewayId,
-      slug: input.slug,
-    }));
-  } catch (error) {
-    deps.log(
-      `[migrate-customer] ⚠ source unmount failed after cutover gateway=${input.gatewayId} ` +
-      `slug=${input.slug}: ${errorMessage(error)} — the destination already serves`,
-    );
-  }
 }
 
 // The customer stays quiescing (the edge answers 503) until a retry re-drives
@@ -1196,52 +1108,6 @@ function terminalDurableMigrationResult(
       };
 }
 
-async function recoverPersistedFreshMigration(
-  deps: MigrateCustomerDeps,
-  op: Operation,
-  ctx: OperationContext,
-  state: CustomerMigrationV2State,
-): Promise<OperationResult> {
-  const scopeMatches = [
-    state.operationId === op.id,
-    state.migrationId === deps.genMigrationId(op.id),
-    state.uid === op.input.uid,
-    state.targetGatewayId === op.input.toGatewayId,
-    op.input.fromGatewayId === undefined || op.input.fromGatewayId === state.sourceGatewayId,
-  ].every(Boolean);
-  if (!scopeMatches) return failure("persisted fresh migration input changed", false);
-  const automatic = resolveOperationOrigin(op.origin) === "automatic";
-  try {
-    const user = await deps.readUser(state.uid);
-    if (!user || user.slug !== state.slug) throw new Error("cannot verify persisted fresh migration owner");
-    if (user.currentGatewayId === state.targetGatewayId) {
-      await deps.commitV2Cutover({ ...state, strategy: PROVISION_FRESH, automatic });
-      const url = await deps.resolveGatewayUrl(state.sourceGatewayId);
-      await discardSourceFootprint(deps, ctx, {
-        client: deps.buildClient(() => url), gatewayId: state.sourceGatewayId,
-        migrationId: state.migrationId, slug: state.slug,
-      });
-      await persistV2(ctx, { ...state, phase: "complete", completedAt: deps.now() });
-      return { steps: [], success: true, rolledBack: false };
-    }
-    if (user.currentGatewayId !== state.sourceGatewayId) throw new Error("persisted fresh migration ownership changed");
-    if (state.phase === "cutover" || state.phase === "sourceRetired") throw new Error("persisted fresh cutover lost target ownership");
-    const abortReason = "retired fresh migration cancelled before cutover; retry with durable state transfer";
-    await persistV2(ctx, { ...state, phase: "abortIntent", abortReason });
-    if (state.sourceAssignmentMode === "assigned") {
-      await deps.setAssignmentState({
-        gatewayId: state.sourceGatewayId, uid: state.uid, slug: state.slug,
-        state: "serving", epoch: state.sourceEpoch, updatedByOperationId: state.operationId,
-        createIfMissing: false, automatic,
-      });
-    }
-    await persistV2(ctx, { ...state, phase: "aborted", abortReason });
-    return { steps: [], success: false, rolledBack: true, error: abortReason };
-  } catch (error) {
-    return failure(v2RetryError(error), false);
-  }
-}
-
 function resumeDurableMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1249,7 +1115,6 @@ function resumeDurableMigration(
 ): Promise<OperationResult> | null {
   const state = op.customerMigrationV2;
   if (!state) return null;
-  if (state.strategy === PROVISION_FRESH) return recoverPersistedFreshMigration(deps, op, ctx, state);
   return runOrdinaryMigrationV2({
     op,
     ctx,
@@ -1261,13 +1126,12 @@ function resumeDurableMigration(
   });
 }
 
-async function executeProvisionFresh(input: MigrationExecutionInput & {
-  stateMigration: RollStateMigrationDecision;
+async function executeNativeReturn(input: MigrationExecutionInput & {
   durable: boolean;
-  nativeReturn?: NativeComputerReturn | null;
+  nativeReturn: NativeComputerReturn;
 }): Promise<OperationResult> {
-  if (input.nativeReturn && input.durable) throw new Error("native computer returns require a Shared target");
-  return provisionCustomerOnTarget({
+  if (input.durable) throw new Error("native computer returns require a Shared target");
+  return runNativeReturn({
     deps: input.deps,
     ctx: input.ctx,
     op: input.op,
@@ -1276,7 +1140,6 @@ async function executeProvisionFresh(input: MigrationExecutionInput & {
     uid: input.uid,
     slug: input.slug,
     migrationId: input.migrationId,
-    stateMigration: input.stateMigration,
     automatic: input.automatic,
     nativeReturn: input.nativeReturn,
   });
@@ -1319,7 +1182,7 @@ async function completeNativeReturn(
   input: NativeReturnTarget & { handoff: SchedulerHandoffState | null; operation: Operation },
 ): Promise<OperationResult> {
   try {
-    await reportFreshStep(deps, ctx, "checkpoint-native-computer", native.awaitCheckpoint);
+    await reportNativeReturnStep(deps, ctx, "checkpoint-native-computer", native.awaitCheckpoint);
     try {
       await ctx.assertCustomerRestoreSettled?.();
     } catch (error) {
@@ -1327,15 +1190,15 @@ async function completeNativeReturn(
       await restoreInterruptedSharedMount(deps, ctx, input, true);
       await ctx.assertCustomerRestoreSettled?.();
     }
-    await reportFreshStep(deps, ctx, "release-native-writers", native.releaseWriterHold);
+    await reportNativeReturnStep(deps, ctx, "release-native-writers", native.releaseWriterHold);
     const park = await closeLiveNativeSource(deps, ctx, native, input);
-    const parked = await reportFreshStep(deps, ctx, "park-native-computer", () => native.park(park));
+    const parked = await reportNativeReturnStep(deps, ctx, "park-native-computer", () => native.park(park));
     logNativePark(deps, input, parked);
     if (input.handoff) {
       const handoff = input.handoff;
-      await reportFreshStep(deps, ctx, "activate-scheduler", () => activateSharedSchedules(deps, ctx, handoff));
+      await reportNativeReturnStep(deps, ctx, "activate-scheduler", () => activateSharedSchedules(deps, ctx, handoff));
     }
-    await reportFreshStep(deps, ctx, "verify-target", () => verifyOrRestoreNativeReturnTarget(deps, ctx, input));
+    await reportNativeReturnStep(deps, ctx, "verify-target", () => verifyOrRestoreNativeReturnTarget(deps, ctx, input));
     await native.acknowledgeCompletedSchedulerHandoff();
     return { steps: [], success: true, rolledBack: false, output: { nativeSourcePark: { ...parked } } };
   } catch (error) {
@@ -1361,11 +1224,11 @@ async function closeLiveNativeSource(
   try {
     const live = await gatewayClient(deps, [fromGatewayId]);
     if (handoff) {
-      await reportFreshStep(deps, ctx, "retire-source-scheduler", () => runReleasedNativeSource(deps, ctx, fromGatewayId, slug,
+      await reportNativeReturnStep(deps, ctx, "retire-source-scheduler", () => runReleasedNativeSource(deps, ctx, fromGatewayId, slug,
         () => live.scheduler({ migrationId: handoff.migrationId, slug, gatewayId: fromGatewayId, phase: "retire" })));
       schedulesRetired = true;
     }
-    await reportFreshStep(deps, ctx, "unmount-source", () => runReleasedNativeSource(deps, ctx, fromGatewayId, slug,
+    await reportNativeReturnStep(deps, ctx, "unmount-source", () => runReleasedNativeSource(deps, ctx, fromGatewayId, slug,
       () => live.unmount({ migrationId: input.migrationId, gatewayId: fromGatewayId, slug })));
     return { mode: "suspend" };
   } catch (error) {
@@ -1444,7 +1307,7 @@ async function restoreInterruptedSharedMount(
       snapshot.gatewayId !== input.toGatewayId || snapshot.status !== "complete") {
     throw new Error("Shared restore snapshot no longer proves the assigned complete owner");
   }
-  await withAssignedSharedRestoreFence(deps, ctx, input, resume, () => reportFreshStep(deps, ctx, "restore-target", async () => {
+  await withAssignedSharedRestoreFence(deps, ctx, input, resume, () => reportNativeReturnStep(deps, ctx, "restore-target", async () => {
     const result = await deps.buildClient(() => url).restoreTarget({
       migrationId: input.migrationId, gatewayId: input.toGatewayId,
       uid: input.uid, slug: input.slug, snapshot,
@@ -1774,8 +1637,8 @@ async function recoverCommittedMigration(
   return convergence ? { steps: [], success: true, rolledBack: false } : null;
 }
 
-function assertRetainedMigrationStrategy(op: Operation, durable: boolean, stateMigration: RollStateMigrationDecision, nativeReturn: NativeComputerReturn | null): void {
-  if (op.input.sourceTransferMode === RETAINED_POD && (!durable || stateMigration.strategy === PROVISION_FRESH || nativeReturn)) throw new Error('retained source transfer requires an ordinary durable migration');
+function assertRetainedMigrationStrategy(op: Operation, durable: boolean, nativeReturn: NativeComputerReturn | null): void {
+  if (op.input.sourceTransferMode === RETAINED_POD && (!durable || nativeReturn)) throw new Error('retained source transfer requires an ordinary durable migration');
 }
 
 function sourceRecoveryOwnershipChanged(op: Operation, user: UserGatewayInfo): boolean {
@@ -1827,7 +1690,7 @@ async function prepareMigration(
   request: { uid: string; toGatewayId: string },
 ): Promise<
   | PreparedMigration
-  | { result: OperationResult; stateMigration?: RollStateMigrationDecision }
+  | { result: OperationResult }
   | { error: string; rolledBack?: false }
 > {
   let user: UserGatewayInfo | null;
@@ -1879,15 +1742,14 @@ async function prepareMigration(
       operationId: op.id,
       claimedStartedAt: op.startedAt,
     });
-    const stateMigration = await decideCustomerStateMigration(deps, resolved.targets);
     const durable = await deps.useDurableMigration(
       user.currentGatewayId,
       request.toGatewayId,
     );
-    assertRetainedMigrationStrategy(op,durable,stateMigration,nativeReturn);
-    if (nativeReturn || stateMigration.strategy === PROVISION_FRESH) {
+    assertRetainedMigrationStrategy(op,durable,nativeReturn);
+    if (nativeReturn) {
       return {
-        result: await executeProvisionFresh({
+        result: await executeNativeReturn({
           deps,
           ctx,
           op,
@@ -1895,12 +1757,10 @@ async function prepareMigration(
           uid: request.uid,
           slug: user.slug,
           migrationId,
-          stateMigration,
           automatic,
           durable,
           nativeReturn,
         }),
-        stateMigration,
       };
     }
     if (durable) {
@@ -1913,7 +1773,7 @@ async function prepareMigration(
         slug: user.slug,
         migrationId,
       });
-      return { result, stateMigration };
+      return { result };
     }
     await prepareSharedSourceAgentStores({ deps, op, ctx, targets: resolved.targets, uid: request.uid, slug: user.slug });
     const urls = new Map<string, string>();
@@ -1941,7 +1801,6 @@ async function prepareMigration(
         ? { projectCheckoutScope: migrationSnapshot.projectCheckoutScope }
         : {}),
       urls,
-      stateMigration,
     };
   } catch (error) {
     return { error: errorMessage(error) };
@@ -1968,6 +1827,14 @@ async function executeOrdinaryMigrationV2(input: {
     }
     return failure(error instanceof Error ? error.message : String(error), false);
   }
+}
+
+function shouldClearMigrationPreparation(input: {
+  preparationFailed: boolean; postQuiesceFailed: boolean; targetUnmountConfirmed: boolean;
+  result: { finalPhase: string; rolledBack: boolean };
+}): boolean {
+  return input.preparationFailed && input.result.finalPhase === "initial" ||
+    (input.preparationFailed || input.postQuiesceFailed) && input.result.rolledBack && input.targetUnmountConfirmed;
 }
 
 async function executeMigration(
@@ -2002,12 +1869,14 @@ async function executeMigration(
   });
   let targetUnmountConfirmed = false;
   let preparationFailed = false;
+  let postQuiesceFailed = false;
   const destinationContext: OperationContext = {
     ...ctx,
     reportStep: async (step) => {
       await ctx.reportStep(step);
       if (step.name === "rollback:unmount-target" && step.status === "done") targetUnmountConfirmed = true;
       if (["keys-sync-state", "pre-sync-state", "wait-for-active-work"].includes(step.name) && step.status === "failed") preparationFailed = true;
+      if (["final-sync-state", "verify-target"].includes(step.name) && step.status === "failed") postQuiesceFailed = true;
       await progress.report(step.name, step.status);
     },
   };
@@ -2045,7 +1914,7 @@ async function executeMigration(
       recordSchedulesStaged: () => persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() }),
     },
   );
-  if (preparationFailed && (result.finalPhase === "initial" || result.rolledBack && targetUnmountConfirmed)) {
+  if (shouldClearMigrationPreparation({ preparationFailed, postQuiesceFailed, targetUnmountConfirmed, result })) {
     await deps.clearMigrationPreparation?.({
       uid: prepared.uid,
       sourceGatewayId: prepared.user.currentGatewayId,
@@ -2066,37 +1935,6 @@ async function executeMigration(
   };
 }
 
-async function decideCustomerStateMigration(
-  deps: MigrateCustomerDeps,
-  targets: MigrationTargets,
-): Promise<RollStateMigrationDecision> {
-  const [sourceOpenclawVersion, targetArtifact] = await Promise.all([
-    deps.readGatewayOpenclawVersion(targets.fromGatewayId),
-    targets.toRelease === null
-      ? Promise.resolve(null)
-      : deps.readGatewayReleaseArtifact(targets.toGatewayId, targets.toRelease),
-  ]);
-  if (targetArtifact === null || targets.toRelease === null) {
-    throw new Error(
-      `target gateway ${targets.toGatewayId} has no valid release identity for ` +
-      `${targets.toRelease ?? "unknown"}`,
-    );
-  }
-  return decideRollStateMigration({
-    sourceOpenclawVersion,
-    targetOpenclawVersion: openclawVersionFromGatewayImageTag(targetArtifact.imageTag),
-    targetOpenclawSourceSha: targetArtifact.openclawSourceSha,
-  });
-}
-
-function withStateMigration(
-  result: OperationResult,
-  stateMigration: RollStateMigrationDecision | undefined,
-): OperationResult {
-  if (!stateMigration) return result;
-  return { ...result, output: { ...result.output, stateMigration } };
-}
-
 async function runMigrateCustomer(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -2112,17 +1950,9 @@ async function runMigrateCustomer(
   const prepared = await prepareMigration(deps, op, ctx, input, request);
   if ("error" in prepared) return failure(prepared.error, prepared.rolledBack);
   if ("result" in prepared) {
-    return withStateMigration(prepared.result, prepared.stateMigration);
+    return prepared.result;
   }
-  return withStateMigration(
-    await executeMigration(
-      deps,
-      ctx,
-      prepared,
-      op,
-    ),
-    prepared.stateMigration,
-  );
+  return executeMigration(deps, ctx, prepared, op);
 }
 
 function migrationComputers(op: Operation): Array<["source" | "target", string]> {

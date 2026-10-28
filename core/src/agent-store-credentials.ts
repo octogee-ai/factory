@@ -18,23 +18,23 @@ export interface AgentStoreGatewayIdentity {
 
 type SchemaRelation = { relname: string; relkind: string; seqcache: string | null };
 
-async function lockSchemaRelation(client: PoolClient, schema: string, source: string, object: SchemaRelation): Promise<void> {
+function lockSchemaRelation(schema: string, source: string, object: SchemaRelation, columns: string[]): string[] {
+  const statements: string[] = [];
   if (object.relkind === "S") {
     const cache = String(object.seqcache);
     if (!/^\d+$/.test(cache) || BigInt(cache) <= 0n) throw new Error(`unsafe agent-store schema ${schema}: invalid sequence cache`);
-    await client.query(`ALTER SEQUENCE ${identifier(schema)}.${identifier(object.relname)} CACHE ${cache}`);
+    statements.push(`ALTER SEQUENCE ${identifier(schema)}.${identifier(object.relname)} CACHE ${cache}`);
   } else if (object.relkind === "r" || object.relkind === "p") {
-    await client.query(`LOCK TABLE ${identifier(schema)}.${identifier(object.relname)} IN ACCESS EXCLUSIVE MODE`);
+    statements.push(`LOCK TABLE ${identifier(schema)}.${identifier(object.relname)} IN ACCESS EXCLUSIVE MODE`);
   } else {
     throw new Error(`unsafe agent-store schema ${schema}: unsupported relation kind`);
   }
   const kind = object.relkind === "S" ? "SEQUENCE" : "TABLE";
-  await client.query(`GRANT ALL ON ${kind} ${identifier(schema)}.${identifier(object.relname)} TO ${identifier(source)}`);
-  if (kind === "TABLE") {
-    const columns = await client.query("SELECT a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum", [schema, object.relname]);
-    if (columns.rows.length) await client.query(`GRANT SELECT (${columns.rows.map(row => identifier(row.attname)).join(", ")}) ON ${identifier(schema)}.${identifier(object.relname)} TO ${identifier(source)}`);
+  statements.push(`GRANT ALL ON ${kind} ${identifier(schema)}.${identifier(object.relname)} TO ${identifier(source)}`);
+  if (kind === "TABLE" && columns.length) {
+    statements.push(`GRANT SELECT (${columns.map(identifier).join(", ")}) ON ${identifier(schema)}.${identifier(object.relname)} TO ${identifier(source)}`);
   }
-
+  return statements;
 }
 
 async function transferSchemaOwnership(client: PoolClient, schema: string, owner: string, family: "agent" | "neutral"): Promise<void> {
@@ -43,25 +43,29 @@ async function transferSchemaOwnership(client: PoolClient, schema: string, owner
   if (family === "agent") {
     const { rows: [{ rolname: source }] } = await client.query("SELECT r.rolname FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = $1", [schema]);
     await client.query(`GRANT ALL ON SCHEMA ${identifier(schema)} TO ${identifier(source)}`);
-    for (const object of objects.rows) await lockSchemaRelation(client, schema, source, object);
-    for (const { signature, procost } of functions.rows) {
+    const columns = await client.query<{ relname: string; attname: string }>("SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum", [schema]);
+    const locks = objects.rows.flatMap(object => lockSchemaRelation(schema, source, object,
+      columns.rows.filter(column => column.relname === object.relname).map(column => column.attname)));
+    if (locks.length) await client.query(locks.join(";\n"));
+    const functionLocks = functions.rows.map(({ signature, procost }) => {
       if (!Number.isFinite(procost) || procost <= 0) throw new Error(`unsafe agent-store schema ${schema}: invalid function cost`);
-      await client.query(`ALTER FUNCTION ${signature} COST ${procost}`);
-    }
+      return `ALTER FUNCTION ${signature} COST ${procost}`;
+    });
+    if (functionLocks.length) await client.query(functionLocks.join(";\n"));
     await assertSafeSchemaOwnershipTransfer(client, schema);
     await assertTrustedAgentStoreRoutines(client, schema);
   }
-  await client.query(`ALTER SCHEMA ${identifier(schema)} OWNER TO ${identifier(owner)}`);
+  const changes = [`ALTER SCHEMA ${identifier(schema)} OWNER TO ${identifier(owner)}`];
   for (const object of objects.rows) {
     const kind = object.relkind === "S" ? "SEQUENCE" : "TABLE";
-    await client.query(`ALTER ${kind} ${identifier(schema)}.${identifier(object.relname)} OWNER TO ${identifier(owner)}`);
+    changes.push(`ALTER ${kind} ${identifier(schema)}.${identifier(object.relname)} OWNER TO ${identifier(owner)}`);
   }
   for (const { signature } of functions.rows) {
-    await client.query(`REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC`);
-    await client.query(`ALTER FUNCTION ${signature} OWNER TO ${identifier(owner)}`);
+    changes.push(`REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC`, `ALTER FUNCTION ${signature} OWNER TO ${identifier(owner)}`);
   }
   const configurations = await client.query("SELECT cfgname FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace WHERE n.nspname = $1", [schema]);
-  for (const { cfgname } of configurations.rows) await client.query(`ALTER TEXT SEARCH CONFIGURATION ${identifier(schema)}.${identifier(cfgname)} OWNER TO ${identifier(owner)}`);
+  for (const { cfgname } of configurations.rows) changes.push(`ALTER TEXT SEARCH CONFIGURATION ${identifier(schema)}.${identifier(cfgname)} OWNER TO ${identifier(owner)}`);
+  await client.query(changes.join(";\n"));
 }
 
 async function assertSafeSchemaOwnershipTransfer(client: Pick<PoolClient, "query">, schema: string): Promise<void> {
@@ -85,22 +89,35 @@ async function assertSafeSchemaOwnershipTransfer(client: Pick<PoolClient, "query
   if (unsafe.rowCount) throw new Error(`unsafe agent-store schema ${schema}: ${unsafe.rows[0].reason}`);
 }
 
-async function isBuilderAgentSchema(client: PoolClient, schema: string, slug: string): Promise<boolean> {
-  const isAgentStore = await client.query("SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'schema_meta' AND c.relkind = 'r'", [schema]);
-  if (!isAgentStore.rowCount) return false;
-  await client.query(`LOCK TABLE ${identifier(schema)}.schema_meta IN ACCESS EXCLUSIVE MODE`);
-  await client.query("SET LOCAL row_security = off");
-  const types = await client.query("SELECT a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'schema_meta' AND a.attname IN ('meta_key', 'role', 'agent_id') AND a.atttypid <> 'pg_catalog.text'::regtype", [schema]);
-  if (types.rowCount) throw new Error(`unsafe agent-store schema ${schema}: untrusted metadata type`);
-  const metadata = await client.query(`SELECT agent_id FROM ${identifier(schema)}.schema_meta WHERE meta_key = 'primary' AND role = 'agent'`);
-  return metadata.rows.length > 0 && agentIdBelongsToSlug(metadata.rows[0].agent_id, slug);
+export interface AgentStoreHandoffIdentity {
+  agentId: string;
+  storeId: string;
+  schema: string;
 }
 
-async function transferStores(client: PoolClient, source: string, owner: string, slug: string): Promise<void> {
-  const schemas = await client.query("SELECT n.nspname FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE r.rolname = $1 ORDER BY n.nspname", [source]);
-  for (const { nspname: schema } of schemas.rows) {
-    if (!await isBuilderAgentSchema(client, schema, slug)) continue;
-    await transferSchemaOwnership(client, schema, owner, "agent");
+async function assertAgentStoreIdentity(client: PoolClient, store: AgentStoreHandoffIdentity): Promise<void> {
+  const { schema } = store;
+  const tables = await client.query("SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname IN ('schema_meta', 'openclaw_schema_meta') AND c.relkind = 'r'", [schema]);
+  if (tables.rowCount !== 2) throw new Error(`Agent-store identity is missing in ${schema}`);
+  await client.query(`LOCK TABLE ${identifier(schema)}.schema_meta, ${identifier(schema)}.openclaw_schema_meta IN ACCESS EXCLUSIVE MODE`);
+  await client.query("SET LOCAL row_security = off");
+  const types = await client.query("SELECT a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND ((c.relname = 'schema_meta' AND a.attname IN ('meta_key', 'role', 'agent_id')) OR (c.relname = 'openclaw_schema_meta' AND a.attname IN ('store', 'store_id'))) AND a.atttypid <> 'pg_catalog.text'::regtype", [schema]);
+  if (types.rowCount) throw new Error(`unsafe agent-store schema ${schema}: untrusted metadata type`);
+  const metadata = await client.query(`SELECT agent_id FROM ${identifier(schema)}.schema_meta WHERE meta_key = 'primary' AND role = 'agent'`);
+  const engine = await client.query(`SELECT store, store_id FROM ${identifier(schema)}.openclaw_schema_meta`);
+  if (metadata.rowCount !== 1 || metadata.rows[0].agent_id !== store.agentId || engine.rowCount !== 1 ||
+      engine.rows[0].store !== 'agent' || engine.rows[0].store_id !== store.storeId) {
+    throw new Error(`Agent-store identity changed in ${schema}`);
+  }
+}
+
+async function transferStores(client: PoolClient, source: string, owner: string, stores: readonly AgentStoreHandoffIdentity[]): Promise<void> {
+  for (const store of [...stores].sort((left, right) => left.schema.localeCompare(right.schema))) {
+    const current = await client.query("SELECT r.rolname FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = $1", [store.schema]);
+    if (current.rows[0]?.rolname !== source && current.rows[0]?.rolname !== owner) throw new Error(`Agent-store owner changed in ${store.schema}`);
+    await assertAgentStoreIdentity(client, store);
+    if (current.rows[0].rolname === owner) continue;
+    await transferSchemaOwnership(client, store.schema, owner, "agent");
   }
 }
 
@@ -236,7 +253,10 @@ export function createAgentStoreCredentialRetirementVerifier(adminDsn: string) {
   };
 }
 
-export function createAgentStoreOwnershipTransferer(adminDsn: string) {
+export function createAgentStoreOwnershipTransferer(
+  adminDsn: string,
+  readStores: (builder: { uid: string; slug: string }) => Promise<readonly AgentStoreHandoffIdentity[]>,
+) {
   const scope = decodeURIComponent(new URL(adminDsn).pathname.slice(1));
   if (!scope) throw new Error("Agent-store ownership transfer requires a database");
   const sharedRole = roleFor("shared", scope);
@@ -249,15 +269,26 @@ export function createAgentStoreOwnershipTransferer(adminDsn: string) {
     try {
       await client.query("BEGIN");
       await client.query(AGENT_STORE_SEARCH_PATH);
+      await client.query("SET LOCAL lock_timeout = '2s'");
+      await client.query("SET LOCAL statement_timeout = '30s'");
       await client.query(AGENT_STORE_CREDENTIAL_LOCK);
       await assertCurrent?.();
+      const stores = await readStores(builder);
+      if (new Set(stores.map(store => store.schema)).size !== stores.length ||
+          new Set(stores.map(store => store.storeId)).size !== stores.length ||
+          new Set(stores.map(store => store.agentId)).size !== stores.length ||
+          stores.some(store => !agentIdBelongsToSlug(store.agentId, builder.slug) ||
+            !/^[a-z_][a-z0-9_]{0,62}$/.test(store.schema) ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(store.storeId))) {
+        throw new Error("Agent-store handoff inventory is invalid or ambiguous");
+      }
       const { rows: [{ current_user: admin }] } = await client.query("SELECT current_user");
       await ensureRole(client, sharedRole);
       await ensureRole(client, owner);
       await client.query(`GRANT ${identifier(sharedRole)} TO ${identifier(admin)} WITH INHERIT TRUE, SET TRUE`);
       await client.query(`GRANT ${identifier(owner)} TO ${identifier(admin)} WITH INHERIT TRUE, SET TRUE`);
       await isolateSharedRole(client, sharedRole);
-      await transferStores(client, target === "shared" ? owner : sharedRole, target === "shared" ? sharedRole : owner, builder.slug);
+      await transferStores(client, target === "shared" ? owner : sharedRole, target === "shared" ? sharedRole : owner, stores);
       await assertCurrent?.();
       await client.query("COMMIT");
     } catch (error) {

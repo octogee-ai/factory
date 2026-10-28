@@ -1,5 +1,3 @@
-import type { FleetBrokerNativeSharedContextDownload, FleetBrokerNativeSharedContextCheckpointRequest } from "@octogee/shared/types/fleet-broker";
-import type { NativeSharedAgentContextRestoreHold } from "@octogee/shared/types/fleet-controller";
 import type { AgentModelSelections } from "@octogee/shared/types/agent-models";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult, CustomerSnapshot } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
@@ -12,7 +10,6 @@ export interface UserSnapshot {
     gatewayId: string;
     status: "" | "provisioning" | "complete";
     agentIds: string[];
-    nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
     restoreAuthority?: FleetBrokerUserSnapshot["restoreAuthority"];
     repoUrl: string;
     mattermostUserId: string | null;
@@ -66,7 +63,6 @@ export interface CustomerContext {
 }
 export type MmUpdate = Record<string, unknown>;
 export interface CustomerLifecycleAdapter {
-    sharedContextCheckpoint?: (request: FleetBrokerNativeSharedContextCheckpointRequest, signal?: AbortSignal) => Promise<FleetBrokerNativeSharedContextDownload>;
     log: (msg: string) => void;
     isBuilderGateway?: () => boolean;
     /** True when this gateway is the configured disposable Builder for this exact slug. */

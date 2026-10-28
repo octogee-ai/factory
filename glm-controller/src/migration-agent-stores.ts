@@ -30,6 +30,11 @@ function assertGatewayUnchanged(current: Gateway | null, expected: Gateway): voi
   }
 }
 
+function isPostgresHandoffTimeout(error: unknown): boolean {
+  const pg = error as { code?: unknown; message?: unknown };
+  return pg?.code === "55P03" || pg?.code === "57014" && typeof pg.message === "string" && /statement timeout/i.test(pg.message);
+}
+
 export function createMigrationAgentStorePreparer(deps: {
   readGateway(gatewayId: string): Promise<Gateway | null>;
   readBuilder(slug: string): Promise<Builder>;
@@ -53,8 +58,15 @@ export function createMigrationAgentStorePreparer(deps: {
       assertBuilderIdentity(currentBuilder, slug, builder.uid);
       await authority.assertCurrent();
     }
-    if (authority) await deps.transferOwnership(builder, gateway.gatewayClass, authority.assertCurrent);
-    else await deps.transferOwnership(builder, gateway.gatewayClass);
+    try {
+      if (authority) await deps.transferOwnership(builder, gateway.gatewayClass, authority.assertCurrent);
+      else await deps.transferOwnership(builder, gateway.gatewayClass);
+    } catch (error) {
+      if (isPostgresHandoffTimeout(error)) {
+        throw new Error(`agent-store handoff timeout: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+      throw error;
+    }
     await authority?.assertCurrent();
   };
 }

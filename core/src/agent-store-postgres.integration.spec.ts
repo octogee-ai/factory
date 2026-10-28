@@ -292,7 +292,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
 
   it("hands tenant ownership between Shared and Builder logins without exposing another Builder's store", async () => {
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
-    const transfer = createAgentStoreOwnershipTransferer(dsn!);
+    const transfer = createAgentStoreOwnershipTransferer(dsn!, async builder => [{ schema: builder.slug === "alice" ? aliceSchema : bobSchema, agentId: `octogee-${builder.slug}-coach`, storeId: builder.slug === "alice" ? aliceStoreId : bobStoreId }]);
     const aliceBuilder = { uid: "alice-uid", slug: "alice" };
     const sharedDsn = await provision({ gatewayClass: "shared", gatewayId: "shared-test", token: "synthetic-shared-password" }, async () => {});
     const admin = new pg.Client({ connectionString: dsn! });
@@ -300,8 +300,8 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     const shared = new pg.Client({ connectionString: sharedDsn });
     await shared.connect();
     const suffix = randomUUID().replaceAll("-", "");
-    const aliceSchema = `octogee_agent_${suffix}`;
-    const bobSchema = `octogee_agent_b${suffix}`;
+    const aliceSchema = `octogee_agent_${suffix}`, aliceStoreId = randomUUID();
+    const bobSchema = `octogee_agent_b${suffix}`, bobStoreId = randomUUID();
     const rogueSchema = `octogee_agent_r${suffix}`;
     const standbySchema = `octogee_agent_u${suffix}`;
     const object = (schema: string, table: string) => `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(table)}`;
@@ -311,7 +311,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
         await shared.query(`CREATE TABLE ${object(schema!, "openclaw_schema_meta")} (
           store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL,
           fingerprint TEXT, ddl_hash TEXT, server_major BIGINT)`);
-        await shared.query(`INSERT INTO ${object(schema!, "openclaw_schema_meta")} (store, version, store_id) VALUES ('agent', 1, $1)`, [randomUUID()]);
+        await shared.query(`INSERT INTO ${object(schema!, "openclaw_schema_meta")} (store, version, store_id) VALUES ('agent', 1, $1)`, [schema === aliceSchema ? aliceStoreId : bobStoreId]);
         await shared.query(`CREATE TABLE ${object(schema!, "schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT)`);
         await shared.query(`INSERT INTO ${object(schema!, "schema_meta")} VALUES ('primary', 'agent', $1)`, [agentId]);
         await shared.query(`CREATE TABLE ${object(schema!, "session_nodes")} (session_key TEXT PRIMARY KEY, entry_json TEXT)`);
@@ -404,7 +404,8 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
         await provision({ gatewayClass: "shared", gatewayId: "shared-test", token: "synthetic-shared-password" }, async () => {});
         await expect(shared.query(`SELECT * FROM ${object(standbySchema, "control_state")}`)).rejects.toMatchObject({ code: "42501" });
         await expect(shared.query(`SET ROLE ${pg.escapeIdentifier(owner)}`)).rejects.toMatchObject({ code: "42501" });
-        await expect(transfer(aliceBuilder, "shared")).rejects.toMatchObject({ code: "42703" });
+        await transfer(aliceBuilder, "shared");
+        await transfer(aliceBuilder, "builder");
         await expect(shared.query(`SELECT * FROM ${object(aliceSchema, "session_nodes")}`)).rejects.toMatchObject({ code: "42501" });
         await alice.query(`DROP SCHEMA ${pg.escapeIdentifier(rogueSchema)} CASCADE`);
         await alice.query(`ALTER TABLE ${object(aliceSchema, "session_nodes")} ADD COLUMN snapshot_revision BIGINT NOT NULL DEFAULT 0`);
@@ -445,7 +446,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
   it.each(["definer", "definer-and-grants", "schema-public", "schema-login", "table-public", "table-login", "column-login", "routine-login", "default-grants", "view", "rls", "invoker-trigger", "modified-native-trigger", "changed-search-path", "unknown-native-trigger", "external-default", "external-generated", "external-check", "external-index", "domain-type", "builtin-default", "external-partition", "metadata-type"])("rejects a Builder-planted %s before Shared ownership", async attack => {
     const suffix = randomUUID().replaceAll("-", "");
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
-    const transfer = createAgentStoreOwnershipTransferer(dsn!);
+    const transfer = createAgentStoreOwnershipTransferer(dsn!, async () => [{ schema, agentId: `octogee-${builder.slug}-coach`, storeId }]);
     const builder = { uid: `attacker-${suffix}`, slug: `attacker-${suffix}` };
     const sharedDsn = await provision({ gatewayClass: "shared", gatewayId: `shared-${suffix}`, token: "synthetic-shared" }, async () => {});
     const builderDsn = await provision({ gatewayClass: "builder", gatewayId: `builder-${suffix}`, token: "synthetic-builder", builder }, async () => {});
@@ -453,7 +454,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     const shared = new pg.Client({ connectionString: sharedDsn });
     const source = new pg.Client({ connectionString: builderDsn });
     await admin.connect(); await shared.connect(); await source.connect();
-    const schema = `octogee_attack_${suffix}`;
+    const schema = `octogee_attack_${suffix}`, storeId = randomUUID();
     const victim = `octogee_victim_${suffix}`;
     const auxiliary = `octogee_aux_${suffix}`;
     const object = (namespace: string, name: string) => `${pg.escapeIdentifier(namespace)}.${pg.escapeIdentifier(name)}`;
@@ -465,6 +466,8 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
       await source.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
       await source.query(`CREATE TABLE ${object(schema, "schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT)`);
       await source.query(`INSERT INTO ${object(schema, "schema_meta")} VALUES ('primary', 'agent', $1)`, [`octogee-${builder.slug}-coach`]);
+      await source.query(`CREATE TABLE ${object(schema, "openclaw_schema_meta")} (store TEXT, store_id TEXT)`);
+      await source.query(`INSERT INTO ${object(schema, "openclaw_schema_meta")} VALUES ('agent', $1)`, [storeId]);
       await source.query(`CREATE FUNCTION ${object(schema, "steal")}() RETURNS TEXT LANGUAGE plpgsql ${attack.startsWith("definer") ? "SECURITY DEFINER" : "SECURITY INVOKER"} AS $body$ BEGIN RETURN (SELECT secret FROM ${object(victim, "auth_profile_store")} LIMIT 1); END $body$`);
       if (attack === "metadata-type") {
         await source.query(`CREATE SCHEMA ${pg.escapeIdentifier(auxiliary)}`);
@@ -534,20 +537,22 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     const suffix = randomUUID().replaceAll("-", "");
     const builder = { uid: `race-${suffix}`, slug: `race-${suffix}` };
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
-    const transfer = createAgentStoreOwnershipTransferer(dsn!);
+    const transfer = createAgentStoreOwnershipTransferer(dsn!, async () => [{ schema, agentId: `octogee-${builder.slug}-coach`, storeId }]);
     await provision({ gatewayClass: "shared", gatewayId: `shared-race-${suffix}`, token: "synthetic-shared" }, async () => {});
     const sourceDsn = await provision({ gatewayClass: "builder", gatewayId: `race-${suffix}`, token: "synthetic-source", builder }, async () => {});
     const admin = new pg.Client({ connectionString: dsn! });
     const source = new pg.Client({ connectionString: sourceDsn });
     const racer = new pg.Client({ connectionString: sourceDsn });
     await admin.connect(); await source.connect(); await racer.connect();
-    const schema = `octogee_race_${suffix}`;
+    const schema = `octogee_race_${suffix}`, storeId = randomUUID();
     const object = (name: string) => `${pg.escapeIdentifier(schema)}.${pg.escapeIdentifier(name)}`;
     let moving: Promise<void> | undefined;
     try {
       await source.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
       await source.query(`CREATE TABLE ${object("schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT)`);
       await source.query(`INSERT INTO ${object("schema_meta")} VALUES ('primary', 'agent', $1)`, [`octogee-${builder.slug}-coach`]);
+      await source.query(`CREATE TABLE ${object("openclaw_schema_meta")} (store TEXT, store_id TEXT)`);
+      await source.query(`INSERT INTO ${object("openclaw_schema_meta")} VALUES ('agent', $1)`, [storeId]);
       await source.query(`CREATE SEQUENCE ${object("sequence")}`);
       await createNativeTriggers(source, schema);
       await source.query("BEGIN");
@@ -615,7 +620,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     }
   });
 
-  it("admits the exact native ACP index null ordering only while PostgreSQL enforces both keys non-null", async () => {
+  it("admits Native-declared ACP index definitions independently of schema admission", async () => {
     const pool = new pg.Pool({ connectionString: dsn, max: 1 }), client = await pool.connect();
     const schema = `acp_order_${randomUUID().replaceAll("-", "")}`, table = `${pg.escapeIdentifier(schema)}.acp_parent_stream_events`;
     try {
@@ -626,7 +631,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
       await client.query(`ALTER TABLE ${table} DROP CONSTRAINT acp_parent_stream_events_pkey`);
       await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
       await client.query(`ALTER TABLE ${table} ALTER COLUMN seq DROP NOT NULL`);
-      await expect(assertTrustedAgentStoreRoutines(client, schema)).rejects.toThrow("untrusted expression index:acp_parent_stream_events:idx_agent_acp_parent_stream_run");
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
     } finally { await client.query("ROLLBACK");client.release();await pool.end(); }
   });
 

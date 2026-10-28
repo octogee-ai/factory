@@ -412,12 +412,11 @@ describe("surge OpenClaw process supervisor", () => {
       await expect(client.status()).resolves.toMatchObject({ phase: "held" });
     } finally { await supervisor.stop(); }
   });
-  it("inspects and repairs all configured Builder stores before spawning a previously healthy runtime", async () => {
+  it("validates configured Builder anchors before Native runtime admission", async () => {
     const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const order: string[] = [], children: FakeChild[] = [];
     const inspection = vi.spyOn(builderStores, "inspectConfiguredBuilderAgentStores")
-      .mockImplementationOnce(async () => { expect(children).toHaveLength(0); order.push("inspect"); return "repair-required"; })
-      .mockImplementationOnce(async () => { expect(children).toHaveLength(0); order.push("verify"); return "exact"; });
+      .mockImplementationOnce(async () => { expect(children).toHaveLength(0); order.push("inspect"); return "exact"; });
     const bootWatcher = createSurgeOpenClawBootWatcher({
       openclawDir, releaseKey: "builder-release", log: () => {}, env: { GATEWAY_CLASS: "builder", OPENCLAW_CONFIG_PATH: path.join(openclawDir, "system_config/openclaw.json") },
       client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() },
@@ -431,7 +430,7 @@ describe("surge OpenClaw process supervisor", () => {
     });
     try {
       await createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath }).permitNormal();
-      expect(order).toEqual(["inspect", "doctor", "verify", "spawn"]);
+      expect(order).toEqual(["inspect", "spawn"]);
       expect(inspection).toHaveBeenCalledWith({ stateDir: openclawDir, configPath: path.join(openclawDir, "system_config/openclaw.json") });
     } finally { await supervisor.stop(); inspection.mockRestore(); }
   });

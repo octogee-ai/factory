@@ -12,7 +12,6 @@ import type {
   MigrationLoadStrategy,
 } from "@octogee/shared/types/fleet-controller";
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
-import type { RollStateMigrationDecision } from "./roll-state-migration.js";
 
 export type SurgeCustomerHandoffResult =
   | { ready: boolean; prelaunchHeld?: never }
@@ -200,7 +199,6 @@ export interface ReconcileSurgeCustomerHandoffInput {
   requiresCustomerMigration: boolean;
   disposableBuilderGateway?: boolean;
   ownerlessOperatorPrewarm?: boolean;
-  stateMigration: RollStateMigrationDecision;
   /** Image tag a queued rollout will put on this gateway, when it replaces the current one. */
   supersedingImageTag?: string;
 }

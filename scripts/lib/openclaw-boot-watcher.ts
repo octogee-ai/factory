@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
-import type { AgentSchemaFit } from "./agent-store-preflight.js";
 
-import { repairSourceDoctorAgentStores, verifySourceDoctorAgentStores } from "./openclaw-source-doctor.js";
+import { repairSourceDoctorAgentStores } from "./openclaw-source-doctor.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 
 export interface OpenClawBootWatcher {
@@ -37,7 +36,7 @@ function runCommand(command: string, args: readonly string[]): Promise<void> {
 function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>) {
   const request = claim.sourceDoctor;
   if (request && (typeof request.requestId !== "string" || !request.requestId || request.requestId.includes("/") || !Array.isArray(request.agentIds) ||
-      request.agentIds.length === 0 || new Set(request.agentIds).size !== request.agentIds.length ||
+      !request.postgresAgentStores || request.agentIds.length === 0 || new Set(request.agentIds).size !== request.agentIds.length ||
       !request.agentIds.every((id) => /^octogee-[a-z0-9][a-z0-9_-]*-coach$/.test(id)) ||
       request.schedulerStateRecovery !== undefined && (request.schedulerStateRecovery !== true || !request.postgresAgentStores))) throw new Error("invalid source Doctor request");
   return request;
@@ -48,9 +47,8 @@ export function createOpenClawBootWatcher(input: {
   releaseKey: string;
   log: (message: string) => void;
   run?: RunCommand;
-  verifySourceDoctor?: (agentIds: string[]) => Promise<void>;
   repairSourceDoctor?: typeof repairSourceDoctorAgentStores;
-  inspectBuilderStores?: () => Promise<AgentSchemaFit>;
+  inspectBuilderStores?: () => Promise<"exact">;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }): OpenClawBootWatcher {
@@ -91,17 +89,12 @@ export function createOpenClawBootWatcher(input: {
       if (claim.action !== "start" && claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
-      const fit = await input.inspectBuilderStores?.();
-      if (claim.action === "start" && fit !== "repair-required") return;
-      if (fit === "repair-required") input.log("[openclaw-boot] configured Builder stores require canonical Doctor before startup");
-      else if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
+      await input.inspectBuilderStores?.();
+      if (claim.action === "start") return;
+      if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
       else input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
       await runClaimedDoctor(input, claim, run);
-      if (input.inspectBuilderStores && await input.inspectBuilderStores() !== "exact") {
-        throw new Error("configured Builder stores remain incompatible after canonical Doctor");
-      }
       if (claim.sourceDoctor) {
-        if (!claim.sourceDoctor.postgresAgentStores) await (input.verifySourceDoctor ?? verifySourceDoctorAgentStores)(claim.sourceDoctor.agentIds);
         await input.client.completeOpenClawDoctor({ releaseKey: input.releaseKey, requestId: claim.sourceDoctor.requestId,
           verifiedAgentIds: claim.sourceDoctor.agentIds });
       }
@@ -119,7 +112,7 @@ export function createOpenClawBootWatcher(input: {
 
 async function runClaimedDoctor(input: Parameters<typeof createOpenClawBootWatcher>[0],
   claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>, run: RunCommand): Promise<void> {
-  if (!claim.sourceDoctor?.postgresAgentStores) {
+  if (!claim.sourceDoctor) {
     await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
     return;
   }

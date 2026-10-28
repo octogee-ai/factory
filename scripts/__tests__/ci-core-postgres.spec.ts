@@ -66,7 +66,7 @@ describe("required core PostgreSQL CI", () => {
     expect(existsSync(directory)).toBe(false);
   });
 
-  it("uses an isolated non-superuser owner and runs both PG files after pinned catalog qualification", () => {
+  it("uses an isolated non-superuser owner and runs every required PG suite after pinned catalog qualification", () => {
     runCorePostgresChecks();
     const qualifier = calls.findIndex(call => call.args.some(arg => arg.endsWith("qualify-agent-store-routines.mjs")));
     const checkout = calls.findIndex(call => call.command === "git" && call.args.includes("checkout"));
@@ -82,7 +82,7 @@ describe("required core PostgreSQL CI", () => {
     expect(qualifier).toBeGreaterThan(-1);
     expect(diff).toBeGreaterThan(qualifier);
     expect(integration).toBeGreaterThan(diff);
-    expect(calls[integration].args).toEqual(["test", "--", "src/agent-store-postgres.integration.spec.ts", "src/agent-store-recovery.integration.spec.ts", "--maxWorkers=1", "--no-file-parallelism"]);
+    expect(calls[integration].args).toEqual(["test", "--", "src/agent-store-postgres.integration.spec.ts", "src/agent-store-recovery.integration.spec.ts", "src/agent-store-handoff.integration.spec.ts", "--maxWorkers=1", "--no-file-parallelism"]);
     const dsn = new URL(calls[integration].env!.OCTOGEE_TEST_POSTGRES_DSN!);
     expect(dsn.username).toBe("octogee_ci_admin");
     expect(dsn.searchParams.get("host")).toBe(join(directory, "socket"));

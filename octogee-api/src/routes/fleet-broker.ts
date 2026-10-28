@@ -1,9 +1,5 @@
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
-import { SharedContextPendingError } from "../lib/native-shared-context-job.js";
-import { createGcsSharedContextObjectStore, type SharedContextObjectStore } from "../lib/native-shared-context-object.js";
-import { authorizeSharedContextCheckpoint } from "../lib/native-shared-context-checkpoint.js";
-import { nativeSharedContextRestoreHeld } from "@octogee/core/assigned-roster";
 import { readCustomerRestoreAuthoritySnapshot, type FleetStateFirestore } from "@octogee/core/fleet-state";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
@@ -284,7 +280,6 @@ interface FleetBrokerRouteDeps {
   readBlobMetadata?: ReadBlobMetadata;
   pruneBuilderRuntimeState?: PruneBuilderRuntimeState;
   computerHomeStore?: ComputerHomeStore;
-  sharedContextObjectStore?: SharedContextObjectStore;
   executeChatSearch?: ExecuteChatSearch;
   executeChatHistory?: ExecuteChatHistory;
   resolveChatIdentity?: ResolveChatIdentity;
@@ -1746,11 +1741,9 @@ async function loadSnapshot(
     ...baseFields,
     greetingPosted: snapshotGreetingPosted(data),
     runtimeMutationFenced: customerRuntimeMutationFenced(data)
-      || readPath(data, "provisioning.openclaw.migration") !== undefined
-      || nativeSharedContextRestoreHeld(data),
+      || readPath(data, "provisioning.openclaw.migration") !== undefined,
     ...(runtimeReset ? { runtimeReset } : {}),
     ...(restoreAuthority ? { restoreAuthority } : {}),
-    ...(nativeSharedContextRestoreHeld(data) ? { nativeSharedContextRestore: readPath(data, "provisioning.openclaw.nativeSharedContextRestore") as FleetBrokerUserSnapshot["nativeSharedContextRestore"] } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,
     freeTierModelRef: modelDials.freeTierModelRef,
     builderAgentDefault: modelDials.builderAgentDefault,
@@ -1859,7 +1852,6 @@ type ResolvedFleetBrokerRouteDeps = {
   readBlobMetadata: ReadBlobMetadata;
   pruneBuilderRuntimeState: PruneBuilderRuntimeState;
   computerHomeStore: ComputerHomeStore;
-  sharedContextObjectStore: SharedContextObjectStore;
   executeChatSearch: ExecuteChatSearch;
   executeChatHistory: ExecuteChatHistory;
   resolveChatIdentity: ResolveChatIdentity;
@@ -1932,7 +1924,6 @@ function resolveFleetBrokerRouteDeps(
 ): ResolvedFleetBrokerRouteDeps {
   return {
     db: opts.db,
-    sharedContextObjectStore: opts.sharedContextObjectStore ?? createGcsSharedContextObjectStore(),
     resolveFreeTierModel: createCachedFreeTierModelResolver({
       db: opts.db,
       onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
@@ -2086,10 +2077,6 @@ function installSnapshotRoutes(
     for (const doc of snap.docs) {
       const data = await isAssignedToGateway(db, bound.gatewayId, doc.id, doc.data() as Record<string, unknown>);
       if (!data) continue;
-      if (nativeSharedContextRestoreHeld(data)) {
-        logger.info("fleet broker withheld Shared context restore from normal mount admission", { uid: doc.id, gatewayId: bound.gatewayId });
-        continue;
-      }
       if (completeOnly && stringAt(data, "provisioning.openclaw.status") !== "complete") {
         continue;
       }
@@ -3674,28 +3661,6 @@ function installComputerHomeRoutes(router: Router, deps: ResolvedFleetBrokerRout
   });
 
   router.post("/computer-home/download-url", async (req, res) => {
-    if (req.body?.agentContextRestore !== undefined) {
-      const bound = boundGateway(req, res);
-      if (!bound) return;
-      const slug = typeof req.body.slug === "string" ? req.body.slug : "";
-      try {
-        const recovery = await authorizeSharedContextCheckpoint(db, bound.gatewayId, slug, req.body.agentContextRestore);
-        const object = await deps.sharedContextObjectStore.derive({ checkpoint: recovery.checkpoint, archive: recovery.archive });
-        const current = await authorizeSharedContextCheckpoint(db, bound.gatewayId, slug, req.body.agentContextRestore);
-        if (current.claimedStartedAt !== recovery.claimedStartedAt) throw new Error("Shared context checkpoint attempt changed");
-        const download = await createBlobSignedUrl({ gcsPath: object.gcsPath, action: "read", generation: object.generation });
-        res.json({ checkpoint: recovery.checkpoint, size: object.size, sha256: object.sha256, generation: object.generation, download });
-      } catch (error) {
-        if (error instanceof SharedContextPendingError) {
-          res.setHeader("Retry-After", "5");
-          res.status(503).json({ error: "shared_context_checkpoint_preparing" });
-          return;
-        }
-        logger.error("Shared context checkpoint download refused", { gatewayId: bound.gatewayId });
-        res.status(403).json(FORBIDDEN);
-      }
-      return;
-    }
     const scope = await requireComputerHomeScope(db, req, res);
     if (!scope) return;
     await runBrokered(res, async () => {

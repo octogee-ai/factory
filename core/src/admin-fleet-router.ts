@@ -2006,47 +2006,6 @@ function recoveryPredecessorFenceMatches(input: {
     fence.gatewayId === gatewayId && fence.phase === "dispatched" &&
     fence.target?.restoreOperationId === operationId && isDeepStrictEqual(fence.target?.images, images);
 }
-function nativeRecoveryStatusMatches(previous: DocumentData): boolean {
-  const pending = previous.status === "pending" && previous.startedAt === null && previous.completedAt === null;
-  const failed = previous.status === "failed" && Number.isSafeInteger(previous.startedAt) && previous.startedAt > 0 &&
-    Number.isSafeInteger(previous.completedAt) && previous.completedAt >= previous.startedAt &&
-    previous.error === "restore recovery images are not ready; outcome remains fenced";
-  return pending || failed;
-}
-function nativeRecoveryOperationMatches(previous: DocumentData | undefined, gatewayId: string): previous is DocumentData {
-  return previous?.kind === OP_KIND_RESTART_GATEWAY && nativeRecoveryStatusMatches(previous) && previous.cancellationRequestedAt === undefined &&
-    previous.restoreRuntimeRecovery === undefined && typeof previous.error === "string" && Boolean(previous.error) && previous.input?.gatewayId === gatewayId;
-}
-function pendingNativeRestoreMatches(returned: DocumentData, openclaw: DocumentData, assignment: DocumentData, operationId: string, gatewayId: string): boolean {
-  const receipt = returned.restoreAttempt ?? {}, hold = openclaw.nativeSharedContextRestore ?? {}, stage = returned.nativeSharedAgentContextStage ?? {};
-  const archive = stage.archive ?? {}, input = returned.input ?? {}, lease = openclaw.activationLease ?? {};
-  return [returned.kind === "migrate-customer", returned.status === "pending", returned.startedAt === null, returned.completedAt === null,
-    returned.cancellationRequestedAt === undefined, returned.cutoverCommittedAt > 0,
-    returned.nativeSharedAgentContextRestored === undefined, returned.nativeSharedAgentContextRestoreReceipt === undefined,
-    receipt.phase === "dispatched", receipt.operationId === operationId, receipt.gatewayId === gatewayId,
-    isDeepStrictEqual(receipt, openclaw.restoreFence), openclaw.gatewayId === gatewayId,
-    lease.status === "returning", lease.returnOperationId === operationId, lease.targetGatewayId === input.fromGatewayId,
-    assignment.state === "quiescing", assignment.updatedByOperationId === operationId, assignment.gatewayId === gatewayId,
-    assignment.uid === receipt.uid, assignment.slug === receipt.slug, assignment.epoch === receipt.assignmentEpoch,
-    typeof receipt.uid === "string", Boolean(receipt.uid), typeof receipt.slug === "string", Boolean(receipt.slug),
-    input.uid === receipt.uid, input.builderSlug === receipt.slug, input.toGatewayId === gatewayId, input.fromGatewayId === receipt.fromGatewayId,
-    hold.operationId === operationId, hold.uid === receipt.uid, hold.slug === receipt.slug, hold.fromGatewayId === receipt.fromGatewayId,
-    hold.toGatewayId === gatewayId, hold.migrationId === `mig-${operationId}`, typeof hold.archiveId === "string", Boolean(hold.archiveId),
-    typeof hold.contextSha256 === "string", /^[a-f0-9]{64}$/.test(hold.contextSha256),
-    stage.toGatewayId === gatewayId, stage.slug === receipt.slug, stage.migrationId === hold.migrationId,
-    archive.uid === receipt.uid, archive.slug === receipt.slug, archive.archiveId === hold.archiveId, archive.contextSha256 === hold.contextSha256,
-    !Object.hasOwn(openclaw, "migration"), !Object.hasOwn(openclaw, "sourceTransferFence")].every(Boolean);
-}
-async function capturedPendingNativeRestore(db: Firestore, gatewayId: string, operationId: string) {
-  const returned = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()).data() ?? {};
-  const uid = returned.restoreAttempt?.uid;
-  if (typeof uid !== "string" || !uid || uid.includes("/")) return null;
-  const [user, row] = await Promise.all([db.doc(`users/${uid}`).get(), db.doc(`gateways/${gatewayId}/assignments/${uid}`).get()]);
-  const openclaw = user.data()?.provisioning?.openclaw ?? {}, assignment = row.data() ?? {};
-  if (!pendingNativeRestoreMatches(returned, openclaw, assignment, operationId, gatewayId)) return null;
-  return { restoreAttempt: returned.restoreAttempt, nativeSharedContextRestore: openclaw.nativeSharedContextRestore,
-    nativeSharedAgentContextStage: returned.nativeSharedAgentContextStage, assignment };
-}
 async function capturedRecoveryPredecessor(db: Firestore, gatewayId: string, operationId: string, predecessorId: string, reauthorize: unknown) {
   const [root, predecessor] = await Promise.all([
     db.collection("gateways").doc(gatewayId).get(), db.collection(GLM_OPERATIONS_COLLECTION).doc(predecessorId).get(),
@@ -2055,11 +2014,6 @@ async function capturedRecoveryPredecessor(db: Firestore, gatewayId: string, ope
   const recovery = previous?.input?.restoreRecovery;
   if (recovery?.operationId !== operationId ||
       !recoveryPredecessorFenceMatches({ fence, predecessorId, gatewayId, operationId, images: recovery.images })) return null;
-  if (nativeRecoveryOperationMatches(previous, gatewayId) && reauthorize === undefined && recovery.reauthorize === undefined) {
-    const pendingNativeRestore = await capturedPendingNativeRestore(db, gatewayId, operationId);
-    if (!pendingNativeRestore) return null;
-    return { operationId: predecessorId, status: previous.status, startedAt: previous.startedAt, input: previous.input, completedAt: previous.completedAt, fence, pendingNativeRestore };
-  }
   if (!failedRecoveryOperationMatches(previous, gatewayId) || reauthorize === undefined || !isDeepStrictEqual(recovery.reauthorize, reauthorize)) return null;
   return { operationId: predecessorId, input: previous.input, completedAt: previous.completedAt, fence };
 }

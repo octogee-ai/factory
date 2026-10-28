@@ -48,8 +48,7 @@ function assertOwnedFence(fence: Row, op: Operation, input: SourceRecovery, pod:
   if (![fence.kind === 'source-recovery', fence.attemptId === op.id, fence.auditId === op.id,
     fence.gatewayId === op.input.gatewayId, ['reserved', 'dispatched'].includes(fence.phase), doctor.requestId === op.id,
     target.podUid === pod.metadata.uid, target.podName === pod.metadata.name, target.sourceSha === input.sourceSha,
-    isDeepStrictEqual(target.images, input.images), isDeepStrictEqual(target.agents, expectedAgents(input)),
-    isDeepStrictEqual(target.failedExportOperationIds, input.failedExports.map(row => row.operationId))].every(Boolean)) {
+    isDeepStrictEqual(target.images, input.images), isDeepStrictEqual(target.agents, expectedAgents(input))].every(Boolean)) {
     throw new Error('source recovery runtime fence changed');
   }
   if (input.postgresAgentStores && (!isDeepStrictEqual(target.postgresAgentStores, input.postgresAgentStores) || !target.workload)) {
@@ -65,8 +64,6 @@ async function reserve(deps: SharedPodRecoveryDeps, op: Operation, input: Source
       await transferPredecessor({ deps, tx, op, input, pod, root, workload }); return;
     }
     if (input.supersede) throw new Error('captured source recovery predecessor fence is absent');
-    if (input.managementRecovery && (!pod.status.conditions?.some((condition: Row) => condition.type === 'Ready' && condition.status === 'True') ||
-      !pod.status.containerStatuses?.every((status: Row) => status.ready === true))) throw new Error('source management Pod is unready');
     const fence = newFence(deps, op, input, pod, workload);
     tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: fence });
   });
@@ -77,8 +74,8 @@ function newFence(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecov
       startedAt: (deps.now ?? Date.now)(), phase: 'reserved', doctor: { requestId: op.id },
       target: { podName: pod.metadata.name, podUid: pod.metadata.uid, sourceSha: input.sourceSha, images: input.images,
         originalImages: Object.fromEntries(pod.spec.containers.map((container: Row) => [container.name, container.image])),
-        agents: expectedAgents(input), failedExportOperationIds: input.failedExports.map(row => row.operationId),
-        ...(input.schedulerStateRecovery ? { schedulerStateRecovery: true } : {}),
+        agents: expectedAgents(input),
+        schedulerStateRecovery: input.schedulerStateRecovery,
         ...(input.postgresAgentStores ? { postgresAgentStores: input.postgresAgentStores, workload } : {}) } };
 }
 async function transferPredecessor(request: { deps: SharedPodRecoveryDeps; tx: Transaction; op: Operation; input: SourceRecovery; pod: Row; root: Row; workload?: SourceRecoveryWorkload }): Promise<void> {
@@ -143,39 +140,20 @@ async function recordInstalled(deps: SharedPodRecoveryDeps, op: Operation, input
     return true;
   });
 }
-function releaseCapturedPlacements(deps: SharedPodRecoveryDeps, tx: Transaction, op: Operation, input: SourceRecovery, completedAt: number): Row[] {
-  if (input.postgresAgentStores) return input.failedExports.map(failure => {
-    const assignment = input.assignments.find(row => row.uid === failure.input.uid);
-    if (!assignment) throw new Error('repaired PostgreSQL source placement owner changed');
-    tx.update(deps.db.doc(`glmOperations/${failure.operationId}`), { sourceRuntimeRecovery: {
-      operationId: op.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt,
-    } });
-    return { operationId: failure.operationId, uid: assignment.uid, assignmentEpoch: assignment.assignmentEpoch, marker: null };
-  });
-  if (!input.managementRecovery) return [];
-  return input.managementRecovery.failures.map((failure, index) => {
-    const assignment = input.assignments[index]!, user = input.managementRecovery!.users[index]!;
-    const receipt = { operationId: op.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt };
-    tx.update(deps.db.doc(`glmOperations/${failure.operationId}`), { sourceRuntimeRecovery: receipt });
-    if (user.migration !== null) tx.update(deps.db.doc(`users/${assignment.uid}`), { 'provisioning.openclaw.migration': FieldValue.delete() });
-    return { operationId: failure.operationId, uid: assignment.uid, assignmentEpoch: assignment.assignmentEpoch, marker: user.migration };
-  });
-}
 async function finish(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, managementHealth?: Row): Promise<void> {
   await deps.db.runTransaction(async tx => {
     const root = await authority(deps, tx, op, input), fence = object(root.runtimeRestartFence);
     assertOwnedFence(fence, op, input, pod);
-    if ((input.managementRecovery || input.postgresAgentStores) && !managementHealth) throw new Error('source management health is unavailable');
+    if (!managementHealth) throw new Error('source management health is unavailable');
     if (!doctorComplete(fence, input) || !recoveredPodReady(pod, fence.target, input.images)) throw new Error('source repair acknowledgment is unavailable');
     const completedAt = (deps.now ?? Date.now)();
     const release = input.postgresAgentStores ? await recordRecoveredGatewayRelease(deps.db, tx, {
       gatewayId: op.input.gatewayId as string, operationId: op.id, claimedStartedAt: op.startedAt, payload: input.payload!, now: completedAt,
     }) : undefined;
-    const releasedPlacements = releaseCapturedPlacements(deps, tx, op, input, completedAt);
     tx.update(deps.db.doc(`glmOperations/${op.id}`), { sourceRuntimeRecovery: { gatewayId: op.input.gatewayId,
       sourceSha: input.sourceSha, images: input.images, podUid: pod.metadata.uid, doctor: fence.doctor, installedImage: fence.installedImage,
       ...(release ? { release, workload: fence.target.workload } : {}),
-      ...(managementHealth ? { managementHealth, releasedPlacements } : {}), completedAt } });
+      ...(managementHealth ? { managementHealth } : {}), completedAt } });
     tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: FieldValue.delete() });
   });
 }
@@ -183,10 +161,6 @@ function ownsPausedSourceWorkload(fence: Row, op: Operation, input: SourceRecove
   const predecessor = input.supersede;
   return fence.kind === 'source-recovery' && (fence.attemptId === op.id ||
     predecessor !== undefined && fence.attemptId === predecessor.operationId && isDeepStrictEqual(fence, predecessor.fence));
-}
-function assertSourceManagementPod(input: SourceRecovery, pod: Row, namespace: string): void {
-  if (input.managementRecovery && (pod.metadata.uid !== input.managementRecovery.podUid || pod.metadata.name !== input.managementRecovery.podName ||
-    pod.metadata.namespace !== namespace)) throw new Error('source management Pod custody changed');
 }
 async function preflightNewPostgresSource(request: {
   deps: SharedPodRecoveryDeps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; ownFence: Row;
@@ -210,7 +184,6 @@ export async function recoverSharedSourceRuntime(deps: SharedPodRecoveryDeps, op
     return;
   }
   const pod = await existingOwnedPod(deps, gatewayId);
-  assertSourceManagementPod(input, pod, deps.namespace);
   const ownFence = object((await deps.db.doc(`gateways/${gatewayId}`).get()).data()?.runtimeRestartFence);
   const workload = input.postgresAgentStores ? await captureSourceRecoveryWorkload(deps, gatewayId, pod,
     ownsPausedSourceWorkload(ownFence, op, input)) : undefined;
@@ -254,8 +227,8 @@ async function resumeRecoveredSource(deps: SharedPodRecoveryDeps, op: Operation,
   const proof = await read();
   await resumeSourceRecoveryWorkload(deps, proof.workload, input.images, async () => { await read(); });
 }
-function sourceRepairTimeout(input: SourceRecovery): number {
-  return input.schedulerStateRecovery ? 1_200_000 : 600_000;
+function sourceRepairTimeout(): number {
+  return 1_200_000;
 }
 async function waitForSourceRepair(request: {
   deps: SharedPodRecoveryDeps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; saved: Row;
@@ -263,7 +236,7 @@ async function waitForSourceRepair(request: {
   const { deps, op, input, ctx, pod, saved } = request;
   const gatewayId = op.input.gatewayId as string;
   const now = deps.now ?? Date.now, wait = deps.wait ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
-  const deadline = now() + sourceRepairTimeout(input);
+  const deadline = now() + sourceRepairTimeout();
   while (now() < deadline) {
     await ctx.assertActiveClaim!();
     const current = await json(deps, ['get', 'pod', pod.metadata.name]);
@@ -275,7 +248,7 @@ async function waitForSourceRepair(request: {
     assertOwnedFence(fence, op, input, current);
     if (fence.doctor?.error !== undefined) throw new Error('source Doctor failed; outcome remains fenced');
     if (doctorComplete(fence, input) && recoveredPodReady(current, fence.target, input.images)) {
-      if (input.managementRecovery || input.postgresAgentStores) {
+      if (input.postgresAgentStores) {
         const proof = await managementHealth(deps, op, current);
         await ctx.assertActiveClaim!();
         const after = await json(deps, ['get', 'pod', pod.metadata.name]);

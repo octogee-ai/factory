@@ -3,8 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { preflightAgentDatabase } from "../lib/agent-store-preflight.js";
-import { repairPostgresSourceDoctorAgentStores, repairSourceDoctorAgentStores, verifyPostgresSourceDoctorAgentStores, verifySourceDoctorAgentStores } from "../lib/openclaw-source-doctor.js";
+import { repairSourceDoctorAgentStores, verifyPostgresSourceDoctorAgentStores } from "../lib/openclaw-source-doctor.js";
 import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 import { OpenClawCommandError, type OpenClawCommand } from "../lib/openclaw-cli.js";
 const roots: string[] = [];
@@ -38,42 +37,6 @@ async function fixture(version = 25) {
   });
   return { root, agentIds, run, env: { OPENCLAW_STATE_DIR: root } };
 }
-it("verifies all requested canonical stores against the installed native preflight without replacing their history", async () => {
-  const f = await fixture(); await verifySourceDoctorAgentStores(f.agentIds, f); expect(f.run).toHaveBeenCalledTimes(12);
-  for (const agentId of f.agentIds) { const db = new DatabaseSync(path.join(f.root, "agents", agentId, "agent/openclaw-agent.sqlite"), { readOnly: true }); expect(db.prepare("SELECT body FROM history").get()?.body).toBe("preserved"); db.close(); }
-});
-it("refuses success when a requested store still requires native repair", async () => {
-  const f = await fixture(24); await expect(verifySourceDoctorAgentStores(f.agentIds, f)).rejects.toThrow("incompatible");
-});
-it("refuses a linked requested store before invoking native preflight", async () => {
-  const f = await fixture(), file = path.join(f.root, "agents", f.agentIds[0]!, "agent/openclaw-agent.sqlite");
-  await fs.rename(file, file + ".retained"); await fs.symlink(file + ".retained", file);
-  await expect(verifySourceDoctorAgentStores(f.agentIds, f)).rejects.toThrow("not canonical"); expect(f.run).not.toHaveBeenCalled();
-});
-
-it("verifies consolidated copies while preserving live SQLite sidecars and removing only private verification files", async () => {
-  const f = await fixture();
-  const file = path.join(f.root, "agents", f.agentIds[0]!, "agent/openclaw-agent.sqlite");
-  await fs.writeFile(file + "-wal", "retained-wal"); await fs.writeFile(file + "-shm", "retained-shm");
-  await verifySourceDoctorAgentStores(f.agentIds, f);
-  expect(await fs.readFile(file + "-wal", "utf8")).toBe("retained-wal");
-  expect(await fs.readFile(file + "-shm", "utf8")).toBe("retained-shm");
-  for (const [args, { env }] of f.run.mock.calls) {
-    await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
-    if (args[0] === "database") await expect(fs.stat(args[2]!)).rejects.toMatchObject({ code: "ENOENT" });
-  }
-});
-it("preserves a native refusal reason when the copied-store schema version is indeterminate", async () => {
-  const file = "/private/verification/database.sqlite", agentId = "octogee-alice-coach";
-  const reason = "Agent preflight requires a consolidated snapshot with no SQLite sidecars.";
-  const run = vi.fn<OpenClawCommand>().mockResolvedValue({ code: 1, stdout: JSON.stringify({
-    schema: "openclaw.agent-schema-preflight.v1", agentId, databasePath: file,
-    foundVersion: null, targetVersion: 25, status: "indeterminate", reason,
-  }) });
-  await expect(preflightAgentDatabase(file, agentId, run, { env: {} })).rejects.toThrow(reason);
-});
-
-
 async function postgresFixture() {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "source-doctor-pg-"))); roots.push(root);
   const ids = ["octogee-livefixture-coach", "octogee-livefixture-proj-launch-coach", "octogee-foreign-coach"];
@@ -171,14 +134,14 @@ it.each(["owner", "store", "version", "coherence", "duplicate", "anchor-roster",
   if (change === "claim") f.assertCurrent.mockRejectedValue(new Error("claim changed"));
   if (change === "descriptor") f.run.mockResolvedValue({ code: 0, stdout: "{}" });
   if (change === "doctor") { const original = f.run.getMockImplementation()!; f.run.mockImplementation(async (args, options) => args[0] === "doctor" ? { code: 1, stdout: "" } : original(args, options)); }
-  await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow();
+  await expect(repairSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow();
   expect(f.metadata.get("agent_2")!.version).toBe(31);
 });
 
 it("refuses a successful Doctor that did not advance PostgreSQL metadata to the installed Native version", async () => {
   const f = await postgresFixture(), original = f.run.getMockImplementation()!;
   f.run.mockImplementation(async (args, options) => args[0] === "doctor" ? { code: 0, stdout: "" } : original(args, options));
-  await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("identity/version metadata mismatch");
+  await expect(repairSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow("identity/version metadata mismatch");
 });
 
 it("verifies PostgreSQL metadata without treating SQLite schema descriptor as a PostgreSQL check", async () => {
@@ -264,13 +227,13 @@ async function sqliteDriftFixture() {
   const expectedAnchors = f.agentIds.map((agentId, index) => ({ agentId, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `captured_agent_${index}` }));
   const configPath = path.join(f.root, "openclaw.json"), originalConfig = JSON.stringify({ agents: { ownership: "explicit", entries: {} }, retained: "unchanged" });
   await fs.writeFile(configPath, originalConfig, { mode: 0o600 });
-  return { ...f, expectedAnchors, configPath, originalConfig };
+  return { ...f, env: { ...f.env, OPENCLAW_AGENT_STORE_DSN: "postgresql://synthetic/private" }, expectedAnchors, configPath, originalConfig };
 }
 
 it.each([false, true])("refuses SQLite drift under captured PostgreSQL authority before Native effects (%s)", async emptyRoster => {
   const f = await sqliteDriftFixture();
   await expect(repairSourceDoctorAgentStores(f.agentIds, { env: f.env, run: f.run,
-    expectedAnchors: emptyRoster ? [] : f.expectedAnchors, assertCurrent: async () => {} })).rejects.toThrow("captured PostgreSQL roster requires PostgreSQL anchors");
+    expectedAnchors: emptyRoster ? [] : f.expectedAnchors, assertCurrent: async () => {} })).rejects.toThrow("requires a PostgreSQL anchor");
   expect(f.run).not.toHaveBeenCalled();
   expect(await fs.readFile(f.configPath, "utf8")).toBe(f.originalConfig);
 });
@@ -283,19 +246,17 @@ it("cannot acknowledge captured PostgreSQL repair when every local anchor has dr
       assertOpenClawDoctor: async () => {}, completeOpenClawDoctor, completeOpenClawBoot: async () => {} },
     repairSourceDoctor: (agentIds, options) => repairSourceDoctorAgentStores(agentIds, { ...options, env: f.env, run: f.run }),
   });
-  await expect(watcher.beforeStart()).rejects.toThrow("captured PostgreSQL roster requires PostgreSQL anchors");
+  await expect(watcher.beforeStart()).rejects.toThrow("requires a PostgreSQL anchor");
   expect(f.run).not.toHaveBeenCalled(); expect(completeOpenClawDoctor).not.toHaveBeenCalled();
   expect(await fs.readFile(f.configPath, "utf8")).toBe(f.originalConfig);
 });
 
-it("preserves true legacy SQLite repair when no PostgreSQL roster was captured", async () => {
+it("refuses legacy SQLite stores even without captured PostgreSQL authority", async () => {
   const f = await sqliteDriftFixture();
-  await repairSourceDoctorAgentStores(f.agentIds, { env: f.env, run: f.run, assertCurrent: async () => {} });
-  expect(f.run.mock.calls[0]![0]).toEqual(["doctor", "--fix", "--non-interactive"]);
-  expect(f.run).toHaveBeenCalledTimes(13);
+  await expect(repairSourceDoctorAgentStores(f.agentIds, { env: f.env, run: f.run, assertCurrent: async () => {} })).rejects.toThrow("PostgreSQL anchor");
+  expect(f.run).not.toHaveBeenCalled();
   expect(await fs.readFile(f.configPath, "utf8")).toBe(f.originalConfig);
 });
-
 
 async function mattermostSourceFixture() {
   const f = await postgresFixture();
@@ -446,7 +407,7 @@ it("seals failed PostgreSQL command output on retained HOME before disposable cl
     return remove(file, options);
   });
   try {
-    await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input,
+    await expect(repairSourceDoctorAgentStores(f.agentIds, { ...f.input,
       env: { ...f.input.env, HOME: home }, diagnostics: { requestId: "private-request", releaseKey: "private-release", log },
     })).rejects.toThrow("sanitized timeout");
     await expect(fs.stat(commandRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -466,7 +427,7 @@ it.each(["linked-root", "writable-home"])("refuses unsafe diagnostics before any
   roots.push(home);
   if (change === "linked-root") await fs.symlink(f.root, path.join(home, ".octogee-source-doctor-diagnostics"));
   else await fs.chmod(home, 0o777);
-  await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
+  await expect(repairSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
     diagnostics: { requestId: "request", releaseKey: "release", log: () => {} },
   })).rejects.toThrow("unsafe");
   expect(f.run).not.toHaveBeenCalled();
@@ -485,7 +446,7 @@ it.each(["bootstrap", "postgres-doctor"])("retains numeric Native refusal output
     }
     return original(args, options);
   });
-  const error = await repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
+  const error = await repairSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
     diagnostics: { requestId: "request", releaseKey: "release", log: () => {} },
   }).catch((failure: unknown) => failure);
   expect(error).toBeInstanceOf(Error);
@@ -513,7 +474,7 @@ it("keeps successful command evidence and refuses completion when private cleanu
     return remove(file, options);
   });
   try {
-    await expect(repairPostgresSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
+    await expect(repairSourceDoctorAgentStores(f.agentIds, { ...f.input, env: { ...f.input.env, HOME: home },
       diagnostics: { requestId: "request", releaseKey: "release", log: () => {} },
     })).rejects.toThrow("source Doctor private cleanup failed");
     expect(await fs.readFile(path.join(home, ".octogee-source-doctor-diagnostics/slot-0/stdout.bin"), "utf8")).toBe("private-success");

@@ -496,7 +496,7 @@ export interface Operation {
     schedulerHandoffLost?: string;
     cutoverCommittedAt?: number;
 }
-export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "freshSourceQuiesced" | "freshCutoverReady" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
+export type CustomerMigrationV2Phase = "initialized" | "keysSynced" | "preSynced" | "sourceQuiesced" | "finalSynced" | "targetVerified" | "cutover" | "sourceRetired" | "complete" | "abortIntent" | "abortTargetUnmounted" | "aborted";
 export interface CustomerMigrationV2GatewayRootFence {
     gatewayId: string;
     updatedAt: number;
@@ -510,7 +510,6 @@ export interface CustomerMigrationV2GatewayRootFence {
 }
 export interface CustomerMigrationV2State {
     phase: CustomerMigrationV2Phase;
-    strategy?: "migrate-state" | "provision-fresh";
     operationId: string;
     migrationId: string;
     uid: string;

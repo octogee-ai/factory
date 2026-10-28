@@ -1,4 +1,4 @@
-import { type GatewayStatus, type NativeSharedAgentContextStage } from "@octogee/shared/types/fleet-controller";
+import { type GatewayStatus } from "@octogee/shared/types/fleet-controller";
 import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerCustomerRestoreAuthority } from "@octogee/shared/types/fleet-broker";
@@ -123,15 +123,8 @@ export interface CutoverCommitParams {
         source: AssignmentSource;
         updatedByOperationId: string | null;
     } | null;
-    nativeSharedContextHold?: {
-        operationId: string;
-        claimedStartedAt: number;
-        migrationId: string;
-        stage: NativeSharedAgentContextStage;
-    };
     customerMigrationV2Fence?: {
         claimStartedAt?: number;
-        strategy: "migrate-state" | "provision-fresh";
         operationId: string;
         migrationId: string;
         uid: string;

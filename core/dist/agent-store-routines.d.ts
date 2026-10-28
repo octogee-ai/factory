@@ -28,6 +28,5 @@ type Expression = {
     definition: string;
 };
 export declare function agentStoreExpressionFingerprint(expression: Expression, schema: string): string;
-export declare const agentStoreNonNullColumnsQuery = "SELECT c.relname, a.attname FROM pg_catalog.pg_class c\n  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n  JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid\n  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped AND a.attnotnull";
 export declare function assertTrustedAgentStoreRoutines(client: PoolClient, schema: string): Promise<void>;
 export {};

@@ -29,7 +29,7 @@ it.each(["state", "owner", "epoch", "clock"])("refuses stale %s custody before a
   expect(h.deps.scheduler).not.toHaveBeenCalled();
 });
 
-it("rechecks the exact owned clock after hold before reading a snapshot", async () => {
+it("rechecks the exact owned clock after export before staging a snapshot", async () => {
   const h = setup();
   const scheduler = h.deps.scheduler!;
   h.deps.scheduler = vi.fn(async request => {
@@ -50,7 +50,7 @@ it("refuses target pod replacement between source export and staging", async () 
     return result;
   });
   await expect(stageSurgeScheduler(h.deps, h.custody)).rejects.toThrow("scheduler physical custody changed");
-  expect(vi.mocked(h.deps.scheduler).mock.calls.map(([request]) => request.phase)).toEqual(["hold", "export"]);
+  expect(vi.mocked(h.deps.scheduler).mock.calls.map(([request]) => request.phase)).toEqual(["export"]);
 });
 
 it("stages the full exported project scope without a target hold that could truncate it", async () => {
@@ -60,9 +60,10 @@ it("stages the full exported project scope without a target hold that could trun
     ...(request.phase === "export" ? { snapshot: { version: 1, operationId: request.operationId, agentIds, jobs: [], scratch: [] } } : {}) }));
   await stageSurgeScheduler(h.deps, h.custody);
   expect(vi.mocked(h.deps.scheduler).mock.calls.map(([request]) => [request.pod.uid, request.phase])).toEqual([
-    [oldPod.uid, "hold"], [oldPod.uid, "export"], [targetPod.uid, "stage"],
+    [oldPod.uid, "export"], [targetPod.uid, "stage"],
   ]);
-  expect(vi.mocked(h.deps.scheduler).mock.calls[2][0]).toMatchObject({ agentIds, snapshot: { version: 1, operationId: expect.any(String), agentIds, jobs: [], scratch: [] } });
+  expect(vi.mocked(h.deps.scheduler).mock.calls[0][0]).toMatchObject({ phase: "export", resolveAgentScope: true });
+  expect(vi.mocked(h.deps.scheduler).mock.calls[1][0]).toMatchObject({ agentIds, snapshot: { version: 1, operationId: expect.any(String), agentIds, jobs: [], scratch: [] } });
 });
 
 it("requires confirmed target abort before resuming source schedules", async () => {
@@ -104,14 +105,13 @@ it("refuses a missing source scheduler record after export instead of manufactur
 it("never resumes the foreign fence or accepts an empty receipt for the unheld current operation", async () => {
   const h = setup();
   h.deps.scheduler = vi.fn(async request => {
-    if (request.phase === "hold") throw new Error("agent is held for migration foreign-native-owner");
-    if (request.phase === "export") throw new Error("Cron migration must acquire hold before this phase");
+    if (request.phase === "export") throw new Error("agent is held for migration foreign-native-owner");
     return { operationId: request.operationId, phase: request.phase, drained: true, agentIds: [] };
   });
   await expect(stageSurgeScheduler(h.deps, h.custody)).rejects.toThrow("foreign-native-owner");
   await abortSurgeSchedulerTarget(h.deps, h.custody);
   await expect(resumeSurgeSchedulerSource(h.deps, h.custody)).rejects.toThrow("scheduler resume scope changed");
-  expect(vi.mocked(h.deps.scheduler).mock.calls.map(([request]) => request.phase)).toEqual(["hold", "abort", "resume"]);
+  expect(vi.mocked(h.deps.scheduler).mock.calls.map(([request]) => request.phase)).toEqual(["export", "abort", "resume"]);
 });
 
 it("verifies the existing resumed receipt after a lost source resume acknowledgement", async () => {

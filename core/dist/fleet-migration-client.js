@@ -204,11 +204,6 @@ export function createMigrationClient(deps) {
             log(`[migration-client] ✅ unmount migrationId=${migrationId} slug=${slug} wasMounted=${res.unmounted}`);
             return res;
         },
-        finishAgentContextRestore: async (input) => {
-            if (!deps.finishAgentContextRestore)
-                throw new Error("Shared agent context restoration is unavailable");
-            return deps.finishAgentContextRestore(input);
-        },
         transferState: deps.transferState,
         async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
             const requestTimeoutMs = timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);

@@ -110,7 +110,7 @@ async function readSharedCustomer(slug: string): Promise<SharedCheckpointCustome
 
 function assertSharedCustomer(user: FleetBrokerUserSnapshot | undefined, expected: { uid: string; slug: string; gatewayId: string }): asserts user is FleetBrokerUserSnapshot {
   if (!user || user.uid !== expected.uid || user.slug !== expected.slug || user.gatewayId !== expected.gatewayId ||
-      user.status !== "complete" || user.nativeSharedContextRestore !== undefined || !Array.isArray(user.projects)) {
+      user.status !== "complete" || !Array.isArray(user.projects)) {
     throw new Error("Shared checkpoint owner is no longer assigned and ready here");
   }
 }

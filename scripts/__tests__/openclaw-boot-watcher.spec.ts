@@ -3,48 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 
 describe("OpenClaw boot watcher", () => {
-  it("repairs a dormant configured Builder store before a previously healthy gateway starts", async () => {
-    const inspectBuilderStores = vi.fn()
-      .mockResolvedValueOnce("repair-required")
-      .mockResolvedValueOnce("exact");
-    const run = vi.fn(async () => undefined);
-    const input = {
-      client: {
-        claimOpenClawBoot: vi.fn(async () => ({ action: "start" as const })),
-        completeOpenClawDoctor: vi.fn(async () => undefined),
-        completeOpenClawBoot: vi.fn(async () => undefined),
-      },
-      releaseKey: "qualified-builder-release",
-      log: () => undefined,
-      run,
-      inspectBuilderStores,
-    };
-    await createOpenClawBootWatcher(input).beforeStart();
-    expect(run).toHaveBeenCalledWith("openclaw", ["doctor", "--fix", "--non-interactive"]);
-    expect(inspectBuilderStores).toHaveBeenCalledTimes(2);
-  });
-  it("does not run Doctor when every configured Builder store is exact", async () => {
-    const inspectBuilderStores = vi.fn().mockResolvedValue("exact"), run = vi.fn();
-    await createOpenClawBootWatcher({
-      client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawDoctor: vi.fn(), completeOpenClawBoot: vi.fn() },
-      releaseKey: "builder-release", log: () => {}, run, inspectBuilderStores,
-    }).beforeStart();
-    expect(inspectBuilderStores).toHaveBeenCalledOnce();
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("refuses Builder startup when inspection is unsafe or repair does not produce exact stores", async () => {
-    for (const inspection of [vi.fn().mockRejectedValue(new Error("store inspection refused")),
-      vi.fn().mockResolvedValue("repair-required")]) {
-      const run = vi.fn();
-      await expect(createOpenClawBootWatcher({
-        client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawDoctor: vi.fn(), completeOpenClawBoot: vi.fn() },
-        releaseKey: "builder-release", log: () => {}, run, inspectBuilderStores: inspection,
-      }).beforeStart()).rejects.toThrow(/refused|incompatible/);
-      expect(run).toHaveBeenCalledTimes(inspection.mock.calls.length === 1 ? 0 : 1);
-    }
-  });
-
   it("records an ordinary first start without running Doctor", async () => {
     const run = vi.fn(async () => undefined);
     const client = {
@@ -192,7 +150,7 @@ describe("OpenClaw boot watcher", () => {
 
 
 describe("operator-requested source Doctor", () => {
-  const sourceDoctor = { requestId: "source-repair", agentIds: ["octogee-alice-coach"] };
+  const sourceDoctor = { requestId: "source-repair", agentIds: ["octogee-alice-coach"], postgresAgentStores: [{ agentId: "octogee-alice-coach", storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_agent" }] };
   function fixture() {
     const order: string[] = [];
     const client = {
@@ -201,9 +159,17 @@ describe("operator-requested source Doctor", () => {
       completeOpenClawDoctor: vi.fn(async () => { order.push("ack"); }),
     };
     const run = vi.fn(async () => { order.push("doctor"); });
-    const verifySourceDoctor = vi.fn(async () => { order.push("preflight"); });
-    return { client, run, verifySourceDoctor, order };
+    const repairSourceDoctor = vi.fn(async () => { order.push("doctor"); });
+    return { client: { ...client, assertOpenClawDoctor: vi.fn(async () => {}) }, run, repairSourceDoctor, order };
   }
+  it("rejects an explicit repair without PostgreSQL authority before Native effects", async () => {
+    const f = fixture();
+    f.client.claimOpenClawBoot.mockResolvedValue({ action: "doctor", sourceDoctor: { requestId: "repair", agentIds: sourceDoctor.agentIds } });
+    await expect(createOpenClawBootWatcher({ ...f, releaseKey: "qualified", log: () => {} }).beforeStart()).rejects.toThrow("invalid source Doctor request");
+    expect(f.repairSourceDoctor).not.toHaveBeenCalled();
+    expect(f.run).not.toHaveBeenCalled();
+    expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
+  });
   it.each([false, true])("uses the exact PostgreSQL owner roster and rechecks broker authority, scheduler repair=%s", async scheduler => {
     const f = fixture();
     const postgresAgentStores = [{ agentId: "octogee-alice-coach", storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_agent" }];
@@ -218,7 +184,6 @@ describe("operator-requested source Doctor", () => {
     });
     expect(assertOpenClawDoctor).toHaveBeenCalledWith({ releaseKey: "qualified", requestId: sourceDoctor.requestId });
     expect(f.run).not.toHaveBeenCalled();
-    expect(f.verifySourceDoctor).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).toHaveBeenCalledOnce();
   });
   it("keeps PostgreSQL startup fenced after authority loss during maintenance", async () => {
@@ -231,15 +196,14 @@ describe("operator-requested source Doctor", () => {
     expect(f.run).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
-  it("acknowledges the requested repair only after canonical Doctor and every native store preflight", async () => {
+  it("acknowledges the requested repair only after the PostgreSQL repair completes", async () => {
     const f = fixture();
     await createOpenClawBootWatcher({ ...f, releaseKey: "observed-image-build", log: () => {} }).beforeStart();
-    expect(f.order).toEqual(["doctor", "preflight", "ack"]);
-    expect(f.verifySourceDoctor).toHaveBeenCalledWith(sourceDoctor.agentIds);
+    expect(f.order).toEqual(["doctor", "ack"]);
     expect(f.client.completeOpenClawDoctor).toHaveBeenCalledWith({ releaseKey: "observed-image-build", requestId: sourceDoctor.requestId, verifiedAgentIds: sourceDoctor.agentIds });
   });
   it("keeps the source repair unacknowledged when native postflight still refuses a requested store", async () => {
-    const f = fixture(); f.verifySourceDoctor.mockRejectedValue(new Error("agent store still incompatible"));
+    const f = fixture(); f.repairSourceDoctor.mockRejectedValue(new Error("agent store still incompatible"));
     await expect(createOpenClawBootWatcher({ ...f, releaseKey: "observed-image-build", log: () => {} }).beforeStart()).rejects.toThrow("agent store still incompatible");
     expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
@@ -248,12 +212,11 @@ describe("operator-requested source Doctor", () => {
     f.client.claimOpenClawBoot.mockResolvedValueOnce({ action: "wait", sourceDoctor });
     const wait = vi.fn(async () => { f.order.push("wait"); });
     await createOpenClawBootWatcher({ ...f, wait, releaseKey: "observed-image-build", log: () => {} }).beforeStart();
-    expect(f.order).toEqual(["wait", "doctor", "preflight", "ack"]);
+    expect(f.order).toEqual(["wait", "doctor", "ack"]);
   });
   it("does not acknowledge or preflight a failed canonical Doctor", async () => {
-    const f = fixture(); f.run.mockRejectedValue(new Error("Doctor failed"));
+    const f = fixture(); f.repairSourceDoctor.mockRejectedValue(new Error("Doctor failed"));
     await expect(createOpenClawBootWatcher({ ...f, releaseKey: "observed-image-build", log: () => {} }).beforeStart()).rejects.toThrow("Doctor failed");
-    expect(f.verifySourceDoctor).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
   it("fails fenced after the bounded installed image proof wait instead of starting a writer", async () => {

@@ -51,9 +51,7 @@ function unclaimedRetry(row: DocumentData): boolean {
     'restoreAttempt', 'cancellationRequestedAt', 'rolledBack', 'lastResumedAt'];
   return row.status === 'pending' && row.startedAt === null && row.completedAt === null &&
     (row.resumeCount === undefined || row.resumeCount === 0) && untouched.every(key => row[key] === undefined) &&
-    Array.isArray(row.steps) && row.steps.length === 0 &&
-    (row.output === undefined || row.output && typeof row.output === 'object' && !Array.isArray(row.output) &&
-      Object.keys(row.output).every(key => key === 'stateMigration'));
+    Array.isArray(row.steps) && row.steps.length === 0 && row.output === undefined;
 }
 
 function queuedSharedMigrationBeforeTransport(row: DocumentData, id: string): boolean {
@@ -63,7 +61,6 @@ function queuedSharedMigrationBeforeTransport(row: DocumentData, id: string): bo
 function sourceOwnerMatches(row: DocumentData, id: string, owner: DocumentData | undefined): boolean {
   const openclaw = owner?.provisioning?.openclaw, marker = readWorkspaceMigrationMarker(openclaw);
   return !customerRuntimeMutationFenced(owner) && openclaw?.gatewayId === row.input.fromGatewayId &&
-    openclaw.nativeSharedContextRestore === undefined &&
     ['complete', 'provisioning'].includes(openclaw.status) && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
 }
 

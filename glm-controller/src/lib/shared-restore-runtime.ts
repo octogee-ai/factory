@@ -53,37 +53,6 @@ function recovery(op: Operation, sourceSha: string): Recovery {
   return input as Recovery;
 }
 
-function quiescingNativeRestoreMatches(params: {
-  assignment: RecordValue; openclaw: RecordValue; returned: RecordValue; receipt: RecordValue; operationId: string; gatewayId: string;
-}): boolean {
-  const { assignment, openclaw, returned, receipt, operationId, gatewayId } = params;
-  const hold = object(openclaw.nativeSharedContextRestore);
-  const stage = object(returned.nativeSharedAgentContextStage);
-  const archive = object(stage.archive);
-  const input = object(returned.input);
-  return [
-    assignment.state === 'quiescing', assignment.updatedByOperationId === operationId,
-    hold.operationId === operationId, hold.uid === receipt.uid, hold.slug === receipt.slug,
-    hold.fromGatewayId === receipt.fromGatewayId, hold.toGatewayId === gatewayId,
-    input.builderSlug === receipt.slug, hold.migrationId === `mig-${operationId}`,
-    typeof hold.archiveId === 'string', Boolean(hold.archiveId),
-    typeof hold.contextSha256 === 'string', /^[a-f0-9]{64}$/.test(hold.contextSha256),
-    stage.toGatewayId === gatewayId, stage.migrationId === hold.migrationId, stage.slug === receipt.slug,
-    archive.uid === receipt.uid, archive.slug === receipt.slug, archive.archiveId === hold.archiveId,
-    archive.contextSha256 === hold.contextSha256,
-    returned.nativeSharedAgentContextRestored === undefined, returned.nativeSharedAgentContextRestoreReceipt === undefined,
-    !Object.hasOwn(openclaw, 'migration'),
-  ].every(Boolean);
-}
-function assignmentMatches(params: {
-  assignment: RecordValue; openclaw: RecordValue; returned: RecordValue; receipt: RecordValue; operationId: string; gatewayId: string;
-}): boolean {
-  const { assignment, receipt, gatewayId } = params;
-  return [assignment.uid === receipt.uid, assignment.slug === receipt.slug, assignment.gatewayId === gatewayId,
-    assignment.epoch === receipt.assignmentEpoch,
-    assignment.state === 'serving' || quiescingNativeRestoreMatches(params)].every(Boolean);
-}
-
 async function authority(deps: Deps, tx: Transaction, op: Operation, input: Recovery): Promise<RecordValue> {
   const gatewayId = op.input.gatewayId as string;
   const [root, claim, restore, users, active, transfersFrom, transfersTo] = await Promise.all([
@@ -115,7 +84,8 @@ async function authority(deps: Deps, tx: Transaction, op: Operation, input: Reco
   if (!exact) throw new Error('paired post-cutover restore authority is unavailable');
   if (!reauthorizationMatches(input, receipt, returned.status)) throw new Error('restore reauthorization requires an unchanged intent and a pending native return');
   const assignment = object((await tx.get(deps.db.doc(`gateways/${gatewayId}/assignments/${uid}`))).data());
-  if (!assignmentMatches({ assignment, openclaw, returned, receipt, operationId: input.operationId, gatewayId })) {
+  if (![assignment.uid === receipt.uid, assignment.slug === receipt.slug, assignment.gatewayId === gatewayId,
+    assignment.epoch === receipt.assignmentEpoch, assignment.state === "serving"].every(Boolean)) {
     throw new Error('restore recovery assignment changed');
   }
   for (const row of users.docs) {
@@ -216,29 +186,6 @@ function recoveryPredecessorFenceMatches(params: {
     fence.gatewayId === gatewayId && fence.phase === 'dispatched' && target.podUid === pod.metadata.uid &&
     target.podName === pod.metadata.name && target.restoreOperationId === operationId;
 }
-async function assertPendingNativeRestore(deps: Deps, tx: Transaction, input: Recovery, gatewayId: string): Promise<void> {
-  const captured = object(input.supersede?.pendingNativeRestore);
-  const returned = object((await tx.get(deps.db.doc(`glmOperations/${input.operationId}`))).data());
-  const receipt = object(returned.restoreAttempt), uid = receipt.uid;
-  if (typeof uid !== 'string' || !uid || uid.includes('/')) throw new Error('pending native restore owner is unavailable');
-  const [user, row] = await Promise.all([tx.get(deps.db.doc(`users/${uid}`)), tx.get(deps.db.doc(`gateways/${gatewayId}/assignments/${uid}`))]);
-  const openclaw = customerState(user.data()), assignment = object(row.data()), lease = object(openclaw.activationLease);
-  const current = { restoreAttempt: receipt, nativeSharedContextRestore: openclaw.nativeSharedContextRestore,
-    nativeSharedAgentContextStage: returned.nativeSharedAgentContextStage, assignment };
-  if (![input.reauthorize === undefined, returned.status === 'pending', returned.startedAt === null, returned.completedAt === null,
-    isDeepStrictEqual(current, captured), lease.status === 'returning', lease.returnOperationId === input.operationId,
-    lease.targetGatewayId === returned.input?.fromGatewayId,
-    quiescingNativeRestoreMatches({ assignment, openclaw, returned, receipt, operationId: input.operationId, gatewayId })].every(Boolean)) {
-    throw new Error('pending native restore custody changed');
-  }
-}
-function assertNativeRecoveryPredecessor(previous: RecordValue, captured: RecordValue): void {
-  const pending = captured.status === 'pending' && previous.status === 'pending' && previous.startedAt === null && previous.completedAt === null;
-  const failed = captured.status === 'failed' && previous.status === 'failed' && Number.isSafeInteger(previous.startedAt) && previous.startedAt > 0 &&
-    Number.isSafeInteger(previous.completedAt) && previous.completedAt >= previous.startedAt &&
-    previous.error === 'restore recovery images are not ready; outcome remains fenced';
-  if (!(pending || failed) || previous.startedAt !== captured.startedAt) throw new Error('native restore recovery predecessor changed');
-}
 async function assertRecoveryPredecessor(params: {
   deps: Deps;
   tx: Transaction;
@@ -246,10 +193,10 @@ async function assertRecoveryPredecessor(params: {
   input: Recovery;
   existing: unknown;
   pod: RecordValue;
-}): Promise<boolean> {
+}): Promise<void> {
   const { deps, tx, op, input, existing, pod } = params;
   const captured = input.supersede!;
-  if (!captured.pendingNativeRestore && input.reauthorize === undefined) throw new Error('failed restore recovery requires explicit reauthorization');
+  if (input.reauthorize === undefined) throw new Error('failed restore recovery requires explicit reauthorization');
   const previous = object((await tx.get(deps.db.doc(`glmOperations/${captured.operationId}`))).data());
   const fence = object(existing); const target = object(fence.target);
   if (!recoveryPredecessorOperationMatches(previous, captured, op.input.gatewayId) ||
@@ -258,19 +205,14 @@ async function assertRecoveryPredecessor(params: {
   if (prior.operationId !== input.operationId || !isDeepStrictEqual(prior.images, target.images) ||
       !isDeepStrictEqual(prior.reauthorize, input.reauthorize)) throw new Error('failed restore recovery custody changed');
   imagePatch(pod, fence, prior.images);
-  if (!captured.pendingNativeRestore) return false;
-  assertNativeRecoveryPredecessor(previous, captured);
-  await assertPendingNativeRestore(deps, tx, input, op.input.gatewayId as string);
-  return true;
 }
 async function reserveRecovery(deps: Deps, op: Operation, input: Recovery, pod: RecordValue): Promise<RecordValue> {
   const gatewayId = op.input.gatewayId as string;
   return deps.db.runTransaction(async tx => {
     const root = await authority(deps, tx, op, input);
     const existing = root.runtimeRestartFence;
-    let retireNativePredecessor = false;
     if (input.supersede && existing?.attemptId !== op.id) {
-      retireNativePredecessor = await assertRecoveryPredecessor({ deps, tx, op, input, existing, pod });
+      await assertRecoveryPredecessor({ deps, tx, op, input, existing, pod });
     } else if (existing !== undefined) {
       if (existing.kind !== 'restore-recovery' || existing.attemptId !== op.id || existing.target?.podUid !== pod.metadata.uid ||
           existing.target?.restoreOperationId !== input.operationId || !isDeepStrictEqual(existing.target?.images, input.images)) throw new Error('another runtime restart outcome is unresolved');
@@ -279,11 +221,6 @@ async function reserveRecovery(deps: Deps, op: Operation, input: Recovery, pod: 
     const fence = { kind: 'restore-recovery', attemptId: op.id, auditId: op.id, gatewayId, startedAt: Date.now(), phase: 'reserved',
       target: { podName: pod.metadata.name, podUid: pod.metadata.uid, restoreOperationId: input.operationId, images: input.images,
         originalImages: Object.fromEntries(pod.spec.containers.map((container: RecordValue) => [container.name, container.image])) } };
-    if (retireNativePredecessor) {
-      const now = Date.now();
-      tx.update(deps.db.doc(`glmOperations/${input.supersede!.operationId}`), { status: 'failed', startedAt: input.supersede!.startedAt, completedAt: input.supersede!.status === 'failed' ? input.supersede!.completedAt : now,
-        cancellationRequestedAt: now, restoreRecoverySupersededBy: op.id });
-    }
     tx.update(deps.db.doc(`gateways/${gatewayId}`), { runtimeRestartFence: fence });
     return fence;
   });

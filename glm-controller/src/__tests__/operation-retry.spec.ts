@@ -1062,11 +1062,11 @@ describe('fenced source management health availability', () => {
   });
   it('keeps the captured source management operation pending beyond retry exhaustion', () => {
     expect(buildOperationCompletionUpdate({
-      op: { kind: 'restart-gateway', attempts: MAX_OPERATION_ATTEMPTS, input: { sourceRecovery: { managementRecovery: {} } } },
+      op: { kind: 'restart-gateway', attempts: MAX_OPERATION_ATTEMPTS, input: { sourceRecovery: { postgresAgentStores: [{}] } } },
       result: { success: false, steps: [], error, retryAfterMs: 60_000 }, steps: [], now: 10_000,
     })).toMatchObject({ status: 'pending', attempts: MAX_OPERATION_ATTEMPTS + 1, nextAttemptAt: 490_000 });
   });
-  it.each([{ kind: 'restart-gateway', input: { sourceRecovery: {} } }, { kind: 'rollout', input: { sourceRecovery: { managementRecovery: {} } } }])('retains the normal cap outside management source recovery %j', op => {
+  it.each([{ kind: 'restart-gateway', input: { sourceRecovery: {} } }, { kind: 'rollout', input: { sourceRecovery: { postgresAgentStores: [{}] } } }])('retains the normal cap outside management source recovery %j', op => {
     expect(buildOperationCompletionUpdate({ op: { ...op, attempts: MAX_OPERATION_ATTEMPTS },
       result: { success: false, steps: [], error, retryAfterMs: 60_000 }, steps: [], now: 10_000,
     })).toMatchObject({ status: 'failed' });

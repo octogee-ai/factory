@@ -180,7 +180,7 @@ function migrationV2ImportCurrent(
   expected: Pick<CustomerMigrationV2State, "operationId" | "migrationId" | "uid" | "slug" | "sourceGatewayId" | "targetGatewayId" | "sourceEpoch">,
 ): boolean {
   if (state === undefined) return true;
-  return [state.phase === "sourceQuiesced", state.cutoverAt === undefined, state.strategy === "migrate-state",
+  return [state.phase === "sourceQuiesced", state.cutoverAt === undefined,
     state.operationId === expected.operationId, state.migrationId === expected.migrationId,
     state.uid === expected.uid, state.slug === expected.slug, state.sourceGatewayId === expected.sourceGatewayId,
     state.targetGatewayId === expected.targetGatewayId, state.sourceEpoch === expected.sourceEpoch,

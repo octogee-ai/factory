@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
 import { reconcileSurgeCustomerHandoff, type SurgePod } from "../surge-customer-handoff.js";
-import { MIGRATE_STATE, oldPod, targetPod, assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff.js";
+import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff.js";
 
 it.each([false, true])("preserves an existing Native job through a complete-roster Shared surge (enabled=%s)", async enabled => {
   const job = {
@@ -24,7 +24,7 @@ it.each([false, true])("preserves an existing Native job through a complete-rost
     const agentIds = input.agentIds ?? [job.agentId];
     if (input.phase === "hold") statuses.set(key, "held");
     if (input.phase === "export") {
-      expect(statuses.get(key)).toBe("held");
+      expect(input.resolveAgentScope).toBe(true);
       statuses.set(key, "exported");
       return { operationId: input.operationId, phase: input.phase, drained: true, agentIds,
         snapshot: { version: 1, operationId: input.operationId, agentIds, jobs: jobs.get(input.pod.uid), scratch: scratchByPod.get(input.pod.uid) } };
@@ -57,7 +57,7 @@ it.each([false, true])("preserves an existing Native job through a complete-rost
     targetMountedCustomers.push(input.slug);
   });
   const deps = Object.assign(h.deps, { scheduler });
-  const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE };
+  const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, };
   await expect(reconcileSurgeCustomerHandoff(deps, input)).resolves.toEqual({ ready: false });
   pods.splice(0, pods.length, { ...targetPod, ready: true });
   await expect(reconcileSurgeCustomerHandoff(deps, input)).resolves.toEqual({ ready: true });
@@ -80,7 +80,7 @@ it("rolls back an interrupted imported Shared roster only with retained Native e
   h.deps.discardTargetCustomer = vi.fn(async () => { calls.push("discard-target"); });
   h.deps.resumeSourceIngress = vi.fn(async () => { calls.push("resume-ingress"); sourceMountedCustomers.push("alice"); });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
   })).resolves.toEqual({ ready: false });
   expect(calls).toEqual(["old-uid:export", "target-uid:abort", "discard-target", "resume-ingress", "old-uid:resume"]);
   expect(h.assignments()[0].state).toBe("serving");
@@ -96,7 +96,7 @@ it("keeps an abandoned Shared gate closed with only a source pod and no Native c
   h.deps.readPodHealth = vi.fn(async (...args) => ({ ...(await readHealth(...args))!, handoffReleased: true, prelaunchState: "serving" }));
   h.deps.scheduler = vi.fn(async () => { throw new Error("Cron migration must acquire hold before this phase"); });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
   })).rejects.toThrow("must acquire hold");
   expect(h.assignments()[0].state).toBe("quiescing");
   expect(h.deps.markAssignment).not.toHaveBeenCalled();
@@ -114,7 +114,7 @@ it("settles Native scheduler custody before reopening a source for a queued Shar
   });
   h.deps.resumeSourceIngress = vi.fn(async () => { calls.push("resume-ingress"); });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", supersedingImageTag: "queued-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    gatewayId: "default", desiredImageTag: "new-sha", supersedingImageTag: "queued-sha", requiresCustomerMigration: true,
   })).resolves.toEqual({ ready: false });
   expect(calls).toEqual(["old-uid:export", "target-uid:abort", "resume-ingress", "old-uid:resume"]);
   expect(h.assignments()[0].state).toBe("serving");
@@ -123,10 +123,10 @@ it("settles Native scheduler custody before reopening a source for a queued Shar
 it("captures the committed assignment clock when gating a legacy clockless assignment", async () => {
   const h = createSurgeHandoffHarness(vi.fn, { assignments: [assignment("u1", "alice", { updatedAt: undefined })] });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
   })).resolves.toEqual({ ready: false });
   expect(h.assignments()[0].updatedAt).toBeGreaterThan(0);
-  expect(h.deps.scheduler).toHaveBeenCalledWith(expect.objectContaining({ phase: "hold", operationId: expect.stringMatching(/^surge-cron:/u) }));
+  expect(h.deps.scheduler).toHaveBeenCalledWith(expect.objectContaining({ phase: "export", resolveAgentScope: true, operationId: expect.stringMatching(/^surge-cron:/u) }));
   expect(h.deps.releaseTarget).toHaveBeenCalledOnce();
 });
 
@@ -135,27 +135,24 @@ it("keeps schedules and admission closed if the restored source starts terminati
   const h = createSurgeHandoffHarness(vi.fn, { pods, assignments: [assignment("u1", "alice")], transferError: new Error("import refused") });
   h.deps.resumeSourceIngress = vi.fn(async () => { pods[0] = { ...pods[0], terminating: true }; });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
   })).rejects.toThrow("Shared rollback source is not serving");
   expect(vi.mocked(h.deps.scheduler!).mock.calls.some(([request]) => request.phase === "resume")).toBe(false);
   expect(h.assignments()[0].state).toBe("quiescing");
 });
 
-it.each([false, true])("keeps a nonportable job on a serving source when the move is refused (hold ACK lost=%s)", async lostHoldAck => {
+it.each([false, true])("keeps a nonportable job on a serving source when the move is refused (export ACK lost=%s)", async lostExportAck => {
   const h = createSurgeHandoffHarness(vi.fn, { assignments: [assignment("u1", "alice")] });
   let sourceHeld = false;
   h.deps.scheduler = vi.fn(async request => {
     const agentIds = ["octogee-alice-coach"];
     const result = { operationId: request.operationId, phase: request.phase, drained: true, agentIds };
-    if (request.phase === "hold") {
-      if (request.retainNonportable !== true) throw new Error("Cannot migrate on-exit cron job");
-      sourceHeld = true;
-      if (lostHoldAck) throw new Error("hold acknowledgement lost");
-    }
     if (request.phase === "export") {
-      if (!sourceHeld) throw new Error("Cron migration must acquire hold before this phase");
-      expect(request.retainNonportable).toBe(false);
-      throw new Error("Cannot migrate on-exit cron job");
+      expect(request.retainNonportable).toBe(true);
+      sourceHeld = true;
+      if (lostExportAck) throw new Error("export acknowledgement lost");
+      return { ...result, snapshot: { version: 1, operationId: request.operationId, agentIds,
+        jobs: [], scratch: [], retainedJobIds: ["host-bound-job"] } };
     }
     if (request.phase === "abort") return { ...result, agentIds: [] };
     if (request.phase === "resume") {
@@ -165,8 +162,8 @@ it.each([false, true])("keeps a nonportable job on a serving source when the mov
     return result;
   });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
-  })).rejects.toThrow(lostHoldAck ? "hold acknowledgement lost" : "Cannot migrate on-exit cron job");
+    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
+  })).rejects.toThrow(lostExportAck ? "export acknowledgement lost" : "full scheduler snapshot");
   expect(h.assignments()[0].state).toBe("serving");
   expect(sourceHeld).toBe(false);
   expect(h.deps.resumeSourceIngress).toHaveBeenCalledOnce();
@@ -178,12 +175,11 @@ it.each([false, true])("keeps a nonportable job on a serving source when the mov
 it("does not reopen source admission when a foreign Native fence prevented this operation from holding", async () => {
   const h = createSurgeHandoffHarness(vi.fn, { assignments: [assignment("u1", "alice")] });
   h.deps.scheduler = vi.fn(async request => {
-    if (request.phase === "hold") throw new Error("Cron agent is held for migration foreign-native-owner");
-    if (request.phase === "export") throw new Error("Cron migration must acquire hold before this phase");
+    if (request.phase === "export") throw new Error("Cron agent is held for migration foreign-native-owner");
     return { operationId: request.operationId, phase: request.phase, drained: true, agentIds: [] };
   });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
-    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, stateMigration: MIGRATE_STATE,
+    gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
   })).rejects.toThrow("foreign-native-owner");
   expect(h.assignments()[0].state).toBe("quiescing");
   expect(h.deps.releaseTarget).not.toHaveBeenCalled();

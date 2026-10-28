@@ -53,7 +53,7 @@ function sourceLeaseMatches(user: DocumentData, source: DocumentData, operation:
   if (!returnLeaseMatches(user, operation, operationId)) return false;
   const openclaw = user.provisioning.openclaw;
   return ownedSourceMatches(source, operation.input, uid, openclaw.activationLease) &&
-    openclaw.nativeSharedContextRestore === undefined && !customerRuntimeMutationFenced(user) &&
+    !customerRuntimeMutationFenced(user) &&
     (!user.accountLifecycle?.status || user.accountLifecycle.status === "active") &&
     (openclaw.migration === undefined || openclaw.migration?.operationId === operationId);
 }

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSurgeOpenClawProcessGate } from "../../scripts/lib/surge-openclaw-process-gate.js";
 import { reconcileSurgeCustomerHandoff, type SurgePod } from "../../glm-controller/src/surge-customer-handoff.js";
-import { MIGRATE_STATE, oldPod, targetPod, assignment, createSurgeHandoffHarness } from "../../glm-controller/src/__tests__/fixtures/surge-customer-handoff.js";
+import { oldPod, targetPod, assignment, createSurgeHandoffHarness } from "../../glm-controller/src/__tests__/fixtures/surge-customer-handoff.js";
 
 const harness = (input: Parameters<typeof createSurgeHandoffHarness>[1] = {}) => createSurgeHandoffHarness(vi.fn, input);
 
@@ -32,7 +32,7 @@ describe("real process-gate terminal target recovery", () => {
         else await gate.markHeld(request);
       });
       const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
-        disposableBuilderGateway: true, stateMigration: MIGRATE_STATE };
+        disposableBuilderGateway: true };
       await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow(superseding ? "source resume refused" : "first transfer failed");
       expect(await gate.read()).toMatchObject({ role: "normal", mode: "held", phase: "held",
         terminalTarget: { migrationId: h.operationId, slug: "alice", targetPodUid: targetPod.uid } });
@@ -78,7 +78,7 @@ describe("real process-gate terminal target recovery", () => {
       const remove = vi.fn(async ({ pod }: { pod: SurgePod }) => { h.events.push(`delete-cancelled:${pod.uid}`); });
       Object.assign(h.deps, { deleteCancelledTarget: remove });
       const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
-        disposableBuilderGateway: true, stateMigration: MIGRATE_STATE };
+        disposableBuilderGateway: true };
       expect(await reconcileSurgeCustomerHandoff(h.deps, input)).toEqual({ ready: false });
       expect(remove).toHaveBeenCalledExactlyOnceWith({ gatewayId: "default", pod: targetPod });
       expect(h.events).toEqual([`delete-cancelled:${targetPod.uid}`]);

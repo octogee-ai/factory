@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
 import { Firestore as FirestoreClient } from "firebase-admin/firestore";
-import { assertSharedSourceRecoveryPredecessor, postgresImportMaintenanceFailureMatches, readPostgresSourceAgentStores, readSharedSourceRecoveryAuthority, type SourceRecoveryAssignment } from "./shared-source-recovery.js";
+import { assertSharedSourceRecoveryPredecessor, readPostgresSourceAgentStores, readSharedSourceRecoveryAuthority, type SourceRecoveryAssignment } from "./shared-source-recovery.js";
 import { buildOperationAuditIntent, operationAuditMutationFingerprint } from "./operation-audit.js";
 const identity: SourceRecoveryAssignment = { uid: "owner", slug: "livefixture", agentId: "octogee-livefixture-coach", assignmentEpoch: 7,
   assignment: { uid: "owner", slug: "livefixture", gatewayId: "shared-old", state: "serving", epoch: 7 } };
@@ -16,43 +16,6 @@ function fixture(migration: "identity" | "database" = "identity") {
       { name: "final-sync-state", status: "failed", error }, ...["scheduler-abort", "unmount-target", "scheduler-resume", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
   return { ...row, attemptHistory: [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }] };
 }
-it.each(["identity", "database"] as const)("accepts the exact fully rolled-back automatic placement %s maintenance failure", migration => {
-  expect(postgresImportMaintenanceFailureMatches(fixture(migration), "placement", identity, "shared-old")).toBe(true);
-});
-it.each(["foreign-agent", "wrong-class", "wrong-message", "trailing-text"])("refuses a current database maintenance receipt with %s", changed => {
-  const row = fixture("database");
-  const failure = JSON.parse(row.error.slice(row.error.indexOf("{")));
-  if (changed === "foreign-agent") failure.message = failure.message.replace("octogee-livefixture-coach", "octogee-foreign-coach");
-  if (changed === "wrong-class") failure.message = failure.message.replace("AgentDatabaseMaintenanceRequiredError", "OtherError");
-  if (changed === "wrong-message") failure.message = failure.message.replace("Agent database migration requires", "Agent database migration needs");
-  if (changed === "trailing-text") failure.message += " ignored";
-  row.error = "/finish-rsync-import/shared-new: 500 " + JSON.stringify(failure);
-  row.steps = row.steps.map(step => step.name === "final-sync-state" ? { ...step, error: row.error } : step);
-  row.attemptHistory[0] = { ...row.attemptHistory[0], error: row.error, steps: structuredClone(row.steps) };
-  expect(postgresImportMaintenanceFailureMatches(row, "placement", identity, "shared-old")).toBe(false);
-});
-it.each(["cutover", "verify", "uid", "source", "target", "foreign-agent", "different-error", "rollback", "abort", "unmount", "resume", "ingress", "claim", "attempt", "duplicate", "restore", "transfer", "v2", "cancelled", "history", "null-body"])("refuses PostgreSQL admission with %s", change => {
-  const row: any = fixture();
-  if (change === "cutover") row.cutoverCommittedAt = 180;
-  if (change === "verify") row.steps.push({ name: "verify-target", status: "failed" });
-  if (change === "uid") row.input.uid = "foreign";
-  if (change === "source") row.input.fromGatewayId = "other";
-  if (change === "target") row.input.toGatewayId = "other";
-  if (change === "foreign-agent") row.error = row.error.replace("octogee-livefixture-coach", "octogee-foreign-coach");
-  if (change === "different-error") row.error = row.error.replace("AgentDatabaseMaintenanceRequiredError", "OtherError");
-  if (change === "rollback") row.rolledBack = false;
-  if (["abort", "unmount", "resume", "ingress"].includes(change)) row.steps = row.steps.filter((step: any) => step.name !== `rollback:${({ abort: "scheduler-abort", unmount: "unmount-target", resume: "scheduler-resume", ingress: "resume-ingress" } as any)[change]}`);
-  if (change === "claim") row.schedulerHandoff.migrationId = "mig-placement:scheduler:1:claim:101";
-  if (change === "attempt") row.attempts = 2;
-  if (change === "duplicate") row.steps.push({ name: "quiesce-source", status: "done" });
-  if (change === "restore") row.restoreAttempt = {};
-  if (change === "transfer") row.sourceTransferExecution = {};
-  if (change === "v2") row.customerMigrationV2 = {};
-  if (change === "cancelled") row.cancellationRequestedAt = 200;
-  if (change === "history") row.attemptHistory = [{}];
-  if (change === "null-body") row.error = "/finish-rsync-import/shared-new: 500 null";
-  expect(postgresImportMaintenanceFailureMatches(row, "placement", identity, "shared-old")).toBe(false);
-});
 function rosterFixture() {
   const anchors = [identity.agentId, "octogee-livefixture-proj-launch-coach"].map((agentId, index) => ({ agentId, gatewayId: "shared-old", assignmentEpoch: 7,
     storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `agent_${index}` }));
@@ -194,7 +157,7 @@ async function spentPostgresPredecessorFixture(fullRoster = false) {
     doctor: { requestId: operationId, startedAt: 500, releaseKey: "pinned-native-image" },
     target: { podUid: "source-pod", podName: "source-pod-name", sourceSha, images,
       agents: source.assignments.map(({ uid, slug, agentId, assignmentEpoch }) => ({ uid, slug, agentId, assignmentEpoch })),
-      failedExportOperationIds: source.failedExports.map(exported => exported.operationId) },
+      postgresAgentStores: source.postgresAgentStores },
     installedImage: { podUid: "source-pod", gatewayImageId: "docker-pullable://" + images.gateway, verifiedAt: 450 } };
   return { gatewayId: "shared-old", operationId, row, fence, source };
 }
@@ -336,41 +299,17 @@ it.each(["anchor", "schema", "epoch", "input", "image", "pod", "clock", "cancell
   expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow();
 });
 
-function schedulerFailureFixture() {
-  const row = fixture();
-  row.error = '/scheduler/shared-new: 500 ' + JSON.stringify({ error: 'scheduler migration failed', message:
-    'Invalid cron migration snapshot: job 81f72c0a-452c-4efd-85b4-5d308224ee84 is not persistable (invalid-payload)' });
-  row.steps = row.steps.map(step => step.name === 'final-sync-state' ? { ...step, error: row.error } : step);
-  row.attemptHistory[0] = { ...row.attemptHistory[0]!, error: row.error, steps: structuredClone(row.steps) };
-  return row;
-}
-
-it('captures stopped-source scheduler repair with the complete PostgreSQL roster after a fully rolled-back cron export', async () => {
-  const f = authorityFixture(); f.rows['glmOperations/placement'] = schedulerFailureFixture();
-  const before = structuredClone(f.rows);
-  const captured = await readSharedSourceRecoveryAuthority(f.db, f.tx, 'shared-old');
-  expect(captured).toMatchObject({ schedulerStateRecovery: true, postgresAgentStores: [{ agentId: identity.agentId }] });
-  expect(f.rows).toEqual(before);
-});
-it.each(['cutover','rollback','cleanup','foreign-uid','foreign-source','foreign-target','other-reason','trailing-text','missing-anchor','active-transfer','history'])(
-  'refuses scheduler source recovery with %s', async changed => {
-    const f = authorityFixture(), row: any = schedulerFailureFixture(); f.rows['glmOperations/placement'] = row;
-    if (changed === 'cutover') row.cutoverCommittedAt = 180;
-    if (changed === 'rollback') row.rolledBack = false;
-    if (changed === 'cleanup') row.steps = row.steps.filter((step: any) => step.name !== 'rollback:unmount-target');
-    if (changed === 'foreign-uid') row.input.uid = 'foreign';
-    if (changed === 'foreign-source') row.input.fromGatewayId = 'shared-other';
-    if (changed === 'foreign-target') row.input.toGatewayId = 'shared-other';
-    if (changed === 'other-reason') row.error = row.error.replace('invalid-payload','unknown-reason');
-    if (changed === 'trailing-text') row.error += ' extra';
-    if (changed === 'missing-anchor') delete f.rows['users/owner/agentStores/' + identity.agentId];
-    if (changed === 'active-transfer') f.rows['glmMigrationTransferTasks/task'] = { status: 'running', sourceGatewayId: 'shared-old' };
-    if (changed === 'history') row.attemptHistory = [];
-    await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, 'shared-old')).rejects.toThrow();
-  });
-
 it.each(["commercial", "project-status"])("does not require a retired project's anchor in the live recovery roster: %s", async archive => {
   const f = rosterFixture();f.anchors.pop();
   Object.assign(f.projects[0]!.data, archive === "commercial" ? { commercialLifecycle: { status: "archived" } } : { status: "archived" });
   await expect(readPostgresSourceAgentStores(f.db, f.tx, [identity])).resolves.toHaveLength(1);
+});
+it('admits maintenance for the current complete roster without historical migration failures', async () => {
+  const f = authorityFixture();
+  delete f.rows['glmOperations/placement'];
+  f.rows['gateways/shared-old/assignments/other'] = { uid: 'other', slug: 'other', gatewayId: 'shared-old', state: 'serving', epoch: 3 };
+  f.rows['users/other'] = { username: 'other', provisioning: { openclaw: { gatewayId: 'shared-old', status: 'complete' } } };
+  f.rows['users/other/agentStores/octogee-other-coach'] = { agentId: 'octogee-other-coach', gatewayId: 'shared-old', assignmentEpoch: 3, storeId: '00000000-0000-4000-8000-000000000002', schema: 'agent_other' };
+  const result = await readSharedSourceRecoveryAuthority(f.db, f.tx, 'shared-old');
+  expect(result.postgresAgentStores?.map(store => store.agentId)).toEqual(['octogee-livefixture-coach', 'octogee-other-coach']);
 });

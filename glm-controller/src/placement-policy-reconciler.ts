@@ -1,4 +1,3 @@
-import { postgresImportMaintenanceFailureMatches, type SourceRecoveryAssignment } from "@octogee/core/shared-source-recovery";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import { isDeepStrictEqual } from 'node:util';
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
@@ -3625,21 +3624,12 @@ async function assertSharedRevisionReturnAuthority(
     root?.runtimeRestartFence === undefined && root?.retirementClaim === undefined);
   const exact = rootsUnfenced && authority.source?.desiredStatus === "running" &&
     authority.assignment?.slug === request.builderSlug && openclaw?.migration === undefined &&
-    openclaw?.nativeSharedContextRestore === undefined && !previousTargetAssignment.exists;
+    !previousTargetAssignment.exists;
   if (!exact) throw new Error("Builder revision return retry authority changed");
 }
 
 function proofRows(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value) && value.every(row => record(row) !== null) ? value : [];
-}
-function sourceRepairProofParts(repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput) {
-  const source = record(record(repair.input)?.sourceRecovery) ?? {}, completed = record(repair.sourceRuntimeRecovery) ?? {};
-  const management = record(source.managementRecovery) ?? {};
-  const postgres = source.postgresAgentStores !== undefined;
-  return { source, completed, postgres,
-    assignment: proofRows(source.assignments).find(row => row.uid === request.uid) ?? {},
-    failure: proofRows(postgres ? source.failedExports : management.failures).find(row => row.operationId === request.operationId) ?? {},
-    released: proofRows(completed.releasedPlacements), marker: postgres ? null : proofRows(management.users).find(row => row.uid === request.uid)?.migration };
 }
 function capturedPostgresRosterMatches(source: Record<string, unknown>): boolean {
   const assignments = proofRows(source.assignments), stores = proofRows(source.postgresAgentStores);
@@ -3654,20 +3644,6 @@ function capturedPostgresRosterMatches(source: Record<string, unknown>): boolean
     assignments.every(owner => stores.some(store => store.uid === owner.uid && store.agentId === owner.agentId)),
     new Set(stores.map(store => store.agentId)).size === stores.length, new Set(stores.map(store => store.storeId)).size === stores.length,
     new Set(stores.map(store => store.schema)).size === stores.length].every(Boolean);
-}
-
-function completedPostgresPlacementReleasesMatch(source: Record<string, unknown>, completed: Record<string, unknown>): boolean {
-  const assignments = proofRows(source.assignments), failures = proofRows(source.failedExports), released = proofRows(completed.releasedPlacements);
-  const expectedReleased = failures.map(failed => {
-    const owner = assignments.find(row => row.uid === record(failed.input)?.uid);
-    return { operationId: failed.operationId, uid: owner?.uid, assignmentEpoch: owner?.assignmentEpoch, marker: null };
-  });
-  return [failures.length === assignments.length,
-    isDeepStrictEqual([...released].sort((a, b) => String(a.operationId).localeCompare(String(b.operationId))),
-      [...expectedReleased].sort((a, b) => String(a.operationId).localeCompare(String(b.operationId)))),
-    new Set(failures.map(row => row.operationId)).size === failures.length,
-    new Set(failures.map(row => record(row.input)?.uid)).size === assignments.length &&
-      failures.every(row => assignments.some(owner => owner.uid === record(row.input)?.uid) && typeof row.operationId === "string" && !row.operationId.includes("/"))].every(Boolean);
 }
 
 function completedPostgresDoctorMatches(input: { source: Record<string, unknown>; completed: Record<string, unknown>; repairId: unknown }): boolean {
@@ -3688,30 +3664,19 @@ function completedPostgresImageMatches(source: Record<string, unknown>, complete
     typeof record(completed.managementHealth)?.bootId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(String(record(completed.managementHealth)?.bootId))].every(Boolean);
 }
 
-export function repairedPostgresPlacementProofMatches(data: Record<string, unknown>, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
-  const { source, completed, assignment, failure, postgres } = sourceRepairProofParts(repair, request);
-  if (!postgres) return false;
-  const original = { ...data }; delete original.sourceRuntimeRecovery;
-  return [capturedPostgresRosterMatches(source), typeof source.sourceSha === "string" && /^[a-f0-9]{40}$/.test(source.sourceSha),
-    assignment.uid === request.uid, postgresImportMaintenanceFailureMatches(original, request.operationId, assignment as unknown as SourceRecoveryAssignment, request.fromGatewayId),
-    isDeepStrictEqual(failure, { operationId: request.operationId, input: original.input, startedAt: original.startedAt,
-      completedAt: original.completedAt, error: original.error, steps: original.steps }),
-    completedPostgresPlacementReleasesMatch(source, completed), completedPostgresDoctorMatches({ source, completed, repairId: repair.id }),
-    completedPostgresImageMatches(source, completed)].every(Boolean);
-}
-
 export function repairedPlacementProofMatches(data: Record<string, unknown>, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): boolean {
-  const proof = record(data.sourceRuntimeRecovery), { source, completed, assignment, failure, released, marker, postgres } = sourceRepairProofParts(repair, request);
-  const original = { ...data }; delete original.sourceRuntimeRecovery;
-  return [repair.kind === 'restart-gateway', ['running', 'succeeded'].includes(String(repair.status)), repair.cancellationRequestedAt === undefined,
+  const source = record(record(repair.input)?.sourceRecovery) ?? {}, completed = record(repair.sourceRuntimeRecovery) ?? {};
+  const assignment = proofRows(source.assignments).find(row => row.uid === request.uid);
+  return [isAutomaticRolledBackPlacement(data, request), data.cutoverCommittedAt === undefined,
+    repair.kind === 'restart-gateway', ['running', 'succeeded'].includes(String(repair.status)), repair.cancellationRequestedAt === undefined,
     record(repair.input)?.gatewayId === request.fromGatewayId, completed.gatewayId === request.fromGatewayId,
-    Number.isSafeInteger(completed.completedAt), Number(completed.completedAt) > 0,
-    assignment.slug === request.builderSlug, source.sourceSha === completed.sourceSha,
-    isDeepStrictEqual(source.images, completed.images), postgres ? repairedPostgresPlacementProofMatches(data, repair, request) : isDeepStrictEqual(failure.receipt, original),
-    isDeepStrictEqual(proof, { operationId: repair.id, sourceAssignmentEpoch: assignment.assignmentEpoch, completedAt: completed.completedAt }),
-    released.some(row => isDeepStrictEqual(row, { operationId: request.operationId, uid: request.uid, assignmentEpoch: assignment.assignmentEpoch, marker })),
-    record(completed.managementHealth)?.attemptId === repair.id, record(completed.managementHealth)?.health === true,
-    record(completed.doctor)?.requestId === repair.id, Number(record(completed.doctor)?.completedAt) > 0].every(Boolean);
+    Number.isSafeInteger(repair.startedAt) && Number(repair.startedAt) >= Number(data.completedAt),
+    Number.isSafeInteger(completed.completedAt) && Number(completed.completedAt) >= Number(repair.startedAt),
+    assignment?.slug === request.builderSlug, capturedPostgresRosterMatches(source),
+    typeof source.sourceSha === 'string' && /^[a-f0-9]{40}$/.test(source.sourceSha), source.sourceSha === completed.sourceSha,
+    isDeepStrictEqual(source.images, completed.images), completedPostgresDoctorMatches({ source, completed, repairId: repair.id }),
+    completedPostgresImageMatches(source, completed), record(completed.managementHealth)?.attemptId === repair.id,
+    record(completed.managementHealth)?.health === true].every(Boolean);
 }
 async function assertCurrentRepairTarget(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, sourceImage: string): Promise<void> {
   const [target, runtime, pool, user] = await Promise.all([
@@ -3784,20 +3749,24 @@ async function assertCurrentPostgresRepairSource(input: FirestorePlacementPolicy
   }
 }
 
-async function assertRepairedSourcePlacementAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, data: Record<string, unknown>): Promise<void> {
-  const proof = record(data.sourceRuntimeRecovery), operationId = proof?.operationId;
-  if (typeof operationId !== 'string' || !operationId || operationId.includes('/')) throw new Error('source repair placement receipt is unavailable');
-  const snapshot = await transaction.get(input.db.doc(`${GLM_OPERATIONS_COLLECTION}/${operationId}`));
-  const repair: Record<string, unknown> = { ...snapshot.data(), id: operationId };
-  if (!repairedPlacementProofMatches(data, repair, request)) throw new Error('source repair placement receipt changed');
+async function findRepairedSourcePlacement(
+  input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, data: Record<string, unknown>,
+): Promise<boolean> {
+  if (!isAutomaticRolledBackPlacement(data, request)) return false;
+  const candidates = await transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).where('input.gatewayId', '==', request.fromGatewayId));
+  const repair = candidates.docs.map((row): Record<string, unknown> => ({ ...row.data(), id: row.id }))
+    .filter(row => repairedPlacementProofMatches(data, row, request))
+    .sort((left, right) => Number(record(right.sourceRuntimeRecovery)?.completedAt) - Number(record(left.sourceRuntimeRecovery)?.completedAt))[0];
+  if (!repair) return false;
   const assignment = await assertPreRpcRetryAuthority(input, transaction, request);
-  if (assignment.epoch !== proof?.sourceAssignmentEpoch || assignment.slug !== request.builderSlug) throw new Error('source repair assignment changed');
+  const captured = record(record(repair.input)?.sourceRecovery) ?? {};
+  const owner = proofRows(captured.assignments).find(row => row.uid === request.uid);
+  if (assignment.epoch !== owner?.assignmentEpoch || assignment.slug !== request.builderSlug) throw new Error('source repair assignment changed');
   const sourceImage = record(record(repair.sourceRuntimeRecovery)?.images)?.gateway;
   if (typeof sourceImage !== 'string') throw new Error('source repair image receipt is unavailable');
-  if (record(record(repair.input)?.sourceRecovery)?.postgresAgentStores !== undefined) {
-    await assertCurrentPostgresRepairSource(input, transaction, repair, request);
-  }
+  await assertCurrentPostgresRepairSource(input, transaction, repair, request);
   await assertCurrentRepairTarget(input, transaction, request, sourceImage);
+  return true;
 }
 
 function rearmedPlacementMigrationPatch(): Record<string, unknown> {
@@ -4041,8 +4010,7 @@ export async function enqueuePlacementMigration(
       transaction.update(ref, { ...rearmedPlacementMigrationPatch(), supersededBy: FieldValue.delete() });
       return;
     }
-    if (data.sourceRuntimeRecovery !== undefined) {
-      await assertRepairedSourcePlacementAuthority(input, transaction, request, data);
+    if (await findRepairedSourcePlacement(input, transaction, request, data)) {
       await applyTerminalPlacementRearm({ transaction, ref }); return;
     }
     if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {

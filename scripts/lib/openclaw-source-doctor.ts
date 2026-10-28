@@ -7,7 +7,6 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { readPostgresAgentAnchor, queryAgentStore, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
-import { preflightAgentDatabase } from "./agent-store-preflight.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 
 import { runWithSourceDoctorDiagnostics, type SourceDoctorDiagnosticContext } from "./source-doctor-diagnostics.js";
@@ -28,42 +27,6 @@ async function assertCanonicalSources(agentIds: string[], root: string): Promise
     if (!stat.isFile() || stat.nlink !== 1) throw new Error(`source Doctor agent store is not canonical: ${agentId}`);
   }
 }
-
-export async function verifySourceDoctorAgentStores(agentIds: string[], input: {
-  env?: NodeJS.ProcessEnv;
-  run?: OpenClawCommand;
-} = {}): Promise<void> {
-  if (agentIds.length === 0 || new Set(agentIds).size !== agentIds.length) throw new Error("source Doctor requires a unique nonempty agent roster");
-  const env = input.env ?? process.env;
-  const root = await fs.realpath(env.OPENCLAW_STATE_DIR || env.OPENCLAW_DIR || DEFAULT_OPENCLAW_STATE_DIR);
-  await assertCanonicalSources(agentIds, root);
-  const verificationRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "source-doctor-verification-")));
-  const exportRoot = path.join(verificationRoot, "snapshots"), configPath = path.join(verificationRoot, "openclaw.json");
-  const run = input.run ?? runOpenClaw;
-  try {
-    await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false }, agents: { ownership: "explicit", entries: {} } }), { mode: 0o600 });
-    for (const agentId of agentIds) {
-      const repository = path.join(exportRoot, agentId);
-      await fs.mkdir(repository, { recursive: true, mode: 0o700 });
-      await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false }, agents: { ownership: "explicit", entries: {
-        [agentId]: { agentDir: path.join(root, "agents", agentId, "agent") },
-      } } }), { mode: 0o600 });
-      const options = { env: { PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", OPENCLAW_STATE_DIR: verificationRoot,
-        OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_CONFIG_READONLY: "1" } };
-      const result = await run(["backup", "sqlite", "create", "--agent", agentId, "--repository", repository, "--json"], options);
-      const snapshot = JSON.parse(result.stdout);
-      if (result.code !== 0 || snapshot.ok !== true || typeof snapshot.snapshotPath !== "string" || path.dirname(snapshot.snapshotPath) !== repository) {
-        throw new Error(`source Doctor could not snapshot ${agentId}`);
-      }
-      await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false }, agents: { ownership: "explicit", entries: {} } }), { mode: 0o600 });
-      const fit = await preflightAgentDatabase(path.join(snapshot.snapshotPath, "database.sqlite"), agentId, run, options);
-      if (fit !== "exact") throw new Error(`source Doctor left ${agentId} incompatible with the installed native runtime`);
-    }
-  } finally {
-    await fs.rm(verificationRoot, { recursive: true, force: true });
-  }
-}
-
 
 export interface PostgresSourceDoctorOptions {
   schedulerStateRecovery?: true;
@@ -308,7 +271,7 @@ async function assertSchedulerSourceRoster(stores: SourceAgentStore[], input: Po
   } finally { db.close(); }
 }
 
-export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], input: PostgresSourceDoctorOptions): Promise<void> {
+export async function repairSourceDoctorAgentStores(agentIds: string[], input: PostgresSourceDoctorOptions): Promise<void> {
   const env = input.env ?? process.env;
   if (!env.OPENCLAW_AGENT_STORE_DSN?.trim()) throw new Error("source Doctor requires OPENCLAW_AGENT_STORE_DSN");
   const servingConfig = await captureServingConfig(env);
@@ -400,24 +363,4 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
       await phase("scheduler-post-metadata", () => verifyPostgresSourceMetadata(stores, bound, true));
     }
   });
-}
-
-
-export async function repairSourceDoctorAgentStores(agentIds: string[], input: PostgresSourceDoctorOptions): Promise<void> {
-  const env = input.env ?? process.env;
-  if (agentIds.length === 0 || new Set(agentIds).size !== agentIds.length) throw new Error("source Doctor requires a unique nonempty agent roster");
-  const root = await fs.realpath(env.OPENCLAW_STATE_DIR || env.OPENCLAW_DIR || DEFAULT_OPENCLAW_STATE_DIR);
-  await assertCanonicalSources(agentIds, root);
-  const anchors = agentIds.map(agentId => readPostgresAgentAnchor(path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite")));
-  if (input.expectedAnchors !== undefined && !anchors.every(Boolean)) {
-    throw new Error("source Doctor captured PostgreSQL roster requires PostgreSQL anchors");
-  }
-  if (anchors.every(Boolean)) return repairPostgresSourceDoctorAgentStores(agentIds, input);
-  if (anchors.some(Boolean)) throw new Error("source Doctor cannot mix PostgreSQL and SQLite agents");
-  await input.assertCurrent();
-  const result = await (input.run ?? runOpenClaw)(["doctor", "--fix", "--non-interactive"], { env });
-  await input.assertCurrent();
-  if (result.code !== 0) throw new Error(`source Doctor failed (exit ${result.code})`);
-  await verifySourceDoctorAgentStores(agentIds, { env, run: input.run });
-  await input.assertCurrent();
 }

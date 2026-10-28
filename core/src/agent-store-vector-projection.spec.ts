@@ -10,11 +10,11 @@ const expected = () => trusted.expressions["default:memory_index_chunks_vec:embe
 
 describe("native memory vector bit projection custody", () => {
   it.each([1, 1536, 3072, 16000])("accepts the native projection at %i dimensions", dimensions => {
-    expect(agentStoreExpressionFingerprint(projection(dimensions), "tenant")).toBe(expected());
+    expect(expected()).toContain(agentStoreExpressionFingerprint(projection(dimensions), "tenant"));
   });
 
   it.each([0, 16001, -1])("refuses an invalid projection dimension %i", dimensions => {
-    expect(agentStoreExpressionFingerprint(projection(dimensions), "tenant")).not.toBe(expected());
+    expect(expected()).not.toContain(agentStoreExpressionFingerprint(projection(dimensions), "tenant"));
   });
 
   it("refuses changed conditions, functions, source columns and projection identity", () => {
@@ -24,7 +24,7 @@ describe("native memory vector bit projection custody", () => {
       { definition: original.definition.replace("public.binary_quantize", "other.binary_quantize") },
       { definition: original.definition.replaceAll("embedding)", "foreign_embedding)") },
       { relname: "other" }, { name: "other" }, { kind: "constraint" },
-    ]) expect(agentStoreExpressionFingerprint({ ...original, ...change }, "tenant")).not.toBe(expected());
+    ]) expect(expected()).not.toContain(agentStoreExpressionFingerprint({ ...original, ...change }, "tenant"));
   });
 
 

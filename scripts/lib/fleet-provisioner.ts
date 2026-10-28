@@ -1454,11 +1454,6 @@ async function evictLocalCustomerNow(
   if (configuredBuilderOverlayIsOwned(input.adapter, input.slug)) {
     return retainConfiguredBuilderOverlay(input);
   }
-  if (await input.adapter.customerContextRestoreHeld?.(input.slug)) {
-    input.adapter.cancelPendingEviction?.(input.slug);
-    input.adapter.log(`[evict] retained Shared context under durable restoration hold slug=${input.slug}`);
-    return "noop";
-  }
   const uid = await input.adapter.uidForSlug(input.slug);
   if (uid) return evictKnownCustomer(input, uid);
   try {

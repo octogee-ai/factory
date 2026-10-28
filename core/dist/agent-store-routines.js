@@ -31,51 +31,20 @@ export const agentStoreExpressionsQuery = `WITH relations AS (
   UNION ALL SELECT 'index', r.relname, i.relname, pg_catalog.pg_get_indexdef(x.indexrelid)
     FROM relations r JOIN pg_catalog.pg_index x ON x.indrelid = r.oid JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
   ORDER BY kind, relname, name`;
-const NULL_EXCLUDED_INDEX_DEFINITIONS = new Set([
-    "CREATE INDEX idx_agent_cache_expiry ON $schema.cache_entries USING btree (scope, expires_at NULLS FIRST, key) WHERE (expires_at IS NOT NULL)",
-    "CREATE INDEX idx_agent_session_nodes_archived_at ON $schema.session_nodes USING btree (archived_at NULLS FIRST, session_key) WHERE (archived_at IS NOT NULL)",
-    "CREATE INDEX idx_agent_session_nodes_label ON $schema.session_nodes USING btree (label NULLS FIRST, session_key) WHERE (label IS NOT NULL)",
-    "CREATE INDEX idx_agent_session_nodes_status ON $schema.session_nodes USING btree (status NULLS FIRST, session_key) WHERE (status IS NOT NULL)",
-    "CREATE UNIQUE INDEX idx_agent_transcript_active_messages ON $schema.session_transcript_active_events USING btree (session_id, message_position NULLS FIRST) WHERE (message_position IS NOT NULL)",
-    "CREATE INDEX idx_agent_session_windows_conversation ON $schema.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
-    "CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency ON $schema.transcript_event_identities USING btree (session_id, message_idempotency_key NULLS FIRST) WHERE (message_idempotency_key IS NOT NULL)",
-]);
 export function agentStoreExpressionFingerprint(expression, schema) {
     let definition = expression.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
-    if (expression.kind === "index" && NULL_EXCLUDED_INDEX_DEFINITIONS.has(definition)) {
-        definition = definition.replace(" NULLS FIRST", "");
-    }
     if (expression.kind === "default" && expression.relname === "memory_index_chunks_vec" && expression.name === "embedding_bits") {
         definition = definition.replace(/::bit\(([1-9]\d{0,4})\)/g, (cast, dimensions) => Number(dimensions) <= 16_000 ? "::bit($dimensions)" : cast);
     }
     return createHash("sha256").update(JSON.stringify([expression.kind, expression.relname, expression.name, definition])).digest("hex");
 }
-export const agentStoreNonNullColumnsQuery = `SELECT c.relname, a.attname FROM pg_catalog.pg_class c
-  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
-  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped AND a.attnotnull`;
-function nonNullQualifiedExpression(expression, columns) {
-    if (expression.kind !== "index")
-        return expression;
-    const nonNull = new Set(columns.filter(column => column.relname === expression.relname).map(column => column.attname));
-    const definition = expression.definition.replace(/([,(]\s*)("[A-Za-z_]\w*"|[a-z_][a-z0-9_]*)( DESC| ASC)? NULLS (?:FIRST|LAST)(?=\s*[,)])/g, (original, prefix, identifier, direction) => {
-        const name = identifier.startsWith('"') ? identifier.slice(1, -1) : identifier;
-        return nonNull.has(name) ? prefix + identifier + (direction ?? "") : original;
-    });
-    return { ...expression, definition };
-}
 async function assertTrustedTableExpressions(client, schema) {
     const expressions = await client.query(agentStoreExpressionsQuery, [schema]);
-    let nonNull;
     for (const expression of expressions.rows) {
         const key = `${expression.kind}:${expression.relname}:${expression.name}`;
         const expected = trusted.expressions[key];
-        let fingerprint = agentStoreExpressionFingerprint(expression, schema);
-        if (expected !== fingerprint && expression.kind === "index") {
-            nonNull ??= (await client.query(agentStoreNonNullColumnsQuery, [schema])).rows;
-            fingerprint = agentStoreExpressionFingerprint(nonNullQualifiedExpression(expression, nonNull), schema);
-        }
-        if (expected !== fingerprint) {
+        const fingerprint = agentStoreExpressionFingerprint(expression, schema);
+        if (!expected?.includes(fingerprint)) {
             throw new Error(`unsafe agent-store schema ${schema}: untrusted expression ${key}`);
         }
     }
@@ -95,13 +64,13 @@ export async function assertTrustedAgentStoreRoutines(client, schema) {
     await assertTrustedTableExpressions(client, schema);
     const { rows } = await client.query(agentStoreRoutinesQuery, [schema]);
     for (const routine of rows) {
-        if (trusted.routines[routine.proname] !== agentStoreRoutineFingerprint(routine, schema)) {
+        if (!trusted.routines[routine.proname]?.includes(agentStoreRoutineFingerprint(routine, schema))) {
             throw new Error(`unsafe agent-store schema ${schema}: untrusted routine ${routine.proname}`);
         }
     }
     const triggers = await client.query(agentStoreTriggersQuery, [schema]);
     for (const trigger of triggers.rows) {
-        if (trusted.triggers[trigger.tgname] !== agentStoreTriggerFingerprint(trigger, schema)) {
+        if (!trusted.triggers[trigger.tgname]?.includes(agentStoreTriggerFingerprint(trigger, schema))) {
             throw new Error(`unsafe agent-store schema ${schema}: untrusted trigger ${trigger.tgname}`);
         }
     }

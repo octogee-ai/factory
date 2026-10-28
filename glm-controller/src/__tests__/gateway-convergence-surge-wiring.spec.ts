@@ -5,14 +5,8 @@ import {
   shouldReconcileDisposablePrelaunch,
 } from "../index.js";
 import type { DurableGateway } from "../converge-gateway.js";
-import { decideRollStateMigration } from "../roll-state-migration.js";
 
 const openclawSourceSha = "a".repeat(40);
-const unchangedOpenclaw = decideRollStateMigration({
-  sourceOpenclawVersion: "OpenClaw 2026.7.1 (aaaaaaaa)",
-  targetOpenclawVersion: "2026.7.1",
-  targetOpenclawSourceSha: openclawSourceSha,
-});
 
 const repository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway";
 const builderRepository = "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder";
@@ -105,7 +99,6 @@ describe("gateway convergence surge wiring", () => {
       requiresCustomerMigration: true,
       disposableBuilderGateway: false,
       ownerlessOperatorPrewarm: false,
-      stateMigration: unchangedOpenclaw,
     });
 
     await expect(refineGatewayConvergenceAction({
@@ -271,7 +264,6 @@ describe("gateway convergence surge wiring", () => {
       requiresCustomerMigration: true,
       disposableBuilderGateway: true,
       ownerlessOperatorPrewarm: false,
-      stateMigration: unchangedOpenclaw,
     });
   });
 
@@ -380,49 +372,6 @@ describe("gateway convergence surge wiring", () => {
     })).resolves.toEqual({ kind: "mark-live" });
   });
 
-  it("migrates state when the release changes the openclaw version", async () => {
-    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
-    const upgrade: ReleasePayload = { ...artifact, imageTag: "8886d40-oc2026.7.2-beta.7" };
-
-    await refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff),
-      gateway: gateway(),
-      artifact: upgrade,
-      runtime: runtime("def5678-oc2026.7.1", "2026.7.1"),
-      helmObserved: { imageRepository: repository, imageTag: upgrade.imageTag, replicas: 1 },
-      action: { kind: "steady" },
-    });
-
-    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
-      stateMigration: decideRollStateMigration({
-        sourceOpenclawVersion: "OpenClaw 2026.7.1 (aaaaaaaa)",
-        targetOpenclawVersion: "2026.7.2-beta.7",
-        targetOpenclawSourceSha: openclawSourceSha,
-      }),
-    }));
-  });
-
-  it("migrates state when the live gateway reports no openclaw version", async () => {
-    const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
-
-    await refineGatewayConvergenceAction({
-      passDeps: passDeps(reconcileSurgeHandoff),
-      gateway: gateway(),
-      artifact,
-      runtime: runtime("def5678-oc2026.7.1"),
-      helmObserved: { imageRepository: repository, imageTag: artifact.imageTag, replicas: 1 },
-      action: { kind: "steady" },
-    });
-
-    expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
-      stateMigration: expect.objectContaining({
-        strategy: "migrate-state",
-        sourceOpenclawVersion: null,
-        targetOpenclawVersion: "2026.7.1",
-      }),
-    }));
-  });
-
   it("reads the source version from the runtime config status the pod reports", async () => {
     const reconcileSurgeHandoff = vi.fn(async () => ({ ready: false }));
     const configured = {
@@ -444,12 +393,6 @@ describe("gateway convergence surge wiring", () => {
     });
 
     expect(reconcileSurgeHandoff).toHaveBeenCalledWith(expect.objectContaining({
-      stateMigration: decideRollStateMigration({
-        sourceOpenclawVersion: "2026.7.1",
-        targetOpenclawVersion: "2026.7.1",
-        sourceOpenclawSourceSha: openclawSourceSha,
-        targetOpenclawSourceSha: openclawSourceSha,
-      }),
     }));
   });
 

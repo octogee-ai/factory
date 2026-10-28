@@ -1,328 +1,1070 @@
 {
     "sourceSha": "ebf32b25df5693f3f2ebca7c81d88df84e621dcc",
     "routines": {
-        "memory_index_chunks_search_sync": "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd",
-        "memory_index_chunks_vec_sync": "aa3fd60d05de31bd95264d5c8d33e060f12c3d92520718dab3d988c53714c74a",
-        "memory_index_sources_search_sync": "15a2ecb7072612e551b0340b3f4bb46411d4c7b3b907fe16cb7173142dc4d86e",
-        "openclaw_session_conversations_trigger": "51062b9356fe3ddd2477d84bae1f51627d0a31ca3b6d31e6d4901c18f6d566a7",
-        "openclaw_session_entry_snapshots_trigger": "77eb0676607a410b3084a24b7698c488c68d8edc5785e1628379e1713cf7b6b6",
-        "openclaw_transcript_navigation_check": "2dae4274e8b37eeaae16c21c326eb6af04da129a98556fac1dde2aabb02a8315",
-        "openclaw_vector": "6d15f06e4043912e47051b44bddf295369217ea17c9fd4879425f265080bbfa6",
-        "session_transcript_fts_search_sync": "1e8d50cc932c9e724f478c161cb70b0ab9676b15b01ff42c4915ca968518b040",
-        "standing_intents_search_sync": "c240be82342c4a2e7e69be29914dc71bdb8f238966697b4c946621b227ac9e67"
+        "memory_index_chunks_search_sync": [
+            "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd"
+        ],
+        "memory_index_chunks_vec_sync": [
+            "aa3fd60d05de31bd95264d5c8d33e060f12c3d92520718dab3d988c53714c74a"
+        ],
+        "memory_index_sources_search_sync": [
+            "15a2ecb7072612e551b0340b3f4bb46411d4c7b3b907fe16cb7173142dc4d86e"
+        ],
+        "openclaw_memory_index_chunks_trigger": [
+            "4b2d0be6886a02168cf95fc2c798455e57c442009a7a7c67d5f44ad8ac70c090"
+        ],
+        "openclaw_memory_index_sources_trigger": [
+            "335c2e3f92abbecb3e39fe157ffa9253fd4dc4c318970bc6084220c7690e0123"
+        ],
+        "openclaw_session_conversations_trigger": [
+            "51062b9356fe3ddd2477d84bae1f51627d0a31ca3b6d31e6d4901c18f6d566a7"
+        ],
+        "openclaw_session_entry_snapshots_trigger": [
+            "77eb0676607a410b3084a24b7698c488c68d8edc5785e1628379e1713cf7b6b6"
+        ],
+        "openclaw_transcript_navigation_check": [
+            "2dae4274e8b37eeaae16c21c326eb6af04da129a98556fac1dde2aabb02a8315",
+            "a60826ad3581e177a989302605aea4505a5d029b48e2f84380bd247913686e53"
+        ],
+        "openclaw_vector": [
+            "6d15f06e4043912e47051b44bddf295369217ea17c9fd4879425f265080bbfa6",
+            "4d617c9234c4889c4fd0ebec017fc61f82b361014df615738e0f95adef00043d"
+        ],
+        "session_transcript_fts_search_sync": [
+            "1e8d50cc932c9e724f478c161cb70b0ab9676b15b01ff42c4915ca968518b040"
+        ],
+        "standing_intents_search_sync": [
+            "c240be82342c4a2e7e69be29914dc71bdb8f238966697b4c946621b227ac9e67"
+        ]
     },
     "triggers": {
-        "memory_index_chunks_search_sync": "1081a126b16c6f87007d985135c259ce6a811d3174e8e1be0fc6ba54b8921684",
-        "memory_index_chunks_vec_sync": "3d0aedf870bc73d12aa0ad20bd6869950d83ff2d117206825f95d6dfed5a9af8",
-        "memory_index_sources_search_sync": "8504f55d729897fe1c63e0fd16ff3d707aa493ad79fd6bce05c10d0d0500a8d7",
-        "session_conversations_route_context_invalidate_after_update": "2809a6a1f4e2b477452b97c529b90e8e6128c4ba67e79edf7aa2e279697e02d1",
-        "session_entry_snapshots_after_delete": "966ebfac18ff14c9912e1c54e34c63b906a87aba32e895e803b62f7a565d940e",
-        "session_entry_snapshots_after_insert": "7277c5555cf5d70bf187b983647a9a358081f6d33006a5b7ee78646764fc1afc",
-        "session_entry_snapshots_after_update": "9bbe855ee53cf452606fe67283a9ea9e3a0a3767daeeff30c8fb6b0d37a88bf4",
-        "session_transcript_fts_search_sync": "ac0363dd199c3f51dbe9d8fdacfc6ad55adcecde1ac9c1e13819797ce47f82ad",
-        "standing_intents_search_sync": "f9108b5bb08e2f6e1217764d099e25ac488f89a04241e23fe51845d251a59019"
+        "memory_index_chunks_revision_after_delete": [
+            "87f1c3fdfcfd9bbda6177a8cb73f2a9ef6aa232480bfc2b1d6a8b302b0a873c6"
+        ],
+        "memory_index_chunks_revision_after_insert": [
+            "663a7b2fb789266d8b15669aa47b0a1a55c8329c4caf4fc6f20072c60f413e2f"
+        ],
+        "memory_index_chunks_revision_after_update": [
+            "a22103e37d0f79b9bf16fa5c0f68cdad9dc5f0a206e81c965881b8b1f48b2fae"
+        ],
+        "memory_index_chunks_search_sync": [
+            "1081a126b16c6f87007d985135c259ce6a811d3174e8e1be0fc6ba54b8921684"
+        ],
+        "memory_index_chunks_vec_sync": [
+            "3d0aedf870bc73d12aa0ad20bd6869950d83ff2d117206825f95d6dfed5a9af8"
+        ],
+        "memory_index_sources_revision_after_delete": [
+            "2c0d55811d353cb8eeef589dcc414b0a62caae71ec0b15225bdefd544ead3d2c"
+        ],
+        "memory_index_sources_revision_after_insert": [
+            "049488eb0273f69347498b8fbffc2af006ecb35d32de9e95b1fb155e910316b1"
+        ],
+        "memory_index_sources_revision_after_update": [
+            "44e91d9f9d850fddb98d2101d7efc5246cf9bd46a3f0c333f3233acc6a6a699c"
+        ],
+        "memory_index_sources_search_sync": [
+            "8504f55d729897fe1c63e0fd16ff3d707aa493ad79fd6bce05c10d0d0500a8d7"
+        ],
+        "session_conversations_route_context_invalidate_after_update": [
+            "2809a6a1f4e2b477452b97c529b90e8e6128c4ba67e79edf7aa2e279697e02d1"
+        ],
+        "session_entry_snapshots_after_delete": [
+            "966ebfac18ff14c9912e1c54e34c63b906a87aba32e895e803b62f7a565d940e"
+        ],
+        "session_entry_snapshots_after_insert": [
+            "7277c5555cf5d70bf187b983647a9a358081f6d33006a5b7ee78646764fc1afc"
+        ],
+        "session_entry_snapshots_after_update": [
+            "9bbe855ee53cf452606fe67283a9ea9e3a0a3767daeeff30c8fb6b0d37a88bf4"
+        ],
+        "session_transcript_fts_search_sync": [
+            "ac0363dd199c3f51dbe9d8fdacfc6ad55adcecde1ac9c1e13819797ce47f82ad"
+        ],
+        "standing_intents_search_sync": [
+            "f9108b5bb08e2f6e1217764d099e25ac488f89a04241e23fe51845d251a59019"
+        ]
     },
     "expressions": {
-        "constraint:acp_parent_stream_events:acp_parent_stream_events_pkey": "80fe34cc8212a0556890c7a097926aa8123e7dc7c36e600f5bd35d5eb04e5949",
-        "constraint:acp_parent_stream_events:acp_parent_stream_events_session_id_fkey": "1f7a6e73b9865e62bcde9d52dda98b585c1934ce8ea1912d148fc6ab609bf805",
-        "constraint:auth_profile_state:auth_profile_state_pkey": "f93d9c8d904f51b6f3bd8116efccef2a25cbe1b608af661d69be373e10da214f",
-        "constraint:auth_profile_store:auth_profile_store_pkey": "d2b0d5c7cd011022b3728fad196b2debd877aaecdfa1903bc5d3b48dfb2f9314",
-        "constraint:board_tabs:board_tabs_chat_dock_check": "cd298843b25c04d56e2fe885ec8a30348117a67434e00379f20557718ffe360c",
-        "constraint:board_tabs:board_tabs_created_by_check": "b496e1e2d928ab8bcc355ecb764056b535529924c05e717e227f51b43a116506",
-        "constraint:board_tabs:board_tabs_pkey": "f8cd43ca2aec49b31ea7d0de78a0e3e48cb2e41250fc36d59c0aa3806a5519fc",
-        "constraint:board_tabs:board_tabs_position_check": "dbb29c581c242e354d7d8a0ada346dccdbd09a3ab27332420763835e81ee71ae",
-        "constraint:board_tabs:board_tabs_revision_check": "a1126bf419ab2e936eb391e8bde1c6058f7d7d2e53e263ae5caff74a3badd2bb",
-        "constraint:board_tabs:board_tabs_session_key_fkey": "bb5d2b1ad36498ab8a67ab7cc8cee4d42aaea7a0fdec2d65af1e46e90b56f8a7",
-        "constraint:board_widgets:board_widgets_check": "0ba1e3801d8884b6da9f356a64486d0fdba1fe337c492cfb8707fd9c144fccdc",
-        "constraint:board_widgets:board_widgets_content_kind_check": "382711118a302d0ba6737630e2c9efe7189f8a955e1a9a59106f10c57a5895d3",
-        "constraint:board_widgets:board_widgets_created_by_check": "8441e9695e07c0ac2009e0d2091e88a1a897d3a81dd1be275c64b98ee894ecfd",
-        "constraint:board_widgets:board_widgets_grant_state_check": "57902ab2119e5783663dfa2a182eb1c632b15a6bded3f4815080615f5f2fbe3d",
-        "constraint:board_widgets:board_widgets_pkey": "134e86f6dcce7e9eecedbeded15fa1fd417605e8d2ee9279a5b688c51fe1b1aa",
-        "constraint:board_widgets:board_widgets_position_check": "ed175020985d7be5ede078e05a914c9aeea8804e401a362b6645e6dec520324d",
-        "constraint:board_widgets:board_widgets_revision_check": "2a1f1440b41ae306b10770c3d12a0ceefe5cf22ddfa35cb67a6413897cc03ed3",
-        "constraint:board_widgets:board_widgets_session_key_tab_id_fkey": "2cc38b2d565b0af44d78e03cbb849e97ea826fcb6acc733ada9edf964d2b88d8",
-        "constraint:board_widgets:board_widgets_size_h_check": "0ab5287af405d5f38b8abf3af5a54c7a40a554293dbece28907733f3061f080a",
-        "constraint:board_widgets:board_widgets_size_w_check": "681a2bd393bdb576fcbede4d1a8cac4cfda886ee52425ef7c13b134eca4e51e7",
-        "constraint:cache_entries:cache_entries_pkey": "d11bcec684c3f4a7c804547f93b56c30fca413306216e86dfc8a2d6c8b517a71",
-        "constraint:context_engine_turn_outbox:context_engine_turn_outbox_advancement_key_key": "6d57ebd8788dbbe6c01e2535a13a23dbf2307b6e4c7879e306030dd915dff22a",
-        "constraint:context_engine_turn_outbox:context_engine_turn_outbox_pkey": "3c6189e13f078a5a4f10a5a9bab8e52c5c15f611198470876b433f445e7f0c9e",
-        "constraint:conversation_deliveries:conversation_deliveries_check": "341c113a79598bd320a39d17f4b27a436e4daa63e0c8f800bf48a6d487a467d5",
-        "constraint:conversation_deliveries:conversation_deliveries_conversation_id_fkey": "f5e756333550a1456916d44f4501e7ac4c30458f91df774c8146f09a418aff34",
-        "constraint:conversation_deliveries:conversation_deliveries_operation_kind_check": "d3d2b3fd54f084e52c3bf10dbf65dd06f468d8aa420876acaf3270e7489304bb",
-        "constraint:conversation_deliveries:conversation_deliveries_pkey": "7944d6a4a3918929c40572cdf12f64f2457d2ddf0dc38dcdfb3791228a896103",
-        "constraint:conversation_deliveries:conversation_deliveries_status_check": "f6bf6e8c7ce2a5bb2967e9fce809d46e262ee3faf9720ac51b61464759e42804",
-        "constraint:conversations:conversations_kind_check": "0e65ad91627eba22ac334e7f04a4d9092b923462ed24bd68e099023853be286a",
-        "constraint:conversations:conversations_pkey": "0b34d5a1aa0d07ecc88127418f4210ed370b3f47fd14f2d6688e2967639bce01",
-        "constraint:heartbeat_outcomes:heartbeat_outcomes_outcome_check": "8c348ab46084e322c5085393646e91510d06c5b1157ddb189e29945770b16ecd",
-        "constraint:heartbeat_outcomes:heartbeat_outcomes_pkey": "5cfd65a1e98322900315eb8a2e19a0094bb0dd19bd8d8b8f3643838c32ddcfc3",
-        "constraint:heartbeat_outcomes:heartbeat_outcomes_priority_check": "286f25c050aa6210f1270a64ce199853796108a89fc154bbde098ab5c163f536",
-        "constraint:heartbeat_outcomes:heartbeat_outcomes_session_key_fkey": "d5d2c6e8f2a3ccf4d3e094d1fb78523e26b1896f08adb2f0330472f734912664",
-        "constraint:memory_embedding_cache:memory_embedding_cache_pkey": "b0f72a8815b92b3ee654fd1aee771ef35e5315f2965d275650475c7061bd8d06",
-        "constraint:memory_entry_origins:memory_entry_origins_origin_class_check": "4f1534ee5e7d62cbefad47adc7cc2cc739a5dbcaefb9d56deb494b364c9b0cf4",
-        "constraint:memory_entry_origins:memory_entry_origins_pkey": "c182bfe750091531fc6f2e7826608d1698ab5a112f2f5363ea2a31439379e715",
-        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_chunk_id_fkey": "b46ccf93ecffd1c45182d5beb01ab0c671c32bc61e6903d6ac7075a54e8e8e92",
-        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_origin_class_check": "0a0bd238178639145578bb09092f9e5d9be1ed2b70423088cbcac31cd0619f4a",
-        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_pkey": "ad03ca1f186beac54793c0a873886120f04f7f36dfe60a9c78927afffffd8660",
-        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_session_kind_check": "fdca093b7a5eef4693236e0230c71b305befc4280b7b3b46d76f3d47cad53577",
-        "constraint:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_chunk_id_fkey": "a8e5d96e7be67c3ba7064efb587ce8d72799aff4909ae100b3460d914d2303d1",
-        "constraint:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_importance_check": "cb0b6aa4f6ce7b574ce575e82a997f70d8f069f2baf74f42ed4e03168742aa80",
-        "constraint:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_pkey": "86005732ffe2a874ca9dc9197db000ba3e5133dd9c5a4728e93f9f7445194396",
-        "constraint:memory_index_chunks:memory_index_chunks_id_key": "8c78c19dfe36deaae21611175b3d87058fd315cc7b1314d955266efbf1584bf5",
-        "constraint:memory_index_chunks:memory_index_chunks_pkey": "53164ee5ad24cca4251a34c31442f8f0691377076e68d8168e435e91e6e60cd5",
-        "constraint:memory_index_chunks_vec:memory_index_chunks_vec_id_fkey": "789d3f2d83416f064720c4c4ae08cef8f1cf77f37c1655b9532afb8986c64d54",
-        "constraint:memory_index_chunks_vec:memory_index_chunks_vec_pkey": "6ff928e8eb5fcfdb3160aae3853d42810e2a94a9acd2869ee0a080705c97eed5",
-        "constraint:memory_index_meta:memory_index_meta_pkey": "62433100002f0a3b2e67810c088dc85727e97bbb0c3bbdf3f07781ee04e83b6d",
-        "constraint:memory_index_sources:memory_index_sources_path_source_key": "c2c51a0c7e376535084113f9f8fd16cee58f8e25beb74afb4d54d55534b537f7",
-        "constraint:memory_index_sources:memory_index_sources_pkey": "aee566c05f86c92d78ee61936b893c45a6b40ccf95545d0535b39144c8c96b09",
-        "constraint:memory_index_state:memory_index_state_id_check": "fca285e60cd6daf9c410bf9b5507d3366d32a502a6e7f149a6dd3faec3da7eef",
-        "constraint:memory_index_state:memory_index_state_pkey": "9af9603436e03832d5463744d8b3349ff3f040d804cbb25fab331d4cbc3d7bdc",
-        "constraint:memory_session_tombstones:memory_session_tombstones_pkey": "8c769d0a0e9a4f41964b625ede5b4e0df8b7506110eb9b19488e542bbdc43369",
-        "constraint:message_tool_run_outcomes:message_tool_run_outcomes_outcome_check": "ad26608535ab5313db420f0167edcc3553bd41543192fb2cce675ad677fe63ed",
-        "constraint:message_tool_run_outcomes:message_tool_run_outcomes_pkey": "270fd01ba4ee5b552bc629523a7ed134e0468a7bfc09513fc06ecc952c22f6a7",
-        "constraint:message_tool_run_outcomes:message_tool_run_outcomes_run_status_check": "139dd36905abe154bdca9ba33ff6f5c669e8e65f9bfcdeb3f7683d3d21cf0e1e",
-        "constraint:openclaw_schema_meta:openclaw_schema_meta_pkey": "6c389fe2e364bb4fee1b7149392a8382ea533fac3ca77378f64454b9b1f277c3",
-        "constraint:schema_meta:schema_meta_pkey": "1fd332b010670c92bd16c09de09c391cc0a50ae726db2d33ca9a95d9abdef756",
-        "constraint:session_canonical_validation_pending:session_canonical_validation_pending_pkey": "415acf13794699cb8102a363aed05ae5472eb61a75360fa5d9ed9c6d99da917f",
-        "constraint:session_conversations:session_conversations_conversation_id_fkey": "814babf7e707df5a4c44ac7e2342cbd534ace9e66d36f509376d4904c381167f",
-        "constraint:session_conversations:session_conversations_pkey": "6e27acb4ea0ec1e4def00a012fe127486cf1caa712340395ca403cea8102dfeb",
-        "constraint:session_conversations:session_conversations_role_check": "9c4e530d28b0c33a035895d8a055c139b19dd6baf27703d3fd85014de26cda9a",
-        "constraint:session_conversations:session_conversations_session_id_fkey": "6116e929af67b89115a3ec28adaa6875d6feebe3796d679763b3ba624860a8f0",
-        "constraint:session_entry_snapshots:session_entry_snapshots_field_check": "bffdd09f3611d2620e510a1610cae8f5ce691b4f309ec48e6b037ba3cbdd12ed",
-        "constraint:session_entry_snapshots:session_entry_snapshots_pkey": "1ecf766712c8c976249daca6275d20802263623d17a2a64a36636d6acc88410b",
-        "constraint:session_entry_snapshots:session_entry_snapshots_session_key_fkey": "507a30e234f086e642e5e3cb88da06f880364aa95794179a5468beb7e46621fd",
-        "constraint:session_goal_operations:session_goal_operations_pkey": "5774945aec558f2e95fe600d2bfac4bf7a0852e84a85ae18cf00530a0a5bde8a",
-        "constraint:session_input_completions:session_input_completions_pkey": "5c615e336eff68a944c47a7386b4d0d554296b269c7191f26a7b14c226e7a9da",
-        "constraint:session_input_completions:session_input_completions_session_id_fkey": "92fd3bd6bdb3539e839bb1954d9bce72b310f98d8dceba2216829ce647fe29db",
-        "constraint:session_input_completions:session_input_completions_session_key_fkey": "6eaac59fb865c285cf92e3ddd386899269bd0101380cccee78515c998f33d0f0",
-        "constraint:session_input_completions:session_input_completions_succeeded_check": "fae5b8512563fe2f195a5d7c2c5433831ae4338a3e8162387a224901bfe8eb14",
-        "constraint:session_key_contract:session_key_contract_id_check": "9eb4d8652f44918077406b1fb654bd4a65312044720301e5781502e2bd16aa07",
-        "constraint:session_key_contract:session_key_contract_pkey": "eaedcbde80f45442045d981957d77a2242f6792f3d41edda392ea09adbf33d6b",
-        "constraint:session_members:session_members_pkey": "c29a1f8f1c5d626f1cc26238ff8a6eb6ba525f617df8ecc5b32d611be288aeba",
-        "constraint:session_members:session_members_session_key_fkey": "96b889a0ee01ebada244c6ba0d55c828bf39c0dd8bbb7c3312522eda16a30eea",
-        "constraint:session_nodes:session_nodes_created_actor_type_check": "516978ea56209b151efc07d44e39061c0208145beb34710f5855d6ad290d29aa",
-        "constraint:session_nodes:session_nodes_created_via_check": "350a681a01f54bb8c3c1b1175f6d009ba1db523f4ff43c11e16d0063bc75520c",
-        "constraint:session_nodes:session_nodes_entry_valid_check": "d378b1713b68ca76f65615454b7657c694f1f0377391f4797e181e75a8da2b02",
-        "constraint:session_nodes:session_nodes_pkey": "cc390771ba3ad061b6a8db7f84072a136096a2fdb1f0dc87ce78b8d56ec41303",
-        "constraint:session_nodes:session_nodes_status_check": "c4690791b379fa73e058b21616eedc5f8da5fc5d72914a8ea275eb8deaf4853f",
-        "constraint:session_participants:session_participants_pkey": "c7d055271ab7c817598784a3a4c974862a4b806b49a900c8945379c5edd7ebc5",
-        "constraint:session_participants:session_participants_session_key_fkey": "4e12a6405357e60520e6965c106e7d78f7c6e1554a00a5ffb5c11b86d1d299d1",
-        "constraint:session_pending_inputs:session_pending_inputs_input_id_key": "be76f9d9152987ff52bc48d1b2bf792db986b3e964cb9b05af8bd4f894999657",
-        "constraint:session_pending_inputs:session_pending_inputs_pkey": "f9fe2d1fda8724fac94d19fd4c4d95f30d0f08b37c7dc142861c1a84c26c5203",
-        "constraint:session_pending_inputs:session_pending_inputs_session_id_fkey": "7fde83a90ebaa81447434f0ab604fd70692d5b1d4531e71e3ec45d142d2ca4cb",
-        "constraint:session_pending_inputs:session_pending_inputs_session_id_idempotency_key_key": "4f76bcdc8c7fd6179f193abc82775e26928e9050f71bf45a36844b31871a8117",
-        "constraint:session_pending_inputs:session_pending_inputs_session_key_fkey": "295b0d3928232162ac89536b065265f3515e9b72a534200db92fb0754b15d04d",
-        "constraint:session_pending_inputs:session_pending_inputs_state_check": "924fbe837f4c5fdf6579de857b3e0d1889f15b6d92501f0bb8215583b8bc1fc2",
-        "constraint:session_progress_cards:session_progress_cards_pkey": "950974a74c1f7a452592e6023b49949e0e619624bf39a03f841fee7c22b4ad07",
-        "constraint:session_progress_cards:session_progress_cards_session_key_fkey": "7ab08511efb9c3e1ed6671bd66ac12f09d0d90830b5fb3907f7ea5bcf04ce124",
-        "constraint:session_reactions:session_reactions_pkey": "8ba39771dbb52bbb48a3af734f2383b45fdfef212c71e8ef0b69e2156c9004c9",
-        "constraint:session_reactions:session_reactions_session_key_fkey": "969e9ae7f215f877d0de7b8ba7964fa0767e2d95a31079ecf455fc3ba4d73496",
-        "constraint:session_suggestions:session_suggestions_check": "25908a5dbd71af1eac8ebaa8ec36f3e93a24c2e604c0a768ed49dcf58c9a7c60",
-        "constraint:session_suggestions:session_suggestions_dispatch_resolution_check": "beef6594a190ca1e7ead95184b311a6d109bf1e20803c13cf8c1ccad6aa70de6",
-        "constraint:session_suggestions:session_suggestions_pkey": "915d80b4a9c2efaa77770d7b3c500111267542a7251f0ec3347e138b8bad88a2",
-        "constraint:session_suggestions:session_suggestions_session_key_fkey": "3a2658c7800c1002de588febda063dbdc92c476234e21146b2ca4ef2b20b2a1b",
-        "constraint:session_suggestions:session_suggestions_state_check": "7515f28ff02aef46abf073835a16dda732d73fe72fccab8d6b069ba28a839f4b",
-        "constraint:session_transcript_active_events:session_transcript_active_events_active_position_check": "a66943725d93299732384c0a5307d20a1003a6518c3fe5956e65c7d5ec31f096",
-        "constraint:session_transcript_active_events:session_transcript_active_events_message_position_check": "96bcb8137be3600900291bac51d8657f72342af9cce4aac6579466e9a09ccdae",
-        "constraint:session_transcript_active_events:session_transcript_active_events_pkey": "ec8f0e77be9d0078b401425bb48b105e8b4388593f520a3b38c3f6c7f5da2ab3",
-        "constraint:session_transcript_active_events:session_transcript_active_events_session_id_event_seq_fkey": "47f1a106a7278ed2a306738efdac4cd0fcd6c3ae475a7e076bf584328cf44033",
-        "constraint:session_transcript_archives:session_transcript_archives_archive_name_check": "801cc21cc632afe6d394de7b66f4e16a7c29172b9436d828d124d8624d87332e",
-        "constraint:session_transcript_archives:session_transcript_archives_archive_name_key": "f6781aa7eda55d97b8534a562001e96050114c0b73905ec96e90b9085c10794b",
-        "constraint:session_transcript_archives:session_transcript_archives_archive_sha256_check": "ae523491cdd642efadfa6bb585b91d1b04fff3b886bfc71a0b216a0a00ce7b8d",
-        "constraint:session_transcript_archives:session_transcript_archives_encoding_check": "aa69abac4b224fddadf3a021a96de62261a485a94e00c57959f9bd76739502d0",
-        "constraint:session_transcript_archives:session_transcript_archives_pkey": "bd39502e5f7920740d6bac7135107e36332062fcc2a2db5ca0303994bbf1eafe",
-        "constraint:session_transcript_archives:session_transcript_archives_publish_attempts_check": "807010545bec5a1b4b16e1048588f5f143adf34343ac27eeb210ae8d56e20158",
-        "constraint:session_transcript_archives:session_transcript_archives_reason_check": "e381dffc86a16b35a5d2c20ba6dd9581757ef0fe81ba7c6b1f9af9624c9a4499",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_bytes_check": "6a1ba82c239b18586a694682f2c945e0cf392642a3ba60298832e257b52d07e6",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_name_check": "9b114572e8ef24d1b0c15dd645626f0035e2f3c9f1873808d23fa529aca02b15",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_name_key": "9fcac4923587782d512f044768ea1cd34c4d38f9b26b3c38072adc8645364576",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_sha256_check": "7b7aaaa1b8fc31e17267a448cccc6ac5dc6fb0a83216a479b76a8a7660224a2c",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_check": "fb2e84ec35f00ce2d99b9a55511500802c83f7d3c24fc3c2b1a4545da4821169",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_chunk_index_check": "2b2e6e9f3d03360a5bdbd15ce1ca3d10f56d78f57f5e40c793e271be8d3a0cf0",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_event_count_check": "3a3c31ee3fd00ace4af728eec92df6dd165447ef41268e5034bc760afba5cb00",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_pkey": "2a03ad73a700e243a2f47d4152276ef87798fb3894e956a1f616ff84ca555ce7",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_raw_bytes_check": "f5a0d1d00a483d4e77bab49db224e1e5389e3de080f4d070db91e2fe7170a57a",
-        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_session_id_fkey": "90331afb13ed5cc8ca59ee7501ebdd42496c1b98df8870abd22c4dc6215d48f4",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_bytes_check": "b08ad5f19258f7383f98535adde8efd92abffc746c7f404ec8bf9e882b364ba6",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_name_check": "09f927dada76b96838c436dda2849c842ef7ae916a67b4c7fb3f1ab10ef28f28",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_name_key": "6e67c0fb9f779bc6bacd09c83512177b5ff625e77cddbe3a05fbe307d05a48c5",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_sha256_check": "51fedfdb060e4c4824a89fa8651e258dd792c8bb4e829fd3404f137f1ba72697",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_check": "34eaec22a3502de48ab047f70648ccdc748b2652069a884d2bb15c73d01f7fbd",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_event_count_check": "87e745da6595b19e7ec13bfbd583d30661f8db360db5b00d2134df91b919fad4",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_pkey": "a2f322af321ceb04d0973dc5e36c3cd7011b33ad71fd4343c7e7ca002d9dd5f9",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_raw_bytes_check": "a89c313f24cd34aa9593493800310f1d8b21921a71e5b56c403ed12b1ba3351e",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_session_id_fkey": "777a0d9eb4c474f595dd71630da0a3903561f9879c0c73f15534d3052ad4cc30",
-        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_storage_check": "d5c1c1884f6a02f38ca0ca91756d797a003916aec5ffd4dcfb098b5820d3e408",
-        "constraint:session_transcript_fts:session_transcript_fts_pkey": "6a2866b6c3c42ba99e9d8a516d9cdf5466428d24ee7f54c7d81d81a0ebfb5b50",
-        "constraint:session_transcript_fts:session_transcript_fts_rowid_fkey": "e54848c20428f01e97a21a2083ab85d2a5b5bdd07f904e61e0cb90e4f2d27580",
-        "constraint:session_transcript_fts_rows:session_transcript_fts_rows_pkey": "707846a1ecb0c69db2fa8a05105a891b42c96a43a41851ed4686d84483a6f448",
-        "constraint:session_transcript_index_state:session_transcript_index_state_pkey": "6d025ef4431a30644e350bc7a77aa76723a7d94cde638118708b8217992abc5a",
-        "constraint:session_transcript_index_state:session_transcript_index_state_session_id_fkey": "5fd4c7ebd719376c379c7b619c6038862e4b001e271f0c9c8507e2fd0568648a",
-        "constraint:session_windows:session_windows_acp_owned_check": "36adf7808701aa32056ba02394b64cef9d468e11fd57200cca2ffa02ead732bb",
-        "constraint:session_windows:session_windows_chat_type_check": "7b5fc59d16434ab934574bfe61386cd707f9cf46f3f38a3781f17c254b7d6ca0",
-        "constraint:session_windows:session_windows_hook_external_content_source_check": "90ede2c2f2d4672cb118aa5741b0bd3e66364b2f42e77b39926e3eac9f4b6b88",
-        "constraint:session_windows:session_windows_pkey": "2448ebb28f8371400dbae03b57fa3532e7821db21d965bccace2d5718dff0367",
-        "constraint:session_windows:session_windows_primary_conversation_id_fkey": "2e5cad3cbc47307afcec57d0c80b3b31dfdc0c1609024e80d4c3233dae696da7",
-        "constraint:session_windows:session_windows_reason_check": "418569913ba1bd994d25397bbf8f1914cea399c9d593bf9dddd430c4845b2392",
-        "constraint:session_windows:session_windows_session_entry_provenance_check": "9fca67adce65fd609b83cf47e07fb5b4cbc3154bac24f755cd1a93b1623d2ca5",
-        "constraint:session_windows:session_windows_session_key_fkey": "91b0855ca0aa719dc735fed398331f075ef4ed9406f1f17dd5fbe3c7a9d990e2",
-        "constraint:session_windows:session_windows_session_scope_check": "55d22a810b650f4d06e54851489fde6401656c30dfbd3b93e87bda5e13b1062a",
-        "constraint:session_windows:session_windows_status_check": "0cb434f7b57fb1ebe38b930dc57dea501daeded5ce9ca20e569c039df62c55c2",
-        "constraint:standing_intents:standing_intents_cooldown_seconds_check": "aabf8170070893b874ea36135446087328703cf0208908bee635761c8deb4ddc",
-        "constraint:standing_intents:standing_intents_creator_sender_check": "a45736834d9ed9ed8ee9b0e0615c381b6b8222bbceef13ed8404b60e1ddbd217",
-        "constraint:standing_intents:standing_intents_fire_count_check": "c97d16a61fa78769863759f95a649133f7b05b1864d99c3c3084cd321470c33f",
-        "constraint:standing_intents:standing_intents_id_key": "f273c2126eedb25bc8ecda0a4a07571732dac4267b1b0ccc4f1e0969fb6f1f94",
-        "constraint:standing_intents:standing_intents_max_fires_check": "f599322d1fc66eeb9023c50ce236c21d3290854f1c03a326bef61d7f315001ca",
-        "constraint:standing_intents:standing_intents_pkey": "935c0eba2d6caf7bd0a5b1e49c6707703ebcfb7aababc70ede2e1989f299ba66",
-        "constraint:standing_intents:standing_intents_status_check": "43fb61383329068f6f49d83c743675e51290eec1d4a058ac89697fbaff76d594",
-        "constraint:trajectory_runtime_events:trajectory_runtime_events_pkey": "d2e4f360fe27ee3c0ca7a9a27d1e5fccaa33ccedd9900caf865830fa65759dba",
-        "constraint:trajectory_runtime_events:trajectory_runtime_events_session_id_fkey": "9a0b75c03920058515d5ca8c74b3f69fe2f42b304e6b4641c21793d97c27253a",
-        "constraint:transcript_event_identities:transcript_event_identities_pkey": "f5495a9068b5295dc330142c3382438060832ee4c0be8c15d4a05e06700dada8",
-        "constraint:transcript_event_identities:transcript_event_identities_session_id_seq_fkey": "43dad97e83d4f2c57b22f2309a5bb5de69995f1e1f9c4829f9d6a4207fa15f3e",
-        "constraint:transcript_events:transcript_events_check": "dc266345901d4e156e9929c00143d1015544ffa858b0a93613afa898d511b530",
-        "constraint:transcript_events:transcript_events_event_utf8_bytes_check": "56f62ee861b8feb36343b54f5c2729965bfb6d2fa7adbbccf167bd4096160d55",
-        "constraint:transcript_events:transcript_events_navigation_json_check": "edd4b27e22f891e8df903ae1507593b769acb027311bb4d975ad1a2ebf70ef5f",
-        "constraint:transcript_events:transcript_events_pkey": "5528dd334aca8189161b1a8ee84383ae0708fdaa92467ac60e51330a6f9148ce",
-        "constraint:transcript_events:transcript_events_session_id_fkey": "9e05a080030f53bcf1c2a5c35394dd620e22a0f86cbb8f0cf1a8a7da93eed096",
-        "constraint:transcript_rewrite_watermarks:transcript_rewrite_watermarks_pkey": "d4cd1f4b483349b60463fa070c143135a58a9539e0216f234e164faff889cd6b",
-        "constraint:transcript_rewrite_watermarks:transcript_rewrite_watermarks_session_id_fkey": "05b0a6283df850bea9d47d533d32b1be7e7624b2c74c07751349324273e1b4b1",
-        "default:board_tabs:chat_dock": "14aa4cb95017db53594fba2854bab3ffefc90abcd8bb6536ded485422f0e5cb1",
-        "default:board_widgets:grant_state": "37ae7b2af3ee35b392e7f3d42d7ec1df67377d0cfd19d0f92650fc454340c122",
-        "default:board_widgets:manifest": "b65de1d0754af2859d4709324767598daa0d378c2a23f1c32f7ec0c8f05dd5ea",
-        "default:context_engine_turn_outbox:attempt_count": "a7c2898edc89413fb2280bd3718fe35acb37d72f0ef7b867fe123061581bda53",
-        "default:memory_index_chunks:source": "c2a32639047387503fa0010f848657f5d7bfd62362071eb8922f02096d2b9bcd",
-        "default:memory_index_chunks_vec:embedding_bits": "0a8ee6bfc28b1a53e3317f1e4cdcbdcbd9cbd5f1e978826c6aeca8790cae5a74",
-        "default:memory_index_sources:source": "f7b88324cae75698034351ecfa42690447e4d9ae35c604e372030d77087351f2",
-        "default:session_conversations:role": "d195086f740128d2269ceecc90a355a293401d3a5aa9e9b585de4647e9058536",
-        "default:session_nodes:entry_valid": "293f697d41a578ece759bfa8e96e719c5d8f14a1db8c17b2efc1b614385038ee",
-        "default:session_nodes:has_optional_references": "a6f8c982e213a435978253ce11755478ff8283207ee809dd83155890304e835a",
-        "default:session_nodes:snapshot_revision": "168c8d7519ebc9cfb1ee067c07b84eef061c06f5562b4fc388231228c535c230",
-        "default:session_transcript_archives:publish_attempts": "ddf538972143acade61a4be3675e208de24bee19bcbf495886e487937c1342e6",
-        "default:session_transcript_index_state:active_event_count": "042bcc9841c8af26b08d4121d68ed6cde6bf0394af242223c558b8e4ce8817e7",
-        "default:session_transcript_index_state:active_message_count": "19a88a49245a88c149bb1acc2e6f3011a946900053aa17809a66c551e5f24d66",
-        "default:session_transcript_index_state:needs_rebuild": "0a30c9f6f698a64c94513bd3cbb9c6a4f5d9187f85275e08cfd190251fc32048",
-        "default:session_windows:acp_owned": "10c598f4178a263a3c304c4c6dea889f29597ecd5936454e2baa5ce158ecde98",
-        "default:session_windows:session_entry_provenance": "4c044411565dc34891eb2164c4965e300c247bc69322e7151b7710c76bb0f7ea",
-        "default:session_windows:session_scope": "37e5c0222ea3394228fce176553eacc0e6a1b89dea71b9c946e9ca5641eacb9d",
-        "default:standing_intents:cooldown_seconds": "f35fce0fc203dd816b4247b5b3314992aace8cca5b3cc711cb19a7dcb6ca9624",
-        "default:standing_intents:fire_count": "bc2690e5ad87290707852258bb2a3033d733cacfcd352c24845255d095d81dfa",
-        "default:transcript_events:navigation_display": "88c7941040d6b5be7f88b4cb45279c905487e6729fc24e061af66a6bb8935043",
-        "default:transcript_events:navigation_valid": "6a56a98e582be71ffbced98db41d98e3d488332f4e8f22ce9e26c06bd9707af7",
-        "index:acp_parent_stream_events:acp_parent_stream_events_pkey": "01a0109742c83ba8f465c10e46c56e7bba9b77423d467b4134d3e4b40187e75f",
-        "index:acp_parent_stream_events:idx_agent_acp_parent_stream_run": "60c65d763d9adcfe44f80abff36ce0396a3a51642c5b6eead9e59042ee5bf756",
-        "index:auth_profile_state:auth_profile_state_pkey": "60b28b60200abd8c8e0926ea749359a2a4c8f5430b807f504df3fbfdb8ea8489",
-        "index:auth_profile_store:auth_profile_store_pkey": "48495139b5dc8d362c27c37ea8dfe69c8f08129884bb2ee80d9ec1db2d110630",
-        "index:board_tabs:board_tabs_pkey": "db8c94439966584aa9e63a69f89e5d90388e05c5d661f89aaf0e27a969a8259a",
-        "index:board_widgets:board_widgets_pkey": "5bb371c21a439e40aee9727d5c439321389949b4a87b4a65a04953c4f743ec74",
-        "index:board_widgets:idx_agent_board_widgets_tab_position": "95853f0dd2f18224913af315afc1af52838c513eb9b2470afd6684be43693894",
-        "index:cache_entries:cache_entries_pkey": "76d1535bb012d546ea8dd531f6f1234bf9d4545c35128213c19ed755b1d74dde",
-        "index:cache_entries:idx_agent_cache_expiry": "f6bfd1be80d1b6c6197122921395f1efe567bfa3a6ee0e4be34557607d99e6ae",
-        "index:cache_entries:idx_agent_cache_updated": "fe213a8464f64c19f724e0b9f095f40326829f400869702ef36d46e740c5c280",
-        "index:cache_entries:idx_agent_voice_session_open_scope": "0db310e8d098f67cc52729c4ce719fe77c125d11fb365d0467a619df84497622",
-        "index:cache_entries:idx_agent_voice_session_open_updated": "2ce9893885b851a18d34750ca87c06b684b180bbc0efe249af0cd6524142e81c",
-        "index:context_engine_turn_outbox:context_engine_turn_outbox_advancement_key_key": "5bc0c1811e4251dad1eca41dd7b8fa5fca2eb3a1dc4935169f9d2fd744fbbed9",
-        "index:context_engine_turn_outbox:context_engine_turn_outbox_pkey": "cadeffdcef940ad64ee7e63267205820b9826b14d3f2911d31c7b9dfc4518ba8",
-        "index:context_engine_turn_outbox:idx_agent_context_engine_turn_outbox_engine": "b03fcbe207aeb6b7d641254320c9d196a3295dd3858449da72e3344ed33492da",
-        "index:conversation_deliveries:conversation_deliveries_pkey": "6e7bbcc46373870c90aab69310d963972a6824f9486e530e47f638b26ce760d6",
-        "index:conversation_deliveries:idx_agent_conversation_deliveries_reply": "2054d7d3a776387bb4a23a9aae31d97bfcebdef9494ea66c34903e09dcf3491f",
-        "index:conversation_deliveries:idx_agent_conversation_deliveries_updated": "14296ebbe87701ea0bc88094ea279e2a149dd25f51c287e5ca89f08cda26e17f",
-        "index:conversations:conversations_pkey": "09fb0708d0f180e63b89282ddb9b3f7cd3628f17b3d9cad103f3ff0be368a0c0",
-        "index:conversations:idx_agent_conversations_identity": "4b93e664fa3054429eb74892756cea7419ca188cd652b60d6b3b31848960390b",
-        "index:conversations:idx_agent_conversations_lookup": "95d7fc1adebe24f38da265df455b14697323e74357e660691a40179b93636fd4",
-        "index:conversations:idx_agent_conversations_updated": "9f9198eb480133ba5ac27f208103da5788dd31037472fe87dcc31796cb8ad889",
-        "index:heartbeat_outcomes:heartbeat_outcomes_pkey": "fc7fa79008b41ead4b6b8329f030f945c826a966616d936d99f0f0f13c25b910",
-        "index:memory_embedding_cache:idx_memory_embedding_cache_updated_at": "cba464e83663c5ec8f1fabd1d81af8f071909678a7cb5f6b6ce5150bf9f2ac5d",
-        "index:memory_embedding_cache:memory_embedding_cache_pkey": "e7bba98a87437a6df6ecf097e886db92828e0fb0cdf9feab088e2cc6dc5a7ec8",
-        "index:memory_entry_origins:memory_entry_origins_pkey": "a1e62db179e97d953f90c5c24e631c65fa6a2d931634c6059da33a19714537e6",
-        "index:memory_index_chunk_provenance:memory_index_chunk_provenance_pkey": "d7ecd8f87aa6274f5c422a2d4a56275f8c3c3e0abecbaa5237038114321c6692",
-        "index:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_pkey": "1c504a0c4e597adea2ea719c9e129df1ccf9f32186746c2101fad3f154451353",
-        "index:memory_index_chunks:idx_memory_index_chunks_path_source": "85d9d0cc194abd17604b711adb652f2281c47fb226fe6363b36c12652bfd8525",
-        "index:memory_index_chunks:idx_memory_index_chunks_source": "c5b6306c389e14a11539fce811c6f5dd3ea56fbe6947650902be021052884fd5",
-        "index:memory_index_chunks:memory_index_chunks_id_key": "0ec211e43864abe0cdc8717210f2a13ecd51ea1b82cf515a58e832fe21ff7747",
-        "index:memory_index_chunks:memory_index_chunks_pkey": "a69e2154e10589a8edb892b9f8912aa497f0c3acc178c68bd5684facdcbbb061",
-        "index:memory_index_chunks:memory_index_chunks_search_gin": "6d96a6f1fe006827357225e36bdbe0a6f84727c8cf77cf7e5a0d55a708c7197c",
-        "index:memory_index_chunks:memory_index_chunks_trgm_gin": "65c8906ca281c03575d60ec05f83cc119c2cc6f45cdb57eb7c59edb5cfe69d6f",
-        "index:memory_index_chunks_vec:memory_index_chunks_vec_pkey": "c70474d2fe25a33924eaf0d1e791a69b01cbfb1537e0f3e51053a8a0a710e3ad",
-        "index:memory_index_meta:memory_index_meta_pkey": "9588159d810acca433c91ed8d0658722401ef1e50d7ac56e37a3ba0497b81430",
-        "index:memory_index_sources:idx_memory_index_sources_basename": "ee48bfd0a31f88e49aec934e91e20954290e73e9ca3e49ea5b2b1f5abc415df5",
-        "index:memory_index_sources:idx_memory_index_sources_exact_path": "c480c11420f498bc27e2b1ca4181fe38d75a58d0d442dd7e1d8a3e041d443ac1",
-        "index:memory_index_sources:idx_memory_index_sources_source": "9d9a7d5bc0a473f160713c17067c4193a4e92e4d29ce5abeef158e1e9eb6ba68",
-        "index:memory_index_sources:idx_memory_index_sources_stem": "0158433c51e71c336ca274d13cf096afcba4bf659f455cef09470c6dcbed63a8",
-        "index:memory_index_sources:memory_index_sources_path_source_key": "a819cf8b602287251bc4e964c437eff764e12bb5bc4c7b851c3cc93e5b531f2d",
-        "index:memory_index_sources:memory_index_sources_pkey": "5063ba7fefc51413aa8a8706f5fdd550fa55ae23015ed987fb8268bbe9afd658",
-        "index:memory_index_sources:memory_index_sources_search_gin": "16af982bffca34b97912f54d4e1b46cf5d40f7db05db95de4d3399229aad9efe",
-        "index:memory_index_sources:memory_index_sources_trgm_gin": "e9c53b8141507c7248233f173bb6d9a54a78ac73f1c272030b5b1ee0614c6b27",
-        "index:memory_index_state:memory_index_state_pkey": "05d9f996b3991024d81cc7fcf2df3fcdaa11124a029ac8cef8d23175f69de97e",
-        "index:memory_session_tombstones:memory_session_tombstones_pkey": "62ad081deff6b4fbbfb272b1224328a4f5dcde06e585be9588fbbe6a6f2701ec",
-        "index:message_tool_run_outcomes:idx_agent_message_tool_run_outcomes_occurred": "c4a6cdef8a95230aa28e9b0c1f45b00d1b7d476514c161d0bf0a146466da7869",
-        "index:message_tool_run_outcomes:message_tool_run_outcomes_pkey": "b7cb667bd05f80c931c665fff7ca6284ea3b1e98af3b30e10a43c5c564221b36",
-        "index:openclaw_schema_meta:openclaw_schema_meta_pkey": "44af00e689c9842f161531268aa03f4921429cdeeafb3ef099a8b0c7d581e783",
-        "index:schema_meta:schema_meta_pkey": "377d1f5eb3493911929f484c1a0f84e009c512ef658cb60664aa209abdf9cea8",
-        "index:session_canonical_validation_pending:session_canonical_validation_pending_pkey": "f74858faf0b26ae5ab55c9c65abae98fa4dc9a0773004456ec6d4ffea345c37c",
-        "index:session_conversations:idx_agent_session_conversations_conversation": "373fdc8c23d697089fd3d311442830920aa403fcad483e7bad824f2d263bd21a",
-        "index:session_conversations:idx_agent_session_conversations_primary": "c81996d87970a422d31d61a495c0231aa8d9b6ac51d5b83eae3c78187ca03a33",
-        "index:session_conversations:session_conversations_pkey": "d8d6a5eedc2bcecd6499aee11145f543158716dc8e8f7e9339a75f37f75a7c71",
-        "index:session_entry_snapshots:session_entry_snapshots_pkey": "fa21f34b11e3448551d33112c2528b4ff46b8b1d7289996b1c9f866836695fca",
-        "index:session_goal_operations:idx_agent_session_goal_operations_expiry": "88bb4ed6a81338dc19e8e5be1118248271774b83066bbf9a27b1ab657444325d",
-        "index:session_goal_operations:session_goal_operations_pkey": "fd968fbb2a969356feff9e5bd604cb3954d40edb72f23f7f296d8a5de2c14198",
-        "index:session_input_completions:session_input_completions_pkey": "928024daa4beeb30010abd7cb43b005aa8aad029bde20a4f684cda0fbcf07130",
-        "index:session_key_contract:session_key_contract_pkey": "1bbd4ea9b587cd1ee1f757bcb8432e9bbd33a25e905074ad53c1affdabcd8a35",
-        "index:session_members:idx_agent_session_members_identity": "97b8da1cea17ae07f517a426ff2032fcbb499bb5f80360e2bbf1355d5daf77d8",
-        "index:session_members:session_members_pkey": "3bb5c0d28e32c9b3ed07e789799552cf70591813547b8aaed889e34692a58a9d",
-        "index:session_nodes:idx_agent_session_nodes_active": "251617340c193e378cf9f75e701109e035129088e97686acb21212640ea5a636",
-        "index:session_nodes:idx_agent_session_nodes_archived_at": "a0d46d604878a9655edd2e00e5e9a4040be98a088b2d799f3fa3de4fe338fdc0",
-        "index:session_nodes:idx_agent_session_nodes_current_session_id": "99012710ad055ff0861fbded30a46c88ba99c44a3afe1f4c2532224dd6a70bb9",
-        "index:session_nodes:idx_agent_session_nodes_entry_not_valid": "cc9e95f38405d7da78fdbfc3460453a84e8a7346654c19b96e30cde25d2ea257",
-        "index:session_nodes:idx_agent_session_nodes_entry_valid_pending": "7ec63a59ba5a69346f3f9e3c9b4061f685bc99c2abdcc72fddee25573399bb80",
-        "index:session_nodes:idx_agent_session_nodes_label": "59d9cdb5f7084e08f008d3c467caeed9a2012b93a31b09236b824b13ca54ef9b",
-        "index:session_nodes:idx_agent_session_nodes_parent_session_key": "9e5ff1840d155bc44bf6ac7e9130ecf647c1326a643b0815386a40b399f78acd",
-        "index:session_nodes:idx_agent_session_nodes_spawned_by": "a9d71be5fe55ef65b0e659fba39730a92f08fa7ac90e57911a6492c5158c1c25",
-        "index:session_nodes:idx_agent_session_nodes_status": "0f86d44a83f17f799c7563fdbe945bc640513a2b68089525d8cd7674160289e1",
-        "index:session_nodes:idx_agent_session_nodes_updated_at": "4454a8b6b60edc89ef881e8a3363a92a5aba2ef9b14f93104a5e49ff71a732d9",
-        "index:session_nodes:session_nodes_pkey": "9d03c595d1d35e17a1fc34e4f2eb557ce41dbfd519aea440754b56374a932cd4",
-        "index:session_participants:session_participants_pkey": "1c101ed27a126e0bde3faa6c0bb14ec3f8932f9055d9247b9b622c7875e51a50",
-        "index:session_pending_inputs:idx_agent_session_pending_inputs_session": "52a45eb2a25a0651b73c47e568f39312be07790fc59cbb79cb57a06379ef2040",
-        "index:session_pending_inputs:session_pending_inputs_input_id_key": "40f92a06a5387469b6cb74423fd9b39a9da04dcfd45777b30e5cc693913a05ba",
-        "index:session_pending_inputs:session_pending_inputs_pkey": "b13938f3be2b99fe3ece347fcb3914349b0b5314ae37ea3d7a44c008b908644b",
-        "index:session_pending_inputs:session_pending_inputs_session_id_idempotency_key_key": "269567da5c2c1375d5ed639d414fb83ed3aed12ee66dd98390cd3760d8abed35",
-        "index:session_progress_cards:session_progress_cards_pkey": "fb77c6f196d7975aa19afd5c97a8f66a57b78d5339d8c0ac11de6f4fa14161ea",
-        "index:session_reactions:session_reactions_pkey": "16eb9cf5c293b20e63e2618514ff1449bbd08f51ed097fdf7c03b638f0dc79ec",
-        "index:session_suggestions:idx_agent_session_suggestions_author_created": "c460ca0b918003fb70e2693f83310d28a600670e4624c57f208cc0463d8c1267",
-        "index:session_suggestions:idx_agent_session_suggestions_session_state_created": "b35a45d7034412ebb2e3e7cd50521895a978b03b249510f8b0b72ef616bc8f83",
-        "index:session_suggestions:session_suggestions_pkey": "98921f8d8ed1a0b1303361e510f4efa3d1837b944c0507141e0423ad1a1fb4c9",
-        "index:session_transcript_active_events:idx_agent_transcript_active_event_seq": "9ba5e79ba583b1ed1859abdc11fae9ec9afbee255e268902bb72d054e24c8fd3",
-        "index:session_transcript_active_events:idx_agent_transcript_active_messages": "783776c2d8439d4cdc9695798869ab5402c93e96d51cd35840a79bd703881e26",
-        "index:session_transcript_active_events:idx_agent_transcript_context_pending": "22e2111e3dc2ef4e4f454aa9719a911272a49b65177635fe10ed85a97aae6988",
-        "index:session_transcript_active_events:session_transcript_active_events_pkey": "3bbb41ab754a23604229124959d9d4e9af29e6e366e97a7dd6e3628bea9f2275",
-        "index:session_transcript_archives:idx_agent_session_transcript_archives_pending": "f773f382a0ddba85ab28a32e7e725e3ac9f6f0d4384c6de8ad6be468f38647a2",
-        "index:session_transcript_archives:idx_agent_session_transcript_archives_retention": "1b521f38c96b21b6e8903cbd2a1a4b6b5b905d6e5b8eb401b159d8b062018257",
-        "index:session_transcript_archives:session_transcript_archives_archive_name_key": "e04f54dfe0d06ad5421f0daf662416f51599ce67e7866a61e6690c7cad1f3057",
-        "index:session_transcript_archives:session_transcript_archives_pkey": "205a2fa899d1f66e792fe2125cf78e56f2d430cfd5935b61e213be7d24dc70b3",
-        "index:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_name_key": "b192f027646d9a0ffedd114cb550ff9abae03c54b77e99678f3c6dbecccb157f",
-        "index:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_pkey": "3e343924eb2f959919047ed538d238fcc4e343295c93ee703d16dfad7ca67c77",
-        "index:session_transcript_cold_archives:session_transcript_cold_archives_archive_name_key": "9a1555b73d1ebe5364ee4d2d36116b8f241539c026509417816cdaa1e1abea47",
-        "index:session_transcript_cold_archives:session_transcript_cold_archives_pkey": "0ce04489aba2ce69d592387bda0059bf2cb8ecff789b76cc51314fe04d390b19",
-        "index:session_transcript_fts:session_transcript_fts_pkey": "8e0548bdb1e3fe4d2e2f3b1a22aadc5cdf6b3f8dc620d38568aad800a4a36819",
-        "index:session_transcript_fts:session_transcript_fts_search_gin": "e73192d46ddbde466917a393f6dca840986e7fde1836b638e696e5698b603235",
-        "index:session_transcript_fts_rows:idx_session_transcript_fts_rows_session_message": "a734e056ac3e6e5b7ab47ec00921231b927144afaf86258cdb8b31632100157a",
-        "index:session_transcript_fts_rows:session_transcript_fts_rows_pkey": "304e2c8520d3a73eee60122a3819cbe1a6aae7b3493bf5855095001843767ba8",
-        "index:session_transcript_index_state:session_transcript_index_state_pkey": "8836d609587286ad7f0e61019dd697da6cde242cc579a5efbe03e8986b53e180",
-        "index:session_windows:idx_agent_session_windows_conversation": "1773fd7bf4557d23db1baa0da29fced792bbb8ea17a065b7b7689aa11aa6d2e5",
-        "index:session_windows:idx_agent_session_windows_created_at": "17a9a0a4c211f2a39a281f0b6b400b4a6c5faf1abdd03312b6c23b1735f93192",
-        "index:session_windows:idx_agent_session_windows_session_key": "0ce30b11104f8c66d38730405b2799023719eff0101d9f47822d66c0fd0e4c65",
-        "index:session_windows:idx_agent_session_windows_updated_at": "eb0312d04eae65b40248653910259a5e5f668476572061c90243a29380d5fe28",
-        "index:session_windows:session_windows_pkey": "c6c9eb19c8f48133fbad5029620bb119aadca3ee5061a40986194811b7a9d148",
-        "index:standing_intents:idx_standing_intents_lifecycle": "28d397445902408e7e81fa3d82cbeef9c11af7213359b29f376734a290880dd1",
-        "index:standing_intents:idx_standing_intents_scope": "901cd0ad4b965a9cb12e696b6e106f5ae88bbe22b8a3fa21d8d4785f8ebf3579",
-        "index:standing_intents:standing_intents_id_key": "b4267e1465df391ecddf5441491aeab2a4664a14cf532e93b58f14075e0ef877",
-        "index:standing_intents:standing_intents_pkey": "2efdb649fd5f781f472e004e5e5df14a157c3e94613f4b2428b55c6d7862da15",
-        "index:standing_intents:standing_intents_search_gin": "744d60ae6fe476f7a83719cbe2715a0c4a8b3e8d2e2aa6e7b3b622e16bbb33be",
-        "index:trajectory_runtime_events:idx_agent_trajectory_runtime_run": "8ade815dd6204d1eb15448936de8c1dd65a924bc770647030b58179360c58389",
-        "index:trajectory_runtime_events:trajectory_runtime_events_pkey": "a7e1399dc958fdd6e88c319918bf99dc1aac945c74930f5328a4fb60f15f95d2",
-        "index:transcript_event_identities:idx_agent_transcript_event_identity_sequence": "05ccfb1dfa1028cdc616c849f48e9e70837b6047de225d516324df99956f9b58",
-        "index:transcript_event_identities:idx_agent_transcript_event_sequence": "22a1b86d97b782ffa95be4cee09d5cf6f555c903255288f59079f6ecb42753e3",
-        "index:transcript_event_identities:idx_agent_transcript_message_idempotency": "b83fb5b33c5e4baece2919e566fa167b0651853a93d7326fc3ed2c225bc3a9f6",
-        "index:transcript_event_identities:transcript_event_identities_pkey": "20148d9d139c08776faf9341ed13ba8280aa2d97d92e33210117621d0d06ca78",
-        "index:transcript_events:transcript_events_pkey": "226afdec8cad24e631c3fe1f97f359979968b4f37a3a6b62ac4adb4c2fc0bc11",
-        "index:transcript_rewrite_watermarks:transcript_rewrite_watermarks_pkey": "8bd37207312178b6d82f11806e685c2c505f9d9b012680328e1611e981899112"
+        "constraint:acp_parent_stream_events:acp_parent_stream_events_pkey": [
+            "80fe34cc8212a0556890c7a097926aa8123e7dc7c36e600f5bd35d5eb04e5949"
+        ],
+        "constraint:acp_parent_stream_events:acp_parent_stream_events_session_id_fkey": [
+            "1f7a6e73b9865e62bcde9d52dda98b585c1934ce8ea1912d148fc6ab609bf805"
+        ],
+        "constraint:auth_profile_state:auth_profile_state_pkey": [
+            "f93d9c8d904f51b6f3bd8116efccef2a25cbe1b608af661d69be373e10da214f"
+        ],
+        "constraint:auth_profile_store:auth_profile_store_pkey": [
+            "d2b0d5c7cd011022b3728fad196b2debd877aaecdfa1903bc5d3b48dfb2f9314"
+        ],
+        "constraint:board_tabs:board_tabs_chat_dock_check": [
+            "cd298843b25c04d56e2fe885ec8a30348117a67434e00379f20557718ffe360c"
+        ],
+        "constraint:board_tabs:board_tabs_created_by_check": [
+            "b496e1e2d928ab8bcc355ecb764056b535529924c05e717e227f51b43a116506"
+        ],
+        "constraint:board_tabs:board_tabs_pkey": [
+            "f8cd43ca2aec49b31ea7d0de78a0e3e48cb2e41250fc36d59c0aa3806a5519fc"
+        ],
+        "constraint:board_tabs:board_tabs_position_check": [
+            "dbb29c581c242e354d7d8a0ada346dccdbd09a3ab27332420763835e81ee71ae"
+        ],
+        "constraint:board_tabs:board_tabs_revision_check": [
+            "a1126bf419ab2e936eb391e8bde1c6058f7d7d2e53e263ae5caff74a3badd2bb"
+        ],
+        "constraint:board_tabs:board_tabs_session_key_fkey": [
+            "bb5d2b1ad36498ab8a67ab7cc8cee4d42aaea7a0fdec2d65af1e46e90b56f8a7"
+        ],
+        "constraint:board_widgets:board_widgets_check": [
+            "0ba1e3801d8884b6da9f356a64486d0fdba1fe337c492cfb8707fd9c144fccdc"
+        ],
+        "constraint:board_widgets:board_widgets_content_kind_check": [
+            "382711118a302d0ba6737630e2c9efe7189f8a955e1a9a59106f10c57a5895d3"
+        ],
+        "constraint:board_widgets:board_widgets_created_by_check": [
+            "8441e9695e07c0ac2009e0d2091e88a1a897d3a81dd1be275c64b98ee894ecfd"
+        ],
+        "constraint:board_widgets:board_widgets_grant_state_check": [
+            "57902ab2119e5783663dfa2a182eb1c632b15a6bded3f4815080615f5f2fbe3d"
+        ],
+        "constraint:board_widgets:board_widgets_pkey": [
+            "134e86f6dcce7e9eecedbeded15fa1fd417605e8d2ee9279a5b688c51fe1b1aa"
+        ],
+        "constraint:board_widgets:board_widgets_position_check": [
+            "ed175020985d7be5ede078e05a914c9aeea8804e401a362b6645e6dec520324d"
+        ],
+        "constraint:board_widgets:board_widgets_revision_check": [
+            "2a1f1440b41ae306b10770c3d12a0ceefe5cf22ddfa35cb67a6413897cc03ed3"
+        ],
+        "constraint:board_widgets:board_widgets_session_key_tab_id_fkey": [
+            "2cc38b2d565b0af44d78e03cbb849e97ea826fcb6acc733ada9edf964d2b88d8"
+        ],
+        "constraint:board_widgets:board_widgets_size_h_check": [
+            "0ab5287af405d5f38b8abf3af5a54c7a40a554293dbece28907733f3061f080a"
+        ],
+        "constraint:board_widgets:board_widgets_size_w_check": [
+            "681a2bd393bdb576fcbede4d1a8cac4cfda886ee52425ef7c13b134eca4e51e7"
+        ],
+        "constraint:cache_entries:cache_entries_pkey": [
+            "d11bcec684c3f4a7c804547f93b56c30fca413306216e86dfc8a2d6c8b517a71"
+        ],
+        "constraint:context_engine_turn_outbox:context_engine_turn_outbox_advancement_key_key": [
+            "6d57ebd8788dbbe6c01e2535a13a23dbf2307b6e4c7879e306030dd915dff22a"
+        ],
+        "constraint:context_engine_turn_outbox:context_engine_turn_outbox_pkey": [
+            "3c6189e13f078a5a4f10a5a9bab8e52c5c15f611198470876b433f445e7f0c9e"
+        ],
+        "constraint:conversation_deliveries:conversation_deliveries_check": [
+            "341c113a79598bd320a39d17f4b27a436e4daa63e0c8f800bf48a6d487a467d5"
+        ],
+        "constraint:conversation_deliveries:conversation_deliveries_conversation_id_fkey": [
+            "f5e756333550a1456916d44f4501e7ac4c30458f91df774c8146f09a418aff34"
+        ],
+        "constraint:conversation_deliveries:conversation_deliveries_operation_kind_check": [
+            "d3d2b3fd54f084e52c3bf10dbf65dd06f468d8aa420876acaf3270e7489304bb"
+        ],
+        "constraint:conversation_deliveries:conversation_deliveries_pkey": [
+            "7944d6a4a3918929c40572cdf12f64f2457d2ddf0dc38dcdfb3791228a896103"
+        ],
+        "constraint:conversation_deliveries:conversation_deliveries_status_check": [
+            "f6bf6e8c7ce2a5bb2967e9fce809d46e262ee3faf9720ac51b61464759e42804"
+        ],
+        "constraint:conversations:conversations_kind_check": [
+            "0e65ad91627eba22ac334e7f04a4d9092b923462ed24bd68e099023853be286a"
+        ],
+        "constraint:conversations:conversations_pkey": [
+            "0b34d5a1aa0d07ecc88127418f4210ed370b3f47fd14f2d6688e2967639bce01"
+        ],
+        "constraint:heartbeat_outcomes:heartbeat_outcomes_outcome_check": [
+            "8c348ab46084e322c5085393646e91510d06c5b1157ddb189e29945770b16ecd"
+        ],
+        "constraint:heartbeat_outcomes:heartbeat_outcomes_pkey": [
+            "5cfd65a1e98322900315eb8a2e19a0094bb0dd19bd8d8b8f3643838c32ddcfc3"
+        ],
+        "constraint:heartbeat_outcomes:heartbeat_outcomes_priority_check": [
+            "286f25c050aa6210f1270a64ce199853796108a89fc154bbde098ab5c163f536"
+        ],
+        "constraint:heartbeat_outcomes:heartbeat_outcomes_session_key_fkey": [
+            "d5d2c6e8f2a3ccf4d3e094d1fb78523e26b1896f08adb2f0330472f734912664"
+        ],
+        "constraint:memory_embedding_cache:memory_embedding_cache_pkey": [
+            "b0f72a8815b92b3ee654fd1aee771ef35e5315f2965d275650475c7061bd8d06"
+        ],
+        "constraint:memory_entry_origins:memory_entry_origins_origin_class_check": [
+            "4f1534ee5e7d62cbefad47adc7cc2cc739a5dbcaefb9d56deb494b364c9b0cf4"
+        ],
+        "constraint:memory_entry_origins:memory_entry_origins_pkey": [
+            "c182bfe750091531fc6f2e7826608d1698ab5a112f2f5363ea2a31439379e715"
+        ],
+        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_chunk_id_fkey": [
+            "b46ccf93ecffd1c45182d5beb01ab0c671c32bc61e6903d6ac7075a54e8e8e92"
+        ],
+        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_origin_class_check": [
+            "0a0bd238178639145578bb09092f9e5d9be1ed2b70423088cbcac31cd0619f4a"
+        ],
+        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_pkey": [
+            "ad03ca1f186beac54793c0a873886120f04f7f36dfe60a9c78927afffffd8660"
+        ],
+        "constraint:memory_index_chunk_provenance:memory_index_chunk_provenance_session_kind_check": [
+            "fdca093b7a5eef4693236e0230c71b305befc4280b7b3b46d76f3d47cad53577"
+        ],
+        "constraint:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_chunk_id_fkey": [
+            "a8e5d96e7be67c3ba7064efb587ce8d72799aff4909ae100b3460d914d2303d1"
+        ],
+        "constraint:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_importance_check": [
+            "cb0b6aa4f6ce7b574ce575e82a997f70d8f069f2baf74f42ed4e03168742aa80"
+        ],
+        "constraint:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_pkey": [
+            "86005732ffe2a874ca9dc9197db000ba3e5133dd9c5a4728e93f9f7445194396"
+        ],
+        "constraint:memory_index_chunks_vec:memory_index_chunks_vec_id_fkey": [
+            "789d3f2d83416f064720c4c4ae08cef8f1cf77f37c1655b9532afb8986c64d54"
+        ],
+        "constraint:memory_index_chunks_vec:memory_index_chunks_vec_pkey": [
+            "6ff928e8eb5fcfdb3160aae3853d42810e2a94a9acd2869ee0a080705c97eed5"
+        ],
+        "constraint:memory_index_chunks:memory_index_chunks_id_key": [
+            "8c78c19dfe36deaae21611175b3d87058fd315cc7b1314d955266efbf1584bf5"
+        ],
+        "constraint:memory_index_chunks:memory_index_chunks_pkey": [
+            "53164ee5ad24cca4251a34c31442f8f0691377076e68d8168e435e91e6e60cd5"
+        ],
+        "constraint:memory_index_meta:memory_index_meta_pkey": [
+            "62433100002f0a3b2e67810c088dc85727e97bbb0c3bbdf3f07781ee04e83b6d"
+        ],
+        "constraint:memory_index_sources:memory_index_sources_path_source_key": [
+            "c2c51a0c7e376535084113f9f8fd16cee58f8e25beb74afb4d54d55534b537f7"
+        ],
+        "constraint:memory_index_sources:memory_index_sources_pkey": [
+            "aee566c05f86c92d78ee61936b893c45a6b40ccf95545d0535b39144c8c96b09"
+        ],
+        "constraint:memory_index_state:memory_index_state_id_check": [
+            "fca285e60cd6daf9c410bf9b5507d3366d32a502a6e7f149a6dd3faec3da7eef"
+        ],
+        "constraint:memory_index_state:memory_index_state_pkey": [
+            "9af9603436e03832d5463744d8b3349ff3f040d804cbb25fab331d4cbc3d7bdc"
+        ],
+        "constraint:memory_session_tombstones:memory_session_tombstones_pkey": [
+            "8c769d0a0e9a4f41964b625ede5b4e0df8b7506110eb9b19488e542bbdc43369"
+        ],
+        "constraint:message_tool_run_outcomes:message_tool_run_outcomes_outcome_check": [
+            "ad26608535ab5313db420f0167edcc3553bd41543192fb2cce675ad677fe63ed"
+        ],
+        "constraint:message_tool_run_outcomes:message_tool_run_outcomes_pkey": [
+            "270fd01ba4ee5b552bc629523a7ed134e0468a7bfc09513fc06ecc952c22f6a7"
+        ],
+        "constraint:message_tool_run_outcomes:message_tool_run_outcomes_run_status_check": [
+            "139dd36905abe154bdca9ba33ff6f5c669e8e65f9bfcdeb3f7683d3d21cf0e1e"
+        ],
+        "constraint:openclaw_schema_meta:openclaw_schema_meta_pkey": [
+            "6c389fe2e364bb4fee1b7149392a8382ea533fac3ca77378f64454b9b1f277c3"
+        ],
+        "constraint:schema_meta:schema_meta_pkey": [
+            "1fd332b010670c92bd16c09de09c391cc0a50ae726db2d33ca9a95d9abdef756"
+        ],
+        "constraint:session_canonical_validation_pending:session_canonical_validation_pending_pkey": [
+            "415acf13794699cb8102a363aed05ae5472eb61a75360fa5d9ed9c6d99da917f"
+        ],
+        "constraint:session_conversations:session_conversations_conversation_id_fkey": [
+            "814babf7e707df5a4c44ac7e2342cbd534ace9e66d36f509376d4904c381167f"
+        ],
+        "constraint:session_conversations:session_conversations_pkey": [
+            "6e27acb4ea0ec1e4def00a012fe127486cf1caa712340395ca403cea8102dfeb"
+        ],
+        "constraint:session_conversations:session_conversations_role_check": [
+            "9c4e530d28b0c33a035895d8a055c139b19dd6baf27703d3fd85014de26cda9a"
+        ],
+        "constraint:session_conversations:session_conversations_session_id_fkey": [
+            "6116e929af67b89115a3ec28adaa6875d6feebe3796d679763b3ba624860a8f0"
+        ],
+        "constraint:session_entry_snapshots:session_entry_snapshots_field_check": [
+            "bffdd09f3611d2620e510a1610cae8f5ce691b4f309ec48e6b037ba3cbdd12ed"
+        ],
+        "constraint:session_entry_snapshots:session_entry_snapshots_pkey": [
+            "1ecf766712c8c976249daca6275d20802263623d17a2a64a36636d6acc88410b"
+        ],
+        "constraint:session_entry_snapshots:session_entry_snapshots_session_key_fkey": [
+            "507a30e234f086e642e5e3cb88da06f880364aa95794179a5468beb7e46621fd"
+        ],
+        "constraint:session_goal_operations:session_goal_operations_pkey": [
+            "5774945aec558f2e95fe600d2bfac4bf7a0852e84a85ae18cf00530a0a5bde8a"
+        ],
+        "constraint:session_input_completions:session_input_completions_pkey": [
+            "5c615e336eff68a944c47a7386b4d0d554296b269c7191f26a7b14c226e7a9da"
+        ],
+        "constraint:session_input_completions:session_input_completions_session_id_fkey": [
+            "92fd3bd6bdb3539e839bb1954d9bce72b310f98d8dceba2216829ce647fe29db"
+        ],
+        "constraint:session_input_completions:session_input_completions_session_key_fkey": [
+            "6eaac59fb865c285cf92e3ddd386899269bd0101380cccee78515c998f33d0f0"
+        ],
+        "constraint:session_input_completions:session_input_completions_succeeded_check": [
+            "fae5b8512563fe2f195a5d7c2c5433831ae4338a3e8162387a224901bfe8eb14"
+        ],
+        "constraint:session_key_contract:session_key_contract_id_check": [
+            "9eb4d8652f44918077406b1fb654bd4a65312044720301e5781502e2bd16aa07"
+        ],
+        "constraint:session_key_contract:session_key_contract_pkey": [
+            "eaedcbde80f45442045d981957d77a2242f6792f3d41edda392ea09adbf33d6b"
+        ],
+        "constraint:session_members:session_members_pkey": [
+            "c29a1f8f1c5d626f1cc26238ff8a6eb6ba525f617df8ecc5b32d611be288aeba"
+        ],
+        "constraint:session_members:session_members_session_key_fkey": [
+            "96b889a0ee01ebada244c6ba0d55c828bf39c0dd8bbb7c3312522eda16a30eea"
+        ],
+        "constraint:session_nodes:session_nodes_created_actor_type_check": [
+            "516978ea56209b151efc07d44e39061c0208145beb34710f5855d6ad290d29aa"
+        ],
+        "constraint:session_nodes:session_nodes_created_via_check": [
+            "350a681a01f54bb8c3c1b1175f6d009ba1db523f4ff43c11e16d0063bc75520c"
+        ],
+        "constraint:session_nodes:session_nodes_entry_valid_check": [
+            "d378b1713b68ca76f65615454b7657c694f1f0377391f4797e181e75a8da2b02"
+        ],
+        "constraint:session_nodes:session_nodes_pkey": [
+            "cc390771ba3ad061b6a8db7f84072a136096a2fdb1f0dc87ce78b8d56ec41303"
+        ],
+        "constraint:session_nodes:session_nodes_status_check": [
+            "c4690791b379fa73e058b21616eedc5f8da5fc5d72914a8ea275eb8deaf4853f"
+        ],
+        "constraint:session_participants:session_participants_pkey": [
+            "c7d055271ab7c817598784a3a4c974862a4b806b49a900c8945379c5edd7ebc5"
+        ],
+        "constraint:session_participants:session_participants_session_key_fkey": [
+            "4e12a6405357e60520e6965c106e7d78f7c6e1554a00a5ffb5c11b86d1d299d1"
+        ],
+        "constraint:session_pending_inputs:session_pending_inputs_input_id_key": [
+            "be76f9d9152987ff52bc48d1b2bf792db986b3e964cb9b05af8bd4f894999657"
+        ],
+        "constraint:session_pending_inputs:session_pending_inputs_pkey": [
+            "f9fe2d1fda8724fac94d19fd4c4d95f30d0f08b37c7dc142861c1a84c26c5203"
+        ],
+        "constraint:session_pending_inputs:session_pending_inputs_session_id_fkey": [
+            "7fde83a90ebaa81447434f0ab604fd70692d5b1d4531e71e3ec45d142d2ca4cb"
+        ],
+        "constraint:session_pending_inputs:session_pending_inputs_session_id_idempotency_key_key": [
+            "4f76bcdc8c7fd6179f193abc82775e26928e9050f71bf45a36844b31871a8117"
+        ],
+        "constraint:session_pending_inputs:session_pending_inputs_session_key_fkey": [
+            "295b0d3928232162ac89536b065265f3515e9b72a534200db92fb0754b15d04d"
+        ],
+        "constraint:session_pending_inputs:session_pending_inputs_state_check": [
+            "924fbe837f4c5fdf6579de857b3e0d1889f15b6d92501f0bb8215583b8bc1fc2"
+        ],
+        "constraint:session_progress_cards:session_progress_cards_pkey": [
+            "950974a74c1f7a452592e6023b49949e0e619624bf39a03f841fee7c22b4ad07"
+        ],
+        "constraint:session_progress_cards:session_progress_cards_session_key_fkey": [
+            "7ab08511efb9c3e1ed6671bd66ac12f09d0d90830b5fb3907f7ea5bcf04ce124"
+        ],
+        "constraint:session_reactions:session_reactions_pkey": [
+            "8ba39771dbb52bbb48a3af734f2383b45fdfef212c71e8ef0b69e2156c9004c9"
+        ],
+        "constraint:session_reactions:session_reactions_session_key_fkey": [
+            "969e9ae7f215f877d0de7b8ba7964fa0767e2d95a31079ecf455fc3ba4d73496"
+        ],
+        "constraint:session_suggestions:session_suggestions_check": [
+            "25908a5dbd71af1eac8ebaa8ec36f3e93a24c2e604c0a768ed49dcf58c9a7c60"
+        ],
+        "constraint:session_suggestions:session_suggestions_dispatch_resolution_check": [
+            "beef6594a190ca1e7ead95184b311a6d109bf1e20803c13cf8c1ccad6aa70de6"
+        ],
+        "constraint:session_suggestions:session_suggestions_pkey": [
+            "915d80b4a9c2efaa77770d7b3c500111267542a7251f0ec3347e138b8bad88a2"
+        ],
+        "constraint:session_suggestions:session_suggestions_session_key_fkey": [
+            "3a2658c7800c1002de588febda063dbdc92c476234e21146b2ca4ef2b20b2a1b"
+        ],
+        "constraint:session_suggestions:session_suggestions_state_check": [
+            "7515f28ff02aef46abf073835a16dda732d73fe72fccab8d6b069ba28a839f4b"
+        ],
+        "constraint:session_transcript_active_events:session_transcript_active_events_active_position_check": [
+            "a66943725d93299732384c0a5307d20a1003a6518c3fe5956e65c7d5ec31f096"
+        ],
+        "constraint:session_transcript_active_events:session_transcript_active_events_message_position_check": [
+            "96bcb8137be3600900291bac51d8657f72342af9cce4aac6579466e9a09ccdae"
+        ],
+        "constraint:session_transcript_active_events:session_transcript_active_events_pkey": [
+            "ec8f0e77be9d0078b401425bb48b105e8b4388593f520a3b38c3f6c7f5da2ab3"
+        ],
+        "constraint:session_transcript_active_events:session_transcript_active_events_session_id_event_seq_fkey": [
+            "47f1a106a7278ed2a306738efdac4cd0fcd6c3ae475a7e076bf584328cf44033"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_archive_name_check": [
+            "801cc21cc632afe6d394de7b66f4e16a7c29172b9436d828d124d8624d87332e"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_archive_name_key": [
+            "f6781aa7eda55d97b8534a562001e96050114c0b73905ec96e90b9085c10794b"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_archive_sha256_check": [
+            "ae523491cdd642efadfa6bb585b91d1b04fff3b886bfc71a0b216a0a00ce7b8d"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_encoding_check": [
+            "aa69abac4b224fddadf3a021a96de62261a485a94e00c57959f9bd76739502d0"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_pkey": [
+            "bd39502e5f7920740d6bac7135107e36332062fcc2a2db5ca0303994bbf1eafe"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_publish_attempts_check": [
+            "807010545bec5a1b4b16e1048588f5f143adf34343ac27eeb210ae8d56e20158"
+        ],
+        "constraint:session_transcript_archives:session_transcript_archives_reason_check": [
+            "e381dffc86a16b35a5d2c20ba6dd9581757ef0fe81ba7c6b1f9af9624c9a4499"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_bytes_check": [
+            "6a1ba82c239b18586a694682f2c945e0cf392642a3ba60298832e257b52d07e6"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_name_check": [
+            "9b114572e8ef24d1b0c15dd645626f0035e2f3c9f1873808d23fa529aca02b15"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_name_key": [
+            "9fcac4923587782d512f044768ea1cd34c4d38f9b26b3c38072adc8645364576"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_sha256_check": [
+            "7b7aaaa1b8fc31e17267a448cccc6ac5dc6fb0a83216a479b76a8a7660224a2c"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_check": [
+            "fb2e84ec35f00ce2d99b9a55511500802c83f7d3c24fc3c2b1a4545da4821169"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_chunk_index_check": [
+            "2b2e6e9f3d03360a5bdbd15ce1ca3d10f56d78f57f5e40c793e271be8d3a0cf0"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_event_count_check": [
+            "3a3c31ee3fd00ace4af728eec92df6dd165447ef41268e5034bc760afba5cb00"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_pkey": [
+            "2a03ad73a700e243a2f47d4152276ef87798fb3894e956a1f616ff84ca555ce7"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_raw_bytes_check": [
+            "f5a0d1d00a483d4e77bab49db224e1e5389e3de080f4d070db91e2fe7170a57a"
+        ],
+        "constraint:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_session_id_fkey": [
+            "90331afb13ed5cc8ca59ee7501ebdd42496c1b98df8870abd22c4dc6215d48f4"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_bytes_check": [
+            "b08ad5f19258f7383f98535adde8efd92abffc746c7f404ec8bf9e882b364ba6"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_name_check": [
+            "09f927dada76b96838c436dda2849c842ef7ae916a67b4c7fb3f1ab10ef28f28"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_name_key": [
+            "6e67c0fb9f779bc6bacd09c83512177b5ff625e77cddbe3a05fbe307d05a48c5"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_archive_sha256_check": [
+            "51fedfdb060e4c4824a89fa8651e258dd792c8bb4e829fd3404f137f1ba72697"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_check": [
+            "34eaec22a3502de48ab047f70648ccdc748b2652069a884d2bb15c73d01f7fbd"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_event_count_check": [
+            "87e745da6595b19e7ec13bfbd583d30661f8db360db5b00d2134df91b919fad4"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_pkey": [
+            "a2f322af321ceb04d0973dc5e36c3cd7011b33ad71fd4343c7e7ca002d9dd5f9"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_raw_bytes_check": [
+            "a89c313f24cd34aa9593493800310f1d8b21921a71e5b56c403ed12b1ba3351e"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_session_id_fkey": [
+            "777a0d9eb4c474f595dd71630da0a3903561f9879c0c73f15534d3052ad4cc30"
+        ],
+        "constraint:session_transcript_cold_archives:session_transcript_cold_archives_storage_check": [
+            "d5c1c1884f6a02f38ca0ca91756d797a003916aec5ffd4dcfb098b5820d3e408"
+        ],
+        "constraint:session_transcript_fts_rows:session_transcript_fts_rows_pkey": [
+            "707846a1ecb0c69db2fa8a05105a891b42c96a43a41851ed4686d84483a6f448"
+        ],
+        "constraint:session_transcript_fts:session_transcript_fts_pkey": [
+            "6a2866b6c3c42ba99e9d8a516d9cdf5466428d24ee7f54c7d81d81a0ebfb5b50"
+        ],
+        "constraint:session_transcript_fts:session_transcript_fts_rowid_fkey": [
+            "e54848c20428f01e97a21a2083ab85d2a5b5bdd07f904e61e0cb90e4f2d27580"
+        ],
+        "constraint:session_transcript_index_state:session_transcript_index_state_pkey": [
+            "6d025ef4431a30644e350bc7a77aa76723a7d94cde638118708b8217992abc5a"
+        ],
+        "constraint:session_transcript_index_state:session_transcript_index_state_session_id_fkey": [
+            "5fd4c7ebd719376c379c7b619c6038862e4b001e271f0c9c8507e2fd0568648a"
+        ],
+        "constraint:session_windows:session_windows_acp_owned_check": [
+            "36adf7808701aa32056ba02394b64cef9d468e11fd57200cca2ffa02ead732bb"
+        ],
+        "constraint:session_windows:session_windows_chat_type_check": [
+            "7b5fc59d16434ab934574bfe61386cd707f9cf46f3f38a3781f17c254b7d6ca0"
+        ],
+        "constraint:session_windows:session_windows_hook_external_content_source_check": [
+            "90ede2c2f2d4672cb118aa5741b0bd3e66364b2f42e77b39926e3eac9f4b6b88"
+        ],
+        "constraint:session_windows:session_windows_pkey": [
+            "2448ebb28f8371400dbae03b57fa3532e7821db21d965bccace2d5718dff0367"
+        ],
+        "constraint:session_windows:session_windows_primary_conversation_id_fkey": [
+            "2e5cad3cbc47307afcec57d0c80b3b31dfdc0c1609024e80d4c3233dae696da7"
+        ],
+        "constraint:session_windows:session_windows_reason_check": [
+            "418569913ba1bd994d25397bbf8f1914cea399c9d593bf9dddd430c4845b2392"
+        ],
+        "constraint:session_windows:session_windows_session_entry_provenance_check": [
+            "9fca67adce65fd609b83cf47e07fb5b4cbc3154bac24f755cd1a93b1623d2ca5"
+        ],
+        "constraint:session_windows:session_windows_session_key_fkey": [
+            "91b0855ca0aa719dc735fed398331f075ef4ed9406f1f17dd5fbe3c7a9d990e2"
+        ],
+        "constraint:session_windows:session_windows_session_scope_check": [
+            "55d22a810b650f4d06e54851489fde6401656c30dfbd3b93e87bda5e13b1062a"
+        ],
+        "constraint:session_windows:session_windows_status_check": [
+            "0cb434f7b57fb1ebe38b930dc57dea501daeded5ce9ca20e569c039df62c55c2"
+        ],
+        "constraint:standing_intents:standing_intents_cooldown_seconds_check": [
+            "aabf8170070893b874ea36135446087328703cf0208908bee635761c8deb4ddc"
+        ],
+        "constraint:standing_intents:standing_intents_creator_sender_check": [
+            "a45736834d9ed9ed8ee9b0e0615c381b6b8222bbceef13ed8404b60e1ddbd217"
+        ],
+        "constraint:standing_intents:standing_intents_fire_count_check": [
+            "c97d16a61fa78769863759f95a649133f7b05b1864d99c3c3084cd321470c33f"
+        ],
+        "constraint:standing_intents:standing_intents_id_key": [
+            "f273c2126eedb25bc8ecda0a4a07571732dac4267b1b0ccc4f1e0969fb6f1f94"
+        ],
+        "constraint:standing_intents:standing_intents_max_fires_check": [
+            "f599322d1fc66eeb9023c50ce236c21d3290854f1c03a326bef61d7f315001ca"
+        ],
+        "constraint:standing_intents:standing_intents_pkey": [
+            "935c0eba2d6caf7bd0a5b1e49c6707703ebcfb7aababc70ede2e1989f299ba66"
+        ],
+        "constraint:standing_intents:standing_intents_status_check": [
+            "43fb61383329068f6f49d83c743675e51290eec1d4a058ac89697fbaff76d594"
+        ],
+        "constraint:trajectory_runtime_events:trajectory_runtime_events_pkey": [
+            "d2e4f360fe27ee3c0ca7a9a27d1e5fccaa33ccedd9900caf865830fa65759dba"
+        ],
+        "constraint:trajectory_runtime_events:trajectory_runtime_events_session_id_fkey": [
+            "9a0b75c03920058515d5ca8c74b3f69fe2f42b304e6b4641c21793d97c27253a"
+        ],
+        "constraint:transcript_event_identities:transcript_event_identities_pkey": [
+            "f5495a9068b5295dc330142c3382438060832ee4c0be8c15d4a05e06700dada8"
+        ],
+        "constraint:transcript_event_identities:transcript_event_identities_session_id_seq_fkey": [
+            "43dad97e83d4f2c57b22f2309a5bb5de69995f1e1f9c4829f9d6a4207fa15f3e"
+        ],
+        "constraint:transcript_events:transcript_events_check": [
+            "dc266345901d4e156e9929c00143d1015544ffa858b0a93613afa898d511b530"
+        ],
+        "constraint:transcript_events:transcript_events_event_utf8_bytes_check": [
+            "56f62ee861b8feb36343b54f5c2729965bfb6d2fa7adbbccf167bd4096160d55"
+        ],
+        "constraint:transcript_events:transcript_events_navigation_json_check": [
+            "edd4b27e22f891e8df903ae1507593b769acb027311bb4d975ad1a2ebf70ef5f"
+        ],
+        "constraint:transcript_events:transcript_events_pkey": [
+            "5528dd334aca8189161b1a8ee84383ae0708fdaa92467ac60e51330a6f9148ce"
+        ],
+        "constraint:transcript_events:transcript_events_session_id_fkey": [
+            "9e05a080030f53bcf1c2a5c35394dd620e22a0f86cbb8f0cf1a8a7da93eed096"
+        ],
+        "constraint:transcript_rewrite_watermarks:transcript_rewrite_watermarks_pkey": [
+            "d4cd1f4b483349b60463fa070c143135a58a9539e0216f234e164faff889cd6b"
+        ],
+        "constraint:transcript_rewrite_watermarks:transcript_rewrite_watermarks_session_id_fkey": [
+            "05b0a6283df850bea9d47d533d32b1be7e7624b2c74c07751349324273e1b4b1"
+        ],
+        "default:board_tabs:chat_dock": [
+            "14aa4cb95017db53594fba2854bab3ffefc90abcd8bb6536ded485422f0e5cb1"
+        ],
+        "default:board_widgets:grant_state": [
+            "37ae7b2af3ee35b392e7f3d42d7ec1df67377d0cfd19d0f92650fc454340c122"
+        ],
+        "default:board_widgets:manifest": [
+            "b65de1d0754af2859d4709324767598daa0d378c2a23f1c32f7ec0c8f05dd5ea"
+        ],
+        "default:context_engine_turn_outbox:attempt_count": [
+            "a7c2898edc89413fb2280bd3718fe35acb37d72f0ef7b867fe123061581bda53"
+        ],
+        "default:memory_index_chunks_vec:embedding_bits": [
+            "0a8ee6bfc28b1a53e3317f1e4cdcbdcbd9cbd5f1e978826c6aeca8790cae5a74"
+        ],
+        "default:memory_index_chunks:openclaw_search": [
+            "bfc3529148db7767c4bc0d6e8dfd5a09fca059a1ef114df17cfc1780bda1c042"
+        ],
+        "default:memory_index_chunks:source": [
+            "c2a32639047387503fa0010f848657f5d7bfd62362071eb8922f02096d2b9bcd"
+        ],
+        "default:memory_index_sources:openclaw_search": [
+            "e45e6b36df5f07991109084d0c0cb5197c275182f92eda309c2c23363c812374"
+        ],
+        "default:memory_index_sources:source": [
+            "f7b88324cae75698034351ecfa42690447e4d9ae35c604e372030d77087351f2"
+        ],
+        "default:session_conversations:role": [
+            "d195086f740128d2269ceecc90a355a293401d3a5aa9e9b585de4647e9058536"
+        ],
+        "default:session_nodes:entry_valid": [
+            "293f697d41a578ece759bfa8e96e719c5d8f14a1db8c17b2efc1b614385038ee"
+        ],
+        "default:session_nodes:has_optional_references": [
+            "a6f8c982e213a435978253ce11755478ff8283207ee809dd83155890304e835a"
+        ],
+        "default:session_nodes:snapshot_revision": [
+            "168c8d7519ebc9cfb1ee067c07b84eef061c06f5562b4fc388231228c535c230"
+        ],
+        "default:session_transcript_archives:publish_attempts": [
+            "ddf538972143acade61a4be3675e208de24bee19bcbf495886e487937c1342e6"
+        ],
+        "default:session_transcript_fts:openclaw_search": [
+            "850c7e118a06ce5e20d58c683dabbbcdb0e768c600bf274c8107c5ef23e5c723"
+        ],
+        "default:session_transcript_index_state:active_event_count": [
+            "042bcc9841c8af26b08d4121d68ed6cde6bf0394af242223c558b8e4ce8817e7"
+        ],
+        "default:session_transcript_index_state:active_message_count": [
+            "19a88a49245a88c149bb1acc2e6f3011a946900053aa17809a66c551e5f24d66"
+        ],
+        "default:session_transcript_index_state:needs_rebuild": [
+            "0a30c9f6f698a64c94513bd3cbb9c6a4f5d9187f85275e08cfd190251fc32048"
+        ],
+        "default:session_windows:acp_owned": [
+            "10c598f4178a263a3c304c4c6dea889f29597ecd5936454e2baa5ce158ecde98"
+        ],
+        "default:session_windows:session_entry_provenance": [
+            "4c044411565dc34891eb2164c4965e300c247bc69322e7151b7710c76bb0f7ea"
+        ],
+        "default:session_windows:session_scope": [
+            "37e5c0222ea3394228fce176553eacc0e6a1b89dea71b9c946e9ca5641eacb9d"
+        ],
+        "default:standing_intents:cooldown_seconds": [
+            "f35fce0fc203dd816b4247b5b3314992aace8cca5b3cc711cb19a7dcb6ca9624"
+        ],
+        "default:standing_intents:fire_count": [
+            "bc2690e5ad87290707852258bb2a3033d733cacfcd352c24845255d095d81dfa"
+        ],
+        "default:standing_intents:openclaw_search": [
+            "5e7874b410436e9fa8989d115221657480ec946a82cfa4db4f7ed0ea8f32b45a"
+        ],
+        "default:transcript_events:navigation_display": [
+            "88c7941040d6b5be7f88b4cb45279c905487e6729fc24e061af66a6bb8935043"
+        ],
+        "default:transcript_events:navigation_valid": [
+            "6a56a98e582be71ffbced98db41d98e3d488332f4e8f22ce9e26c06bd9707af7"
+        ],
+        "index:acp_parent_stream_events:acp_parent_stream_events_pkey": [
+            "01a0109742c83ba8f465c10e46c56e7bba9b77423d467b4134d3e4b40187e75f"
+        ],
+        "index:acp_parent_stream_events:idx_agent_acp_parent_stream_run": [
+            "60c65d763d9adcfe44f80abff36ce0396a3a51642c5b6eead9e59042ee5bf756",
+            "cae238f5062f70208e0ac3dfeeafb6b66d725e0c7a70e2af34d60cf410341b04"
+        ],
+        "index:auth_profile_state:auth_profile_state_pkey": [
+            "60b28b60200abd8c8e0926ea749359a2a4c8f5430b807f504df3fbfdb8ea8489"
+        ],
+        "index:auth_profile_store:auth_profile_store_pkey": [
+            "48495139b5dc8d362c27c37ea8dfe69c8f08129884bb2ee80d9ec1db2d110630"
+        ],
+        "index:board_tabs:board_tabs_pkey": [
+            "db8c94439966584aa9e63a69f89e5d90388e05c5d661f89aaf0e27a969a8259a"
+        ],
+        "index:board_widgets:board_widgets_pkey": [
+            "5bb371c21a439e40aee9727d5c439321389949b4a87b4a65a04953c4f743ec74"
+        ],
+        "index:board_widgets:idx_agent_board_widgets_tab_position": [
+            "95853f0dd2f18224913af315afc1af52838c513eb9b2470afd6684be43693894",
+            "684735b51cdcd5a45b9cee6902896afd849cb4165ee0f82c2d7d96c87a17bfb4"
+        ],
+        "index:cache_entries:cache_entries_pkey": [
+            "76d1535bb012d546ea8dd531f6f1234bf9d4545c35128213c19ed755b1d74dde"
+        ],
+        "index:cache_entries:idx_agent_cache_expiry": [
+            "f6bfd1be80d1b6c6197122921395f1efe567bfa3a6ee0e4be34557607d99e6ae",
+            "3b182f79ea696546432b8cfe8253fdf83795d5b938dfc297ad69ba973c404690",
+            "e6df75675808748a42be238603e66f77066132bcb320962e46c3532cbba5c29c"
+        ],
+        "index:cache_entries:idx_agent_cache_updated": [
+            "fe213a8464f64c19f724e0b9f095f40326829f400869702ef36d46e740c5c280",
+            "07d7f4ad61e32e1b5fec300f3c9931ee6bf7de45309bbfb3a605b57d6f9b51eb"
+        ],
+        "index:cache_entries:idx_agent_voice_session_open_scope": [
+            "0db310e8d098f67cc52729c4ce719fe77c125d11fb365d0467a619df84497622"
+        ],
+        "index:cache_entries:idx_agent_voice_session_open_updated": [
+            "2ce9893885b851a18d34750ca87c06b684b180bbc0efe249af0cd6524142e81c",
+            "ca7405c42ece70a20e586d92113943a47a6b44cb2352d43f06988e9e8eedaeb4"
+        ],
+        "index:context_engine_turn_outbox:context_engine_turn_outbox_advancement_key_key": [
+            "5bc0c1811e4251dad1eca41dd7b8fa5fca2eb3a1dc4935169f9d2fd744fbbed9"
+        ],
+        "index:context_engine_turn_outbox:context_engine_turn_outbox_pkey": [
+            "cadeffdcef940ad64ee7e63267205820b9826b14d3f2911d31c7b9dfc4518ba8"
+        ],
+        "index:context_engine_turn_outbox:idx_agent_context_engine_turn_outbox_engine": [
+            "b03fcbe207aeb6b7d641254320c9d196a3295dd3858449da72e3344ed33492da",
+            "bcf66e3508098b2e323f271964f5adffbadc582cd994445c86356d92ef0730c6"
+        ],
+        "index:conversation_deliveries:conversation_deliveries_pkey": [
+            "6e7bbcc46373870c90aab69310d963972a6824f9486e530e47f638b26ce760d6"
+        ],
+        "index:conversation_deliveries:idx_agent_conversation_deliveries_reply": [
+            "2054d7d3a776387bb4a23a9aae31d97bfcebdef9494ea66c34903e09dcf3491f",
+            "d5da67e56debd69d8d1404dfe5d553154452e4b1d374efcd9b352f7b63b1a9cd"
+        ],
+        "index:conversation_deliveries:idx_agent_conversation_deliveries_updated": [
+            "14296ebbe87701ea0bc88094ea279e2a149dd25f51c287e5ca89f08cda26e17f",
+            "ba1f73476236d8ead7c54c63b8fac4c4f72b1da50cad0e2166dec5ca29290eef"
+        ],
+        "index:conversations:conversations_pkey": [
+            "09fb0708d0f180e63b89282ddb9b3f7cd3628f17b3d9cad103f3ff0be368a0c0"
+        ],
+        "index:conversations:idx_agent_conversations_identity": [
+            "4b93e664fa3054429eb74892756cea7419ca188cd652b60d6b3b31848960390b",
+            "60f6a06980ada85ce77c61706f86c86c861c1de20054dbc5db8c051f4a635e9a"
+        ],
+        "index:conversations:idx_agent_conversations_lookup": [
+            "95d7fc1adebe24f38da265df455b14697323e74357e660691a40179b93636fd4",
+            "895d7e8411fecf9b31f58903e9e09a6669620ae79d7a44530fdd65fb24d608d8"
+        ],
+        "index:conversations:idx_agent_conversations_updated": [
+            "9f9198eb480133ba5ac27f208103da5788dd31037472fe87dcc31796cb8ad889",
+            "9a5360be81126aec553ab7c16c028a6ba30216ca7eece60d10b8787579709276"
+        ],
+        "index:heartbeat_outcomes:heartbeat_outcomes_pkey": [
+            "fc7fa79008b41ead4b6b8329f030f945c826a966616d936d99f0f0f13c25b910"
+        ],
+        "index:memory_embedding_cache:idx_memory_embedding_cache_updated_at": [
+            "cba464e83663c5ec8f1fabd1d81af8f071909678a7cb5f6b6ce5150bf9f2ac5d",
+            "2b3ec5bc28be07e397b4b0eb2e32f0b9bbcfdf010cbe267a44e480e09b0f9ed5"
+        ],
+        "index:memory_embedding_cache:memory_embedding_cache_pkey": [
+            "e7bba98a87437a6df6ecf097e886db92828e0fb0cdf9feab088e2cc6dc5a7ec8"
+        ],
+        "index:memory_entry_origins:memory_entry_origins_pkey": [
+            "a1e62db179e97d953f90c5c24e631c65fa6a2d931634c6059da33a19714537e6"
+        ],
+        "index:memory_index_chunk_provenance:memory_index_chunk_provenance_pkey": [
+            "d7ecd8f87aa6274f5c422a2d4a56275f8c3c3e0abecbaa5237038114321c6692"
+        ],
+        "index:memory_index_chunk_recall_metadata:memory_index_chunk_recall_metadata_pkey": [
+            "1c504a0c4e597adea2ea719c9e129df1ccf9f32186746c2101fad3f154451353"
+        ],
+        "index:memory_index_chunks_vec:memory_index_chunks_vec_pkey": [
+            "c70474d2fe25a33924eaf0d1e791a69b01cbfb1537e0f3e51053a8a0a710e3ad"
+        ],
+        "index:memory_index_chunks:idx_memory_index_chunks_path_source": [
+            "85d9d0cc194abd17604b711adb652f2281c47fb226fe6363b36c12652bfd8525",
+            "026241caceaacf5e5e4a582e00f2e01547fe810e5035cdd14511dad439ec5da4"
+        ],
+        "index:memory_index_chunks:idx_memory_index_chunks_source": [
+            "c5b6306c389e14a11539fce811c6f5dd3ea56fbe6947650902be021052884fd5",
+            "61ca1f474076f60bc815b3d274b8a23796a449064f788cbbf52c9e774d9c3e36"
+        ],
+        "index:memory_index_chunks:memory_index_chunks_id_key": [
+            "0ec211e43864abe0cdc8717210f2a13ecd51ea1b82cf515a58e832fe21ff7747"
+        ],
+        "index:memory_index_chunks:memory_index_chunks_pkey": [
+            "a69e2154e10589a8edb892b9f8912aa497f0c3acc178c68bd5684facdcbbb061"
+        ],
+        "index:memory_index_chunks:memory_index_chunks_search_gin": [
+            "6d96a6f1fe006827357225e36bdbe0a6f84727c8cf77cf7e5a0d55a708c7197c"
+        ],
+        "index:memory_index_chunks:memory_index_chunks_trgm_gin": [
+            "65c8906ca281c03575d60ec05f83cc119c2cc6f45cdb57eb7c59edb5cfe69d6f"
+        ],
+        "index:memory_index_meta:memory_index_meta_pkey": [
+            "9588159d810acca433c91ed8d0658722401ef1e50d7ac56e37a3ba0497b81430"
+        ],
+        "index:memory_index_sources:idx_memory_index_sources_basename": [
+            "ee48bfd0a31f88e49aec934e91e20954290e73e9ca3e49ea5b2b1f5abc415df5"
+        ],
+        "index:memory_index_sources:idx_memory_index_sources_exact_path": [
+            "c480c11420f498bc27e2b1ca4181fe38d75a58d0d442dd7e1d8a3e041d443ac1"
+        ],
+        "index:memory_index_sources:idx_memory_index_sources_source": [
+            "9d9a7d5bc0a473f160713c17067c4193a4e92e4d29ce5abeef158e1e9eb6ba68",
+            "b0984660e04320b9f219df3096f527a13dae3074d09c63fe4f7311ddc64ece21"
+        ],
+        "index:memory_index_sources:idx_memory_index_sources_stem": [
+            "0158433c51e71c336ca274d13cf096afcba4bf659f455cef09470c6dcbed63a8"
+        ],
+        "index:memory_index_sources:memory_index_sources_path_source_key": [
+            "a819cf8b602287251bc4e964c437eff764e12bb5bc4c7b851c3cc93e5b531f2d"
+        ],
+        "index:memory_index_sources:memory_index_sources_pkey": [
+            "5063ba7fefc51413aa8a8706f5fdd550fa55ae23015ed987fb8268bbe9afd658"
+        ],
+        "index:memory_index_sources:memory_index_sources_search_gin": [
+            "16af982bffca34b97912f54d4e1b46cf5d40f7db05db95de4d3399229aad9efe"
+        ],
+        "index:memory_index_sources:memory_index_sources_trgm_gin": [
+            "e9c53b8141507c7248233f173bb6d9a54a78ac73f1c272030b5b1ee0614c6b27"
+        ],
+        "index:memory_index_state:memory_index_state_pkey": [
+            "05d9f996b3991024d81cc7fcf2df3fcdaa11124a029ac8cef8d23175f69de97e"
+        ],
+        "index:memory_session_tombstones:memory_session_tombstones_pkey": [
+            "62ad081deff6b4fbbfb272b1224328a4f5dcde06e585be9588fbbe6a6f2701ec"
+        ],
+        "index:message_tool_run_outcomes:idx_agent_message_tool_run_outcomes_occurred": [
+            "c4a6cdef8a95230aa28e9b0c1f45b00d1b7d476514c161d0bf0a146466da7869",
+            "4ef1387355415825bae2260fb0e93b184c5152db0b2a2d161121896fdf699e15"
+        ],
+        "index:message_tool_run_outcomes:message_tool_run_outcomes_pkey": [
+            "b7cb667bd05f80c931c665fff7ca6284ea3b1e98af3b30e10a43c5c564221b36"
+        ],
+        "index:openclaw_schema_meta:openclaw_schema_meta_pkey": [
+            "44af00e689c9842f161531268aa03f4921429cdeeafb3ef099a8b0c7d581e783"
+        ],
+        "index:schema_meta:schema_meta_pkey": [
+            "377d1f5eb3493911929f484c1a0f84e009c512ef658cb60664aa209abdf9cea8"
+        ],
+        "index:session_canonical_validation_pending:session_canonical_validation_pending_pkey": [
+            "f74858faf0b26ae5ab55c9c65abae98fa4dc9a0773004456ec6d4ffea345c37c"
+        ],
+        "index:session_conversations:idx_agent_session_conversations_conversation": [
+            "373fdc8c23d697089fd3d311442830920aa403fcad483e7bad824f2d263bd21a",
+            "f9293db9f1f219d263a1c0cea1bcb7a522b1eac9c94f6edfeb29c5144d125719"
+        ],
+        "index:session_conversations:idx_agent_session_conversations_primary": [
+            "c81996d87970a422d31d61a495c0231aa8d9b6ac51d5b83eae3c78187ca03a33",
+            "038adb5e909131e795567f01784ac82ed66e5ba72c1f5f729a9184115e1bdafd"
+        ],
+        "index:session_conversations:session_conversations_pkey": [
+            "d8d6a5eedc2bcecd6499aee11145f543158716dc8e8f7e9339a75f37f75a7c71"
+        ],
+        "index:session_entry_snapshots:session_entry_snapshots_pkey": [
+            "fa21f34b11e3448551d33112c2528b4ff46b8b1d7289996b1c9f866836695fca"
+        ],
+        "index:session_goal_operations:idx_agent_session_goal_operations_expiry": [
+            "88bb4ed6a81338dc19e8e5be1118248271774b83066bbf9a27b1ab657444325d",
+            "9ac790c8978bf1bbcd96f1d01f65a39669379193624a8c9d416f8879b9e0100f"
+        ],
+        "index:session_goal_operations:session_goal_operations_pkey": [
+            "fd968fbb2a969356feff9e5bd604cb3954d40edb72f23f7f296d8a5de2c14198"
+        ],
+        "index:session_input_completions:session_input_completions_pkey": [
+            "928024daa4beeb30010abd7cb43b005aa8aad029bde20a4f684cda0fbcf07130"
+        ],
+        "index:session_key_contract:session_key_contract_pkey": [
+            "1bbd4ea9b587cd1ee1f757bcb8432e9bbd33a25e905074ad53c1affdabcd8a35"
+        ],
+        "index:session_members:idx_agent_session_members_identity": [
+            "97b8da1cea17ae07f517a426ff2032fcbb499bb5f80360e2bbf1355d5daf77d8",
+            "43156b06fa09a7639202b15ecaa8f983028cf7bfa419fb56db28cd8723f3d718"
+        ],
+        "index:session_members:session_members_pkey": [
+            "3bb5c0d28e32c9b3ed07e789799552cf70591813547b8aaed889e34692a58a9d"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_active": [
+            "251617340c193e378cf9f75e701109e035129088e97686acb21212640ea5a636",
+            "49e5e4b60109a3c06de403315c24885ce43f317bd9215336f05b3abf0a96ed86"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_archived_at": [
+            "a0d46d604878a9655edd2e00e5e9a4040be98a088b2d799f3fa3de4fe338fdc0",
+            "f16ebe099c1a4ee5d979d059d5c789d281ad2941c6a6675f2cfa3578f612f71f",
+            "3cd82271cad1d8516da47451844bc9025923ae1a7271d338d7a32d41a0831d9d"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_current_session_id": [
+            "99012710ad055ff0861fbded30a46c88ba99c44a3afe1f4c2532224dd6a70bb9",
+            "55f7bf35a6083f9f44c35c294979608bce37f7c6eb09f7ee1180b43d846f530b"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_entry_not_valid": [
+            "cc9e95f38405d7da78fdbfc3460453a84e8a7346654c19b96e30cde25d2ea257",
+            "22d66892f99aefc498619118788f69b8a73ad73256a241512d9f0e70da9a133e"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_entry_valid_pending": [
+            "7ec63a59ba5a69346f3f9e3c9b4061f685bc99c2abdcc72fddee25573399bb80",
+            "307218c5a22c43188c3f362ca0f39f278b5db18a7f0c2362da3c08c8487019cb"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_label": [
+            "59d9cdb5f7084e08f008d3c467caeed9a2012b93a31b09236b824b13ca54ef9b",
+            "55f9f277107e34135b663604a98071b0ce37f15269ecdfdbacede3e8e2d9ad1e",
+            "0db57da96aa55d1e03b21aa644c06fba3a6816b4df9b9b02d1a662d7e773d947"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_last_interaction_at": [
+            "8aca8e4984dadb96b5088eeaef7ab6079cf7439ef18ccdf04a7b1c51948ff5c5"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_parent_session_key": [
+            "9e5ff1840d155bc44bf6ac7e9130ecf647c1326a643b0815386a40b399f78acd",
+            "c388d64fd7747b381eeb5d905018523a1b558f312eac2cca0b117610730c31f5"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_spawned_by": [
+            "a9d71be5fe55ef65b0e659fba39730a92f08fa7ac90e57911a6492c5158c1c25",
+            "6e74a98133ad81f0441fb803ad3b501b8184dedb01ba7157789e2dd02b46e3d1"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_status": [
+            "0f86d44a83f17f799c7563fdbe945bc640513a2b68089525d8cd7674160289e1",
+            "76ff08dc894f3e97fa3f735b1d9e8d5644fa138ed5d4ce156142b2cac70b7c8d",
+            "84c5fbf7f4f90d565a1109b6dbdb3e677b8b32c1b4fb8cd5c9212763f59eb92c"
+        ],
+        "index:session_nodes:idx_agent_session_nodes_updated_at": [
+            "4454a8b6b60edc89ef881e8a3363a92a5aba2ef9b14f93104a5e49ff71a732d9",
+            "28fa8ea6478ae92e7084ca89eb051b19cb420be9ad16fed949cbb6a1375a86ce"
+        ],
+        "index:session_nodes:session_nodes_pkey": [
+            "9d03c595d1d35e17a1fc34e4f2eb557ce41dbfd519aea440754b56374a932cd4"
+        ],
+        "index:session_participants:session_participants_pkey": [
+            "1c101ed27a126e0bde3faa6c0bb14ec3f8932f9055d9247b9b622c7875e51a50"
+        ],
+        "index:session_pending_inputs:idx_agent_session_pending_inputs_session": [
+            "52a45eb2a25a0651b73c47e568f39312be07790fc59cbb79cb57a06379ef2040",
+            "3cbf0265b5f9d4569bcdf27c46d3d58c052d62a747e60045de24c5debb9ec85b"
+        ],
+        "index:session_pending_inputs:session_pending_inputs_input_id_key": [
+            "40f92a06a5387469b6cb74423fd9b39a9da04dcfd45777b30e5cc693913a05ba"
+        ],
+        "index:session_pending_inputs:session_pending_inputs_pkey": [
+            "b13938f3be2b99fe3ece347fcb3914349b0b5314ae37ea3d7a44c008b908644b"
+        ],
+        "index:session_pending_inputs:session_pending_inputs_session_id_idempotency_key_key": [
+            "269567da5c2c1375d5ed639d414fb83ed3aed12ee66dd98390cd3760d8abed35"
+        ],
+        "index:session_progress_cards:session_progress_cards_pkey": [
+            "fb77c6f196d7975aa19afd5c97a8f66a57b78d5339d8c0ac11de6f4fa14161ea"
+        ],
+        "index:session_reactions:idx_agent_session_reactions_message": [
+            "fc0d71b5eff90425c349621f64a42cb23bb1cfe6864c9e7f667ee36bc95407c9"
+        ],
+        "index:session_reactions:session_reactions_pkey": [
+            "16eb9cf5c293b20e63e2618514ff1449bbd08f51ed097fdf7c03b638f0dc79ec"
+        ],
+        "index:session_suggestions:idx_agent_session_suggestions_author_created": [
+            "c460ca0b918003fb70e2693f83310d28a600670e4624c57f208cc0463d8c1267",
+            "2cc75c72162949a60744640da4804582ad80a9cb8df3a15e8a0ded796f2d3179"
+        ],
+        "index:session_suggestions:idx_agent_session_suggestions_session_state_created": [
+            "b35a45d7034412ebb2e3e7cd50521895a978b03b249510f8b0b72ef616bc8f83",
+            "8e654177dceb1330fa12c9e3f6892e72e6f1f7505b76a00b2bf89bd3c8f7128d"
+        ],
+        "index:session_suggestions:session_suggestions_pkey": [
+            "98921f8d8ed1a0b1303361e510f4efa3d1837b944c0507141e0423ad1a1fb4c9"
+        ],
+        "index:session_transcript_active_events:idx_agent_transcript_active_event_seq": [
+            "9ba5e79ba583b1ed1859abdc11fae9ec9afbee255e268902bb72d054e24c8fd3",
+            "3982d64e2b615d28f5fe978106293f91cc09de920c9ccffd6de9cbc1755806a3"
+        ],
+        "index:session_transcript_active_events:idx_agent_transcript_active_messages": [
+            "783776c2d8439d4cdc9695798869ab5402c93e96d51cd35840a79bd703881e26",
+            "952d2cfba705d9b3301926f80dfee876deb374f62acf93511eb5944b96f4e5cd",
+            "2b879196595d8676db9caa7a9cfef2a8e4756a84c3b84c6f76ce631ad10de750"
+        ],
+        "index:session_transcript_active_events:idx_agent_transcript_context_pending": [
+            "22e2111e3dc2ef4e4f454aa9719a911272a49b65177635fe10ed85a97aae6988",
+            "4fcf3422c66f62121f3bfe1fbdd5a859c2990082407966ac60000d5a6ba4dcfe"
+        ],
+        "index:session_transcript_active_events:session_transcript_active_events_pkey": [
+            "3bbb41ab754a23604229124959d9d4e9af29e6e366e97a7dd6e3628bea9f2275"
+        ],
+        "index:session_transcript_archives:idx_agent_session_transcript_archives_pending": [
+            "f773f382a0ddba85ab28a32e7e725e3ac9f6f0d4384c6de8ad6be468f38647a2",
+            "b4a37fcc06e9a56eb44d0325dc041717b0195b964e173abecb0880427ea317e9"
+        ],
+        "index:session_transcript_archives:idx_agent_session_transcript_archives_retention": [
+            "1b521f38c96b21b6e8903cbd2a1a4b6b5b905d6e5b8eb401b159d8b062018257",
+            "f1c0f46638df8ea7747907e5991a44aafb1f67731033002f9948bc7d269a3eda"
+        ],
+        "index:session_transcript_archives:session_transcript_archives_archive_name_key": [
+            "e04f54dfe0d06ad5421f0daf662416f51599ce67e7866a61e6690c7cad1f3057"
+        ],
+        "index:session_transcript_archives:session_transcript_archives_pkey": [
+            "205a2fa899d1f66e792fe2125cf78e56f2d430cfd5935b61e213be7d24dc70b3"
+        ],
+        "index:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_archive_name_key": [
+            "b192f027646d9a0ffedd114cb550ff9abae03c54b77e99678f3c6dbecccb157f"
+        ],
+        "index:session_transcript_cold_archive_chunks:session_transcript_cold_archive_chunks_pkey": [
+            "3e343924eb2f959919047ed538d238fcc4e343295c93ee703d16dfad7ca67c77"
+        ],
+        "index:session_transcript_cold_archives:session_transcript_cold_archives_archive_name_key": [
+            "9a1555b73d1ebe5364ee4d2d36116b8f241539c026509417816cdaa1e1abea47"
+        ],
+        "index:session_transcript_cold_archives:session_transcript_cold_archives_pkey": [
+            "0ce04489aba2ce69d592387bda0059bf2cb8ecff789b76cc51314fe04d390b19"
+        ],
+        "index:session_transcript_fts_rows:idx_session_transcript_fts_rows_session_message": [
+            "a734e056ac3e6e5b7ab47ec00921231b927144afaf86258cdb8b31632100157a",
+            "f9a3546332efa92f84836d77fcf0e00054f060de2411e933e9bdc5b8f271c5f5"
+        ],
+        "index:session_transcript_fts_rows:session_transcript_fts_rows_pkey": [
+            "304e2c8520d3a73eee60122a3819cbe1a6aae7b3493bf5855095001843767ba8"
+        ],
+        "index:session_transcript_fts:session_transcript_fts_pkey": [
+            "8e0548bdb1e3fe4d2e2f3b1a22aadc5cdf6b3f8dc620d38568aad800a4a36819"
+        ],
+        "index:session_transcript_fts:session_transcript_fts_search_gin": [
+            "e73192d46ddbde466917a393f6dca840986e7fde1836b638e696e5698b603235"
+        ],
+        "index:session_transcript_index_state:session_transcript_index_state_pkey": [
+            "8836d609587286ad7f0e61019dd697da6cde242cc579a5efbe03e8986b53e180"
+        ],
+        "index:session_windows:idx_agent_session_windows_conversation": [
+            "1773fd7bf4557d23db1baa0da29fced792bbb8ea17a065b7b7689aa11aa6d2e5",
+            "acaa9d396f7755793b0cc58bba648f6d4e96bd1cd9fd7799b9653efa98872c27",
+            "888a9035ca49b2d7209b21480ea63d2e4b44ba0969cbb4e920b03641990b5e98"
+        ],
+        "index:session_windows:idx_agent_session_windows_created_at": [
+            "17a9a0a4c211f2a39a281f0b6b400b4a6c5faf1abdd03312b6c23b1735f93192",
+            "27543ef287c96c58257fb8a4a7a218f76103751c122acac2cbfaac36a2fa2c62"
+        ],
+        "index:session_windows:idx_agent_session_windows_session_key": [
+            "0ce30b11104f8c66d38730405b2799023719eff0101d9f47822d66c0fd0e4c65",
+            "b4d5ab32fe6db3a6013ee830bdc631321092adeea127ca9ed42b4745d688c3be"
+        ],
+        "index:session_windows:idx_agent_session_windows_updated_at": [
+            "eb0312d04eae65b40248653910259a5e5f668476572061c90243a29380d5fe28",
+            "54c4000581e96ee857f8308155d26306a746fac0e08c8ea8389e13861c2eb21e"
+        ],
+        "index:session_windows:session_windows_pkey": [
+            "c6c9eb19c8f48133fbad5029620bb119aadca3ee5061a40986194811b7a9d148"
+        ],
+        "index:standing_intents:idx_standing_intents_lifecycle": [
+            "28d397445902408e7e81fa3d82cbeef9c11af7213359b29f376734a290880dd1",
+            "f3452b3157af181837d8a82bb12468a903f028c73ba98c374c4d9ae3d995399b"
+        ],
+        "index:standing_intents:idx_standing_intents_scope": [
+            "901cd0ad4b965a9cb12e696b6e106f5ae88bbe22b8a3fa21d8d4785f8ebf3579",
+            "7ec61b16cda2c11c4ee2381d5196905a18e27c87ea1bf849a8333a05c4c408f0"
+        ],
+        "index:standing_intents:standing_intents_id_key": [
+            "b4267e1465df391ecddf5441491aeab2a4664a14cf532e93b58f14075e0ef877"
+        ],
+        "index:standing_intents:standing_intents_pkey": [
+            "2efdb649fd5f781f472e004e5e5df14a157c3e94613f4b2428b55c6d7862da15"
+        ],
+        "index:standing_intents:standing_intents_search_gin": [
+            "744d60ae6fe476f7a83719cbe2715a0c4a8b3e8d2e2aa6e7b3b622e16bbb33be"
+        ],
+        "index:trajectory_runtime_events:idx_agent_trajectory_runtime_run": [
+            "8ade815dd6204d1eb15448936de8c1dd65a924bc770647030b58179360c58389",
+            "30c88e12877b41f5a353292c25f0844c52e6d22f08ea89beed597ae5c5587c15",
+            "b84319d3f91994d7e13f84320fa18db2f1f70dcaa7ab598cc27ee452cb11a5f5"
+        ],
+        "index:trajectory_runtime_events:trajectory_runtime_events_pkey": [
+            "a7e1399dc958fdd6e88c319918bf99dc1aac945c74930f5328a4fb60f15f95d2"
+        ],
+        "index:transcript_event_identities:idx_agent_transcript_event_identity_sequence": [
+            "05ccfb1dfa1028cdc616c849f48e9e70837b6047de225d516324df99956f9b58",
+            "53ee62c4dc86c1bcf2160b7c78a127bc38b83d3c991102b9b747858fae984b45"
+        ],
+        "index:transcript_event_identities:idx_agent_transcript_event_parent": [
+            "ecc480e39e1e4f7b561707044f5680729fe3fd0a12a6c2db3f68f0592ee011cf"
+        ],
+        "index:transcript_event_identities:idx_agent_transcript_event_sequence": [
+            "22a1b86d97b782ffa95be4cee09d5cf6f555c903255288f59079f6ecb42753e3",
+            "8600c468508a7d2b696284ac13d44186a1876449428a257524c239143e04884a"
+        ],
+        "index:transcript_event_identities:idx_agent_transcript_message_idempotency": [
+            "b83fb5b33c5e4baece2919e566fa167b0651853a93d7326fc3ed2c225bc3a9f6",
+            "e4c5d1dc324998680414b2b2c876b3312ebece62528d349276a68207ee5c8dfc",
+            "143f21048b287d15678e0235df67c6a7a420e2ad25ed1671f4655f361f7df9ad"
+        ],
+        "index:transcript_event_identities:transcript_event_identities_pkey": [
+            "20148d9d139c08776faf9341ed13ba8280aa2d97d92e33210117621d0d06ca78"
+        ],
+        "index:transcript_events:transcript_events_pkey": [
+            "226afdec8cad24e631c3fe1f97f359979968b4f37a3a6b62ac4adb4c2fc0bc11"
+        ],
+        "index:transcript_rewrite_watermarks:transcript_rewrite_watermarks_pkey": [
+            "8bd37207312178b6d82f11806e685c2c505f9d9b012680328e1611e981899112"
+        ]
     }
 }

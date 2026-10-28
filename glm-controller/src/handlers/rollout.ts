@@ -3,19 +3,13 @@ import type { Operation, OperationStep, StepStatus } from "@octogee/shared/types
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext, OperationHandler, OperationResult } from "../operation-router.js";
 import { classifyOperationFailure } from "../operation-retry.js";
-import {
-  decideRollStateMigration,
-  openclawVersionFromGatewayImageTag,
-  type RollStateMigrationDecision,
-} from "../roll-state-migration.js";
+
 
 export interface RolloutDeps {
   rollbackUnadmittedActivationTarget?: (op: Operation, ctx: OperationContext) => Promise<BuilderActivationTargetRollbackProof | null>;
   readGatewayDoc: (gatewayId: string) => Promise<GatewayDoc | null>;
   readReleasePayload: (gatewayId: string, release: number) => Promise<ReleasePayload | null>;
   readDeploymentPrerequisiteError: (gatewayId: string) => Promise<string | null>;
-  /** The OpenClaw version and source build the live pod reports through its heartbeat. */
-  readGatewayOpenclawVersion: (gatewayId: string) => Promise<string | null>;
   activateDesiredRelease: (input: {
     gatewayId: string;
     targetRelease: number;
@@ -140,9 +134,8 @@ export function createRolloutHandler(deps: RolloutDeps): OperationHandler {
       completedAt: deps.now(),
       ...(outcome.error ? { error: outcome.error } : {}),
     });
-    const journaled = outcome.stateMigration || outcome.targetRollback
-      ? { output: { ...(outcome.stateMigration ? { stateMigration: outcome.stateMigration } : {}),
-          ...(outcome.targetRollback ? { builderActivationTargetRollback: outcome.targetRollback } : {}) } }
+    const journaled = outcome.targetRollback
+      ? { output: { builderActivationTargetRollback: outcome.targetRollback } }
       : {};
     return outcome.success
       ? { steps: [], success: true, ...journaled }
@@ -154,7 +147,6 @@ interface RollOutcome {
   targetRollback?: BuilderActivationTargetRollbackProof;
   success: boolean;
   error?: string;
-  stateMigration?: RollStateMigrationDecision;
 }
 
 async function runReleaseRoll(
@@ -173,27 +165,18 @@ async function runReleaseRoll(
         "immutable gateway-edge image reference",
     };
   }
-  const stateMigration = decideRollStateMigration({
-    sourceOpenclawVersion: await deps.readGatewayOpenclawVersion(target.gatewayId),
-    targetOpenclawVersion: openclawVersionFromGatewayImageTag(recorded.payload.imageTag),
-    targetOpenclawSourceSha: recorded.payload.openclawSourceSha,
-  });
-  deps.log(
-    `[rollout] ${target.gatewayId} → release ${target.targetRelease}: ` +
-    `${stateMigration.strategy} (${stateMigration.reason})`,
-  );
   const prerequisites = await awaitDeploymentPrerequisites(deps, target, progress);
-  if (!prerequisites.success) return { ...prerequisites, stateMigration };
+  if (!prerequisites.success) return prerequisites;
   const activationWindow = await awaitActivationWindow(deps, target);
-  if (!activationWindow.success) return { ...activationWindow, stateMigration };
+  if (!activationWindow.success) return activationWindow;
   const activation = await deps.activateDesiredRelease({
     gatewayId: target.gatewayId,
     targetRelease: target.targetRelease,
     operationId,
   });
-  if (!activation.success) return { ...activation, stateMigration };
+  if (!activation.success) return activation;
   deps.requestReconcileTick?.(target.gatewayId);
-  return { ...await awaitConvergence(deps, target, progress), stateMigration };
+  return awaitConvergence(deps, target, progress);
 }
 
 type DeploymentPrerequisite =

@@ -71,12 +71,10 @@ function assertFullSchedulerSnapshot(snapshot: unknown, operationId: string, age
 
 export async function stageSurgeScheduler(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (!custody.source) throw new Error("scheduler export requires the physical source");
-  const held = await schedulerPhase(deps, custody, custody.source, { phase: "hold", retainNonportable: true });
-  custody.agentIds = held.agentIds;
-  const exported = await schedulerPhase(deps, custody, custody.source, { phase: "export", agentIds: held.agentIds, retainNonportable: false });
-  if (exported.snapshot === undefined || JSON.stringify(exported.agentIds) !== JSON.stringify(held.agentIds)) {
-    throw new Error(`scheduler export scope changed for ${custody.assignment.slug}`);
-  }
+  const exported = await schedulerPhase(deps, custody, custody.source, {
+    phase: "export", resolveAgentScope: true, retainNonportable: true,
+  });
+  custody.agentIds = exported.agentIds;
   assertFullSchedulerSnapshot(exported.snapshot, exported.operationId, exported.agentIds);
   const staged = await schedulerPhase(deps, custody, custody.target, {
     phase: "stage", agentIds: exported.agentIds, snapshot: exported.snapshot,

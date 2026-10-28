@@ -1,13 +1,6 @@
-import { sharedContextCheckpointObjectPath } from "../../shared/types/fleet-broker.js";
-import { assertMatchingSharedContextPreparation } from "../lib/shared-agent-context-preparation.js";
-import { customerAgentRuntimePresent } from "../lib/customer-agent-runtime.js";
-import { evictLocalCustomer } from "../lib/fleet-provisioner.js";
-import { create as createTar } from "tar";
 
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
-import { archiveNativeSharedAgentContext } from "../lib/native-shared-agent-context.js";
-import { gatewayVmPodName } from "../../shared/types/glm.js";
 import { pendingCloneAppliedFingerprint } from "../lib/pending-clone-fingerprint";
 import { deferredProjectPlaceholder } from "../lib/deferred-project-workspace.js";
 import type { Request, Response } from "express";
@@ -46,8 +39,6 @@ import { liveImportAdmissionPath } from "../lib/migration-staging.js";
 import {
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   SIGNATURE_HEADER,
-  type NativeAgentContextTransfer,
-  type NativeSharedAgentContextArchive,
   type QuiesceRequestBody,
   type UnmountRequestBody,
   type ExportPathsRequestBody,
@@ -71,14 +62,11 @@ import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { OpenclawWireError } from "../lib/gateway-rpc.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
-import { readSharedAgentContextRestoreReceipt, writeSharedAgentContextRestoreReceipt } from "../lib/shared-agent-context-restore-receipt.js";
 import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
 import { OPENCLAW_DIR } from "../lib/config.js";
 import { readActivationManifest, writeActivationManifest, activationManifestTarPath } from "../lib/migration-activation-manifest.js";
 
 const spawnMock = vi.fn();
-const upgradeStoresMock = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../lib/agent-store-upgrade.js", () => ({ upgradeStagedAgentStores: upgradeStoresMock }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...await importOriginal<typeof import("node:child_process")>(),
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -338,7 +326,6 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
 
 beforeEach(() => {
   spawnMock.mockReset();
-  upgradeStoresMock.mockReset().mockResolvedValue(undefined);
 });
 
 const liveAdmissionRecords: Array<{ migrationId: string; slug: string; instanceId: string }> = [];
@@ -3429,7 +3416,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     migrationId: string;
     importDir: string;
     daemon: ReturnType<typeof mkFakeChild>;
-    agentContext?: NativeAgentContextTransfer;
     mode?: "pre" | "final";
     configTransferMode?: PrepareRsyncImportRequestBody["configTransferMode"];
     adapter?: Partial<CustomerLifecycleAdapter>;
@@ -3459,7 +3445,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       rpcPhase: "prepare-rsync-import",
       mode: input.mode ?? "final",
       ...(input.configTransferMode ? { configTransferMode: input.configTransferMode } : {}),
-      ...(input.agentContext ? { agentContext: input.agentContext } : {}),
       transferUser: "migration",
       transferKey: "c".repeat(64),
     };
@@ -3475,7 +3460,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       .find((arg) => arg.startsWith("--config="))!
       .slice("--config=".length);
     const stageDir = /^\s*path = (.+)$/mu.exec(await fs.readFile(configPath, "utf-8"))![1]!;
-    if (input.adapter?.isBuilderGateway?.() === false && !input.agentContext) await writeSharedTargetManifest(stageDir, input.importDir);
+    if (input.adapter?.isBuilderGateway?.() === false) await writeSharedTargetManifest(stageDir, input.importDir);
     return { deps, stageDir };
   }
 
@@ -3483,18 +3468,12 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     deps: MigrationHandlerDeps,
     migrationId: string,
     mode: "pre" | "final" = "final",
-    agentContext?: NativeAgentContextTransfer,
-    targetCertificateSha256?: string,
-    sharedAgentContextRecovery?: FinishRsyncImportRequestBody["sharedAgentContextRecovery"],
   ): Promise<ReturnType<typeof mkResponse>> {
     const body: FinishRsyncImportRequestBody = {
       migrationId,
       slug: "chris",
       rpcPhase: "finish-rsync-import",
       mode,
-      ...(agentContext ? { agentContext } : {}),
-      ...(targetCertificateSha256 ? { targetCertificateSha256 } : {}),
-      ...(sharedAgentContextRecovery ? { sharedAgentContextRecovery } : {}),
     };
     const response = mkResponse();
     await createFinishRsyncImportHandler(deps)(
@@ -3684,7 +3663,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
     expect((await fs.stat(path.join(importDir, CARRIED_STORE))).mode & 0o777).toBe(0o600);
     expect(landedAtActivation).toEqual([true]);
-    expect(upgradeStoresMock).not.toHaveBeenCalled();
     await expect(fs.access(path.join(importDir, ".octogee-import", "mig-carry-land"))).rejects.toThrow();
     await expect(fs.access(path.join(stageDir, SNAPSHOT_REPOSITORY))).rejects.toThrow();
   });
@@ -3854,30 +3832,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     };
   }
 
-  const retainedContext = {
-    mode: "retain-native" as const, archiveId: "retained-shared-activation",
-    custody: { uid: "uid-chris", slug: "chris", returnOperationId: "native-return", migrationId: "native-return:scheduler:1",
-      sourceGatewayId: "chris-original", sharedGatewayId: "shared-original", instanceName: "native-chris", instanceId: "123456789",
-      zone: "us-central1-f", homeDiskId: "home-id", homeDiskSource: "projects/test/zones/us-central1-f/disks/home", completedAt: 20, cutoverCommittedAt: 10 },
-  };
-
-  async function archivedContextFixture(configOnlyAgent = false) {
-    const stateDir = await mkTempRoot(), stageDir = await mkTempRoot(), landingRoot = await mkTempRoot(), procRoot = await mkTempRoot();
-    const destinationPath = await writeStore(stateDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native'), ('native')"));
-    await fs.mkdir(path.join(stateDir, "customers", "chris"), { recursive: true });
-    const restoredPath = await writeStore(landingRoot, "restored.sqlite", db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
-    await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-coach", "agent", "memory.md"), "shared-memory");
-    if (configOnlyAgent) {
-      await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-proj-configonly-coach", "agent"), { recursive: true });
-      await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-proj-configonly-coach", "agent", "AGENTS.md"), "configuration without a database");
-      await writeStore(stageDir, "agents/octogee-chris-coach/agent/memory.sqlite", () => {});
-    }
-    const archive = await archiveNativeSharedAgentContext({ stateDir, stageDir, procRoot, transfer: retainedContext,
-      prepared: { landingRoot, stores: [{ agentId: "octogee-chris-coach", restoredPath, destinationPath }] } });
-    return { stateDir, archive, destinationPath };
-  }
-
   it.each(["success", "late-writer", "claim-loss", "capture-loss", "absence"])("preserves the staged Shared activation personas across %s", async mode => {
     const importDir = await mkTempRoot(); vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
     const migrationId = `mig-target-persona-${mode}`, projectId = "octogee-chris-proj-persona-coach";
@@ -3927,554 +3881,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       expect(result.getStatus()).toBe(500); expect(published).toBe(false); expect(deps.adapter.onMounted).not.toHaveBeenCalled();
       for (const [dir] of originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"), "utf8")).toBe("- Name: machine-agent-id\n");
     } else { expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200); expect(published).toBe(true); }
-  });
-
-  it("retains current customer memory across archived Shared return and retained Native activation", async () => {
-    const input = await archivedContextFixture(), sharedDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const note = "memory/qa-20261019-4530-fresh.md", contents = "Synthetic customer memory created after activation.\n";
-    const persona = Buffer.from("# Coach\r\n- **Name:** Authored coach differs from machine ID\r\nPersonal notes. 🐙\r\n");
-    await fs.writeFile(path.join(input.stateDir, "customers/chris/IDENTITY.md"), persona);
-    await fs.mkdir(path.join(input.stateDir, "customers/chris/memory"), { recursive: true });
-    await fs.writeFile(path.join(input.stateDir, "customers/chris", note), contents);
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    vi.stubEnv("OPENCLAW_STATE_DIR", sharedDir);
-    const returned = await prepareImport({ migrationId: "memory-return", importDir: sharedDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(sharedDir, input.archive, "memory-return"),
-        applyAddCustomerConfigPatch: vi.fn(async (_snapshot, _mm, opts) => {
-          expect(rowCount(path.join(sharedDir, CARRIED_STORE))).toBe(1);
-          const file = path.join(sharedDir, "customers/chris/IDENTITY.md");
-          expect(await fs.readFile(file)).toEqual(persona);
-          const text = await fs.readFile(file, "utf8");
-          await fs.writeFile(file, text.replace(/^- \*?\*?Name:\*?\*?.*$/mu, "- Name: octogee-chris-coach"));
-          expect(opts?.beforeRuntimePublish).toBeTypeOf("function");
-          await opts?.beforeRuntimePublish?.();
-          return { elapsedMs: 1 };
-        }),
-      }, deps: { procRoot } });
-    const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    spawnMock.mockImplementationOnce((command: string, args: string[], options: import("node:child_process").SpawnOptions) => {
-      const password = args.indexOf("--password-file");
-      const sources = args.slice(password + 2, -1);
-      const local = [...args.slice(0, password), ...sources, `${returned.stageDir}/`];
-      const image = process.env.OCTOGEE_RSYNC_TEST_IMAGE;
-      if (!image) return real.spawn(command, local, options);
-      const roots = [...new Set([...sources.map(source => source.split("/./")[0]!), returned.stageDir])];
-      return real.spawn("docker", ["run", "--rm", "--network=none", "--user=0:0",
-        ...roots.flatMap(root => ["--mount", `type=bind,src=${fsSync.realpathSync(root)},dst=${root}`]),
-        "--entrypoint", command, image, ...local], options);
-    });
-    const runOpenClaw = fakeOpenClaw();
-    const snapshot = runOpenClaw.getMockImplementation()!;
-    runOpenClaw.mockImplementation(async args => {
-      const result = await snapshot(args);
-      if (args[2] === "create") {
-        const snapshotPath = JSON.parse(result.stdout).snapshotPath;
-        const archiveRoot = path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId);
-        await fs.copyFile(path.join(archiveRoot, CARRIED_STORE), path.join(snapshotPath, "database.sqlite"));
-      }
-      return result;
-    });
-    vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const body: PushRsyncStateRequestBody = { migrationId: "memory-return", slug: "chris", rpcPhase: "push-rsync-state", mode: "final",
-      targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM, transferUser: "migration", transferKey: "b".repeat(64),
-      agentContext: policy, includeActivationManifest: false };
-    const adapter = mkAdapter({ isBuilderGateway: () => true, releaseAgent: vi.fn(async () => undefined), listExportPaths: async () => [
-      { cwd: input.stateDir, path: "agents/octogee-chris-coach" }, { cwd: input.stateDir, path: "customers/chris" },
-    ] });
-    const exported = mkResponse();
-    await createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw }))(mkRequest(body, {
-      signature: signForPod(body.migrationId, JSON.stringify(body)),
-    }), exported.res, vi.fn());
-    expect(exported.getStatus(), JSON.stringify(exported.getBody())).toBe(200);
-    expect(await fs.readFile(path.join(returned.stageDir, "customers/chris", note), "utf8")).toBe(contents);
-    vi.stubEnv("OPENCLAW_STATE_DIR", sharedDir);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "cluster");
-    vi.stubEnv("POD_UID", "shared-pod");
-    spawnMock.mockImplementation(await realMigrationSpawn());
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    const installed = await finishImport(returned.deps, "memory-return", "final", policy, certificate);
-    expect(installed.getStatus(), JSON.stringify(installed.getBody())).toBe(200);
-    expect(await fs.readFile(path.join(sharedDir, "customers/chris", note), "utf8")).toBe(contents);
-    expect(rowCount(path.join(sharedDir, CARRIED_STORE))).toBe(1);
-    expect(await fs.readFile(path.join(sharedDir, "customers/chris/IDENTITY.md"))).toEqual(persona);
-    expect(rowCount(input.destinationPath)).toBe(2);
-    const nextRetained = { ...retainedContext, archiveId: "memory-reactivation-shared" };
-    const target = builderTargetImport(async () => true);
-    vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const activated = await prepareImport({ migrationId: "memory-reactivation", importDir: input.stateDir, daemon: mkFakeChild(),
-      agentContext: nextRetained, adapter: target.adapter, deps: { ...target.deps, procRoot } });
-    await fs.cp(path.join(sharedDir, "customers"), path.join(activated.stageDir, "customers"), { recursive: true });
-    await stageSnapshot(activated.stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    const resumed = await finishImport(activated.deps, "memory-reactivation", "final", nextRetained);
-    expect(resumed.getStatus(), JSON.stringify(resumed.getBody())).toBe(200);
-    expect(await fs.readFile(path.join(input.stateDir, "customers/chris", note), "utf8")).toBe(contents);
-    expect(rowCount(input.destinationPath)).toBe(2);
-    expect(rowCount(path.join(input.stateDir, ".octogee-shared-context", nextRetained.archiveId, CARRIED_STORE))).toBe(1);
-  });
-
-  it("pushes archived Shared agents instead of active Native agents through the real rsync export handler", async () => {
-    const input = await archivedContextFixture();
-    vi.stubEnv("OPENCLAW_STATE_DIR", input.stateDir);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const adapter = mkAdapter({ isBuilderGateway: () => true, releaseAgent: vi.fn(async () => undefined), listExportPaths: vi.fn(async () => [
-      { cwd: input.stateDir, path: "agents/octogee-chris-coach" },
-      ...["customers/chris", "git-metadata/chris", "customer-keys/chris", "customers/someone-else"].map(relative => ({ cwd: input.stateDir, path: relative })),
-    ]) });
-    const body: PushRsyncStateRequestBody = { migrationId: "restore-shared-export", slug: "chris", rpcPhase: "push-rsync-state", mode: "final",
-      targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM, transferUser: "migration", transferKey: "b".repeat(64),
-      agentContext: { mode: "restore-shared", archive: input.archive }, includeActivationManifest: false };
-    const runOpenClaw = fakeOpenClaw();
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const response = mkResponse();
-    await createPushRsyncStateHandler(mkDeps({ adapter, runOpenClaw }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
-    expect(response.getStatus()).toBe(200);
-    expect(adapter.listExportPaths).toHaveBeenCalledWith("chris");
-    const args = spawnMock.mock.calls[0]![1] as string[];
-    expect(args).toContain(`${await fs.realpath(input.stateDir)}/.octogee-shared-context/${input.archive.archiveId}/./agents/octogee-chris-coach`);
-    expect(args).not.toContain(`${input.stateDir}/./agents/octogee-chris-coach`);
-    expect(args).toContain(`${input.stateDir}/./customers/chris`);
-    expect(args).toContain(`${input.stateDir}/./git-metadata/chris`);
-    expect(args).not.toContain(`${input.stateDir}/./customer-keys/chris`);
-    expect(args).not.toContain(`${input.stateDir}/./customers/someone-else`);
-    expect(rowCount(input.destinationPath)).toBe(2);
-    expect(runOpenClaw).not.toHaveBeenCalled();
-    expect(adapter.releaseAgent).toHaveBeenCalledWith("octogee-chris-coach");
-  });
-
-  it("stages Shared context without pre-cutover broker admission and activates only after exact owner assignment", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const uidForSlug = vi.fn(async () => null as string | null);
-    const { deps, stageDir } = await prepareImport({ migrationId: "restore-shared-assigned", importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { isBuilderGateway: () => false, uidForSlug }, deps: { procRoot } });
-    expect(uidForSlug).not.toHaveBeenCalled();
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    uidForSlug.mockResolvedValue("uid-other");
-    const refused = await finishImport(deps, "restore-shared-assigned", "final", policy, certificate);
-    expect(refused.getStatus()).toBe(500);
-    expect(refused.getBody()).toMatchObject({ message: "native agent context owner identity changed" });
-    expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
-  });
-
-  function sharedRestoreAdapter(importDir: string, archive: NativeSharedAgentContextArchive, migrationId: string): Partial<CustomerLifecycleAdapter> {
-    if (!process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
-    return {
-      isBuilderGateway: () => false,
-      hasCustomerAgentRuntime: () => false,
-      customerCoachWiredInOpenclawConfig: () => false,
-      loadUserSnapshot: vi.fn(async () => ({ ...RESTORE_SNAPSHOT, nativeSharedContextRestore: {
-        operationId: "return-op", uid: archive.uid, slug: archive.slug, fromGatewayId: "native-current", toGatewayId: GATEWAY_ID,
-        migrationId, archiveId: archive.archiveId, contextSha256: archive.contextSha256,
-      } })),
-      hasCustomerSshKey: () => true, readLocalCustomerPubKey: () => "ssh-ed25519 TEST",
-      readGiteaCustomerPubKeys: async () => ["ssh-ed25519 TEST"], ensureGiteaOrg: async () => undefined,
-      hasWorkspaceGitDir: () => true, hasGitRemote: () => true, cloneWorkspaceRepo: async () => true,
-      ensureCustomerDirectories: () => undefined, writeCustomerTemplateFiles: async () => undefined,
-      blobSyncForSlug: async () => undefined, restoreByosubForAgent: async () => ({ restored: false, present: false }),
-      reassertConvergedContextFilesForCustomer: async () => undefined,
-      applyAddCustomerConfigPatch: vi.fn(async () => {
-        expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
-        return { elapsedMs: 1 };
-      }),
-    };
-  }
-
-  it.each(["empty-preparation", "runtime-state", "configured"])("restores only an unadmitted target with %s", async (target) => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    const migrationId = `restore-admission-${target}`;
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const agentDir = path.join(importDir, "agents", "octogee-chris-coach", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    if (target === "runtime-state") await fs.writeFile(path.join(agentDir, "existing.json"), "existing-runtime");
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId),
-        hasCustomerAgentRuntime: slug => customerAgentRuntimePresent(path.join(importDir, "agents"), slug),
-        customerCoachWiredInOpenclawConfig: () => target === "configured" }, deps: { procRoot } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    if (target === "empty-preparation") spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const result = await finishImport(deps, migrationId, "final", policy, certificate);
-    if (target === "empty-preparation") {
-      expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
-      expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
-      expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
-    } else {
-      expect(result.getStatus()).toBe(500);
-      expect(result.getBody()).toMatchObject({ message: "Shared context restoration requires an unadmitted customer runtime" });
-      expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
-      expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
-      if (target === "runtime-state") expect(await fs.readFile(path.join(agentDir, "existing.json"), "utf8")).toBe("existing-runtime");
-    }
-  });
-
-  it("records the restored config fingerprint and mount marker so the reconcile does not re-mount the returned Builder", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    const migrationId = "restore-records-convergence";
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const recordAppliedFingerprint = vi.fn();
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId),
-        applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1, appliedFingerprint: "fp-restored" })),
-        recordAppliedFingerprint }, deps: { procRoot } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const result = await finishImport(deps, migrationId, "final", policy, createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex"));
-    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
-    expect(recordAppliedFingerprint).toHaveBeenCalledExactlyOnceWith("chris", "fp-restored");
-    expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-  });
-
-  it("records no fingerprint when a restore's re-assert failed, so the reconcile re-ensures the returned Builder", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    const migrationId = "restore-reassert-incomplete";
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const recordAppliedFingerprint = vi.fn();
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId),
-        applyAddCustomerConfigPatch: vi.fn(async () => ({ elapsedMs: 1, appliedFingerprint: "fp-restored" })),
-        reassertByotForCustomer: vi.fn(async () => { throw new Error("broker hiccup"); }),
-        recordAppliedFingerprint }, deps: { procRoot } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const result = await finishImport(deps, migrationId, "final", policy, createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex"));
-    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
-    expect(recordAppliedFingerprint).not.toHaveBeenCalled();
-    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("re-assert incomplete"));
-  });
-
-  it("restores the exact Shared history after cutover and confirms lost-ACK replay without replacing newer history", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const uidForSlug = vi.fn(async () => null as string | null);
-    const { deps, stageDir } = await prepareImport({ migrationId: "restore-shared-replay", importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, "restore-shared-replay"), uidForSlug }, deps: { procRoot } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    uidForSlug.mockResolvedValue("uid-chris");
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const restored = await finishImport(deps, "restore-shared-replay", "final", policy, certificate);
-    expect(restored.getStatus()).toBe(200);
-    expect(restored.getBody()).toMatchObject({ sharedAgentContext: input.archive, imported: true });
-    const database = path.join(importDir, CARRIED_STORE);
-    expect(rowCount(database)).toBe(1);
-    const db = new DatabaseSync(database); db.exec("INSERT INTO transcript_events VALUES ('new-shared-turn')"); db.close();
-    const replay = await finishImport(deps, "restore-shared-replay", "final", policy, certificate);
-    expect(replay.getStatus()).toBe(200);
-    expect(replay.getBody()).toEqual(restored.getBody());
-    expect(rowCount(database)).toBe(2);
-    expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
-    expect(rowCount(input.destinationPath)).toBe(2);
-    const changedCertificate = await finishImport(deps, "restore-shared-replay", "final", policy, "0".repeat(64));
-    expect(changedCertificate.getStatus()).toBe(500);
-    uidForSlug.mockResolvedValue("uid-other");
-    const changedOwner = await finishImport(deps, "restore-shared-replay", "final", policy, certificate);
-    expect(changedOwner.getStatus()).toBe(500);
-  });
-
-  it("restores accepted config-only owned agent directories and replays only the installed strict database set", async () => {
-    const input = await archivedContextFixture(true), importDir = await mkTempRoot();
-    expect(input.archive.agentIds).toContain("octogee-chris-proj-configonly-coach");
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const { deps, stageDir } = await prepareImport({ migrationId: "restore-config-only", importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: sharedRestoreAdapter(importDir, input.archive, "restore-config-only") });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    await fs.mkdir(path.join(stageDir, "agents/octogee-chris-proj-configonly-coach/agent"), { recursive: true });
-    await fs.writeFile(path.join(stageDir, "agents/octogee-chris-proj-configonly-coach/agent/AGENTS.md"), "configuration without a database");
-    const requiredMemory = "agents/octogee-chris-coach/agent/memory.sqlite";
-    await writeStore(stageDir, requiredMemory, () => {});
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    const spawn = await realMigrationSpawn();
-    spawnMock.mockImplementation(spawn);
-    const installed = await finishImport(deps, "restore-config-only", "final", policy, certificate);
-    expect(installed.getStatus(), JSON.stringify(installed.getBody())).toBe(200);
-    await expect(fs.access(path.join(importDir, "agents/octogee-chris-proj-configonly-coach/agent/openclaw-agent.sqlite"))).rejects.toThrow();
-    expect(await fs.readFile(path.join(importDir, "agents/octogee-chris-proj-configonly-coach/agent/AGENTS.md"), "utf8")).toBe("configuration without a database");
-    const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('new-turn')"); db.close();
-    const replay = await finishImport(deps, "restore-config-only", "final", policy, certificate);
-    expect(replay.getStatus(), JSON.stringify(replay.getBody())).toBe(200);
-    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(2);
-    expect(deps.adapter.applyAddCustomerConfigPatch).toHaveBeenCalledOnce();
-    await fs.rm(path.join(importDir, requiredMemory));
-    const missingRequired = await finishImport(deps, "restore-config-only", "final", policy, certificate);
-    expect(missingRequired.getStatus()).toBe(500);
-    await writeStore(importDir, requiredMemory, () => {});
-    const receipts = path.join(importDir, ".octogee-shared-context-restores");
-    const [receiptName] = await fs.readdir(receipts);
-    const file = path.join(receipts, receiptName!);
-    const receipt = JSON.parse(await fs.readFile(file, "utf8"));
-    receipt.databasePaths.push("agents/octogee-foreign-coach/agent/openclaw-agent.sqlite");
-    await fs.writeFile(file, JSON.stringify(receipt));
-    const changedDatabaseSet = await finishImport(deps, "restore-config-only", "final", policy, certificate);
-    expect(changedDatabaseSet.getStatus()).toBe(500);
-    expect(changedDatabaseSet.getBody()).toMatchObject({ message: "Shared context strict database set changed" });
-  });
-
-  it("serializes background eviction with Shared context installation and rechecks its durable hold", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    let releaseActivation!: () => void, enteredActivation!: () => void;
-    const activationGate = new Promise<void>(resolve => { releaseActivation = resolve; });
-    const activationEntered = new Promise<void>(resolve => { enteredActivation = resolve; });
-    const customerContextRestoreHeld = vi.fn(async () => true);
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const { deps, stageDir } = await prepareImport({ migrationId: "restore-with-eviction", importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, "restore-with-eviction"), customerContextRestoreHeld,
-        applyAddCustomerConfigPatch: vi.fn(async () => { enteredActivation(); await activationGate; return { elapsedMs: 1 }; }) } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const finish = finishImport(deps, "restore-with-eviction", "final", policy, certificate);
-    await activationEntered;
-    const evict = evictLocalCustomer({ adapter: deps.adapter, slug: "chris", stampMounted: vi.fn(async () => undefined), onLocalStateRemoved: vi.fn() });
-    await new Promise<void>(resolve => setImmediate(resolve));
-    expect(customerContextRestoreHeld).not.toHaveBeenCalled();
-    releaseActivation();
-    expect((await finish).getStatus()).toBe(200);
-    expect(await evict).toBe("noop");
-    expect(customerContextRestoreHeld).toHaveBeenCalledOnce();
-    expect(deps.adapter.deleteDepartedCustomerState).not.toHaveBeenCalled();
-    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
-  });
-
-  it("retains Shared restore originals after a late Native writer and missing-session duplicate retry", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
-    const migrationId = "restore-persona-late", policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const persona = Buffer.from("# Coach\r\n- Name: Human original 🐙\r\n"), file = path.join(importDir, "customers/chris/IDENTITY.md");
-    let lateWrite: (() => Promise<void>) | undefined, published = false;
-    const applyAddCustomerConfigPatch = vi.fn(async (_snapshot, _mm, opts) => {
-      if (applyAddCustomerConfigPatch.mock.calls.length === 1) { lateWrite = () => fs.writeFile(file, "- Name: machine-agent-id\n"); throw new Error("Native create client timed out"); }
-      await opts?.beforeRuntimePublish?.();
-      expect(await fs.readFile(file)).toEqual(persona); published = true;
-      return { elapsedMs: 1 };
-    });
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, migrationId), applyAddCustomerConfigPatch } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('original')"));
-    await fs.mkdir(path.join(stageDir, "customers/chris"), { recursive: true }); await fs.writeFile(path.join(stageDir, "customers/chris/IDENTITY.md"), persona);
-    spawnMock.mockImplementation(await realMigrationSpawn());
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex"), body: FinishRsyncImportRequestBody = { migrationId, slug: "chris", mode: "final", rpcPhase: "finish-rsync-import", agentContext: policy, targetCertificateSha256: certificate };
-    const first = await finishImport(deps, migrationId, "final", policy, certificate);
-    expect(first.getStatus()).toBe(500); expect(published).toBe(false);
-    const retained = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: body });
-    expect(retained?.phase).toBe("installed"); expect(retained?.workspaceIdentities?.files[0].content).toBe(persona.toString("base64"));
-    const renewed = { ...body, targetCertificateSha256: "0".repeat(64) };
-    await expect(readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: renewed })).rejects.toThrow("completion identity changed");
-    expect((await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: renewed, captureOnly: true }))?.workspaceIdentities).toEqual(retained?.workspaceIdentities);
-    const changed = structuredClone(retained!.workspaceIdentities!); changed.podUid = "foreign-pod";
-    await expect(writeSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: body, response: retained!.response, phase: "installed", workspaceIdentities: changed })).rejects.toThrow("original workspace identity capture changed");
-
-    await expect(fs.access(stageDir)).rejects.toThrow(); await lateWrite!();
-    const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('newer turn')"); db.close();
-    const retry = await finishImport(deps, migrationId, "final", policy, certificate);
-    expect(retry.getStatus(), JSON.stringify(retry.getBody())).toBe(200); expect(published).toBe(true); expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(2);
-    const completed = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: GATEWAY_ID, podUid: "target-pod", request: body });
-    expect(completed?.workspaceIdentities).toEqual(retained?.workspaceIdentities);
-    const repeated = await finishImport(deps, migrationId, "final", policy, certificate);
-    expect(repeated.getStatus()).toBe(200); expect(applyAddCustomerConfigPatch).toHaveBeenCalledTimes(2);
-  });
-
-  it("refuses prepared-only Shared identity capture without full source retransmission", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
-    const migrationId = "restore-persona-prepared", policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: policy, adapter: sharedRestoreAdapter(importDir, input.archive, migrationId) });
-    await stageSnapshot(stageDir, () => undefined);
-    upgradeStoresMock.mockRejectedValueOnce(new Error("pre-install upgrade interrupted"));
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    const first = await finishImport(deps, migrationId, "final", policy, certificate);
-    expect(first.getStatus()).toBe(500);
-    const retry = await finishImport(deps, migrationId, "final", policy, certificate);
-    expect(retry.getStatus()).toBe(500); expect(retry.getBody()).toMatchObject({ message: "Prepared Shared context requires full source retransmission" });
-    expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
-    await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
-  });
-
-  it("refuses replacement-pod replay of installed Shared identity custody without overwriting a newer turn", async () => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    let admitted = false;
-    const applyAddCustomerConfigPatch = vi.fn(async () => {
-      admitted = true;
-      if (applyAddCustomerConfigPatch.mock.calls.length === 1) throw new Error("activation verification interrupted");
-      return { elapsedMs: 1 };
-    });
-    const policy: NativeAgentContextTransfer = { mode: "restore-shared", archive: input.archive };
-    const { deps, stageDir } = await prepareImport({ migrationId: "restore-installed-retry", importDir, daemon: mkFakeChild(), agentContext: policy,
-      adapter: { ...sharedRestoreAdapter(importDir, input.archive, "restore-installed-retry"), applyAddCustomerConfigPatch,
-        hasCustomerAgentRuntime: () => admitted, customerCoachWiredInOpenclawConfig: () => admitted } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('original-shared')"));
-    const certificate = createHash("sha256").update(TARGET_CERTIFICATE_PEM).digest("hex");
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const first = await finishImport(deps, "restore-installed-retry", "final", policy, certificate);
-    expect(first.getStatus()).toBe(500);
-    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(1);
-    const db = new DatabaseSync(path.join(importDir, CARRIED_STORE)); db.exec("INSERT INTO transcript_events VALUES ('later-shared-turn')"); db.close();
-    vi.stubEnv("POD_UID", "replacement-shared-pod-with-installed-context");
-    const retry = await finishImport(deps, "restore-installed-retry", "final", policy, certificate);
-    expect(retry.getStatus()).toBe(500);
-    expect(retry.getBody()).toMatchObject({ message: "Target workspace identity custody changed" });
-    expect(rowCount(path.join(importDir, CARRIED_STORE))).toBe(2);
-    expect(applyAddCustomerConfigPatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses an ordinary SQLite sidecar even when its bytes match the archive preparation", async () => {
-    const importDir = await mkTempRoot(), archiveRoot = await mkTempRoot();
-    const relative = "agents/octogee-chris-coach/agent/openclaw-agent.sqlite-wal";
-    for (const root of [importDir, archiveRoot]) {
-      await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
-      await fs.writeFile(path.join(root, relative), "matching wal state");
-    }
-    await expect(assertMatchingSharedContextPreparation({ importDir, archiveRoot, agentIds: ["octogee-chris-coach"], signal: new AbortController().signal }))
-      .rejects.toThrow("existing runtime or nonmatching preparation state");
-    expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe("matching wal state");
-  });
-
-  it.each(["fresh", "matching-partial", "repairable-schema", "foreign-file", "mutated-file", "database", "wal", "shm", "journal", "configured", "mounted"])("refuses agents-only checkpoint recovery without original workspace identity: %s", async variant => {
-    const input = await archivedContextFixture(), importDir = await mkTempRoot(), checkpointRoot = await mkTempRoot();
-    vi.stubEnv("OPENCLAW_STATE_DIR", importDir);
-    vi.stubEnv("POD_UID", "replacement-shared-pod");
-    const relative = `data/.openclaw/.octogee-shared-context/${input.archive.archiveId}`;
-    await fs.mkdir(path.dirname(path.join(checkpointRoot, relative)), { recursive: true });
-    await fs.cp(path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId), path.join(checkpointRoot, relative), { recursive: true, verbatimSymlinks: true });
-    await fs.mkdir(path.join(checkpointRoot, "desktop-home"));
-    await fs.writeFile(path.join(checkpointRoot, "desktop-home", "private-context"), "native secret context must not be extracted");
-    const file = path.join(checkpointRoot, "checkpoint.tar.gz");
-    await createTar({ cwd: checkpointRoot, file, gzip: true }, ["data", "desktop-home"]);
-    const bytes = await fs.readFile(file);
-    const checkpoint = { name: "20261011T181450Z.tar.gz", generation: "12345", coverage: "builder-home-v2" as const, writerProtocol: 3 as const,
-      instanceId: "123456789", completedAt: 30, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
-    const sharedContextCheckpoint = vi.fn(async () => ({ checkpoint, generation: "67890", size: bytes.length, sha256: checkpoint.sha256, download: { url: "https://storage.googleapis.com/derived-context-object", method: "GET" as const,
-      gcsPath: sharedContextCheckpointObjectPath("chris", checkpoint, input.archive), expiresAt: "2099-01-01" } }));
-    const deps = mkDeps({ adapter: mkAdapter({ ...sharedRestoreAdapter(importDir, input.archive, "restore-after-pod-loss"), sharedContextCheckpoint }),
-      fetch: vi.fn(async () => new Response(bytes)), runOpenClaw: fakeOpenClaw() });
-    deps.adapter.hasCustomerAgentRuntime = slug => customerAgentRuntimePresent(path.join(importDir, "agents"), slug);
-    deps.adapter.customerMountMarked = () => variant === "mounted";
-    deps.adapter.customerCoachWiredInOpenclawConfig = () => variant === "configured";
-    const nonDatabase = path.join(importDir, "agents/octogee-chris-coach/agent/memory.md");
-    if (variant === "matching-partial" || variant === "mutated-file") {
-      await fs.mkdir(path.dirname(nonDatabase), { recursive: true });
-      await fs.writeFile(nonDatabase, variant === "matching-partial" ? "shared-memory" : "different context");
-    }
-    const prohibited = variant === "foreign-file" ? path.join(path.dirname(nonDatabase), "foreign.md") :
-      ["database", "wal", "shm", "journal"].includes(variant) ? path.join(importDir, CARRIED_STORE) + (variant === "database" ? "" : `-${variant}`) : null;
-    if (prohibited) { await fs.mkdir(path.dirname(prohibited), { recursive: true }); await fs.writeFile(prohibited, "existing state"); }
-    if (variant === "repairable-schema") {
-      const actual = await vi.importActual<typeof import("../lib/agent-store-upgrade.js")>("../lib/agent-store-upgrade.js");
-      upgradeStoresMock.mockImplementation(actual.upgradeStagedAgentStores);
-      deps.runOpenClaw = vi.fn(async (args, options) => {
-        if (args[0] === "doctor") {
-          const file = path.join(options.env.OPENCLAW_STATE_DIR, CARRIED_STORE);
-          if (fsSync.existsSync(file)) { const db = new DatabaseSync(file); db.exec("PRAGMA user_version=25"); db.close(); }
-          return { code: 0, stdout: "{}" };
-        }
-        const db = new DatabaseSync(args[2], { readOnly: true });
-        const version = Number(db.prepare("PRAGMA user_version").get().user_version) || 24; db.close();
-        return { code: version === 25 ? 0 : 1, stdout: JSON.stringify({ schema: "openclaw.agent-schema-preflight.v1", databasePath: args[2],
-          agentId: args[args.indexOf("--agent-id") + 1], foundVersion: version, targetVersion: 25, status: version === 25 ? "exact" : "incompatible" }) };
-      });
-    }
-    const originalDatabase = await fs.readFile(path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId, CARRIED_STORE));
-    const actualRename = fs.rename.bind(fs);
-    const physicalImportDir = await fs.realpath(importDir);
-    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(to).endsWith(CARRIED_STORE) && !String(from).startsWith(physicalImportDir + path.sep)) {
-        throw Object.assign(new Error("EXDEV: checkpoint staging and target home are on different filesystems"), { code: "EXDEV" });
-      }
-      return actualRename(from, to);
-    });
-    const result = await finishImport(deps, "restore-after-pod-loss", "final", { mode: "restore-shared", archive: input.archive }, "c".repeat(64), { checkpoint });
-    expect(result.getStatus()).toBe(500);
-    if (variant === "configured" || variant === "mounted") expect(result.getBody()).toMatchObject({ message: "Shared context recovery requires an unwired and unmounted customer runtime" });
-    else expect(result.getBody()).toMatchObject({ message: "Shared restoration requires original workspace identity retransmission" });
-    expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();
-    expect(sharedContextCheckpoint).not.toHaveBeenCalled();
-    expect(upgradeStoresMock).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(input.stateDir, ".octogee-shared-context", input.archive.archiveId, CARRIED_STORE))).toEqual(originalDatabase);
-    if (prohibited || variant === "mutated-file") expect(await fs.readFile(prohibited ?? nonDatabase, "utf8")).toBe(prohibited ? "existing state" : "different context");
-    if (variant !== "database") expect(fsSync.existsSync(path.join(importDir, CARRIED_STORE))).toBe(false);
-    await expect(fs.access(path.join(importDir, "desktop-home"))).rejects.toThrow();
-  });
-
-  it.each(["pre", "final"] as const)("preserves retained native history during %s activation and archives only authoritative final Shared state", async mode => {
-    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native'), ('native')"));
-    const target = builderTargetImport(async () => true);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const migrationId = `mig-retained-native-${mode}`;
-    const prepareSurgeTarget = vi.fn(async () => { expect(rowCount(previous)).toBe(2); });
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode, agentContext: retainedContext,
-      adapter: target.adapter, deps: { ...target.deps, procRoot, prepareSurgeTarget } });
-    if (mode === "final") await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    else await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
-    await fs.writeFile(path.join(stageDir, "agents", "octogee-chris-coach", "agent", "memory.md"), "shared-memory");
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-    const result = await finishImport(deps, migrationId, mode, retainedContext);
-    expect(result.getStatus()).toBe(200);
-    expect(rowCount(previous)).toBe(2);
-    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
-    const copy = spawnMock.mock.calls.find(([command, args]) => command === "/usr/bin/rsync" && args[0] === "-a");
-    expect(copy![1]).toContain("--exclude=/agents/");
-    if (mode === "pre") {
-      expect(result.getBody()).not.toHaveProperty("sharedAgentContext");
-      expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("preserved retained native agent context during pre-copy slug=chris"));
-      expect(deps.runOpenClaw).not.toHaveBeenCalled();
-      expect(prepareSurgeTarget).toHaveBeenCalledOnce();
-      migrationTempRoots.push(path.dirname(stageDir));
-    } else {
-      expect(result.getBody()).toMatchObject({ sharedAgentContext: { archiveId: retainedContext.archiveId, agentIds: ["octogee-chris-coach"], custody: retainedContext.custody } });
-      const archived = path.join(importDir, ".octogee-shared-context", retainedContext.archiveId);
-      expect(rowCount(path.join(archived, CARRIED_STORE))).toBe(1);
-      expect(await fs.readFile(path.join(archived, "agents", "octogee-chris-coach", "agent", "memory.md"), "utf8")).toBe("shared-memory");
-    }
-  });
-
-  it("rejects removal of retained-native policy between prepare and finish before copying any state", async () => {
-    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    await writeStore(importDir, CARRIED_STORE, () => {});
-    const target = builderTargetImport(async () => true);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const { deps, stageDir } = await prepareImport({ migrationId: "mig-custody-changed", importDir, daemon: mkFakeChild(), mode: "pre",
-      agentContext: retainedContext, adapter: target.adapter, deps: { ...target.deps, procRoot } });
-    const result = await finishImport(deps, "mig-custody-changed", "pre");
-    expect(result.getStatus()).toBe(409);
-    expect(result.getBody()).toMatchObject({ error: "rsync import agent context custody does not match prepared session" });
-    const abort = { migrationId: "mig-custody-changed", slug: "chris", rpcPhase: "abort-rsync-import", mode: "pre" };
-    await createAbortRsyncImportHandler(deps)(mkRequest(abort, { signature: signForPod(abort.migrationId, JSON.stringify(abort)) }), mkResponse().res, vi.fn());
-    migrationTempRoots.push(path.dirname(stageDir));
-  });
-
-  it("fails retained activation when native history is corrupt instead of replacing it with a healthy Shared snapshot", async () => {
-    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const previous = await writeStore(importDir, CARRIED_STORE, () => {});
-    await fs.writeFile(previous, "corrupt-native-history");
-    const target = builderTargetImport(async () => true);
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const { deps, stageDir } = await prepareImport({ migrationId: "mig-custody-corrupt", importDir, daemon: mkFakeChild(), mode: "pre",
-      agentContext: retainedContext, adapter: target.adapter, deps: { ...target.deps, procRoot } });
-    await fs.mkdir(path.join(stageDir, "agents", "octogee-chris-coach", "agent"), { recursive: true });
-    const result = await finishImport(deps, "mig-custody-corrupt", "pre", retainedContext);
-    expect(result.getStatus()).toBe(500);
-    expect(await fs.readFile(previous, "utf8")).toBe("corrupt-native-history");
-    expect(deps.releaseSurgeReadiness).not.toHaveBeenCalled();
   });
 
   it("prepares a held Builder from a file-only pre-copy without touching its agent database", async () => {
@@ -4952,28 +4358,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
-  it("archives Shared agents into a live retained-native Builder without holding its OpenClaw", async () => {
-    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const previous = await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native'), ('native')"));
-    const target = liveBuilderTargetImport();
-    vi.stubEnv("GATEWAY_RUNTIME_KIND", "gce-vm");
-    vi.stubEnv("POD_UID", gatewayVmPodName(GATEWAY_ID, "123456789"));
-    const migrationId = "mig-live-retained-native";
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), agentContext: retainedContext,
-      adapter: target.adapter, deps: { ...target.deps, procRoot } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('shared')"));
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
-
-    const result = await finishImport(deps, migrationId, "final", retainedContext);
-
-    expect(result.getStatus()).toBe(200);
-    expectNoHeldGateCalls(deps);
-    expect(deps.adapter.releaseAgent).not.toHaveBeenCalled();
-    expect(rowCount(previous)).toBe(2);
-    expect(result.getBody()).toMatchObject({ sharedAgentContext: { archiveId: retainedContext.archiveId } });
-    expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledOnce();
-  });
-
   async function prepareLiveImport(deps: MigrationHandlerDeps, migrationId: string): Promise<number> {
     const body: PrepareRsyncImportRequestBody = {
       migrationId, slug: "chris", mode: "final", rpcPhase: "prepare-rsync-import",
@@ -5173,7 +4557,6 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const { getStatus, getBody } = await finishImport(deps, "mig-schema-failure");
     expect(getStatus()).toBe(500);
     expect(getBody()).toMatchObject({ message: "SQLite agent handoff is unsupported after the PostgreSQL cutover" });
-    expect(upgradeStoresMock).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
@@ -5250,8 +4633,7 @@ describe("Git metadata across migration imports", () => {
         message: expect.stringContaining("unsafe Git metadata"),
       });
       expect(spawnMock.mock.calls).toHaveLength(1);
-      expect(upgradeStoresMock).not.toHaveBeenCalled();
-      expect(result.adapter.activateImportedCustomer).not.toHaveBeenCalled();
+        expect(result.adapter.activateImportedCustomer).not.toHaveBeenCalled();
       expect(result.adapter.writeMountMarker).not.toHaveBeenCalled();
       expect(result.adapter.onMounted).not.toHaveBeenCalled();
       expect(result.adapter.removePartialWorkspace).not.toHaveBeenCalled();
@@ -5714,6 +5096,28 @@ describe("scheduler migration signed endpoint", () => {
     );
     expect(response.getStatus()).toBe(200);
     expect(schedulerMigration).toHaveBeenCalledWith("chris", { operationId: "handoff-1", phase: "export", retainNonportable: true });
+  });
+  it("resolves the initial export scope only when explicitly requested", async () => {
+    const initial = { ...body, phase: "export", resolveAgentScope: true };
+    const schedulerMigration = vi.fn(async () => ({ operationId: body.migrationId, phase: "export", agentIds: ["octogee-chris-coach"], drained: true }));
+    const response = mkResponse();
+    await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+      mkRequest(initial, { signature: signForPod(initial.migrationId, JSON.stringify(initial)) }), response.res, vi.fn(),
+    );
+    expect(response.getStatus()).toBe(200);
+    expect(schedulerMigration).toHaveBeenCalledWith("chris", { operationId: "handoff-1", phase: "export", resolveAgentScope: true });
+  });
+  it("rejects initial scope resolution mixed with another phase or an explicit scope", async () => {
+    for (const invalid of [{ ...body, resolveAgentScope: true }, { ...body, phase: "export", resolveAgentScope: false },
+      { ...body, phase: "export", resolveAgentScope: true, agentIds: ["octogee-chris-coach"] }]) {
+      const schedulerMigration = vi.fn();
+      const response = mkResponse();
+      await createSchedulerMigrationHandler(mkDeps({ adapter: mkAdapter({ schedulerMigration }) }))(
+        mkRequest(invalid, { signature: signForPod(invalid.migrationId, JSON.stringify(invalid)) }), response.res, vi.fn(),
+      );
+      expect(response.getStatus()).toBe(400);
+      expect(schedulerMigration).not.toHaveBeenCalled();
+    }
   });
   it("rejects a partial flag that is not a boolean or names a phase that cannot retain", async () => {
     for (const invalid of [{ ...body, retainNonportable: "yes" }, { ...body, phase: "retire", retainNonportable: true }]) {

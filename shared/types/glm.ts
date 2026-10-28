@@ -1071,8 +1071,6 @@ export type CustomerMigrationV2Phase =
   | "sourceQuiesced"
   | "finalSynced"
   | "targetVerified"
-  | "freshSourceQuiesced"
-  | "freshCutoverReady"
   | "cutover"
   | "sourceRetired"
   | "complete"
@@ -1094,7 +1092,6 @@ export interface CustomerMigrationV2GatewayRootFence {
 
 export interface CustomerMigrationV2State {
   phase: CustomerMigrationV2Phase;
-  strategy?: "migrate-state" | "provision-fresh";
   operationId: string;
   migrationId: string;
   uid: string;

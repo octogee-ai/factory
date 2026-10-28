@@ -1,4 +1,4 @@
-import { type NativeAgentContextTransfer, type NativeSharedAgentContextRecovery, type NativeSharedAgentContextStage, type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -13,7 +13,6 @@ export interface MigrationClientDeps {
     fetch?: typeof globalThis.fetch;
     log?: (msg: string) => void;
     timeouts?: MigrationClientTimeouts;
-    finishAgentContextRestore?: MigrationClient["finishAgentContextRestore"];
     prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
     transferState: MigrationClient["transferState"];
 }
@@ -68,20 +67,7 @@ export interface MigrationClient {
         slug: string;
         snapshot: FleetBrokerUserSnapshot;
     }): Promise<RestoreMigrationResponse>;
-    finishAgentContextRestore(opts: {
-        sharedAgentContextRecovery?: NativeSharedAgentContextRecovery;
-        migrationId: string;
-        fromGatewayId: string;
-        toGatewayId: string;
-        slug: string;
-        agentContext: Extract<NativeAgentContextTransfer, {
-            mode: "restore-shared";
-        }>;
-        stage: NativeSharedAgentContextStage;
-    }): Promise<ImportResponse>;
     transferState(opts: {
-        stageOnly?: boolean;
-        agentContext?: NativeAgentContextTransfer;
         migrationId: string;
         fromGatewayId: string;
         toGatewayId: string;

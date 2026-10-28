@@ -10,7 +10,7 @@ const fail = (message: string): never => { throw Object.assign(new Error(message
 function sourceUserReady(data: DocumentData | undefined, owner: OwnerContext): boolean {
   const native = data?.provisioning?.openclaw;
   return accountAllowsInteractiveAccess(data) && native?.gatewayId === owner.gatewayId && native?.status === "complete" && native?.slug === owner.slug &&
-    !customerRuntimeMutationFenced(data) && native.migration == null && native.nativeSharedContextRestore === undefined;
+    !customerRuntimeMutationFenced(data) && native.migration == null;
 }
 function sourcePlacementReady(placed: DocumentData | undefined, owner: OwnerContext): boolean {
   return placed?.state === "serving" && placed.slug === owner.slug && placed.gatewayId === owner.gatewayId && Number.isSafeInteger(placed.epoch) && placed.epoch >= 0;

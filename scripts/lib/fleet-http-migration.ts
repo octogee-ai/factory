@@ -1,11 +1,5 @@
 import { assertSafeStagedSymlinks, RSYNC_DAEMON_SYMLINK_POLICY, STAGED_RSYNC_COPY_OPTIONS } from "./rsync-staged-symlinks.js";
-import { recoverSharedAgentContextCheckpoint } from "./shared-agent-context-checkpoint.js";
-import { upgradeStagedAgentStores } from "./agent-store-upgrade.js";
-import { assertMatchingSharedContextPreparation } from "./shared-agent-context-preparation.js";
-import { readSharedAgentContextRestoreReceipt, writeSharedAgentContextRestoreReceipt } from "./shared-agent-context-restore-receipt.js";
-import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { archivedSharedAgentExportPaths, archiveNativeSharedAgentContext, assertNativeAgentContextTransfer, assertRetainedNativeAgentContext } from "./native-shared-agent-context.js";
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
 import { agentIdBelongsToSlug } from "../../shared/types/agent-models.js";
 import { updateVoiceMigration, type VoiceMigrationInput } from './voice-migration.js';
@@ -31,8 +25,6 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  type NativeAgentContextTransfer,
-  type NativeSharedAgentContextArchive,
   type SchedulerMigrationRequestBody,
   type AbortRsyncImportRequestBody,
   type ImportResponse,
@@ -75,10 +67,8 @@ import {
   listSqliteStores,
 } from "./agent-store-carry.js";
 import {
-  type PreparedAgentStores,
   findPortableAgentStores,
   AGENT_STORE_BASENAME,
-  AGENT_IMPORT_DIRNAME,
   exportAgentStoreSnapshots,
   findStagedAgentSnapshots,
   findStagedLiveAgentStores,
@@ -94,7 +84,7 @@ import {
   type MigrationTlsEndpoint,
   type OpenMigrationTlsEndpoint,
 } from "./migration-rsync-tls.js";
-import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+import type { OpenClawCommand } from "./openclaw-cli.js";
 import { reattachBuilderAgents } from "./reattach-builder-agents.js";
 import { activeAgentProjectIds } from "./openclaw-config-builders.js";
 import { PROC_ROOT } from "./held-files.js";
@@ -150,7 +140,6 @@ import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as const;
 const ACTIVATION_MANIFEST_TRANSFER = "activation-manifest" as const;
-const RESTORE_SHARED_AGENT_CONTEXT = "restore-shared" as const;
 
 export interface MigrationHandlerDeps {
   voiceMigration?: (input: VoiceMigrationInput) => Promise<{ activeCalls: number }>;
@@ -559,7 +548,9 @@ function isSchedulerMigrationRequest(body: SchedulerMigrationRequestBody): boole
   const stageValid = body.phase !== "stage" || (body.agentIds !== undefined && body.snapshot !== undefined);
   const retainValid = body.retainNonportable === undefined ||
     (typeof body.retainNonportable === "boolean" && SCHEDULER_RETAINING_PHASES.includes(body.phase));
-  return SCHEDULER_MIGRATION_PHASES.includes(body.phase) && agentIdsValid && stageValid && retainValid;
+  const scopeValid = body.resolveAgentScope === undefined ||
+    (body.resolveAgentScope === true && body.phase === "export" && body.agentIds === undefined);
+  return SCHEDULER_MIGRATION_PHASES.includes(body.phase) && agentIdsValid && stageValid && retainValid && scopeValid;
 }
 
 export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -574,6 +565,7 @@ export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): Req
     try {
       const result = await deps.adapter.schedulerMigration(body.slug, {
         operationId: body.migrationId, phase: body.phase,
+        ...(body.resolveAgentScope ? { resolveAgentScope: true } : {}),
         ...(body.agentIds ? { agentIds: body.agentIds } : {}),
         ...(body.snapshot === undefined ? {} : { snapshot: body.snapshot }),
         ...(body.retainNonportable === undefined ? {} : { retainNonportable: body.retainNonportable }),
@@ -846,7 +838,7 @@ export function createExportPathsHandler(deps: MigrationHandlerDeps): RequestHan
     if (!mode) return;
 
     try {
-      const allSources = await migrationAgentContextExportSources(deps, body, mode);
+      const allSources = await deps.adapter.listExportPaths(body.slug);
       const sources = sourcesForPushMode(allSources, body.slug, mode);
       if (sources.length === 0) {
         res.status(404).json({
@@ -1056,7 +1048,6 @@ const RSYNC_DAEMON_STOP_TIMEOUT_MS = 5_000;
 const RSYNC_BIN = "/usr/bin/rsync";
 
 interface RSyncImportSession {
-  agentContext?: NativeAgentContextTransfer;
   key: string;
   migrationId: string;
   slug: string;
@@ -1652,20 +1643,6 @@ function migrationImportBusy(): boolean {
   return preparingRsyncImport || finishingRsyncImports.size > 0;
 }
 
-async function validateAgentContextTransfer(
-  deps: MigrationHandlerDeps, body: MigrationRequestBody & { agentContext?: unknown }, side: "source" | "target", mode: MigrationTransferMode, privateStaging = false,
-): Promise<NativeAgentContextTransfer | undefined> {
-  if (body.agentContext === undefined) return undefined;
-  const context = body.agentContext as NativeAgentContextTransfer;
-  const uid = privateStaging && side === "target" && context.mode === RESTORE_SHARED_AGENT_CONTEXT
-    ? context.archive?.uid : await deps.adapter.uidForSlug(body.slug);
-  if (!uid) throw new Error("native agent context owner is missing");
-  return assertNativeAgentContextTransfer(body.agentContext, {
-    uid, slug: body.slug, runtimeKind: process.env.GATEWAY_RUNTIME_KIND ?? "cluster",
-    gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", configuredBuilder: deps.adapter.isBuilderGateway?.() === true,
-  }, side, mode);
-}
-
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
@@ -1695,7 +1672,6 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     let activation: ConfiguredBuilderActivation | null = null;
     try {
-      const agentContext = await validateAgentContextTransfer(deps, body, "target", mode, true);
       activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
       if (activation?.live) {
         await admitLiveConfiguredBuilderImport(deps, activation);
@@ -1721,7 +1697,6 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
         log,
       });
       const session: RSyncImportSession = {
-        agentContext,
         key,
         migrationId: body.migrationId,
         slug: body.slug,
@@ -1795,15 +1770,6 @@ function validateRsyncPushTarget(body: PushRsyncStateRequestBody, res: Response)
   return { targetHost, targetPort, targetCertificatePem: body.targetCertificatePem, ...credentials };
 }
 
-async function migrationAgentContextExportSources(deps: MigrationHandlerDeps, body: MigrationRequestBody & { agentContext?: unknown }, mode: MigrationTransferMode): Promise<Array<{ cwd: string; path: string }>> {
-  const agentContext = await validateAgentContextTransfer(deps, body, "source", mode);
-  if (agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) return deps.adapter.listExportPaths(body.slug);
-  const archived = await archivedSharedAgentExportPaths({ stateDir: resolveOpenClawStateDir(), archive: agentContext.archive });
-  const customerFiles = (await deps.adapter.listExportPaths(body.slug)).filter(source =>
-    ["customers", "git-metadata", "customer-keys"].some(directory => source.path === path.join(directory, body.slug)));
-  return [...archived, ...customerFiles];
-}
-
 export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
@@ -1834,7 +1800,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
     const { controller, detach } = attachImportDisconnectHandlers(res, body.migrationId, body.slug, log, "export");
     const transferTimer = setTimeout(() => controller.abort(new Error("rsync push-state transfer deadline exceeded")), Math.max(0, deadline - Date.now()));
     try {
-      const allSources = await migrationAgentContextExportSources(deps, body, mode);
+      const allSources = await deps.adapter.listExportPaths(body.slug);
       const sources = sourcesForPushMode(allSources, body.slug, mode);
       if (sources.length === 0) {
         res
@@ -2144,35 +2110,6 @@ async function activateConfiguredBuilderImport(
   }
 }
 
-function sharedRestoreHoldMatches(snapshot: UserSnapshot | null, deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody): snapshot is UserSnapshot {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT || !snapshot) return false;
-  const archive = body.agentContext.archive, hold = snapshot.nativeSharedContextRestore;
-  if (!hold || ![hold.operationId, hold.fromGatewayId].every(value => typeof value === "string" && value.length > 0)) return false;
-  return snapshot.uid === archive.uid && snapshot.slug === body.slug && snapshot.gatewayId === deps.gatewayId &&
-    isDeepStrictEqual(hold, { operationId: hold.operationId, fromGatewayId: hold.fromGatewayId, uid: archive.uid, slug: body.slug,
-      toGatewayId: deps.gatewayId, migrationId: body.migrationId, archiveId: archive.archiveId, contextSha256: archive.contextSha256 });
-}
-
-async function sharedRestoreSnapshot(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, requireUnadmitted: boolean): Promise<UserSnapshot> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) throw new Error("Shared restore policy is missing");
-  const snapshot = await deps.adapter.loadUserSnapshot(body.agentContext.archive.uid, { refresh: true });
-  if (!sharedRestoreHoldMatches(snapshot, deps, body)) throw new Error("Shared context restoration admission hold does not match assigned owner");
-  if (requireUnadmitted && (deps.adapter.hasCustomerAgentRuntime?.(body.slug) !== false || deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug) !== false)) {
-    throw new Error("Shared context restoration requires an unadmitted customer runtime");
-  }
-  return snapshot;
-}
-
-function withSharedRestoreCustody<T>(body: FinishRsyncImportRequestBody, run: () => Promise<T>): Promise<T> {
-  return body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT ? withCustomerRemoval(body.slug, run) : run();
-}
-
-async function markSharedRestoreInstalled(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, stateDir: string): Promise<void> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) return;
-  await writeSharedAgentContextRestoreReceipt({ stateDir, gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body,
-    response: completedImportResponse(body, undefined, body.agentContext.archive), phase: "installed" });
-}
-
 function recordRestoredConvergence(
   deps: MigrationHandlerDeps,
   slug: string,
@@ -2211,41 +2148,10 @@ function sharedTargetCustody(deps: MigrationHandlerDeps, body: FinishRsyncImport
 async function sharedTargetWorkspaceRestore(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, importDir: string, signal: AbortSignal, stageDir?: string): Promise<(() => Promise<void>) | undefined> {
   if (deps.adapter.isBuilderGateway?.() !== false) return undefined;
   signal.throwIfAborted();
-  if (body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) return sharedArchiveWorkspaceRestore({ deps, body, importDir, signal, stageDir });
-  if (body.agentContext) return undefined;
   return sharedManifestWorkspaceRestore({ deps, body, importDir, signal, stageDir });
 }
 
 type TargetWorkspaceRestoreInput = { deps: MigrationHandlerDeps; body: FinishRsyncImportRequestBody; importDir: string; signal: AbortSignal; stageDir?: string };
-
-async function sharedArchiveWorkspaceRestore({ deps, body, importDir, signal, stageDir }: TargetWorkspaceRestoreInput): Promise<() => Promise<void>> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) throw new Error("Shared restore policy is missing");
-  const snapshot = await sharedRestoreSnapshot(deps, body, !!stageDir);
-  const custody = sharedTargetCustody(deps, body, snapshot.uid), agentIds = body.agentContext.archive.agentIds;
-  const previous = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: deps.gatewayId, podUid: custody.podUid, request: body, captureOnly: true });
-  let capture = previous?.workspaceIdentities;
-  if (!capture) {
-    if (!stageDir || previous) throw new Error("Shared restoration requires original workspace identity retransmission");
-    capture = await captureTargetWorkspaceIdentities(body.slug, agentIds, stageDir, custody);
-  }
-  assertTargetIdentityCustody(capture, custody);
-  if (stageDir) await writeSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: deps.gatewayId, podUid: custody.podUid, request: body,
-    response: completedImportResponse(body, undefined, body.agentContext.archive), phase: "prepared", workspaceIdentities: capture });
-  const captured = capture;
-  const admitted = await sharedRestoreSnapshot(deps, body, false);
-  if (!isDeepStrictEqual(admitted.nativeSharedContextRestore, snapshot.nativeSharedContextRestore)) throw new Error("Shared workspace identity restore authority changed");
-  signal.throwIfAborted();
-  const assertCurrent = async () => {
-    signal.throwIfAborted();
-    assertTargetIdentityCustody(custody, sharedTargetCustody(deps, body, snapshot.uid));
-    const current = await sharedRestoreSnapshot(deps, body, false);
-    if (!isDeepStrictEqual(current.nativeSharedContextRestore, snapshot.nativeSharedContextRestore)) throw new Error("Shared workspace identity restore authority changed");
-    const retained = await readSharedAgentContextRestoreReceipt({ stateDir: importDir, gatewayId: deps.gatewayId, podUid: custody.podUid, request: body, captureOnly: true });
-    if (retained?.phase !== "installed" || !isDeepStrictEqual(retained.workspaceIdentities, captured)) throw new Error("Shared workspace identity restore capture changed");
-    signal.throwIfAborted();
-  };
-  return () => restoreTargetWorkspaceIdentities(captured, body.slug, agentIds, importDir, { custody, assertCurrent });
-}
 
 async function sharedManifestWorkspaceRestore({ deps, body, importDir, signal, stageDir }: TargetWorkspaceRestoreInput): Promise<() => Promise<void>> {
   const readAuthority = deps.adapter.targetMigrationIdentityCustody;
@@ -2292,13 +2198,6 @@ async function activateFinishedRsyncImport(input: {
 }): Promise<string | undefined> {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
-  if (body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) {
-    const snapshot = await sharedRestoreSnapshot(deps, body, false);
-    const restored = await restoreCustomerRuntimeFromSnapshot(deps.adapter, snapshot, { signal, beforeRuntimePublish: input.beforeRuntimePublish });
-    recordRestoredConvergence(deps, body.slug, restored);
-    deps.adapter.onMounted?.(body.slug);
-    return undefined;
-  }
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
     const activation = await configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
     let verificationPending: string | undefined;
@@ -2360,30 +2259,6 @@ interface StagedImportInput {
   log: (msg: string, fields?: LogContext) => void;
 }
 
-type RetainedAgentContextTransfer = Extract<NativeAgentContextTransfer, { mode: "retain-native" }>;
-
-async function retainedImportPolicy(input: StagedImportInput): Promise<RetainedAgentContextTransfer | undefined> {
-  const retained = input.session.agentContext?.mode === "retain-native" ? input.session.agentContext : undefined;
-  if (!retained) return undefined;
-  if (!input.activation || !input.activation.live && !await input.deps.surgeTargetOpenClawHeld?.(input.activation.request)) {
-    throw new Error("retained native import requires its held or live Builder OpenClaw process gate");
-  }
-  await assertRetainedNativeAgentContext(input.session.importDir, input.slug);
-  return retained;
-}
-
-function deferImportedAgentState(input: StagedImportInput, retained: RetainedAgentContextTransfer | undefined): boolean {
-  return !!retained || input.mode === "pre" && (!input.activation || input.activation.live);
-}
-
-async function archiveRetainedImport(input: StagedImportInput, prepared: PreparedAgentStores, retained: RetainedAgentContextTransfer): Promise<NativeSharedAgentContextArchive> {
-  const { session, log } = input;
-  const receipt = await archiveNativeSharedAgentContext({ stateDir: session.importDir, stageDir: session.stageDir, prepared,
-    procRoot: input.deps.procRoot ?? PROC_ROOT, transfer: retained, signal: input.signal });
-  log(`[migration-rsync] preserved native context and archived Shared agents slug=${receipt.slug} archiveId=${receipt.archiveId} digest=${receipt.contextSha256} agents=${receipt.agentIds.join(",")}`);
-  return receipt;
-}
-
 async function carriedProjectWorkspace(input: StagedImportInput, agentId: string): Promise<string | null> {
   const parsed = parseAgentId(agentId);
   if (parsed.kind !== "project" || parsed.username !== input.slug) return null;
@@ -2405,15 +2280,13 @@ async function heldBuilderImport(input: StagedImportInput): Promise<BuilderImpor
   return await input.deps.surgeTargetOpenClawHeld?.(activation.request) === true ? activation.request : null;
 }
 
-async function deliverStagedImport(input: StagedImportInput): Promise<NativeSharedAgentContextArchive | undefined> {
+async function deliverStagedImport(input: StagedImportInput): Promise<void> {
   const { deps, session, log } = input;
-  const retained = await retainedImportPolicy(input);
-  const deferAgentState = deferImportedAgentState(input, retained);
+  const deferAgentState = input.mode === "pre" && (!input.activation || input.activation.live);
   const copyOptions = { baselineEntries: session.baselineEntries, deferAgentState };
   if (input.mode !== "final") {
     if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
     await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
-    if (retained) log(`[migration-rsync] preserved retained native agent context during pre-copy slug=${input.slug}`);
     return;
   }
   const prepared = await prepareAgentStoreSnapshots({
@@ -2427,8 +2300,7 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
   const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
   try {
     const offlineTarget = await heldBuilderImport(input);
-    if (!offlineTarget || retained) await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
-    if (retained) return archiveRetainedImport(input, prepared, retained);
+    if (!offlineTarget) await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     await installPreparedAgentStores({
       prepared,
       releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log, input.heldTarget),
@@ -2453,7 +2325,6 @@ async function deliverStagedImport(input: StagedImportInput): Promise<NativeShar
       await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     }
     await installCodexStoreSnapshots({ prepared: codex, importDir: session.importDir, procRoot: deps.procRoot ?? PROC_ROOT, log, signal: input.signal });
-    if (session.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) return session.agentContext.archive;
   } finally {
     await discardCodexStoreSnapshots(codex, log);
   }
@@ -2477,22 +2348,7 @@ async function finishTargetPreparation(
   await deps.prepareSurgeTarget(activation.request, signal);
 }
 
-function validateSharedRestoreCertificate(session: RSyncImportSession, body: FinishRsyncImportRequestBody, res: Response): boolean {
-  const expected = session.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT
-    ? createHash("sha256").update(session.transport.certificatePem).digest("hex") : undefined;
-  if (body.targetCertificateSha256 !== expected) {
-    res.status(409).json({ error: "Shared context restoration target certificate does not match prepared session" });
-    return false;
-  }
-  return true;
-}
-
 function validateRsyncImportSessionPolicy(session: RSyncImportSession, body: FinishRsyncImportRequestBody, configTransferMode: MigrationConfigTransferMode, res: Response): boolean {
-  if (!validateSharedRestoreCertificate(session, body, res)) return false;
-  if (!isDeepStrictEqual(session.agentContext, body.agentContext)) {
-    res.status(409).json({ error: "rsync import agent context custody does not match prepared session" });
-    return false;
-  }
   if (session.configTransferMode !== configTransferMode) {
     res.status(409).json({ error: "rsync import config transfer mode does not match prepared session" });
     return false;
@@ -2500,138 +2356,15 @@ function validateRsyncImportSessionPolicy(session: RSyncImportSession, body: Fin
   return true;
 }
 
-function completedImportResponse(body: MigrationRequestBody, verificationPending: string | undefined, sharedAgentContext: NativeSharedAgentContextArchive | undefined): ImportResponse {
+function completedImportResponse(body: MigrationRequestBody, verificationPending: string | undefined): ImportResponse {
   return { migrationId: body.migrationId, slug: body.slug, imported: true,
-    ...(verificationPending ? { verificationPending } : {}), ...(sharedAgentContext ? { sharedAgentContext } : {}) };
+    ...(verificationPending ? { verificationPending } : {}) };
 }
 
-async function replaySharedAgentContextRestore(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, mode: MigrationTransferMode, res: Response): Promise<boolean> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) return false;
-  const receipt = await readSharedAgentContextRestoreReceipt({ stateDir: resolveOpenClawStateDir(), gatewayId: deps.gatewayId,
-    podUid: process.env.POD_UID ?? "", request: body });
-  if (!receipt) return false;
-  if (migrationImportBusy()) { res.status(409).json({ error: "migration import completion is already in progress" }); return true; }
-  const key = rsyncSessionKey(body.migrationId, body.slug, "final");
-  finishingRsyncImports.add(key);
-  const log = deps.log ?? provisionerLog, { controller, detach } = attachImportDisconnectHandlers(res, body.migrationId, body.slug, log);
-  try {
-    await withCustomerRemoval(body.slug, async () => {
-      await validateAgentContextTransfer(deps, body, "target", mode);
-      if (receipt.phase === "prepared") throw new Error("Prepared Shared context requires full source retransmission");
-      await assertInstalledSharedContext(body, receipt.databasePaths);
-      if (receipt.phase === "installed") {
-        await sharedRestoreSnapshot(deps, body, false);
-        const beforeRuntimePublish = await sharedTargetWorkspaceRestore(deps, body, resolveOpenClawStateDir(), controller.signal);
-        await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal, beforeRuntimePublish });
-        await writeSharedAgentContextRestoreReceipt({ stateDir: resolveOpenClawStateDir(), gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body, response: receipt.response });
-      }
-    });
-    log(`[migration-rsync] confirmed previously restored Shared context slug=${body.slug} archiveId=${body.agentContext.archive.archiveId}`);
-    res.status(200).json(receipt.response);
-  } finally { detach(); finishingRsyncImports.delete(key); }
-  return true;
-}
-
-async function assertInstalledSharedContext(body: FinishRsyncImportRequestBody, databasePaths: readonly string[]): Promise<void> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) throw new Error("Installed Shared context policy is missing");
-  const stateDir = await fs.realpath(resolveOpenClawStateDir());
-  for (const relative of databasePaths) {
-    const file = path.join(stateDir, relative);
-    if (!(await fs.lstat(file)).isFile() || await fs.realpath(file) !== file) throw new Error("Installed Shared agent database is not canonical");
-  }
-  await assertRetainedNativeAgentContext(stateDir, body.slug);
-}
-
-async function sharedRecoverySnapshot(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody): Promise<UserSnapshot> {
-  const snapshot = await sharedRestoreSnapshot(deps, body, false);
-  if (deps.adapter.customerCoachWiredInOpenclawConfig?.(body.slug) !== false || deps.adapter.customerMountMarked?.(body.slug) !== false) {
-    throw new Error("Shared context recovery requires an unwired and unmounted customer runtime");
-  }
-  return snapshot;
-}
-
-async function installRecoveredSharedContext(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, root: string, signal: AbortSignal): Promise<void> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT) throw new Error("Shared recovery archive is missing");
-  const archive = body.agentContext.archive, importDir = await fs.realpath(resolveOpenClawStateDir());
-  const stores = await findPortableAgentStores(archive.agentIds.map(agentId => ({ cwd: root, path: `agents/${agentId}` })));
-  const importRoot = path.join(importDir, AGENT_IMPORT_DIRNAME);
-  await fs.mkdir(importRoot, { recursive: true, mode: 0o700 });
-  if (await fs.realpath(importRoot) !== path.resolve(importRoot)) throw new Error("Shared recovery landing directory is not canonical");
-  const landingRoot = await fs.mkdtemp(path.join(importRoot, "shared-recovered-"));
-  try {
-    const prepared: PreparedAgentStores = { landingRoot, stores: [] };
-    for (const store of stores) {
-      signal.throwIfAborted();
-      const source = path.join(store.sourceAgentDir, AGENT_STORE_BASENAME);
-      const restoredPath = path.join(landingRoot, store.agentDir, AGENT_STORE_BASENAME);
-      await fs.mkdir(path.dirname(restoredPath), { recursive: true, mode: 0o700 });
-      await fs.copyFile(source, restoredPath);
-      await fs.chmod(restoredPath, 0o600);
-      prepared.stores.push({ agentId: store.agentId, restoredPath, destinationPath: path.join(importDir, store.agentDir, AGENT_STORE_BASENAME) });
-    }
-    await upgradeStagedAgentStores(landingRoot, { run: deps.runOpenClaw ?? runOpenClaw, signal, log: deps.log ?? provisionerLog });
-    const codex = await prepareCodexStoreSnapshots(root, deps.log ?? provisionerLog);
-    try {
-      await sharedRecoverySnapshot(deps, body);
-      await assertMatchingSharedContextPreparation({ importDir, archiveRoot: root, agentIds: archive.agentIds, signal });
-      for (const agentId of archive.agentIds) await fs.cp(path.join(root, "agents", agentId), path.join(importDir, "agents", agentId), {
-        recursive: true, dereference: false, verbatimSymlinks: true, filter: source => {
-          const relative = path.relative(root, source).split(path.sep).join("/");
-          return !path.basename(source).startsWith(AGENT_STORE_BASENAME) && !isCodexDatabase(relative) && !relative.includes(".octogee-codex-snapshots");
-        },
-      });
-      await installPreparedAgentStores({ prepared, releaseAgent: agentId => releaseAgentForImport(deps, null, agentId, deps.log ?? provisionerLog),
-        procRoot: deps.procRoot ?? PROC_ROOT, log: deps.log });
-      await installCodexStoreSnapshots({ prepared: codex, importDir, procRoot: deps.procRoot ?? PROC_ROOT, log: deps.log ?? provisionerLog, signal });
-    } finally { await discardCodexStoreSnapshots(codex, deps.log ?? provisionerLog); }
-  } finally { await fs.rm(landingRoot, { recursive: true, force: true }); }
-}
-
-async function recoverMissingSharedRestore(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, res: Response): Promise<boolean> {
-  if (body.agentContext?.mode !== RESTORE_SHARED_AGENT_CONTEXT || !body.sharedAgentContextRecovery) return false;
-  const archive = body.agentContext.archive, recovery = body.sharedAgentContextRecovery;
-  const key = rsyncSessionKey(body.migrationId, body.slug, "final");
-  if (migrationImportBusy()) { res.status(409).json({ error: "migration import completion is already in progress" }); return true; }
-  finishingRsyncImports.add(key);
-  const log = deps.log ?? provisionerLog, { controller, detach } = attachImportDisconnectHandlers(res, body.migrationId, body.slug, log);
-  try {
-    await withCustomerRemoval(body.slug, async () => {
-    await validateAgentContextTransfer(deps, body, "target", "final");
-    const snapshot = await sharedRecoverySnapshot(deps, body);
-    const beforeRuntimePublish = await sharedTargetWorkspaceRestore(deps, body, resolveOpenClawStateDir(), controller.signal);
-    if (!deps.adapter.sharedContextCheckpoint) throw new Error("Shared context checkpoint recovery is unavailable");
-    const download = await deps.adapter.sharedContextCheckpoint({ ...snapshot.nativeSharedContextRestore!, checkpoint: recovery.checkpoint }, controller.signal);
-    const recovered = await recoverSharedAgentContextCheckpoint({ archive, recovery,
-      download, fetch: deps.fetch ?? globalThis.fetch, signal: controller.signal });
-    try {
-      await sharedRecoverySnapshot(deps, body);
-      await assertMatchingSharedContextPreparation({ importDir: resolveOpenClawStateDir(), archiveRoot: recovered.root, agentIds: archive.agentIds, signal: controller.signal });
-      await installRecoveredSharedContext(deps, body, recovered.root, controller.signal);
-      await markSharedRestoreInstalled(deps, body, resolveOpenClawStateDir());
-      await activateFinishedRsyncImport({ deps, body, configTransferMode: ACTIVATION_MANIFEST_TRANSFER, loadStrategy: "standard", signal: controller.signal, beforeRuntimePublish });
-      const response = completedImportResponse(body, undefined, archive);
-      await writeSharedAgentContextRestoreReceipt({ stateDir: resolveOpenClawStateDir(), gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body, response });
-      log(`[migration-rsync] recovered Shared context from pinned native checkpoint slug=${body.slug} archiveId=${archive.archiveId}`);
-      res.status(200).json(response);
-    } finally { await recovered.cleanup(); }
-    });
-  } finally { detach(); finishingRsyncImports.delete(key); }
-  return true;
-}
-
-async function respondMissingRsyncSession(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, mode: MigrationTransferMode, res: Response): Promise<void> {
-  try {
-    if (!await replaySharedAgentContextRestore(deps, body, mode, res) && !await recoverMissingSharedRestore(deps, body, res)) res.status(404).json({ error: "rsync import session not found" });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    (deps.log ?? provisionerLog)(`[migration-rsync] Shared restore replay refused migrationId=${body.migrationId} slug=${body.slug}: ${message}`);
-    res.status(500).json({ error: "Shared context restoration replay refused", message });
-  }
-}
-
-async function validateFinishedImportAdmission(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, mode: MigrationTransferMode): Promise<void> {
-  await validateAgentContextTransfer(deps, body, "target", mode);
-  if (body.agentContext?.mode === RESTORE_SHARED_AGENT_CONTEXT) await sharedRestoreSnapshot(deps, body, true);
+function finishedImportLog(body: MigrationRequestBody, mode: string, verificationPending: string | undefined, stageMs: number, activateMs: number): string {
+  return `${verificationPending ? "🟡" : "🟢"} [migration-rsync] finish-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} ${verificationPending ? "verification-pending" : "done"}` +
+    ` stageMs=${stageMs} activateMs=${activateMs}` +
+    (verificationPending ? ` (verification pending: ${verificationPending})` : "");
 }
 
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -2651,7 +2384,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     const session = rsyncImportSessions.get(key);
     if (!session) {
-      await respondMissingRsyncSession(deps, body, mode, res);
+      res.status(404).json({ error: "rsync import session not found" });
       return;
     }
     if (!validateRsyncImportSessionPolicy(session, body, configTransferMode, res)) return;
@@ -2679,10 +2412,8 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
-      await withSharedRestoreCustody(body, async () => {
-      await validateFinishedImportAdmission(deps, body, mode);
       const beforeRuntimePublish = mode === "final" ? await sharedTargetWorkspaceRestore(deps, body, session.importDir, controller.signal, session.stageDir) : undefined;
-      const sharedAgentContext = await deliverStagedImport({
+      await deliverStagedImport({
         deps,
         session,
         slug: body.slug,
@@ -2692,7 +2423,6 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         signal: controller.signal,
         log,
       });
-      await markSharedRestoreInstalled(deps, body, session.importDir);
       const stagedAt = Date.now();
       if (mode === "pre") {
         await finishTargetPreparation(deps, session, body, configTransferMode, controller.signal);
@@ -2709,19 +2439,13 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         })
         : undefined;
       const activatedAt = Date.now();
-      const response = completedImportResponse(body, verificationPending, sharedAgentContext);
-      await writeSharedAgentContextRestoreReceipt({ stateDir: session.importDir, gatewayId: deps.gatewayId, podUid: process.env.POD_UID ?? "", request: body, response });
+      const response = completedImportResponse(body, verificationPending);
       await stopRsyncSession(session, preserveStage);
       sessionReleased = true;
       finishingRsyncImports.delete(key);
       controller.signal.throwIfAborted();
-      log(
-        `${verificationPending ? "🟡" : "🟢"} [migration-rsync] finish-import mode=${mode} migrationId=${body.migrationId} slug=${body.slug} ${verificationPending ? "verification-pending" : "done"}` +
-        ` stageMs=${stagedAt - startedAt} activateMs=${activatedAt - stagedAt}` +
-        (verificationPending ? ` (verification pending: ${verificationPending})` : ""),
-      );
+      log(finishedImportLog(body, mode, verificationPending, stagedAt - startedAt, activatedAt - stagedAt));
       res.status(200).json(response);
-      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`[migration-rsync] 🔴 finish-import migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });

@@ -103,14 +103,35 @@ it("preserves the original foreign-fence failure without probing whether Native 
   expect(rpc.schedulerMigration).toHaveBeenCalledExactlyOnceWith({ operationId: "handoff-2", phase: "hold", agentIds: ["octogee-alice-coach"] });
 });
 
-it("keeps the old /scheduler contract for an older controller: hold drains before it answers", async () => {
+it("returns Native's undrained hold receipt without a second polling loop", async () => {
+  const request = { operationId: "handoff-1", phase: "hold" as const };
+  const receipt = { ...request, agentIds: ["octogee-alice-coach"], drained: false };
   const rpc = {
     configGet: vi.fn(async () => ({ config: {} })),
-    schedulerMigration: vi.fn()
-      .mockResolvedValueOnce({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], drained: false })
-      .mockResolvedValueOnce({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-alice-coach"], drained: true }),
+    schedulerMigration: vi.fn().mockResolvedValueOnce(receipt).mockResolvedValueOnce({ ...receipt, drained: true }),
   };
-  await expect(migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], { operationId: "handoff-1", phase: "hold" })).resolves.toMatchObject({ drained: true });
-  expect(rpc.schedulerMigration).toHaveBeenCalledTimes(2);
-  expect(rpc.schedulerMigration.mock.calls[0]).toEqual(rpc.schedulerMigration.mock.calls[1]);
+  await expect(migrateCustomerScheduler(rpc as never, "alice", ["octogee-alice-coach"], request)).resolves.toBe(receipt);
+  expect(rpc.schedulerMigration).toHaveBeenCalledExactlyOnceWith({ ...request, agentIds: ["octogee-alice-coach"] });
+});
+
+it("begins a Native export with the complete customer scope while excluding service agents", async () => {
+  const rpc = {
+    configGet: vi.fn(async () => ({ config: { agents: { entries: {
+      "octogee-alice-coach": {}, "octogee-alice-proj-demo-coach": {}, "octogee-bob-coach": {},
+    } } } })),
+    schedulerMigration: vi.fn(async request => ({ ...request, drained: true })),
+  };
+  await migrateCustomerScheduler(rpc as never, "alice", ["main", "octogee-unmatched-route", "octogee-alice-coach"], {
+    operationId: "initial-export", phase: "export", resolveAgentScope: true,
+  });
+  expect(rpc.schedulerMigration).toHaveBeenCalledExactlyOnceWith({
+    operationId: "initial-export", phase: "export", agentIds: ["octogee-alice-coach", "octogee-alice-proj-demo-coach"],
+  });
+});
+
+it("resumes a Native export from its durable scope after the roster was removed", async () => {
+  const rpc = { configGet: vi.fn(), schedulerMigration: vi.fn(async request => ({ ...request, drained: true })) };
+  await migrateCustomerScheduler(rpc as never, "alice", [], { operationId: "retained-export", phase: "export" });
+  expect(rpc.configGet).not.toHaveBeenCalled();
+  expect(rpc.schedulerMigration).toHaveBeenCalledExactlyOnceWith({ operationId: "retained-export", phase: "export" });
 });

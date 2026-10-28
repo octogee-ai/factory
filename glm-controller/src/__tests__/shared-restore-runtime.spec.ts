@@ -1,11 +1,11 @@
 import { enqueuePlacementMigration, continuousPlacementMigrationOperationId } from '../placement-policy-reconciler.js';
 import { createRestartGatewayHandler } from '../handlers/restart-gateway.js';
-import { buildOperationCompletionUpdate, MAX_OPERATION_ATTEMPTS, MAX_OPERATION_ATTEMPT_HISTORY, classifyOperationFailure } from '../operation-retry.js';
+import { MAX_OPERATION_ATTEMPT_HISTORY } from '../operation-retry.js';
 import { assertSharedSourceRecoveryPredecessor, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
 import { recoverSharedSourceRuntime } from "../lib/shared-source-runtime.js";
 import { describe, expect, it, vi } from 'vitest';
 import { FieldValue } from 'firebase-admin/firestore';
-import { acknowledgeCustomerRestore, beginCustomerRestore, setWorkspaceMigrationPhase, type FleetStateDeps } from '@octogee/core/fleet-state';
+import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from '@octogee/core/fleet-state';
 import type { Operation } from '@octogee/shared/types/glm';
 import { recoverSharedRestoreRuntime } from '../lib/shared-restore-runtime.js';
 import { processOperation } from '../index.js';
@@ -91,90 +91,6 @@ describe('journaled Shared restore runtime recovery', () => {
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
     return structuredClone(original);
   }
-  function nativeRestore(h: ReturnType<typeof harness>) {
-    const returned = h.store['glmOperations/return'];
-    returned.input.builderSlug = 'alice';
-    const hold = { operationId: 'return', uid: 'u', slug: 'alice', fromGatewayId: 'builder-alice',
-      toGatewayId: 'shared-1', migrationId: 'mig-return', archiveId: 'mig-activate', contextSha256: 'f'.repeat(64) };
-    h.store['users/u'].provisioning.openclaw.nativeSharedContextRestore = hold;
-    returned.nativeSharedAgentContextStage = { toGatewayId: 'shared-1', migrationId: hold.migrationId, slug: 'alice',
-      targetName: 'pod', targetIp: '10.0.0.1', targetVm: false, targetCertificateSha256: 'e'.repeat(64),
-      archive: { uid: 'u', slug: 'alice', archiveId: hold.archiveId, contextSha256: hold.contextSha256 } };
-    Object.assign(h.store['gateways/shared-1/assignments/u'], { state: 'quiescing', updatedByOperationId: 'return' });
-    return hold;
-  }
-  it('recovers a quiescing native archive restore on the same pod without admitting or acknowledging the customer', async () => {
-    const h = harness(); nativeRestore(h);
-    const user = structuredClone(h.store['users/u']);
-    const returned = structuredClone(h.store['glmOperations/return']);
-    const assignment = structuredClone(h.store['gateways/shared-1/assignments/u']);
-    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-    expect(h.store['users/u']).toEqual(user);
-    expect(h.store['glmOperations/return']).toEqual(returned);
-    expect(h.store['gateways/shared-1/assignments/u']).toEqual(assignment);
-    expect(h.store['glmOperations/recover'].restoreRuntimeRecovery.podUid).toBe('pod-uid');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-  });
-  it('observes a lost quiescing recovery patch reply on the same pod without repeating it or changing native custody', async () => {
-    const h = harness(); nativeRestore(h); h.lostReply();
-    const returned = structuredClone(h.store['glmOperations/return']);
-    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('unresolved');
-    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-    expect(h.store['glmOperations/return']).toEqual(returned);
-    expect(h.store['gateways/shared-1/assignments/u'].state).toBe('quiescing');
-  });
-  it('retains restart and restore fences when native archive authority changes during the image update', async () => {
-    const h = harness(); const hold = nativeRestore(h);
-    const original = structuredClone(hold);
-    const returned = structuredClone(h.store['glmOperations/return']);
-    const kubectl = h.deps.runKubectl.getMockImplementation()!;
-    h.deps.runKubectl.mockImplementation(async args => {
-      const result = await kubectl(args);
-      if (args.includes('patch')) hold.archiveId = 'other';
-      return result;
-    });
-    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('assignment changed');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence.phase).toBe('dispatched');
-    expect(h.store['users/u'].provisioning.openclaw.restoreFence).toEqual(returned.restoreAttempt);
-    expect(h.store['glmOperations/return']).toEqual(returned);
-    Object.assign(hold, original);
-    await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-  });
-  it.each(['missing-hold', 'operation', 'uid', 'slug', 'from', 'to', 'migration', 'archive', 'digest', 'invalid-digest',
-    'stage-target', 'stage-slug', 'stage-migration', 'archive-owner', 'archive-slug', 'archive-id', 'archive-digest',
-    'missing-stage', 'assignment-operation', 'epoch', 'restored', 'receipt', 'other-migration', 'input-slug'])('rejects quiescing native restore %s before reserving custody or patching images', async change => {
-      const h = harness(); const hold = nativeRestore(h);
-      const returned = h.store['glmOperations/return'], stage = returned.nativeSharedAgentContextStage;
-      const openclaw = h.store['users/u'].provisioning.openclaw;
-      if (change === 'missing-hold') delete openclaw.nativeSharedContextRestore;
-      for (const [key, field] of [['operation', 'operationId'], ['uid', 'uid'], ['slug', 'slug'], ['from', 'fromGatewayId'],
-        ['to', 'toGatewayId'], ['migration', 'migrationId'], ['archive', 'archiveId'], ['digest', 'contextSha256']]) {
-        if (change === key) (hold as any)[field] = 'foreign';
-      }
-      if (change === 'invalid-digest') hold.contextSha256 = stage.archive.contextSha256 = 'invalid';
-      if (change === 'stage-target') stage.toGatewayId = 'other';
-      if (change === 'stage-slug') stage.slug = 'other';
-      if (change === 'stage-migration') stage.migrationId = 'other';
-      if (change === 'archive-owner') stage.archive.uid = 'other';
-      if (change === 'archive-slug') stage.archive.slug = 'other';
-      if (change === 'archive-id') stage.archive.archiveId = 'other';
-      if (change === 'archive-digest') stage.archive.contextSha256 = 'a'.repeat(64);
-      if (change === 'missing-stage') delete returned.nativeSharedAgentContextStage;
-      if (change === 'assignment-operation') h.store['gateways/shared-1/assignments/u'].updatedByOperationId = 'other';
-      if (change === 'epoch') h.store['gateways/shared-1/assignments/u'].epoch++;
-      if (change === 'restored') returned.nativeSharedAgentContextRestored = true;
-      if (change === 'receipt') returned.nativeSharedAgentContextRestoreReceipt = {};
-      if (change === 'other-migration') openclaw.migration = {};
-      if (change === 'input-slug') returned.input.builderSlug = 'other';
-      const before = structuredClone(h.store);
-      await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
-      expect(h.store).toEqual(before);
-      expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
-    });
   async function failedRecovery() {
     const h = harness();
     const intent = reauthorize(h);
@@ -206,111 +122,6 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.store).toEqual(before);
     expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
   });
-  async function pendingRecovery() {
-    const h = harness(); const hold = nativeRestore(h);
-    Object.assign(h.store['glmOperations/return'], { startedAt: null, completedAt: null });
-    h.store['users/u'].provisioning.openclaw.activationLease = { status: 'returning', returnOperationId: 'return', targetGatewayId: 'builder-alice' };
-    h.setReady(false); let clock = 1;
-    await expect(recoverSharedRestoreRuntime({ ...h.deps, now: () => clock, wait: async () => { clock += 240_000; } }, h.op, h.ctx)).rejects.toThrow('images are not ready');
-    Object.assign(h.store['glmOperations/recover'], { status: 'pending', startedAt: null, completedAt: null,
-      error: 'restore recovery images are not ready; outcome remains fenced', attempts: 1, nextAttemptAt: Date.now() + 60_000 });
-    const predecessor = { operationId: 'recover', status: 'pending', startedAt: null, input: structuredClone(h.op.input), completedAt: null,
-      fence: structuredClone(h.store['gateways/shared-1'].runtimeRestartFence), pendingNativeRestore: {
-        restoreAttempt: structuredClone(h.store['glmOperations/return'].restoreAttempt), nativeSharedContextRestore: structuredClone(hold),
-        nativeSharedAgentContextStage: structuredClone(h.store['glmOperations/return'].nativeSharedAgentContextStage),
-        assignment: structuredClone(h.store['gateways/shared-1/assignments/u']) } };
-    const nextSha = 'd'.repeat(40), nextImages = Object.fromEntries(Object.entries(images).map(([name, image]) => [name,
-      image.replace('aaaaaaa', 'ddddddd').replace(/@sha256:.+$/, `@sha256:${'e'.repeat(64)}`)]));
-    const next = { ...h.op, id: 'successor', startedAt: 600, input: { gatewayId: 'shared-1',
-      restoreRecovery: { operationId: 'return', sourceSha: nextSha, images: nextImages, supersede: predecessor } } } as Operation;
-    h.store['glmOperations/successor'] = structuredClone(next); h.deps.runKubectl.mockClear(); h.setReady(true);
-    return { h, next, deps: { ...h.deps, sourceSha: nextSha }, predecessor, nextImages };
-  }
-  it('atomically supersedes only an unclaimed pending image recovery while preserving the native restore intent and same pod', async () => {
-    const { h, next, deps, predecessor } = await pendingRecovery();
-    const originalReturn = structuredClone(h.store['glmOperations/return']);
-    const originalUser = structuredClone(h.store['users/u']);
-    const prior = structuredClone(h.store['glmOperations/recover']);
-    const kubectl = h.deps.runKubectl.getMockImplementation()!;
-    h.deps.runKubectl.mockImplementation(async args => {
-      if (args.includes('patch')) {
-        expect(h.store['glmOperations/recover']).toMatchObject({ status: 'failed', startedAt: null,
-          cancellationRequestedAt: expect.any(Number), restoreRecoverySupersededBy: next.id });
-        expect(h.store['gateways/shared-1'].runtimeRestartFence.attemptId).toBe(next.id);
-      }
-      return kubectl(args);
-    });
-    await recoverSharedRestoreRuntime(deps, next, h.ctx);
-    expect(h.store['glmOperations/recover']).toMatchObject({ input: prior.input, error: prior.error, attempts: 1, completedAt: expect.any(Number) });
-    expect(h.store['glmOperations/return']).toEqual(originalReturn);
-    expect(h.store['users/u']).toEqual(originalUser);
-    expect(h.store['glmOperations/successor'].restoreRuntimeRecovery.podUid).toBe(predecessor.fence.target.podUid);
-    expect(h.store['glmOperations/successor'].input.restoreRecovery.reauthorize).toBeUndefined();
-  });
-  it.each(['running', 'claimed', 'completed', 'cancelled', 'receipt', 'input', 'fence', 'intent', 'stage', 'epoch', 'pod'])('refuses pending predecessor %s without changing either owner or pod', async change => {
-      const { h, next, deps } = await pendingRecovery(); const prior = h.store['glmOperations/recover'];
-      if (change === 'running') prior.status = 'running';
-      if (change === 'claimed') prior.startedAt = 800;
-      if (change === 'completed') prior.completedAt = 800;
-      if (change === 'cancelled') prior.cancellationRequestedAt = 800;
-      if (change === 'receipt') prior.restoreRuntimeRecovery = {};
-      if (change === 'input') prior.input.extra = true;
-      if (change === 'fence') h.store['gateways/shared-1'].runtimeRestartFence.startedAt++;
-      if (change === 'intent') { h.store['glmOperations/return'].restoreAttempt.claimStartedAt++;
-        h.store['users/u'].provisioning.openclaw.restoreFence.claimStartedAt++; }
-      if (change === 'stage') h.store['glmOperations/return'].nativeSharedAgentContextStage.targetCertificateSha256 = 'a'.repeat(64);
-      if (change === 'epoch') { h.store['gateways/shared-1/assignments/u'].epoch++;
-        h.store['glmOperations/return'].restoreAttempt.assignmentEpoch++; h.store['users/u'].provisioning.openclaw.restoreFence.assignmentEpoch++; }
-      if (change === 'pod') h.pod.metadata.uid = 'replacement';
-      const before = structuredClone(h.store);
-      await expect(recoverSharedRestoreRuntime(deps, next, h.ctx)).rejects.toThrow();
-      expect(h.store).toEqual(before); expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
-    });
-  it('prevents a superseded pending retry from claiming and a stale predecessor from clearing the successor fence', async () => {
-    const { h, next, deps } = await pendingRecovery();
-    const pending = structuredClone(h.store['glmOperations/recover']);
-    const handler = vi.fn(async () => ({ success: true, steps: [] }));
-    const kubectl = h.deps.runKubectl.getMockImplementation()!;
-    h.deps.runKubectl.mockImplementation(async args => {
-      if (args.includes('patch')) {
-        const fence = structuredClone(h.store['gateways/shared-1'].runtimeRestartFence);
-        await processOperation({ ...pending, id: 'recover' }, (h.deps.db as any).doc('glmOperations/recover'),
-          { db: h.deps.db, handlers: { 'restart-gateway': handler }, log: vi.fn() } as never);
-        expect(handler).not.toHaveBeenCalled();
-        await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('paired post-cutover restore authority');
-        expect(h.store['gateways/shared-1'].runtimeRestartFence).toEqual(fence);
-      }
-      return kubectl(args);
-    });
-    await recoverSharedRestoreRuntime(deps, next, h.ctx);
-    expect(h.store['glmOperations/recover'].restoreRuntimeRecovery).toBeUndefined();
-    expect(h.store['glmOperations/successor'].restoreRuntimeRecovery.podUid).toBe('pod-uid');
-  });
-  async function failedNativeRecovery() {
-    const h = await pendingRecovery();
-    Object.assign(h.h.store['glmOperations/recover'], { status: 'failed', startedAt: 300, completedAt: 500 });
-    Object.assign(h.predecessor, { status: 'failed', startedAt: 300, completedAt: 500 });
-    h.h.store['glmOperations/successor'].input = structuredClone(h.next.input);
-    return h;
-  }
-  it('supersedes a failed native image recovery without rewriting completion, failure, history or restore intent', async () => {
-    const { h, next, deps } = await failedNativeRecovery();
-    const prior = structuredClone(h.store['glmOperations/recover']);
-    const returned = structuredClone(h.store['glmOperations/return']);
-    await recoverSharedRestoreRuntime(deps, next, h.ctx);
-    expect(h.store['glmOperations/recover']).toMatchObject({ completedAt: prior.completedAt, error: prior.error,
-      input: prior.input, attempts: prior.attempts, cancellationRequestedAt: expect.any(Number), restoreRecoverySupersededBy: next.id });
-    expect(h.store['glmOperations/return']).toEqual(returned);
-    expect(h.store['glmOperations/successor'].restoreRuntimeRecovery.previousRestoreAttempt).toBeUndefined();
-  });
-  it.each(['completedAt', 'error'])('refuses a changed failed native predecessor %s without transferring custody', async change => {
-    const { h, next, deps } = await failedNativeRecovery();
-    h.store['glmOperations/recover'][change] = change === 'completedAt' ? 501 : 'another failure';
-    const before = structuredClone(h.store);
-    await expect(recoverSharedRestoreRuntime(deps, next, h.ctx)).rejects.toThrow();
-    expect(h.store).toEqual(before);
-    expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
-  });
   function queuedMigration(h: ReturnType<typeof harness>) {
     h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', createdAt: 1_000,
       createdBy: 'glm-controller-placement-policy', origin: 'automatic', startedAt: null, completedAt: null,
@@ -329,7 +140,7 @@ describe('journaled Shared restore runtime recovery', () => {
     const error = 'expected exactly one ready pod for transport=shared-1; found 0';
     row.input = { uid: 'other', builderSlug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' };
     Object.assign(row, { attempts, firstStartedAt: 1_100, lastProgressAt: 1_200 + attempts * 100, nextAttemptAt: 481_200 + attempts * 100,
-      error: `attempt ${attempts} failed (transient): ${error} — retrying in 480s`, output: { stateMigration: { strategy: 'migrate-state' } },
+      error: `attempt ${attempts} failed (transient): ${error} — retrying in 480s`,
       schedulerHandoff: { uid: 'other', slug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', migrationId: `mig-queued:scheduler:${attempts}:claim:${1_100 + (attempts - 1) * 100}` },
       schedulerHandoffReleased: false, attemptHistory: Array.from({ length: attempts }, (_, index) => ({
         attempt: index + 1, startedAt: 1_100 + index * 100, completedAt: 1_200 + index * 100,
@@ -567,7 +378,7 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
   });
 
-  it.each(['owner', 'marker', 'phase', 'restore-fence', 'transfer-fence', 'native-custody', 'source-missing', 'source-uid', 'source-slug',
+  it.each(['owner', 'marker', 'phase', 'restore-fence', 'transfer-fence', 'source-missing', 'source-uid', 'source-slug',
     'source-gateway', 'source-state', 'source-epoch', 'source-operation', 'target-assignment'])('refuses pre-transport release and recovery after %s changes', async change => {
     const h = harness(); const queued = blockedPreTransportMigration(h);
     const owner = h.store['users/other'].provisioning.openclaw;
@@ -577,7 +388,6 @@ describe('journaled Shared restore runtime recovery', () => {
     if (change === 'phase') owner.migration.phase = 'transferring';
     if (change === 'restore-fence') owner.restoreFence = {};
     if (change === 'transfer-fence') owner.sourceTransferFence = { sourceGatewayId: 'shared-1' };
-    if (change === 'native-custody') owner.nativeSharedContextRestore = {};
     if (change === 'source-missing') delete h.store['gateways/shared-1/assignments/other'];
     if (change === 'source-uid') source.uid = 'foreign';
     if (change === 'source-slug') source.slug = 'foreign';
@@ -930,6 +740,7 @@ describe('journaled Shared source schema repair', () => {
         `OpenClaw snapshot of ${id} failed: SQLite database cannot be snapshotted safely: ${file}. OpenClaw agent database ${file} uses schema version 24; run openclaw doctor --fix before compacting it.` });
       h.store[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: 'shared-1', status: 'complete' } } };
       h.store[`gateways/shared-1/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-1', state: 'serving', epoch: index + 1 };
+      h.store[`users/${uid}/agentStores/${id}`] = { agentId: id, gatewayId: 'shared-1', assignmentEpoch: index + 1, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}` };
       h.store[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 100, completedAt: 200,
         input: { uid, fromGatewayId: 'shared-1', toGatewayId: 'shared-2' }, error,
         steps: [{ name: 'pre-sync-state', status: 'failed', error }, { name: 'rollback:unmount-target', status: 'done' }] };
@@ -954,8 +765,7 @@ describe('journaled Shared source schema repair', () => {
         row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'target-scheduler-ready', status: 'done' },
           { name: 'wait-for-active-work', status: 'failed', error: row.error }, { name: 'rollback:unmount-target', status: 'done' }];
         row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
-        Object.assign(h.store[`users/${uid}`].provisioning.openclaw, { mounted: true,
-          migration: { state: 'preparing', phase: 'waiting', operationId, startedAt: 110 } });
+        Object.assign(h.store[`users/${uid}`].provisioning.openclaw, { mounted: true });
       }
     }
     if (absent) delete h.store['users/source-0'].provisioning.openclaw.migration;
@@ -1060,7 +870,6 @@ describe('journaled Shared source schema repair', () => {
           expect(root.runtimeRestartFence).toBeUndefined();
           expect(h.store['gateways/shared-1/releases/2'].payload).toEqual(payload);
           expect(h.store[`glmOperations/${h.op.id}`].sourceRuntimeRecovery.managementHealth.health).toBe(true);
-          for (const failure of captured.failedExports) expect(h.store[`glmOperations/${failure.operationId}`].sourceRuntimeRecovery.operationId).toBe(h.op.id);
         } else expect(root.runtimeRestartFence.phase).toBe('dispatched');
         if (kind === 'pod') {
           expect(deployment.spec.paused).toBe(true);
@@ -1222,7 +1031,6 @@ describe('journaled Shared source schema repair', () => {
     expect(h.store['gateways/shared-1/releases/2']).toEqual(collision);
     expect(h.store['gateways/shared-1']).toMatchObject({ latestRelease: 1, desiredRelease: 1, liveRelease: 1 });
     expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined(); expect(h.deployment.spec.paused).toBe(true);
-    for (const failure of h.captured.failedExports) expect(h.store[`glmOperations/${failure.operationId}`].sourceRuntimeRecovery).toBeUndefined();
     expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
   });
   async function postgresSourceSuccessor(completedDoctor = false) {
@@ -1302,300 +1110,23 @@ describe('journaled Shared source schema repair', () => {
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
     expect(h.store).toEqual(before); expect(h.events).toEqual([]); expect(h.deployment.spec.paused).toBe(true);
   });
-  it('requires fresh authenticated management health after Doctor ACK on the preserved source Pod', async () => {
-    const h = await sourceHarness(true), before = structuredClone(h.store);
+  it('rearms a rolled-back placement from the completed source repair journal', async () => {
+    const h = await postgresSourceHarness();
+    const failedId = continuousPlacementMigrationOperationId({ uid: 'source-0', builderSlug: 'jdog99', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', sourceAssignmentEpoch: 1 });
+    h.store[`glmOperations/${failedId}`].error = 'a different maintenance failure';
     await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('exec'))).toHaveLength(1);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.managementHealth).toMatchObject({ attemptId: h.op.id, bootId: 'fresh-boot', health: true });
-    for (const [key, value] of Object.entries(before)) {
-      if (key.startsWith('users/')) { const expected = structuredClone(value); delete expected.provisioning.openclaw.migration; expect(h.store[key]).toEqual(expected); }
-      if (key.includes('/assignments/')) expect(h.store[key]).toEqual(value);
-      if (key.startsWith('glmOperations/placement-')) { const { sourceRuntimeRecovery, ...preserved } = h.store[key]; expect(sourceRuntimeRecovery.operationId).toBe(h.op.id); expect(preserved).toEqual(value); }
-    }
-  });
-  it('preserves explicit marker absence after Doctor and fresh management health and retains its placement proof', async () => {
-    const h = await sourceHarness(true, true), user = structuredClone(h.store['users/source-0']);
-    const failure = (h.op.input.sourceRecovery as any).managementRecovery.failures[0];
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['users/source-0']).toEqual(user);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.releasedPlacements[0].marker).toBeNull();
-    await expect(enqueuePlacementMigration(currentPlacement(h), { ...failure.receipt.input, operationId: failure.operationId })).resolves.toBe(failure.operationId);
-    expect(h.store['users/source-0']).toEqual(user);
-  });
-  it.each(['reservation', 'completion'])('rejects a migration marker that appears before %s rather than clearing it', async stage => {
-    const h = await sourceHarness(true, true);
-    const failure = (h.op.input.sourceRecovery as any).managementRecovery.failures[0];
-    const marker = { state: 'preparing', phase: 'waiting', operationId: failure.operationId, startedAt: 110 };
-    const appear = () => { h.store['users/source-0'].provisioning.openclaw.migration = structuredClone(marker); };
-    if (stage === 'reservation') appear();
-    else {
-      const original = h.deps.runKubectl.getMockImplementation()!;
-      h.deps.runKubectl.mockImplementation(async args => {
-        const result = await original(args);
-        if (args.includes('exec')) appear();
-        return result;
-      });
-    }
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('custody changed');
-    expect(h.store['users/source-0'].provisioning.openclaw.migration).toEqual(marker);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
-    if (stage === 'completion') expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined();
-    else expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
-  });
-  it('does not rearm a failed migration after an operator parks the Builder', async () => {
-    const h = await sourceHarness(true);
-    const failedId = (h.op.input.sourceRecovery as any).managementRecovery.failures[0].operationId;
+    const root = h.store['gateways/shared-1'], payload = h.op.input.sourceRecovery!.payload;
+    root.liveRelease = 2;
+    h.store['glmGateways/shared-1'] = { docKind: 'runtime', gatewayId: 'shared-1', runtime: 'cluster', release: 2, lifecycle: 'serving',
+      heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), mountedCustomers: [], migratingIn: [] },
+      helm: { imageRepository: payload.imageRepository, imageTag: payload.imageTag } };
+    h.store['gateways/shared-2'] = { ...root, gatewayId: 'shared-2', desiredStatus: 'running', latestRelease: 1, desiredRelease: 1, liveRelease: 1 };
+    h.store['gateways/shared-2/releases/1'] = { payload };
+    h.store['glmGateways/shared-2'] = { docKind: 'runtime', gatewayId: 'shared-2', runtime: 'cluster', release: 1, lifecycle: 'serving',
+      heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), mountedCustomers: [], migratingIn: [] } };
     const request = { ...h.store[`glmOperations/${failedId}`].input, operationId: failedId };
-    h.store['users/source-0'].provisioning.openclaw.managedBy = 'operator';
-    const input = currentPlacement(h), before = structuredClone(h.store);
-    await expect(enqueuePlacementMigration(input, request)).rejects.toThrow('operator-managed');
-    expect(h.store).toEqual(before);
-  });
-  it('makes the exact recovered failed placement runnable through normal enqueue and a fresh worker claim', async () => {
-    const h = await sourceHarness(true), failedId = (h.op.input.sourceRecovery as any).managementRecovery.failures[0].operationId, prior = structuredClone(h.store[`glmOperations/${failedId}`]);
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    const request = { ...prior.input, operationId: failedId };
-    await expect(enqueuePlacementMigration(currentPlacement(h), request)).resolves.toBe(failedId);
-    expect(h.store['users/source-0'].provisioning.openclaw.migration).toBeUndefined();
-    expect(h.store[`glmOperations/${failedId}`].attemptHistory).toEqual(prior.attemptHistory);
-    const handler = vi.fn(async () => ({ success: true, steps: [] }));
-    await processOperation({ ...h.store[`glmOperations/${failedId}`], id: failedId }, h.deps.db.doc(`glmOperations/${failedId}`),
-      { db: h.deps.db, handlers: { 'migrate-customer': handler }, log: vi.fn() } as never);
-    expect(handler).toHaveBeenCalledOnce();
-    expect(h.store[`glmOperations/${failedId}`].status).toBe('succeeded');
-    expect(h.store[`glmOperations/${failedId}`].attemptHistory).toEqual(prior.attemptHistory);
-  });
-  it('releases the exact old marker for a new current-target claim and phase without rearming the old native target', async () => {
-    const h = await sourceHarness(true), failedId = (h.op.input.sourceRecovery as any).managementRecovery.failures[0].operationId;
-    const before = structuredClone(h.store[`glmOperations/${failedId}`]);
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    const input = currentPlacement(h), oldPayload = h.store['gateways/shared-2/releases/1'].payload;
-    oldPayload.imageTag = 'legacy@sha256:' + 'e'.repeat(64); oldPayload.openclawSourceSha = 'c'.repeat(40);
-    await expect(enqueuePlacementMigration(input, { ...before.input, operationId: failedId })).rejects.toThrow('current target authority changed');
-    const current = currentPlacement(h, 'shared-3');
-    const request = { ...before.input, toGatewayId: 'shared-3', operationId: continuousPlacementMigrationOperationId({
-      uid: before.input.uid, builderSlug: before.input.builderSlug, fromGatewayId: before.input.fromGatewayId, toGatewayId: 'shared-3', sourceAssignmentEpoch: 1 }),
-      sharedDrain: { pairedTargetGatewayId: null } };
-    await enqueuePlacementMigration(current, request);
-    const handler = vi.fn(async (op: Operation) => {
-      await setWorkspaceMigrationPhase({ db: h.deps.db as never, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete() },
-        { uid: before.input.uid, sourceGatewayId: 'shared-1', operationId: op.id, phase: 'preparing' });
-      return { success: true, steps: [] };
-    });
-    await processOperation({ ...h.store[`glmOperations/${request.operationId}`], id: request.operationId }, h.deps.db.doc(`glmOperations/${request.operationId}`),
-      { db: h.deps.db, handlers: { 'migrate-customer': handler }, log: vi.fn() } as never);
-    expect(handler).toHaveBeenCalledOnce();
-    expect(h.store['users/source-0'].provisioning.openclaw.migration.operationId).toBe(request.operationId);
-    const { sourceRuntimeRecovery, ...preserved } = h.store[`glmOperations/${failedId}`];
-    expect(sourceRuntimeRecovery.operationId).toBe(h.op.id); expect(preserved).toEqual(before);
-  });
-  it.each(['uid', 'epoch', 'marker', 'failed-operation'])('refuses stale %s during proof-keyed same-target rearm', async change => {
-    const h = await sourceHarness(true), failedId = (h.op.input.sourceRecovery as any).managementRecovery.failures[0].operationId;
-    const request = { ...h.store[`glmOperations/${failedId}`].input, operationId: failedId };
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    const input = currentPlacement(h);
-    if (change === 'uid') h.store['users/source-0'].username = 'foreign';
-    if (change === 'epoch') h.store['gateways/shared-1/assignments/source-0'].epoch++;
-    if (change === 'marker') h.store['users/source-0'].provisioning.openclaw.migration = { state: 'preparing', operationId: 'foreign', startedAt: 1 };
-    if (change === 'failed-operation') h.store[`glmOperations/${failedId}`].completedAt++;
-    const before = structuredClone(h.store);
-    await expect(enqueuePlacementMigration(input, request)).rejects.toThrow(); expect(h.store).toEqual(before);
-  });
-  it('resumes only the failed management probe using the completed Doctor acknowledgment and unchanged retained fence', async () => {
-    const h = await sourceHarness(true); h.setManagementFailure();
-    h.op.attempts = MAX_OPERATION_ATTEMPTS; h.store['glmOperations/recover'].attempts = MAX_OPERATION_ATTEMPTS;
-    const handler = createRestartGatewayHandler({ kubeOps: {} as never, namespace: h.deps.namespace,
-      resolveLiveRevisionId: async () => null, now: h.deps.now, log: vi.fn(),
-      recoverSource: (op, ctx) => recoverSharedSourceRuntime(h.deps, op, ctx) });
-    const result = await handler(h.op, h.ctx);
-    expect(result).toMatchObject({ success: false, error: 'source management health unconfirmed; outcome remains fenced', retryAfterMs: 60_000 });
-    const fence = structuredClone(h.store['gateways/shared-1'].runtimeRestartFence);
-    expect(fence.doctor.completedAt).toBeGreaterThan(0);
-    const completion = buildOperationCompletionUpdate({ op: h.op, result, steps: [], now: h.deps.now() });
-    await h.deps.db.runTransaction(async tx => { tx.update(h.deps.db.doc('glmOperations/recover'), completion); });
-    expect(h.store['glmOperations/recover']).toMatchObject({ status: 'pending', startedAt: null, attempts: MAX_OPERATION_ATTEMPTS + 1 });
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toEqual(fence);
-    const freshStartedAt = completion.nextAttemptAt as number;
-    await h.deps.db.runTransaction(async tx => {
-      tx.update(h.deps.db.doc('glmOperations/recover'), { status: 'running', startedAt: freshStartedAt });
-    });
-    Object.assign(h.op, structuredClone(h.store['glmOperations/recover']));
-    expect(h.op.startedAt).toBe(freshStartedAt);
-    h.setManagementFailure(false); expect(await handler(h.op, h.ctx)).toMatchObject({ success: true });
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.doctor).toEqual(fence.doctor);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('exec'))).toHaveLength(2);
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-  });
-  it('normalizes a rejected management exec transport to fenced availability without changing the completed Doctor proof', async () => {
-    const h = await sourceHarness(true); h.setManagementTransportFailure();
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source management health unconfirmed; outcome remains fenced');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt).toBeGreaterThan(0);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
-  });
-  it.each(['not-json', JSON.stringify({ version: 2, attemptId: 'recover', bootId: 'fresh', health: true }),
-    JSON.stringify({ version: 1, attemptId: 'foreign', bootId: 'fresh', health: true }),
-    JSON.stringify({ version: 1, attemptId: 'recover', bootId: '', health: true })])('refuses invalid management receipt %s as terminal while retaining the fence', async receipt => {
-    const h = await sourceHarness(true); h.setManagementReceipt(receipt);
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source management health receipt invalid');
-    expect(classifyOperationFailure('source management health receipt invalid')).toBe('terminal');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt).toBeGreaterThan(0);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
-  });
-  it('resumes an owned management repair while its preserved Pod is temporarily unready without repeating the image patch', async () => {
-    const h = await sourceHarness(true); h.setAck(false);
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
-    expect(h.pod.status.conditions[0].status).toBe('False');
-    h.setAck(true); await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('exec'))).toHaveLength(1);
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-  });
-  it.each(['health', 'custody', 'pod'])('keeps management repair fenced on failed %s proof', async change => {
-    const h = await sourceHarness(true);
-    if (change === 'health') h.setManagementFailure();
-    if (change === 'custody') h.setChangedAfterProbe();
-    if (change === 'pod') h.pod.metadata.uid = 'replacement';
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
-    if (change !== 'pod') expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeDefined();
-  });
-  function currentPlacement(h: Awaited<ReturnType<typeof sourceHarness>>, target = 'shared-2') {
-    const payload = { imageRepository: 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway', imageTag: images.gateway.split('octogee-gateway:')[1]!, openclawSourceSha: 'd'.repeat(40) };
-    h.store[`gateways/${target}`] = { configSchemaVersion: 1, profile: 'standard', imageProfile: 'standard', sizingTier: null, gcpProject: null, gatewayContainerSecurityContext: null, serviceAccountName: null, serviceAccount: null, builderAccess: null, modelBrokerLimits: null, gatewayId: target, gatewayClass: 'shared', ownerUid: null, builderSlug: null, desiredStatus: 'running', desiredRelease: 1, latestRelease: 1, liveRelease: 1 };
-    h.store[`gateways/${target}/releases/1`] = { payload };
-    h.store[`glmGateways/${target}`] = { docKind: 'runtime', gatewayId: target, runtime: 'cluster', release: 1, lifecycle: 'serving',
-      heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), version: payload.imageTag, mountedCustomers: [], migratingIn: [] } };
-    return { db: h.deps.db, now: h.deps.now, platformArtifact: payload } as Parameters<typeof enqueuePlacementMigration>[0];
-  }
-  async function sourceSuccessor() {
-    const h = await sourceHarness(); h.setAck(false);
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
-    const fence = h.store['gateways/shared-1'].runtimeRestartFence; delete fence.installedImage;
-    const prior = h.store['glmOperations/recover']; Object.assign(prior, { status: 'failed', completedAt: 400, error: 'another source operation is active' });
-    const before = structuredClone(prior), oldOp = structuredClone(h.op), oldFence = structuredClone(fence);
-    h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', origin: 'automatic', createdBy: 'glm-controller-placement-policy',
-      startedAt: null, completedAt: null, attempts: 0, steps: [], input: { uid: 'source-0', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' } };
-    const nextSha = 'd'.repeat(40), nextImages = { gateway: `us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway:ddddddd@sha256:${'e'.repeat(64)}`,
-      'gateway-edge': `us-central1-docker.pkg.dev/octogee/octogee/gateway-edge:ddddddd@sha256:${'f'.repeat(64)}` };
-    Object.assign(h.op, { id: 'successor', startedAt: 500, input: { gatewayId: 'shared-1', sourceRecovery: { ...before.input.sourceRecovery,
-      sourceSha: nextSha, images: nextImages, supersede: assertSharedSourceRecoveryPredecessor({ gatewayId: 'shared-1',
-        operationId: 'recover', row: before, fence: oldFence, source: before.input.sourceRecovery }) } } });
-    h.store['glmOperations/successor'] = structuredClone(h.op); h.deps.sourceSha = nextSha; h.setAck(true);
-    return { ...h, before, oldOp, oldFence };
-  }
-  it('atomically transfers the failed queue-race fence to a new immutable family, preserving its failure and preventing stale completion', async () => {
-    const h = await sourceSuccessor();
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['glmOperations/recover']).toEqual({ ...h.before, sourceRecoverySupersededBy: 'successor', cancellationRequestedAt: expect.any(Number) });
-    expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-    const before = structuredClone(h.store);
-    await expect(recoverSharedSourceRuntime({ ...h.deps, sourceSha: sha }, h.oldOp, h.ctx)).rejects.toThrow();
-    expect(h.store).toEqual(before);
-  });
-  async function spentSourceSuccessor() {
-    const h = await sourceSuccessor(), prior = h.store['glmOperations/recover'], fence = h.store['gateways/shared-1'].runtimeRestartFence;
-    prior.error = 'source repair is not ready; outcome remains fenced';
-    prior.input.sourceRecovery.supersede = { operationId: 'original-queue-repair', history: 'preserved' };
-    prior.completedAt = fence.startedAt + 20;
-    Object.assign(fence.doctor, { startedAt: fence.startedAt + 10, releaseKey: 'actual-baked-source-key' });
-    fence.installedImage = { podUid: 'pod-uid', gatewayImageId: h.pod.status.containerStatuses[0].imageID, verifiedAt: fence.startedAt + 5 };
-    h.op.input.sourceRecovery.supersede = assertSharedSourceRecoveryPredecessor({ gatewayId: 'shared-1',
-      operationId: 'recover', row: prior, fence: structuredClone(fence), source: prior.input.sourceRecovery });
-    h.store['glmOperations/successor'] = structuredClone(h.op);
-    return { ...h, before: structuredClone(prior) };
-  }
-  it('transfers a terminal spent-but-unacknowledged Doctor to a distinct once-only request preserving every failed history field', async () => {
-    const h = await spentSourceSuccessor();
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['glmOperations/recover']).toEqual({ ...h.before, sourceRecoverySupersededBy: 'successor', cancellationRequestedAt: expect.any(Number) });
-    expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-  });
-  it.each(['running', 'acknowledged', 'changed-start', 'changed-image', 'nested-history', 'immediate-input', 'fingerprint'])('refuses changed spent source %s without clearing its fence', async change => {
-    const h = await spentSourceSuccessor();
-    if (change === 'running') h.store['glmOperations/recover'].status = 'running';
-    if (change === 'acknowledged') h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt = Date.now();
-    if (change === 'changed-start') h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt++;
-    if (change === 'changed-image') h.store['gateways/shared-1'].runtimeRestartFence.installedImage.gatewayImageId = 'foreign';
-    if (change === 'nested-history') h.store['glmOperations/recover'].input.sourceRecovery.supersede.history = 'changed';
-    if (change === 'immediate-input') h.store['glmOperations/recover'].input.sourceRecovery.operatorContext = 'changed';
-    if (change === 'fingerprint') h.op.input.sourceRecovery.supersede.inputFingerprint = '0'.repeat(64);
-    const before = structuredClone(h.store);
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
-    expect(h.store).toEqual(before);
-  });
-  it('supersedes the exact old installed image while its failed repair is in CrashLoopBackOff without weakening the new running proof', async () => {
-    const h = await sourceSuccessor();
-    h.pod.status.containerStatuses[0].state = { waiting: { reason: 'CrashLoopBackOff' } };
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['glmOperations/successor'].sourceRuntimeRecovery.doctor.requestId).toBe('successor');
-    expect(h.store['glmOperations/recover'].status).toBe('failed');
-  });
-  it.each(['completed-at', 'doctor-spent', 'same-pod', 'prior-image', 'missing-prior-image', 'cancelled', 'progressed-queue', 'missing-fence', 'claimed-history'])('refuses source successor %s without changing the prior fence or failed history', async change => {
-    const h = await sourceSuccessor();
-    if (change === 'completed-at') h.store['glmOperations/recover'].completedAt++;
-    if (change === 'doctor-spent') h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt = 1;
-    if (change === 'same-pod') h.pod.metadata.uid = 'replacement';
-    if (change === 'prior-image') h.pod.status.containerStatuses[0].imageID = 'wrong';
-    if (change === 'missing-prior-image') delete h.pod.status.containerStatuses[0].imageID;
-    if (change === 'cancelled') h.store['glmOperations/recover'].cancellationRequestedAt = 1;
-    if (change === 'progressed-queue') h.store['glmOperations/queued'].steps = [{ name: 'keys-sync-state', status: 'running' }];
-    if (change === 'missing-fence') { delete h.store['gateways/shared-1'].runtimeRestartFence; delete h.store['glmOperations/queued']; }
-    if (change === 'claimed-history') h.store['glmOperations/queued'].attemptHistory = [{ startedAt: 200, completedAt: 250 }];
-    const before = structuredClone(h.store), calls = h.deps.runKubectl.mock.calls.filter(([a]) => a.includes('patch')).length;
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
-    expect(h.store).toEqual(before); expect(h.deps.runKubectl.mock.calls.filter(([a]) => a.includes('patch'))).toHaveLength(calls);
-  });
-  it('finishes an owned repair when pristine automatic outbound moves were queued after its fence', async () => {
-    const h = await sourceHarness(), run = h.deps.runKubectl.getMockImplementation()!;
-    h.deps.runKubectl.mockImplementation(async args => {
-      const result = await run(args);
-      if (args.includes('patch')) h.store['glmOperations/queued'] = { kind: 'migrate-customer', status: 'pending', origin: 'automatic',
-        createdBy: 'glm-controller-placement-policy', startedAt: null, completedAt: null, attempts: 0, steps: [],
-        input: { uid: 'source-0', fromGatewayId: 'shared-1', toGatewayId: 'shared-2' } };
-      return result;
-    });
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeDefined();
-    expect(h.store['glmOperations/queued']).toMatchObject({ status: 'pending', startedAt: null, steps: [] });
-  });
-  it('holds the same Pod/home, records actual installed digest before Doctor and clears only after real repair ACK plus Ready', async () => {
-    const h = await sourceHarness(), before = structuredClone(h.store);
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toMatchObject({ sourceSha: sha, podUid: 'pod-uid',
-      doctor: { requestId: h.op.id, releaseKey: 'actual-reused-image-tag', verifiedAgentIds: expect.arrayContaining(['octogee-jefe-coach', 'octogee-oct08-coach']) } });
-    for (const [key, value] of Object.entries(before)) if (key.startsWith('users/') || key.includes('/assignments/') || key.startsWith('glmOperations/export-')) expect(h.store[key]).toEqual(value);
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-  });
-  it.each(['epoch', 'failed-export', 'foreign-fence', 'source-sha', 'pod'])('refuses changed source %s before image mutation', async change => {
-    const h = await sourceHarness();
-    if (change === 'epoch') h.store['gateways/shared-1/assignments/source-0'].epoch++;
-    if (change === 'failed-export') h.store['glmOperations/export-0'].completedAt++;
-    if (change === 'foreign-fence') h.store['gateways/shared-1'].runtimeRestartFence = {};
-    if (change === 'source-sha') h.deps.sourceSha = 'd'.repeat(40);
-    if (change === 'pod') h.pod.metadata.deletionTimestamp = 'now';
-    const before = structuredClone(h.store);
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow();
-    expect(h.store).toEqual(before); expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
-  });
-  it('keeps mandatory repair fenced even if the image became Ready without a Doctor acknowledgment', async () => {
-    const h = await sourceHarness(); h.setAck(false); h.setHealthyWithoutAck();
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
-    const fence = h.store['gateways/shared-1'].runtimeRestartFence;
-    expect(fence.phase).toBe('dispatched'); expect(fence.installedImage.podUid).toBe('pod-uid');
-    expect(fence.doctor.completedAt).toBeUndefined(); expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
-    h.setAck(true);
-    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
-    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeDefined();
-    expect(h.deps.runKubectl.mock.calls.filter(([args]) => args.includes('patch'))).toHaveLength(1);
-  });
-  it('never grants installed-image proof or spends Doctor for an old running imageID', async () => {
-    const h = await sourceHarness(); h.setWrongImage();
-    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
-    expect(h.store['gateways/shared-1'].runtimeRestartFence.installedImage).toBeUndefined();
-    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.startedAt).toBeUndefined();
+    const input = { db: h.deps.db, now: h.deps.now, platformArtifact: payload } as Parameters<typeof enqueuePlacementMigration>[0];
+    await expect(enqueuePlacementMigration(input, request)).resolves.toBe(failedId);
+    expect(h.store[`glmOperations/${failedId}`].status).toBe('pending');
   });
 });

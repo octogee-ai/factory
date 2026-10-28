@@ -1,16 +1,5 @@
 import { SurgeOpenClawProcessEndpointMissingError, type SurgeAssignment, type SurgeCustomerHandoffDeps, type SurgePod, type SurgePodHealth } from "../../surge-customer-handoff.js";
-import { decideRollStateMigration } from "../../roll-state-migration.js";
 import type { OperationStatus } from "@octogee/shared/types/glm";
-
-export const MIGRATE_STATE = decideRollStateMigration({
-  sourceOpenclawVersion: "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
-  targetOpenclawVersion: "2026.7.2-beta.7",
-  targetOpenclawSourceSha: "a".repeat(40),
-});
-export const CROSS_VERSION = decideRollStateMigration({
-  sourceOpenclawVersion: "2026.7.1",
-  targetOpenclawVersion: "2026.7.2-beta.7",
-});
 
 export const oldPod: SurgePod = {
   uid: "old-uid",

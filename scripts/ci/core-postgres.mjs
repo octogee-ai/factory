@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const specifications = ["src/agent-store-postgres.integration.spec.ts", "src/agent-store-recovery.integration.spec.ts"];
+const specifications = ["src/agent-store-postgres.integration.spec.ts", "src/agent-store-recovery.integration.spec.ts", "src/agent-store-handoff.integration.spec.ts"];
 
 export function runCorePostgresChecks() {
   const bin = "/usr/lib/postgresql/16/bin";

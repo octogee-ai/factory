@@ -7,10 +7,18 @@ export interface AgentStoreGatewayIdentity {
         slug: string;
     };
 }
+export interface AgentStoreHandoffIdentity {
+    agentId: string;
+    storeId: string;
+    schema: string;
+}
 export declare function createAgentStoreCredentialProvisioner(adminDsn: string, clientDsn: string): (identity: AgentStoreGatewayIdentity, assertCurrent: () => Promise<void>) => Promise<string>;
 export declare function createAgentStoreCredentialRevoker(adminDsn: string): (gatewayId: string, assertCurrent: () => Promise<void>) => Promise<void>;
 export declare function createAgentStoreCredentialRetirementVerifier(adminDsn: string): (gatewayId: string, assertCurrent: () => Promise<void>) => Promise<boolean>;
-export declare function createAgentStoreOwnershipTransferer(adminDsn: string): (builder: {
+export declare function createAgentStoreOwnershipTransferer(adminDsn: string, readStores: (builder: {
+    uid: string;
+    slug: string;
+}) => Promise<readonly AgentStoreHandoffIdentity[]>): (builder: {
     uid: string;
     slug: string;
 }, target: "shared" | "builder", assertCurrent?: () => Promise<void>) => Promise<void>;

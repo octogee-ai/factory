@@ -1,5 +1,3 @@
-import { setTimeout as pause } from "node:timers/promises";
-import { MIGRATION_IMPORT_FINISH_TIMEOUT_MS } from "@octogee/shared/types/fleet-controller";
 import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
   FleetBrokerAgentAnchor,
@@ -8,8 +6,6 @@ import type {
   FleetBrokerGatewayStateAnchor,
   FleetBrokerAssignmentRosterEntry,
   FleetBrokerBlobSignedUrl,
-  FleetBrokerNativeSharedContextDownload,
-  FleetBrokerNativeSharedContextCheckpointRequest,
   FleetBrokerBuilderRuntimeStatePruneResult,
   FleetBrokerBuilderRuntimeStateSnapshotUrls,
   BuilderRuntimeStateRecoveryTier,
@@ -125,7 +121,6 @@ export interface FleetBrokerBlobMaterialization {
 }
 
 export interface FleetBrokerClient {
-  sharedContextCheckpoint(request: FleetBrokerNativeSharedContextCheckpointRequest, signal?: AbortSignal): Promise<FleetBrokerNativeSharedContextDownload>;
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   assignmentRoster(): Promise<FleetBrokerAssignmentRosterEntry[]>;
@@ -319,27 +314,6 @@ function openClawBootClient(
   };
 }
 
-// The wire `revisionId` is the pod's bare gateway identity (simple-roll: one
-// stable pod per gateway); the broker cross-checks it against the pod name it
-// authenticated (revisionIdFromGatewayPodName).
-async function sharedContextCheckpointDownload(gatewayId: string, request: FleetBrokerNativeSharedContextCheckpointRequest,
-  gatewayCredentialHeaders: () => Promise<Record<string, string>>, signal?: AbortSignal): Promise<FleetBrokerNativeSharedContextDownload> {
-      const bounded = AbortSignal.any([AbortSignal.timeout(MIGRATION_IMPORT_FINISH_TIMEOUT_MS), ...(signal ? [signal] : [])]);
-      const path = "/internal/fleet/computer-home/download-url";
-      while (true) {
-        bounded.throwIfAborted();
-        const response = await internalFetch(`${baseUrl()}${path}`, {
-          method: "POST", signal: bounded,
-          headers: { "Content-Type": "application/json", ...await gatewayCredentialHeaders() },
-          body: JSON.stringify({ gatewayId, slug: request.slug, agentContextRestore: request }),
-        });
-        const preparing = response.status === 503 && (await response.clone().json().catch(() => null))?.error === "shared_context_checkpoint_preparing";
-        if (preparing) { await pause(5000, undefined, { signal: bounded }); continue; }
-        if (!response.ok) throw await brokerHttpError(path, response);
-        return await response.json() as FleetBrokerNativeSharedContextDownload;
-      }
-}
-
 async function readBuilderIdentity(
   gatewayId: string,
   gatewayCredentialHeaders: () => Promise<Record<string, string>>,
@@ -384,7 +358,6 @@ export function createFleetBrokerClient(
       url: `${baseUrl()}/internal/fleet/assignment-watch`,
       gatewayId, revisionId, headers: gatewayCredentialHeaders, wake, log,
     }),
-    sharedContextCheckpoint: (request, signal) => sharedContextCheckpointDownload(gatewayId, request, gatewayCredentialHeaders, signal),
     async assignedUsers(opts = {}) {
       const data = await postJson<{ users: FleetBrokerUserSnapshot[] }>(
         "/internal/fleet/assigned-users",

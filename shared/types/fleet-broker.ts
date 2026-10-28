@@ -1,4 +1,3 @@
-import type { NativeSharedAgentContextRestoreHold } from "./fleet-controller.js";
 import type { AgentLook } from "./agent-look.js";
 import type { AgentModelSelections } from "./agent-models.js";
 import type { ProjectAgentIdentity, ProjectAgentStatus } from "./project.js";
@@ -216,18 +215,6 @@ export interface FleetBrokerComputerHomeDownload extends FleetBrokerComputerHome
   download: FleetBrokerBlobSignedUrl;
 }
 
-export interface FleetBrokerNativeSharedContextDownload {
-  checkpoint: import("./glm.js").GatewayVmHomeCheckpoint;
-  size: number;
-  sha256: string;
-  generation: string;
-  download: FleetBrokerBlobSignedUrl;
-}
-
-export function sharedContextCheckpointObjectPath(slug: string, checkpoint: import("./glm.js").GatewayVmHomeCheckpoint, archive: { archiveId: string; contextSha256: string }): string {
-  return `customers/${slug}/computer-home/shared-context/${checkpoint.name}/${checkpoint.generation}/${archive.archiveId}/${archive.contextSha256}.tar.gz`;
-}
-
 export interface FleetBrokerComputerHomePruneResult {
   deleted: number;
 }
@@ -288,7 +275,6 @@ export interface FleetBrokerUserSnapshot {
   runtimeReset?: FleetBrokerCustomerRuntimeReset;
   restoreAuthority?: FleetBrokerCustomerRestoreAuthority;
   runtimeMutationFenced?: boolean;
-  nativeSharedContextRestore?: NativeSharedAgentContextRestoreHold;
   repoUrl: string;
   mattermostUserId: string | null;
   customerMmUserId: string | null;
@@ -331,5 +317,3 @@ export interface FleetBrokerUserSnapshot {
     agentModels?: AgentModelSelections;
   };
 }
-
-export type FleetBrokerNativeSharedContextCheckpointRequest = NativeSharedAgentContextRestoreHold & { checkpoint: import("./glm.js").GatewayVmHomeCheckpoint };

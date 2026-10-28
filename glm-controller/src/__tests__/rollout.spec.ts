@@ -7,7 +7,6 @@ import {
 import type { Operation } from "@octogee/shared/types/glm";
 import type { GatewayDoc, ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import type { OperationContext } from "../operation-router.js";
-import { decideRollStateMigration } from "../roll-state-migration.js";
 
 function mkPayload(overrides: Partial<ReleasePayload> = {}): ReleasePayload {
   return {
@@ -74,7 +73,6 @@ function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: str
   return {
     readGatewayDoc: async () => mkGateway(),
     readReleasePayload: async () => mkPayload(),
-    readGatewayOpenclawVersion: async () => "beta2",
     readDeploymentPrerequisiteError: vi.fn(async () => null),
     activateDesiredRelease: vi.fn(async () => ({ success: true as const })),
     requestReconcileTick: vi.fn(),
@@ -92,6 +90,13 @@ function mkDeps(overrides: Partial<RolloutDeps> = {}): RolloutDeps & { logs: str
 }
 
 describe("rollout op — durable root validation", () => {
+  it("activates a release without consulting source version metadata", async () => {
+    const deps = mkDeps({ readGatewayDoc: async () => mkGateway({ liveRelease: 2 }) });
+    Object.assign(deps, { readGatewayOpenclawVersion: vi.fn(async () => { throw new Error("version unavailable"); }) });
+    const result = await createRolloutHandler(deps)(mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-ocbeta2" }), ctx);
+    expect(result.success).toBe(true);
+    expect(deps.activateDesiredRelease).toHaveBeenCalled();
+  });
   it("refuses a gateway with no durable gateways/{id} desired doc without naming retired recovery tools", async () => {
     const deps = mkDeps({ readGatewayDoc: async () => null });
     const handler = createRolloutHandler(deps);
@@ -458,94 +463,6 @@ describe("rollout op — awaits the roll arm's convergence", () => {
     expect(res.success).toBe(false);
     expect(res.error).toContain("did not converge within 5000ms");
     expect(res.error).toContain("converging r1 → r2");
-  });
-
-  it("journals a state migration when the release keeps the gateway's openclaw version", async () => {
-    const openclawSourceSha = "a".repeat(40);
-    const deps = mkDeps({
-      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
-      readReleasePayload: async () => mkPayload({
-        imageTag: "cafe123-oc2026.7.2-beta.7",
-        openclawSourceSha,
-      }),
-      readGatewayOpenclawVersion: async () => "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
-    });
-
-    const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "cafe123-oc2026.7.2-beta.7" }),
-      ctx,
-    );
-
-    expect(res.success).toBe(true);
-    expect(res.output).toEqual({
-      stateMigration: decideRollStateMigration({
-        sourceOpenclawVersion: "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)",
-        targetOpenclawVersion: "2026.7.2-beta.7",
-        targetOpenclawSourceSha: openclawSourceSha,
-      }),
-    });
-    expect((res.output?.stateMigration as { strategy: string }).strategy).toBe("migrate-state");
-  });
-
-  it("journals state transfer across an openclaw version change", async () => {
-    const deps = mkDeps({
-      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
-      readReleasePayload: async () => mkPayload({ imageTag: "8886d40-oc2026.7.2-beta.7" }),
-      readGatewayOpenclawVersion: async () => "2026.7.1",
-    });
-
-    const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "8886d40-oc2026.7.2-beta.7" }),
-      ctx,
-    );
-
-    expect(res.success).toBe(true);
-    expect(res.output).toEqual({
-      stateMigration: {
-        strategy: "migrate-state",
-        sourceOpenclawVersion: "2026.7.1",
-        targetOpenclawVersion: "2026.7.2-beta.7",
-        sourceOpenclawSourceSha: null,
-        targetOpenclawSourceSha: null,
-        reason: expect.stringContaining("transfer durable state"),
-      },
-    });
-    expect(deps.logs.some((line) => line.includes("migrate-state"))).toBe(true);
-  });
-
-  it("journals state transfer when the source gateway reports no openclaw version", async () => {
-    const deps = mkDeps({
-      readGatewayDoc: async () => mkGateway({ liveRelease: 2 }),
-      readReleasePayload: async () => mkPayload({ imageTag: "8886d40-oc2026.7.2-beta.7" }),
-      readGatewayOpenclawVersion: async () => null,
-    });
-
-    const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "8886d40-oc2026.7.2-beta.7" }),
-      ctx,
-    );
-
-    expect(res.success).toBe(true);
-    expect(res.output).toMatchObject({
-      stateMigration: { strategy: "migrate-state", sourceOpenclawVersion: null },
-    });
-  });
-
-  it("journals the chosen strategy even when the roll never converges", async () => {
-    const deps = mkDeps({
-      convergeTimeoutMs: 5_000,
-      readGatewayDoc: async () => mkGateway(),
-      readReleasePayload: async () => mkPayload({ imageTag: "8886d40-oc2026.7.2-beta.7" }),
-      readGatewayOpenclawVersion: async () => "2026.7.1",
-    });
-
-    const res = await createRolloutHandler(deps)(
-      mkOp({ gatewayId: "default", targetRelease: 2, imageTag: "8886d40-oc2026.7.2-beta.7" }),
-      ctx,
-    );
-
-    expect(res.success).toBe(false);
-    expect(res.output).toMatchObject({ stateMigration: { strategy: "migrate-state" } });
   });
 
   it("no-op rollout (already live on the requested release, no roll) succeeds immediately", async () => {

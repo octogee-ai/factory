@@ -1,6 +1,5 @@
 import {
   type GatewayStatus,
-  type NativeSharedAgentContextStage,
   GATEWAYS_COLLECTION,
 } from "@octogee/shared/types/fleet-controller";
 import { isDeepStrictEqual } from "node:util";
@@ -143,12 +142,11 @@ export async function assertWorkspaceMigrationSourcePreparationAuthority(deps: F
     const exact = [
       userSnapshot.exists, operationSnapshot.exists,
       openclaw.gatewayId === params.sourceGatewayId, slugFromAssignedUser(user) === params.slug,
-      openclaw.nativeSharedContextRestore === undefined,
       marker?.operationId === params.operationId, marker?.state === "preparing", marker?.phase === "preparing",
       operation.kind === MIGRATE_CUSTOMER_OPERATION_KIND, operation.status === "running", operation.startedAt === params.claimStartedAt,
       operation.cancellationRequestedAt === undefined, operation.cutoverCommittedAt === undefined,
       operation.customerMigrationV2 === undefined, operation.sourceTransferExecution === undefined,
-      operation.nativeSharedAgentContextStage === undefined, operation.restoreAttempt === undefined,
+      operation.restoreAttempt === undefined,
       operation.schedulerHandoffLost === undefined, input.recoverSourceOnly !== true, input.sourceTransferMode === undefined,
       input.uid === params.uid, input.fromGatewayId === params.sourceGatewayId, input.toGatewayId === params.targetGatewayId,
       input.builderSlug === undefined || input.builderSlug === params.slug,
@@ -358,12 +356,29 @@ export async function clearWorkspaceMigrationPreparation(
   });
 }
 
+function transferringRollbackConfirmed(operation: Record<string, unknown>): boolean {
+  const steps = (operation.steps as unknown[]).map(recordOrEmpty);
+  const once = (name: string, statuses: string[]) => {
+    const matches = steps.filter(step => step.name === name);
+    return matches.length === 1 && statuses.includes(String(matches[0]?.status));
+  };
+  const abort = steps.filter(step => step.name === "rollback:scheduler-abort");
+  return once("quiesce-source", ["done"]) &&
+    (once("final-sync-state", ["failed"]) || once("verify-target", ["failed"])) &&
+    once("rollback:unmount-target", ["done"]) && once("rollback:scheduler-resume", ["done"]) &&
+    once("rollback:resume-ingress", ["done"]) && abort.length <= 1 &&
+    (abort.length === 0 || ["done", "skipped"].includes(String(abort[0]?.status)));
+}
+
 function preparationCleanupMatches(operation: Record<string, unknown>, phase: unknown): boolean {
   if (phase === "preparing" && preparationStepsMatch(operation, "done")) return true;
   if (operation.kind !== MIGRATE_CUSTOMER_OPERATION_KIND ||
       !["running", "failed"].includes(String(operation.status)) ||
       operation.cutoverCommittedAt !== undefined || operation.customerMigrationV2 !== undefined ||
       operation.cancellationRequestedAt !== undefined || !Array.isArray(operation.steps)) return false;
+  if (phase === "transferring" || phase === "connecting") {
+    return transferringRollbackConfirmed(operation);
+  }
   if (phase !== "preparing" && phase !== "waiting") return false;
   const expected = phase === "preparing" ? [["keys-sync-state", "failed"]] : [
     ["keys-sync-state", "done"], ["pre-sync-state", "done"], ["target-scheduler-ready", "done"],
@@ -505,17 +520,6 @@ function assertCustomerRestoreInput(input: CustomerRestoreInput): void {
   }
 }
 
-function customerRestoreAssignmentAllowed(assignment: Record<string, unknown>, openclaw: Record<string, unknown>,
-  operation: Record<string, unknown>, input: CustomerRestoreInput): boolean {
-  if (assignment.state === "serving") return true;
-  const hold = recordOrEmpty(openclaw.nativeSharedContextRestore), stage = recordOrEmpty(operation.nativeSharedAgentContextStage);
-  const archive = recordOrEmpty(stage.archive);
-  return assignment.state === "quiescing" && assignment.updatedByOperationId === input.operationId &&
-    isDeepStrictEqual(hold, { operationId: input.operationId, uid: input.uid, slug: input.slug,
-      fromGatewayId: input.fromGatewayId, toGatewayId: input.gatewayId, migrationId: stage.migrationId,
-      archiveId: archive.archiveId, contextSha256: archive.contextSha256 });
-}
-
 async function readCustomerRestoreAuthority(deps: Pick<FleetStateDeps, "db">, txn: FleetStateTxn, input: CustomerRestoreInput) {
   assertCustomerRestoreInput(input);
   const userRef = deps.db.collection("users").doc(input.uid);
@@ -544,7 +548,7 @@ async function readCustomerRestoreAuthority(deps: Pick<FleetStateDeps, "db">, tx
     handoff.fromGatewayId === input.fromGatewayId, handoff.toGatewayId === input.gatewayId,
     assignment.uid === input.uid, assignment.slug === input.slug,
     assignment.gatewayId === input.gatewayId, assignment.epoch === input.assignmentEpoch,
-    customerRestoreAssignmentAllowed(assignment, openclaw, operation, input),
+    assignment.state === "serving",
   ].every(Boolean);
   if (!exact) throw new CustomerRestoreAuthorityUnavailableError("customer restore authority changed");
   return { userRef, operationRef, user, openclaw, operation, gateway: recordOrEmpty(gatewaySnapshot.data()) };
@@ -554,7 +558,7 @@ function hasPriorCustomerRestoreWork(operation: Record<string, unknown>): boolea
   const histories = Array.isArray(operation.attemptHistory) ? operation.attemptHistory : [];
   const attempts = [operation, ...histories.map(recordOrEmpty)];
   return attempts.some(attempt => Array.isArray(attempt.steps) &&
-    attempt.steps.some(step => ["restore-target", "restore-shared-agent-context"].includes(String(recordOrEmpty(step).name))));
+    attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
 }
 
 function restoreDispatchClaim(operation: Record<string, unknown>, intent: Record<string, unknown>): number | null {
@@ -566,7 +570,7 @@ function restoreDispatchClaim(operation: Record<string, unknown>, intent: Record
   const history = Array.isArray(operation.attemptHistory) ? operation.attemptHistory.map(recordOrEmpty) : [];
   const candidates = history.filter(attempt => Number.isSafeInteger(attempt.startedAt) &&
     Number(attempt.startedAt) > 0 && Number(attempt.startedAt) <= Number(intent.dispatchedAt) &&
-    Array.isArray(attempt.steps) && attempt.steps.some(step => ["restore-target", "restore-shared-agent-context"].includes(String(recordOrEmpty(step).name))));
+    Array.isArray(attempt.steps) && attempt.steps.some(step => recordOrEmpty(step).name === "restore-target"));
   return candidates.length === 1 ? Number(candidates[0]!.startedAt) : null;
 }
 
@@ -715,15 +719,8 @@ export interface CutoverCommitParams {
     source: AssignmentSource;
     updatedByOperationId: string | null;
   } | null;
-  nativeSharedContextHold?: {
-    operationId: string;
-    claimedStartedAt: number;
-    migrationId: string;
-    stage: NativeSharedAgentContextStage;
-  };
   customerMigrationV2Fence?: {
     claimStartedAt?: number;
-    strategy: "migrate-state" | "provision-fresh";
     operationId: string;
     migrationId: string;
     uid: string;
@@ -752,10 +749,6 @@ function customerMigrationV2FenceIsExact(
   const state = recordOrEmpty(operation?.customerMigrationV2);
   const sourceRootFence = state.sourceRootFence as CustomerMigrationV2GatewayRootFence;
   const targetRootFence = state.targetRootFence as CustomerMigrationV2GatewayRootFence;
-  const stateStrategy = state.strategy ?? "migrate-state";
-  const cutoverReady = fence.strategy === "provision-fresh"
-    ? state.phase === "freshCutoverReady"
-    : state.phase === "targetVerified";
   const claimBound = recordOrEmpty(operation?.input).sourceTransferMode === "retained-pod" || fence.claimStartedAt !== undefined;
   const claimCurrent = !claimBound || (
     Number.isSafeInteger(fence.claimStartedAt) && (fence.claimStartedAt ?? 0) > 0 &&
@@ -764,8 +757,7 @@ function customerMigrationV2FenceIsExact(
   return [
     operation?.status === "running",
     claimCurrent,
-    cutoverReady,
-    stateStrategy === fence.strategy,
+    state.phase === "targetVerified",
     state.operationId === fence.operationId,
     state.migrationId === fence.migrationId,
     state.uid === fence.uid,
@@ -819,51 +811,9 @@ export async function commitCutoverAtomic(
     const activationSourcePatch = await builderActivationSourceCutoverPatch({
       txn, db: deps.db, params, user: restoreOwner.data(), prior, targetRoot,
     });
-    const nativeSharedContextRestore = await validateNativeSharedContextCutover({ txn, db: deps.db, params, user: restoreOwner.data(), targetRoot });
-    updateUserMirror(txn, deps, params, targetRoot, { ...activationSourcePatch,
-      ...(nativeSharedContextRestore ? { "provisioning.openclaw.nativeSharedContextRestore": nativeSharedContextRestore } : {}) });
+    updateUserMirror(txn, deps, params, targetRoot, activationSourcePatch);
     updateAssignment(txn, deps.db, params, prior.epoch, nowMs);
-    if (nativeSharedContextRestore) txn.update(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(nativeSharedContextRestore.operationId), { cutoverCommittedAt: nowMs });
   });
-}
-
-async function validateNativeSharedContextCutover(input: {
-  txn: FleetStateTxn; db: FleetStateFirestore; params: CutoverCommitParams;
-  user: Record<string, unknown> | undefined; targetRoot: Record<string, unknown> | undefined;
-}) {
-  const { params } = input, hold = params.nativeSharedContextHold;
-  if (!hold) return null;
-  const [operationSnapshot, sourceRootSnapshot, sourceRuntimeSnapshot] = await Promise.all([
-    input.txn.get(input.db.collection(GLM_OPERATIONS_COLLECTION).doc(hold.operationId)),
-    input.txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
-    input.txn.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(params.fromGatewayId)),
-  ]);
-  const op = recordOrEmpty(operationSnapshot.data()), stage = hold.stage;
-  const operationInput = recordOrEmpty(op.input), sourceRoot = recordOrEmpty(sourceRootSnapshot.data());
-  const runtime = recordOrEmpty(sourceRuntimeSnapshot.data()), vm = recordOrEmpty(runtime.vm);
-  const provisioning = recordOrEmpty(input.user?.provisioning), openclaw = recordOrEmpty(provisioning.openclaw), home = recordOrEmpty(provisioning.homeDisk);
-  const archive = stage.archive, proof = archive.custody;
-  const exact = [
-    params.flipMirror, params.assignment !== null, params.fromGatewayId !== params.toGatewayId,
-    input.targetRoot?.gatewayClass === "shared", openclaw.gatewayId === params.fromGatewayId,
-    !Object.hasOwn(openclaw, "nativeSharedContextRestore"),
-    op.kind === MIGRATE_CUSTOMER_OPERATION_KIND, op.status === "running", op.startedAt === hold.claimedStartedAt,
-    Number.isSafeInteger(hold.claimedStartedAt), hold.claimedStartedAt > 0, op.cancellationRequestedAt === undefined,
-    op.cutoverCommittedAt === undefined, operationInput.uid === params.uid,
-    operationInput.fromGatewayId === params.fromGatewayId, operationInput.toGatewayId === params.toGatewayId,
-    isDeepStrictEqual(op.nativeSharedAgentContextStage, stage),
-    isDeepStrictEqual(op.nativeAgentContextTransfer, { mode: "restore-shared", archive }),
-    isDeepStrictEqual(home.sharedAgentContext, archive),
-    stage.migrationId === hold.migrationId, stage.slug === params.slug, stage.toGatewayId === params.toGatewayId,
-    archive.uid === params.uid, archive.slug === params.slug,
-    proof.uid === params.uid, proof.slug === params.slug, home.id === proof.homeDiskId, home.source === proof.homeDiskSource,
-    sourceRoot.gatewayClass === "builder", sourceRoot.ownerUid === params.uid, sourceRoot.builderSlug === params.slug,
-    runtime.runtime === "gce-vm", vm.instanceName === proof.instanceName, vm.instanceId === proof.instanceId, vm.zone === proof.zone,
-  ].every(Boolean);
-  if (!exact) throw new Error("native Shared history cutover authority changed");
-  return { operationId: hold.operationId, uid: params.uid, slug: params.slug,
-    fromGatewayId: params.fromGatewayId, toGatewayId: params.toGatewayId, migrationId: hold.migrationId,
-    archiveId: archive.archiveId, contextSha256: archive.contextSha256 };
 }
 
 interface PriorAssignment {
@@ -1105,11 +1055,11 @@ function updateAssignment(
     slug: params.slug,
     gatewayId: params.toGatewayId,
     source: params.assignment.source,
-    state: (params.nativeSharedContextHold ? "quiescing" : "serving") satisfies AssignmentState,
+    state: "serving" satisfies AssignmentState,
     epoch: priorEpoch + 1,
     createdAt: nowMs,
     updatedAt: nowMs,
-    updatedByOperationId: params.nativeSharedContextHold?.operationId ?? params.assignment.updatedByOperationId,
+    updatedByOperationId: params.assignment.updatedByOperationId,
   });
   if (params.fromGatewayId !== params.toGatewayId) {
     txn.delete(assignmentRef(db, params.fromGatewayId, params.uid));

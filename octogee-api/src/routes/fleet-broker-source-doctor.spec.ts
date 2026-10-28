@@ -24,6 +24,12 @@ function fixture() {
     [`glmOperations/${requestId}`]: { kind: "restart-gateway", status: "running", completedAt: null,
       input: { gatewayId, sourceRecovery: { root: { gatewayId, gatewayClass: "shared", ownerUid: null, builderSlug: null, desiredStatus: "draining", desiredRelease: 3, liveRelease: 3, latestRelease: 3 }, sourceSha, images, assignments: [{ ...agent, assignment: { state: "serving" } }] } } },
   };
+  const recovery = data[`glmOperations/${requestId}`].input.sourceRecovery;
+  const stores = [{ ...agent, storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_coach" }];
+  recovery.postgresAgentStores = stores;
+  recovery.schedulerStateRecovery = true;
+  Object.assign(data[`gateways/${gatewayId}`].runtimeRestartFence.target, { postgresAgentStores: structuredClone(stores), schedulerStateRecovery: true });
+  recoveryReads.read.mockImplementation(async () => ({ root: recovery.root, assignments: recovery.assignments, postgresAgentStores: recovery.postgresAgentStores, schedulerStateRecovery: true }));
   const ref = (path: string) => ({ path });
   const db = { doc: ref, collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
     runTransaction: async (body: (txn: any) => Promise<any>) => {
@@ -51,15 +57,30 @@ describe("source Doctor boot authority", () => {
       { ...agent, agentId: "octogee-alice-proj-demo-coach", storeId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", schema: "owned_project" }];
     recovery.postgresAgentStores = stores;
     f.fence().target.postgresAgentStores = structuredClone(stores);
-    const captured = { root: recovery.root, assignments: recovery.assignments, failedExports: [], postgresAgentStores: stores };
-    recovery.failedExports = [];
+    const captured = { root: recovery.root, assignments: recovery.assignments, schedulerStateRecovery: true, postgresAgentStores: stores };
     recoveryReads.read.mockResolvedValue(captured);
     return { ...f, recovery, stores, captured };
   }
+  it("refuses source repair without the PostgreSQL and scheduler roster", async () => {
+    const f = fixture();
+    for (const field of ["postgresAgentStores", "schedulerStateRecovery"]) {
+      delete f.data[`glmOperations/${requestId}`].input.sourceRecovery[field];
+      delete f.fence().target[field];
+    }
+    await expect(f.store.claim(input)).rejects.toThrow();
+    expect(f.fence().doctor.startedAt).toBeUndefined();
+  });
+  it.each(["postgresAgentStores", "schedulerStateRecovery"])("requires %s for every stopped-source repair", async field => {
+    const f = fixture();
+    delete f.data[`glmOperations/${requestId}`].input.sourceRecovery[field];
+    delete f.fence().target[field];
+    await expect(f.store.claim(input)).rejects.toThrow();
+    expect(f.fence().doctor.startedAt).toBeUndefined();
+  });
   it("binds every PostgreSQL project anchor and exposes a read-only current-authority check during Doctor", async () => {
     const f = postgresFixture();
     const agentIds = f.stores.map(s => s.agentId);
-    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds,
+    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds, schedulerStateRecovery: true,
       postgresAgentStores: f.stores.map(({ agentId, storeId, schema }) => ({ agentId, storeId, schema })) } });
     const before = structuredClone(f.fence());
     await request(f.server).post("/internal/fleet/openclaw-boot/doctor-current").send({ gatewayId, revisionId: gatewayId, releaseKey: input.releaseKey, requestId }).expect(204);
@@ -104,23 +125,25 @@ describe("source Doctor boot authority", () => {
     const f = fixture();
     const initialAgent = { ...agent, assignmentEpoch: 0 };
     f.fence().target.agents = [initialAgent];
+    f.fence().target.postgresAgentStores[0].assignmentEpoch = 0;
+    f.data[`glmOperations/${requestId}`].input.sourceRecovery.postgresAgentStores[0].assignmentEpoch = 0;
     f.data[`glmOperations/${requestId}`].input.sourceRecovery.assignments = [{ ...initialAgent, assignment: { state: "serving" } }];
 
-    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds: [agent.agentId] } });
+    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds: [agent.agentId], schedulerStateRecovery: true, postgresAgentStores: [{ agentId: agent.agentId, storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_coach" }] } });
     expect(await f.store.completeDoctor({ ...input, requestId, verifiedAgentIds: [agent.agentId] })).toBe(true);
     expect(await f.store.claim(input)).toEqual({ action: "start" });
   });
 
   it("binds actual installed image and Pod while treating a different baked build key only as correlation", async () => {
     const f = fixture();
-    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds: [agent.agentId] } });
+    expect(await f.store.claim(input)).toEqual({ action: "doctor", sourceDoctor: { requestId, agentIds: [agent.agentId], schedulerStateRecovery: true, postgresAgentStores: [{ agentId: agent.agentId, storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_coach" }] } });
     expect(f.fence().doctor).toEqual({ requestId, releaseKey: input.releaseKey, startedAt: 300 });
     await expect(f.store.claim(input)).rejects.toThrow();
     expect(f.fence().doctor.completedAt).toBeUndefined();
   });
   it("leaves the request unspent until the controller verifies the installed gateway digest", async () => {
     const f = fixture(); delete f.fence().installedImage;
-    expect(await f.store.claim(input)).toEqual({ action: "wait", sourceDoctor: { requestId, agentIds: [agent.agentId] } });
+    expect(await f.store.claim(input)).toEqual({ action: "wait", sourceDoctor: { requestId, agentIds: [agent.agentId], schedulerStateRecovery: true, postgresAgentStores: [{ agentId: agent.agentId, storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_coach" }] } });
     expect(f.fence().doctor).toEqual({ requestId });
   });
   it.each(["pod", "image", "operation", "cancelled"])("rejects stale or foreign %s custody without spending Doctor", async (changed) => {

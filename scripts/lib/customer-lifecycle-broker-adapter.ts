@@ -507,21 +507,6 @@ async function snapshotForSlug(ctx: BrokerCtx, slug: string): Promise<FleetBroke
   return uid ? snapshotForUid(ctx, uid) : null;
 }
 
-async function customerContextRestoreHeld(ctx: BrokerCtx, slug: string): Promise<boolean> {
-  const uid = await ctx.client.uidForSlug(slug);
-  if (!uid) return false;
-  const snapshot = await ctx.client.userSnapshot(uid);
-  if (!snapshot) throw new Error("Shared restore eviction owner snapshot is missing");
-  const hold = snapshot.nativeSharedContextRestore;
-  if (hold === undefined) return false;
-  const gatewayId = process.env.GATEWAY_ID;
-  if (!hold || !gatewayId || snapshot.uid !== uid || snapshot.slug !== slug ||
-      hold.uid !== uid || hold.slug !== slug || snapshot.gatewayId !== hold.toGatewayId ||
-      ![hold.operationId, hold.fromGatewayId, hold.toGatewayId, hold.migrationId, hold.archiveId].every(value => typeof value === "string" && value.length > 0) ||
-      !/^[a-f0-9]{64}$/u.test(hold.contextSha256)) throw new Error("Shared restore eviction hold is malformed");
-  return hold.toGatewayId === gatewayId;
-}
-
 function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
   return {
     uid: snapshot.uid,
@@ -530,7 +515,6 @@ function toUserSnapshot(snapshot: FleetBrokerUserSnapshot): UserSnapshot {
     gatewayId: snapshot.gatewayId,
     status: snapshot.status,
     agentIds: snapshot.agentIds,
-    nativeSharedContextRestore: snapshot.nativeSharedContextRestore,
     restoreAuthority: snapshot.restoreAuthority,
     repoUrl: snapshot.repoUrl,
     mattermostUserId: snapshot.mattermostUserId,
@@ -1106,7 +1090,7 @@ interface AssignedWorkspaceIdentityInput {
 function currentAssignedIdentityOwner(input: { current: FleetBrokerUserSnapshot | null; snapshot: UserSnapshot; assigned: FleetBrokerAssignmentRosterEntry[]; gatewayId?: string; podUid?: string }): boolean {
   const { current, snapshot, assigned, gatewayId, podUid } = input;
   return !!gatewayId && !!podUid && current?.uid === snapshot.uid && current.slug === snapshot.slug && current.gatewayId === gatewayId && current.status === "complete" && assigned.length === 1 &&
-    Number.isSafeInteger(assigned[0].epoch) && assigned[0].epoch >= 0 && current.nativeSharedContextRestore === undefined;
+    Number.isSafeInteger(assigned[0].epoch) && assigned[0].epoch >= 0;
 }
 
 function assertAssignedIdentityMode(input: AssignedWorkspaceIdentityInput, current: FleetBrokerUserSnapshot, assigned: FleetBrokerAssignmentRosterEntry): void {
@@ -1808,7 +1792,7 @@ async function sourceMigrationIdentityCustody(ctx: BrokerCtx, slug: string, migr
   const snapshot = uid ? await ctx.client.userSnapshot(uid) : null;
   const assignments = (await ctx.client.assignmentRoster()).filter(assignment => assignment.uid === uid);
   if (!uid || snapshot?.uid !== uid || snapshot.slug !== slug || snapshot.gatewayId !== gatewayId ||
-      snapshot.status !== "complete" || snapshot.nativeSharedContextRestore !== undefined ||
+      snapshot.status !== "complete" ||
       assignments.length !== 1 || !["serving", "quiescing"].includes(assignments[0].state)) {
     throw new Error("Source workspace identity requires its current assigned customer");
   }
@@ -2315,7 +2299,6 @@ export function buildBrokeredLifecycleAdapter(
     clearCustomerMigratingIn: (slug) => clearMigratingInPin(CUSTOMERS_DIR, slug),
     listMigratingInSlugs: () => listMigratingInSlugs(CUSTOMERS_DIR, MIGRATING_IN_PIN_TTL_MS),
 
-    sharedContextCheckpoint: (request, signal) => ctx.client.sharedContextCheckpoint(request, signal),
     loadUserSnapshot: async (uid, options) => {
       if (options?.refresh) invalidateSnapshot(ctx, uid);
       const snapshot = await snapshotForUid(ctx, uid);
@@ -2415,7 +2398,6 @@ export function buildBrokeredLifecycleAdapter(
     projectAgentsHealthy: (snapshot) => projectAgentsRuntimeReady({ ...snapshot, rpc: ctx.rpc }),
     notifyOpsOfSignup: (customerCtx) => opts.client.notifySignup(customerCtx.uid),
     uidForSlug: (slug) => opts.client.uidForSlug(slug),
-    customerContextRestoreHeld: (slug) => customerContextRestoreHeld(ctx, slug),
     quiesceCustomer: (slug, timeoutMs, opts) => quiesceCustomer(ctx, slug, timeoutMs, opts),
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     schedulerReady: async () => { await ctx.rpc.configGet(); },

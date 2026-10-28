@@ -7,9 +7,6 @@ import {
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
-  type NativeAgentContextTransfer,
-  type NativeSharedAgentContextRecovery,
-  type NativeSharedAgentContextStage,
   type SchedulerMigrationRequestBody,
   type SchedulerMigrationResult,
   type FlushGatewayResponse,
@@ -44,7 +41,6 @@ export interface MigrationClientDeps {
 
   timeouts?: MigrationClientTimeouts;
 
-  finishAgentContextRestore?: MigrationClient["finishAgentContextRestore"];
   prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
   transferState: MigrationClient["transferState"];
 }
@@ -89,19 +85,7 @@ export interface MigrationClient {
     snapshot: FleetBrokerUserSnapshot;
   }): Promise<RestoreMigrationResponse>;
 
-  finishAgentContextRestore(opts: {
-    sharedAgentContextRecovery?: NativeSharedAgentContextRecovery;
-    migrationId: string;
-    fromGatewayId: string;
-    toGatewayId: string;
-    slug: string;
-    agentContext: Extract<NativeAgentContextTransfer, { mode: "restore-shared" }>;
-    stage: NativeSharedAgentContextStage;
-  }): Promise<ImportResponse>;
-
   transferState(opts: {
-    stageOnly?: boolean;
-    agentContext?: NativeAgentContextTransfer;
     migrationId: string;
     fromGatewayId: string;
     toGatewayId: string;
@@ -396,10 +380,7 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    finishAgentContextRestore: async input => {
-      if (!deps.finishAgentContextRestore) throw new Error("Shared agent context restoration is unavailable");
-      return deps.finishAgentContextRestore(input);
-    },
+
     transferState: deps.transferState,
 
     async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {

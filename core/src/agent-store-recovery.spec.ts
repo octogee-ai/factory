@@ -34,7 +34,7 @@ describe("agent-store ownership transaction recovery authority", () => {
     });
     let current = true;
     const assertCurrent = vi.fn(async () => { if (!current) throw new Error("recovery claim replaced"); });
-    const transfer = createAgentStoreOwnershipTransferer("postgresql://fixture:synthetic@localhost/fixture");
+    const transfer = createAgentStoreOwnershipTransferer("postgresql://fixture:synthetic@localhost/fixture", async () => []);
     const moving = transfer({ uid: "uid-alice", slug: "alice" }, "shared", assertCurrent);
     void moving.catch(() => {});
     await waiting;
@@ -58,7 +58,7 @@ describe("agent-store ownership transaction recovery authority", () => {
         if (scenario === "cancel-before-commit") throw new Error("recovery claim replaced before commit");
       }
     });
-    const transfer = createAgentStoreOwnershipTransferer("postgresql://fixture:synthetic@localhost/fixture");
+    const transfer = createAgentStoreOwnershipTransferer("postgresql://fixture:synthetic@localhost/fixture", async () => []);
     const moving = transfer({ uid: "uid-alice", slug: "alice" }, "shared", assertCurrent);
     if (scenario === "commit") { await moving; expect(state.commands.at(-1)).toBe("COMMIT"); }
     else { await expect(moving).rejects.toThrow("recovery claim replaced before commit"); expect(state.commands.at(-1)).toBe("ROLLBACK"); }

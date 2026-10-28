@@ -10,7 +10,6 @@ import {
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
 } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
-import type { GatewayArtifact } from "@octogee/core/gateway-live-release";
 import { buildOperationCompletionUpdate, classifyOperationFailure } from "../operation-retry";
 import { assertCustomerRestoreSettled, createOperationContext, PendingCustomerRestoreError } from "../operation-context";
 import { builderReturnOperationId } from "@octogee/core/builder-activation-lease";
@@ -76,7 +75,6 @@ function mkOp(overrides: Partial<Operation>): Operation {
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
-    finishAgentContextRestore: vi.fn(async request => ({ migrationId: request.migrationId, slug: request.slug, imported: true, sharedAgentContext: request.stage.archive })),
     abortImport: vi.fn(async () => undefined),
     schedulerReady: vi.fn(async () => undefined),
     scheduler: vi.fn(async ({ migrationId, phase }) => ({ operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } })),
@@ -122,33 +120,6 @@ interface HarnessOptions {
   client?: MigrationClient & { calls: string[] };
   durable?: boolean;
   sourceGatewayId?: string;
-  openclawVersions?: Record<string, string | null>;
-  targetArtifact?: GatewayArtifact | null;
-}
-
-const SAME_OPENCLAW = `OpenClaw 2026.7.2-beta.7 (${"a".repeat(40)})`;
-const SAME_OPENCLAW_VERSION = "2026.7.2-beta.7";
-
-function targetArtifact(version = SAME_OPENCLAW_VERSION): GatewayArtifact {
-  return {
-    imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway",
-    imageTag: `deadbee-oc${version}@sha256:${"b".repeat(64)}`,
-    openclawSourceSha: "a".repeat(40),
-    profileImages: {
-      builder: {
-        imageRepository:
-          "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder",
-        imageTag: `deadbee-oc${version}@sha256:${"c".repeat(64)}`,
-      },
-    },
-  };
-}
-
-function configuredTargetArtifact(options: HarnessOptions): GatewayArtifact | null {
-  if (options.targetArtifact !== undefined) return options.targetArtifact;
-  const configured = options.openclawVersions?.["gw-green"];
-  if (configured === null || configured === "unknown") return null;
-  return targetArtifact(configured ?? SAME_OPENCLAW_VERSION);
 }
 
 function mkDeps(options: HarnessOptions = {}) {
@@ -162,19 +133,8 @@ function mkDeps(options: HarnessOptions = {}) {
     })),
     readUserSnapshot: vi.fn(async () => SNAPSHOT),
     prepareNativeComputerReturn: vi.fn(async () => null),
-    prepareNativeAgentContextTransfer: vi.fn(async () => null),
-    acknowledgeNativeAgentContextTransfer: vi.fn(async () => undefined),
-    acknowledgeNativeSharedContextStage: vi.fn(async () => undefined),
-    prepareNativeSharedContextRestore: vi.fn(async () => null),
-    acknowledgeNativeSharedContextRestore: vi.fn(async () => undefined),
     retireNativeSchedulerBeforeStage: vi.fn(async () => undefined),
-    readGatewayOpenclawVersion: vi.fn(async (gatewayId: string) =>
-      options.openclawVersions
-        ? options.openclawVersions[gatewayId] ?? null
-        : SAME_OPENCLAW),
     readGatewaySystemConfigCommit: vi.fn(async () => TARGET_SYSTEM_CONFIG_COMMIT),
-    readGatewayReleaseArtifact: vi.fn(async (_gatewayId: string, release: number) =>
-      release === 2 ? configuredTargetArtifact(options) : null),
     commitCutover: vi.fn(async (commit) => {
       events.push(`cutover:${commit.fromGatewayId}->${commit.toGatewayId}:mirror=${commit.flipMirror}`);
     }),
@@ -389,8 +349,6 @@ describe("PostgreSQL agent context transfer", () => {
     const h = mkDeps({ durable });
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: true });
     expect(h.client.transferState).toHaveBeenCalledWith(expect.objectContaining({ mode: "final" }));
-    expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
-    expect(h.deps.acknowledgeNativeAgentContextTransfer).not.toHaveBeenCalled();
   });
 });
 
@@ -776,19 +734,14 @@ describe("native computer return", () => {
       if (request.mode === "keys") return { migrationId: "mig-op-1", slug: "alice", imported: true };
       order.push("store-handoff");
       expect(request).toMatchObject({ mode: "final", includeActivationManifest: true });
-      expect(request.agentContext).toBeUndefined();
-      expect(request.stageOnly).toBeUndefined();
       return { migrationId: "mig-op-1", slug: "alice", imported: true };
     });
     native.requestCheckpoint.mockImplementation(async () => { order.push("request-checkpoint"); });
-    vi.mocked(h.deps.commitCutover).mockImplementation(async commit => {
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
       order.push("cutover");
-      expect(commit.nativeSharedContextHold).toBeUndefined();
     });
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({ startedAt: 4000 }), h.ctx)).toMatchObject({ success: true });
     expect(order).toEqual(["store-handoff", "request-checkpoint", "cutover"]);
-    expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
-    expect(h.deps.prepareNativeSharedContextRestore).not.toHaveBeenCalled();
   });
 
   it("keeps the source available when returning customer keys cannot be transferred", async () => {
@@ -875,7 +828,6 @@ describe("native computer return", () => {
     vi.mocked(h.client.transferState).mockImplementation(async request => {
       if (request.mode === "final") {
         expect(request).toMatchObject({ includeActivationManifest: true });
-        expect(request.agentContext).toBeUndefined();
         expect(assignment.state).toBe("quiescing");
         order.push("final-import-refused");
         throw new MigrationRpcError(missingWitness, { status: 500 });
@@ -909,8 +861,6 @@ describe("native computer return", () => {
     expect(native.requestCheckpoint).not.toHaveBeenCalled();
     expect(native.park).not.toHaveBeenCalled();
     expect(h.client.restoreTarget).not.toHaveBeenCalled();
-    expect(h.deps.prepareNativeAgentContextTransfer).not.toHaveBeenCalled();
-    expect(h.deps.prepareNativeSharedContextRestore).not.toHaveBeenCalled();
   });
 
   describe("checkpoint release readiness", () => {
@@ -1168,8 +1118,6 @@ describe("native computer return", () => {
     expect(h.client.restoreTarget).not.toHaveBeenCalled();
     expect(h.client.transferState).toHaveBeenCalledTimes(2);
     expect(h.client.transferState).toHaveBeenNthCalledWith(2, expect.objectContaining({ mode: "final", includeActivationManifest: true }));
-    expect(h.deps.readGatewayOpenclawVersion).toHaveBeenCalledWith("gw-blue");
-    expect(h.deps.readGatewayReleaseArtifact).toHaveBeenCalledWith("gw-green", 2);
   });
 
   describe("interrupted Shared mount recovery", () => {
@@ -2026,6 +1974,17 @@ describe("migrate-customer — input validation", () => {
 });
 
 describe("migrate-customer — legacy data-plane migration (shared class)", () => {
+  it("clears the migration marker after final transfer fails and source rollback succeeds", async () => {
+    const h = mkDeps();
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
+    vi.mocked(h.client.transferState).mockImplementation(async request => {
+      if (request.mode === "final") throw new Error("native maintenance required");
+      return { migrationId: request.migrationId, slug: request.slug, imported: true };
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledOnce();
+  });
   it.each([true, false])("clears a failed idle probe only after target cleanup (%s)", async (cleanupConfirmed) => {
     const h = mkDeps();
     h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
@@ -2172,48 +2131,6 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
     expect(result.error).toMatch(/agents busy/u);
     expect(events.some((event) => event.startsWith("cutover:"))).toBe(false);
     expect(events).toContain("assignment:gw-blue:serving");
-  });
-});
-
-describe("PostgreSQL handoff schema admission", () => {
-  it.each([false, true])("hands off across build identities using native store admission (durable=%s)", async durable => {
-    for (const options of [
-      { targetArtifact: { ...targetArtifact(), openclawSourceSha: "b".repeat(40) } },
-      { targetArtifact: targetArtifact("2026.8.1") },
-      { openclawVersions: { "gw-blue": null, "gw-green": null }, targetArtifact: targetArtifact() },
-      { openclawVersions: { "gw-blue": "OpenClaw 2026.7.2-beta.7 (aaaaaaaa)", "gw-green": SAME_OPENCLAW } },
-    ]) {
-      const { deps, ctx, client } = mkDeps({ durable, ...options });
-      expect(await createMigrateCustomerHandler(deps)(mkOp({}), ctx)).toMatchObject({ success: true, rolledBack: false });
-      expect(client.transferState).toHaveBeenCalled();
-      expect(client.quiesce).toHaveBeenCalled();
-    }
-  });
-});
-
-describe("persisted fresh migration recovery", () => {
-  it.each(["gw-green", "gw-blue", "unrelated"])("reconciles canonical owner %s without unmounting the target", async (owner) => {
-    const initial = mkDeps({ durable: true });
-    await createMigrateCustomerHandler(initial.deps)(mkOp({}), initial.ctx);
-    const state = { ...initial.persisted[0]!, strategy: "provision-fresh" as const, phase: "freshCutoverReady" as const };
-    const h = mkDeps({ durable: true });
-    vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: owner });
-    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ customerMigrationV2: state }), h.ctx);
-    expect(h.client.unmount).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
-    expect(h.client.transferState).not.toHaveBeenCalled();
-    if (owner === "gw-green") {
-      expect(result.success).toBe(true);
-      expect(h.deps.commitV2Cutover).toHaveBeenCalledWith(expect.objectContaining({ strategy: "provision-fresh", migrationId: state.migrationId }));
-      expect(h.persisted.at(-1)?.phase).toBe("complete");
-    } else if (owner === "gw-blue") {
-      expect(result).toMatchObject({ success: false, rolledBack: true });
-      expect(h.deps.setAssignmentState).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue", state: "serving", createIfMissing: false }));
-      expect(h.persisted.at(-1)?.phase).toBe("aborted");
-    } else {
-      expect(result.success).toBe(false);
-      expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
-      expect(h.client.unmount).not.toHaveBeenCalled();
-    }
   });
 });
 
@@ -2758,4 +2675,15 @@ describe("waiting for active Builder work", () => {
     expect(h.client.resume).toHaveBeenCalled();
     expect(h.client.unmount).not.toHaveBeenCalled();
   });
+});
+
+it("migrates without reading version metadata or a release artifact for a fixed strategy", async () => {
+  const h = mkDeps();
+  Object.assign(h.deps, {
+    readGatewayOpenclawVersion: vi.fn(async () => { throw new Error("version unavailable"); }),
+    readGatewayReleaseArtifact: vi.fn(async () => { throw new Error("artifact unavailable"); }),
+  });
+  const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+  expect(result.success).toBe(true);
+  expect(h.client.quiesce).toHaveBeenCalled();
 });

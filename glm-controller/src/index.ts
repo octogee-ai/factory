@@ -21,7 +21,6 @@ import { reportMigrationProgress } from "@octogee/core/fleet-migration-client";
 import { fleetOperationLockResources } from "@octogee/core/fleet-operation-lock";
 import { journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 import { operationScopedLog } from "./operation-log-scope.js";
-import { prepareNativeAgentContextTransfer, acknowledgeNativeAgentContextTransfer, acknowledgeNativeSharedContextStage, prepareNativeSharedContextRestore, acknowledgeNativeSharedContextRestore } from "./lib/native-agent-context-transfer.js";
 import { createNativeReturnSourceRecoveryOwner } from "./native-return-source-recovery.js";
 import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-target-retirement.js";
 import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-computer-return.js";
@@ -122,14 +121,7 @@ import {
   type SurgeCustomerHandoffDeps,
   type SurgeCustomerHandoffResult,
 } from "./surge-customer-handoff.js";
-import {
-  decideRollStateMigration,
-  heartbeatOpenclawIdentity,
-  heartbeatOpenclawSourceSha,
-  heartbeatOpenclawVersion,
-  openclawVersionFromGatewayImageTag,
-  type RollStateMigrationDecision,
-} from "./roll-state-migration.js";
+
 import { pruneSurgeOrphanAssignments } from "./surge-orphan-assignment.js";
 import {
   createSurgePodTransport,
@@ -277,7 +269,7 @@ import {
   customerMigrationV2GatewayRootFence,
   isCustomerMigrationV2Transition,
 } from "@octogee/core/customer-migration-v2";
-import { abortRetainedSourceImport, createRsyncMigrationTransfer, createRsyncAgentContextRestoreFinish, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
+import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
 import {
   beginCustomerRestore,
   acknowledgeCustomerRestore,
@@ -677,15 +669,6 @@ async function readGatewaySystemConfigCommitFromFirestore(
   return typeof configStatus?.acceptedCommit === "string" ? configStatus.acceptedCommit : null;
 }
 
-async function readGatewayOpenclawVersionFromFirestore(
-  db: Firestore,
-  gatewayId: string,
-): Promise<string | null> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const runtime = snap.exists ? snap.data() : undefined;
-  return isGatewayRuntimeDoc(runtime) ? heartbeatOpenclawIdentity(runtime.heartbeat) : null;
-}
-
 function clearedHeartbeatFieldsPatch(): Record<string, unknown> {
   const del = FieldValue.delete();
   const out: Record<string, unknown> = {};
@@ -957,7 +940,6 @@ interface GatewayConvergencePassDeps {
     requiresCustomerMigration: boolean;
     disposableBuilderGateway: boolean;
     ownerlessOperatorPrewarm: boolean;
-    stateMigration: RollStateMigrationDecision;
   }) => Promise<SurgeCustomerHandoffResult>;
   log: (msg: string) => void;
 }
@@ -1014,7 +996,6 @@ function reconcileGatewaySurgeHandoff(input: {
   gateway: DurableGateway;
   runtime: GatewayRuntimeDoc | undefined;
   desiredImage: { imageRepository: string; imageTag: string };
-  desiredOpenclawSourceSha: string | null;
   pendingArtifact: ReleasePayload | null;
   helmObserved: ObservedHelmInstance | null;
   prelaunchRefresh: boolean;
@@ -1022,9 +1003,7 @@ function reconcileGatewaySurgeHandoff(input: {
   const {
     passDeps,
     gateway,
-    runtime,
     desiredImage,
-    desiredOpenclawSourceSha,
     pendingArtifact,
     helmObserved,
   } = input;
@@ -1042,12 +1021,6 @@ function reconcileGatewaySurgeHandoff(input: {
     requiresCustomerMigration: !input.prelaunchRefresh && requiresSurgeCustomerMigration(gateway),
     disposableBuilderGateway: isDisposableBuilderGateway(gateway),
     ownerlessOperatorPrewarm: false,
-    stateMigration: decideRollStateMigration({
-      sourceOpenclawVersion: heartbeatOpenclawVersion(runtime?.heartbeat),
-      targetOpenclawVersion: openclawVersionFromGatewayImageTag(desiredImage.imageTag),
-      sourceOpenclawSourceSha: heartbeatOpenclawSourceSha(runtime?.heartbeat),
-      targetOpenclawSourceSha: desiredOpenclawSourceSha,
-    }),
     ...(supersedingImageTag ? { supersedingImageTag } : {}),
   });
 }
@@ -1094,7 +1067,6 @@ export async function refineGatewayConvergenceAction(input: {
     gateway,
     runtime,
     desiredImage,
-    desiredOpenclawSourceSha: artifact.openclawSourceSha ?? null,
     pendingArtifact,
     helmObserved,
     prelaunchRefresh,
@@ -2132,8 +2104,6 @@ async function runClaimedOperation(
           if (
             current.operationId !== state.operationId ||
             current.migrationId !== state.migrationId ||
-            (current.strategy ?? "migrate-state") !==
-              (state.strategy ?? "migrate-state") ||
             !isCustomerMigrationV2Transition(current.phase, state.phase)
           ) {
             throw new Error(
@@ -2685,6 +2655,17 @@ function buildNativeReturnSourceRecoveryOwner(db: Firestore, kubeOps: KubeOps, p
   });
 }
 
+async function readBuilderAgentStoreInventory(db: Firestore, builder: { uid: string }) {
+  const stores = await db.collection("users").doc(builder.uid).collection("agentStores").get();
+  return stores.docs.filter(store => store.id !== "_gateway-state" && store.id !== "octogee-unmatched-route").map(store => {
+    const data = store.data();
+    if (data.agentId !== store.id || typeof data.storeId !== "string" || typeof data.schema !== "string") {
+      throw new Error(`Agent-store handoff inventory is invalid for ${store.id}`);
+    }
+    return { agentId: store.id, storeId: data.storeId, schema: data.schema };
+  });
+}
+
 async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -2716,7 +2697,10 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       return { uid: users.docs[0].id, slug };
     },
     ensureCredentials: gatewayId => ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId }),
-    transferOwnership: createAgentStoreOwnershipTransferer(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store handoff requires the controller-only administration URL")),
+    transferOwnership: createAgentStoreOwnershipTransferer(
+      requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store handoff requires the controller-only administration URL"),
+      builder => readBuilderAgentStoreInventory(db, builder),
+    ),
   });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,
@@ -3029,11 +3013,6 @@ function createMigrationClientBuilder(
       resolveGatewayUrl: resolveSync,
       log: logFn,
       prepareAgentStores,
-      finishAgentContextRestore: createRsyncAgentContextRestoreFinish({
-        prepareAgentStores,
-        db, namespace: NAMESPACE, privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
-        resolveGatewayUrl: resolveSync, resolveGatewayVm: transportId => readGatewayVmAddress(db, transportId), log: logFn,
-      }),
       transferState: async (request) => {
         if (request.mode === "final" && !prepareAgentStores) throw new Error("Final agent-store transfer requires ownership preparation");
         return createRsyncMigrationTransfer({
@@ -3320,11 +3299,6 @@ async function buildHandlers(
       db, vm: createGatewayComputeClient(logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
-    prepareNativeAgentContextTransfer: input => prepareNativeAgentContextTransfer({ db, vm: createGatewayComputeClient(logFn) }, input),
-    acknowledgeNativeAgentContextTransfer: (input, policy, result) => acknowledgeNativeAgentContextTransfer({ db, vm: createGatewayComputeClient(logFn) }, input, policy, result),
-    acknowledgeNativeSharedContextStage: (input, policy, stage) => acknowledgeNativeSharedContextStage({ db, vm: createGatewayComputeClient(logFn) }, input, policy, stage),
-    prepareNativeSharedContextRestore: input => prepareNativeSharedContextRestore({ db, vm: createGatewayComputeClient(logFn) }, input),
-    acknowledgeNativeSharedContextRestore: (input, stage, result) => acknowledgeNativeSharedContextRestore({ db, vm: createGatewayComputeClient(logFn) }, input, stage, result),
     retireNativeSchedulerBeforeStage: (input, scheduler) => retireNativeSchedulerBeforeStage({
       db, vm: createGatewayComputeClient(logFn), log: logFn,
     }, input, scheduler),
@@ -3341,12 +3315,8 @@ async function buildHandlers(
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
-    readGatewayOpenclawVersion: (gatewayId) =>
-      readGatewayOpenclawVersionFromFirestore(db, gatewayId),
     readGatewaySystemConfigCommit: (gatewayId) =>
       readGatewaySystemConfigCommitFromFirestore(db, gatewayId),
-    readGatewayReleaseArtifact: (gatewayId, release) =>
-      readGatewayArtifact(db, gatewayId, release),
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
         {
@@ -3363,9 +3333,8 @@ async function buildHandlers(
           flipMirror: commit.flipMirror,
           assignment: {
             source: MIGRATE_CUSTOMER_KIND,
-            updatedByOperationId: commit.nativeSharedContextHold?.operationId ?? null,
+            updatedByOperationId: null,
           },
-          ...(commit.nativeSharedContextHold ? { nativeSharedContextHold: commit.nativeSharedContextHold } : {}),
           automatic: commit.automatic,
         },
       );
@@ -3445,7 +3414,6 @@ async function buildHandlers(
           },
           customerMigrationV2Fence: {
             ...(input.claimStartedAt !== undefined ? {claimStartedAt:input.claimStartedAt} : {}),
-            strategy: input.strategy,
             operationId: input.operationId,
             migrationId: input.migrationId,
             uid: input.uid,
@@ -3648,8 +3616,6 @@ async function buildHandlers(
     },
     readReleasePayload: (gatewayId, release) =>
       readReleasePayloadFromFirestore(db, gatewayId, release),
-    readGatewayOpenclawVersion: (gatewayId) =>
-      readGatewayOpenclawVersionFromFirestore(db, gatewayId),
     readDeploymentPrerequisiteError: async (gatewayId) => {
       if (!(await isVmGateway(db, gatewayId))) return null;
       const vmRuntime = vmGatewayRuntimeRef.current;

@@ -65,7 +65,7 @@ function customerAuthorityMatches(user: DocumentData | undefined, cleanup: Custo
   return user.username === cleanup.slug && user.accountLifecycle?.deletionId === deletionId &&
     user.accountLifecycle.eraseAfter === eraseAfter &&
     ["deletion_scheduled", "erasing"].includes(user.accountLifecycle?.status) &&
-    !["gatewayId", "migration", "restoreFence", "sourceTransferFence", "nativeSharedContextRestore", "runtimeRestartFence"]
+    !["gatewayId", "migration", "restoreFence", "sourceTransferFence", "runtimeRestartFence"]
       .some(key => state[key] != null);
 }
 

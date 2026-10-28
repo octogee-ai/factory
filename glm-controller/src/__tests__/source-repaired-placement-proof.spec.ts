@@ -1,6 +1,6 @@
 import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
 import { expect, it } from "vitest";
-import { repairedPlacementProofMatches, repairedPostgresPlacementProofMatches, repairedPostgresSourceConverged } from "../placement-policy-reconciler.js";
+import { repairedPlacementProofMatches, repairedPostgresSourceConverged } from "../placement-policy-reconciler.js";
 
 function fixture() {
   const request = { uid: "owner", builderSlug: "livefixture", fromGatewayId: "shared-old", toGatewayId: "shared-new", operationId: "placement", source: "continuous-placement-policy" as const };
@@ -18,27 +18,22 @@ function fixture() {
   const images = { gateway: "registry/gateway:aaaaaaaa@sha256:" + "a".repeat(64), "gateway-edge": "registry/edge:aaaaaaaa@sha256:" + "b".repeat(64) };
   const stores = [assignment.agentId, "octogee-livefixture-proj-launch-coach"].map((agentId, index) => ({ uid: request.uid, slug: request.builderSlug, assignmentEpoch: 7,
     agentId, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `agent_${index}` }));
-  const repair: any = { id: "repair", kind: "restart-gateway", status: "succeeded", input: { gatewayId: request.fromGatewayId,
-    sourceRecovery: { sourceSha: "c".repeat(40), images, assignments: [assignment], postgresAgentStores: stores,
-      failedExports: [{ operationId: request.operationId, input: original.input, startedAt: original.startedAt, completedAt: original.completedAt, error, steps: original.steps }] } },
+  const repair: any = { id: "repair", kind: "restart-gateway", status: "succeeded", startedAt: 250, input: { gatewayId: request.fromGatewayId,
+    sourceRecovery: { sourceSha: "c".repeat(40), images, assignments: [assignment], postgresAgentStores: stores } },
     sourceRuntimeRecovery: { gatewayId: request.fromGatewayId, sourceSha: "c".repeat(40), images, podUid: "source-pod", completedAt: 400,
       doctor: { requestId: "repair", releaseKey: "installed-image-build", startedAt: 310, completedAt: 350, verifiedAgentIds: stores.map(store => store.agentId) },
       installedImage: { podUid: "source-pod", gatewayImageId: "docker-pullable://" + images.gateway, verifiedAt: 300 },
-      managementHealth: { attemptId: "repair", bootId: "fresh-boot", health: true },
-      releasedPlacements: [{ operationId: request.operationId, uid: request.uid, assignmentEpoch: 7, marker: null }] } };
-  const data = { ...original, sourceRuntimeRecovery: { operationId: "repair", sourceAssignmentEpoch: 7, completedAt: 400 } };
+      managementHealth: { attemptId: "repair", bootId: "fresh-boot", health: true } } };
+  const data = { ...original };
   return { request, original, data, repair };
 }
 it("accepts only the complete captured PostgreSQL repair proof for placement rearm", () => {
   const f = fixture(); expect(repairedPlacementProofMatches(f.data, f.repair, f.request)).toBe(true);
 });
-it.each(["history", "claim", "cutover", "rollback", "failure-projection", "store-owner", "store-epoch", "duplicate-uuid", "missing-coach", "doctor-project", "doctor-owner", "doctor-time", "release-key", "image", "pod", "health", "release-marker", "duplicate-release", "source-image", "cancelled", "receipt"])("refuses PostgreSQL placement rearm with %s", change => {
+it.each(["cutover", "rollback", "store-owner", "store-epoch", "duplicate-uuid", "missing-coach", "doctor-project", "doctor-owner", "doctor-time", "release-key", "image", "pod", "health", "source-image", "cancelled", "old-repair"])("refuses PostgreSQL placement rearm with %s", change => {
   const f: any = fixture(), source = f.repair.input.sourceRecovery, completed = f.repair.sourceRuntimeRecovery;
-  if (change === "history") f.data.attemptHistory = [];
-  if (change === "claim") f.data.schedulerHandoff.migrationId = "foreign";
   if (change === "cutover") f.data.cutoverCommittedAt = 180;
   if (change === "rollback") f.data.rolledBack = false;
-  if (change === "failure-projection") source.failedExports[0].completedAt = 201;
   if (change === "store-owner") source.postgresAgentStores[1].uid = "foreign";
   if (change === "store-epoch") source.postgresAgentStores[1].assignmentEpoch = 8;
   if (change === "duplicate-uuid") source.postgresAgentStores[1].storeId = source.postgresAgentStores[0].storeId;
@@ -50,18 +45,16 @@ it.each(["history", "claim", "cutover", "rollback", "failure-projection", "store
   if (change === "image") completed.installedImage.gatewayImageId = "other@sha256:" + "f".repeat(64);
   if (change === "pod") completed.installedImage.podUid = "other";
   if (change === "health") completed.managementHealth.health = false;
-  if (change === "release-marker") completed.releasedPlacements[0].marker = {};
-  if (change === "duplicate-release") completed.releasedPlacements.push(completed.releasedPlacements[0]);
   if (change === "source-image") completed.images = { ...completed.images, gateway: "other" };
   if (change === "cancelled") f.repair.cancellationRequestedAt = 400;
-  if (change === "receipt") f.data.sourceRuntimeRecovery.sourceAssignmentEpoch = 8;
+  if (change === "old-repair") f.repair.startedAt = 199;
   expect(repairedPlacementProofMatches(f.data, f.repair, f.request)).toBe(false);
 });
-it("preserves the existing management-only repair proof path", () => {
-  const f = fixture(), source = f.repair.input.sourceRecovery;
-  delete source.postgresAgentStores;
-  source.managementRecovery = { failures: [{ operationId: f.request.operationId, receipt: f.original }], users: [{ uid: f.request.uid, migration: null }] };
-  expect(repairedPostgresPlacementProofMatches(f.data, f.repair, f.request)).toBe(false);
+it("accepts a completed repair after a rollback regardless of error text or attempt count", () => {
+  const f = fixture();
+  f.data.error = "a different native maintenance error";
+  f.data.attempts = 2;
+  f.data.attemptHistory = [];
   expect(repairedPlacementProofMatches(f.data, f.repair, f.request)).toBe(true);
 });
 

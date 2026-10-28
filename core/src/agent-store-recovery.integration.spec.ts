@@ -25,7 +25,7 @@ describe.skipIf(!dsn)("claimed PostgreSQL source recovery", () => {
     const applicationName = `recovery-transfer-${nonce}`;
     const transferUrl = new URL(dsn!); transferUrl.searchParams.set("application_name", applicationName);
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
-    const transfer = createAgentStoreOwnershipTransferer(transferUrl.toString());
+    const transfer = createAgentStoreOwnershipTransferer(transferUrl.toString(), async () => [{ schema, agentId: `octogee-${builder.slug}-coach`, storeId }]);
     const sharedId = `recovery-shared-${nonce}`, builderId = `recovery-builder-${nonce}`;
     const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
     const fixtureRoles = [roleFor("gateway", `${scope}:${sharedId}`), roleFor("gateway", `${scope}:${builderId}`), roleFor("builder", `${scope}:${builder.uid}`)];
@@ -47,6 +47,8 @@ describe.skipIf(!dsn)("claimed PostgreSQL source recovery", () => {
       await shared.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
       await shared.query(`CREATE TABLE ${table("schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT, store_id TEXT)`);
       await shared.query(`INSERT INTO ${table("schema_meta")} VALUES ('primary', 'agent', $1, $2)`, [`octogee-${builder.slug}-coach`, storeId]);
+      await shared.query(`CREATE TABLE ${table("openclaw_schema_meta")} (store TEXT, store_id TEXT)`);
+      await shared.query(`INSERT INTO ${table("openclaw_schema_meta")} VALUES ('agent', $1)`, [storeId]);
       await shared.query(`CREATE TABLE ${table("session_nodes")} (session_key TEXT PRIMARY KEY, entry_json TEXT)`);
       await shared.query(`INSERT INTO ${table("session_nodes")} VALUES ('history', $1)`, [history]);
       await transfer(builder, "builder");
@@ -110,7 +112,7 @@ describe.skipIf(!dsn)("native return PostgreSQL source resume", () => {
     const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
     const fixtureRoles = [roleFor("gateway", `${scope}:${sharedId}`), roleFor("gateway", `${scope}:${sourceId}`), roleFor("builder", `${scope}:${builder.uid}`)];
     const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
-    const transfer = createAgentStoreOwnershipTransferer(dsn!);
+    const transfer = createAgentStoreOwnershipTransferer(dsn!, async () => [{ schema, agentId: `octogee-${builder.slug}-coach`, storeId }]);
     const admin = new pg.Client({ connectionString: dsn! });
     await admin.connect();
     let shared: pg.Client | undefined, source: pg.Client | undefined;
@@ -127,6 +129,8 @@ describe.skipIf(!dsn)("native return PostgreSQL source resume", () => {
       await shared.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
       await shared.query(`CREATE TABLE ${table("schema_meta")} (meta_key TEXT, role TEXT, agent_id TEXT, store_id TEXT)`);
       await shared.query(`INSERT INTO ${table("schema_meta")} VALUES ('primary', 'agent', $1, $2)`, [`octogee-${builder.slug}-coach`, storeId]);
+      await shared.query(`CREATE TABLE ${table("openclaw_schema_meta")} (store TEXT, store_id TEXT)`);
+      await shared.query(`INSERT INTO ${table("openclaw_schema_meta")} VALUES ('agent', $1)`, [storeId]);
       await shared.query(`CREATE TABLE ${table("session_nodes")} (entry_json TEXT)`);
       await shared.query(`INSERT INTO ${table("session_nodes")} VALUES ($1)`, [history]);
       const before = await admin.query("SELECT oid FROM pg_namespace WHERE nspname = $1", [schema]);

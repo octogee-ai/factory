@@ -1,7 +1,7 @@
 import type { Request, Response, Router } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { slugFromAssignedUser, nativeSharedContextRestoreHeld } from "@octogee/core/assigned-roster";
+import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import { parseAssignmentDoc } from "@octogee/core/assignment-doc";
 import { isManifestPath } from "@octogee/core/workspace-manifest";
 import { parseMultipart, MAX_UPLOAD_BYTES, UploadTooLargeError } from "../../../gateway-edge/src/routes/workspace/upload.js";
@@ -22,7 +22,7 @@ interface WorkspaceBlobBrokerDeps {
 function workspaceOwnerMatches(user: FirebaseFirestore.DocumentData | undefined, workspace: FirebaseFirestore.DocumentData | undefined, scope: AssignedWorkspace): boolean {
   const openclaw = user?.provisioning?.openclaw;
   return accountAllowsInteractiveAccess(user) && slugFromAssignedUser(user) === scope.slug && openclaw?.gatewayId === scope.gatewayId && openclaw.status === "complete" &&
-    !nativeSharedContextRestoreHeld(user) && openclaw.restoreFence === undefined && workspace?.ownerUid === scope.uid && workspace.ownerActive !== false;
+    openclaw.restoreFence === undefined && workspace?.ownerUid === scope.uid && workspace.ownerActive !== false;
 }
 
 function checkpointAssignmentMatches(raw: FirebaseFirestore.DocumentData | undefined, scope: AssignedWorkspace): boolean {

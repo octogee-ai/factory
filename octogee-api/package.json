@@ -52,7 +52,6 @@
     "resend": "^6.34.1",
     "sharp": "^0.35.5",
     "stripe": "^23.0.0",
-    "tar": "^7.5.16",
     "undici": "^8.12.1",
     "unique-names-generator": "^4.7.1",
     "ws": "^8.21.3"
@@ -98,7 +97,6 @@
     "protobufjs": "^7.6.3",
     "re2": "1.26.1",
     "uuid": "^14.0.0",
-    "tar": "^7.5.16",
     "js-yaml": "^4.3.1",
     "@opentelemetry/core": "^2.8.0",
     "esbuild": "^0.28.1",

@@ -5,7 +5,6 @@ import {
   computerHomeCheckpointPath,
   computerHomeCurrentPath,
   computerHomePruneCandidates,
-  computerHomeContextPruneCandidates,
   validComputerHomeCheckpointName,
 } from "./computer-home-checkpoint.js";
 
@@ -271,35 +270,5 @@ describe("archive generation identity", () => {
     const record = checkpoint();
     delete record.generation;
     expect(await h.commit(record)).toMatchObject({ generation: "9007199254740995" });
-  });
-});
-
-describe("derived Shared context retention", () => {
-  it("expires only exact derivatives of removed/orphaned checkpoints and preserves retained/current generations", () => {
-    const checkpointsPrefix = "customers/bob/computer-home/checkpoints", root = "customers/bob/computer-home/shared-context";
-    const old = "20260905T101500Z.tar.gz", recent = "20260905T101501Z.tar.gz", current = "20260905T101502Z.tar.gz";
-    const derivative = (name: string) => `${root}/${name}/123/archive/${"a".repeat(64)}.tar.gz`;
-    expect(computerHomeContextPruneCandidates({ checkpointsPrefix, checkpointPaths: [old, recent, current].map(name => `${checkpointsPrefix}/${name}`),
-      contextPaths: [derivative(old), derivative(recent), derivative(current), derivative("20260905T101459Z.tar.gz"),
-        derivative(old).replace("customers/bob/", "customers/other/"), `${derivative(old)}/extra`], currentName: current, keep: 2 }))
-      .toEqual([derivative(old), derivative("20260905T101459Z.tar.gz")]);
-  });
-  it("retains all derivatives when no authoritative current checkpoint exists", () => {
-    expect(computerHomeContextPruneCandidates({ checkpointsPrefix: "customers/bob/computer-home/checkpoints", checkpointPaths: [],
-      contextPaths: [`customers/bob/computer-home/shared-context/20260905T101500Z.tar.gz/123/archive/${"a".repeat(64)}.tar.gz`], currentName: null, keep: 2 })).toEqual([]);
-  });
-  it("integrates cleanup with the existing prune call and deletes only the listed derivative generation", async () => {
-    const checkpointsPrefix = "customers/bob/computer-home/checkpoints", old = "20260905T101500Z.tar.gz", currentName = "20260905T101502Z.tar.gz";
-    const contextPath = `customers/bob/computer-home/shared-context/${old}/123/archive/${"a".repeat(64)}.tar.gz`;
-    const contextDelete = vi.fn(), checkpointDelete = vi.fn();
-    storage.bucket.mockReturnValue({
-      getFiles: vi.fn(async ({ prefix }: { prefix: string }) => [prefix.includes("shared-context")
-        ? [{ name: contextPath, metadata: { generation: "987" }, delete: contextDelete }]
-        : [{ name: `${checkpointsPrefix}/${old}` }, { name: `${checkpointsPrefix}/${currentName}` }]]),
-      file: () => ({ delete: checkpointDelete }),
-    });
-    expect(await createGcsComputerHomeStore().prune({ checkpointsPrefix, currentName, keep: 1 })).toBe(2);
-    expect(contextDelete).toHaveBeenCalledExactlyOnceWith({ ignoreNotFound: true, ifGenerationMatch: "987" });
-    expect(checkpointDelete).toHaveBeenCalledOnce();
   });
 });

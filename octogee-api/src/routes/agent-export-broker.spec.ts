@@ -25,7 +25,7 @@ describe("authored export custody", () => {
     if (scenario === "retired") f.docs.get("gateways/shared-a").retirementClaim = false;
     if (scenario === "restart") f.docs.get("gateways/shared-a").runtimeRestartFence = {};
     if (scenario === "transfer") f.docs.get("users/u1").provisioning.openclaw.sourceTransferFence = {};
-    if (scenario === "restore") f.docs.get("users/u1").provisioning.openclaw.nativeSharedContextRestore = {};
+    if (scenario === "restore") f.docs.get("users/u1").provisioning.openclaw.restoreFence = {};
     if (scenario === "foreign") agent = "octogee-other-coach";
     if (scenario === "archived") f.docs.get("workspaces/alice/projects/demo").commercialLifecycle = { status: "archived" };
     if (scenario === "owner") f.docs.get("workspaces/alice/projects/demo").ownerUid = "u2";

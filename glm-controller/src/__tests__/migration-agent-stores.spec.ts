@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMigrationAgentStorePreparer } from "../migration-agent-stores.js";
+import { classifyCustomerMigrationV2Error } from "@octogee/core/customer-migration-v2";
+import { classifyOperationFailure } from "../operation-retry.js";
 
 function harness(gateway: { gatewayClass: "shared" | "builder"; ownerUid: string | null; builderSlug: string | null } | null) {
   const order: string[] = [];
@@ -12,6 +14,24 @@ function harness(gateway: { gatewayClass: "shared" | "builder"; ownerUid: string
 }
 
 describe("migration agent-store ownership", () => {
+  it.each([
+    ["55P03", "canceling statement due to lock timeout"],
+    ["57014", "canceling statement due to statement timeout"],
+  ])("treats PostgreSQL %s handoff timeout as retryable through both migration paths", async (code, message) => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    h.transferOwnership.mockRejectedValue(Object.assign(new Error(message), { code }));
+    const error = await h.prepare("target", "alice").catch(error => error);
+    expect(error.message).toMatch(/^agent-store handoff timeout:/);
+    expect(classifyCustomerMigrationV2Error(error)).toBe("retry");
+    expect(classifyOperationFailure(error.message)).toBe("transient");
+  });
+  it("does not turn PostgreSQL authorization failure into a retry", async () => {
+    const h = harness({ gatewayClass: "shared", ownerUid: null, builderSlug: null });
+    h.transferOwnership.mockRejectedValue(Object.assign(new Error("permission denied"), { code: "42501" }));
+    const error = await h.prepare("target", "alice").catch(error => error);
+    expect(classifyCustomerMigrationV2Error(error)).toBe("terminal");
+    expect(classifyOperationFailure(error.message)).toBe("terminal");
+  });
   it.each(["shared", "builder"] as const)("prepares %s ownership from the authoritative Builder identity", async gatewayClass => {
     const h = harness({ gatewayClass, ownerUid: gatewayClass === "builder" ? "uid-alice" : null, builderSlug: gatewayClass === "builder" ? "alice" : null });
     await h.prepare("target", "alice");

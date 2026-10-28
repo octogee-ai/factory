@@ -406,10 +406,6 @@
       "types": "./dist/shared-source-recovery.d.ts",
       "default": "./dist/shared-source-recovery.js"
     },
-    "./native-shared-agent-context": {
-      "types": "./dist/native-shared-agent-context.d.ts",
-      "default": "./dist/native-shared-agent-context.js"
-    },
     "./agent-store-inventory": {
       "types": "./dist/agent-store-inventory.d.ts",
       "default": "./dist/agent-store-inventory.js"
@@ -707,9 +703,6 @@
       ],
       "project-blob-materialization": [
         "dist/project-blob-materialization.d.ts"
-      ],
-      "native-shared-agent-context": [
-        "dist/native-shared-agent-context.d.ts"
       ],
       "agent-store-inventory": [
         "dist/agent-store-inventory.d.ts"

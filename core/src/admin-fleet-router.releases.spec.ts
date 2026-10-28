@@ -9,8 +9,6 @@ import {
   ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE,
   ERR_STANDBY_RIDES_PLATFORM_RELEASE,
 } from "./admin-fleet-router.js";
-import { readSharedSourceRecoveryAuthority } from './shared-source-recovery.js';
-import { operationAuditMutationFingerprint } from './operation-audit.js';
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,
@@ -507,82 +505,6 @@ describe('POST /gateways/:id/recover-restore', () => {
     const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
     await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(409);
     expect(opsIn(store, 'restart-gateway').filter(op => op.status === 'pending')).toHaveLength(0);
-    expect(auditsIn(store)).toHaveLength(0);
-  });
-  function pendingRecoverySeed() {
-    const h = failedRecoverySeed(); const { seed } = h;
-    const receipt = { ...h.receipt, slug: 'alice', fromGatewayId: 'builder-alice', operationId: 'return-1', phase: 'dispatched' };
-    const hold = { operationId: 'return-1', uid: 'u', slug: 'alice', fromGatewayId: 'builder-alice', toGatewayId: 'shared-0',
-      migrationId: 'mig-return-1', archiveId: 'mig-activate', contextSha256: 'f'.repeat(64) };
-    const stage = { toGatewayId: 'shared-0', migrationId: hold.migrationId, slug: 'alice', archive: {
-      uid: 'u', slug: 'alice', archiveId: hold.archiveId, contextSha256: hold.contextSha256 } };
-    seed['glmOperations/return-1'] = { kind: 'migrate-customer', status: 'pending', startedAt: null, completedAt: null,
-      input: { uid: 'u', builderSlug: 'alice', fromGatewayId: 'builder-alice', toGatewayId: 'shared-0' }, cutoverCommittedAt: 50,
-      restoreAttempt: receipt, nativeSharedAgentContextStage: stage };
-    seed['users/u'] = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-0', restoreFence: structuredClone(receipt),
-      nativeSharedContextRestore: hold, activationLease: { status: 'returning', returnOperationId: 'return-1', targetGatewayId: 'builder-alice' } } } };
-    seed['gateways/shared-0/assignments/u'] = { uid: 'u', slug: 'alice', gatewayId: 'shared-0', epoch: 3,
-      state: 'quiescing', updatedByOperationId: 'return-1' };
-    const previous = seed['glmOperations/failed-recovery'];
-    Object.assign(previous, { status: 'pending', startedAt: null, completedAt: null, error: 'images are not ready', attempts: 1 });
-    delete (previous.input as any).restoreRecovery.reauthorize;
-    const body = { sourceSha: h.manifest.sourceSha, operationId: 'return-1', supersedeRecoveryId: 'failed-recovery' };
-    return { ...h, receipt, hold, stage, body };
-  }
-  it('captures an unclaimed pending image recovery and paired native intent without reauthorizing or changing its owner', async () => {
-    const { seed, manifest, body, receipt, hold, stage, fence } = pendingRecoverySeed();
-    const before = structuredClone(seed);
-    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(202);
-    const next = opsIn(store, 'restart-gateway').find(op => op.input.restoreRecovery.sourceSha === manifest.sourceSha);
-    expect(next?.input.restoreRecovery).toMatchObject({ supersede: { operationId: 'failed-recovery', status: 'pending',
-      input: before['glmOperations/failed-recovery'].input, completedAt: null, fence, pendingNativeRestore: {
-        restoreAttempt: receipt, nativeSharedContextRestore: hold, nativeSharedAgentContextStage: stage,
-        assignment: before['gateways/shared-0/assignments/u'] } } });
-    expect(next?.input.restoreRecovery.reauthorize).toBeUndefined();
-    expect(store.get('glmOperations/failed-recovery')).toEqual(before['glmOperations/failed-recovery']);
-    expect(store.get('users/u')).toEqual(before['users/u']);
-    expect(store.get('gateways/shared-0')?.runtimeRestartFence).toEqual(fence);
-  });
-  it.each(['running', 'claimed', 'completed', 'cancelled', 'reauthorize', 'receipt', 'fence', 'intent', 'stage', 'epoch'])('refuses pending image predecessor %s before queueing a successor', async change => {
-      const { seed, manifest, body } = pendingRecoverySeed();
-      const prior = seed['glmOperations/failed-recovery'];
-      if (change === 'running') prior.status = 'running';
-      if (change === 'claimed') prior.startedAt = 200;
-      if (change === 'completed') prior.completedAt = 200;
-      if (change === 'cancelled') prior.cancellationRequestedAt = 200;
-      if (change === 'reauthorize') (prior.input as any).restoreRecovery.reauthorize = {};
-      if (change === 'receipt') prior.restoreRuntimeRecovery = {};
-      if (change === 'fence') delete seed['gateways/shared-0'].runtimeRestartFence;
-      if (change === 'intent') (seed['users/u'].provisioning as any).openclaw.restoreFence.attemptId = 'other';
-      if (change === 'stage') (seed['glmOperations/return-1'].nativeSharedAgentContextStage as any).archive.contextSha256 = 'a'.repeat(64);
-      if (change === 'epoch') seed['gateways/shared-0/assignments/u'].epoch = 4;
-      const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-      await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(409);
-      expect(opsIn(store, 'restart-gateway').filter(op => op.input.restoreRecovery.sourceSha === manifest.sourceSha)).toHaveLength(0);
-      expect(auditsIn(store)).toHaveLength(0);
-    });
-  function terminalNativeRecoverySeed() {
-    const h = pendingRecoverySeed();
-    Object.assign(h.seed['glmOperations/failed-recovery'], { status: 'failed', startedAt: 200, completedAt: 500,
-      error: 'restore recovery images are not ready; outcome remains fenced' });
-    return h;
-  }
-  it('captures a failed image recovery with unchanged native restore authority without reauthorization', async () => {
-    const { seed, manifest, body } = terminalNativeRecoverySeed();
-    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(202);
-    const next = opsIn(store, 'restart-gateway').find(op => op.input.restoreRecovery.sourceSha === manifest.sourceSha);
-    expect(next?.input.restoreRecovery.supersede).toMatchObject({ status: 'failed', startedAt: 200, completedAt: 500,
-      pendingNativeRestore: { restoreAttempt: seed['glmOperations/return-1'].restoreAttempt } });
-    expect(next?.input.restoreRecovery.reauthorize).toBeUndefined();
-    expect(store.get('glmOperations/failed-recovery')).toEqual(seed['glmOperations/failed-recovery']);
-  });
-  it.each(['completedAt', 'error'])('refuses terminal native recovery with invalid %s', async change => {
-    const { seed, manifest, body } = terminalNativeRecoverySeed();
-    seed['glmOperations/failed-recovery'][change] = change === 'completedAt' ? null : 'another failure';
-    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(app).post('/gateways/shared-0/recover-restore').send(body).expect(409);
     expect(auditsIn(store)).toHaveLength(0);
   });
   it('captures the exact retained attempt only when the operator explicitly reauthorizes its ID', async () => {
@@ -1616,291 +1538,36 @@ describe('POST /gateways/:id/recover-source', () => {
     const seed = seedNewSchemaGateway('shared-0', sharedPayload());
     seed['gateways/shared-0'].desiredStatus = 'draining';
     seed['gateways/shared-0'].liveRelease = 1;
-    const slugs = ['jdog99', 'oct01', 'journeyd093e6f87', 'journey94a458e32', 'jefe', 'oct08'];
-    for (const [index, slug] of slugs.entries()) {
-      const uid = `source-user-${index}`, agentId = `octogee-${slug}-coach`, file = `/home/node/.openclaw/agents/${agentId}/agent/openclaw-agent.sqlite`;
+    for (const [index, slug] of ['jdog99', 'oct01'].entries()) {
+      const uid = `source-user-${index}`, agentId = `octogee-${slug}-coach`;
       seed[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: 'shared-0', status: 'complete' } } };
       seed[`gateways/shared-0/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-0', state: 'serving', epoch: index + 1 };
-      const message = `OpenClaw snapshot of ${agentId} failed: SQLite database cannot be snapshotted safely: ${file}. OpenClaw agent database ${file} uses schema version 24; run openclaw doctor --fix before compacting it.`;
-      const error = '/push-rsync-state/shared-0: 500 ' + JSON.stringify({ error: 'push-rsync-state failed', message });
-      seed[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 300, completedAt: 400,
-        input: { uid, fromGatewayId: 'shared-0', toGatewayId: 'shared-1' }, error,
-        steps: [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'failed', error },
-          { name: 'rollback:unmount-target', status: 'done' }] };
+      seed[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: 'shared-0', assignmentEpoch: index + 1,
+        storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}` };
     }
     return seed;
   }
-  function managementSeed() {
-    const seed = sourceSeed();
-    for (let index = 2; index < 6; index++) {
-      delete seed[`users/source-user-${index}`]; delete seed[`gateways/shared-0/assignments/source-user-${index}`]; delete seed[`glmOperations/export-${index}`];
-    }
-    seed['glmGateways/shared-0'] = { runtime: 'cluster', release: 1, lifecycle: 'serving',
-      kubernetes: { totalPods: 1, readyPods: 1, status: 'ready', pods: [{ uid: 'same-pod', name: 'same-name' }] },
-      heartbeat: { status: 'ready', lastHeartbeatAt: Date.now(), mountedCustomers: ['jdog99', 'oct01'], migratingIn: [] } };
-    for (let index = 0; index < 2; index++) {
-      const row = seed[`glmOperations/export-${index}`] as any, uid = `source-user-${index}`, slug = ['jdog99', 'oct01'][index];
-      row.input.builderSlug = slug; row.input.source = 'continuous-placement-policy';
-      row.origin = 'automatic'; row.createdBy = 'glm-controller-placement-policy'; row.attempts = 2;
-      row.error = '/quiesce/shared-0: 500 ' + JSON.stringify({ error: 'quiesce failed', message: 'WorkerTaskError: Session history database read was revoked: code=unavailable' });
-      row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' },
-        { name: 'target-scheduler-ready', status: 'done' }, { name: 'wait-for-active-work', status: 'failed', error: row.error },
-        { name: 'rollback:unmount-target', status: 'done' }];
-      row.rolledBack = true; row.schedulerHandoffReleased = true; row.schedulerHandoffReleasedAt = 450;
-      row.schedulerHandoff = { migrationId: `mig-export-${index}:scheduler:2:claim:${row.startedAt}`, fromGatewayId: 'shared-0', toGatewayId: 'shared-1', uid, slug };
-      row.attemptHistory = [{ attempt: 1, startedAt: 100, completedAt: 200, steps: [
-        { name: 'quiesce-source', status: 'failed' }, ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))] }];
-      row.attemptHistory.push({ attempt: 2, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) });
-      (seed[`users/${uid}`].provisioning as any).openclaw.mounted = true;
-      (seed[`users/${uid}`].provisioning as any).openclaw.migration = { state: 'preparing', phase: 'waiting', operationId: `export-${index}`, startedAt: 300 };
-    }
-    return seed;
-  }
-  it.each([false, true])('captures terminal rolled-back management failures with claimed custody=%s without changing customer state', async claimed => {
-    const seed = managementSeed();
-    if (!claimed) for (const id of ['export-0', 'export-1']) {
-      const row = seed[`glmOperations/${id}`] as any;
-      row.schedulerHandoff.migrationId = `mig-${id}:scheduler:${row.attempts}`;
-    }
-    const before = structuredClone(seed), manifest = immutableBuild();
-    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(claimed ? 202 : 409);
-    if (!claimed) {
-      expect(opsIn(store, 'restart-gateway')).toHaveLength(0);
-      for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
-      return;
-    }
-    const input = opsIn(store, 'restart-gateway')[0].input.sourceRecovery;
-    expect(input.managementRecovery).toMatchObject({ podUid: 'same-pod', podName: 'same-name' });
-    expect(input.managementRecovery.failures[0].receipt).toEqual(before['glmOperations/export-0']);
-    expect(input.managementRecovery.users[0].migration).toEqual((before['users/source-user-0'].provisioning as any).openclaw.migration);
-    for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
-  });
-  it('captures an explicitly absent marker for an exact terminal released failure without changing the customer', async () => {
-    const seed = managementSeed(), manifest = immutableBuild();
-    delete (seed['users/source-user-0'].provisioning as any).openclaw.migration;
-    const before = structuredClone(seed['users/source-user-0']);
-    const h = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
-    const captured = opsIn(h.store, 'restart-gateway')[0].input.sourceRecovery.managementRecovery;
-    expect(captured.users.find((row: any) => row.uid === 'source-user-0')).toEqual({ uid: 'source-user-0', migration: null });
-    expect(h.store.get('users/source-user-0')).toEqual(before);
-  });
-  function terminalQuiesceSeed() {
-    const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
-    row.attemptHistory[0].steps = [{ name: 'quiesce-source', status: 'done' }, { name: 'final-sync-state', status: 'failed' },
-      ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))];
-    row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'target-scheduler-ready', status: 'done' },
-      { name: 'wait-for-active-work', status: 'done' }, { name: 'quiesce-source', status: 'failed', error: row.error },
-      ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))];
-    row.attemptHistory[1].steps = structuredClone(row.steps);
-    return seed;
-  }
-  it('captures a terminal revoked quiesce failure after complete prior final-sync rollback', async () => {
-    const seed = terminalQuiesceSeed(), row = seed['glmOperations/export-0'] as any;
-    const h = mkApp(seed, { releaseAuthority: buildAuthority(immutableBuild()) });
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: immutableBuild().sourceSha }).expect(202);
-    expect(opsIn(h.store, 'restart-gateway')[0].input.sourceRecovery.managementRecovery.failures[0].receipt).toEqual(row);
-  });
-  it('captures the terminal source authority with explicit absent migration custody', async () => {
-    const seed = terminalQuiesceSeed();
-    delete (seed['users/source-user-0'].provisioning as any).openclaw.migration;
-    const { db } = makeDb(seed);
-    const captured = await db.runTransaction(tx => readSharedSourceRecoveryAuthority(db, tx, 'shared-0'));
-    expect(captured.managementRecovery!.users[0]).toEqual({ uid: 'source-user-0', migration: null });
-  });
-  it.each(['prior-rollback', 'current-rollback', 'prior-cutover', 'prior-verify', 'running-task', 'present-null'])('refuses terminal recovery with %s', async change => {
-    const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
-    row.attemptHistory[0].steps.push({ name: 'final-sync-state', status: 'failed' });
-    if (change === 'prior-rollback') row.attemptHistory[0].steps = row.attemptHistory[0].steps.filter((step: any) => step.name !== 'rollback:resume-ingress');
-    if (change === 'current-rollback') {
-      row.steps.push({ name: 'quiesce-source', status: 'failed', error: row.error });
-      row.attemptHistory[1].steps = structuredClone(row.steps);
-    }
-    if (change === 'prior-cutover') row.attemptHistory[0].steps.push({ name: 'cutover-firestore', status: 'done' });
-    if (change === 'prior-verify') row.attemptHistory[0].steps.push({ name: 'verify-target', status: 'done' });
-    if (change === 'running-task') seed['glmMigrationTransferTasks/task'] = { status: 'running', sourceGatewayId: 'shared-0', targetGatewayId: 'shared-1' };
-    if (change === 'present-null') (seed['users/source-user-0'].provisioning as any).openclaw.migration = null;
-    const h = mkApp(seed, { releaseAuthority: buildAuthority(immutableBuild()) });
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: immutableBuild().sourceSha }).expect(409);
-    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(0);
-  });
-  it.each(['unreleased', 'history-release', 'missing-history', 'duplicate-history', 'zero-history', 'marker', 'cutover', 'running', 'receipt', 'unready', 'roster', 'handoff-operation', 'handoff-attempt', 'handoff-claim'])('refuses management recovery with %s custody', async change => {
-    const seed = managementSeed(), row = seed['glmOperations/export-0'] as any;
-    if (change === 'unreleased') row.schedulerHandoffReleased = false;
-    if (change === 'history-release') row.attemptHistory[0].steps.pop();
-    if (change === 'missing-history') row.attemptHistory.pop();
-    if (change === 'zero-history') { row.attempts = 0; row.attemptHistory = []; }
-    if (change === 'duplicate-history') row.attemptHistory[0].attempt = 2;
-    if (change === 'marker') (seed['users/source-user-0'].provisioning as any).openclaw.migration.operationId = 'foreign';
-    if (change === 'cutover') row.cutoverCommittedAt = 350;
-    if (change === 'running') row.status = 'running';
-    if (change === 'receipt') row.restoreAttempt = {};
-    if (change === 'handoff-operation') row.schedulerHandoff.migrationId = `mig-foreign:scheduler:2:claim:${row.startedAt}`;
-    if (change === 'handoff-attempt') row.schedulerHandoff.migrationId = `mig-export-0:scheduler:1:claim:${row.startedAt}`;
-    if (change === 'handoff-claim') row.schedulerHandoff.migrationId = `mig-export-0:scheduler:2:claim:${row.startedAt + 1}`;
-    if (change === 'unready') (seed['glmGateways/shared-0'].kubernetes as any).readyPods = 0;
-    if (change === 'roster') (seed['glmGateways/shared-0'].heartbeat as any).mountedCustomers.pop();
-    const manifest = immutableBuild(), h = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
-    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(0);
-  });
-  async function failedSourceRepair() {
-    const manifest = immutableBuild(), authority = buildAuthority(manifest), h = mkApp(sourceSeed(), { releaseAuthority: authority });
-    const first = await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
-    const id = first.body.operationId, prior = h.store.get(`glmOperations/${id}`) as any, input = prior.input.sourceRecovery;
-    Object.assign(prior, { status: 'failed', startedAt: 500, completedAt: 600, error: 'another source operation is active' });
-    const fence = { kind: 'source-recovery', attemptId: id, auditId: id, gatewayId: 'shared-0', startedAt: 510, phase: 'dispatched',
-      doctor: { requestId: id }, target: { podUid: 'same-pod', podName: 'same-name', sourceSha: input.sourceSha, images: input.images,
-        originalImages: input.images, agents: input.assignments.map(({ uid, slug, agentId, assignmentEpoch }: any) => ({ uid, slug, agentId, assignmentEpoch })),
-        failedExportOperationIds: input.failedExports.map((r: any) => r.operationId) } };
-    h.store.get('gateways/shared-0')!.runtimeRestartFence = fence;
-    h.store.set('glmOperations/queued', { kind: 'migrate-customer', status: 'pending', origin: 'automatic', createdBy: 'glm-controller-placement-policy',
-      startedAt: null, completedAt: null, attempts: 0, steps: [], input: { uid: 'source-user-0', fromGatewayId: 'shared-0', toGatewayId: 'shared-1' } });
-    return { ...h, manifest, authority, id, prior, fence };
-  }
-  async function spentSourceRepair() {
-    const h = await failedSourceRepair();
-    h.prior.error = 'source repair is not ready; outcome remains fenced';
-    h.prior.input.sourceRecovery.supersede = { operationId: 'original-queue-repair', history: 'preserved' };
-    Object.assign(h.fence.doctor, { startedAt: 550, releaseKey: 'actual-baked-source-key' });
-    (h.fence as any).installedImage = { podUid: h.fence.target.podUid, gatewayImageId: h.fence.target.images.gateway, verifiedAt: 540 };
-    return h;
-  }
-  function predecessorCapture(operationId: string, row: any, fence: unknown) {
-    const input = structuredClone(row.input);
-    delete input.sourceRecovery.supersede;
-    return { operationId, input, inputFingerprint: operationAuditMutationFingerprint(row.input),
-      startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
-  }
-  it('journals an explicit once-only retry for a terminal spent Doctor without acknowledging or changing its nested history', async () => {
-    const h = await spentSourceRepair(), before = structuredClone(h.prior), oldFence = structuredClone(h.fence);
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
-    const next = opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending') as any;
-    expect(next.input.sourceRecovery.supersede).toEqual(predecessorCapture(h.id, before, oldFence));
-    expect(h.prior).toEqual(before); expect(h.fence).toEqual(oldFence);
-  });
-  it.each(['running', 'acknowledged', 'image-proof', 'clock', 'different-error'])('refuses spent source continuation with %s', async change => {
-    const h = await spentSourceRepair();
-    if (change === 'running') h.prior.status = 'running';
-    if (change === 'acknowledged') (h.fence.doctor as any).completedAt = 560;
-    if (change === 'image-proof') (h.fence as any).installedImage.gatewayImageId = 'foreign';
-    if (change === 'clock') h.prior.completedAt = 545;
-    if (change === 'different-error') h.prior.error = 'other failure';
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(409);
-    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(1);
-  });
-  it('captures a terminal owned queue-race repair for normal supersession without changing its failure or source fence', async () => {
-    const h = await failedSourceRepair(), before = structuredClone(h.prior), fence = structuredClone(h.fence);
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(202);
-    const next = opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending') as any;
-    expect(next.input.sourceRecovery.supersede).toEqual(predecessorCapture(h.id, before, fence));
-    expect(h.prior).toEqual(before); expect(h.store.get('gateways/shared-0')!.runtimeRestartFence).toEqual(fence);
-  });
-  it.each([false, true])('binds a new immutable family while refusing changed native source (%s)', async changedNative => {
-    const h = await failedSourceRepair(), next = immutableBuild('d'.repeat(40));
-    if (changedNative) next.openclawSourceSha = 'e'.repeat(40);
-    vi.mocked(h.authority.resolveManifest).mockImplementation(async sourceSha => sourceSha === h.manifest.sourceSha ? h.manifest : next);
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: next.sourceSha, supersedeRecoveryId: h.id }).expect(changedNative ? 409 : 202);
-    if (!changedNative) expect(opsIn(h.store, 'restart-gateway').find((r: any) => r.status === 'pending')!.input).toMatchObject({
-      sourceRecovery: { sourceSha: next.sourceSha, supersede: { input: { sourceRecovery: { sourceSha: h.manifest.sourceSha } } } } });
-  });
-  it.each(['claimed', 'completed-proof', 'cancelled', 'different-error', 'doctor-spent', 'foreign-fence', 'progressed-queue', 'foreign-queue', 'epoch'])('refuses terminal source continuation with %s', async change => {
-    const h = await failedSourceRepair();
-    if (change === 'claimed') h.prior.status = 'running';
-    if (change === 'completed-proof') h.prior.sourceRuntimeRecovery = {};
-    if (change === 'cancelled') h.prior.cancellationRequestedAt = 1;
-    if (change === 'different-error') h.prior.error = 'other error';
-    if (change === 'doctor-spent') (h.fence.doctor as any).startedAt = 520;
-    if (change === 'foreign-fence') h.fence.auditId = 'foreign';
-    if (change === 'progressed-queue') h.store.get('glmOperations/queued')!.startedAt = 550;
-    if (change === 'foreign-queue') (h.store.get('glmOperations/queued')!.input as any).uid = 'foreign';
-    if (change === 'epoch') (h.store.get('gateways/shared-0/assignments/source-user-0') as any).epoch++;
-    await request(h.app).post('/gateways/shared-0/recover-source').send({ sourceSha: h.manifest.sourceSha, supersedeRecoveryId: h.id }).expect(409);
-    expect(opsIn(h.store, 'restart-gateway')).toHaveLength(1);
-  });
-  it('journals immutable source repair for the six configured schema24 exports without forging a restore or boot failure', async () => {
-    const manifest = immutableBuild(), seed = sourceSeed(), before = structuredClone(seed);
+  it('journals current complete custody without requiring a failed export', async () => {
+    const seed = sourceSeed(), manifest = immutableBuild(), before = structuredClone(seed);
     const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
     await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
-    const queued = opsIn(store, 'restart-gateway')[0];
-    expect(queued.input.sourceRecovery).toMatchObject({ sourceSha: manifest.sourceSha,
-      assignments: expect.arrayContaining([{ uid: 'source-user-4', slug: 'jefe', agentId: 'octogee-jefe-coach', assignmentEpoch: 5,
-        assignment: before['gateways/shared-0/assignments/source-user-4'] }]),
-      failedExports: expect.arrayContaining([{ operationId: 'export-4', input: before['glmOperations/export-4'].input,
-        startedAt: 300, completedAt: 400, error: before['glmOperations/export-4'].error, steps: before['glmOperations/export-4'].steps }]) });
-    expect(queued.input.sourceRecovery.assignments).toHaveLength(6);
-    expect(queued.input.sourceRecovery.failedExports).toHaveLength(6);
-    expect(queued.input.restoreRecovery).toBeUndefined();
-    expect(store.get('gateways/shared-0')).toEqual(before['gateways/shared-0']);
-    expect(store.get('glmOperations/export-4')).toEqual(before['glmOperations/export-4']);
-    expect(auditsIn(store)).toHaveLength(1);
-  });
-  it.each(['builder', 'retired', 'restart', 'assignment', 'owner', 'restore', 'running', 'pending', 'rollback', 'cutover', 'schema', 'empty', 'tenant'])('refuses source repair with %s authority before journaling', async change => {
-      const manifest = immutableBuild(), seed = sourceSeed();
-      if (change === 'builder') seed['gateways/shared-0'].gatewayClass = 'builder';
-      if (change === 'retired') seed['gateways/shared-0'].desiredStatus = 'retired';
-      if (change === 'restart') seed['gateways/shared-0'].runtimeRestartFence = {};
-      if (change === 'assignment') seed['gateways/shared-0/assignments/source-user-0'].state = 'quiescing';
-      if (change === 'owner') (seed['users/source-user-0'].provisioning as any).openclaw.gatewayId = 'shared-2';
-      if (change === 'restore') (seed['users/source-user-0'].provisioning as any).openclaw.restoreFence = {};
-      if (change === 'running' || change === 'pending') seed['glmOperations/competing'] = { kind: 'migrate-customer', status: change,
-        input: { uid: 'other', fromGatewayId: 'shared-0', toGatewayId: 'shared-1' } };
-      if (change === 'tenant') seed['glmOperations/tenant-delete'] = { kind: 'erase-customer', status: 'running', input: { uid: 'source-user-0' } };
-      if (change === 'rollback') (seed['glmOperations/export-0'].steps as any[]).pop();
-      if (change === 'cutover') seed['glmOperations/export-0'].cutoverCommittedAt = 350;
-      if (change === 'schema') seed['glmOperations/export-0'].error = 'corrupt database';
-      if (change === 'empty') for (let i = 0; i < 6; i++) delete seed[`gateways/shared-0/assignments/source-user-${i}`];
-      const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-      await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
-      expect(opsIn(store, 'restart-gateway')).toHaveLength(0); expect(auditsIn(store)).toHaveLength(0);
-    });
-  const SUPERSEDED_DETACH = 'Agent configuration was saved but its application to the active Gateway was not confirmed (superseded); run config.get, then apply the saved config or restart the Gateway.';
-  const detachFailure = (agentIds: string[]) => '/push-rsync-state/shared-0: 500 ' + JSON.stringify({ error: 'push-rsync-state failed',
-    message: agentIds.map(id => `[release:${id}] agents.detach failed for ${id} (${SUPERSEDED_DETACH})`).join('; ') });
-  function supersededDetachSeed() {
-    const seed = sourceSeed();
-    for (let index = 2; index < 6; index++) {
-      delete seed[`users/source-user-${index}`]; delete seed[`gateways/shared-0/assignments/source-user-${index}`]; delete seed[`glmOperations/export-${index}`];
-    }
-    for (const [index, slug] of ['jdog99', 'oct01'].entries()) {
-      const error = detachFailure([`octogee-${slug}-coach`, `octogee-${slug}-proj-notes-coach`]);
-      seed[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 300, completedAt: 400, rolledBack: true,
-        input: { uid: `source-user-${index}`, fromGatewayId: 'shared-0', toGatewayId: 'shared-1' }, error,
-        steps: [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'quiesce-source', status: 'done' },
-          { name: 'flush-source', status: 'done' }, { name: 'final-sync-state', status: 'failed', error },
-          ...['scheduler-abort', 'unmount-target', 'scheduler-resume', 'resume-ingress'].map(name => ({ name: `rollback:${name}`, status: 'done' }))] };
-    }
-    return seed;
-  }
-  it('journals source repair for exports whose final sync lost agents.detach to a newer config write', async () => {
-    const manifest = immutableBuild(), seed = supersededDetachSeed(), before = structuredClone(seed);
-    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(202);
-    const queued = opsIn(store, 'restart-gateway')[0];
-    expect(queued.input.sourceRecovery.assignments).toHaveLength(2);
-    expect(queued.input.sourceRecovery.failedExports).toEqual(['export-0', 'export-1'].map(operationId => ({ operationId,
-      input: before[`glmOperations/${operationId}`].input, startedAt: 300, completedAt: 400,
-      error: before[`glmOperations/${operationId}`].error, steps: before[`glmOperations/${operationId}`].steps })));
-    expect(queued.input.sourceRecovery.managementRecovery).toBeUndefined();
+    const recovery = opsIn(store, 'restart-gateway')[0].input.sourceRecovery;
+    expect(recovery.assignments).toHaveLength(2);
+    expect(recovery.postgresAgentStores).toHaveLength(2);
+    expect(recovery.failedExports).toBeUndefined();
     for (const [key, value] of Object.entries(before)) expect(store.get(key)).toEqual(value);
   });
-  it.each(['other-message', 'foreign-agent', 'partial-error', 'rollback-incomplete', 'not-rolled-back', 'cutover', 'step-error', 'sync-not-failed'])(
-    'refuses source repair for a detach failure with %s', async change => {
-      const manifest = immutableBuild(), seed = supersededDetachSeed(), row = seed['glmOperations/export-0'] as any;
-      if (change === 'other-message') row.error = row.error.replace('(superseded)', '(failed)');
-      if (change === 'foreign-agent') row.error = detachFailure(['octogee-oct01-coach']);
-      if (change === 'partial-error') row.error += ' — source ingress on shared-0 not resumed: /resume/shared-0 transport failed: fetch failed';
-      if (change === 'rollback-incomplete') row.steps = row.steps.filter((step: any) => step.name !== 'rollback:resume-ingress');
-      if (change === 'not-rolled-back') row.rolledBack = false;
-      if (change === 'cutover') row.cutoverCommittedAt = 350;
-      if (change === 'step-error') row.steps.find((step: any) => step.name === 'final-sync-state').error = 'different';
-      if (change === 'sync-not-failed') row.steps.find((step: any) => step.name === 'final-sync-state').status = 'done';
-      if (['other-message', 'foreign-agent', 'partial-error'].includes(change)) row.steps.find((step: any) => step.name === 'final-sync-state').error = row.error;
-      const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
-      await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
-      expect(opsIn(store, 'restart-gateway')).toHaveLength(0); expect(auditsIn(store)).toHaveLength(0);
-    });
+  it.each(['assignment', 'user', 'anchor', 'active-operation', 'active-transfer'])('rejects changed %s custody before journaling', async change => {
+    const seed = sourceSeed(), manifest = immutableBuild();
+    if (change === 'assignment') seed['gateways/shared-0/assignments/source-user-0'].epoch++;
+    if (change === 'user') seed['users/source-user-0'].username = 'other';
+    if (change === 'anchor') delete seed['users/source-user-0/agentStores/octogee-jdog99-coach'];
+    if (change === 'active-operation') seed['glmOperations/active'] = { kind: 'migrate-customer', status: 'running', input: { fromGatewayId: 'shared-0' } };
+    if (change === 'active-transfer') seed['glmMigrationTransferTasks/active'] = { status: 'running', sourceGatewayId: 'shared-0' };
+    const { app, store } = mkApp(seed, { releaseAuthority: buildAuthority(manifest) });
+    await request(app).post('/gateways/shared-0/recover-source').send({ sourceSha: manifest.sourceSha }).expect(409);
+    expect(opsIn(store, 'restart-gateway')).toHaveLength(0);
+  });
   it.each([{ sourceSha: 'short' }, { sourceSha: 'a'.repeat(40), restoreAttempt: {} }])('rejects malformed source repair %j', async body => {
     const { app } = mkApp(sourceSeed());
     await request(app).post('/gateways/shared-0/recover-source').send(body).expect(400);
