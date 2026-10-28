@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
-import { builderActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned } from "@octogee/core/fleet-state";
+import { builderActivationRecoveryTargetMatches, sharedRecoveryTargetCleaned, migrationCancellationDeferred } from "@octogee/core/fleet-state";
 import { slugFromAssignedUser } from "@octogee/core/assigned-roster";
 import { GLM_OPERATIONS_COLLECTION, readSchedulerMigrationIdentity, type CustomerMigrationV2State } from "@octogee/shared/types/glm";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -30,7 +30,7 @@ async function sharedCrossGatewayAgentAnchorScope(db: Firestore, txn: Transactio
   const operationId = migrationId.slice(4);
   const operation = (await txn.get(db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId))).data() ?? {};
   const input = operation.input ?? {};
-  if (!migrationOperationCurrent(operation, input, gatewayId)) return null;
+  if (!migrationOperationCurrent(operation, input, gatewayId, operationId)) return null;
   const sourceGatewayId = input.fromGatewayId, targetGatewayId = input.toGatewayId;
   const sourceRequest = gatewayId === sourceGatewayId;
   const [gateway, source, user, assignment, targetAssignment] = await Promise.all([
@@ -59,15 +59,18 @@ async function sharedSurgeAgentAnchorScope(
   db: Firestore, txn: Transaction, request: AgentAnchorMigrationRequest,
 ) {
   const { gatewayId, slug, migrationId, podUid, expected } = request;
-  if (!podUid || !POD_UID_SHAPE.test(podUid) ||
-      migrationId !== `surge-${gatewayId}-${podUid}`) return null;
+  if (typeof migrationId !== "string") return null;
+  const prefix = `surge-${gatewayId}-`;
+  const logicalTargetPodUid = migrationId.startsWith(prefix) ? migrationId.slice(prefix.length) : "";
+  if (!podUid || !POD_UID_SHAPE.test(podUid) || !POD_UID_SHAPE.test(logicalTargetPodUid)) return null;
   const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
   const [gateway, assignments] = await Promise.all([
     txn.get(gatewayRef), txn.get(gatewayRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).where("slug", "==", slug).limit(2)),
   ]);
   if (!sharedSurgeGatewayCurrent(gateway.data(), gatewayId) || assignments.size !== 1) return null;
   const assignment = assignments.docs[0]!, assigned = assignment.data(), uid = assignment.id;
-  if (!sharedSurgeAssignmentCurrent(assigned, uid, request)) return null;
+  if (!sharedSurgeAssignmentCurrent(assigned, uid, request) ||
+      sharedSurgeReceivingPodUid(assigned, migrationId, logicalTargetPodUid) !== podUid) return null;
   const data = (await txn.get(db.collection("users").doc(uid))).data();
   if (!sharedSurgeCustomerCurrent(data, request)) return null;
   const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: assigned.updatedAt, sourceGatewayId: gatewayId, sourceEpoch: assigned.epoch };
@@ -88,10 +91,24 @@ export async function sharedAssignedSourceSurgeAnchorScope(
   ]);
   const assigned = assignment.data();
   if (!sharedSurgeGatewayCurrent(gateway.data(), gatewayId) || !assigned || !sharedSurgeAssignmentCurrent(assigned, uid, request) ||
-      !sharedSurgeCustomerCurrent(user.data(), request)) return null;
+      !sharedSurgeCustomerCurrent(user.data(), request) ||
+      !sharedSurgeSourcePodCurrent(assigned, migrationId, targetPodUid, podUid)) return null;
   const sourceSurge: FleetBrokerAgentAnchorMigration = { migrationId: migrationId as string, claimStartedAt: assigned.updatedAt, sourceGatewayId: gatewayId, sourceEpoch: assigned.epoch };
   if (!migrationAuthorityMatches(sourceSurge, expected)) return null;
   return { gatewayId, uid, slug, assignmentEpoch: assigned.epoch as number, assignmentState: "quiescing" as const, sourceSurge };
+}
+
+function sharedSurgeReceivingPodUid(assignment: DocumentData, migrationId: unknown, logicalTargetPodUid: string): string | null {
+  const marker = assignment.sharedSurgeForwardRecovery;
+  if (marker === undefined) return logicalTargetPodUid;
+  if (marker?.operationId !== migrationId || marker.targetPodUid !== logicalTargetPodUid ||
+      typeof marker.receivingPodUid !== "string" || !POD_UID_SHAPE.test(marker.receivingPodUid)) return null;
+  return marker.receivingPodUid;
+}
+
+function sharedSurgeSourcePodCurrent(assignment: DocumentData, migrationId: unknown, logicalTargetPodUid: string, podUid: string): boolean {
+  const receivingPodUid = sharedSurgeReceivingPodUid(assignment, migrationId, logicalTargetPodUid);
+  return receivingPodUid !== null && podUid !== receivingPodUid;
 }
 
 function sharedSurgeGatewayCurrent(data: DocumentData | undefined, gatewayId: string): boolean {
@@ -113,9 +130,10 @@ function sharedSurgeCustomerCurrent(data: DocumentData | undefined, { gatewayId,
     Number.isSafeInteger(marker?.startedAt), (marker?.startedAt ?? 0) > 0].every(Boolean);
 }
 
-function migrationOperationCurrent(operation: DocumentData, input: DocumentData, gatewayId: string): boolean {
+function migrationOperationCurrent(operation: DocumentData, input: DocumentData, gatewayId: string, operationId: string): boolean {
   return [
-    operation.kind === "migrate-customer", operation.status === "running", operation.cancellationRequestedAt === undefined,
+    operation.kind === "migrate-customer", operation.status === "running",
+    operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, operationId),
     operation.cutoverCommittedAt === undefined, Number.isSafeInteger(operation.startedAt), operation.startedAt > 0,
     validDocumentId(input.uid), validDocumentId(input.fromGatewayId), validDocumentId(input.toGatewayId),
     input.fromGatewayId !== input.toGatewayId, gatewayId === input.toGatewayId || gatewayId === input.fromGatewayId,
@@ -149,8 +167,15 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
     slugFromAssignedUser(data) === slug, openclaw?.gatewayId === sourceGatewayId, openclaw?.migration?.operationId === operationId,
     assigned.uid === input.uid, assigned.slug === slug, assigned.gatewayId === sourceGatewayId, assigned.state === "quiescing",
     Number.isSafeInteger(assigned.epoch), assigned.epoch >= 0,
+    cancelledImportCustodyCurrent(operation, slug, assigned.epoch),
     migrationV2ImportCurrent(operation.customerMigrationV2, { operationId, migrationId, uid: input.uid, slug, sourceGatewayId, targetGatewayId, sourceEpoch: assigned.epoch }),
   ].every(Boolean);
+}
+
+function cancelledImportCustodyCurrent(operation: DocumentData, slug: string, sourceEpoch: unknown): boolean {
+  if (operation.cancellationRequestedAt === undefined || operation.customerMigrationV2 !== undefined) return true;
+  const handoff = operation.schedulerHandoff;
+  return handoff?.slug === slug && handoff.forwardRecovery?.sourceEpoch === sourceEpoch;
 }
 
 function sourceRecoveryIntentCurrent(operationId: string, operation: Record<string, unknown>, input: Record<string, unknown>, slug: string, sourceEpoch: unknown): boolean {

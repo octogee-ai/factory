@@ -44,6 +44,7 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
   observedPodUids?: string[];
   assignments?: SurgeAssignment[];
   targetReleased?: boolean;
+  completionStarted?: boolean;
   terminalTargetByUid?: Record<string, SurgePodHealth["terminalTarget"]>;
   transferError?: Error;
   transferErrorSlug?: string;
@@ -130,12 +131,20 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
       if (input.holdTargetError && call >= (input.holdTargetErrorFromCall ?? 1)) {
         throw input.holdTargetError;
       }
+      return { completionStarted: input.completionStarted ?? true };
     }),
     unreserveTargetOpenClaw: spy(async ({ targetPod: pod, slug }) => {
       events.push(`unreserve-target:${pod.uid}:${slug}`);
     }),
     readAssignments: spy(async () => assignments),
-    markAssignment: spy(async ({ uid, state, updatedByOperationId, expected }) => {
+    markSharedSurgeForwardRecovery: spy(async ({ uid, operationId, targetPodUid }) => {
+      assignments = assignments.map(item => item.uid === uid ? { ...item, sharedSurgeForwardRecovery: { operationId, targetPodUid, receivingPodUid: targetPodUid } } : item);
+    }),
+    rebindSharedSurgeForwardRecovery: spy(async ({ uid, receivingPodUid }) => {
+      assignments = assignments.map(item => item.uid === uid && item.sharedSurgeForwardRecovery
+        ? { ...item, sharedSurgeForwardRecovery: { ...item.sharedSurgeForwardRecovery, receivingPodUid } } : item);
+    }),
+    markAssignment: spy(async ({ uid, state, updatedByOperationId, expected, clearSharedSurgeForwardRecovery }) => {
       events.push(`assignment:${uid}:${state}`);
       if (input.markErrorUid === uid && state === "quiescing") {
         throw new Error("assignment write failed");
@@ -149,7 +158,7 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
         throw new Error("assignment ownership changed");
       }
       assignments = assignments.map((item) => item.uid === uid
-        ? { ...item, state, updatedByOperationId, updatedAt: (item.updatedAt ?? 0) + 1 }
+        ? { ...item, state, updatedByOperationId, updatedAt: (item.updatedAt ?? 0) + 1, ...(clearSharedSurgeForwardRecovery ? { sharedSurgeForwardRecovery: undefined } : {}) }
         : item);
     }),
     waitForSourceIdle: spy(async () => undefined),
@@ -178,6 +187,7 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
       events.push(`discard:${slug}`);
       if (input.discardError) throw input.discardError;
     }),
+    readSystemConfigCommit: spy(async () => "a".repeat(40)),
     readDurableSessionDigest: spy(async ({ pod, slug }) => {
       events.push(`digest:${pod.uid}:${slug}`);
       return input.digestByPodUid?.[pod.uid] ?? {

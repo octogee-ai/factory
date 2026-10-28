@@ -1072,3 +1072,14 @@ describe('fenced source management health availability', () => {
     })).toMatchObject({ status: 'failed' });
   });
 });
+
+ it("keeps a fenced final transfer pending past retry exhaustion", () => {
+   const update = buildOperationCompletionUpdate({
+     op: { kind: "migrate-customer", attempts: MAX_OPERATION_ATTEMPTS,
+       schedulerHandoff: { migrationId: "stable", uid: "alice", slug: "alice", fromGatewayId: "old", toGatewayId: "new",
+         forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 } } },
+     result: { steps: [], success: false, rolledBack: false, error: "migration forward recovery pending: status 503: response lost" },
+     steps: [], now: 1000,
+   });
+   expect(update).toMatchObject({ status: "pending", attempts: MAX_OPERATION_ATTEMPTS + 1 });
+ });

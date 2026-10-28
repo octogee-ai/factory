@@ -996,3 +996,34 @@ describe("pre-drain probe journaling", () => {
     expect(h.events.some((event) => event.startsWith("report:quiesce-source"))).toBe(false);
   });
 });
+
+it("retains the source fence after an ambiguous final upgrade and resumes from the durable checkpoint", async () => {
+  const h = harness({ gateAssignment: true });
+  let checkpoint: { sourceSystemConfigCommit?: string } | undefined;
+  h.deps.persistForwardRecovery = vi.fn(async state => { checkpoint = structuredClone(state); });
+  vi.mocked(h.client.transferState).mockImplementationOnce(async request => ({ ...request, imported: true }))
+    .mockImplementationOnce(async request => ({ ...request, imported: true }))
+    .mockRejectedValueOnce(new Error("target Doctor upgraded agent store; response lost"));
+  const first = await runMigration(h.input, h.deps);
+  expect(first).toMatchObject({ success: false, rolledBack: false, errorAt: { error: expect.stringContaining("status 503") } });
+  expect(checkpoint).toEqual({});
+  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.client.unmount).not.toHaveBeenCalled();
+  expect(vi.mocked(h.client.scheduler).mock.calls.some(([request]) => ["resume", "abort"].includes(request.phase))).toBe(false);
+  vi.mocked(h.client.transferState).mockClear();
+  vi.mocked(h.client.quiesce).mockClear();
+  const second = await runMigration({ ...h.input, resumeForwardRecovery: checkpoint }, h.deps);
+  expect(second).toMatchObject({ success: true, rolledBack: false });
+  expect(h.client.quiesce).not.toHaveBeenCalled();
+  expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final" }));
+  expect(h.client.unmount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: h.input.fromGatewayId }));
+});
+
+it("does not dispatch final transfer or release the source when critical checkpoint persistence is ambiguous", async () => {
+  const h = harness({ gateAssignment: true });
+  h.deps.persistForwardRecovery = vi.fn(async () => { throw new Error("checkpoint write response lost"); });
+  expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: false });
+  expect(vi.mocked(h.client.transferState).mock.calls.map(([request]) => request.mode)).toEqual(["keys", "pre"]);
+  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.client.unmount).not.toHaveBeenCalled();
+});

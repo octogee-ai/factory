@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { FieldValue } from "firebase-admin/firestore";
+import { MIGRATION_TRANSFER_LEASE_MS } from "@octogee/shared/types/fleet-controller";
 import { recoverControllerOrphanedOperations, runStuckOpReaperTick } from "../stuck-op-reaper.js";
 import { decideOperationClaim } from "../operation-queue.js";
 
@@ -120,7 +121,7 @@ function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
 const NOW = 1_700_000_000_000;
 
 describe("runStuckOpReaperTick", () => {
-  it.each(["owned", "purge-failed", "failed-entry", "transient-cleanup", "clean-envelope", "rollback-only", "quiesced", "foreign-marker", "target-assigned", "cutover", "cancelled", "other-attempt"])(
+  it.each(["owned", "purge-failed", "failed-entry", "transient-cleanup", "clean-envelope", "rollback-only", "quiesced", "foreign-marker", "target-assigned", "cutover", "cancelled", "other-attempt", "forward-recovery"])(
     "recovers held target cleanup only for the exact pre-quiesce Shared attempt: %s", async (scenario) => {
       const held = "agent database files are still held open: /state/agents/octogee-alice-coach/agent/openclaw-agent.sqlite";
       const op: FakeOpDoc = { id: "placement-owned", data: {
@@ -142,6 +143,7 @@ describe("runStuckOpReaperTick", () => {
       if (scenario === "cutover") op.data.cutoverCommittedAt = 200;
       if (scenario === "cancelled") op.data.cancellationRequestedAt = 200;
       if (scenario === "other-attempt") op.data.attempts = 2;
+      if (scenario === "forward-recovery") op.data.schedulerHandoff!.forwardRecovery = { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 1 };
       const db = makeFakeDb([op], {
         users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: marker } } } },
         assignments: { "shared-a/alice": assignment, ...(scenario === "target-assigned" ? { "shared-b/alice": { state: "serving" } } : {}) },
@@ -426,7 +428,7 @@ describe("runStuckOpReaperTick", () => {
   });
 
 
-  it.each([{ age: 2_690_000, reaped: 0 }, { age: 2_701_000, reaped: 1 }])("respects the bounded final-import deadline at age $age", async ({ age, reaped }) => {
+  it.each([{ age: MIGRATION_TRANSFER_LEASE_MS + 59_000, reaped: 0 }, { age: MIGRATION_TRANSFER_LEASE_MS + 61_000, reaped: 1 }])("respects the bounded final-import deadline at age $age", async ({ age, reaped }) => {
     const ops: FakeOpDoc[] = [{ id: "slow-final", data: { status: "running", kind: "migrate-customer",
       startedAt: NOW - age, lastProgressAt: NOW - age, steps: [{ name: "final-sync-state", status: "running" }] } }];
     await expect(runStuckOpReaperTick({ db: makeFakeDb(ops) as never, log: vi.fn(), now: () => NOW,

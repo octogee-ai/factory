@@ -6,6 +6,7 @@ import { GLM_OPERATIONS_COLLECTION } from '@octogee/shared/types/glm';
 import { customerRuntimeMutationFenced } from '@octogee/shared/types/gateway-releases';
 import { accountAllowsInteractiveAccess } from '@octogee/shared/types/account-lifecycle';
 import { slugFromAssignedUser } from '@octogee/core/assigned-roster';
+import { isCustomerMigrationV2ForwardOnly } from '@octogee/core/customer-migration-v2';
 import type { PushRsyncStateRequestBody } from '@octogee/shared/types/fleet-controller';
 import type { CommandRunner } from './migration-rsync-transfer.js';
 import { planSourceTransfer, observeSourceTransfer, sourceTransferBlocksRelease, type SourceTransferPod } from './source-transfer-execution.js';
@@ -23,6 +24,14 @@ export interface RetainedSourceTransfer {
 interface Deps { db: Firestore; namespace: string; image: string; runCommand: CommandRunner; now(): number; attach?: typeof attachTransfer; wait?: (ms: number) => Promise<void> }
 const PROBE = `const fs=require('fs');const m=fs.readFileSync('/proc/meminfo','utf8').match(/^MemAvailable:\\s+(\\d+) kB$/m);const max=fs.readFileSync('/sys/fs/cgroup/memory.max','utf8').trim();const current=fs.readFileSync('/sys/fs/cgroup/memory.current','utf8').trim();const disk=fs.statfsSync('/tmp');if(!m||!/^\\d+$/.test(max)||!/^\\d+$/.test(current)||Number(m[1])*1024<4294967296||Number(max)-Number(current)<4294967296||disk.bavail*disk.bsize<1073741824)process.exit(1);process.stdout.write(JSON.stringify({sourceMemoryMax:Number(max),sourceMemoryCurrent:Number(current)}));`;
 
+function retainedSourceCancellationDeferred(context: RetainedSourceContext, fresh: FirebaseFirestore.DocumentData | undefined): boolean {
+  const {op,state}=context;
+  return [fresh?.kind==='migrate-customer',state.operationId===op.id,
+    fresh?.input?.sourceTransferMode==='retained-pod',fresh?.input?.uid===state.uid,
+    fresh?.input?.fromGatewayId===state.sourceGatewayId,fresh?.input?.toGatewayId===state.targetGatewayId,
+    isCustomerMigrationV2ForwardOnly(state),isDeepStrictEqual(fresh?.customerMigrationV2,state)].every(Boolean);
+}
+
 export function assertRetainedSourceAuthority(input: RetainedSourceContext, fresh: Operation & { cancellationRequestedAt?: unknown; restoreAttempt?: {phase?:string} }, user: Record<string, unknown>, assignment: Record<string, unknown>, roots: {source:Record<string,unknown>;target:Record<string,unknown>}): void {
   const {op,state} = input;
   const {source:root,target}=roots;
@@ -33,7 +42,7 @@ export function assertRetainedSourceAuthority(input: RetainedSourceContext, fres
     fresh.kind === 'migrate-customer', fresh.status === 'running', fresh.startedAt === op.startedAt,
     fresh.input.sourceTransferMode === 'retained-pod', fresh.input.uid === state.uid,
     fresh.input.fromGatewayId === state.sourceGatewayId, fresh.input.toGatewayId === state.targetGatewayId,
-    fresh.cancellationRequestedAt === undefined, !customerRuntimeMutationFenced(user),
+    fresh.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(input,fresh), !customerRuntimeMutationFenced(user),
     fresh.restoreAttempt === undefined || fresh.restoreAttempt.phase === 'acknowledged',
     durable.phase === 'sourceQuiesced', durable.operationId === op.id,
     durable.migrationId === state.migrationId, durable.uid === state.uid, durable.slug === state.slug,
@@ -87,7 +96,7 @@ function sourcePodFromList(stdout: string): SourceTransferPod {
 export function createRetainedSourceTransfer(deps: Deps, context: RetainedSourceContext): RetainedSourceTransfer {
   const ref = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(context.op.id);
   function requireActiveClaim(fresh: FirebaseFirestore.DocumentData | undefined, allowCancelled = false): void {
-    if (fresh?.status !== 'running' || fresh.startedAt !== context.op.startedAt || (!allowCancelled && fresh.cancellationRequestedAt !== undefined)) throw new Error('source transfer active claim changed');
+    if (fresh?.status !== 'running' || fresh.startedAt !== context.op.startedAt || (!allowCancelled && fresh.cancellationRequestedAt !== undefined && !retainedSourceCancellationDeferred(context,fresh))) throw new Error('source transfer active claim changed');
   }
   async function assertActiveClaim(): Promise<void> { requireActiveClaim((await ref.get()).data()); }
   async function transferred(record: SourceTransferExecution | undefined): Promise<SourceTransferExecution> {
@@ -155,7 +164,7 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
       const [operation,user] = await Promise.all([txn.get(ref),txn.get(deps.db.doc(`users/${record.uid}`))]);
       const fresh=operation.data();
       const {status: _status,...identity}=record;
-      const claimValid=!requireClaim || (fresh?.status === 'running' && fresh?.startedAt === context.op.startedAt && fresh?.cancellationRequestedAt === undefined);
+      const claimValid=!requireClaim || (fresh?.status === 'running' && fresh?.startedAt === context.op.startedAt && (fresh?.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(context,fresh)));
       const exact=[claimValid,isDeepStrictEqual(fresh?.sourceTransferExecution,record),
         isDeepStrictEqual(user.data()?.provisioning?.openclaw?.sourceTransferFence,identity)].every(Boolean);
       if (!exact) throw new Error('source transfer dispatch authority changed');
@@ -252,7 +261,7 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
     if (!await waitForHelper(planned.record)) return transferred(await observe());
     const freshAdmission=await probeResources(planned.record,sourceContainerName);
     const attachClaim = (await ref.get()).data();
-    if (attachClaim?.status !== 'running' || attachClaim.startedAt !== context.op.startedAt || attachClaim.cancellationRequestedAt !== undefined) throw new Error('source transfer claim changed before attach');
+    requireActiveClaim(attachClaim);
     await (deps.attach ?? attachTransfer)(deps.namespace,planned.record.podName,planned.record.executionId,{
       resourceAdmission:freshAdmission,version:1,executionId:planned.record.executionId,operationId:context.op.id,claimStartedAt:planned.record.claimStartedAt,migrationId:context.state.migrationId,uid:context.state.uid,slug:context.state.slug,sourceGatewayId:context.state.sourceGatewayId,sourcePodUid:planned.record.podUid,assignmentEpoch:context.state.sourceEpoch,mode:'final',includeActivationManifest:push.includeActivationManifest === true,targetHost:push.targetHost,targetPort:push.targetPort,targetCertificatePem:push.targetCertificatePem,transferUser:push.transferUser,transferKey:push.transferKey,
     });

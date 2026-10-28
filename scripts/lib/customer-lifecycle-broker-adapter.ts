@@ -335,8 +335,8 @@ async function prepareCustomerSharedAnchors(ctx: BrokerCtx, input: {
   if (ctx.isBuilderGateway() || !postgresAgentStoreConfigured()) return undefined;
   const uid = input.uid ?? await ctx.client.uidForSlug(input.slug);
   if (!uid && !input.migrationId) throw new Error(`Shared imported agent anchors require an assigned owner for ${input.slug}`);
-  const surgeTarget = process.env.GATEWAY_ID && process.env.POD_UID &&
-    input.migrationId === `surge-${process.env.GATEWAY_ID}-${process.env.POD_UID}`;
+  const surgeTarget = !input.allowQuiescingExisting && process.env.GATEWAY_ID &&
+    input.migrationId?.startsWith(`surge-${process.env.GATEWAY_ID}-`);
   return prepareSharedCustomerAgentAnchors({ ...input, uid: uid ?? undefined, migrationId: uid && !surgeTarget ? undefined : input.migrationId, stateDir: resolveOpenClawStateDir(), broker: ctx.client });
 }
 
@@ -2422,7 +2422,7 @@ export function buildBrokeredLifecycleAdapter(
           current.assignment.epoch !== current.migration.sourceEpoch || !Number.isSafeInteger(current.migration.claimStartedAt) || current.migration.claimStartedAt <= 0) {
         throw new Error("Shared target migration authority changed");
       }
-      return { custody: { migrationId, uid: current.assignment.uid, gatewayId, podUid }, migration: current.migration };
+      return { custody: { migrationId, uid: current.assignment.uid, gatewayId, podUid }, migration: current.migration, anchors: current.anchors };
     },
     activateImportedCustomer: (slug, callOpts) =>
       openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {

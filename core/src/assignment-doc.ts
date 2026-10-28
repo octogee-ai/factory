@@ -59,6 +59,23 @@ function assignmentCreatedAt(data: Record<string, unknown>): number {
   return typeof data.updatedAt === "number" ? data.updatedAt : 0;
 }
 
+function parseSharedSurgeForwardRecovery(uid: string, data: Record<string, unknown>): AssignmentDoc["sharedSurgeForwardRecovery"] {
+  const forward = data.sharedSurgeForwardRecovery;
+  if (forward === undefined) return undefined;
+  if (!forward || typeof forward !== "object" || Array.isArray(forward)) {
+    throw new Error(`invalid Shared surge forward recovery marker for ${uid}`);
+  }
+  const marker = forward as Record<string, unknown>;
+  if (typeof marker.operationId !== "string" || !marker.operationId ||
+      typeof marker.targetPodUid !== "string" || !marker.targetPodUid ||
+      typeof marker.receivingPodUid !== "string" || !marker.receivingPodUid ||
+      data.state !== "quiescing" || data.updatedByOperationId !== marker.operationId ||
+      !Number.isSafeInteger(data.updatedAt) || (data.updatedAt as number) <= 0) {
+    throw new Error(`invalid Shared surge forward recovery marker for ${uid}`);
+  }
+  return { operationId: marker.operationId, targetPodUid: marker.targetPodUid, receivingPodUid: marker.receivingPodUid };
+}
+
 export function parseAssignmentDoc(
   uid: string,
   data: Record<string, unknown> | undefined,
@@ -75,6 +92,7 @@ export function parseAssignmentDoc(
   ) {
     return null;
   }
+  const forward = parseSharedSurgeForwardRecovery(uid, data);
   return {
     uid,
     slug,
@@ -86,6 +104,7 @@ export function parseAssignmentDoc(
     updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
     updatedByOperationId:
       typeof data.updatedByOperationId === "string" ? data.updatedByOperationId : null,
+    ...(forward ? { sharedSurgeForwardRecovery: forward } : {}),
     ...(Array.isArray(data.handoffProgress)
       ? { handoffProgress: data.handoffProgress.filter(isMigrationProgressRecord) }
       : {}),

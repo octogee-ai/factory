@@ -91,7 +91,7 @@ it("isolates PostgreSQL Doctor from original shared state and foreign agents, pr
     expect(f.metadata.get(f.expectedAnchors[index]!.schema)!.history).toEqual(["original turn"]);
   }
   expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "doctor", "doctor"]);
-  expect(f.run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([undefined, undefined, 300_000]);
+  expect(f.run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([180_000, undefined, 300_000]);
   expect(f.assertCurrent).toHaveBeenCalled();
   for (const [, { env }] of f.run.mock.calls) await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
 });

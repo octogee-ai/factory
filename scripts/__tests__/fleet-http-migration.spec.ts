@@ -18,6 +18,7 @@ import {
   createActivationManifestExportHandler,
   createAbortRsyncImportHandler,
   createCompleteSurgeHandoffHandler,
+  migrationImportBusy,
   createExportPathsHandler,
   createFlushHandler,
   createFinishRsyncImportHandler,
@@ -65,6 +66,8 @@ import { stubBuilderClaim } from "./helpers/builder-claim.js";
 import { exportCodexStoreSnapshots } from "../lib/codex-store-snapshot.js";
 import { OPENCLAW_DIR } from "../lib/config.js";
 import { readActivationManifest, writeActivationManifest, activationManifestTarPath } from "../lib/migration-activation-manifest.js";
+
+import { createBuilderSurgeGateWiring } from "../lib/fleet-provisioner.js";
 
 const spawnMock = vi.fn();
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -292,7 +295,7 @@ const RSYNC_DAEMON_LOOPBACK_PORT = 41873;
 function sharedTargetAuthority(slug: string, migrationId: string) {
   if (!process.env.POD_UID) vi.stubEnv("POD_UID", "shared-target-pod");
   return { custody: { uid: `uid-${slug}`, gatewayId: GATEWAY_ID, podUid: process.env.POD_UID!, migrationId },
-    migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 } };
+    migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 }, anchors: [] };
 }
 
 async function writeSharedTargetManifest(root: string, workspaceRoot: string, migrationId?: string) {
@@ -2528,7 +2531,7 @@ describe("queued-rsync migration control handlers", () => {
         expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
       }
       expect(releaseSurgeReadiness).toHaveBeenCalledWith({
-        migrationId: prepare.migrationId, targetPodUid: "builder-pod",
+        migrationId: prepare.migrationId, targetPodUid: "builder-pod", importSlug: "chris",
       });
       if (outcome === "ready") {
         expect(response.getStatus()).toBe(200);
@@ -3436,6 +3439,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       pauseSystemConfigWatch: vi.fn(async () => undefined),
       resumeSystemConfigWatch: vi.fn(async () => undefined),
       runOpenClaw: fakeOpenClaw(),
+      upgradeImportedAgents: vi.fn(async () => {}),
       ...input.deps,
     });
     spawnMock.mockReturnValueOnce(input.daemon);
@@ -3638,6 +3642,100 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     await expect(fs.access(path.join(importDir, CARRIED_STORE))).rejects.toThrow();
   });
 
+  it("runs scoped Shared agent upgrade after landing anchors and before activation", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot(), order: string[] = [];
+    const migrationId = "shared-scoped-doctor";
+    const upgradeImportedAgents = vi.fn(async (input: { stores: Array<{ agentId: string; anchorPath: string }>; assertCurrent: () => Promise<void> }) => {
+      await input.assertCurrent();
+      expect(input.stores).toMatchObject([{ agentId: "octogee-chris-coach", anchorPath: path.join(importDir, CARRIED_STORE) }]);
+      expect(fsSync.existsSync(input.stores[0]!.anchorPath)).toBe(true);
+      order.push("doctor");
+    });
+    const targetMigrationIdentityCustody = vi.fn(async () => ({ ...sharedTargetAuthority("chris", migrationId),
+      anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] }));
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: { isBuilderGateway: () => false, targetMigrationIdentityCustody,
+        activateImportedCustomer: vi.fn(async () => { order.push("activate"); return { appliedFingerprint: "fp-chris" }; }) },
+      deps: { procRoot, upgradeImportedAgents } as Partial<MigrationHandlerDeps> });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const result = await finishImport(deps, migrationId);
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(order).toEqual(["doctor", "activate"]);
+  });
+
+  it.each(["roster", "authority"] as const)("refuses Shared import when %s changes before agent adoption", async failure => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const migrationId = `shared-doctor-${failure}`, order: string[] = [];
+    const anchor = { agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" };
+    let changed = false;
+    const targetMigrationIdentityCustody = vi.fn(async () => ({ ...sharedTargetAuthority("chris", migrationId),
+      anchors: failure === "roster" ? [] : [{ ...anchor, ...(changed ? { schema: "octogee_agent_foreign" } : {}) }] }));
+    const upgradeImportedAgents = vi.fn(async (input: { assertCurrent: () => Promise<void> }) => { changed = true; await input.assertCurrent(); });
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: { isBuilderGateway: () => false, targetMigrationIdentityCustody,
+        activateImportedCustomer: vi.fn(async () => { order.push("activate"); return { appliedFingerprint: "fp-chris" }; }) },
+      deps: { procRoot, upgradeImportedAgents } as Partial<MigrationHandlerDeps> });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const result = await finishImport(deps, migrationId);
+    expect(result.getStatus()).toBe(500);
+    expect(order).toEqual([]);
+    if (failure === "roster") expect(upgradeImportedAgents).not.toHaveBeenCalled();
+    else expect(upgradeImportedAgents).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a delayed Builder release while final import holds its in-process claim", async () => {
+    stubBuilderClaim("chris");
+    vi.stubEnv("POD_UID", "target-pod");
+    const importDir = await mkTempRoot(), daemon = mkFakeChild({ holdExit: true });
+    const { deps } = await prepareImport({ migrationId: "copy-release-race", importDir, daemon });
+    const finishing = finishImport(deps, "copy-release-race");
+    try {
+      await vi.waitFor(() => expect(migrationImportBusy()).toBe(true));
+      const wiring = createBuilderSurgeGateWiring({ adapter: { isBuilderGateway: () => true,
+        isConfiguredBuilderCustomer: () => true, configuredBuilderOverlayPresent: () => true } as never,
+        processGate: { status: async () => { throw new Error("owned release entered"); } } as never,
+        surgeReadiness: {} as never, waitForGatewayReady: async () => {}, log: () => {},
+        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() } });
+      await expect(wiring.releaseSurgeReadiness({ migrationId: "copy-release-race", targetPodUid: "target-pod" }))
+        .rejects.toThrow("import is in progress");
+      await expect(wiring.releaseSurgeReadiness({ migrationId: "copy-release-race", targetPodUid: "target-pod", importSlug: "other" }))
+        .rejects.toThrow("import is in progress");
+      await expect(wiring.releaseSurgeReadiness({ migrationId: "copy-release-race", targetPodUid: "target-pod", importSlug: "chris" }))
+        .rejects.toThrow("owned release entered");
+    } finally {
+      daemon.exitCode = 0; daemon.emit("exit", 0, null);
+      spawnMock.mockReturnValue(mkFakeChild({ exitCode: 0 }));
+      await finishing;
+    }
+  });
+
+  it("rejects Builder final import while surge release owns the in-process claim", async () => {
+    stubBuilderClaim("chris");
+    const importDir = await mkTempRoot(), target = builderTargetImport(async () => true);
+    const { deps } = await prepareImport({ migrationId: "release-copy-race", importDir, daemon: mkFakeChild(),
+      adapter: target.adapter, deps: { ...target.deps } });
+    let unblock!: () => void;
+    const blocked = new Promise<void>(resolve => { unblock = resolve; });
+    const status = vi.fn(async () => { await blocked; throw new Error("test release stopped"); });
+    const wiring = createBuilderSurgeGateWiring({ adapter: { ...target.adapter, configuredBuilderOverlayPresent: () => true } as never,
+      processGate: { status } as never, surgeReadiness: {} as never, waitForGatewayReady: async () => {}, log: () => {},
+      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() } });
+    const release = wiring.releaseSurgeReadiness({ migrationId: "release-copy-race", targetPodUid: "builder-pod" }).catch(() => {});
+    try {
+      await vi.waitFor(() => expect(status).toHaveBeenCalledOnce());
+      deps.surgeReleaseInProgress = wiring.surgeReleaseInProgress;
+      const result = await finishImport(deps, "release-copy-race");
+      expect(result.getStatus()).toBe(409);
+      expect(result.getBody()).toMatchObject({ error: "Builder surge release is already in progress" });
+    } finally {
+      unblock(); await release;
+      const body: AbortRsyncImportRequestBody = { migrationId: "release-copy-race", slug: "chris", mode: "final", rpcPhase: "abort-rsync-import" };
+      await createAbortRsyncImportHandler(deps)(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), mkResponse().res, vi.fn());
+    }
+  });
+
   it("verifies and lands the PostgreSQL anchor before activating", async () => {
     const importDir = await mkTempRoot();
     const landedAtActivation: boolean[] = [];
@@ -3672,7 +3770,8 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const procRoot = await mkTempRoot();
     const migrationId = "mig-shared-undiscoverable-pre";
     const releaseAgent = vi.fn(async () => undefined);
-    const adapter = { isBuilderGateway: () => false, releaseAgent };
+    const adapter = { isBuilderGateway: () => false, releaseAgent, targetMigrationIdentityCustody: vi.fn(async () => ({
+      ...sharedTargetAuthority("chris", migrationId), anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] })) };
     const pre = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre", adapter, deps: { procRoot } });
     await fs.mkdir(path.join(pre.stageDir, "agents/octogee-chris-coach/agent"), { recursive: true });
     await fs.writeFile(path.join(pre.stageDir, "agents/octogee-chris-coach/agent/auth.json"), "agent configuration");
@@ -3837,7 +3936,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const migrationId = `mig-target-persona-${mode}`, projectId = "octogee-chris-proj-persona-coach";
     const workspace = path.join(importDir, "customers/chris"), project = path.join(workspace, "projects/persona");
     const originals = new Map([[workspace, Buffer.from("# Coach\r\n- Name: Human coach 🐙\r\n")], [project, Buffer.from("# Project\n- Name: Human project\nNotes.\n")]]);
-    const authority = { custody: { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod" }, migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 } };
+    const authority = { custody: { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "target-pod" }, migration: { migrationId, claimStartedAt: 123, sourceGatewayId: "source-builder", sourceEpoch: 4 }, anchors: [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }] };
     let currentAuthority = authority, lateWrite: (() => Promise<void>) | undefined;
     let calls = 0, published = false;
     const adapter: Partial<CustomerLifecycleAdapter> = { isBuilderGateway: () => false, releaseAgent: async () => undefined,
@@ -4154,7 +4253,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(releaseAgent).not.toHaveBeenCalled();
     expect(rowCount(previous)).toBe(boundary === "held" ? 2 : 1);
     expect(await fs.readFile(workspaceFile, "utf8")).toBe(boundary === "held" ? "carried workspace" : "original workspace");
-    if (boundary !== "held") expect(deps.runOpenClaw).not.toHaveBeenCalled();
+    expect(deps.runOpenClaw).not.toHaveBeenCalled();
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(config);
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
     expect(deps.adapter.applyAddCustomerConfigPatch).not.toHaveBeenCalled();

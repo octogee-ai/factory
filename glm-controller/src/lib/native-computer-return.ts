@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { legacyForwardRecoveryMatches } from "@octogee/core/fleet-state";
 import { nativeReturnSourceIdentity, nativeReturnSourceState, type NativeReturnSourceState } from "./native-return-source-fence.js";
 import { FieldValue, type DocumentData, type Firestore } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -75,7 +76,8 @@ async function claimCheckpoint(deps: NativeReturnDeps, input: NativeComputerRetu
       tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId)),
     ]);
     const data = snap.data();
-    if (!precutoverOperationMatches(operation.data(), input) || operation.data()?.cancellationRequestedAt !== undefined) {
+    if (!precutoverOperationMatches(operation.data(), input) ||
+        operation.data()?.cancellationRequestedAt !== undefined && !forwardRecoveryMatches(operation.data(), input)) {
       throw new Error("native return checkpoint claim authority changed");
     }
     assertOwner(root.data(), input);
@@ -111,6 +113,9 @@ async function releaseUncommittedCheckpoint(deps: NativeReturnDeps, input: Nativ
       tx.get(deps.db.collection("users").doc(input.uid)),
     ]);
     assertOwner(root.data(), input);
+    if (operation.data()?.schedulerHandoff?.forwardRecovery !== undefined) {
+      throw new Error("native return crossed the final transfer boundary and must roll forward");
+    }
     if (!precutoverOperationMatches(operation.data(), input) || user.data()?.provisioning?.openclaw?.gatewayId !== input.fromGatewayId) {
       throw new Error("native return checkpoint release authority changed");
     }
@@ -149,6 +154,12 @@ async function releaseCommittedWriterHold(deps: NativeReturnDeps, input: NativeC
     if (!exact) throw new Error("native return writer hold release authority changed");
     tx.update(source, RELEASED_RETURN_HOLD);
   });
+}
+
+function forwardRecoveryMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {
+  return op?.schedulerHandoff?.slug === input.slug && legacyForwardRecoveryMatches(input.operationId, {
+    uid: input.uid, fromGatewayId: input.fromGatewayId, toGatewayId: input.toGatewayId,
+  }, op.schedulerHandoff);
 }
 
 function currentOperationMatches(op: DocumentData | undefined, input: NativeComputerReturnInput): boolean {

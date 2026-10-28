@@ -54,6 +54,8 @@ export interface MigrationRunnerDeps {
 
   readTargetSystemConfigCommit?: (gatewayId: string) => Promise<string | null>;
 
+  persistForwardRecovery?: (state: { sourceSystemConfigCommit?: string }) => Promise<void>;
+
   now?: () => number;
   wait?: (delayMs: number) => Promise<void>;
 }
@@ -74,6 +76,7 @@ export function isTargetSchedulerNotReady(error: unknown): boolean {
 type StepTimings = Readonly<Record<string, number>>;
 
 export interface MigrationRunnerInput {
+  resumeForwardRecovery?: { sourceSystemConfigCommit?: string };
   migrationId: string;
   uid: string;
   slug: string;
@@ -420,6 +423,7 @@ interface MigrationExecution {
   targetScheduler: TargetSchedulerState;
   systemConfig: SystemConfigConvergence;
   state: MigrationState;
+  forwardOnly: boolean;
 }
 
 function createMigrationExecution(
@@ -433,13 +437,14 @@ function createMigrationExecution(
     input,
     deps,
     crossGateway: input.crossGateway ?? input.fromGatewayId !== input.toGatewayId,
-    quiescingMarked: false,
-    quiesceStarted: false,
+    forwardOnly: input.resumeForwardRecovery !== undefined,
+    quiescingMarked: input.resumeForwardRecovery !== undefined,
+    quiesceStarted: input.resumeForwardRecovery !== undefined,
     preDrainStarted: false,
     targetScheduler: { mayHoldStage: false },
-    systemConfig: { convergeTarget: input.convergeTargetSystemConfig },
+    systemConfig: { convergeTarget: input.convergeTargetSystemConfig, sourceCommit: input.resumeForwardRecovery?.sourceSystemConfigCommit },
     state: {
-      phase: "initial",
+      phase: input.resumeForwardRecovery ? "source-flushed" : "initial",
       slug: input.slug,
       uid: input.uid,
       fromGatewayId: input.fromGatewayId,
@@ -542,6 +547,7 @@ async function runNextMigrationStep(
     if (step.action === "verify-target") await execution.deps.setMigrationPhase?.("connecting");
     await markSourceQuiescing(execution, step);
     if (step.action === QUIESCE_SOURCE) execution.quiesceStarted = true;
+    await persistFinalTransferFence(execution, step);
     const timings = await executeForwardStep(execution, step);
     await report(execution.deps, { name, status: "done" });
     advanceExecution(execution, name, phaseAtStart, timings);
@@ -549,6 +555,14 @@ async function runNextMigrationStep(
   } catch (error) {
     return handleStepFailure(execution, { step, name, phaseAtStart, error });
   }
+}
+
+async function persistFinalTransferFence(execution: MigrationExecution, step: MigrationStep): Promise<void> {
+  if (step.action !== "sync-state" || step.mode !== "final" || !execution.deps.persistForwardRecovery) return;
+  execution.forwardOnly = true;
+  await execution.deps.persistForwardRecovery({
+    ...(execution.systemConfig.sourceCommit ? { sourceSystemConfigCommit: execution.systemConfig.sourceCommit } : {}),
+  });
 }
 
 async function awaitActiveWorkDrained(
@@ -620,7 +634,13 @@ async function handleStepFailure(
     execution.state = { ...execution.state, phase: advancePhase(execution.state.phase) };
     return null;
   }
-  if (execution.preDrainStarted && !execution.quiesceStarted) await deps.client.resume({ migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug });
+  if (execution.forwardOnly) {
+    await report(deps, { name, status: "failed", error: message });
+    deps.log(`[migration-runner] forward recovery pending migrationId=${input.migrationId}: ${message}`);
+    return { success: false, finalPhase: execution.state.phase, rolledBack: false,
+      errorAt: { phase: phaseAtStart, error: `migration forward recovery pending: status 503: ${message}` } };
+  }
+  await resumeUnquiescedPreDrain(execution);
   await report(deps, { name, status: "failed", error: message });
   deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${message}`);
   const rollback = await rollbackExecution(execution);
@@ -638,6 +658,12 @@ async function handleStepFailure(
     },
     rolledBack: rollback.rolledBack,
   };
+}
+
+async function resumeUnquiescedPreDrain(execution: MigrationExecution): Promise<void> {
+  if (!execution.preDrainStarted || execution.quiesceStarted) return;
+  const { input, deps } = execution;
+  await deps.client.resume({ migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug });
 }
 
 interface RollbackOutcome {

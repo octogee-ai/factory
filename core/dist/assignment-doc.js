@@ -22,6 +22,23 @@ function assignmentCreatedAt(data) {
         return data.createdAt;
     return typeof data.updatedAt === "number" ? data.updatedAt : 0;
 }
+function parseSharedSurgeForwardRecovery(uid, data) {
+    const forward = data.sharedSurgeForwardRecovery;
+    if (forward === undefined)
+        return undefined;
+    if (!forward || typeof forward !== "object" || Array.isArray(forward)) {
+        throw new Error(`invalid Shared surge forward recovery marker for ${uid}`);
+    }
+    const marker = forward;
+    if (typeof marker.operationId !== "string" || !marker.operationId ||
+        typeof marker.targetPodUid !== "string" || !marker.targetPodUid ||
+        typeof marker.receivingPodUid !== "string" || !marker.receivingPodUid ||
+        data.state !== "quiescing" || data.updatedByOperationId !== marker.operationId ||
+        !Number.isSafeInteger(data.updatedAt) || data.updatedAt <= 0) {
+        throw new Error(`invalid Shared surge forward recovery marker for ${uid}`);
+    }
+    return { operationId: marker.operationId, targetPodUid: marker.targetPodUid, receivingPodUid: marker.receivingPodUid };
+}
 export function parseAssignmentDoc(uid, data) {
     if (!data)
         return null;
@@ -34,6 +51,7 @@ export function parseAssignmentDoc(uid, data) {
         !ASSIGNMENT_SOURCES.has(source)) {
         return null;
     }
+    const forward = parseSharedSurgeForwardRecovery(uid, data);
     return {
         uid,
         slug,
@@ -44,6 +62,7 @@ export function parseAssignmentDoc(uid, data) {
         createdAt: assignmentCreatedAt(data),
         updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : 0,
         updatedByOperationId: typeof data.updatedByOperationId === "string" ? data.updatedByOperationId : null,
+        ...(forward ? { sharedSurgeForwardRecovery: forward } : {}),
         ...(Array.isArray(data.handoffProgress)
             ? { handoffProgress: data.handoffProgress.filter(isMigrationProgressRecord) }
             : {}),

@@ -1,4 +1,5 @@
 import http from "node:http";
+import { MIGRATION_IMPORT_FINISH_TIMEOUT_MS } from "@octogee/shared/types/fleet-controller";
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type {SourceTransferExecution} from "@octogee/shared/types/glm";
 import { describe, expect, it, vi } from "vitest";
@@ -321,9 +322,9 @@ describe("createRsyncMigrationTransfer", () => {
       const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]) });
       const completion = transfer({ migrationId: "stalled", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
-      const rejection = expect(completion).rejects.toThrow("timed out after 1530000ms");
+      const rejection = expect(completion).rejects.toThrow(`timed out after ${MIGRATION_IMPORT_FINISH_TIMEOUT_MS}ms`);
       await waiting;
-      await vi.advanceTimersByTimeAsync(1_530_000);
+      await vi.advanceTimersByTimeAsync(MIGRATION_IMPORT_FINISH_TIMEOUT_MS);
       await rejection;
       expect(store["stalled__final"].status).toBe("failed");
     } finally { vi.useRealTimers(); }

@@ -27,7 +27,7 @@ export interface CustomerSuspensionDeps {
   ) => Promise<void>;
   assertRestoreNotInProgress: (uid: string) => Promise<void>;
   suspendAuthUser: (uid: string) => Promise<void>;
-  cancelCustomerMigrations: (uid: string, deletionId: string) => Promise<void>;
+  cancelCustomerMigrations: (uid: string, deletionId: string) => Promise<boolean>;
   deactivateCustomerVisibility: (uid: string) => Promise<void>;
   invalidatePendingCredentialFlows: (uid: string) => Promise<void>;
   unmountFromGateway: (
@@ -99,6 +99,12 @@ async function checkRestoreFence(
   }
 }
 
+function pendingMigrationRetry(deletionId: string, pending: boolean, failures: string[], previousFailures: number): OperationResult | null {
+  if (pending) return { steps: [], success: false, error: "customer migration is still settling", output: { deletionCleanupRetry: { deletionId } } };
+  if (failures.length > previousFailures) return { steps: [], success: false, error: failures.join("; "), output: { deletionCleanupRetry: { deletionId } } };
+  return null;
+}
+
 export function createSuspendCustomerHandler(
   deps: CustomerSuspensionDeps,
 ): OperationHandler {
@@ -144,7 +150,13 @@ export function createSuspendCustomerHandler(
     const skip = (name: string) => report(ctx, deps, { name, status: "skipped" });
 
     await run("suspend-auth", () => deps.suspendAuthUser(uid));
-    await run("cancel-customer-migrations", () => deps.cancelCustomerMigrations(uid, deletionId));
+    let migrationPending = false;
+    const failuresBeforeCancellation = failures.length;
+    await run("cancel-customer-migrations", async () => {
+      migrationPending = await deps.cancelCustomerMigrations(uid, deletionId);
+    });
+    const migrationRetry = pendingMigrationRetry(deletionId, migrationPending, failures, failuresBeforeCancellation);
+    if (migrationRetry) return migrationRetry;
     await run("deactivate-customer-visibility", () =>
       deps.deactivateCustomerVisibility(uid));
     await run("invalidate-pending-credential-flows", () =>

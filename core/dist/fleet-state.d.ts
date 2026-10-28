@@ -140,6 +140,8 @@ export interface CutoverCommitParams {
     };
     automatic?: boolean;
 }
+export declare function legacyForwardRecoveryMatches(operationId: string, input: Record<string, unknown>, handoff: Record<string, unknown>): boolean;
+export declare function migrationCancellationDeferred(operation: Record<string, unknown>, operationId: string): boolean;
 export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
 export interface UnavailableGatewayRecoveryParams {
     operationId: string;
@@ -189,5 +191,25 @@ export interface MarkAssignmentStateParams {
         updatedAt?: number;
     };
     automatic?: boolean;
+    clearSharedSurgeForwardRecovery?: {
+        operationId: string;
+        targetPodUid: string;
+        receivingPodUid: string;
+    };
 }
+interface SharedSurgeForwardRecoveryParams {
+    gatewayId: string;
+    uid: string;
+    slug: string;
+    epoch: number;
+    operationId: string;
+    targetPodUid: string;
+    expectedUpdatedAt: number;
+}
+export declare function markSharedSurgeForwardRecovery(deps: FleetStateDeps, params: SharedSurgeForwardRecoveryParams): Promise<void>;
+export declare function rebindSharedSurgeForwardRecovery(deps: FleetStateDeps, params: SharedSurgeForwardRecoveryParams & {
+    expectedReceivingPodUid: string;
+    receivingPodUid: string;
+}): Promise<void>;
 export declare function markAssignmentState(deps: FleetStateDeps, params: MarkAssignmentStateParams): Promise<void>;
+export {};

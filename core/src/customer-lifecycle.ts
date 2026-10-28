@@ -292,6 +292,7 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
   targetMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<{
     custody: import("./migration-activation-manifest.js").MigrationTargetIdentityCustody;
     migration: import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchorMigration;
+    anchors: import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchor[];
   }>;
 
   activateImportedCustomer: (

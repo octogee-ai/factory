@@ -462,7 +462,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   });
 
-  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "quiescing-source-migration", "quiescing-source-migration-missing", "quiescing-source-surge", "quiescing-source-surge-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-known-surge", "pre-cutover-known-surge-missing-record", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
+  it.each(["activate", "resume", "quiescing-resume", "quiescing-missing", "quiescing-source-migration", "quiescing-source-migration-missing", "quiescing-source-surge", "quiescing-source-surge-missing", "pre-cutover", "pre-cutover-first", "pre-cutover-known-surge", "pre-cutover-known-surge-replacement", "pre-cutover-known-surge-missing-record", "pre-cutover-partial", "pre-cutover-missing-record", "pre-cutover-local-conflict", "pre-cutover-wrong-claim", "pre-cutover-no-claim", "pre-cutover-missing-pg", "stale-migration"])("preserves and durably reports Shared imported identities before activation (%s)", async (mode) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "shared-anchor-import-"));
     const priorConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => undefined);
     const priorState = process.env.OPENCLAW_STATE_DIR;
@@ -475,7 +475,7 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     ];
     const migrating = mode.startsWith("pre-cutover") || mode === "stale-migration";
     const knownSurge = mode.startsWith("pre-cutover-known-surge");
-    if (knownSurge) { vi.stubEnv("GATEWAY_ID", "shared-target"); vi.stubEnv("POD_UID", "target-pod"); }
+    if (knownSurge) { vi.stubEnv("GATEWAY_ID", "shared-target"); vi.stubEnv("POD_UID", mode === "pre-cutover-known-surge-replacement" ? "replacement-pod" : "target-pod"); }
     const sourceMigration = mode.startsWith("quiescing-source-migration");
     const sourceSurge = mode.startsWith("quiescing-source-surge");
     const migration = { migrationId: knownSurge ? "surge-shared-target-target-pod" : sourceSurge ? "surge-shared-source-foreign-pod" : "mig-move", claimStartedAt: 10, sourceGatewayId: knownSurge ? "shared-target" : "source", sourceEpoch: 0 };

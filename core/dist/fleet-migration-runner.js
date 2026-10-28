@@ -233,13 +233,14 @@ function createMigrationExecution(input, deps) {
         input,
         deps,
         crossGateway: input.crossGateway ?? input.fromGatewayId !== input.toGatewayId,
-        quiescingMarked: false,
-        quiesceStarted: false,
+        forwardOnly: input.resumeForwardRecovery !== undefined,
+        quiescingMarked: input.resumeForwardRecovery !== undefined,
+        quiesceStarted: input.resumeForwardRecovery !== undefined,
         preDrainStarted: false,
         targetScheduler: { mayHoldStage: false },
-        systemConfig: { convergeTarget: input.convergeTargetSystemConfig },
+        systemConfig: { convergeTarget: input.convergeTargetSystemConfig, sourceCommit: input.resumeForwardRecovery?.sourceSystemConfigCommit },
         state: {
-            phase: "initial",
+            phase: input.resumeForwardRecovery ? "source-flushed" : "initial",
             slug: input.slug,
             uid: input.uid,
             fromGatewayId: input.fromGatewayId,
@@ -336,6 +337,7 @@ async function runNextMigrationStep(execution) {
         await markSourceQuiescing(execution, step);
         if (step.action === QUIESCE_SOURCE)
             execution.quiesceStarted = true;
+        await persistFinalTransferFence(execution, step);
         const timings = await executeForwardStep(execution, step);
         await report(execution.deps, { name, status: "done" });
         advanceExecution(execution, name, phaseAtStart, timings);
@@ -344,6 +346,14 @@ async function runNextMigrationStep(execution) {
     catch (error) {
         return handleStepFailure(execution, { step, name, phaseAtStart, error });
     }
+}
+async function persistFinalTransferFence(execution, step) {
+    if (step.action !== "sync-state" || step.mode !== "final" || !execution.deps.persistForwardRecovery)
+        return;
+    execution.forwardOnly = true;
+    await execution.deps.persistForwardRecovery({
+        ...(execution.systemConfig.sourceCommit ? { sourceSystemConfigCommit: execution.systemConfig.sourceCommit } : {}),
+    });
 }
 async function awaitActiveWorkDrained(execution, step, phaseAtStart) {
     await report(execution.deps, { name: WAIT_FOR_ACTIVE_WORK, status: "running" });
@@ -392,8 +402,13 @@ async function handleStepFailure(execution, failure) {
         execution.state = { ...execution.state, phase: advancePhase(execution.state.phase) };
         return null;
     }
-    if (execution.preDrainStarted && !execution.quiesceStarted)
-        await deps.client.resume({ migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug });
+    if (execution.forwardOnly) {
+        await report(deps, { name, status: "failed", error: message });
+        deps.log(`[migration-runner] forward recovery pending migrationId=${input.migrationId}: ${message}`);
+        return { success: false, finalPhase: execution.state.phase, rolledBack: false,
+            errorAt: { phase: phaseAtStart, error: `migration forward recovery pending: status 503: ${message}` } };
+    }
+    await resumeUnquiescedPreDrain(execution);
     await report(deps, { name, status: "failed", error: message });
     deps.log(`[migration-runner] ❌ ${name} failed at phase=${phaseAtStart}: ${message}`);
     const rollback = await rollbackExecution(execution);
@@ -409,6 +424,12 @@ async function handleStepFailure(execution, failure) {
         },
         rolledBack: rollback.rolledBack,
     };
+}
+async function resumeUnquiescedPreDrain(execution) {
+    if (!execution.preDrainStarted || execution.quiesceStarted)
+        return;
+    const { input, deps } = execution;
+    await deps.client.resume({ migrationId: input.migrationId, gatewayId: input.fromGatewayId, slug: input.slug });
 }
 function rollbackServingTarget(execution) {
     if (!execution.quiescingMarked)

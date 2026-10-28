@@ -1,4 +1,5 @@
 import { FieldValue, type DocumentData, type Firestore } from "firebase-admin/firestore";
+import { migrationCancellationDeferred } from "@octogee/core/fleet-state";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import type { GatewayVmClient } from "./compute-vm.js";
 
@@ -63,7 +64,8 @@ type Deps = {
 
 function activeAttempt(op: DocumentData | undefined, input: NativeSchedulerRetirementInput): boolean {
   return op?.kind === "migrate-customer" && op.status === "running" && typeof input.claimedStartedAt === "number" &&
-    op.startedAt === input.claimedStartedAt && op.cancellationRequestedAt === undefined &&
+    op.startedAt === input.claimedStartedAt &&
+    (op.cancellationRequestedAt === undefined || migrationCancellationDeferred(op, input.operationId)) &&
     op.input?.uid === input.uid && op.input.toGatewayId === input.gatewayId && typeof op.cutoverCommittedAt === "number";
 }
 

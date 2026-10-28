@@ -120,7 +120,7 @@ describe("offline Builder preparation", () => {
     expect(fixture.ready).not.toHaveBeenCalled();
     expect(fixture.processGate.rehold).toHaveBeenCalledExactlyOnceWith(request);
     await vi.waitFor(async () => expect(await fixture.processGate.status()).toEqual({
-      version: 1, podUid: request.targetPodUid, role: "normal", mode: "held", phase: "held", terminalTarget: request,
+      version: 1, podUid: request.targetPodUid, role: "normal", mode: "held", phase: "held", terminalTarget: { ...request, completionStarted: true },
     }));
     await expect(fixture.wiring.releaseSurgeReadiness(request)).rejects.toThrow("not reserved by this migration");
     expect(fixture.processGate.permit).not.toHaveBeenCalled();

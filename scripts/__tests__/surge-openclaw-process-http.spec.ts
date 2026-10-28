@@ -72,7 +72,7 @@ describe("surge OpenClaw process control handlers", () => {
   });
 
   it("requires a signed configured Builder hold and returns only after the child is held", async () => {
-    const hold = vi.fn(async () => GATE_STATE);
+    const hold = vi.fn(async () => ({ ...GATE_STATE, completionStarted: false }));
     const handler = createHoldSurgeOpenClawHandler({
       publicKey: PUBLIC_KEY,
       gatewayId: GATEWAY_ID,
@@ -97,7 +97,7 @@ describe("surge OpenClaw process control handlers", () => {
     expect(hold).toHaveBeenCalledWith(gateRequest(body));
     expect(res.result()).toEqual({
       status: 200,
-      body: { ...gateRequest(body), operation: "hold", role: "target", mode: "held", phase: "held" },
+      body: { ...gateRequest(body), operation: "hold", role: "target", mode: "held", phase: "held", completionStarted: false },
     });
   });
 

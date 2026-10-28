@@ -129,6 +129,7 @@ import {
   deleteCancelledSurgePod,
   listSurgePods,
   readPodDurableSessionDigest,
+  readPodSystemConfigCommit,
 } from "./surge-customer-handoff-runtime.js";
 import {
   createGatewayModelKeySecretEnsurer,
@@ -275,6 +276,8 @@ import {
   acknowledgeCustomerRestore,
   commitCutoverAtomic,
   markAssignmentState,
+  markSharedSurgeForwardRecovery,
+  rebindSharedSurgeForwardRecovery,
   setWorkspaceMigrationPhase,
   clearWorkspaceMigrationPreparation,
   completeWorkspaceMigrationRecovery,
@@ -2133,19 +2136,21 @@ async function runClaimedOperation(
     const fresh = await txn.get(ref);
     if (!fresh.exists) return null;
     const freshOp = fresh.data() as Operation | undefined;
-    const status = freshOp?.status ?? "missing";
-    if (!shouldPersistClaimedOperationCompletion({ status, startedAt: freshOp?.startedAt, claimedStartedAt: op.startedAt })) return null;
+    if (!freshOp) return null;
+    const status = freshOp.status ?? "missing";
+    if (!shouldPersistClaimedOperationCompletion({ status, startedAt: freshOp.startedAt, claimedStartedAt: op.startedAt })) return null;
     const completion = buildOperationCompletionUpdate({
       op: {
         id: ref.id,
-        kind: freshOp?.kind,
-        origin: freshOp?.origin,
-        input: freshOp?.input,
-        attempts: freshOp?.attempts,
-        attemptHistory: freshOp?.attemptHistory,
-        startedAt: freshOp?.startedAt,
-        customerMigrationV2: freshOp?.customerMigrationV2,
-        sourceTransferExecution: freshOp?.sourceTransferExecution,
+        kind: freshOp.kind,
+        origin: freshOp.origin,
+        input: freshOp.input,
+        attempts: freshOp.attempts,
+        attemptHistory: freshOp.attemptHistory,
+        startedAt: freshOp.startedAt,
+        customerMigrationV2: freshOp.customerMigrationV2,
+        schedulerHandoff: freshOp.schedulerHandoff,
+        sourceTransferExecution: freshOp.sourceTransferExecution,
       },
       result,
       steps,
@@ -2589,6 +2594,7 @@ function buildSurgeHandoffDeps(input: {
         epoch: assignment.epoch,
         updatedAt: assignment.updatedAt,
         updatedByOperationId: assignment.updatedByOperationId,
+        ...(assignment.sharedSurgeForwardRecovery ? { sharedSurgeForwardRecovery: assignment.sharedSurgeForwardRecovery } : {}),
       }));
       const assignedUsers = userSnapshot.docs.map((doc) => {
         const slug = slugFromAssignedUser(doc.data() as Record<string, unknown>);
@@ -2606,8 +2612,13 @@ function buildSurgeHandoffDeps(input: {
       assertSurgeAssignmentCoverage(retained, assignedUsers);
       return retained;
     },
+    readSystemConfigCommit: (pod) => readPodSystemConfigCommit(runKubectl, NAMESPACE, pod),
     readDurableSessionDigest: ({ pod, slug, configTransferMode }) =>
       readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug, configTransferMode),
+    markSharedSurgeForwardRecovery: (assignment) => markSharedSurgeForwardRecovery(
+      { db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log }, assignment),
+    rebindSharedSurgeForwardRecovery: (assignment) => rebindSharedSurgeForwardRecovery(
+      { db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log }, assignment),
     markAssignment: (assignment) => markAssignmentState(
       {
         db: db as unknown as FleetStateFirestore,

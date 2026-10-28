@@ -1,3 +1,4 @@
+import { MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS } from "@octogee/shared/types/fleet-controller";
 import fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import { createHash } from "node:crypto";
@@ -102,7 +103,7 @@ function positivePostgresInteger(value: unknown): number {
   return NaN;
 }
 
-function postgresSourceMetadataMatches(input: {
+export function postgresSourceMetadataMatches(input: {
   rows: Array<Record<string, unknown>>; store: SourceAgentStore; expectedVersion: number; exact: boolean;
 }): boolean {
   const { rows, store, expectedVersion, exact } = input, row = rows[0];
@@ -129,12 +130,12 @@ async function verifyPostgresSourceMetadata(stores: SourceAgentStore[], input: P
   }
 }
 
-async function installedAgentSchemaVersion(privateRoot: string, agentId: string, input: PostgresSourceDoctorOptions): Promise<number> {
+export async function installedAgentSchemaVersion(privateRoot: string, agentId: string, input: PostgresSourceDoctorOptions): Promise<number> {
   const file = path.join(privateRoot, "absent-schema-probe.sqlite");
   await input.assertCurrent();
   const result = await (input.run ?? runOpenClaw)(["database", "preflight-agent", file, "--agent-id", agentId, "--json"], { env: {
     PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", OPENCLAW_STATE_DIR: privateRoot,
-  } });
+  }, timeoutMs: MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS });
   await input.assertCurrent();
   let report: Record<string, unknown>;
   try { report = JSON.parse(result.stdout); } catch { throw new Error("Native agent schema descriptor is not JSON"); }

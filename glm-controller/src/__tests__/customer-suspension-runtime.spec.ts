@@ -296,6 +296,14 @@ describe("Firestore suspension fences", () => {
         customerMigrationV2: { phase: "initialized" },
       },
       {
+        id: "forward-retry",
+        kind: "migrate-customer",
+        status: "pending",
+        inputUid: "uid-1",
+        input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
+        schedulerHandoff: { forwardRecovery: { schemaVersion: 1, phase: "source-flushed" } },
+      },
+      {
         id: "other-builder",
         kind: "migrate-customer",
         status: "pending",
@@ -328,9 +336,9 @@ describe("Firestore suspension fences", () => {
       }),
     };
 
-    await cancelCustomerMigrationsForSuspension(db as never, "uid-1", "delete-1", 80);
+    await expect(cancelCustomerMigrationsForSuspension(db as never, "uid-1", "delete-1", 80)).resolves.toBe(true);
 
-    expect(writes).toHaveLength(2);
+    expect(writes).toHaveLength(3);
     expect(writes).toContainEqual({
       id: "queued-migration",
       data: expect.objectContaining({
@@ -343,6 +351,10 @@ describe("Firestore suspension fences", () => {
     });
     expect(writes).toContainEqual({
       id: "started-migration",
+      data: { cancellationRequestedAt: 80 },
+    });
+    expect(writes).toContainEqual({
+      id: "forward-retry",
       data: { cancellationRequestedAt: 80 },
     });
   });

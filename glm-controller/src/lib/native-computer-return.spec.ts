@@ -336,3 +336,54 @@ describe("native computer return checkpoint", () => {
     expect(h.update).not.toHaveBeenCalled();
   });
 });
+
+function forwardHandoff() {
+  return {
+    migrationId: "mig-return-1:scheduler:1:claim:800", uid: input.uid, slug: input.slug,
+    fromGatewayId: input.fromGatewayId, toGatewayId: input.toGatewayId,
+    forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 },
+  };
+}
+
+describe("native return forward recovery authority", () => {
+  it("continues checkpointing after cancellation with the exact durable operation handoff from an earlier attempt", async () => {
+    const h = harness();
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    Object.assign(h.docs["glmOperations/return-1"], { cancellationRequestedAt: 950, schedulerHandoff: forwardHandoff() });
+    await expect(native.requestCheckpoint()).resolves.toBeUndefined();
+    expect(h.source.vmHome).toMatchObject({ returnOperationId: input.operationId, checkpointRequestedAt: 1000 });
+  });
+
+  it.each(["missing", "operation", "uid", "source", "target", "slug", "schema", "epoch", "claim"])("rejects cancelled checkpointing when the %s authority differs", async change => {
+    const h = harness();
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    const op = h.docs["glmOperations/return-1"];
+    op.cancellationRequestedAt = 950;
+    op.schedulerHandoff = forwardHandoff();
+    const handoff = op.schedulerHandoff;
+    if (change === "missing") delete handoff.forwardRecovery;
+    if (change === "operation") handoff.migrationId = "mig-another:scheduler:1:claim:800";
+    if (change === "uid") handoff.uid = "other";
+    if (change === "source") handoff.fromGatewayId = "other";
+    if (change === "target") handoff.toGatewayId = "other";
+    if (change === "slug") handoff.slug = "other";
+    if (change === "schema") handoff.forwardRecovery.schemaVersion = 2;
+    if (change === "epoch") handoff.forwardRecovery.sourceEpoch = Number.NaN;
+    if (change === "claim") op.startedAt = 901;
+    await expect(native.requestCheckpoint()).rejects.toThrow(/authority changed/);
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each([["release", false], ["source-recovery", false], ["release", true], ["source-recovery", true]] as const)("retains the old writer hold when %s attempts to undo a forward migration (malformed=%s)", async (path, malformed) => {
+    const h = harness();
+    const native = (await prepareNativeComputerReturn(h.deps, input))!;
+    await native.requestCheckpoint();
+    h.docs["glmOperations/return-1"].schedulerHandoff = forwardHandoff();
+    if (malformed) h.docs["glmOperations/return-1"].schedulerHandoff.forwardRecovery.schemaVersion = 2;
+    h.update.mockClear();
+    const release = path === "release" ? native.release() : releaseNativeReturnSourceRecoveryHold(h.deps, input);
+    await expect(release).rejects.toThrow(/must roll forward/);
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.source.vmHome).toMatchObject({ returnOperationId: input.operationId, checkpointRequestedAt: 1000 });
+  });
+});

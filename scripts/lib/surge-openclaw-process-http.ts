@@ -20,7 +20,7 @@ export interface SurgeOpenClawProcessHandlerDeps {
   publicKey: string;
   gatewayId: string;
   configuredBuilder: (slug: string) => boolean;
-  processGate?: SurgeOpenClawProcessHandlerGate;
+  processGate?: SurgeOpenClawProcessHandlerGate & Partial<Pick<SurgeOpenClawProcessSupervisorClient, "status" | "hydrate">>;
   unreserveConfiguredBuilderTarget?: (request: SurgeOpenClawProcessRequest) => Promise<SurgeOpenClawProcessGateState>;
   waitForActiveProvisioningDrain?: () => Promise<void>;
   log?: (message: string) => void;
@@ -30,7 +30,12 @@ function validProcessPodUid(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
 }
 
-function parseProcessRequestBody(rawBody: string): (SurgeOpenClawProcessRequest & { receivingPodUid: string }) | null {
+function validTargetFlags(inspect: unknown, reserve: unknown): boolean {
+  return (inspect === undefined || typeof inspect === "boolean") &&
+    (reserve === undefined || typeof reserve === "boolean") && !(inspect && reserve);
+}
+
+function parseProcessRequestBody(rawBody: string): (SurgeOpenClawProcessRequest & { receivingPodUid: string; inspectTarget?: boolean; reserveTarget?: boolean }) | null {
   let body: Record<string, unknown>;
   try {
     const parsed = JSON.parse(rawBody) as unknown;
@@ -39,19 +44,20 @@ function parseProcessRequestBody(rawBody: string): (SurgeOpenClawProcessRequest 
   } catch {
     return null;
   }
-  const { migrationId, slug, targetPodUid, receivingPodUid } = body;
+  const { migrationId, slug, targetPodUid, receivingPodUid, inspectTarget, reserveTarget } = body;
+  if (!validTargetFlags(inspectTarget, reserveTarget)) return null;
   if (typeof migrationId !== "string" || !migrationId || migrationId.length > 512) return null;
   if (typeof slug !== "string" || !isValidUsername(slug)) return null;
   if (!validProcessPodUid(targetPodUid)) return null;
   if (!validProcessPodUid(receivingPodUid)) return null;
-  return { migrationId, slug, targetPodUid, receivingPodUid };
+  return { migrationId, slug, targetPodUid, receivingPodUid, ...(inspectTarget ? { inspectTarget: true } : {}), ...(reserveTarget ? { reserveTarget: true } : {}) };
 }
 
 function parseAndVerify(
   req: Request,
   res: Response,
   deps: SurgeOpenClawProcessHandlerDeps,
-): SurgeOpenClawProcessRequest | null {
+): (SurgeOpenClawProcessRequest & { inspectTarget?: boolean; reserveTarget?: boolean }) | null {
   const rawBody = (req as Request & { rawBody?: string }).rawBody ?? "";
   const request = parseProcessRequestBody(rawBody);
   if (!request) {
@@ -77,19 +83,59 @@ function parseAndVerify(
     res.status(409).json({ error: "OpenClaw process request receiving pod UID does not match this allocation" });
     return null;
   }
-  return { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid };
+  return { migrationId: request.migrationId, slug: request.slug, targetPodUid: request.targetPodUid, ...(request.inspectTarget ? { inspectTarget: true } : {}), ...(request.reserveTarget ? { reserveTarget: true } : {}) };
 }
 
 function requireConfiguredBuilder(
   request: SurgeOpenClawProcessRequest,
   res: Response,
   deps: SurgeOpenClawProcessHandlerDeps,
-): SurgeOpenClawProcessHandlerGate | null {
+): (SurgeOpenClawProcessHandlerGate & Partial<Pick<SurgeOpenClawProcessSupervisorClient, "status" | "hydrate">>) | null {
   if (!deps.processGate || !deps.configuredBuilder(request.slug)) {
     res.status(409).json({ error: "configured Builder OpenClaw process control is unavailable" });
     return null;
   }
   return deps.processGate;
+}
+
+function assertHeldReservation(state: SurgeOpenClawProcessGateState, request: SurgeOpenClawProcessRequest): void {
+  if (state.role !== "target" || state.mode !== "held" || state.phase !== "held" ||
+      state.podUid !== request.targetPodUid || state.migrationId !== request.migrationId ||
+      state.slug !== request.slug || state.targetPodUid !== request.targetPodUid) {
+    throw new Error("target reservation identity is not held");
+  }
+}
+
+function assertTargetAddress(operation: SurgeOpenClawProcessOperation, targetPodUid: string): void {
+  if (operation !== "hold" || targetPodUid !== process.env.POD_UID?.trim()) {
+    throw new Error("target reservation addresses another allocation or operation");
+  }
+}
+
+async function processRequest(
+  operation: SurgeOpenClawProcessOperation,
+  request: SurgeOpenClawProcessRequest & { inspectTarget?: boolean; reserveTarget?: boolean },
+  gate: SurgeOpenClawProcessHandlerGate & Partial<Pick<SurgeOpenClawProcessSupervisorClient, "status" | "hydrate">>,
+  deps: SurgeOpenClawProcessHandlerDeps,
+): Promise<SurgeOpenClawProcessGateState> {
+  const { inspectTarget, reserveTarget, ...gateRequest } = request;
+  if (inspectTarget || reserveTarget) {
+    assertTargetAddress(operation, request.targetPodUid);
+    const action = inspectTarget ? gate.status : gate.hydrate;
+    if (!action) throw new Error("target reservation inspection unavailable");
+    const state = inspectTarget ? await gate.status!() : await gate.hydrate!(gateRequest);
+    assertHeldReservation(state, request);
+    if (reserveTarget) await deps.waitForActiveProvisioningDrain?.();
+    return state;
+  }
+  let state = operation === "unreserve" && deps.unreserveConfiguredBuilderTarget
+    ? await deps.unreserveConfiguredBuilderTarget(gateRequest)
+    : await gate[operation](gateRequest);
+  if (operation === "hold") {
+    await deps.waitForActiveProvisioningDrain?.();
+    if (state.phase === "cancelling") state = await gate.finalizeTargetCancellation(gateRequest);
+  }
+  return state;
 }
 
 function createHandler(
@@ -102,13 +148,7 @@ function createHandler(
     const gate = requireConfiguredBuilder(request, res, deps);
     if (!gate) return;
     try {
-      let state = operation === "unreserve" && deps.unreserveConfiguredBuilderTarget
-        ? await deps.unreserveConfiguredBuilderTarget(request)
-        : await gate[operation](request);
-      if (operation === "hold") {
-        await deps.waitForActiveProvisioningDrain?.();
-        if (state.phase === "cancelling") state = await gate.finalizeTargetCancellation(request);
-      }
+      const state = await processRequest(operation, request, gate, deps);
       res.status(200).json({
         migrationId: request.migrationId,
         slug: request.slug,
@@ -117,6 +157,7 @@ function createHandler(
         role: state.role,
         mode: state.mode,
         phase: state.phase,
+        ...(state.role === "target" && typeof state.completionStarted === "boolean" ? { completionStarted: state.completionStarted } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

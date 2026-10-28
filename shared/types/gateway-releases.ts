@@ -274,6 +274,7 @@ export interface AssignmentDoc {
   updatedAt: number;
   updatedByOperationId: string | null;
   handoffProgress?: MigrationProgressRecord[];
+  sharedSurgeForwardRecovery?: { operationId: string; targetPodUid: string; receivingPodUid: string };
 }
 
 export type GatewayRuntimeLifecycle =

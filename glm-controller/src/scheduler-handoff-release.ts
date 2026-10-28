@@ -100,7 +100,7 @@ async function releaseUnclaimedPreTransportHandoff(deps: SchedulerHandoffRelease
     const current = await tx.get(doc.ref);
     if (!current.exists || !current.updateTime?.isEqual(doc.updateTime)) return false;
     const row = current.data()!;
-    if (row.schedulerHandoffReleased !== false || !await queuedSharedMigrationOwnsSource(deps.db, tx, row, doc.id)) return false;
+    if (row.schedulerHandoff?.forwardRecovery !== undefined || row.schedulerHandoffReleased !== false || !await queuedSharedMigrationOwnsSource(deps.db, tx, row, doc.id)) return false;
     tx.update(doc.ref, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: deps.now() });
     return true;
   });
@@ -127,6 +127,11 @@ export async function releaseAbandonedSchedulerHandoffs(
 
 async function releaseFailedHandoff(deps: SchedulerHandoffReleaseDeps, doc: QueryDocumentSnapshot): Promise<boolean> {
   const operation = doc.data();
+  if (operation.schedulerHandoff?.forwardRecovery !== undefined ||
+      ["sourceQuiesced", "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete"].includes(operation.customerMigrationV2?.phase)) {
+    deps.log(`[scheduler-handoff-release] ${doc.id} requires forward recovery; source stays fenced`);
+    return false;
+  }
   if (sourceRecoveryOwns(operation, doc.id)) return false;
   const handoff = operation.schedulerHandoff;
   if (!isHandoff(handoff)) {

@@ -28,7 +28,7 @@ import type {
   SchedulerHandoffState,
   StepStatus,
 } from "@octogee/shared/types/glm";
-import { resolveOperationOrigin } from "@octogee/shared/types/glm";
+import { resolveOperationOrigin, readSchedulerMigrationIdentity } from "@octogee/shared/types/glm";
 import type {
   FleetBrokerProjectCheckoutScope,
   FleetBrokerUserSnapshot,
@@ -41,7 +41,7 @@ import {
   advanceCustomerMigrationV2,
   beginCustomerMigrationV2Abort,
   classifyCustomerMigrationV2Error,
-  isCustomerMigrationV2PostIntent,
+  isCustomerMigrationV2ForwardOnly,
   customerMigrationV2GatewayRootFenceEqual,
   type CustomerMigrationV2CutoverFence,
 } from "@octogee/core/customer-migration-v2";
@@ -308,7 +308,7 @@ async function cancellationResult(
   const { ctx, deps } = execution.input;
   const state = execution.state;
   if (sourceTransferBlocksRelease(await deps.observeSourceTransfer?.(execution.input.op))) return {steps:[],success:false,error:"source transfer observation pending: status 503",rolledBack:false};
-  if (isAbortPhase(state.phase) || isCustomerMigrationV2PostIntent(state)) return null;
+  if (isAbortPhase(state.phase) || isCustomerMigrationV2ForwardOnly(state)) return null;
   if (!await ctx.cancellationRequested?.()) return null;
   if (state.phase === "initialized") {
     return { steps: [], success: false, error: "customer migration cancelled before transfer" };
@@ -347,7 +347,7 @@ async function ordinaryV2IterationFailure(
       rolledBack: false,
     };
   }
-  if (isCustomerMigrationV2PostIntent(execution.state)) {
+  if (isCustomerMigrationV2ForwardOnly(execution.state)) {
     return {
       steps: [],
       success: false,
@@ -689,12 +689,16 @@ type SourceAssignment = Omit<Parameters<MigrateCustomerDeps["setAssignmentState"
 
 async function runNativeReturn(input: NativeReturnProvision): Promise<OperationResult> {
   const { deps, targets, uid, slug, migrationId, automatic } = input;
+  const handoff = await persistNativeReturnHandoff(input);
+  const assertClaim = input.ctx.assertActiveClaim;
+  input = { ...input, ctx: { ...input.ctx, ...(assertClaim ? {
+    assertActiveClaim: (allowCancelled = false) => assertClaim(allowCancelled || handoff.forwardRecovery !== undefined),
+  } : {}) } };
   const ctx = destinationProgressContext(input);
   deps.log(
     `[migrate-customer] ${targets.fromGatewayId} → ${targets.toGatewayId} slug=${slug}: ` +
     "native-return",
   );
-  const handoff = await persistNativeReturnHandoff(input);
   const client = await gatewayClient(deps, [targets.fromGatewayId, targets.toGatewayId]);
   const step = async (name: string, action: () => Promise<unknown>): Promise<void> => {
     await reportNativeReturnStep(deps, ctx, name, action);
@@ -709,18 +713,20 @@ async function runNativeReturn(input: NativeReturnProvision): Promise<OperationR
   };
   let sourceFenced = false;
   try {
-    await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
-    await step("keys-sync-state", () => client.transferState({
-      migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "keys",
-    }));
-    await step("wait-for-active-work", () => client.quiesce({ migrationId, gatewayId: targets.fromGatewayId, slug, timeoutMs: 30_000, stopMattermost: false }));
-    await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "transferring" });
-    await deps.setAssignmentState({
-      ...sourceAssignment,
-      state: "quiescing",
-      createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
-    });
-    sourceFenced = true;
+    if (!handoff.forwardRecovery) {
+      await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "waiting" });
+      await step("keys-sync-state", () => client.transferState({
+        migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "keys",
+      }));
+      await step("wait-for-active-work", () => client.quiesce({ migrationId, gatewayId: targets.fromGatewayId, slug, timeoutMs: 30_000, stopMattermost: false }));
+      await deps.setMigrationPhase?.({ uid, sourceGatewayId: targets.fromGatewayId, operationId: input.operationId, phase: "transferring" });
+      await deps.setAssignmentState({
+        ...sourceAssignment,
+        state: "quiescing",
+        createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
+      });
+      sourceFenced = true;
+    }
     await closeSourceForNativeReturnProvision(input, client, step, handoff);
     await step("cutover-firestore", async () => {
       await deps.commitCutover({
@@ -734,6 +740,13 @@ async function runNativeReturn(input: NativeReturnProvision): Promise<OperationR
       await recordCutoverCommitted(deps, ctx);
     });
   } catch (error) {
+    if (handoff.forwardRecovery) {
+      const current = await deps.readUser(uid);
+      if (current?.currentGatewayId === targets.toGatewayId) {
+        return completeNativeReturn(deps, ctx, input.nativeReturn, { ...targets, uid, migrationId, slug, handoff, operation: input.op });
+      }
+      return failure(`migration forward recovery pending: status 503: ${errorMessage(error)}`, false);
+    }
     if (error instanceof MigrationDrainPendingError) {
       return deferNativeReturnProvision(input, client, sourceAssignment, handoff, sourceFenced);
     }
@@ -775,20 +788,38 @@ async function closeSourceForNativeReturnProvision(
   handoff: SchedulerHandoffState | null,
 ): Promise<void> {
   const { targets, slug, migrationId } = input;
-  await step("quiesce-source", () => client.quiesce({
-    migrationId,
-    gatewayId: targets.fromGatewayId,
-    slug,
-    ...(handoff ? { schedulerHandoff: true, schedulerMigrationId: handoff.migrationId, retainNonportable: true } : {}),
-  }));
-  if (!input.nativeReturn.checkpointRequested) {
-    await step("flush-source", () => client.flushGateway({
+  if (!handoff) throw new Error("native return requires a durable scheduler handoff");
+  if (!handoff.forwardRecovery) {
+    await step("quiesce-source", () => client.quiesce({
       migrationId,
       gatewayId: targets.fromGatewayId,
       slug,
-      reason: "native-return",
+      ...(handoff ? { schedulerHandoff: true, schedulerMigrationId: handoff.migrationId, retainNonportable: true } : {}),
     }));
+    if (!input.nativeReturn.checkpointRequested) {
+      await step("flush-source", () => client.flushGateway({
+        migrationId,
+        gatewayId: targets.fromGatewayId,
+        slug,
+        reason: "native-return",
+      }));
+    }
   }
+  if (!input.ctx.assertActiveClaim || !input.ctx.persistSchedulerHandoff) {
+    throw new Error("native return forward recovery requires strict claimed persistence");
+  }
+  await input.ctx.assertActiveClaim(handoff.forwardRecovery !== undefined);
+  const placement = await input.deps.resolveSourcePlacement(input.uid, targets.fromGatewayId);
+  const owner = await input.deps.readUser(input.uid);
+  if (!placement || (placement.epoch ?? 0) !== targets.fromEpoch ||
+      owner?.currentGatewayId !== targets.fromGatewayId || owner.slug !== slug) {
+    throw new Error("native return forward recovery placement changed; source remains fenced");
+  }
+  assertForwardRecoveryScope(targets);
+  handoff.forwardRecovery = {
+    schemaVersion: 1, phase: "source-flushed", sourceEpoch: targets.fromEpoch,
+  };
+  await input.ctx.persistSchedulerHandoff(handoff);
   await step("transfer-agent-store", async () => {
     const transferred = await client.transferState({
       migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId,
@@ -868,14 +899,14 @@ async function persistNativeReturnHandoff(input: {
   op: Operation;
 }): Promise<SchedulerHandoffState> {
   if (!input.ctx.persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
-  const handoff: SchedulerHandoffState = {
+  const handoff: SchedulerHandoffState = input.op.schedulerHandoff?.forwardRecovery !== undefined ? input.op.schedulerHandoff : {
     migrationId: claimSchedulerMigrationId(input.migrationId, input.op),
     fromGatewayId: input.targets.fromGatewayId,
     toGatewayId: input.targets.toGatewayId,
     uid: input.uid,
     slug: input.slug,
   };
-  await input.ctx.persistSchedulerHandoff(handoff);
+  await input.ctx.persistSchedulerHandoff({ ...handoff });
   return handoff;
 }
 
@@ -1533,6 +1564,11 @@ async function preparePreviousSourceAgentStores(deps: MigrateCustomerDeps, ctx: 
   await assertCurrent();
 }
 
+function previousSchedulerNeedsRecovery(op: Operation, previous: SchedulerHandoffState, migrationId: string): boolean {
+  return previous.forwardRecovery === undefined && op.schedulerHandoffReleased !== true &&
+    previous.migrationId !== claimSchedulerMigrationId(migrationId, op);
+}
+
 async function resumePreviousSchedulerAttempt(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1541,11 +1577,7 @@ async function resumePreviousSchedulerAttempt(
   uid: string,
 ): Promise<boolean> {
   const previous = op.schedulerHandoff;
-  if (
-    !previous ||
-    op.schedulerHandoffReleased === true ||
-    previous.migrationId === claimSchedulerMigrationId(deps.genMigrationId(op.id), op)
-  ) return false;
+  if (!previous || !previousSchedulerNeedsRecovery(op, previous, deps.genMigrationId(op.id))) return false;
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
   }
@@ -1642,7 +1674,8 @@ function assertRetainedMigrationStrategy(op: Operation, durable: boolean, native
 }
 
 function sourceRecoveryOwnershipChanged(op: Operation, user: UserGatewayInfo): boolean {
-  return op.input.recoverSourceOnly === true && (op.cutoverCommittedAt !== undefined || user.currentGatewayId !== op.input.fromGatewayId);
+  return op.input.recoverSourceOnly === true && (op.schedulerHandoff?.forwardRecovery !== undefined ||
+    op.cutoverCommittedAt !== undefined || user.currentGatewayId !== op.input.fromGatewayId);
 }
 
 async function sourceOnlyRecoveryResult(op: Operation, sourceRecovered: boolean, ctx: OperationContext, now: number): Promise<OperationResult | null> {
@@ -1733,6 +1766,7 @@ async function prepareMigration(
         rolledBack: false,
       };
     }
+    await assertForwardRecoveryBeforePreparation(op, resolved.targets, user.slug, request.uid, ctx);
     const automatic = resolveOperationOrigin(op.origin) === "automatic";
     const nativeReturn = await deps.prepareNativeComputerReturn({
       fromGatewayId: resolved.targets.fromGatewayId,
@@ -1803,8 +1837,12 @@ async function prepareMigration(
       urls,
     };
   } catch (error) {
-    return { error: errorMessage(error) };
+    return migrationPreparationFailure(error, op);
   }
+}
+
+function migrationPreparationFailure(error: unknown, op: Operation): { error: string; rolledBack?: false } {
+  return { error: errorMessage(error), ...(op.schedulerHandoff?.forwardRecovery ? { rolledBack: false as const } : {}) };
 }
 
 async function executeOrdinaryMigrationV2(input: {
@@ -1835,6 +1873,37 @@ function shouldClearMigrationPreparation(input: {
 }): boolean {
   return input.preparationFailed && input.result.finalPhase === "initial" ||
     (input.preparationFailed || input.postQuiesceFailed) && input.result.rolledBack && input.targetUnmountConfirmed;
+}
+
+async function assertForwardRecoveryBeforePreparation(op: Operation, targets: MigrationTargets, slug: string, uid: string, ctx: OperationContext): Promise<void> {
+  if (op.schedulerHandoff?.forwardRecovery === undefined) return;
+  assertForwardRecovery(op, targets, slug, uid);
+  if (!ctx.assertActiveClaim) throw new Error("forward recovery requires an active operation claim");
+  await ctx.assertActiveClaim(true);
+}
+
+function assertForwardRecoveryScope(targets: MigrationTargets): void {
+  if (!Number.isSafeInteger(targets.fromEpoch) || targets.fromEpoch < 0) {
+    throw new Error("migration forward recovery placement fence is malformed");
+  }
+}
+
+function assertForwardRecovery(op: Operation, targets: MigrationTargets, slug: string, uid: string): void {
+  const handoff = op.schedulerHandoff!;
+  const checkpoint = handoff.forwardRecovery!;
+  assertForwardRecoveryScope(targets);
+  const exact = [
+    checkpoint.schemaVersion === 1, checkpoint.phase === "source-flushed",
+    checkpoint.sourceEpoch === targets.fromEpoch, handoff.uid === uid, handoff.slug === slug,
+    handoff.fromGatewayId === targets.fromGatewayId, handoff.toGatewayId === targets.toGatewayId,
+    !declaredMigrationSourceChanged(op.input as MigrateCustomerInput, targets.fromGatewayId),
+    op.input.toGatewayId === targets.toGatewayId,
+    readSchedulerMigrationIdentity(op.id, handoff.migrationId) !== null,
+    checkpoint.sourceSystemConfigCommit === undefined || /^[0-9a-f]{40,64}$/.test(checkpoint.sourceSystemConfigCommit),
+  ].every(Boolean);
+  if (!exact) {
+    throw new Error("migration forward recovery scope changed; source remains fenced");
+  }
 }
 
 async function executeMigration(
@@ -1880,11 +1949,12 @@ async function executeMigration(
       await progress.report(step.name, step.status);
     },
   };
-  const schedulerMigrationId = claimSchedulerMigrationId(prepared.migrationId, op);
+  const schedulerMigrationId = op.schedulerHandoff?.forwardRecovery !== undefined
+    ? op.schedulerHandoff.migrationId : claimSchedulerMigrationId(prepared.migrationId, op);
   const persistSchedulerHandoff = ctx.persistSchedulerHandoff;
   if (!persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
   const heldTarget = prepared.targets.toGatewayClass === "builder";
-  const handoff: SchedulerHandoffState = {
+  let handoff: SchedulerHandoffState = op.schedulerHandoff?.forwardRecovery !== undefined ? op.schedulerHandoff : {
     migrationId: schedulerMigrationId,
     fromGatewayId: prepared.user.currentGatewayId,
     toGatewayId: prepared.toGatewayId,
@@ -1896,6 +1966,7 @@ async function executeMigration(
   const result = await runMigration(
     {
       migrationId: prepared.migrationId,
+      ...(handoff.forwardRecovery ? { resumeForwardRecovery: handoff.forwardRecovery } : {}),
       schedulerMigrationId,
       uid: prepared.uid,
       slug: prepared.user.slug,
@@ -1911,6 +1982,22 @@ async function executeMigration(
     },
     {
       ...buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
+      persistForwardRecovery: async (state) => {
+        if (!ctx.assertActiveClaim) throw new Error("forward recovery requires an active operation claim");
+        await ctx.assertActiveClaim(handoff.forwardRecovery !== undefined);
+        const owner = await deps.readUser(prepared.uid);
+        const source = await deps.resolveSourcePlacement(prepared.uid, prepared.user.currentGatewayId);
+        if (!owner || owner.currentGatewayId !== prepared.user.currentGatewayId || owner.slug !== prepared.user.slug ||
+            !source || (source.epoch ?? 0) !== prepared.targets.fromEpoch) {
+          throw new Error("migration forward recovery placement changed; source remains fenced");
+        }
+        assertForwardRecoveryScope(prepared.targets);
+        handoff = { ...handoff, forwardRecovery: {
+          schemaVersion: 1, phase: "source-flushed",
+          sourceEpoch: prepared.targets.fromEpoch, ...state,
+        } };
+        await persistSchedulerHandoff(handoff);
+      },
       recordSchedulesStaged: () => persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() }),
     },
   );
@@ -1940,6 +2027,10 @@ async function runMigrateCustomer(
   op: Operation,
   ctx: OperationContext,
 ): Promise<OperationResult> {
+  const assertClaim = ctx.assertActiveClaim;
+  if (op.schedulerHandoff?.forwardRecovery !== undefined && assertClaim) {
+    ctx = { ...ctx, assertActiveClaim: () => assertClaim(true) };
+  }
   const input = op.input as MigrateCustomerInput;
   const request = migrationRequest(input);
   if ("error" in request) return failure(request.error);

@@ -130,7 +130,7 @@ function preparingHarness(scenario = "valid") {
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "b-owner" }), logger: { warn: vi.fn() } });
   app.use((req, res, next) => GATEWAY_CREDENTIAL_ROUTES.has(req.path) ? credentialAuth(req, res, next) : next());
   app.use("/internal/fleet", createFleetBrokerRoutes({ db, readBlobMetadata, createBlobSignedUrl }));
-  return { app, owner, readBlobMetadata, createBlobSignedUrl };
+  return { app, owner, operation, readBlobMetadata, createBlobSignedUrl };
 }
 
 describe("source-owned held target project reads", () => {
@@ -169,6 +169,44 @@ describe("source-owned held target project reads", () => {
     for (const [route, body] of [["/blob/project/upload-url", { projectSlug: "app", sha256: "a".repeat(64), size: 3, md5Hash: "kAFQmDzST7DWlj99KOF/cg==" }], ["/blob/upload-url", { path: "projects/app/a.png", size: 3 }], ["/blob/manifest/write-url", { ifGenerationMatch: "0" }], ["/blob/manifest/read-url", {}]] as const) {
       expect((await request(h.app).post(`/internal/fleet${route}`).set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT).send({ slug: "owner", ...body })).status).toBe(403);
     }
+    expect(h.createBlobSignedUrl).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("cancelled forward Builder preparation", () => {
+  function forward(kind: "v2" | "legacy") {
+    const h = preparingHarness();
+    Object.assign(h.operation, { startedAt: 50, cancellationRequestedAt: 60 });
+    if (kind === "v2") h.operation.customerMigrationV2 = {
+      phase: "sourceQuiesced", operationId: "move-0", migrationId: "mig-move-0", uid: "uid-owner", slug: "owner",
+      sourceGatewayId: "shared-source", targetGatewayId: "b-owner", sourceEpoch: 7,
+    };
+    else h.operation.schedulerHandoff = {
+      migrationId: "mig-move-0:scheduler:1:claim:50", uid: "uid-owner", slug: "owner", fromGatewayId: "shared-source", toGatewayId: "b-owner",
+      forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 7 },
+    };
+    return h;
+  }
+  const readManifest = (h: ReturnType<typeof preparingHarness>) => request(h.app)
+    .post("/internal/fleet/blob/materialization/manifest/read-url").set(GATEWAY_CREDENTIAL_TOKEN_HEADER, JWT).send({ slug: "owner", projectSlug: "app" });
+  it.each(["v2", "legacy"] as const)("materializes the held target for the exact cancelled %s migration", async kind => {
+    const h = forward(kind);
+    expect((await readManifest(h)).status).toBe(200);
+    expect(h.createBlobSignedUrl).toHaveBeenCalledOnce();
+  });
+  it.each(["phase", "operation", "migration", "uid", "slug", "source", "target", "epoch", "claim"])("rejects cancelled V2 preparation with changed %s authority", async change => {
+    const h = forward("v2"), state = h.operation.customerMigrationV2;
+    if (change === "phase") state.phase = "preSynced";
+    if (change === "operation") state.operationId = "other";
+    if (change === "migration") state.migrationId = "mig-other";
+    if (change === "uid") state.uid = "other";
+    if (change === "slug") state.slug = "other";
+    if (change === "source") state.sourceGatewayId = "other";
+    if (change === "target") state.targetGatewayId = "other";
+    if (change === "epoch") state.sourceEpoch = Number.NaN;
+    if (change === "claim") h.operation.startedAt = null;
+    expect((await readManifest(h)).status).toBe(403);
     expect(h.createBlobSignedUrl).not.toHaveBeenCalled();
   });
 });

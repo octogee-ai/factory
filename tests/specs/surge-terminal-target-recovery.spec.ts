@@ -110,3 +110,61 @@ describe("real process-gate terminal target recovery", () => {
   });
 
 });
+
+describe("real target reservation inspection during forward retry", () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])("preserves the target reservation across retries and supervisor restart (completionStarted=%s, sourceless=%s)", async (completionStarted, sourceless) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "surge-inspect-target-"));
+    vi.stubEnv("POD_UID", targetPod.uid);
+    try {
+      const { createHoldSurgeOpenClawHandler } = await import("../../scripts/lib/surge-openclaw-process-http.js");
+      const { signFleetRequest, gatewayScopedJobId } = await import("../../scripts/lib/fleet-signature.js");
+      const { SIGNATURE_HEADER } = await import("../../shared/types/fleet-controller.js");
+      const { FLEET_KEY_PAIR } = await import("../../scripts/__tests__/fixtures/fleet-keys.js");
+      let gate = createSurgeOpenClawProcessGate(root);
+      const request = { podUid: targetPod.uid, migrationId: "surge-default-target-uid", slug: "alice", targetPodUid: targetPod.uid };
+      await gate.ensure({ podUid: targetPod.uid, readinessReleased: false });
+      if (!sourceless || completionStarted) { await gate.hold(request); await gate.markHeld(request); }
+      if (completionStarted) { await gate.claimTargetCompletion(request); await gate.reholdTarget(request); await gate.markHeld(request); }
+      const h = harness({ pods: sourceless ? [targetPod] : [{ ...oldPod, ready: false }, targetPod],
+        assignments: [sourceless ? assignment("u1", "alice") : { ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: request.migrationId }],
+        bootingUids: [oldPod.uid, targetPod.uid], prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "held" } });
+      vi.mocked(h.deps.holdTargetOpenClaw!).mockImplementation(async input => {
+        const processGate = {
+          status: async () => (await gate.read())!,
+          hydrate: async (r: Omit<typeof request, "podUid">) => gate.hydrateTarget({ ...r, podUid: targetPod.uid }),
+          hold: async (r: Omit<typeof request, "podUid">) => gate.hold({ ...r, podUid: targetPod.uid }),
+          resume: async (r: Omit<typeof request, "podUid">) => gate.resumeSource({ ...r, podUid: targetPod.uid }),
+          unreserve: async (r: Omit<typeof request, "podUid">) => gate.unreserveTarget({ ...r, podUid: targetPod.uid }),
+          finalizeTargetCancellation: async (r: Omit<typeof request, "podUid">) => gate.finalizeTargetCancellation({ ...r, podUid: targetPod.uid }),
+        };
+        const handler = createHoldSurgeOpenClawHandler({ publicKey: FLEET_KEY_PAIR.publicKey, gatewayId: "default", configuredBuilder: () => true, processGate });
+        const body = { migrationId: input.operationId, slug: input.slug, targetPodUid: input.targetPod.uid, receivingPodUid: input.targetPod.uid, inspectTarget: input.inspectTarget, reserveTarget: input.reserveTarget };
+        const rawBody = JSON.stringify(body);
+        const signature = signFleetRequest(FLEET_KEY_PAIR.privateKey, gatewayScopedJobId(input.operationId, "default"), rawBody);
+        let status = 200; let result: Record<string, unknown> = {};
+        const res = { status(code: number) { status = code; return this; }, json(value: Record<string, unknown>) { result = value; } };
+        await handler({ rawBody, params: { gatewayId: "default" }, header: (name: string) => name.toLowerCase() === SIGNATURE_HEADER.toLowerCase() ? signature : undefined } as never, res as never, vi.fn());
+        if (status !== 200) throw new Error(JSON.stringify(result));
+        return { completionStarted: result.completionStarted as boolean | undefined };
+      });
+      const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, disposableBuilderGateway: true };
+      if (sourceless) vi.mocked(h.deps.releaseTarget).mockImplementationOnce(async () => {
+        await gate.claimTargetCompletion(request);
+        await gate.reholdTarget(request);
+        await gate.markHeld(request);
+        throw new Error("Native start failed");
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = reconcileSurgeCustomerHandoff(h.deps, input);
+        if (sourceless && attempt === 0) await expect(result).rejects.toThrow("Native start failed");
+        else await expect(result).resolves.toEqual({ ready: false });
+        expect(await gate.read()).toMatchObject({ role: "target", mode: "held", phase: "held", completionStarted: sourceless || completionStarted });
+        gate = createSurgeOpenClawProcessGate(root);
+        await gate.ensure({ podUid: targetPod.uid, readinessReleased: false });
+      }
+      expect(h.deps.transfer).toHaveBeenCalledTimes(completionStarted || sourceless ? 0 : 2);
+      expect(h.deps.releaseTarget).toHaveBeenCalledTimes(2);
+      expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); await fs.rm(root, { recursive: true, force: true }); }
+  });
+});

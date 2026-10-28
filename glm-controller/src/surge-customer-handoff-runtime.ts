@@ -143,8 +143,9 @@ export const POD_SESSION_DIGEST_SCRIPT = [
   'import { isCodexDatabase } from "/octogee/scripts/node_modules/@octogee/core/dist/agent-store-inventory.js";',
   'const state=process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),slug=process.argv[1],mode=process.argv[2];',
   'const safeDefaultAgentId="octogee-unmatched-route",isSafeDefaultState=(relative)=>{const normalized=relative.split(path.sep).join("/"),roots=[`agents/${safeDefaultAgentId}`,`workspace-${safeDefaultAgentId}`,`workspaces/${safeDefaultAgentId}`];return roots.some((root)=>normalized===root||normalized.startsWith(`${root}/`))||[`memory/${safeDefaultAgentId}.sqlite`,`memory/${safeDefaultAgentId}.sqlite-wal`,`memory/${safeDefaultAgentId}.sqlite-shm`].includes(normalized);};',
+  'const isStartupMigrationBackup=(relative)=>relative.split(path.sep).some((part)=>/\\.sqlite\\.pre-startup-migration-.{8}-.{4}-.{4}-.{4}-.{12}/u.test(part));',
   'const walk=(dir,prefix="")=>{if(!fs.existsSync(dir))return [];const root=fs.lstatSync(dir);if(root.isSymbolicLink()||!root.isDirectory())throw new Error(`non-regular durable state path: ${prefix||"."}`);const out=[];for(const item of fs.readdirSync(dir,{withFileTypes:true})){const relative=prefix?path.join(prefix,item.name):item.name,abs=path.join(dir,item.name),stat=fs.lstatSync(abs);if(stat.isSymbolicLink())out.push([relative,abs,"link"]);else if(stat.isDirectory())out.push(...walk(abs,relative));else if(stat.isFile())out.push([relative,abs,"file"]);else throw new Error(`non-regular durable state path: ${relative}`);}return out;};',
-  'let files;if(mode==="configured-builder-system-config"){const configPath=process.env.OPENCLAW_CONFIG_PATH||path.join(state,"system_config","openclaw.json");let config;try{config=JSON.parse(fs.readFileSync(configPath,"utf8"));}catch(error){throw new Error(`cannot read configured Builder config: ${error instanceof Error?error.message:String(error)}`);}const plan=configuredBuilderPortableStatePlanFromConfig(config,state),transferPaths=plan.paths.filter((item)=>!isSafeDefaultState(item.relativePath));assertConfiguredBuilderPortableStatePlanOnDisk(state,{...plan,paths:transferPaths});files=transferPaths.flatMap((item)=>{const absolute=path.join(state,item.relativePath);if(!fs.existsSync(absolute))return [];const stat=fs.lstatSync(absolute);if(item.kind==="directory"){if(!stat.isDirectory())throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);return walk(absolute,item.relativePath);}if(!stat.isFile())throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);return [[item.relativePath,absolute,"file"]];}).filter(([relative])=>relative!==path.join("customers",slug,".system",".migrating-in")&&relative!==path.join("customers",slug,".system",".mounted")&&!relative.endsWith(".sqlite-wal")&&!relative.endsWith(".sqlite-shm")&&!isCodexDatabase(relative.split(path.sep).join("/").replace(/-(?:wal|shm|journal)$/u,"")));}else{const root=path.join(state,"agents",`octogee-${slug}-coach`,"sessions");files=walk(root,path.join("agents",`octogee-${slug}-coach`,`sessions`));}',
+  'let files;if(mode==="configured-builder-system-config"){const configPath=process.env.OPENCLAW_CONFIG_PATH||path.join(state,"system_config","openclaw.json");let config;try{config=JSON.parse(fs.readFileSync(configPath,"utf8"));}catch(error){throw new Error(`cannot read configured Builder config: ${error instanceof Error?error.message:String(error)}`);}const plan=configuredBuilderPortableStatePlanFromConfig(config,state),transferPaths=plan.paths.filter((item)=>!isSafeDefaultState(item.relativePath));assertConfiguredBuilderPortableStatePlanOnDisk(state,{...plan,paths:transferPaths});files=transferPaths.flatMap((item)=>{const absolute=path.join(state,item.relativePath);if(!fs.existsSync(absolute))return [];const stat=fs.lstatSync(absolute);if(item.kind==="directory"){if(!stat.isDirectory())throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);return walk(absolute,item.relativePath);}if(!stat.isFile())throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);return [[item.relativePath,absolute,"file"]];}).filter(([relative])=>!isStartupMigrationBackup(relative)&&relative!==path.join("customers",slug,".system",".migrating-in")&&relative!==path.join("customers",slug,".system",".mounted")&&!relative.endsWith(".sqlite-wal")&&!relative.endsWith(".sqlite-shm")&&!isCodexDatabase(relative.split(path.sep).join("/").replace(/-(?:wal|shm|journal)$/u,"")));}else{const root=path.join(state,"agents",`octogee-${slug}-coach`,"sessions");files=walk(root,path.join("agents",`octogee-${slug}-coach`,`sessions`));}',
   'files.sort(([left],[right])=>left.localeCompare(right));const hash=crypto.createHash("sha256");let totalBytes=0;',
   'for(const [relative,absolute,kind] of files){const contents=kind==="link"?Buffer.from(`symlink:${fs.readlinkSync(absolute)}`):fs.readFileSync(absolute);totalBytes+=contents.byteLength;hash.update(relative.split(path.sep).join("/"));hash.update("\\0");hash.update(contents);hash.update("\\0");}',
   'process.stdout.write(JSON.stringify({fileCount:files.length,totalBytes,sha256:hash.digest("hex")}));',
@@ -174,6 +175,14 @@ function parseSessionDigest(value: unknown, context: string): SessionDigest {
     totalBytes: digest.totalBytes as number,
     sha256: digest.sha256,
   };
+}
+
+export async function readPodSystemConfigCommit(runKubectl: SurgeKubectl, namespace: string, pod: SurgePod): Promise<string> {
+  const script = `const {execFileSync}=require("node:child_process"),path=require("node:path");const root=process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),repo=path.join(root,"system_config");const run=(...args)=>execFileSync("git",["-C",repo,...args],{encoding:"utf8"}).trim();if(run("status","--porcelain","--untracked-files=no"))throw Error("system config checkout has tracked changes");process.stdout.write(run("rev-parse","HEAD"));`;
+  const result = await runKubectl(["-n", namespace, "exec", `pod/${pod.name}`, "-c", "gateway", "--", "node", "-e", script]);
+  const commit = result.stdout.trim();
+  if (result.code !== 0 || !/^[0-9a-f]{40,64}$/u.test(commit)) throw new Error(`cannot verify system config commit on pod=${pod.name}`);
+  return commit;
 }
 
 export async function readPodDurableSessionDigest(
@@ -507,17 +516,25 @@ async function resolveSurgeFleetState(input: {
   };
 }
 
+function optionalTerminalFlag(record: Record<string, unknown>, name: string, pod: SurgePod): boolean | undefined {
+  const value = record[name];
+  if (value !== undefined && typeof value !== "boolean") throw new Error(`invalid terminal target from pod=${pod.name}`);
+  return value as boolean | undefined;
+}
+
 function parseTerminalTarget(value: unknown, pod: SurgePod): SurgePodHealth["terminalTarget"] {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid terminal target from pod=${pod.name}`);
   const record = value as Record<string, unknown>;
   if (typeof record.migrationId !== "string" || !record.migrationId || record.migrationId.length > 512 ||
-      typeof record.slug !== "string" || !isValidUsername(record.slug) || record.targetPodUid !== pod.uid ||
-      (record.processHeld !== undefined && typeof record.processHeld !== "boolean")) {
+      typeof record.slug !== "string" || !isValidUsername(record.slug) || record.targetPodUid !== pod.uid) {
     throw new Error(`invalid terminal target from pod=${pod.name}`);
   }
+  const processHeld = optionalTerminalFlag(record, "processHeld", pod);
+  const completionStarted = optionalTerminalFlag(record, "completionStarted", pod);
   return { migrationId: record.migrationId, slug: record.slug, targetPodUid: pod.uid,
-    ...(record.processHeld !== undefined ? { processHeld: record.processHeld } : {}) };
+    ...(processHeld !== undefined ? { processHeld } : {}),
+    ...(completionStarted !== undefined ? { completionStarted } : {}) };
 }
 
 function parseSurgePodHealth(input: {
@@ -627,6 +644,13 @@ function assertHeldTargetResponse(
   }
 }
 
+function assertHeldSourceResponse(response: Record<string, unknown>, input: { operationId: string; slug: string; targetPod: SurgePod }): void {
+  if (response.migrationId !== input.operationId || response.slug !== input.slug || response.targetPodUid !== input.targetPod.uid ||
+      response.operation !== "hold" || response.role !== "source" || response.mode !== "held" || response.phase !== "held") {
+    throw new Error("source OpenClaw hold did not confirm its held migration identity");
+  }
+}
+
 async function controlSurgeOpenClawProcess(
   control: SurgeControlCall,
   input: {
@@ -638,6 +662,8 @@ async function controlSurgeOpenClawProcess(
     targetPodUid: string;
     capability: string;
     timeoutMs?: number;
+    inspectTarget?: boolean;
+    reserveTarget?: boolean;
   },
 ): Promise<Record<string, unknown>> {
   try {
@@ -652,6 +678,8 @@ async function controlSurgeOpenClawProcess(
           slug: input.slug,
           targetPodUid: input.targetPodUid,
           receivingPodUid: input.pod.uid,
+          ...(input.inspectTarget ? { inspectTarget: true } : {}),
+          ...(input.reserveTarget ? { reserveTarget: true } : {}),
         },
         timeoutMs: input.timeoutMs,
       },
@@ -914,7 +942,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
     },
 
     async stopSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {
-      await controlSurgeOpenClawProcess(control, {
+      const response = await controlSurgeOpenClawProcess(control, {
         pod: sourcePod,
         gatewayId,
         path: "hold-surge-openclaw",
@@ -923,6 +951,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         targetPodUid: targetPod.uid,
         capability: "hold",
       });
+      assertHeldSourceResponse(response, { operationId, slug, targetPod });
     },
 
     async resumeSourceOpenClaw({ gatewayId, slug, operationId, sourcePod, targetPod }) {
@@ -938,7 +967,7 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
       });
     },
 
-    async holdTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {
+    async holdTargetOpenClaw({ gatewayId, slug, operationId, targetPod, inspectTarget, reserveTarget }) {
       const response = await controlSurgeOpenClawProcess(control, {
         pod: targetPod,
         gatewayId,
@@ -947,8 +976,10 @@ export function createSurgePodTransport(opts: SurgePodTransportOptions): SurgePo
         slug,
         targetPodUid: targetPod.uid,
         capability: "reserve",
+        inspectTarget, reserveTarget,
       });
       assertHeldTargetResponse(response, { operationId, slug, targetPod }, "hold");
+      return typeof response.completionStarted === "boolean" ? { completionStarted: response.completionStarted } : undefined;
     },
 
     async unreserveTargetOpenClaw({ gatewayId, slug, operationId, targetPod }) {

@@ -96,7 +96,7 @@ function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt
   if (!handoff || typeof input.fromGatewayId !== "string" || typeof input.toGatewayId !== "string") return false;
   const identity = readSchedulerMigrationIdentity(operation.id, handoff.migrationId);
   return [
-    operation.kind === "migrate-customer", operation.customerMigrationV2 === undefined,
+    operation.kind === "migrate-customer", operation.customerMigrationV2 === undefined, handoff.forwardRecovery === undefined,
     operation.cutoverCommittedAt === undefined, operation.cancellationRequestedAt === undefined,
     operation.sourceTransferExecution === undefined, input.sourceTransferMode === undefined,
     Array.isArray(operation.steps),

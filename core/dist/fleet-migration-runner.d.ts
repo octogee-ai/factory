@@ -26,11 +26,17 @@ export interface MigrationRunnerDeps {
     recordSchedulesStaged?: () => Promise<void>;
     setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
     readTargetSystemConfigCommit?: (gatewayId: string) => Promise<string | null>;
+    persistForwardRecovery?: (state: {
+        sourceSystemConfigCommit?: string;
+    }) => Promise<void>;
     now?: () => number;
     wait?: (delayMs: number) => Promise<void>;
 }
 export declare function isTargetSchedulerNotReady(error: unknown): boolean;
 export interface MigrationRunnerInput {
+    resumeForwardRecovery?: {
+        sourceSystemConfigCommit?: string;
+    };
     migrationId: string;
     uid: string;
     slug: string;

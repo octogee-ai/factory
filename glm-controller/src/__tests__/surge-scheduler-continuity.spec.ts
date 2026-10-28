@@ -132,7 +132,8 @@ it("captures the committed assignment clock when gating a legacy clockless assig
 
 it("keeps schedules and admission closed if the restored source starts terminating", async () => {
   const pods = [{ ...oldPod }, { ...targetPod }];
-  const h = createSurgeHandoffHarness(vi.fn, { pods, assignments: [assignment("u1", "alice")], transferError: new Error("import refused") });
+  const h = createSurgeHandoffHarness(vi.fn, { pods, assignments: [assignment("u1", "alice")] });
+  vi.mocked(h.deps.markSharedSurgeForwardRecovery).mockRejectedValueOnce(new Error("boundary refused"));
   h.deps.resumeSourceIngress = vi.fn(async () => { pods[0] = { ...pods[0], terminating: true }; });
   await expect(reconcileSurgeCustomerHandoff(h.deps, {
     gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,

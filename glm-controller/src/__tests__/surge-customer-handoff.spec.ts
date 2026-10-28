@@ -8,6 +8,103 @@ import { oldPod, targetPod, abandonedPodUid, abandonedOperationId,
 const harness = (input: Parameters<typeof createSurgeHandoffHarness>[1] = {}) => createSurgeHandoffHarness(vi.fn, input);
 
 describe("surge customer handoff", () => {
+  it("retries a Shared import forward after the target may upgrade its store", async () => {
+    const scenario = { assignments: [assignment("u1", "alice")], transferError: new Error("failed after upgrade") as Error | undefined };
+    const h = harness(scenario);
+    const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("failed after upgrade");
+    expect(h.assignments()[0]).toMatchObject({ state: "quiescing", sharedSurgeForwardRecovery: { operationId: h.operationId, targetPodUid: targetPod.uid } });
+    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    scenario.transferError = undefined;
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+    expect(h.deps.transfer).toHaveBeenCalledTimes(2);
+    expect(h.deps.releaseTarget).toHaveBeenCalledOnce();
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+  });
+
+  it("continues on a replacement target with the original scheduler custody after an upgrade", async () => {
+    const pods = [oldPod, targetPod];
+    const scenario = { pods, assignments: [assignment("u1", "alice")], transferError: new Error("after upgrade") as Error | undefined };
+    const h = harness(scenario);
+    const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("after upgrade");
+    const firstExport = vi.mocked(h.deps.scheduler!).mock.calls.find(([r]) => r.phase === "export")![0].operationId;
+    const replacement = { ...targetPod, uid: "replacement-uid", name: "replacement" };
+    pods[1] = replacement;
+    const read = vi.mocked(h.deps.readPodHealth).getMockImplementation()!;
+    vi.mocked(h.deps.readPodHealth).mockImplementation((pod, gatewayId) => read(pod.uid === replacement.uid ? targetPod : pod, gatewayId));
+    scenario.transferError = undefined;
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+    const exports = vi.mocked(h.deps.scheduler!).mock.calls.filter(([r]) => r.phase === "export");
+    expect(exports.map(([r]) => r.operationId)).toEqual([firstExport, firstExport]);
+    expect(h.deps.transfer).toHaveBeenLastCalledWith(expect.objectContaining({ operationId: h.operationId, targetPod: replacement }));
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+  });
+
+  it("finishes both Shared assignments after the second import fails", async () => {
+    const pods = [oldPod, targetPod];
+    const targetMountedCustomers: string[] = [];
+    const scenario = { pods, targetMountedCustomers, transferError: new Error("second upgrade failed") as Error | undefined, transferErrorSlug: "bob" };
+    const h = harness(scenario);
+    const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("second upgrade failed");
+    expect(h.assignments().every(row => row.state === "quiescing" && row.sharedSurgeForwardRecovery)).toBe(true);
+    scenario.transferError = undefined;
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { ...input, supersedingImageTag: "next-sha" })).resolves.toEqual({ ready: false });
+    expect(h.deps.transfer).toHaveBeenCalledTimes(4);
+    expect(h.deps.releaseTarget).toHaveBeenCalledOnce();
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    pods.splice(0, 2, { ...targetPod, ready: true });
+    targetMountedCustomers.push("alice", "bob");
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { ...input, supersedingImageTag: "next-sha" })).resolves.toEqual({ ready: true });
+    expect(h.assignments().every(row => row.state === "serving" && !row.sharedSurgeForwardRecovery)).toBe(true);
+  });
+
+  it("rolls back Shared source when the forward boundary fails before any import", async () => {
+    const h = harness({ assignments: [assignment("u1", "alice")] });
+    vi.mocked(h.deps.markSharedSurgeForwardRecovery).mockRejectedValueOnce(new Error("boundary refused"));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true })).rejects.toThrow("boundary refused");
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceIngress).toHaveBeenCalledOnce();
+    expect(h.assignments()[0].state).toBe("serving");
+  });
+
+  it("keeps source fenced when boundary write commits but its acknowledgement is lost", async () => {
+    const h = harness({ assignments: [assignment("u1", "alice")] });
+    const mark = vi.mocked(h.deps.markSharedSurgeForwardRecovery).getMockImplementation()!;
+    vi.mocked(h.deps.markSharedSurgeForwardRecovery).mockImplementationOnce(async input => { await mark(input); throw new Error("lost acknowledgement"); });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true })).rejects.toThrow("lost acknowledgement");
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+  });
+
+  it("keeps source fenced when forward marker cannot be read after an import failure", async () => {
+    const h = harness({ assignments: [assignment("u1", "alice")] });
+    vi.mocked(h.deps.transfer).mockImplementationOnce(async () => {
+      vi.mocked(h.deps.readAssignments).mockRejectedValue(new Error("assignment read unavailable"));
+      throw new Error("import failed");
+    });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true })).rejects.toThrow("assignment read unavailable");
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
+  });
+
+  it("refuses to rebind a Shared target while its previous physical UID is still observed", async () => {
+    const marker = { operationId: "surge-default-target-uid", targetPodUid: targetPod.uid, receivingPodUid: targetPod.uid };
+    const replacement = { ...targetPod, uid: "replacement-uid", name: "replacement" };
+    const h = harness({ pods: [oldPod, replacement], observedPodUids: [oldPod.uid, replacement.uid, targetPod.uid],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: marker.operationId, sharedSurgeForwardRecovery: marker }] });
+    const read = vi.mocked(h.deps.readPodHealth).getMockImplementation()!;
+    vi.mocked(h.deps.readPodHealth).mockImplementation((pod, gatewayId) => read(pod.uid === replacement.uid ? targetPod : pod, gatewayId));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true })).rejects.toThrow("physical custody changed");
+    expect(h.deps.rebindSharedSurgeForwardRecovery).not.toHaveBeenCalled();
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+  });
+
   it("keeps source ingress closed when a shared target release has an unknown outcome", async () => {
     const h = harness({ assignments: [assignment("u1", "alice")], releaseErrorBeforeCommit: new Error("connection refused") });
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -115,7 +212,7 @@ describe("surge customer handoff", () => {
     )).not.toThrow();
   });
 
-  it("leaves a healthy first-install pod for pod-side self-release", async () => {
+  it("releases a first-install pod only after observing no physical source", async () => {
     const h = harness({ pods: [targetPod], assignments: [] });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -124,7 +221,17 @@ describe("surge customer handoff", () => {
       requiresCustomerMigration: false,
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual([]);
+    expect(h.events).toEqual(["release:target-uid"]);
+  });
+
+  it("keeps a sourceless Builder held if another physical pod appears before release", async () => {
+    const h = harness({ pods: [targetPod], assignments: [assignment("u1", "alice")], bootingUids: [targetPod.uid],
+      prelaunchByUid: { [targetPod.uid]: "held" } });
+    vi.mocked(h.deps.listPods).mockResolvedValueOnce({ pods: [targetPod], observedPodUids: [targetPod.uid] })
+      .mockResolvedValueOnce({ pods: [targetPod, { ...oldPod, ready: false }], observedPodUids: [targetPod.uid, oldPod.uid] });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha",
+      requiresCustomerMigration: true, disposableBuilderGateway: true })).resolves.toEqual({ ready: false });
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
   });
 
   it("marks an empty held disposable Builder prelaunch live without releasing it", async () => {
@@ -152,7 +259,7 @@ describe("surge customer handoff", () => {
       name: "an assignment",
       assignments: [assignment("u1", "alice")],
       targetMountedCustomers: [] as string[],
-      expectedEvents: ["unreserve-target:target-uid:alice"],
+      expectedEvents: ["hold-target:target-uid:alice", "release:target-uid"],
     },
     {
       name: "a tenant mount",
@@ -181,7 +288,7 @@ describe("surge customer handoff", () => {
     })).resolves.toEqual({ ready: false });
 
     expect(h.events).toEqual(expectedEvents);
-    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).toHaveBeenCalledTimes(assignments.length);
   });
 
   it("finalizes a Builder source as quiesce, flush, reserve target, stop source, copy, verify", async () => {
@@ -327,7 +434,52 @@ describe("surge customer handoff", () => {
     ]);
   });
 
-  it("recovers a failed Builder rollback before replacing its cancelled target on later reconciles", async () => {
+  it("restarts an interrupted copy before Native completion starts", async () => {
+    const h = harness({ pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      bootingUids: [oldPod.uid, targetPod.uid], prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "held" },
+      completionStarted: false });
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha",
+      requiresCustomerMigration: true, disposableBuilderGateway: true })).resolves.toEqual({ ready: false });
+    expect(h.events).toContain("transfer:alice");
+    expect(h.events.indexOf("transfer:alice")).toBeLessThan(h.events.indexOf("digest:target-uid:alice"));
+    expect(h.deps.releaseTarget).toHaveBeenCalledOnce();
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it("keeps both pods held when target completion state is unavailable", async () => {
+    const h = harness({ pods: [{ ...oldPod, ready: false }, targetPod],
+      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
+      bootingUids: [oldPod.uid, targetPod.uid], prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "held" } });
+    vi.mocked(h.deps.holdTargetOpenClaw!).mockResolvedValue(undefined);
+    await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha",
+      requiresCustomerMigration: true, disposableBuilderGateway: true })).rejects.toThrow("cannot prove whether Native completion started");
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it("retains a held source and retries a verified Builder target after Native release fails", async () => {
+    const pods = [{ ...oldPod }, { ...targetPod }], bootingUids = [targetPod.uid];
+    const phases: Record<string, SurgePodHealth["prelaunchState"]> = { [targetPod.uid]: "held" };
+    const scenario = { pods, bootingUids, prelaunchByUid: phases, assignments: [assignment("u1", "alice")],
+      releaseErrorBeforeCommit: new Error("native release failed") as Error | undefined,
+      targetPrelaunchStateAfterRelease: "held" as const, wait: async () => {} };
+    const h = harness(scenario);
+    const stop = vi.mocked(h.deps.stopSourceOpenClaw!).getMockImplementation()!;
+    vi.mocked(h.deps.stopSourceOpenClaw!).mockImplementation(async input => { await stop(input); pods[0].ready = false; bootingUids.push(oldPod.uid); });
+    const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, disposableBuilderGateway: true };
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("native release failed");
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+    expect(h.assignments()[0]).toMatchObject({ state: "quiescing", updatedByOperationId: h.operationId });
+    scenario.releaseErrorBeforeCommit = undefined;
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
+    expect(h.deps.releaseTarget).toHaveBeenCalledTimes(3);
+    expect(h.deps.transfer).toHaveBeenCalledOnce();
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it("keeps a cancelled Builder target fenced while its old source is held", async () => {
     const pods = [{ ...oldPod }, { ...targetPod }];
     const bootingUids = [targetPod.uid];
     const phases: Record<string, SurgePodHealth["prelaunchState"]> = { [targetPod.uid]: "held" };
@@ -349,7 +501,7 @@ describe("surge customer handoff", () => {
     vi.mocked(h.deps.holdTargetOpenClaw!).mockImplementation(async input => {
       await hold(input);
       if (++holds === 2) terminalTargets[targetPod.uid] = {
-        migrationId: h.operationId, slug: "alice", targetPodUid: targetPod.uid, processHeld: true,
+        migrationId: h.operationId, slug: "alice", targetPodUid: targetPod.uid, processHeld: true, completionStarted: true,
       };
     });
     const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
@@ -363,24 +515,11 @@ describe("surge customer handoff", () => {
 
     scenario.resumeSourceError = undefined;
     await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
-    expect(h.deps.resumeSourceOpenClaw).toHaveBeenCalledTimes(2);
-    expect(h.deps.resumeSourceIngress).toHaveBeenCalledOnce();
-    expect(h.assignments()[0]).toMatchObject({ state: "serving", updatedByOperationId: h.operationId });
-    expect(h.deps.claimCrashLoopEviction).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceOpenClaw).toHaveBeenCalledTimes(1);
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    expect(h.assignments()[0]).toMatchObject({ state: "quiescing", updatedByOperationId: h.operationId });
     expect(h.deps.deleteCancelledTarget).not.toHaveBeenCalled();
-
-    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
-    expect(h.deps.resumeSourceOpenClaw).toHaveBeenCalledTimes(2);
-    pods[0].ready = true;
-    bootingUids.splice(bootingUids.indexOf(oldPod.uid), 1);
-    phases[oldPod.uid] = "serving";
-    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).resolves.toEqual({ ready: false });
-    expect(h.deps.claimCrashLoopEviction).toHaveBeenCalledOnce();
-    expect(h.deps.deleteCancelledTarget).toHaveBeenCalledWith({ gatewayId: "default", pod: pods[1] });
-    expect(h.deps.transfer).toHaveBeenCalledOnce();
     expect(h.deps.releaseTarget).not.toHaveBeenCalled();
-    expect(h.deps.unreserveTargetOpenClaw).not.toHaveBeenCalled();
-    expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
   });
 
   it.each(["source ingress unavailable", "source resume response lost"])("finishes rollback admission after Native resumes before %s", async fault => {
@@ -679,16 +818,16 @@ describe("surge customer handoff", () => {
     expect(h.assignments().every(item => item.state === "serving")).toBe(true);
   });
 
-  it("does not release an empty target after failed rollback removes the source mounted roster", async () => {
+  it("does not release an empty target while the source roster is unavailable", async () => {
     const sourceMountedCustomers = ["alice"];
     const h = harness({ assignments: [assignment("u1", "alice")], sourceMountedCustomers,
       transferError: new Error("anchor admission refused") });
     vi.mocked(h.deps.resumeSourceIngress).mockRejectedValue(new Error("resume admission refused"));
     const input = { gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true, };
-    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("resume admission refused");
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("anchor admission refused");
     sourceMountedCustomers.splice(0);
-    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("resume admission refused");
-    expect(h.deps.transfer).toHaveBeenCalledOnce();
+    await expect(reconcileSurgeCustomerHandoff(h.deps, input)).rejects.toThrow("anchor admission refused");
+    expect(h.deps.transfer).toHaveBeenCalledTimes(2);
     expect(h.deps.releaseTarget).not.toHaveBeenCalled();
     expect(h.assignments()[0].state).toBe("quiescing");
   });
@@ -1197,7 +1336,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("reopens its assignments when transfer fails before target release", async () => {
+  it("keeps assignments fenced when transfer may have upgraded the target", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice")],
       transferError: new Error("rsync failed"),
@@ -1212,8 +1351,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "discard:alice",
-      "assignment:u1:serving",
     ]);
   });
 
@@ -1281,7 +1418,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("discards every target customer touched when a later transfer fails", async () => {
+  it("preserves every touched target when a later transfer fails", async () => {
     const h = harness({
       transferError: new Error("bob rsync failed"),
       transferErrorSlug: "bob",
@@ -1302,10 +1439,6 @@ describe("surge customer handoff", () => {
       "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
-      "discard:bob",
-      "discard:alice",
-      "assignment:u1:serving",
-      "assignment:u2:serving",
     ]);
   });
 
@@ -1428,7 +1561,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toContain("release:target-uid");
   });
 
-  it("resumes a held NotReady Builder source instead of waiting forever and restores its roster", async () => {
+  it("retries a verified held target without resuming its old source", async () => {
     const h = harness({
       pods: [{ ...oldPod, ready: false }, targetPod],
       assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
@@ -1443,10 +1576,11 @@ describe("surge customer handoff", () => {
       disposableBuilderGateway: true,
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["resume-source:old-uid:alice", "assignment:u1:serving"]);
+    expect(h.events).toEqual(["stop-source:old-uid:alice", "hold-target:target-uid:alice", "digest:old-uid:alice", "digest:target-uid:alice", "stop-source:old-uid:alice", "hold-target:target-uid:alice", "release:target-uid"]);
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
   });
 
-  it("releases source voice admission before restoring a recovered Builder assignment", async () => {
+  it("keeps source admission closed during forward retry", async () => {
     const h = harness({
       pods: [{ ...oldPod, ready: false }, targetPod],
       assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
@@ -1460,24 +1594,26 @@ describe("surge customer handoff", () => {
       gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
       disposableBuilderGateway: true,
     });
-    expect(h.deps.resumeSourceIngress).toHaveBeenCalledWith(expect.objectContaining({ slug: "alice", sourcePod: expect.objectContaining({ uid: oldPod.uid }) }));
-    expect(h.assignments()[0].state).toBe("serving");
+    expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
+    expect(h.assignments()[0].state).toBe("quiescing");
   });
 
-  it("keeps a recovered Builder gated if its voice admission cannot resume", async () => {
+  it("keeps a Builder gated if source and target config commits differ", async () => {
     const h = harness({
       pods: [{ ...oldPod, ready: false }, targetPod],
       assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
       bootingUids: [oldPod.uid, targetPod.uid],
       prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "hydrated" },
     });
-    vi.mocked(h.deps.resumeSourceIngress).mockRejectedValueOnce(new Error("voice admission unavailable"));
-    await reconcileSurgeCustomerHandoff(h.deps, {
+    vi.mocked(h.deps.readSystemConfigCommit).mockImplementation(async pod => pod.uid === oldPod.uid ? "a".repeat(40) : "b".repeat(40));
+    await expect(reconcileSurgeCustomerHandoff(h.deps, {
       gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
       disposableBuilderGateway: true,
-    });
+    })).rejects.toThrow("cannot verify matching source and target state");
     expect(h.assignments()[0].state).toBe("quiescing");
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("voice admission unavailable"));
+    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
+    expect(h.deps.transfer).not.toHaveBeenCalled();
+    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
   });
 
   it("does not read assignments for a Barn whose source is missing or NotReady", async () => {
@@ -1514,7 +1650,7 @@ describe("surge customer handoff", () => {
     expect(h.events).toEqual([]);
   });
 
-  it("unreserves a sourceless reserved Builder target so it may rebuild from durable state", async () => {
+  it("releases an assigned Builder only after observing no physical source", async () => {
     const h = harness({
       pods: [targetPod],
       assignments: [assignment("u1", "alice")],
@@ -1529,7 +1665,7 @@ describe("surge customer handoff", () => {
       disposableBuilderGateway: true,
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["unreserve-target:target-uid:alice"]);
+    expect(h.events).toEqual(["hold-target:target-uid:alice", "release:target-uid"]);
   });
 
   it("leaves assignments open when a legacy source cannot begin a scoped handoff", async () => {
@@ -1594,7 +1730,7 @@ describe("surge customer handoff", () => {
     expect(h.assignments().find((item) => item.uid === "u2")?.state).toBe("serving");
   });
 
-  it("keeps admission closed when batch cleanup fails and attempts every touched customer", async () => {
+  it("preserves both imports without invoking batch cleanup after a possible upgrade", async () => {
     const h = harness({
       transferError: new Error("bob rsync failed"),
       transferErrorSlug: "bob",
@@ -1605,7 +1741,7 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
-    })).rejects.toThrow(/target cleanup failed/);
+    })).rejects.toThrow("bob rsync failed");
 
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
@@ -1616,12 +1752,10 @@ describe("surge customer handoff", () => {
       "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
-      "discard:bob",
-      "discard:alice",
     ]);
   });
 
-  it("rolls back an earlier roster gate when a later gate write fails", async () => {
+  it("preserves an earlier forward import when a later roster gate fails", async () => {
     const h = harness({ markErrorUid: "u2" });
 
     await expect(reconcileSurgeCustomerHandoff(h.deps, {
@@ -1636,12 +1770,10 @@ describe("surge customer handoff", () => {
       "digest:old-uid:alice",
       "digest:target-uid:alice",
       "assignment:u2:quiescing",
-      "discard:alice",
-      "assignment:u1:serving",
     ]);
   });
 
-  it("keeps admission closed when a failed target import cannot be discarded", async () => {
+  it("keeps admission closed without discarding a possibly upgraded import", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice")],
       transferError: new Error("rsync failed"),
@@ -1652,12 +1784,11 @@ describe("surge customer handoff", () => {
       gatewayId: "default",
       desiredImageTag: "new-sha",
       requiresCustomerMigration: true,
-    })).rejects.toThrow(/target cleanup failed/);
+    })).rejects.toThrow("rsync failed");
     expect(h.events).toEqual([
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "discard:alice",
     ]);
   });
 
@@ -1787,7 +1918,7 @@ describe("surge customer handoff", () => {
     expect(h.assignments().every((item) => item.state === "serving")).toBe(true);
   });
 
-  it("resumes a held Builder source while standing down for a pending release", async () => {
+  it("retries a verified held Builder while a later release is pending", async () => {
     const h = harness({
       pods: [{ ...oldPod, ready: false }, targetPod],
       assignments: [assignment("u1", "alice", {
@@ -1806,7 +1937,7 @@ describe("surge customer handoff", () => {
       supersedingImageTag: "next-sha",
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["resume-source:old-uid:alice", "assignment:u1:serving"]);
+    expect(h.events).toEqual(["stop-source:old-uid:alice", "hold-target:target-uid:alice", "digest:old-uid:alice", "digest:target-uid:alice", "stop-source:old-uid:alice", "hold-target:target-uid:alice", "release:target-uid"]);
   });
 
   it("releases a live source voice hold when superseding a held Builder target", async () => {

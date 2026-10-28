@@ -26,6 +26,9 @@ function migrationOwnerUid(operation: Record<string, unknown>): string | null {
 
 function migrationNeedsCancellationRequest(operation: Record<string, unknown>): boolean {
   if (operation.status === "running" || operation.customerMigrationV2 !== undefined) return true;
+  const handoff = operation.schedulerHandoff;
+  if (handoff && typeof handoff === "object" && !Array.isArray(handoff) &&
+      (handoff as Record<string, unknown>).forwardRecovery !== undefined) return true;
   const output = operation.output;
   if (!output || typeof output !== "object" || Array.isArray(output)) return false;
   const cleanup = (output as Record<string, unknown>).configCleanup;
@@ -37,26 +40,27 @@ export async function cancelCustomerMigrationsForSuspension(
   uid: string,
   deletionId: string,
   now: number,
-): Promise<void> {
+): Promise<boolean> {
   const snapshot = await db
     .collection(GLM_OPERATIONS_COLLECTION)
     .where("status", "in", ["pending", "running"])
     .get();
+  let pending = false;
   for (const doc of snapshot.docs) {
     const operation = doc.data() as Record<string, unknown>;
     if (operation.kind !== "migrate-customer" || migrationOwnerUid(operation) !== uid) continue;
-    await db.runTransaction(async (transaction) => {
+    const stillPending = await db.runTransaction(async (transaction) => {
       const fresh = await transaction.get(doc.ref);
-      if (!fresh.exists) return;
+      if (!fresh.exists) return false;
       const current = fresh.data() as Record<string, unknown>;
       if (
         current.kind !== "migrate-customer" ||
         migrationOwnerUid(current) !== uid ||
         (current.status !== "pending" && current.status !== "running")
-      ) return;
+      ) return false;
       if (migrationNeedsCancellationRequest(current)) {
         transaction.update(doc.ref, { cancellationRequestedAt: now });
-        return;
+        return true;
       }
       transaction.update(doc.ref, {
         status: "failed",
@@ -67,8 +71,11 @@ export async function cancelCustomerMigrationsForSuspension(
         waitingOn: FieldValue.delete(),
         cancelledByDeletionId: deletionId,
       });
+      return false;
     });
+    pending ||= stillPending;
   }
+  return pending;
 }
 
 export async function assertCustomerRestoreNotInProgress(

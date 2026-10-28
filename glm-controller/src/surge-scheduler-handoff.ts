@@ -18,7 +18,7 @@ export function surgeSchedulerOperationId(custody: Pick<SurgeSchedulerCustody, "
     throw new Error(`scheduler custody requires an assignment clock for ${assignment.slug}`);
   }
   const digest = createHash("sha256").update(JSON.stringify([
-    gatewayId, target.uid, assignment.uid, assignment.slug, assignment.epoch, assignment.updatedAt,
+    gatewayId, assignment.sharedSurgeForwardRecovery?.targetPodUid ?? target.uid, assignment.uid, assignment.slug, assignment.epoch, assignment.updatedAt,
   ])).digest("hex");
   return `surge-cron:${digest}`;
 }
@@ -72,7 +72,7 @@ function assertFullSchedulerSnapshot(snapshot: unknown, operationId: string, age
 export async function stageSurgeScheduler(deps: SurgeCustomerHandoffDeps, custody: SurgeSchedulerCustody): Promise<void> {
   if (!custody.source) throw new Error("scheduler export requires the physical source");
   const exported = await schedulerPhase(deps, custody, custody.source, {
-    phase: "export", resolveAgentScope: true, retainNonportable: true,
+    phase: "export", ...(custody.assignment.sharedSurgeForwardRecovery ? {} : { resolveAgentScope: true, retainNonportable: true }),
   });
   custody.agentIds = exported.agentIds;
   assertFullSchedulerSnapshot(exported.snapshot, exported.operationId, exported.agentIds);

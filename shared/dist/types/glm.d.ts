@@ -424,7 +424,14 @@ export interface BuilderActivationTargetRollbackProof {
     rollClaimStartedAt: number;
     completedAt: number;
 }
+export interface MigrationForwardRecovery {
+    schemaVersion: 1;
+    phase: "source-flushed";
+    sourceEpoch: number;
+    sourceSystemConfigCommit?: string;
+}
 export interface SchedulerHandoffState {
+    forwardRecovery?: MigrationForwardRecovery;
     migrationId: string;
     fromGatewayId: string;
     toGatewayId: string;

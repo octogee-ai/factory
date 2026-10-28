@@ -267,6 +267,9 @@ const POST_INTENT_PHASES = new Set([
     "sourceRetired",
     "complete",
 ]);
+export function isCustomerMigrationV2ForwardOnly(state) {
+    return ["sourceQuiesced", "finalSynced", "targetVerified"].includes(state.phase) || POST_INTENT_PHASES.has(state.phase);
+}
 export function isCustomerMigrationV2PostIntent(state) {
     return POST_INTENT_PHASES.has(state.phase);
 }
@@ -289,6 +292,7 @@ export function isCustomerMigrationV2Transition(from, to) {
         return true;
     return to === "abortIntent" &&
         from !== "initialized" &&
+        !["sourceQuiesced", "finalSynced", "targetVerified"].includes(from) &&
         !POST_INTENT_PHASES.has(from) &&
         !isAbortPhaseName(from);
 }
@@ -298,8 +302,8 @@ function isAbortPhaseName(phase) {
         phase === "aborted";
 }
 export function beginCustomerMigrationV2Abort(state, reason, now) {
-    if (isCustomerMigrationV2PostIntent(state)) {
-        throw new Error(`customer migration V2 phase ${state.phase} crossed cutover and must roll forward`);
+    if (isCustomerMigrationV2ForwardOnly(state)) {
+        throw new Error(`customer migration V2 phase ${state.phase} crossed the final transfer boundary and must roll forward`);
     }
     if (state.phase === "initialized") {
         throw new Error("customer migration V2 has no durable target footprint to abort");

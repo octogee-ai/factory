@@ -789,31 +789,11 @@ describe("native computer return", () => {
     expect(h.client.resume).not.toHaveBeenCalled();
   });
 
-  it("detaches an imported target before resuming the source after a failed native checkpoint claim", async () => {
-    const h = mkDeps();
-    const native = nativeReturn(h);
-    const order: string[] = [];
-    native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim failed"));
-    h.client.unmount = vi.fn(async request => { order.push("detach-target"); return { ...request, unmounted: true }; });
-    h.client.resume = vi.fn(async () => { order.push("adopt-source"); });
-    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true });
-    expect(order).toEqual(["detach-target", "adopt-source"]);
-    expect(h.deps.commitCutover).not.toHaveBeenCalled();
-  });
 
-  it("keeps the source fenced when native rollback cannot confirm target detach", async () => {
-    const h = mkDeps();
-    const native = nativeReturn(h);
-    native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim failed"));
-    h.client.unmount = vi.fn(async () => { throw new Error("target detach unavailable"); });
-    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
-      success: false, rolledBack: false, error: expect.stringContaining("target detach unavailable"),
-    });
-    expect(h.client.resume).not.toHaveBeenCalled();
-    expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
-  });
 
-  it.each([true, false])("resumes the original source after pre-cutover persona refusal only with target cleanup confirmed: %s", async (cleanupConfirmed) => {
+
+
+  it.each([true, false])("retains the source fence after a final import refusal regardless of target cleanup: %s", async (cleanupConfirmed) => {
     const h = mkDeps();
     const native = nativeReturn(h);
     const missingWitness = "Shared import has no original workspace identity witness";
@@ -849,14 +829,11 @@ describe("native computer return", () => {
 
     const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
 
-    expect(result).toMatchObject({ success: false, rolledBack: cleanupConfirmed, error: expect.stringContaining(missingWitness) });
-    expect(h.client.abortImport).toHaveBeenCalledExactlyOnceWith({ migrationId: "mig-op-1", gatewayId: "gw-green", slug: "alice", mode: "final" });
-    expect(h.client.unmount).toHaveBeenCalledExactlyOnceWith({ migrationId: "mig-op-1", gatewayId: "gw-green", slug: "alice" });
-    expect(order).toEqual([
-      "assignment:quiescing", "final-import-refused", "abort:gw-green", "unmount:gw-green",
-      ...(cleanupConfirmed ? ["scheduler:gw-green:abort", "scheduler:gw-blue:resume", "resume:gw-blue", "assignment:serving"] : []),
-    ]);
-    expect(assignment).toEqual({ gatewayId: "gw-blue", epoch: 4, state: cleanupConfirmed ? "serving" : "quiescing" });
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining(missingWitness) });
+    expect(h.client.abortImport).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+    expect(order).toEqual(["assignment:quiescing", "final-import-refused"]);
+    expect(assignment).toEqual({ gatewayId: "gw-blue", epoch: 4, state: "quiescing" });
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
     expect(native.requestCheckpoint).not.toHaveBeenCalled();
     expect(native.park).not.toHaveBeenCalled();
@@ -944,26 +921,7 @@ describe("native computer return", () => {
       expect(h.deps.sleep).toHaveBeenCalledOnce();
     });
 
-    it("waits for checkpoint writers to resume before rolling back a failed checkpoint", async () => {
-      const h = mkDeps();
-      const native = nativeReturn(h);
-      let ready = false;
-      native.requestCheckpoint.mockRejectedValue(new Error("native return checkpoint claim authority changed"));
-      const scheduler = h.client.scheduler;
-      let resuming = false;
-      h.client.scheduler = vi.fn(async (request) => {
-        if (request.phase === "resume") {
-          if (!resuming) { resuming = true; throw new MigrationRpcError("still paused", { status: 503 }); }
-          ready = true;
-        }
-        return scheduler(request);
-      });
-      vi.mocked(h.client.resume).mockImplementation(async () => { expect(ready).toBe(true); });
-      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "native return checkpoint claim authority changed" });
-      expect(native.release).toHaveBeenCalledOnce();
-      expect(h.deps.sleep).toHaveBeenCalledOnce();
-      expect(h.deps.commitCutover).not.toHaveBeenCalled();
-    });
+
 
     it.each([false, true])("releases an earlier checkpoint before deferring an active Builder (source fenced=%s)", async (fenced) => {
       const h = mkDeps();
@@ -994,17 +952,7 @@ describe("native computer return", () => {
       expect(h.deps.commitCutover).not.toHaveBeenCalled();
     });
 
-    it("preserves authorization failure classification during native rollback", async () => {
-      const h = mkDeps();
-      const native = nativeReturn(h);
-      native.requestCheckpoint.mockRejectedValue(new Error("native return checkpoint claim authority changed"));
-      h.client.resume = vi.fn().mockRejectedValue(new MigrationRpcError("unauthorized", { status: 401 }));
-      const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
-      expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("unauthorized") });
-      expect(classifyOperationFailure(result.error)).toBe("terminal");
-      expect(h.deps.sleep).not.toHaveBeenCalled();
-      expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
-    });
+
 
     it("does not resume a rollback until the running source is reachable", async () => {
       const h = mkDeps();
@@ -1514,12 +1462,12 @@ describe("native computer return", () => {
     native.requestCheckpoint.mockRejectedValue(new Error("native computer has another checkpoint request"));
     deps.prepareNativeComputerReturn = vi.fn(async () => native);
     const result = await createMigrateCustomerHandler(deps)(mkOp({}), ctx);
-    expect(result).toMatchObject({ success: false, rolledBack: true, error: "native computer has another checkpoint request" });
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("native computer has another checkpoint request") });
     expect(native.awaitCheckpoint).not.toHaveBeenCalled();
     expect(deps.commitCutover).not.toHaveBeenCalled();
-    expect(client.unmount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "gw-green" }));
-    expect(native.release).toHaveBeenCalledOnce();
-    expect(deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
+    expect(client.unmount).not.toHaveBeenCalled();
+    expect(native.release).not.toHaveBeenCalled();
+    expect(deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "quiescing" }));
   });
 
   describe("partial scheduler handoff", () => {
@@ -1579,38 +1527,9 @@ describe("native computer return", () => {
       expect(native.acknowledgeCompletedSchedulerHandoff).not.toHaveBeenCalled();
     });
 
-    it("aborts Shared's staged schedules and reopens the computer's scheduler when the checkpoint fails", async () => {
-      const h = mkDeps();
-      const native = nativeReturn(h);
-      native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim refused"));
-      const order: string[] = [];
-      vi.mocked(h.client.scheduler).mockImplementation(async ({ gatewayId, phase, migrationId }) => {
-        order.push(`${gatewayId}:${phase}`);
-        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
-      });
-      vi.mocked(h.client.resume).mockImplementation(async () => { order.push("resume-ingress"); });
 
-      expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: true, error: "checkpoint claim refused" });
-      expect(order).toEqual(["gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "resume-ingress"]);
-      expect(h.deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ state: "serving" }));
-    });
 
-    it("does not report a rollback while the computer's scheduler fence is unconfirmed", async () => {
-      const h = mkDeps();
-      const native = nativeReturn(h);
-      native.requestCheckpoint.mockRejectedValue(new Error("checkpoint claim refused"));
-      vi.mocked(h.client.scheduler).mockImplementation(async ({ phase, migrationId }) => {
-        if (phase === "resume") throw new Error("computer unreachable");
-        return { operationId: migrationId, phase, agentIds: ["octogee-alice-coach"], drained: true, snapshot: { retainedJobIds: [] } };
-      });
 
-      const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
-      expect(result).toMatchObject({ success: false, rolledBack: false });
-      expect(result.error).toContain("checkpoint claim refused");
-      expect(result.error).toContain("computer unreachable");
-      expect(h.client.resume).not.toHaveBeenCalled();
-      expect(h.deps.setAssignmentState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "serving" }));
-    });
 
     it("stops the computer and leaves its exported copies fenced for the next activation when the live retire fails", async () => {
       const h = mkDeps();
@@ -1801,8 +1720,9 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
     const id = deferred.migrationId;
     expect(h.order).toEqual([
       `persist:${JSON.stringify(deferred)}`,
+      `persist:${JSON.stringify({ ...deferred, forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4, sourceSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT } })}`,
       `gw-blue:export:${id}`, "cutover", `gw-green:stage:${id}:retain`,
-      `persist:${JSON.stringify({ ...deferred, stagedAt: 5_000 })}`,
+      `persist:${JSON.stringify({ ...deferred, forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4, sourceSystemConfigCommit: SOURCE_SYSTEM_CONFIG_COMMIT }, stagedAt: 5_000 })}`,
       `gw-blue:retire:${id}`, `gw-green:activate:${id}`,
     ]);
     expect(h.client.schedulerReady).not.toHaveBeenCalled();
@@ -1811,7 +1731,7 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
   it("keeps a Shared target's handoff staged before cutover", async () => {
     const h = mkDeps();
     expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
-    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledTimes(1);
+    expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledTimes(2);
     expect(h.ctx.persistSchedulerHandoff).toHaveBeenCalledWith({
       migrationId: "mig-op-1:scheduler:1:claim:4000", fromGatewayId: "gw-blue", toGatewayId: "gw-green", uid: "uid-alice", slug: "alice",
     });
@@ -1974,7 +1894,7 @@ describe("migrate-customer — input validation", () => {
 });
 
 describe("migrate-customer — legacy data-plane migration (shared class)", () => {
-  it("clears the migration marker after final transfer fails and source rollback succeeds", async () => {
+  it("keeps the migration marker after final transfer failure", async () => {
     const h = mkDeps();
     h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
     vi.mocked(h.client.transferState).mockImplementation(async request => {
@@ -1982,8 +1902,8 @@ describe("migrate-customer — legacy data-plane migration (shared class)", () =
       return { migrationId: request.migrationId, slug: request.slug, imported: true };
     });
     const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
-    expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(h.deps.clearMigrationPreparation).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(h.deps.clearMigrationPreparation).not.toHaveBeenCalled();
   });
   it.each([true, false])("clears a failed idle probe only after target cleanup (%s)", async (cleanupConfirmed) => {
     const h = mkDeps();
@@ -2287,7 +2207,7 @@ describe("migrate-customer — durable V2 migration", () => {
     expect(persisted.map((state) => state.phase)).toEqual(["initialized"]);
   });
 
-  it("aborts a transient final-sync failure after source quiesce before returning retry", async () => {
+  it("retains the source fence after a transient final-sync failure", async () => {
     const client = happyClient();
     (client.transferState as ReturnType<typeof vi.fn>).mockImplementation(async ({ mode }) => {
       if (mode === "final") {
@@ -2303,13 +2223,12 @@ describe("migrate-customer — durable V2 migration", () => {
 
     const result = await handler(mkOp({}), ctx);
 
-    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("status 503") });
     expect(persisted.map((state) => state.phase)).toEqual([
       "initialized", "keysSynced", "preSynced", "sourceQuiesced",
-      "abortIntent", "abortTargetUnmounted", "aborted",
     ]);
-    expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
-    expect(events).toContain("assignment:gw-blue:serving");
+    expect(client.calls.filter((call) => call.startsWith("unmount:"))).toEqual([]);
+    expect(events).not.toContain("assignment:gw-blue:serving");
   });
 
   it("replays an ambiguous cutover commit instead of aborting the canonical target", async () => {
@@ -2338,7 +2257,7 @@ describe("migrate-customer — durable V2 migration", () => {
     ]);
   });
 
-  it("aborts on a terminal mid-flight failure: unmounts the target and restores the source", async () => {
+  it("requires forward recovery after a terminal target verification failure", async () => {
     const client = happyClient();
     (client.verifyTarget as ReturnType<typeof vi.fn>).mockRejectedValue(
       Object.assign(new Error("target verify failed"), { status: 409 }),
@@ -2348,13 +2267,12 @@ describe("migrate-customer — durable V2 migration", () => {
 
     const result = await handler(mkOp({}), ctx);
 
-    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("status 503") });
     expect(persisted.map((state) => state.phase)).toEqual([
-      "initialized", "keysSynced", "preSynced", "sourceQuiesced",
-      "finalSynced", "abortIntent", "abortTargetUnmounted", "aborted",
+      "initialized", "keysSynced", "preSynced", "sourceQuiesced", "finalSynced",
     ]);
-    expect(c.calls.filter((call) => call.startsWith("unmount:"))).toEqual(["unmount:gw-green"]);
-    expect(events).toContain("assignment:gw-blue:serving");
+    expect(c.calls.filter((call) => call.startsWith("unmount:"))).toEqual([]);
+    expect(events).not.toContain("assignment:gw-blue:serving");
   });
 
   it("replays a completed durable migration idempotently and refuses changed input", async () => {
@@ -2544,17 +2462,18 @@ describe("migrate-customer — preempted computers", () => {
     input: { uid: "uid-alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", source: "builder-activation-lease" },
   });
 
-  it("rolls back as before but blames the target computer Compute preempted since the migration first started", async () => {
+  it("retains the source fence and blames the target computer Compute preempted since the migration first started", async () => {
     const h = mkDeps({ durable: true, client: finalTransferFails() });
     (h.deps.findPreemptedComputer as ReturnType<typeof vi.fn>).mockImplementation(async (gatewayId: string) =>
       gatewayId === "gw-green" ? "octogee-pool-44847785" : null);
 
     const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
 
-    expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(result.error).toBe(`target computer octogee-pool-44847785 was preempted: ${rsyncReset}`);
-    expect(h.persisted.at(-1)?.phase).toBe("aborted");
-    expect(h.events).toContain("assignment:gw-blue:serving");
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toContain(`target computer octogee-pool-44847785 was preempted:`);
+    expect(result.error).toContain(rsyncReset);
+    expect(h.persisted.at(-1)?.phase).toBe("sourceQuiesced");
+    expect(h.events).not.toContain("assignment:gw-blue:serving");
     expect(h.deps.findPreemptedComputer).toHaveBeenCalledWith("gw-green", 6_000);
   });
 
@@ -2565,13 +2484,14 @@ describe("migrate-customer — preempted computers", () => {
 
     const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
 
-    expect(result.error).toBe(`source computer octogee-computer-prod-uida was preempted: ${rsyncReset}`);
+    expect(result.error).toContain(`source computer octogee-computer-prod-uida was preempted:`);
+    expect(result.error).toContain(rsyncReset);
   });
 
   it("leaves the failure as it was when neither computer was preempted, and never asks on success", async () => {
     const failed = mkDeps({ durable: true, client: finalTransferFails() });
     const result = await createMigrateCustomerHandler(failed.deps)(activation(), failed.ctx);
-    expect(result.error).toBe(rsyncReset);
+    expect(result.error).toContain(rsyncReset);
     expect(failed.deps.findPreemptedComputer).toHaveBeenCalledTimes(2);
 
     const succeeded = mkDeps({ durable: true });
@@ -2585,7 +2505,7 @@ describe("migrate-customer — preempted computers", () => {
 
     const result = await createMigrateCustomerHandler(h.deps)(activation(), h.ctx);
 
-    expect(result.error).toBe(rsyncReset);
+    expect(result.error).toContain(rsyncReset);
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/could not check whether gw-green's computer was preempted: http 403 op=builder-activate-gw-green-g1$/u));
   });
 });
@@ -2686,4 +2606,84 @@ it("migrates without reading version metadata or a release artifact for a fixed 
   const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
   expect(result.success).toBe(true);
   expect(h.client.quiesce).toHaveBeenCalled();
+});
+
+describe("legacy migration forward recovery", () => {
+  it("restarts a lost final import response with the original scheduler ID and never reopens the old Native writer", async () => {
+    const h = mkDeps();
+    let saved: Operation["schedulerHandoff"];
+    vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async state => { saved = structuredClone(state); });
+    const original = h.client.transferState;
+    let upgradeAttempted = false;
+    h.client.transferState = vi.fn(async request => {
+      if (request.mode === "final" && !upgradeAttempted) {
+        upgradeAttempted = true;
+        expect(saved?.forwardRecovery).toMatchObject({ schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 });
+        throw new MigrationTransportError("Native Doctor upgraded agent schema; response lost");
+      }
+      return original(request);
+    });
+    const handler = createMigrateCustomerHandler(h.deps);
+    expect(await handler(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("status 503") });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+    const schedulerId = saved!.migrationId;
+    vi.mocked(h.client.transferState).mockClear();
+    vi.mocked(h.client.quiesce).mockClear();
+    vi.mocked(h.client.scheduler).mockClear();
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 3, epoch: 4, assignmentMode: "assigned" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 4, gatewayClass: "shared" });
+    const result = await handler(mkOp({ schedulerHandoff: saved!, attempts: 1, startedAt: 6000, cancellationRequestedAt: 5500 }), h.ctx);
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final" }));
+    expect(vi.mocked(h.client.scheduler).mock.calls.every(([request]) => request.migrationId === schedulerId)).toBe(true);
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.unmount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+    expect(h.ctx.assertActiveClaim).toHaveBeenCalledWith(true);
+  });
+
+  it.each(["sourceEpoch", "schemaVersion"] as const)("withholds cleanup and transfer when the durable %s fence changed", async field => {
+    const h = mkDeps();
+    const checkpoint = { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4, [field]: 9 };
+    const op = mkOp({ schedulerHandoff: { migrationId: "mig-op-1:scheduler:1:claim:4000", uid: "uid-alice", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", forwardRecovery: checkpoint } as NonNullable<Operation["schedulerHandoff"]> });
+    expect(await createMigrateCustomerHandler(h.deps)(op, h.ctx)).toMatchObject({ success: false, rolledBack: false });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+  });
+});
+
+it.each(["final-transfer", "checkpoint-claim"])("keeps Native writers held across %s failure and replays the same durable handoff", async failureAt => {
+  const h = mkDeps();
+  const native = mockNativeReturn();
+  h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
+  let saved: Operation["schedulerHandoff"];
+  vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async state => { saved = structuredClone(state); });
+  const transfer = h.client.transferState;
+  let failed = false;
+  h.client.transferState = vi.fn(async request => {
+    if (failureAt === "final-transfer" && request.mode === "final" && !failed) {
+      failed = true;
+      expect(saved?.forwardRecovery?.schemaVersion).toBe(1);
+      throw new MigrationTransportError("upgrade completed; final transfer response lost");
+    }
+    return transfer(request);
+  });
+  if (failureAt === "checkpoint-claim") native.requestCheckpoint.mockRejectedValueOnce(new Error("checkpoint claim response lost"));
+  const handler = createMigrateCustomerHandler(h.deps);
+  expect(await handler(mkOp({}), h.ctx)).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("status 503") });
+  expect(native.release).not.toHaveBeenCalled();
+  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.client.unmount).not.toHaveBeenCalled();
+  const originalSchedulerId = saved!.migrationId;
+  vi.mocked(h.client.quiesce).mockClear();
+  vi.mocked(h.client.transferState).mockClear();
+  vi.mocked(h.client.scheduler).mockClear();
+  expect(await handler(mkOp({ schedulerHandoff: saved!, attempts: 1, startedAt: 6000 }), h.ctx)).toMatchObject({ success: true, rolledBack: false });
+  expect(h.client.quiesce).not.toHaveBeenCalled();
+  expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final" }));
+  expect(vi.mocked(h.client.scheduler).mock.calls.every(([request]) => request.migrationId === originalSchedulerId)).toBe(true);
+  expect(native.release).not.toHaveBeenCalled();
+  expect(h.client.resume).not.toHaveBeenCalled();
 });

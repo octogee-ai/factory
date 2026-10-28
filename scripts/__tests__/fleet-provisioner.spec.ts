@@ -66,7 +66,6 @@ import {
 import { stubBuilderClaim } from "./helpers/builder-claim.js";
 import { buildBrokeredLifecycleAdapter } from "../lib/customer-lifecycle-broker-adapter.js";
 import { builderClaimFromIdentity, markBuilderClaimOverlayApplied, writeBuilderClaim } from "@octogee/shared/server/builder-claim";
-import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 
 const tmpDirs: string[] = [];
 
@@ -732,72 +731,7 @@ function configuredBuilderLifecycleAdapter(input: {
 }
 
 describe("configured Builder surge release", () => {
-  it.each(["startup", "permanent", "deadline", "late-admission", "claim-loss", "custody-loss"])("waits for Native RPC admission during normal self-release and preserves %s fencing", async outcome => {
-    stubBuilderClaim("ceckert-test");
-    vi.stubEnv("POD_UID", "target-pod");
-    try {
-      const { adapter } = configuredBuilderLifecycleAdapter();
-      let assigned = true;
-      let clock = 0;
-      let admissionCalls = 0;
-      const events: string[] = [];
-      let state: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" };
-      const holdNormal = vi.fn(async () => { events.push("hold"); state = { ...state, mode: "held", phase: "held" }; });
-      adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => {
-        events.push("projects");
-        expect(admissionCalls).toBe(3);
-        return { elapsedMs: 0 };
-      });
-      const release = vi.fn(async () => { events.push("release"); });
-      const wiring = createBuilderSurgeGateWiring({
-        adapter,
-        processGate: {
-          status: async () => state,
-          permitNormal: async () => { events.push("permit"); state = { ...state, mode: "permitted", phase: "running" }; },
-          holdNormal,
-        } as unknown as SurgeOpenClawProcessSupervisorClient,
-        surgeReadiness: { release } as unknown as SurgeReadinessGate,
-        waitForGatewayHealthy: async assertCurrent => waitForOpenClawHealthz({
-          probeHealthz: async () => true,
-          probeAdmission: async () => {
-            admissionCalls++;
-            if (outcome === "claim-loss") { assigned = false; return {}; }
-            if (outcome === "custody-loss") { state = { ...state, podUid: "replacement-pod" }; return {}; }
-            if (outcome === "late-admission") { clock = 2_001; return {}; }
-            if (outcome === "permanent") throw new OpenclawWireError("auth-failed", "gateway starting; retry shortly", { serverCode: "UNAVAILABLE", details: { reason: "profile-unavailable" } });
-            if (outcome === "deadline" || admissionCalls < 3) {
-              throw new OpenclawWireError(admissionCalls === 1 ? "auth-failed" : "rpc-error", "gateway starting; retry shortly", { serverCode: "UNAVAILABLE", details: { reason: "startup-sidecars" } });
-            }
-            return {};
-          },
-          assertCurrent,
-          timeoutMs: 2_000,
-          now: () => clock,
-          sleep: async ms => { clock += ms; },
-        }),
-        waitForGatewayReady: async () => { events.push("ready"); },
-        configuredBuilderAssigned: async () => assigned,
-        log: () => {},
-        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-      });
-      if (outcome === "startup") {
-        await wiring.selfRelease("target-pod");
-        expect(events).toEqual(["permit", "projects", "ready", "release"]);
-        expect(state).toMatchObject({ role: "normal", mode: "permitted", phase: "running" });
-        expect(holdNormal).not.toHaveBeenCalled();
-        expect(release).toHaveBeenCalledOnce();
-      } else {
-        const reason = outcome === "permanent" ? /gateway starting/ : outcome === "deadline" || outcome === "late-admission" ? /within 2000ms/ : /assignment|custody/;
-        await expect(wiring.selfRelease("target-pod")).rejects.toThrow(reason);
-        expect(holdNormal).toHaveBeenCalledOnce();
-        expect(state).toMatchObject({ role: "normal", mode: "held", phase: "held" });
-        expect(adapter.reconcileConfiguredBuilderProjectAgents).not.toHaveBeenCalled();
-        expect(release).not.toHaveBeenCalled();
-        if (outcome !== "deadline") expect(admissionCalls).toBe(1);
-      }
-    } finally { vi.unstubAllEnvs(); }
-  });
-  it("matches normal self-release against the authoritative desired roster", async () => {
+  it("matches configured Builder ownership against the authoritative desired roster", async () => {
     const readDesiredCustomers = vi.fn(async () => new Map([
       ["ceckert-test", { uid: "uid-builder", fingerprint: "fingerprint", lane: "move" as const, ensureAllowed: true }],
     ]));
@@ -808,86 +742,6 @@ describe("configured Builder surge release", () => {
     await expect(matches("ceckert-test")).resolves.toBe(true);
     await expect(matches("other-builder")).resolves.toBe(false);
     expect(readDesiredCustomers).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    { reconcileFails: false, pending: false },
-    { reconcileFails: true, pending: false },
-    { reconcileFails: false, pending: true },
-  ])("prepares project checkouts before Builder accounts and readiness (reconcile fails: $reconcileFails, pending: $pending)", async ({ reconcileFails, pending: checkoutPending }) => {
-    stubBuilderClaim("ceckert-test");
-    vi.stubEnv("POD_UID", "target-pod");
-    try {
-      const events: string[] = [];
-      const { adapter } = configuredBuilderLifecycleAdapter();
-      const applied = new Map([["ceckert-test", "fp-restored"]]);
-      adapter.recordAppliedFingerprint = (slug, fingerprint) => {
-        applied.set(slug, fingerprint);
-      };
-      let projectsReconciled = false;
-      adapter.listProjectsNeedingClone = vi.fn(async () => checkoutPending ? [{ projectSlug: "pending", giteaRepoName: "ceckert-test-pending" }] : []);
-      adapter.cloneProjectRepo = vi.fn(async () => false);
-      adapter.reconcileConfiguredBuilderProjectAgents = vi.fn(async () => {
-        expect(adapter.listProjectsNeedingClone).toHaveBeenCalledTimes(2);
-        events.push("projects");
-        if (reconcileFails) throw new Error("project reconciliation failed");
-        projectsReconciled = true;
-        return { elapsedMs: 0, appliedFingerprint: "fp-restored" };
-      });
-      const processGate = {
-        status: vi.fn(async () => ({
-          version: 1 as const,
-          podUid: "target-pod",
-          role: "normal" as const,
-          mode: "held" as const,
-          phase: "held" as const,
-        })),
-        permitNormal: vi.fn(async () => {
-          events.push("permit");
-        }),
-        holdNormal: vi.fn(async () => { events.push("hold"); }),
-      } as unknown as SurgeOpenClawProcessSupervisorClient;
-      const log = vi.fn();
-      const wiring = createBuilderSurgeGateWiring({
-        adapter,
-        processGate,
-        surgeReadiness: { release: vi.fn(async () => { events.push("release"); }) } as unknown as SurgeReadinessGate,
-        waitForGatewayHealthy: async () => { events.push("health"); },
-        waitForGatewayReady: async () => {
-          if (!projectsReconciled) throw new Error("archived Mattermost account secret reference was not found");
-          events.push("ready");
-        },
-        log,
-        provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-        configuredBuilderAssigned: async () => true,
-      });
-
-      await expect(wiring.selfReleaseHoldReason()).resolves.toBeNull();
-      if (reconcileFails) {
-        await expect(wiring.selfRelease("target-pod")).rejects.toThrow("project reconciliation failed");
-        expect(events).toEqual(["permit", "health", "projects", "hold"]);
-        expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
-        return;
-      }
-      await wiring.selfRelease("target-pod");
-
-      expect(events).toEqual(["permit", "health", "projects", "ready", "release"]);
-      expect(log).toHaveBeenCalledWith(
-        "[surge-handoff] canonical assignment present and no migration in flight; " +
-        "permitting OpenClaw and releasing readiness slug=ceckert-test",
-      );
-      expect(adapter.reconcileConfiguredBuilderProjectAgents).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ uid: "uid-builder", slug: "ceckert-test" }),
-        { withoutProjectIds: checkoutPending ? ["pending"] : [] },
-      );
-      expect(applied.get("ceckert-test")).toBe(NEEDS_FULL_ATTACH_FINGERPRINT);
-      const pending = new Map<string, string>();
-      const desired = new Map([["ceckert-test", "fp-restored"]]);
-      expect(selectStableContentStale(["ceckert-test"], desired, applied, pending)).toEqual([]);
-      expect(selectStableContentStale(["ceckert-test"], desired, applied, pending)).toEqual(["ceckert-test"]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   it("keeps an unassigned prelaunch empty until canonical migration reserves it", async () => {
@@ -984,10 +838,6 @@ describe("configured Builder surge release", () => {
         log: () => undefined,
       });
 
-      await expect(wiring.selfReleaseHoldReason()).resolves.toBe(
-        "no canonical assignment for ceckert-test on this gateway",
-      );
-      await expect(wiring.selfRelease("target-pod")).rejects.toThrow(/assignment/u);
       await expect(reconcileAdmission()).resolves.toBe(false);
       expect(attachConfiguredBuilderBeforeOpenClaw).not.toHaveBeenCalled();
       expect(vi.mocked(processGate.permitNormal)).not.toHaveBeenCalled();
@@ -1987,6 +1837,7 @@ describe("configured Builder surge release", () => {
 
   it.each([
     ["held and stopped", { mode: "held", phase: "held" }, true],
+    ["held after completion began", { mode: "held", phase: "held", completionStarted: true }, "Native completion has already started"],
     ["permitted and running", { mode: "permitted", phase: "running" }, false],
     ["permitted and starting", { mode: "permitted", phase: "starting" }, false],
     ["held while still stopping", { mode: "held", phase: "stopping" }, "still stopping"],
@@ -2097,60 +1948,6 @@ describe("configured Builder surge release", () => {
     } finally {
       vi.unstubAllEnvs();
     }
-  });
-
-  it.each([
-    ["a migration reserves the pod", { role: "target", migrationId: "activation-2", slug: "ceckert-test", targetPodUid: "target-pod" }, true, true,
-      "reserved by migration activation-2 as target"],
-    ["the retained overlay is missing", { role: "normal" }, false, true, "configured Builder overlay is unavailable"],
-    ["the gateway has no canonical assignment", { role: "normal" }, true, false,
-      "no canonical assignment for ceckert-test on this gateway"],
-    ["the gateway serves its Builder with no migration in flight", { role: "normal" }, true, true, null],
-  ] as const)("names why a configured Builder boot keeps its readiness hold: %s", async (_label, gate, overlay, assigned, expected) => {
-    stubBuilderClaim("ceckert-test");
-    const processGate = {
-      status: async () => ({ version: 1, podUid: "target-pod", mode: "held", phase: "held", ...gate }),
-    } as unknown as SurgeOpenClawProcessSupervisorClient;
-    const wiring = createBuilderSurgeGateWiring({
-      adapter: {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: (slug: string) => slug === "ceckert-test",
-        configuredBuilderOverlayPresent: () => overlay,
-      } as unknown as CustomerLifecycleAdapter,
-      processGate,
-      surgeReadiness: {} as SurgeReadinessGate,
-      waitForGatewayHealthy: async () => undefined,
-      waitForGatewayReady: async () => undefined,
-      log: () => undefined,
-      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-      configuredBuilderAssigned: async () => assigned,
-    });
-
-    await expect(wiring.selfReleaseHoldReason()).resolves.toBe(expected);
-  });
-
-  it("propagates a failing assignment read so the readiness hold names it", async () => {
-    stubBuilderClaim("ceckert-test");
-    const wiring = createBuilderSurgeGateWiring({
-      adapter: {
-        isBuilderGateway: () => true,
-        isConfiguredBuilderCustomer: () => true,
-        configuredBuilderOverlayPresent: () => true,
-      } as unknown as CustomerLifecycleAdapter,
-      processGate: {
-        status: async () => ({ version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" }),
-      } as unknown as SurgeOpenClawProcessSupervisorClient,
-      surgeReadiness: {} as SurgeReadinessGate,
-      waitForGatewayHealthy: async () => undefined,
-      waitForGatewayReady: async () => undefined,
-      log: () => undefined,
-      provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
-      configuredBuilderAssigned: async () => {
-        throw new Error("assignment roster unavailable: HTTP 502");
-      },
-    });
-
-    await expect(wiring.selfReleaseHoldReason()).rejects.toThrow("assignment roster unavailable: HTTP 502");
   });
 
   it("admits a claimed standby live only once its claim overlay is stamped", async () => {

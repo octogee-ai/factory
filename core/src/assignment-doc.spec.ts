@@ -66,6 +66,15 @@ const ASSIGNMENT = {
 };
 
 describe("readAssignmentDocsForGateway", () => {
+  it("retains a bound forward marker and rejects malformed or mismatched authority", async () => {
+    const marker = { operationId: "op-1", targetPodUid: "target-1", receivingPodUid: "target-1" };
+    const { db } = mkAssignmentDb({ "default/uid-alice": { ...ASSIGNMENT, sharedSurgeForwardRecovery: marker } });
+    expect(await readAssignmentDocsForGateway(db as never, "default")).toEqual([{ ...ASSIGNMENT, sharedSurgeForwardRecovery: marker }]);
+    for (const bad of [{ operationId: "op-2", targetPodUid: "target-1" }, { operationId: "op-1", targetPodUid: "" }]) {
+      expect(() => assignmentDoc.parseAssignmentDoc("u1", { ...ASSIGNMENT, sharedSurgeForwardRecovery: bad })).toThrow("invalid Shared surge");
+    }
+  });
+
   it("returns parsed assignment docs for the gateway", async () => {
     const { db } = mkAssignmentDb({ "default/uid-alice": ASSIGNMENT });
     const docs = await readAssignmentDocsForGateway(db as never, "default");

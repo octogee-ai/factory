@@ -74,7 +74,7 @@ export async function setWorkspaceMigrationPhase(
     const exact = [
       userSnapshot.exists, operationSnapshot.exists,
       operation.kind === "migrate-customer", operation.status === "running",
-      operation.cancellationRequestedAt === undefined, input.uid === params.uid,
+      operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, params.operationId), input.uid === params.uid,
       input.fromGatewayId === params.sourceGatewayId, openclaw.gatewayId === expectedGateway,
       !prior?.operationId || prior.operationId === params.operationId,
     ].every(Boolean);
@@ -540,7 +540,8 @@ async function readCustomerRestoreAuthority(deps: Pick<FleetStateDeps, "db">, tx
     slugFromAssignedUser(user) === input.slug, accountAllowsInteractiveAccess(user),
     openclaw.gatewayId === input.gatewayId, openclaw.status === "complete",
     operation.kind === "migrate-customer", operation.status === "running",
-    operation.startedAt === input.claimStartedAt, operation.cancellationRequestedAt === undefined,
+    operation.startedAt === input.claimStartedAt,
+    operation.cancellationRequestedAt === undefined || migrationCancellationDeferred(operation, input.operationId),
     operationInput.uid === input.uid, operationInput.toGatewayId === input.gatewayId,
     operationInput.fromGatewayId === input.fromGatewayId, input.fromGatewayId !== input.gatewayId,
     typeof operation.cutoverCommittedAt === "number" && Number.isFinite(operation.cutoverCommittedAt) && operation.cutoverCommittedAt > 0,
@@ -742,6 +743,23 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+export function legacyForwardRecoveryMatches(operationId: string, input: Record<string, unknown>, handoff: Record<string, unknown>): boolean {
+  const recovery = recordOrEmpty(handoff.forwardRecovery);
+  return recovery.schemaVersion === 1 && recovery.phase === "source-flushed" &&
+    readSchedulerMigrationIdentity(operationId, handoff.migrationId) !== null &&
+    handoff.uid === input.uid && handoff.fromGatewayId === input.fromGatewayId && handoff.toGatewayId === input.toGatewayId &&
+    Number.isSafeInteger(recovery.sourceEpoch) && Number(recovery.sourceEpoch) >= 0;
+}
+
+export function migrationCancellationDeferred(operation: Record<string, unknown>, operationId: string): boolean {
+  const input = recordOrEmpty(operation.input);
+  const state = recordOrEmpty(operation.customerMigrationV2);
+  const durableV2 = state.operationId === operationId && state.uid === input.uid &&
+    state.sourceGatewayId === input.fromGatewayId && state.targetGatewayId === input.toGatewayId &&
+    ["sourceQuiesced", "finalSynced", "targetVerified", "cutover", "sourceRetired", "complete"].includes(String(state.phase));
+  return legacyForwardRecoveryMatches(operationId, input, recordOrEmpty(operation.schedulerHandoff)) || durableV2;
+}
+
 function customerMigrationV2FenceIsExact(
   operation: Record<string, unknown> | undefined,
   fence: NonNullable<CutoverCommitParams["customerMigrationV2Fence"]>,
@@ -752,7 +770,7 @@ function customerMigrationV2FenceIsExact(
   const claimBound = recordOrEmpty(operation?.input).sourceTransferMode === "retained-pod" || fence.claimStartedAt !== undefined;
   const claimCurrent = !claimBound || (
     Number.isSafeInteger(fence.claimStartedAt) && (fence.claimStartedAt ?? 0) > 0 &&
-    operation?.startedAt === fence.claimStartedAt && operation?.cancellationRequestedAt === undefined
+    operation?.startedAt === fence.claimStartedAt
   );
   return [
     operation?.status === "running",
@@ -1699,6 +1717,53 @@ export interface MarkAssignmentStateParams {
     updatedAt?: number;
   };
   automatic?: boolean;
+  clearSharedSurgeForwardRecovery?: { operationId: string; targetPodUid: string; receivingPodUid: string };
+}
+
+interface SharedSurgeForwardRecoveryParams {
+  gatewayId: string; uid: string; slug: string; epoch: number; operationId: string;
+  targetPodUid: string; expectedUpdatedAt: number;
+}
+
+export async function markSharedSurgeForwardRecovery(deps: FleetStateDeps, params: SharedSurgeForwardRecoveryParams): Promise<void> {
+  await writeSharedSurgeForwardRecovery(deps, { ...params, receivingPodUid: params.targetPodUid });
+}
+
+export async function rebindSharedSurgeForwardRecovery(deps: FleetStateDeps, params: SharedSurgeForwardRecoveryParams & {
+  expectedReceivingPodUid: string; receivingPodUid: string;
+}): Promise<void> {
+  await writeSharedSurgeForwardRecovery(deps, params);
+}
+
+async function writeSharedSurgeForwardRecovery(deps: FleetStateDeps, params: SharedSurgeForwardRecoveryParams & {
+  receivingPodUid: string; expectedReceivingPodUid?: string;
+}): Promise<void> {
+  if (![params.gatewayId, params.uid, params.slug, params.operationId, params.targetPodUid, params.receivingPodUid,
+    params.expectedReceivingPodUid ?? params.targetPodUid].every(value =>
+    typeof value === "string" && value.length > 0 && !value.includes("/")) ||
+    !Number.isSafeInteger(params.epoch) || params.epoch < 0 ||
+    !Number.isSafeInteger(params.expectedUpdatedAt) || params.expectedUpdatedAt <= 0) {
+    throw new Error("Shared surge forward recovery identity is invalid");
+  }
+  await deps.db.runTransaction(async txn => {
+    const ref = assignmentRef(deps.db, params.gatewayId, params.uid);
+    const [snapshot, root] = await Promise.all([
+      txn.get(ref), txn.get(deps.db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId)),
+    ]);
+    const assignment = snapshot.data();
+    const marker = { operationId: params.operationId, targetPodUid: params.targetPodUid, receivingPodUid: params.receivingPodUid };
+    const prior = params.expectedReceivingPodUid === undefined ? marker : { ...marker, receivingPodUid: params.expectedReceivingPodUid };
+    const markerMatches = isDeepStrictEqual(assignment?.sharedSurgeForwardRecovery, prior) ||
+      params.expectedReceivingPodUid === undefined && assignment?.sharedSurgeForwardRecovery === undefined;
+    const exact = [snapshot.exists, root.data()?.gatewayClass === "shared",
+      assignment?.uid === params.uid, assignment?.slug === params.slug, assignment?.gatewayId === params.gatewayId,
+      assignment?.epoch === params.epoch, assignment?.state === "quiescing",
+      assignment?.updatedByOperationId === params.operationId, assignment?.updatedAt === params.expectedUpdatedAt,
+      markerMatches,
+    ].every(Boolean);
+    if (!exact) throw new Error("Shared surge forward recovery authority changed");
+    txn.update(ref, { sharedSurgeForwardRecovery: marker });
+  });
 }
 
 // Flip ONLY the roster state on an existing assignment — epoch stays put. The
@@ -1724,15 +1789,32 @@ export async function markAssignmentState(
     }
     const assignment = snap.data();
     assertAssignmentStateUpdateMatches(assignment, params);
+    assertSharedSurgeForwardStateUpdate(assignment, params);
     const updatesClock = params.updatedByOperationId || params.expected?.updatedAt !== undefined;
     const updatedAt = nextAssignmentStateClock(deps, updatesClock ? assignment?.updatedAt : undefined);
     txn.update(ref, {
       state: params.state,
       ...(updatesClock ? { updatedAt } : {}),
       ...(params.updatedByOperationId ? { updatedByOperationId: params.updatedByOperationId } : {}),
+      ...(params.clearSharedSurgeForwardRecovery ? { sharedSurgeForwardRecovery: deps.deleteField() } : {}),
     });
     writeWorkspaceMigrationMarkerForState(txn, deps, params, updatedAt);
   });
+}
+
+function assertSharedSurgeForwardStateUpdate(assignment: Record<string, unknown> | undefined, params: MarkAssignmentStateParams): void {
+  const marker = assignment?.sharedSurgeForwardRecovery;
+  const clear = params.clearSharedSurgeForwardRecovery;
+  if (clear !== undefined) {
+    const exact = [params.state === "serving", isDeepStrictEqual(marker, clear),
+      params.updatedByOperationId === clear.operationId, params.expected?.updatedByOperationId === clear.operationId,
+      params.expected?.state === "quiescing", params.expected?.updatedAt !== undefined,
+      params.slug !== undefined, params.epoch !== undefined].every(Boolean);
+    if (!exact) throw new Error("Shared surge forward recovery completion authority changed");
+  } else if (marker !== undefined && (params.state === "serving" ||
+    params.updatedByOperationId !== undefined && params.updatedByOperationId !== assignment?.updatedByOperationId)) {
+    throw new Error("Shared surge forward recovery cannot reopen its source or change owner");
+  }
 }
 
 function nextAssignmentStateClock(deps: FleetStateDeps, previous: unknown = 0): number {

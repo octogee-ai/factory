@@ -92,17 +92,17 @@ describe('retained source controller',()=>{
   expect(h.user.provisioning.openclaw.sourceTransferFence!==undefined).toBe(phase==='prepared');
   expect(h.attach).not.toHaveBeenCalled();expect(h.runCommand.mock.calls.some(([,args])=>args.includes('patch'))).toBe(false);
  });
- it.each(['cancel','expired'])('settles %s before dispatch without starting a helper',async reason=>{
+ it('settles expired resource admission before dispatch without starting a helper',async()=>{
   const h=harness();const original=h.prepare.getMockImplementation()!;
-  h.prepare.mockImplementation(async()=>{if(reason==='cancel'){h.docs.get('glmOperations/op-1')!.cancellationRequestedAt=1;}else{h.deps.now=()=>40_000;}return original();});
-  await expect(h.controller().execute(h.input)).rejects.toThrow(reason==='cancel'?'dispatch authority changed':'admission expired');
+  h.prepare.mockImplementation(async()=>{h.deps.now=()=>40_000;return original();});
+  await expect(h.controller().execute(h.input)).rejects.toThrow('admission expired');
   expect(h.record()).toMatchObject({status:'failed',failureReason:'not-dispatched',targetCleanup:'pending'});expect(h.user.provisioning.openclaw).toHaveProperty('sourceTransferFence');
   expect(h.attach).not.toHaveBeenCalled();expect(h.runCommand.mock.calls.some(([,args])=>args.includes('patch'))).toBe(false);
  });
- it('withholds credentials on cancellation after dispatch but retains the fence until termination',async()=>{
+ it('withholds credentials when cancelled durable custody changes after dispatch but retains the fence until termination',async()=>{
   const h=harness();const original=h.runCommand.getMockImplementation()!;
-  h.runCommand.mockImplementation(async(command,args)=>{if(args.includes('patch')){h.docs.get('glmOperations/op-1')!.cancellationRequestedAt=1;}return original(command,args);});
-  await expect(h.controller().execute(h.input)).rejects.toThrow('claim changed before attach');
+  h.runCommand.mockImplementation(async(command,args)=>{if(args.includes('patch')){const fresh=h.docs.get('glmOperations/op-1')!;fresh.cancellationRequestedAt=1;(fresh.customerMigrationV2 as CustomerMigrationV2State).phase='preSynced';}return original(command,args);});
+  await expect(h.controller().execute(h.input)).rejects.toThrow('active claim changed');
   expect(h.record().status).toBe('dispatched');expect(h.user.provisioning.openclaw).toHaveProperty('sourceTransferFence');expect(h.attach).not.toHaveBeenCalled();
  });
  it('refreshes the same pod resource version after target preparation',async()=>{
@@ -212,7 +212,7 @@ describe('retained source controller',()=>{
  it.each(['claim','cancel','slug','epoch','state','owner','root','retirement','stopped','restore','existing-fence'])('rejects changed %s authority before target prepare',async change=>{
   const h=harness();const op=h.docs.get('glmOperations/op-1')!;
   if(change==='claim')op.startedAt=101;
-  if(change==='cancel')op.cancellationRequestedAt=1;
+  if(change==='cancel'){op.cancellationRequestedAt=1;(op.customerMigrationV2 as CustomerMigrationV2State).phase='preSynced';}
   if(change==='slug')h.user.username='other';
   if(change==='epoch')h.assignment.epoch=4;
   if(change==='state')h.assignment.state='serving';
@@ -223,5 +223,36 @@ describe('retained source controller',()=>{
   if(change==='restore')Object.assign(h.user.provisioning.openclaw,{restoreFence:{}});
   if(change==='existing-fence')Object.assign(h.user.provisioning.openclaw,{sourceTransferFence:{}});
   await expect(h.controller().execute(h.input)).rejects.toThrow('authority changed');expect(h.prepare).not.toHaveBeenCalled();expect(h.attach).not.toHaveBeenCalled();
+ });
+});
+
+describe('retained source forward continuation',()=>{
+ it.each(['reservation','preparation','dispatch','completion'])('finishes the exact durable transfer when cancellation arrives during %s',async at=>{
+  const h=harness();const fresh=h.docs.get('glmOperations/op-1')!;
+  if(at==='reservation')fresh.cancellationRequestedAt=201;
+  const prepare=h.prepare.getMockImplementation()!;
+  h.prepare.mockImplementation(async()=>{if(at==='preparation'){fresh.cancellationRequestedAt=201;}return prepare();});
+  const run=h.runCommand.getMockImplementation()!;
+  h.runCommand.mockImplementation(async(command,args)=>{const result=await run(command,args);if(at==='dispatch'&&args.includes('patch')){fresh.cancellationRequestedAt=201;}return result;});
+  h.attach.mockImplementation(async()=>{
+   if(at==='completion')fresh.cancellationRequestedAt=201;
+   const r=h.record();h.pod.status.ephemeralContainerStatuses=[{name:r.executionId,state:{terminated:{exitCode:0,message:JSON.stringify({version:1,executionId:r.executionId,migrationId:r.migrationId,sourcePodUid:r.podUid,status:'transferred'})}}}];
+  });
+  expect((await h.controller().execute(h.input)).status).toBe('transferred');
+  await expect(h.controller().assertActiveClaim()).resolves.toBeUndefined();
+  expect(h.user.provisioning.openclaw).not.toHaveProperty('sourceTransferFence');
+  expect((await h.controller().execute(h.input)).status).toBe('transferred');
+  expect(h.prepare).toHaveBeenCalledOnce();expect(h.attach).toHaveBeenCalledOnce();
+ });
+ it.each(['phase','claim','operation','migration','uid','slug','source','target','epoch'])('rejects cancelled continuation after its durable %s changes',async fault=>{
+  const h=harness();const fresh=h.docs.get('glmOperations/op-1')!;fresh.cancellationRequestedAt=201;
+  const durable=fresh.customerMigrationV2 as Record<string,unknown>;
+  if(fault==='phase')durable.phase='preSynced';
+  if(fault==='claim')fresh.startedAt=101;
+  const field={operation:'operationId',migration:'migrationId',uid:'uid',slug:'slug',source:'sourceGatewayId',target:'targetGatewayId',epoch:'sourceEpoch'}[fault];
+  if(field)durable[field]=field==='sourceEpoch'?4:'other';
+  await expect(h.controller().assertActiveClaim()).rejects.toThrow('active claim changed');
+  await expect(h.controller().execute(h.input)).rejects.toThrow('authority changed');
+  expect(h.prepare).not.toHaveBeenCalled();expect(h.attach).not.toHaveBeenCalled();
  });
 });

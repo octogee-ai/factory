@@ -230,6 +230,7 @@ export interface CustomerLifecycleAdapter {
     targetMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<{
         custody: import("./migration-activation-manifest.js").MigrationTargetIdentityCustody;
         migration: import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchorMigration;
+        anchors: import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchor[];
     }>;
     activateImportedCustomer: (slug: string, opts?: {
         signal?: AbortSignal;

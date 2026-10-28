@@ -367,10 +367,10 @@ describe("advanceCustomerMigrationV2", () => {
 
 describe("customer migration V2 failure boundary", () => {
   it("persists abort intent before cutover and never aborts after it", () => {
-    const aborted = beginCustomerMigrationV2Abort(state("finalSynced"), "target broke", 42);
+    const aborted = beginCustomerMigrationV2Abort(state("preSynced"), "target broke", 42);
     expect(aborted).toMatchObject({
       phase: "abortIntent",
-      abortFromPhase: "finalSynced",
+      abortFromPhase: "preSynced",
       abortReason: "target broke",
       abortIntentAt: 42,
     });
@@ -381,6 +381,10 @@ describe("customer migration V2 failure boundary", () => {
       expect(isCustomerMigrationV2PostIntent(state(phase))).toBe(true);
       expect(() => beginCustomerMigrationV2Abort(state(phase), "too late", 42))
         .toThrow(/must roll forward/u);
+    }
+    for (const phase of ["sourceQuiesced", "finalSynced", "targetVerified"] as const) {
+      expect(() => beginCustomerMigrationV2Abort(state(phase), "ambiguous upgrade", 42)).toThrow(/must roll forward/u);
+      expect(isCustomerMigrationV2Transition(phase, "abortIntent")).toBe(false);
     }
     const alreadyAborting = state("abortIntent");
     expect(beginCustomerMigrationV2Abort(alreadyAborting, "again", 42)).toBe(alreadyAborting);
@@ -396,7 +400,7 @@ describe("customer migration V2 failure boundary", () => {
       expect(isCustomerMigrationV2Transition(forward[index], forward[index])).toBe(true);
     }
     expect(isCustomerMigrationV2Transition("initialized", "abortIntent")).toBe(false);
-    expect(isCustomerMigrationV2Transition("targetVerified", "abortIntent")).toBe(true);
+    expect(isCustomerMigrationV2Transition("preSynced", "abortIntent")).toBe(true);
     expect(isCustomerMigrationV2Transition("cutover", "abortIntent")).toBe(false);
     expect(isCustomerMigrationV2Transition("abortIntent", "abortTargetUnmounted")).toBe(true);
     expect(isCustomerMigrationV2Transition("abortTargetUnmounted", "aborted")).toBe(true);

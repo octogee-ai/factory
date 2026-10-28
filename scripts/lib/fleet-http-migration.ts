@@ -75,6 +75,7 @@ import {
   installPreparedAgentStores,
   isAgentSnapshotArtifact,
   prepareAgentStoreSnapshots,
+  type PreparedAgentStores,
 } from "./agent-store-snapshot.js";
 import {
   isMigrationCertificatePem,
@@ -85,6 +86,7 @@ import {
   type OpenMigrationTlsEndpoint,
 } from "./migration-rsync-tls.js";
 import type { OpenClawCommand } from "./openclaw-cli.js";
+import { upgradeImportedAgentStores } from "./openclaw-import-doctor.js";
 import { reattachBuilderAgents } from "./reattach-builder-agents.js";
 import { activeAgentProjectIds } from "./openclaw-config-builders.js";
 import { PROC_ROOT } from "./held-files.js";
@@ -169,7 +171,7 @@ flushLocalState?: (input: {
   expectedSystemConfigCommit?: string;
 }) => Promise<Omit<FlushGatewayResponse, "migrationId" | "slug">>;
 prepareSurgeTarget?: (input: { migrationId: string; slug: string; targetPodUid: string }, signal?: AbortSignal) => Promise<void>;
-releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string }) => Promise<void>;
+releaseSurgeReadiness?: (input: { migrationId: string; targetPodUid: string; importSlug?: string }) => Promise<void>;
 reserveSurgeTarget?: (input: { migrationId: string; slug: string }) => Promise<void>;
 surgeTargetOpenClawHeld?: (input: {
   migrationId: string;
@@ -192,6 +194,8 @@ resumeSystemConfigWatch?: (
   expectedGeneration?: string | null,
 ) => Promise<boolean | void>;
 runOpenClaw?: OpenClawCommand;
+upgradeImportedAgents?: typeof upgradeImportedAgentStores;
+surgeReleaseInProgress?: () => boolean;
 openMigrationTlsEndpoint?: OpenMigrationTlsEndpoint;
 reserveLoopbackPort?: () => Promise<number>;
 procRoot?: string;
@@ -1639,8 +1643,12 @@ async function prepareRsyncImportDirectories(
   }
 }
 
-function migrationImportBusy(): boolean {
+export function migrationImportBusy(): boolean {
   return preparingRsyncImport || finishingRsyncImports.size > 0;
+}
+
+export function ownsFinalMigrationImport(migrationId: string, slug: string): boolean {
+  return !preparingRsyncImport && finishingRsyncImports.size === 1 && finishingRsyncImports.has(rsyncSessionKey(migrationId, slug, "final"));
 }
 
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -2091,6 +2099,7 @@ async function activateConfiguredBuilderImport(
     await deps.releaseSurgeReadiness!({
       migrationId: request.migrationId,
       targetPodUid: request.targetPodUid,
+      importSlug: request.slug,
     });
     signal.throwIfAborted();
     await activateBuilderCoach(deps, request.slug, signal, loadStrategy);
@@ -2280,6 +2289,37 @@ async function heldBuilderImport(input: StagedImportInput): Promise<BuilderImpor
   return await input.deps.surgeTargetOpenClawHeld?.(activation.request) === true ? activation.request : null;
 }
 
+async function upgradeSharedImportedAgents(input: StagedImportInput, prepared: PreparedAgentStores): Promise<void> {
+  if (input.deps.adapter.isBuilderGateway?.() !== false) return;
+  const readAuthority = input.deps.adapter.targetMigrationIdentityCustody;
+  if (!readAuthority) throw new Error("Shared target requires current migration agent authority");
+  const authority = await readAuthority(input.slug, input.session.migrationId);
+  const body = { migrationId: input.session.migrationId } as FinishRsyncImportRequestBody;
+  assertTargetIdentityCustody(authority.custody, sharedTargetCustody(input.deps, body, authority.custody.uid));
+  const expected = authority.anchors;
+  if (!Array.isArray(expected) || expected.length !== prepared.stores.length ||
+      new Set(expected.map(anchor => anchor.agentId)).size !== expected.length ||
+      new Set(prepared.stores.map(store => store.agentId)).size !== prepared.stores.length) {
+    throw new Error("Shared target carried agent roster does not match migration authority");
+  }
+  if (prepared.stores.length === 0) return;
+  const stores = prepared.stores.map(store => {
+    const anchor = expected.find(item => item.agentId === store.agentId);
+    if (!anchor) throw new Error(`Shared target carried agent is not authorized: ${store.agentId}`);
+    return { ...anchor, anchorPath: store.destinationPath };
+  });
+  const assertCurrent = async () => {
+    input.signal.throwIfAborted();
+    if (!isDeepStrictEqual(await readAuthority(input.slug, input.session.migrationId), authority)) {
+      throw new Error("Shared target migration agent authority changed");
+    }
+    assertTargetIdentityCustody(authority.custody, sharedTargetCustody(input.deps, body, authority.custody.uid));
+    input.signal.throwIfAborted();
+  };
+  await (input.deps.upgradeImportedAgents ?? upgradeImportedAgentStores)({ stores, assertCurrent, signal: input.signal,
+    run: input.deps.runOpenClaw });
+}
+
 async function deliverStagedImport(input: StagedImportInput): Promise<void> {
   const { deps, session, log } = input;
   const deferAgentState = input.mode === "pre" && (!input.activation || input.activation.live);
@@ -2307,8 +2347,10 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
       procRoot: deps.procRoot ?? PROC_ROOT,
       log,
     });
+
+    await upgradeSharedImportedAgents(input, prepared);
     if (offlineTarget) {
-      await reattachBuilderAgents({
+      if (!input.heldTarget) await reattachBuilderAgents({
         stores: prepared.stores,
         diagnosticIdentity: offlineTarget,
         env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
@@ -2367,6 +2409,12 @@ function finishedImportLog(body: MigrationRequestBody, mode: string, verificatio
     (verificationPending ? ` (verification pending: ${verificationPending})` : "");
 }
 
+function importCompletionBlocker(deps: MigrationHandlerDeps): string | null {
+  if (migrationImportBusy()) return "migration import completion is already in progress";
+  if (deps.adapter.isBuilderGateway?.() === true && deps.surgeReleaseInProgress?.()) return "Builder surge release is already in progress";
+  return null;
+}
+
 export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
@@ -2388,8 +2436,9 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
       return;
     }
     if (!validateRsyncImportSessionPolicy(session, body, configTransferMode, res)) return;
-    if (migrationImportBusy()) {
-      res.status(409).json({ error: "migration import completion is already in progress" });
+    const blocker = importCompletionBlocker(deps);
+    if (blocker) {
+      res.status(409).json({ error: blocker });
       return;
     }
     finishingRsyncImports.add(key);

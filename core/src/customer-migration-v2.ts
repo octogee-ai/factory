@@ -358,6 +358,10 @@ const POST_INTENT_PHASES: ReadonlySet<CustomerMigrationV2Phase> = new Set([
   "complete",
 ]);
 
+export function isCustomerMigrationV2ForwardOnly(state: CustomerMigrationV2State): boolean {
+  return ["sourceQuiesced", "finalSynced", "targetVerified"].includes(state.phase) || POST_INTENT_PHASES.has(state.phase);
+}
+
 export function isCustomerMigrationV2PostIntent(state: CustomerMigrationV2State): boolean {
   return POST_INTENT_PHASES.has(state.phase);
 }
@@ -383,6 +387,7 @@ export function isCustomerMigrationV2Transition(
   if (NEXT_PHASES[from]?.includes(to)) return true;
   return to === "abortIntent" &&
     from !== "initialized" &&
+    !["sourceQuiesced", "finalSynced", "targetVerified"].includes(from) &&
     !POST_INTENT_PHASES.has(from) &&
     !isAbortPhaseName(from);
 }
@@ -398,9 +403,9 @@ export function beginCustomerMigrationV2Abort(
   reason: string,
   now: number,
 ): CustomerMigrationV2State {
-  if (isCustomerMigrationV2PostIntent(state)) {
+  if (isCustomerMigrationV2ForwardOnly(state)) {
     throw new Error(
-      `customer migration V2 phase ${state.phase} crossed cutover and must roll forward`,
+      `customer migration V2 phase ${state.phase} crossed the final transfer boundary and must roll forward`,
     );
   }
   if (state.phase === "initialized") {

@@ -7,6 +7,7 @@ import type {
   OperationAttemptRecord,
   Operation,
   OperationStep,
+  SchedulerHandoffState,
 } from "@octogee/shared/types/glm";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { OperationResult } from "./operation-router.js";
@@ -143,9 +144,11 @@ export function operationNeedsDurableRestartResume(op: {
   origin?: string;
   input?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
+  schedulerHandoff?: SchedulerHandoffState;
   sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
-  return sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
+  return op.schedulerHandoff?.forwardRecovery !== undefined ||
+    sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
     (op.kind === "restart-gateway" && (op.input?.restoreRecovery !== undefined || op.input?.sourceRecovery !== undefined)) ||
     op.kind === "erase-customer" ||
     isLevelTriggeredBuilderReturn(op) ||
@@ -176,6 +179,7 @@ export interface OperationCompletionInput {
     attemptHistory?: OperationAttemptRecord[];
     startedAt?: number | null;
     customerMigrationV2?: CustomerMigrationV2State;
+    schedulerHandoff?: SchedulerHandoffState;
   sourceTransferExecution?: SourceTransferExecution;
   };
   result: OperationResult;
@@ -431,7 +435,8 @@ function shouldRetry(
   return attempts < MAX_OPERATION_ATTEMPTS ||
     hasDurableCleanup ||
     retryBeyondCap ||
-    hasActiveCustomerMigrationV2;
+    hasActiveCustomerMigrationV2 ||
+    op.schedulerHandoff?.forwardRecovery !== undefined;
 }
 
 function needsSharedRollbackRecovery(input: OperationCompletionInput, steps: OperationStep[]): boolean {

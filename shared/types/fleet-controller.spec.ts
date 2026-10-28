@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   parseConfiguredBuilderReport,
+  ADD_CUSTOMER_DEADLINE_MS,
+  MIGRATION_IMPORT_FINISH_TIMEOUT_MS,
+  MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS,
+  MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS,
+  VERIFY_ACCOUNT_TIMEOUT_MS,
   CONFIG_PATCH_DEADLINE_MS,
   CONFIG_RELOAD_DEADLINE_MS,
   IMPORT_ACTIVATION_PATCH_DEADLINE_MS,
@@ -13,6 +18,13 @@ describe("fleet-controller migration budgets", () => {
   it("lets an import activation wait out one gateway restart plus a reload", () => {
     expect(IMPORT_ACTIVATION_PATCH_DEADLINE_MS).toBe(
       CONFIG_PATCH_DEADLINE_MS + 2 * CONFIG_RELOAD_DEADLINE_MS,
+    );
+  });
+
+  it("budgets Shared final import copies, two Native Doctor phases, and activation", () => {
+    expect(MIGRATION_IMPORT_FINISH_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      3 * MIGRATION_TRANSFER_TIMEOUT_MS + 2 * MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS + MIGRATION_IMPORT_DESCRIPTOR_TIMEOUT_MS + ADD_CUSTOMER_DEADLINE_MS +
+      IMPORT_ACTIVATION_PATCH_DEADLINE_MS + CONFIG_RELOAD_DEADLINE_MS + VERIFY_ACCOUNT_TIMEOUT_MS + 30_000,
     );
   });
 

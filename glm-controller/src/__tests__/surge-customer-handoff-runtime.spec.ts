@@ -18,6 +18,7 @@ import {
   deleteCancelledSurgePod,
   parseSurgePodSnapshot,
   readPodDurableSessionDigest,
+  readPodSystemConfigCommit,
 } from "../surge-customer-handoff-runtime.js";
 import {
   SurgeGatewayScopedSignatureCapabilityMissingError,
@@ -217,6 +218,14 @@ describe("surge handoff Kubernetes projection", () => {
     expect(wedged.pods).toEqual([{ uid: "wedged", name: "wedged-pod", podIP: "10.0.0.4", ready: false, terminating: false, crashLooping: true }]);
   });
 
+  it("requires a clean system-config commit from the exact held pod", async () => {
+    const runKubectl = vi.fn(async () => ({ code: 0, stderr: "", stdout: "a".repeat(40) }));
+    await expect(readPodSystemConfigCommit(runKubectl, "octogee-test", source)).resolves.toBe("a".repeat(40));
+    expect(runKubectl).toHaveBeenCalledWith(expect.arrayContaining(["exec", "pod/old-pod", "-c", "gateway"]));
+    runKubectl.mockResolvedValueOnce({ code: 1, stderr: "dirty checkout", stdout: "" });
+    await expect(readPodSystemConfigCommit(runKubectl, "octogee-test", source)).rejects.toThrow("cannot verify system config commit");
+  });
+
   it("reads the session digest through kubectl exec so the source may run the prior image", async () => {
     const runKubectl = vi.fn(async () => ({
       code: 0,
@@ -351,6 +360,27 @@ describe("surge handoff Kubernetes projection", () => {
 
       fs.writeFileSync(path.join(targetState, "customers", "alice", "notes.md"), "changed");
       expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
+    } finally {
+      fs.rmSync(sourceState, { recursive: true, force: true });
+      fs.rmSync(targetState, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes Native startup migration backups while verifying durable Builder state", () => {
+    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
+    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
+    try {
+      writeConfiguredBuilderCustomerState(sourceState);
+      writeConfiguredBuilderCustomerState(targetState);
+      const agent = path.join(sourceState, "agents", "octogee-alice-coach", "agent");
+      const backup = path.join(agent, "openclaw-agent.sqlite.pre-startup-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93.postgres.bak");
+      fs.mkdirSync(backup, { recursive: true });
+      for (const name of ["anchor.sqlite", "database.sqlite", "manifest.json"]) fs.writeFileSync(path.join(backup, name), name);
+      fs.writeFileSync(`${backup}.pending`, "pending");
+      const sourceDigest = runBuilderDigest(sourceState);
+      expect(runBuilderDigest(targetState)).toEqual(sourceDigest);
+      fs.writeFileSync(path.join(agent, "openclaw-agent.sqlite.pre-startup-migration-not-a-uuid.postgres.bak"), "durable");
+      expect(runBuilderDigest(sourceState)).not.toEqual(sourceDigest);
     } finally {
       fs.rmSync(sourceState, { recursive: true, force: true });
       fs.rmSync(targetState, { recursive: true, force: true });
@@ -518,6 +548,15 @@ describe("surge handoff direct pod transport", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it("rejects a source hold response that does not prove the exact stopped-writer custody", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ migrationId: "recovery-op", slug: "alice",
+      targetPodUid: target.uid, operation: "hold", role: "normal", mode: "held", phase: "held" }), { status: 200 }));
+    const transport = createSurgePodTransport({ privateKey: FLEET_KEY_PAIR.privateKey, fetch,
+      request: requestThroughFetch(fetch), log: vi.fn() });
+    await expect(transport.stopSourceOpenClaw!({ gatewayId: GATEWAY_ID, slug: "alice", operationId: "recovery-op",
+      sourcePod: source, targetPod: target })).rejects.toThrow("source OpenClaw hold did not confirm");
+  });
+
   it("uses native full-operation deadlines for Builder holds, source resume, and target completion", async () => {
     const fetch = vi.fn() as unknown as typeof globalThis.fetch;
     const bodies: Record<string, unknown>[] = [];
@@ -539,8 +578,8 @@ describe("surge handoff direct pod transport", () => {
         response.setEncoding = vi.fn();
         queueMicrotask(() => {
           onResponse(response);
-          response.emit("data", JSON.stringify(options.hostname === target.podIP && options.path === "/hold-surge-openclaw/default"
-            ? { ...JSON.parse(body), operation: "hold", role: "target", mode: "held", phase: "held" }
+          response.emit("data", JSON.stringify(options.path === "/hold-surge-openclaw/default"
+            ? { ...JSON.parse(body), operation: "hold", role: options.hostname === target.podIP ? "target" : "source", mode: "held", phase: "held" }
             : { resumed: true }));
           response.emit("end");
         });

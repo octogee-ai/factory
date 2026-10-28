@@ -1,3 +1,4 @@
+import { migrationCancellationDeferred } from "./fleet-state.js";
 import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
 import { isDeepStrictEqual } from "node:util";
 
@@ -3521,6 +3522,13 @@ async function claimCustomerDeletion(opts: {
       };
     }
     const inFlight = await transaction.get(inFlightOperationsForUid(opts.db, opts.uid));
+    const forwardMigration = inFlight.docs.find(doc => {
+      const operation = doc.data();
+      return operation.kind === "migrate-customer" && migrationCancellationDeferred(operation, doc.id);
+    });
+    if (forwardMigration) {
+      return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: forwardMigration.id };
+    }
     const conflict = inFlight.docs.find((doc) => {
       const data = doc.data() as { kind?: unknown; status?: unknown };
       return (

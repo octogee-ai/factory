@@ -3048,6 +3048,27 @@ describe("account deletion revokes connector grants at the provider first", () =
     },
   );
 
+  it.each(["legacy-pending", "legacy-running", "v2-pending", "v2-running"])("preserves forward migration custody before deletion admission: %s", async scenario => {
+    const operationId = "move-1";
+    const input = { uid: "u1", fromGatewayId: "shared-1", toGatewayId: "shared-2" };
+    const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1" } } };
+    const assignmentPath = "gateways/shared-1/assignments/u1";
+    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", state: "quiescing", epoch: 3 };
+    const recovery = scenario.startsWith("legacy") ? { schedulerHandoff: {
+      ...input, slug: "alice", migrationId: "mig-move-1:scheduler:1:claim:100",
+      forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 3 },
+    } } : { customerMigrationV2: { operationId, uid: "u1", sourceGatewayId: "shared-1", targetGatewayId: "shared-2", phase: "sourceQuiesced" } };
+    const { db, deletionDeps, calls, remaining, otherDocs, added } = makeDeleteApp({ u1: user }, {
+      [assignmentPath]: assignment,
+      [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: scenario.endsWith("pending") ? "pending" : "running", inputUid: "u1", input, ...recovery },
+    });
+    await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
+    expect(remaining.u1).toEqual(user);
+    expect(otherDocs[assignmentPath]).toEqual(assignment);
+    expect(added.some(row => row.kind === "suspend-customer" || row.kind === "erase-customer" || row.status === "suspension_pending")).toBe(false);
+    expect(calls).not.toContain("suspend-auth:u1");
+  });
+
   it("reports a deletion in progress when the customer's suspension is already queued", async () => {
     const { db, deletionDeps, calls } = makeDeleteApp(
       { u2: { username: "acme" } },

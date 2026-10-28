@@ -19,7 +19,8 @@ export interface SurgeOpenClawProcessGateState {
   migrationId?: string;
   slug?: string;
   targetPodUid?: string;
-  terminalTarget?: SurgeOpenClawProcessRequest;
+  completionStarted?: boolean;
+  terminalTarget?: SurgeOpenClawProcessRequest & { completionStarted?: boolean };
 }
 
 export interface SurgeOpenClawProcessRequest {
@@ -151,15 +152,19 @@ function parseMigrationIdentity(
 function parseTerminalTarget(
   value: Record<string, unknown>,
   role: SurgeOpenClawProcessRole,
-): SurgeOpenClawProcessRequest | undefined {
+): (SurgeOpenClawProcessRequest & { completionStarted?: boolean }) | undefined {
   if (value.terminalTarget === undefined) return undefined;
   if (role !== "normal" || !isRecord(value.terminalTarget)) {
     throw new Error("surge OpenClaw process gate has invalid terminal target");
+  }
+  if (value.terminalTarget.completionStarted !== undefined && typeof value.terminalTarget.completionStarted !== "boolean") {
+    throw new Error("surge OpenClaw process gate has invalid terminal completion state");
   }
   return {
     migrationId: requireNonemptyString(value.terminalTarget.migrationId, "terminalTarget.migrationId"),
     slug: requireNonemptyString(value.terminalTarget.slug, "terminalTarget.slug"),
     targetPodUid: requireNonemptyString(value.terminalTarget.targetPodUid, "terminalTarget.targetPodUid"),
+    ...(value.terminalTarget.completionStarted !== undefined ? { completionStarted: value.terminalTarget.completionStarted } : {}),
   };
 }
 
@@ -186,6 +191,9 @@ function parseState(value: unknown): SurgeOpenClawProcessGateState {
   const mode = parseEnum(value.mode, MODES, "mode");
   const phase = parseEnum(value.phase, PHASES, "phase");
   const terminalTarget = parseTerminalTarget(value, role);
+  if (value.completionStarted !== undefined && (role !== "target" || typeof value.completionStarted !== "boolean")) {
+    throw new Error("surge OpenClaw process gate has invalid completion state");
+  }
   assertModePhaseCoherent(mode, phase);
   return {
     version: 1,
@@ -194,6 +202,7 @@ function parseState(value: unknown): SurgeOpenClawProcessGateState {
     mode,
     phase,
     ...parseMigrationIdentity(value, role),
+    ...(typeof value.completionStarted === "boolean" ? { completionStarted: value.completionStarted } : {}),
     ...(terminalTarget ? { terminalTarget } : {}),
   };
 }
@@ -284,6 +293,8 @@ function heldStateForRequest(input: {
   const completedMigration = completedMigrationCanBeReplaced(state, isCancellation);
   if (!completedMigration) requireMigrationOwner(state, request);
   const heldRole: SurgeOpenClawProcessRole = request.targetPodUid === request.podUid ? "target" : "source";
+  let completionStarted: boolean | undefined;
+  if (heldRole === "target") completionStarted = sameMigration(state, request) ? state.completionStarted : false;
   return {
     version: 1,
     podUid: request.podUid,
@@ -291,6 +302,7 @@ function heldStateForRequest(input: {
     mode: "held",
     phase: isCancellation ? "cancelling" : "stopping",
     ...migrationIdentity(request),
+    ...(completionStarted !== undefined ? { completionStarted } : {}),
   };
 }
 
@@ -326,6 +338,7 @@ function createTargetGateOperations(
       return write({
         version: 1, podUid: input.podUid, role: "target", mode: "held", phase: "cancelling",
         ...migrationIdentity(input),
+        ...(state.terminalTarget?.completionStarted !== undefined ? { completionStarted: state.terminalTarget.completionStarted } : {}),
       });
     },
     async reholdTarget(input) {
@@ -343,8 +356,8 @@ function createTargetGateOperations(
       if (state.mode !== "held" || (state.phase !== "held" && state.phase !== "completing")) {
         throw new Error("surge OpenClaw process gate target completion is not held");
       }
-      if (state.phase === "completing") return state;
-      return write({ ...state, phase: "completing" });
+      if (state.phase === "completing" && state.completionStarted) return state;
+      return write({ ...state, phase: "completing", completionStarted: true });
     },
     async finalizeTargetCancellation(input) {
       assertRequest(input);
@@ -357,7 +370,7 @@ function createTargetGateOperations(
       if (state.phase !== "cancelling") {
         throw new Error("surge OpenClaw process gate target cancellation is not pending");
       }
-      return write({ ...normalState(state), mode: "held", phase: "held", terminalTarget: { migrationId: input.migrationId, slug: input.slug, targetPodUid: input.targetPodUid } });
+      return write({ ...normalState(state), mode: "held", phase: "held", terminalTarget: { migrationId: input.migrationId, slug: input.slug, targetPodUid: input.targetPodUid, ...(state.completionStarted !== undefined ? { completionStarted: state.completionStarted } : {}) } });
     },
     async permitTarget(input) {
       assertRequest(input);
@@ -376,6 +389,7 @@ function createTargetGateOperations(
         mode: "permitted",
         phase: "starting",
         ...migrationIdentity(input),
+        completionStarted: true,
       });
     },
     async hydrateTarget(input) {
@@ -385,8 +399,11 @@ function createTargetGateOperations(
         return state;
       }
       requireMigrationOwner(state, input);
-      if (state.mode === "permitted") {
-        throw new Error("cannot hydrate a permitted surge OpenClaw process gate");
+      if (state.role === "normal" && terminalTargetMatches(state, input)) {
+        throw new Error("surge OpenClaw process gate target migration already released");
+      }
+      if (state.mode === "permitted" || state.phase !== "held") {
+        throw new Error("cannot hydrate a surge OpenClaw process gate that is not held");
       }
       return write({
         version: 1,
@@ -395,6 +412,7 @@ function createTargetGateOperations(
         mode: "held",
         phase: "held",
         ...migrationIdentity(input),
+        completionStarted: false,
       });
     },
     async unreserveTarget(input) {
@@ -408,7 +426,7 @@ function createTargetGateOperations(
       if (state.phase !== "held") {
         throw new Error("cannot unreserve a claimed surge OpenClaw process gate");
       }
-      return write({ ...normalState(state), mode: "held", phase: "held", terminalTarget: { migrationId: input.migrationId, slug: input.slug, targetPodUid: input.targetPodUid } });
+      return write({ ...normalState(state), mode: "held", phase: "held", terminalTarget: { migrationId: input.migrationId, slug: input.slug, targetPodUid: input.targetPodUid, ...(state.completionStarted !== undefined ? { completionStarted: state.completionStarted } : {}) } });
     },
     async settleTargetCompletion(input) {
       assertRequest(input);
@@ -423,6 +441,7 @@ function createTargetGateOperations(
           migrationId: input.migrationId,
           slug: input.slug,
           targetPodUid: input.targetPodUid,
+          completionStarted: true,
         },
       });
     },
@@ -499,6 +518,7 @@ function restartedState(
         migrationId: state.migrationId,
         slug: state.slug,
         targetPodUid: state.targetPodUid,
+        ...(state.completionStarted !== undefined ? { completionStarted: state.completionStarted } : {}),
       },
     };
   }
