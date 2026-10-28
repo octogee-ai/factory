@@ -180,6 +180,11 @@ function applyMattermostActionDefaults(
     changed = true;
     logFn("set channels.mattermost.reactionNotifications=own");
   }
+  if (mattermost.joinIntro === undefined) {
+    mattermost.joinIntro = true;
+    changed = true;
+    logFn("set channels.mattermost.joinIntro=true");
+  }
   return changed;
 }
 

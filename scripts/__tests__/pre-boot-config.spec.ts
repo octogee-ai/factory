@@ -489,6 +489,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
         streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
         actions: { messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
         reactionNotifications: "own",
+        joinIntro: true,
         commands: { native: false },
       } },
       messages: { ackReactionScope: "all", queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
@@ -510,7 +511,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.messages.ackReactionScope).toBe("off");
   });
 
-  it("enables Mattermost message actions and own-post reaction forwarding when unset", () => {
+  it("enables Mattermost message actions, own-post reaction forwarding, and the join introduction when unset", () => {
     const config: any = { channels: { mattermost: { actions: { reactions: true, messages: true } } } };
     const log = vi.fn();
     expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
@@ -524,17 +525,20 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       memberInfo: true,
     });
     expect(config.channels.mattermost.reactionNotifications).toBe("own");
+    expect(config.channels.mattermost.joinIntro).toBe(true);
     for (const gate of ["messageWrites", "fileDownloads", "pins", "search", "memberInfo"]) {
       expect(log).toHaveBeenCalledWith(`set channels.mattermost.actions.${gate}=true`);
     }
     expect(log).toHaveBeenCalledWith("set channels.mattermost.reactionNotifications=own");
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.joinIntro=true");
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
   });
 
-  it("keeps explicit Mattermost action gates and reaction notification choices", () => {
+  it("keeps explicit Mattermost action gates, reaction notification, and join introduction choices", () => {
     const config: any = { channels: { mattermost: {
       actions: { messageWrites: false, fileDownloads: false, pins: false, search: false, memberInfo: false },
       reactionNotifications: "all",
+      joinIntro: false,
     } } };
     const log = vi.fn();
     applyMattermostPreBootPatches(config, {}, log);
@@ -546,8 +550,10 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       memberInfo: false,
     });
     expect(config.channels.mattermost.reactionNotifications).toBe("all");
+    expect(config.channels.mattermost.joinIntro).toBe(false);
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining("channels.mattermost.actions"));
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining("reactionNotifications"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("joinIntro"));
   });
 
   it("leaves native reply and streaming preferences untouched", () => {
@@ -1086,6 +1092,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
           actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
+          joinIntro: true,
           commands: "legacy-commands",
           threadSessionScope: "channel",
           accounts: {
@@ -1199,6 +1206,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           replyToModeByChatType: { direct: "all" },
           actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
+          joinIntro: true,
           streaming: {
             mode: "progress",
             chunkMode: "newline",
