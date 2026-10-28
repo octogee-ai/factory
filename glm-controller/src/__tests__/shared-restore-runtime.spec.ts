@@ -1095,6 +1095,42 @@ describe('journaled Shared source schema repair', () => {
     return { ...h, deps: { ...h.deps, runKubectl }, deployment, replicaSet, events, captured,
       setAcknowledgment: (value: typeof acknowledgment) => { acknowledgment = value; }, onEffect: (effect: (event: string) => void) => { afterEffect = effect; } };
   }
+  async function schedulerSourceHarness() {
+    const h = await postgresSourceHarness();
+    for (const row of Object.values(h.store)) {
+      if (row.kind !== 'migrate-customer' || row.status !== 'failed') continue;
+      row.error = '/scheduler/shared-2: 500 ' + JSON.stringify({ error: 'scheduler migration failed',
+        message: 'Invalid cron migration snapshot: job 00000000-0000-4000-8000-000000000099 is not persistable (invalid-payload)' });
+      row.steps.find((step: any) => step.name === 'final-sync-state').error = row.error;
+      row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
+    }
+    const captured = await h.deps.db.runTransaction(tx => readSharedSourceRecoveryAuthority(h.deps.db, tx, 'shared-1', h.op.id));
+    expect(captured.schedulerStateRecovery).toBe(true);
+    h.op.input.sourceRecovery = { ...h.op.input.sourceRecovery, ...captured };
+    h.store['glmOperations/recover'].input = structuredClone(h.op.input);
+    return h;
+  }
+  it('waits for cold scheduler repair and startup beyond ten minutes before releasing the source', async () => {
+    const h = await schedulerSourceHarness(), start = Date.now();
+    let clock = start;
+    h.setAcknowledgment('none'); h.deps.now = () => clock;
+    h.deps.wait = async () => { clock += 60_000; if (clock - start >= 720_000) h.setAcknowledgment('full'); };
+    await recoverSharedSourceRuntime(h.deps, h.op, h.ctx);
+    expect(clock - start).toBe(720_000);
+    expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.managementHealth.health).toBe(true);
+  });
+  it('keeps stalled scheduler repair fenced at the twenty-minute deadline', async () => {
+    const h = await schedulerSourceHarness(), start = Date.now();
+    let clock = start;
+    h.setAcknowledgment('none'); h.deps.now = () => clock;
+    h.deps.wait = async () => { clock += 60_000; };
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('source repair is not ready');
+    expect(clock - start).toBe(1_200_000);
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.installedImage.podUid).toBe('pod-uid');
+    expect(h.store['gateways/shared-1'].runtimeRestartFence.doctor.completedAt).toBeUndefined();
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined();
+  });
   it('refuses foreign discovery before reserving or changing the retained PostgreSQL source', async () => {
     const h = await postgresSourceHarness(), before = structuredClone(h.store);
     const run = h.deps.runKubectl.getMockImplementation()!;

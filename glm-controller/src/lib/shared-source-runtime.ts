@@ -254,12 +254,16 @@ async function resumeRecoveredSource(deps: SharedPodRecoveryDeps, op: Operation,
   const proof = await read();
   await resumeSourceRecoveryWorkload(deps, proof.workload, input.images, async () => { await read(); });
 }
+function sourceRepairTimeout(input: SourceRecovery): number {
+  return input.schedulerStateRecovery ? 1_200_000 : 600_000;
+}
 async function waitForSourceRepair(request: {
   deps: SharedPodRecoveryDeps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; saved: Row;
 }): Promise<void> {
   const { deps, op, input, ctx, pod, saved } = request;
   const gatewayId = op.input.gatewayId as string;
-  const now = deps.now ?? Date.now, wait = deps.wait ?? (ms => new Promise(resolve => setTimeout(resolve, ms))), deadline = now() + 600_000;
+  const now = deps.now ?? Date.now, wait = deps.wait ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const deadline = now() + sourceRepairTimeout(input);
   while (now() < deadline) {
     await ctx.assertActiveClaim!();
     const current = await json(deps, ['get', 'pod', pod.metadata.name]);
