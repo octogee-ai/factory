@@ -436,6 +436,17 @@ export async function gitPush(
   customerDir: string,
   options: { branch?: string; setUpstream?: boolean; githubToken?: string } = {},
 ): Promise<{ ok: true } | { ok: false; error: WorkspaceGitError }> {
+  if (options.branch && !options.setUpstream) {
+    const head = await runGit(customerDir, ["rev-parse", "HEAD"]);
+    if (!head.ok) return head;
+    const remote = await runGit(customerDir, ["ls-remote", END_OF_OPTIONS, "origin", `refs/heads/${options.branch}`], {
+      timeoutMs: GIT_PUSH_TIMEOUT_MS,
+      githubToken: options.githubToken,
+    });
+    if (!remote.ok) return remote;
+    if (/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(head.stdout.trim()) &&
+        remote.stdout.trim() === `${head.stdout.trim()}\trefs/heads/${options.branch}`) return { ok: true };
+  }
   const args = options.branch
     ? [
         "push",

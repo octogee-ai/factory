@@ -95,6 +95,25 @@ it("checkpoints exact Shared coach and Gitea project persona bytes for a cold cl
   expect(restored("demo")).toEqual(Buffer.from(personas.demo));
 });
 
+it("accepts a checkpoint already published in an archived remote and retains unpublished changes", async () => {
+  for (const [name, dir] of [["workspace", customer], ["demo", path.join(customer, "projects/demo")]]) {
+    git(dir, "add", "."); git(dir, "commit", "-m", "published snapshot");
+    git(dir, "push", path.join(remoteRoot, `${name}.git`), "main");
+  }
+  const remote = path.join(remoteRoot, "demo.git");
+  const published = git(remote, "rev-parse", "refs/heads/main");
+  const ssh = process.env.TEST_GIT_SSH!;
+  const script = readFileSync(ssh, "utf8");
+  writeFileSync(ssh, script.replaceAll("exec /usr/bin/git-receive-pack", "exit 128; exec /usr/bin/git-receive-pack"), { mode: 0o700 });
+  expect((await flush()).status).toBe(200);
+  writeFileSync(path.join(customer, "projects/demo/unpublished.md"), "retain local-only work\n");
+  const project = path.join(customer, "projects/demo");
+  git(project, "add", "."); git(project, "commit", "-m", "unpublished local work");
+  expect((await flush()).status).toBe(503);
+  expect(git(remote, "rev-parse", "refs/heads/main")).toBe(published);
+  expect(readFileSync(path.join(customer, "projects/demo/unpublished.md"), "utf8")).toBe("retain local-only work\n");
+});
+
 it.each(["missing", "stale"])("keeps nested project histories out of a %s workspace ignore policy", async policy => {
   const other = checkout("other");
   snapshot.projects = [...snapshot.projects as object[], { projectSlug: "other", giteaRepoName: "other", provisioningState: "active" }];
