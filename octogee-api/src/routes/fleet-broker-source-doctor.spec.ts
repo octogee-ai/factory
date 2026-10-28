@@ -67,6 +67,24 @@ describe("source Doctor boot authority", () => {
     expect(f.fence().doctor.completedAt).toBeUndefined();
     expect(await f.store.completeDoctor({ ...input, requestId, verifiedAgentIds: agentIds })).toBe(true);
   });
+  it("binds scheduler state repair to the captured source authority and runtime fence", async () => {
+    const f = postgresFixture();
+    Object.assign(f.recovery, { schedulerStateRecovery: true });
+    Object.assign(f.captured, { schedulerStateRecovery: true });
+    Object.assign(f.fence().target, { schedulerStateRecovery: true });
+    expect(await f.store.claim(input)).toMatchObject({ action: "doctor", sourceDoctor: { schedulerStateRecovery: true } });
+  });
+  it.each(["fence", "current-custody", "missing-roster"])("refuses unbound scheduler state repair with %s", async changed => {
+    const f = postgresFixture();
+    Object.assign(f.recovery, { schedulerStateRecovery: true });
+    Object.assign(f.captured, { schedulerStateRecovery: true });
+    Object.assign(f.fence().target, { schedulerStateRecovery: true });
+    if (changed === "fence") delete f.fence().target.schedulerStateRecovery;
+    if (changed === "current-custody") recoveryReads.read.mockResolvedValue({ ...f.captured, schedulerStateRecovery: undefined });
+    if (changed === "missing-roster") { delete f.recovery.postgresAgentStores; delete f.fence().target.postgresAgentStores; }
+    await expect(f.store.claim(input)).rejects.toThrow();
+    expect(f.fence().doctor.startedAt).toBeUndefined();
+  });
   it.each(["owner", "anchor", "roster", "current-custody"])("refuses changed PostgreSQL %s before admitting maintenance", async changed => {
     const f = postgresFixture();
     if (changed === "owner") f.stores[1]!.uid = "foreign";

@@ -335,3 +335,42 @@ it.each(["anchor", "schema", "epoch", "input", "image", "pod", "clock", "cancell
   if (change === "completed-recovery") Object.assign(f.row, { sourceRuntimeRecovery: {} });
   expect(() => assertSharedSourceRecoveryPredecessor(f)).toThrow();
 });
+
+function schedulerFailureFixture() {
+  const row = fixture();
+  row.error = '/scheduler/shared-new: 500 ' + JSON.stringify({ error: 'scheduler migration failed', message:
+    'Invalid cron migration snapshot: job 81f72c0a-452c-4efd-85b4-5d308224ee84 is not persistable (invalid-payload)' });
+  row.steps = row.steps.map(step => step.name === 'final-sync-state' ? { ...step, error: row.error } : step);
+  row.attemptHistory[0] = { ...row.attemptHistory[0]!, error: row.error, steps: structuredClone(row.steps) };
+  return row;
+}
+
+it('captures stopped-source scheduler repair with the complete PostgreSQL roster after a fully rolled-back cron export', async () => {
+  const f = authorityFixture(); f.rows['glmOperations/placement'] = schedulerFailureFixture();
+  const before = structuredClone(f.rows);
+  const captured = await readSharedSourceRecoveryAuthority(f.db, f.tx, 'shared-old');
+  expect(captured).toMatchObject({ schedulerStateRecovery: true, postgresAgentStores: [{ agentId: identity.agentId }] });
+  expect(f.rows).toEqual(before);
+});
+it.each(['cutover','rollback','cleanup','foreign-uid','foreign-source','foreign-target','other-reason','trailing-text','missing-anchor','active-transfer','history'])(
+  'refuses scheduler source recovery with %s', async changed => {
+    const f = authorityFixture(), row: any = schedulerFailureFixture(); f.rows['glmOperations/placement'] = row;
+    if (changed === 'cutover') row.cutoverCommittedAt = 180;
+    if (changed === 'rollback') row.rolledBack = false;
+    if (changed === 'cleanup') row.steps = row.steps.filter((step: any) => step.name !== 'rollback:unmount-target');
+    if (changed === 'foreign-uid') row.input.uid = 'foreign';
+    if (changed === 'foreign-source') row.input.fromGatewayId = 'shared-other';
+    if (changed === 'foreign-target') row.input.toGatewayId = 'shared-other';
+    if (changed === 'other-reason') row.error = row.error.replace('invalid-payload','unknown-reason');
+    if (changed === 'trailing-text') row.error += ' extra';
+    if (changed === 'missing-anchor') delete f.rows['users/owner/agentStores/' + identity.agentId];
+    if (changed === 'active-transfer') f.rows['glmMigrationTransferTasks/task'] = { status: 'running', sourceGatewayId: 'shared-old' };
+    if (changed === 'history') row.attemptHistory = [];
+    await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, 'shared-old')).rejects.toThrow();
+  });
+
+it.each(["commercial", "project-status"])("does not require a retired project's anchor in the live recovery roster: %s", async archive => {
+  const f = rosterFixture();f.anchors.pop();
+  Object.assign(f.projects[0]!.data, archive === "commercial" ? { commercialLifecycle: { status: "archived" } } : { status: "archived" });
+  await expect(readPostgresSourceAgentStores(f.db, f.tx, [identity])).resolves.toHaveLength(1);
+});

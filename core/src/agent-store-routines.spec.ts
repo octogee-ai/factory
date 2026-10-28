@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentStoreRoutineFingerprint, agentStoreTriggerFingerprint, agentStoreExpressionFingerprint } from "./agent-store-routines.js";
+import { agentStoreRoutineFingerprint, agentStoreTriggerFingerprint, agentStoreExpressionFingerprint, assertTrustedAgentStoreRoutines, agentStoreExpressionsQuery, agentStoreNonNullColumnsQuery } from "./agent-store-routines.js";
 import trusted from "./agent-store-routines.json" with { type: "json" };
 
 const vectorRoutine = (dimensions: number) => ({
@@ -103,4 +103,34 @@ describe("trusted agent-store routine definitions", () => {
     expect(agentStoreRoutineFingerprint({ ...routine, proconfig: ['search_path="tenant, victim"'] }, "tenant, victim")).toBe(expected);
   });
 
+});
+
+const acpIndex = {kind: "index",relname: "acp_parent_stream_events",name: "idx_agent_acp_parent_stream_run",definition: "CREATE INDEX idx_agent_acp_parent_stream_run ON tenant.acp_parent_stream_events USING btree (run_id NULLS FIRST, seq NULLS FIRST)"};
+const acpPrimary = {kind: "constraint",relname: "acp_parent_stream_events",name: "acp_parent_stream_events_pkey",definition: "PRIMARY KEY (session_id, run_id, seq)"};
+const acpNonNull = ["run_id", "seq"].map(attname => ({ relname: "acp_parent_stream_events", attname }));
+const acpClient = (rows: unknown[], columns = acpNonNull) => ({query: async (sql: string) => ({rows: sql === agentStoreExpressionsQuery ? rows : sql === agentStoreNonNullColumnsQuery ? columns : []})}) as never;
+it("accepts the exact native ACP null ordering only with PostgreSQL catalog non-null proof", async () => {
+  await expect(assertTrustedAgentStoreRoutines(acpClient([acpPrimary,acpIndex]),"tenant")).resolves.toBeUndefined();
+});
+it.each(["missing-nullability","changed-primary","sort","expression","foreign-schema","foreign-table-proof","nullable-key"])("refuses an ACP null-ordering claim with %s", async changed => {
+  const index={...acpIndex},primary={...acpPrimary};
+  let columns=acpNonNull;
+  if(changed==="missing-nullability")columns=[];
+  if(changed==="foreign-table-proof")columns=acpNonNull.map(c=>({...c,relname:"foreign"}));
+  if(changed==="nullable-key")columns=acpNonNull.slice(0,1);
+  if(changed==="changed-primary")primary.definition="PRIMARY KEY (session_id)";
+  if(changed==="sort")index.definition=index.definition.replace("run_id NULLS FIRST","run_id DESC NULLS FIRST");
+  if(changed==="expression")index.definition=index.definition.replace("run_id NULLS FIRST","public.leak(run_id) NULLS FIRST");
+  if(changed==="foreign-schema")index.definition=index.definition.replace("tenant.","victim.");
+  await expect(assertTrustedAgentStoreRoutines(acpClient([primary,index],columns),"tenant")).rejects.toThrow();
+});
+
+it.each([
+  { relname: "board_widgets", name: "idx_agent_board_widgets_tab_position", keys: 'session_key NULLS FIRST, tab_id NULLS FIRST, "position" NULLS FIRST', columns: ["session_key", "tab_id", "position"] },
+  { relname: "cache_entries", name: "idx_agent_cache_updated", keys: "scope NULLS FIRST, updated_at DESC NULLS LAST, key NULLS FIRST", columns: ["scope", "updated_at", "key"] },
+])("qualifies quoted and descending native $name keys using actual column nullability", async fixture => {
+  const expression = {kind: "index", relname: fixture.relname, name: fixture.name, definition: `CREATE INDEX ${fixture.name} ON tenant.${fixture.relname} USING btree (${fixture.keys})`};
+  const columns = fixture.columns.map(attname => ({relname: fixture.relname, attname}));
+  await expect(assertTrustedAgentStoreRoutines(acpClient([expression], columns), "tenant")).resolves.toBeUndefined();
+  await expect(assertTrustedAgentStoreRoutines(acpClient([expression], columns.slice(0, -1)), "tenant")).rejects.toThrow("untrusted expression");
 });

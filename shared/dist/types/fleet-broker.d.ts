@@ -200,6 +200,7 @@ export interface FleetBrokerOpenClawBootClaim {
     sourceDoctor?: {
         requestId: string;
         agentIds: string[];
+        schedulerStateRecovery?: true;
         postgresAgentStores?: Array<{
             agentId: string;
             storeId: string;

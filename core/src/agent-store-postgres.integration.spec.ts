@@ -615,6 +615,21 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     }
   });
 
+  it("admits the exact native ACP index null ordering only while PostgreSQL enforces both keys non-null", async () => {
+    const pool = new pg.Pool({ connectionString: dsn, max: 1 }), client = await pool.connect();
+    const schema = `acp_order_${randomUUID().replaceAll("-", "")}`, table = `${pg.escapeIdentifier(schema)}.acp_parent_stream_events`;
+    try {
+      await client.query("BEGIN"); await client.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      await client.query(`CREATE TABLE ${table} (session_id TEXT, run_id TEXT, seq BIGINT, PRIMARY KEY (session_id, run_id, seq))`);
+      await client.query(`CREATE INDEX idx_agent_acp_parent_stream_run ON ${table} (run_id NULLS FIRST, seq NULLS FIRST)`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
+      await client.query(`ALTER TABLE ${table} DROP CONSTRAINT acp_parent_stream_events_pkey`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
+      await client.query(`ALTER TABLE ${table} ALTER COLUMN seq DROP NOT NULL`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).rejects.toThrow("untrusted expression index:acp_parent_stream_events:idx_agent_acp_parent_stream_run");
+    } finally { await client.query("ROLLBACK");client.release();await pool.end(); }
+  });
+
   it.each([1536, 3072])("admits PostgreSQL's actual %i-dimensional projection and refuses a changed expression", async dimensions => {
     const pool = new pg.Pool({ connectionString: process.env.OCTOGEE_TEST_POSTGRES_DSN, max: 1 });
     const client = await pool.connect();

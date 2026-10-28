@@ -12,7 +12,7 @@ const SLOT_LIMIT = 8;
 const FILE_LIMITS: Record<string, number> = { "stdout.bin": OUTPUT_LIMIT, "stderr.bin": OUTPUT_LIMIT,
   "metadata.json": METADATA_LIMIT, "metadata.pending": METADATA_LIMIT };
 export type SourceDoctorPhase = "descriptor" | "pre-metadata" | "bootstrap" | "copy-anchors" |
-  "postgres-doctor" | "post-metadata" | "serving-projection" | "private-cleanup";
+  "postgres-doctor" | "post-metadata" | "serving-projection" | "source-scheduler-doctor" | "scheduler-post-metadata" | "private-cleanup";
 export interface SourceDoctorDiagnosticContext { requestId: string; releaseKey: string; log: (message: string) => void }
 
 async function privateDirectory(directory: string): Promise<void> {

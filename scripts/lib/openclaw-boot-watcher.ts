@@ -38,7 +38,8 @@ function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimO
   const request = claim.sourceDoctor;
   if (request && (typeof request.requestId !== "string" || !request.requestId || request.requestId.includes("/") || !Array.isArray(request.agentIds) ||
       request.agentIds.length === 0 || new Set(request.agentIds).size !== request.agentIds.length ||
-      !request.agentIds.every((id) => /^octogee-[a-z0-9][a-z0-9_-]*-coach$/.test(id)))) throw new Error("invalid source Doctor request");
+      !request.agentIds.every((id) => /^octogee-[a-z0-9][a-z0-9_-]*-coach$/.test(id)) ||
+      request.schedulerStateRecovery !== undefined && (request.schedulerStateRecovery !== true || !request.postgresAgentStores))) throw new Error("invalid source Doctor request");
   return request;
 }
 
@@ -127,6 +128,7 @@ async function runClaimedDoctor(input: Parameters<typeof createOpenClawBootWatch
   await (input.repairSourceDoctor ?? repairSourceDoctorAgentStores)(request.agentIds, {
     diagnostics: { requestId: request.requestId, releaseKey: input.releaseKey, log: input.log },
     expectedAnchors: request.postgresAgentStores,
+    ...(request.schedulerStateRecovery ? { schedulerStateRecovery: true } : {}),
     assertCurrent: () => assertDoctor({ releaseKey: input.releaseKey, requestId: request.requestId }),
   });
 }

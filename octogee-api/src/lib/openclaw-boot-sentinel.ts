@@ -83,11 +83,14 @@ async function sourceDoctorContext(db: Firestore, txn: Transaction, input: OpenC
   assertSourceOperation(op, recovery, target, input.gatewayId);
   const coaches = sourceAgentIds(recovery.assignments, target.agents);
   const stores = sourcePostgresStores(recovery, target, coaches);
+  if (recovery.schedulerStateRecovery !== target.schedulerStateRecovery ||
+      recovery.schedulerStateRecovery !== undefined && (recovery.schedulerStateRecovery !== true || !stores)) throw new Error("source Doctor scheduler custody mismatch");
   if (stores) {
     const current = await readSharedSourceRecoveryAuthority(db, txn, input.gatewayId, doctor.requestId);
     assertSharedSourceRecoveryUnchanged(current, recovery as Parameters<typeof assertSharedSourceRecoveryUnchanged>[1]);
   }
   return { rootRef, fence, doctor, agentIds: stores ? stores.map(s => s.agentId) : coaches, postgresAgentStores: stores,
+    ...(recovery.schedulerStateRecovery === true ? { schedulerStateRecovery: true as const } : {}),
     imageVerified: sourceImageVerified(fence, input.podUid) };
 }
 
@@ -113,6 +116,7 @@ function sourceDoctorCompleted(context: NonNullable<Awaited<ReturnType<typeof so
 }
 function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sourceDoctorContext>>>) {
   return { requestId: context.doctor.requestId as string, agentIds: context.agentIds,
+    ...(context.schedulerStateRecovery ? { schedulerStateRecovery: true as const } : {}),
     ...(context.postgresAgentStores ? { postgresAgentStores: context.postgresAgentStores } : {}) };
 }
 

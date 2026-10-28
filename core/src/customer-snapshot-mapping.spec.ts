@@ -250,13 +250,13 @@ describe("mapProjectAgentState", () => {
     });
   });
 
-  it("projects an archived project's agent as retire-pending instead of runnable", () => {
+  it.each(["commercial", "project-status"])("projects an archived project's agent as retire-pending instead of runnable: %s", archive => {
     expect(
       mapProjectAgentState(
         "orbit",
         {
           agent: {},
-          commercialLifecycle: { status: "archived" },
+          ...(archive === "commercial" ? { commercialLifecycle: { status: "archived" } } : { status: "archived" }),
         },
         { mmUserId: "bot-1", personalToken: "pat-1" },
       ),

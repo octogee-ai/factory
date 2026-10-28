@@ -9,8 +9,9 @@ import { operationAuditMutationFingerprint } from "./operation-audit.js";
 export interface SourceRecoveryAssignment { uid: string; slug: string; agentId: string; assignmentEpoch: number; assignment: DocumentData }
 export interface SourceRecoveryExport { operationId: string; input: DocumentData; startedAt: number; completedAt: number; error: string; steps: DocumentData[] }
 export interface SourceRecoveryAgentStore { uid: string; slug: string; assignmentEpoch: number; agentId: string; storeId: string; schema: string }
-export interface SharedSourceRecoveryAuthority { postgresAgentStores?: SourceRecoveryAgentStore[]; root: DocumentData; assignments: SourceRecoveryAssignment[]; failedExports: SourceRecoveryExport[]; managementRecovery?: ManagementSourceRecovery }
+export interface SharedSourceRecoveryAuthority { schedulerStateRecovery?: true; postgresAgentStores?: SourceRecoveryAgentStore[]; root: DocumentData; assignments: SourceRecoveryAssignment[]; failedExports: SourceRecoveryExport[]; managementRecovery?: ManagementSourceRecovery }
 export class SharedSourceRecoveryConflict extends Error {}
+const FINAL_SYNC_STEP = "final-sync-state";
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
 const conflict = (message: string): never => { throw new SharedSourceRecoveryConflict(message); };
 
@@ -68,11 +69,11 @@ function schema24Export(row: DocumentData, identity: SourceRecoveryAssignment, g
   return schema24ExportError(row.error, gatewayId, identity.agentId) &&
     steps.some(step => step.name === "pre-sync-state" && step.status === "failed" && step.error === row.error) &&
     steps.some(step => step.name === "rollback:unmount-target" && step.status === "done") &&
-    !steps.some(step => step.name === "quiesce-source" || step.name === "final-sync-state");
+    !steps.some(step => step.name === "quiesce-source" || step.name === FINAL_SYNC_STEP);
 }
 function supersededDetachExport(row: DocumentData, identity: SourceRecoveryAssignment, gatewayId: string, steps: DocumentData[]): boolean {
   return row.rolledBack === true && supersededDetachExportError(row.error, gatewayId, identity.slug) &&
-    steps.some(step => step.name === "final-sync-state" && step.status === "failed" && step.error === row.error) &&
+    steps.some(step => step.name === FINAL_SYNC_STEP && step.status === "failed" && step.error === row.error) &&
     ["scheduler-abort", "unmount-target", "scheduler-resume", "resume-ingress"].every(name =>
       steps.some(step => step.name === `rollback:${name}` && step.status === "done"));
 }
@@ -89,6 +90,34 @@ function postgresMaintenanceImportErrorMatches(error: unknown, target: string, s
   ].find(suffix => typeof message === "string" && message.endsWith(suffix));
   return body?.error === "import failed" && typeof message === "string" && message.startsWith(messagePrefix) && messageSuffix !== undefined &&
     agentIdBelongsToSlug(message.slice(messagePrefix.length, -messageSuffix.length), slug);
+}
+
+function schedulerPayloadExportError(error: unknown, target: string): boolean {
+  const prefix = `/scheduler/${target}: 500 `;
+  if (typeof error !== "string" || !error.startsWith(prefix)) return false;
+  let body: DocumentData;
+  try { body = JSON.parse(error.slice(prefix.length)); } catch { return false; }
+  return body?.error === "scheduler migration failed" && typeof body?.message === "string" &&
+    /^Invalid cron migration snapshot: job [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12} is not persistable \(invalid-payload\)$/.test(body.message);
+}
+
+function schedulerPayloadExportFailure(row: DocumentData, operationId: string, identity: SourceRecoveryAssignment, gatewayId: string): boolean {
+  const target = row.input?.toGatewayId;
+  if (typeof target !== "string" || target === gatewayId || !schedulerPayloadExportError(row.error, target)) return false;
+  const steps = Array.isArray(row.steps) ? row.steps : [];
+  const done = (name: string) => steps.filter(step => step.name === name).length === 1 && steps.some(step => step.name === name && step.status === "done");
+  return [row.rolledBack === true, row.input?.uid === identity.uid, row.input?.fromGatewayId === gatewayId,
+    Number.isSafeInteger(row.attempts), row.attempts > 0,
+    row.schedulerHandoff?.migrationId === `mig-${operationId}:scheduler:${row.attempts}:claim:${row.startedAt}`,
+    row.schedulerHandoff?.uid === identity.uid, row.schedulerHandoff?.slug === identity.slug,
+    row.schedulerHandoff?.fromGatewayId === gatewayId, row.schedulerHandoff?.toGatewayId === target,
+    row.sourceTransferExecution === undefined, row.customerMigrationV2 === undefined,
+    Array.isArray(row.attemptHistory) && row.attemptHistory.some((attempt: DocumentData) =>
+      ["startedAt", "completedAt", "error", "steps"].every(key => isDeepStrictEqual(attempt[key], row[key]))),
+    ["quiesce-source", "flush-source", "rollback:scheduler-abort", "rollback:unmount-target", "rollback:scheduler-resume", "rollback:resume-ingress"].every(done),
+    steps.filter(step => step.name === FINAL_SYNC_STEP).length === 1,
+    steps.some(step => step.name === FINAL_SYNC_STEP && step.status === "failed" && step.error === row.error),
+    !steps.some(step => ["cutover-firestore", "verify-target"].includes(step.name))].every(Boolean);
 }
 
 export function postgresImportMaintenanceFailureMatches(row: DocumentData, operationId: string, identity: SourceRecoveryAssignment, gatewayId: string): boolean {
@@ -108,8 +137,8 @@ export function postgresImportMaintenanceFailureMatches(row: DocumentData, opera
     ["cancellationRequestedAt", "cutoverCommittedAt", "restoreAttempt", "customerMigrationV2", "sourceTransferExecution"].every(key => row[key] === undefined),
     ["keys-sync-state", "pre-sync-state", "target-scheduler-ready", "wait-for-active-work", "quiesce-source", "flush-source",
       "rollback:scheduler-abort", "rollback:unmount-target", "rollback:scheduler-resume", "rollback:resume-ingress"].every(done),
-    steps.filter(step => step.name === "final-sync-state").length === 1,
-    steps.some(step => step.name === "final-sync-state" && step.status === "failed" && step.error === row.error),
+    steps.filter(step => step.name === FINAL_SYNC_STEP).length === 1,
+    steps.some(step => step.name === FINAL_SYNC_STEP && step.status === "failed" && step.error === row.error),
     !steps.some(step => ["cutover-firestore", "verify-target"].includes(step.name))].every(Boolean);
 }
 
@@ -122,7 +151,7 @@ export async function readPostgresSourceAgentStores(db: Firestore, tx: Transacti
     ]);
     const required = [identity.agentId, ...projects.docs.filter(project => {
       const data = project.data();
-      return projectAgentConfigured(data.agent) && data.commercialLifecycle?.status !== "archived";
+      return projectAgentConfigured(data.agent) && data.status !== "archived" && data.commercialLifecycle?.status !== "archived";
     }).map(project => projectAgentId(identity.slug, project.id))];
     const owned = records.docs.filter(record => record.id !== "_gateway-state" &&
       !(record.id === UNMATCHED_ROUTE_AGENT_ID && record.data().agentId === UNMATCHED_ROUTE_AGENT_ID)).map(record => {
@@ -149,7 +178,7 @@ function failedExportMatches(row: DocumentData, operationId: string, identity: S
     row.input?.uid === identity.uid, row.input?.fromGatewayId === gatewayId,
     typeof row.input?.toGatewayId === "string", row.input?.toGatewayId !== gatewayId,
     row.cutoverCommittedAt === undefined, row.restoreAttempt === undefined,
-    schema24Export(row, identity, gatewayId, steps) || supersededDetachExport(row, identity, gatewayId, steps) || postgresImportMaintenanceFailureMatches(row, operationId, identity, gatewayId)].every(Boolean);
+    schema24Export(row, identity, gatewayId, steps) || supersededDetachExport(row, identity, gatewayId, steps) || schedulerPayloadExportFailure(row, operationId, identity, gatewayId) || postgresImportMaintenanceFailureMatches(row, operationId, identity, gatewayId)].every(Boolean);
 }
 function operationTouchesSource(row: DocumentData, gatewayId: string): boolean {
   return [row.input?.gatewayId, row.input?.fromGatewayId, row.input?.toGatewayId].includes(gatewayId);
@@ -178,13 +207,14 @@ async function assertNoSourceTransferTask(db: Firestore, tx: Transaction, gatewa
 async function capturePostgresRecoveryEvidence(input: {
   db: Firestore; tx: Transaction; gatewayId: string; assignments: SourceRecoveryAssignment[];
   failedExports: SourceRecoveryExport[]; failedDocuments: Array<{ id: string; data(): DocumentData }>;
-}): Promise<{ postgresAgentStores?: SourceRecoveryAgentStore[] }> {
+}): Promise<Pick<SharedSourceRecoveryAuthority, "postgresAgentStores" | "schedulerStateRecovery">> {
   const { db, tx, gatewayId, assignments, failedExports, failedDocuments } = input;
-  const postgres = failedExports.some(row => postgresImportMaintenanceFailureMatches(
+  const scheduler = failedExports.some(row => schedulerPayloadExportFailure(failedDocuments.find(doc => doc.id === row.operationId)!.data(), row.operationId, assignments.find(identity => identity.uid === row.input.uid)!, gatewayId));
+  const postgres = scheduler || failedExports.some(row => postgresImportMaintenanceFailureMatches(
     failedDocuments.find(doc => doc.id === row.operationId)!.data(), row.operationId, assignments.find(identity => identity.uid === row.input.uid)!, gatewayId));
   if (!postgres) return {};
   await assertNoSourceTransferTask(db, tx, gatewayId);
-  return { postgresAgentStores: await readPostgresSourceAgentStores(db, tx, assignments) };
+  return { postgresAgentStores: await readPostgresSourceAgentStores(db, tx, assignments), ...(scheduler ? { schedulerStateRecovery: true } : {}) };
 }
 
 export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Transaction, gatewayId: string, ownOperationId?: string, predecessorId?: string): Promise<SharedSourceRecoveryAuthority> {
@@ -234,7 +264,7 @@ export async function readSharedSourceRecoveryAuthority(db: Firestore, tx: Trans
   return { root: rootIdentity(root), assignments, failedExports, ...postgresEvidence };
 }
 export function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecoveryAuthority, captured: SharedSourceRecoveryAuthority): void {
-  if (!isDeepStrictEqual(current, { root: captured.root, assignments: captured.assignments, failedExports: captured.failedExports, ...(captured.managementRecovery ? { managementRecovery: captured.managementRecovery } : {}), ...(captured.postgresAgentStores ? { postgresAgentStores: captured.postgresAgentStores } : {}) })) {
+  if (!isDeepStrictEqual(current, { root: captured.root, assignments: captured.assignments, failedExports: captured.failedExports, ...(captured.managementRecovery ? { managementRecovery: captured.managementRecovery } : {}), ...(captured.postgresAgentStores ? { postgresAgentStores: captured.postgresAgentStores } : {}), ...(captured.schedulerStateRecovery ? { schedulerStateRecovery: true } : {}) })) {
     conflict("source recovery custody changed");
   }
 }
@@ -295,7 +325,8 @@ export function assertSharedSourceRecoveryPredecessor(request: {
   }
   assertSharedSourceRecoveryUnchanged({ root: source.root, assignments: source.assignments, failedExports: source.failedExports,
     ...(source.managementRecovery ? { managementRecovery: source.managementRecovery } : {}),
-    ...(source.postgresAgentStores ? { postgresAgentStores: source.postgresAgentStores } : {}) }, input);
+    ...(source.postgresAgentStores ? { postgresAgentStores: source.postgresAgentStores } : {}),
+    ...(source.schedulerStateRecovery ? { schedulerStateRecovery: true } : {}) }, input);
   const capturedInput = { ...row.input, sourceRecovery: { ...input } };
   delete capturedInput.sourceRecovery.supersede;
   return { operationId, input: capturedInput, inputFingerprint: operationAuditMutationFingerprint(row.input),

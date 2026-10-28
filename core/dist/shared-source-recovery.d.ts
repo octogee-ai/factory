@@ -24,6 +24,7 @@ export interface SourceRecoveryAgentStore {
     schema: string;
 }
 export interface SharedSourceRecoveryAuthority {
+    schedulerStateRecovery?: true;
     postgresAgentStores?: SourceRecoveryAgentStore[];
     root: DocumentData;
     assignments: SourceRecoveryAssignment[];

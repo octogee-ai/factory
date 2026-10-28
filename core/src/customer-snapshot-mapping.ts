@@ -57,9 +57,13 @@ function projectAgentRuntimeState(value: unknown) {
   };
 }
 
-// Vegas: project-agent state for the snapshot. Null when the project has no
-// agent state at all (never enabled, nothing minted) so snapshots stay lean;
-// a disabled-with-secret entry survives so the reconcile can retire it.
+function projectAgentArchived(projectData: Record<string, unknown>): boolean {
+  const commercialLifecycle = projectData.commercialLifecycle;
+  return projectData.status === "archived" || (!!commercialLifecycle &&
+    typeof commercialLifecycle === "object" &&
+    (commercialLifecycle as { status?: unknown }).status === "archived");
+}
+
 export function mapProjectAgentState(
   projectId: string,
   projectData: Record<string, unknown>,
@@ -67,12 +71,7 @@ export function mapProjectAgentState(
 ): ({ projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } & ReturnType<typeof projectAgentRuntimeState>) | null {
   const agent = projectData.agent;
   const requestedEnabled = projectAgentConfigured(agent);
-  const commercialLifecycle = projectData.commercialLifecycle;
-  const archived =
-    !!commercialLifecycle &&
-    typeof commercialLifecycle === "object" &&
-    (commercialLifecycle as { status?: unknown }).status === "archived";
-  const enabled = requestedEnabled && !archived;
+  const enabled = requestedEnabled && !projectAgentArchived(projectData);
   const mmUserId =
     typeof secretData?.mmUserId === "string" && secretData.mmUserId ? secretData.mmUserId : null;
   const token =

@@ -55,6 +55,7 @@ function assertOwnedFence(fence: Row, op: Operation, input: SourceRecovery, pod:
   if (input.postgresAgentStores && (!isDeepStrictEqual(target.postgresAgentStores, input.postgresAgentStores) || !target.workload)) {
     throw new Error('source recovery PostgreSQL workload custody changed');
   }
+  if (target.schedulerStateRecovery !== input.schedulerStateRecovery) throw new Error('source recovery scheduler custody changed');
 }
 async function reserve(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, workload?: SourceRecoveryWorkload): Promise<void> {
   await deps.db.runTransaction(async tx => {
@@ -77,6 +78,7 @@ function newFence(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecov
       target: { podName: pod.metadata.name, podUid: pod.metadata.uid, sourceSha: input.sourceSha, images: input.images,
         originalImages: Object.fromEntries(pod.spec.containers.map((container: Row) => [container.name, container.image])),
         agents: expectedAgents(input), failedExportOperationIds: input.failedExports.map(row => row.operationId),
+        ...(input.schedulerStateRecovery ? { schedulerStateRecovery: true } : {}),
         ...(input.postgresAgentStores ? { postgresAgentStores: input.postgresAgentStores, workload } : {}) } };
 }
 async function transferPredecessor(request: { deps: SharedPodRecoveryDeps; tx: Transaction; op: Operation; input: SourceRecovery; pod: Row; root: Row; workload?: SourceRecoveryWorkload }): Promise<void> {

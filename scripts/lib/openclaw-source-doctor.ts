@@ -5,6 +5,7 @@ import { writeOpenClawConfig } from "@octogee/core/config";
 import { mattermostAccountIdForAgentId } from "../../shared/types/identity.js";
 import * as path from "node:path";
 import * as os from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { readPostgresAgentAnchor, queryAgentStore, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { preflightAgentDatabase } from "./agent-store-preflight.js";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
@@ -65,6 +66,7 @@ export async function verifySourceDoctorAgentStores(agentIds: string[], input: {
 
 
 export interface PostgresSourceDoctorOptions {
+  schedulerStateRecovery?: true;
   diagnostics?: SourceDoctorDiagnosticContext;
   env?: NodeJS.ProcessEnv;
   run?: OpenClawCommand;
@@ -289,6 +291,23 @@ async function narrowServingConfig(snapshot: Awaited<ReturnType<typeof captureSe
   assertSourceAnchors(stores);
 }
 
+async function assertSchedulerSourceRoster(stores: SourceAgentStore[], input: PostgresSourceDoctorOptions): Promise<void> {
+  if (!input.schedulerStateRecovery) return;
+  if (!input.expectedAnchors) throw new Error("scheduler source Doctor requires the complete captured PostgreSQL roster");
+  const env = input.env ?? process.env;
+  const file = path.join(env.OPENCLAW_STATE_DIR || env.OPENCLAW_DIR || DEFAULT_OPENCLAW_STATE_DIR, "state/openclaw.sqlite");
+  const stat = await fs.lstat(file);
+  if (!stat.isFile() || stat.nlink !== 1 || await fs.realpath(file) !== path.resolve(file) || readPostgresAgentAnchor(file)) throw new Error("scheduler source Doctor requires canonical SQLite gateway state");
+  const owners = new Set(stores.map(store => store.agentId));
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const rows = db.prepare("SELECT DISTINCT agent_id FROM cron_jobs").all();
+    if (rows.some(row => !owners.has(typeof row.agent_id === "string" && row.agent_id ? row.agent_id : UNMATCHED_ROUTE_AGENT_ID))) {
+      throw new Error("scheduler source Doctor found cron jobs outside the captured source roster");
+    }
+  } finally { db.close(); }
+}
+
 export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], input: PostgresSourceDoctorOptions): Promise<void> {
   const env = input.env ?? process.env;
   if (!env.OPENCLAW_AGENT_STORE_DSN?.trim()) throw new Error("source Doctor requires OPENCLAW_AGENT_STORE_DSN");
@@ -296,6 +315,7 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
   const selected = await postgresSourceStores(agentIds, env);
   assertRecordedSourceAnchors(selected, input.expectedAnchors);
   const stores = await includeSourceServiceStore(selected, input);
+  await assertSchedulerSourceRoster(stores, input);
   const servingProjection = sourceServingConfig(servingConfig.config, stores, env);
   for (const store of stores) {
     for (const suffix of ["-wal", "-shm", "-journal"]) {
@@ -360,12 +380,25 @@ export async function repairPostgresSourceDoctorAgentStores(agentIds: string[], 
     const result = await phase("postgres-doctor", () => run(["doctor", "--fix", "--non-interactive"], {
       ...commandOptions, timeoutMs: POSTGRES_DOCTOR_TIMEOUT_MS,
     }));
-    await seal(result);
+    if (!input.schedulerStateRecovery) await seal(result);
     await input.assertCurrent();
     assertSourceAnchors(stores);
     if (result.code !== 0) throw new Error(`source PostgreSQL Doctor failed (exit ${result.code}); source remains fenced`);
     await phase("post-metadata", () => verifyPostgresSourceMetadata(stores, bound, true));
     await phase("serving-projection", () => narrowServingConfig(servingConfig, stores, bound, servingProjection));
+    if (input.schedulerStateRecovery) {
+      await input.assertCurrent();
+      assertSourceAnchors(stores);
+      await assertSchedulerSourceRoster(stores, input);
+      const scheduler = await phase("source-scheduler-doctor", () => run(["doctor", "--fix", "--non-interactive"], {
+        env, timeoutMs: POSTGRES_DOCTOR_TIMEOUT_MS,
+      }));
+      await seal(scheduler);
+      await input.assertCurrent();
+      assertSourceAnchors(stores);
+      if (scheduler.code !== 0) throw new Error(`source scheduler Doctor failed (exit ${scheduler.code}); source remains fenced`);
+      await phase("scheduler-post-metadata", () => verifyPostgresSourceMetadata(stores, bound, true));
+    }
   });
 }
 

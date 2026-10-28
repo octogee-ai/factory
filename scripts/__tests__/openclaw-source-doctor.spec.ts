@@ -522,3 +522,47 @@ it("keeps successful command evidence and refuses completion when private cleanu
     expect(metadata.phases.at(-1)).toMatchObject({ phase: "private-cleanup", status: "failed" });
   } finally { cleanup.mockRestore(); if (commandRoot) await fs.rm(commandRoot, { recursive: true, force: true }); }
 });
+
+async function schedulerSourceFixture() {
+  const f = await postgresFixture();
+  await fs.mkdir(path.join(f.root, 'state'));
+  const global = new DatabaseSync(path.join(f.root, 'state/openclaw.sqlite'));
+  global.exec('CREATE TABLE cron_jobs(agent_id TEXT, payload_kind TEXT)');
+  for (const id of f.agentIds) global.prepare('INSERT INTO cron_jobs VALUES (?, ?)').run(id, 'heartbeat');
+  global.close();
+  return f;
+}
+it('repairs source scheduler state only under explicit authority after privately repairing its PostgreSQL stores', async () => {
+  const f = await schedulerSourceFixture(), original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (options.env.OPENCLAW_STATE_DIR !== f.root) return original(args, options);
+    expect(args).toEqual(['doctor', '--fix', '--non-interactive']);
+    expect(options.timeoutMs).toBe(300_000);
+    expect(f.metadata.get('agent_0')!.version).toBe(33);
+    const config = JSON.parse(await fs.readFile(path.join(f.root, 'openclaw.json'), 'utf8'));
+    expect(Object.keys(config.agents.entries).sort()).toEqual(f.agentIds.toSorted());
+    const global = new DatabaseSync(path.join(f.root, 'state/openclaw.sqlite'));
+    global.exec("UPDATE cron_jobs SET payload_kind='agentTurn'"); global.close();
+    return { code: 0, stdout: 'native scheduler migration complete' };
+  });
+  await repairSourceDoctorAgentStores(f.agentIds, { ...f.input, schedulerStateRecovery: true });
+  expect(f.run.mock.calls.filter(([, o]) => o.env.OPENCLAW_STATE_DIR === f.root)).toHaveLength(1);
+  expect(f.metadata.get('agent_2')!.version).toBe(31);
+  const global = new DatabaseSync(path.join(f.root, 'state/openclaw.sqlite'), { readOnly: true });
+  try { expect(global.prepare('SELECT DISTINCT payload_kind FROM cron_jobs').all()).toEqual([{ payload_kind: 'agentTurn' }]); }
+  finally { global.close(); }
+});
+it.each(['foreign-job','implicit-owner','missing-roster','linked-state'])(
+  'refuses source scheduler maintenance before any native command with %s', async changed => {
+    const f = await schedulerSourceFixture(), file = path.join(f.root, 'state/openclaw.sqlite');
+    if (changed === 'foreign-job' || changed === 'implicit-owner') {
+      const global = new DatabaseSync(file);
+      global.prepare('INSERT INTO cron_jobs VALUES (?, ?)').run(changed === 'foreign-job' ? 'octogee-foreign-coach' : null, 'heartbeat'); global.close();
+    }
+    if (changed === 'linked-state') { await fs.rename(file, file + '.retained'); await fs.symlink(file + '.retained', file); }
+    const input = { ...f.input, schedulerStateRecovery: true as const };
+    if (changed === 'missing-roster') delete (input as any).expectedAnchors;
+    await expect(repairSourceDoctorAgentStores(f.agentIds, input)).rejects.toThrow();
+    expect(f.run).not.toHaveBeenCalled();
+    expect(f.metadata.get('agent_0')!.version).toBe(31);
+  });

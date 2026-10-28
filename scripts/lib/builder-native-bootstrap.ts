@@ -60,7 +60,7 @@ export async function bootFreshBuilderHost(stateDir: string, env: NodeJS.Process
   const { id: _id, ...entry } = buildSafeDefaultAgent({ OPENCLAW_DIR: stateDir });
   const config = {
     agents: { ownership: "explicit", entries: { [SAFE_DEFAULT_AGENT_ID]: entry } },
-    plugins: { allow: [] },
+    plugins: { enabled: false, allow: [] },
     discovery: { mdns: { mode: "off" } },
     gateway: {
       mode: "local", bind: "loopback", port: 18791,

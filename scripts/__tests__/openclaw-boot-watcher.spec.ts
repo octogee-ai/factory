@@ -204,14 +204,16 @@ describe("operator-requested source Doctor", () => {
     const verifySourceDoctor = vi.fn(async () => { order.push("preflight"); });
     return { client, run, verifySourceDoctor, order };
   }
-  it("uses the exact PostgreSQL owner roster and rechecks broker authority instead of running unscoped Doctor", async () => {
+  it.each([false, true])("uses the exact PostgreSQL owner roster and rechecks broker authority, scheduler repair=%s", async scheduler => {
     const f = fixture();
     const postgresAgentStores = [{ agentId: "octogee-alice-coach", storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_agent" }];
-    f.client.claimOpenClawBoot.mockResolvedValue({ action: "doctor", sourceDoctor: { ...sourceDoctor, postgresAgentStores } });
+    f.client.claimOpenClawBoot.mockResolvedValue({ action: "doctor", sourceDoctor: { ...sourceDoctor, postgresAgentStores,
+      ...(scheduler ? { schedulerStateRecovery: true } : {}) } });
     const assertOpenClawDoctor = vi.fn(async () => {});
     const repairSourceDoctor = vi.fn(async (_ids, options) => { await options.assertCurrent(); });
     await createOpenClawBootWatcher({ ...f, client: { ...f.client, assertOpenClawDoctor }, repairSourceDoctor, releaseKey: "qualified", log: () => {} }).beforeStart();
     expect(repairSourceDoctor).toHaveBeenCalledWith(sourceDoctor.agentIds, { expectedAnchors: postgresAgentStores, assertCurrent: expect.any(Function),
+      ...(scheduler ? { schedulerStateRecovery: true } : {}),
       diagnostics: { requestId: sourceDoctor.requestId, releaseKey: "qualified", log: expect.any(Function) },
     });
     expect(assertOpenClawDoctor).toHaveBeenCalledWith({ releaseKey: "qualified", requestId: sourceDoctor.requestId });
