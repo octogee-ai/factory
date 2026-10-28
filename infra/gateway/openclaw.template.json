@@ -239,7 +239,16 @@
       "baseUrl": "${MM_URL}",
       "chatmode": "onmessage",
       "requireMention": false,
-      "actions": { "reactions": true, "messages": true, "search": true },
+      "actions": {
+        "reactions": true,
+        "messages": true,
+        "messageWrites": true,
+        "fileDownloads": true,
+        "pins": true,
+        "search": true,
+        "memberInfo": true
+      },
+      "reactionNotifications": "own",
       "network": {
         "dangerouslyAllowPrivateNetwork": true
       },

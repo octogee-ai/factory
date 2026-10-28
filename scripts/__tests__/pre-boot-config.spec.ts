@@ -484,7 +484,13 @@ describe("applyPreBootPatches — MM env sync", () => {
 describe("applyPreBootPatches — Mattermost runtime", () => {
   it.each([undefined, "steer", "collect", "followup", "interrupt"])("uses native Mattermost steering without changing other channel policy (%s)", (mattermostMode) => {
     const config: any = {
-      channels: { mattermost: { replyToMode: "all", threadSessionScope: "channel", streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } }, commands: { native: false } } },
+      channels: { mattermost: {
+        replyToMode: "all", threadSessionScope: "channel",
+        streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
+        actions: { messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
+        reactionNotifications: "own",
+        commands: { native: false },
+      } },
       messages: { ackReactionScope: "all", queue: { mode: "steer", debounceMs: 250, byChannel: { slack: "collect", ...(mattermostMode ? { mattermost: mattermostMode } : {}) } } },
     };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(mattermostMode !== "steer");
@@ -502,6 +508,46 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     const config: any = { channels: { mattermost: {} }, messages: { ackReactionScope: "off" } };
     applyMattermostPreBootPatches(config, {}, vi.fn());
     expect(config.messages.ackReactionScope).toBe("off");
+  });
+
+  it("enables Mattermost message actions and own-post reaction forwarding when unset", () => {
+    const config: any = { channels: { mattermost: { actions: { reactions: true, messages: true } } } };
+    const log = vi.fn();
+    expect(applyMattermostPreBootPatches(config, {}, log)).toBe(true);
+    expect(config.channels.mattermost.actions).toEqual({
+      reactions: true,
+      messages: true,
+      messageWrites: true,
+      fileDownloads: true,
+      pins: true,
+      search: true,
+      memberInfo: true,
+    });
+    expect(config.channels.mattermost.reactionNotifications).toBe("own");
+    for (const gate of ["messageWrites", "fileDownloads", "pins", "search", "memberInfo"]) {
+      expect(log).toHaveBeenCalledWith(`set channels.mattermost.actions.${gate}=true`);
+    }
+    expect(log).toHaveBeenCalledWith("set channels.mattermost.reactionNotifications=own");
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
+  });
+
+  it("keeps explicit Mattermost action gates and reaction notification choices", () => {
+    const config: any = { channels: { mattermost: {
+      actions: { messageWrites: false, fileDownloads: false, pins: false, search: false, memberInfo: false },
+      reactionNotifications: "all",
+    } } };
+    const log = vi.fn();
+    applyMattermostPreBootPatches(config, {}, log);
+    expect(config.channels.mattermost.actions).toEqual({
+      messageWrites: false,
+      fileDownloads: false,
+      pins: false,
+      search: false,
+      memberInfo: false,
+    });
+    expect(config.channels.mattermost.reactionNotifications).toBe("all");
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("channels.mattermost.actions"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("reactionNotifications"));
   });
 
   it("leaves native reply and streaming preferences untouched", () => {
@@ -1038,6 +1084,8 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToModeByChatType: { direct: "all" },
           baseUrl: "${MM_URL}",
           streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
+          actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
+          reactionNotifications: "own",
           commands: "legacy-commands",
           threadSessionScope: "channel",
           accounts: {
@@ -1149,7 +1197,8 @@ describe("applyPreBootPatches — no-change reporting", () => {
           requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          actions: { reactions: true },
+          actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
+          reactionNotifications: "own",
           streaming: {
             mode: "progress",
             chunkMode: "newline",

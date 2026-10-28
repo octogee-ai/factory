@@ -161,6 +161,28 @@ function applyMattermostStreamingDefaults(
   return changed;
 }
 
+const MATTERMOST_ACTION_GATE_DEFAULTS = ["messageWrites", "fileDownloads", "pins", "search", "memberInfo"] as const;
+
+function applyMattermostActionDefaults(
+  mattermost: Record<string, unknown>,
+  logFn: (msg: string) => void,
+): boolean {
+  let changed = false;
+  const actions = ensureNullishObjectProperty(mattermost, "actions");
+  for (const gate of MATTERMOST_ACTION_GATE_DEFAULTS) {
+    if (!actions || actions[gate] !== undefined) continue;
+    actions[gate] = true;
+    changed = true;
+    logFn(`set channels.mattermost.actions.${gate}=true`);
+  }
+  if (mattermost.reactionNotifications === undefined) {
+    mattermost.reactionNotifications = "own";
+    changed = true;
+    logFn("set channels.mattermost.reactionNotifications=own");
+  }
+  return changed;
+}
+
 function applyMattermostAckReactionDefaults(
   config: OpenClawConfig,
   logFn: (msg: string) => void,
@@ -216,6 +238,7 @@ export function applyMattermostPreBootPatches(
   }
 
   changed = applyMattermostStreamingDefaults(mattermost, logFn) || changed;
+  changed = applyMattermostActionDefaults(mattermost, logFn) || changed;
   changed = applyMattermostAckReactionDefaults(config, logFn) || changed;
 
   if (env.MM_URL && mattermost.baseUrl !== MM_URL_PLACEHOLDER) {
