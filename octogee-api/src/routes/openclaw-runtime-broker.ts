@@ -911,8 +911,9 @@ function matchesActivityTicket(scope: ActivityConversation, gatewayId: string, p
 }
 
 async function redeemActivityIdentity(db: Firestore, tx: Transaction, payload: Record<string, unknown>, uid: string, gatewayId: string) {
-  if (Object.keys(payload).some(key => !['channelId', 'threadRootPostId', 'ownerUid', 'expectedAgentId', 'sessionKey'].includes(key)) || !isMattermostPostId(payload.channelId) || !isMattermostPostId(payload.threadRootPostId)) return null;
-  const scope = await resolveActivityConversation({ db, uid, channelId: payload.channelId, threadRootPostId: payload.threadRootPostId });
+  if (Object.keys(payload).some(key => !['channelId', 'threadRootPostId', 'ownerUid', 'expectedAgentId', 'sessionKey'].includes(key)) || !isMattermostPostId(payload.channelId)
+    || (payload.threadRootPostId !== undefined && !isMattermostPostId(payload.threadRootPostId))) return null;
+  const scope = await resolveActivityConversation({ db, uid, channelId: payload.channelId, ...(payload.threadRootPostId === undefined ? {} : { threadRootPostId: payload.threadRootPostId }) });
   if (!scope || !matchesActivityTicket(scope, gatewayId, payload)) return null;
   const owner = await tx.get(db.doc(`users/${scope.ownerUid}`));
   if (readPath(owner.data() ?? {}, 'provisioning.openclaw.gatewayId') !== gatewayId) return null;
@@ -952,9 +953,10 @@ function mountUserAndWsRoutes(router: Router, db: Firestore): void {
     if (!bound) return;
     const uid = stringBody(req, 'uid');
     const channelId = stringBody(req, 'channelId');
-    const threadRootPostId = stringBody(req, 'threadRootPostId');
-    if (!safeDocId(uid) || !MATTERMOST_ID_RE.test(channelId) || !isMattermostPostId(threadRootPostId)) { res.status(400).json({ error: 'invalid_activity_channel' }); return; }
-    const scope = await resolveActivityConversation({ db, uid, channelId, threadRootPostId });
+    const rawThreadRootPostId = (req.body as Record<string, unknown> | undefined)?.threadRootPostId;
+    const threadRootPostId = rawThreadRootPostId === undefined ? undefined : stringBody(req, 'threadRootPostId');
+    if (!safeDocId(uid) || !MATTERMOST_ID_RE.test(channelId) || (threadRootPostId !== undefined && !isMattermostPostId(threadRootPostId))) { res.status(400).json({ error: 'invalid_activity_channel' }); return; }
+    const scope = await resolveActivityConversation({ db, uid, channelId, ...(threadRootPostId === undefined ? {} : { threadRootPostId }) });
     if (!scope || scope.gatewayId !== bound.gatewayId) { forbidden(res); return; }
     res.set('Cache-Control', 'no-store').json(scope);
   });

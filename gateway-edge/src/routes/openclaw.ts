@@ -4,7 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
 import { resolveActivityConversation } from "../lib/activity-conversation.js";
-import { isMattermostThreadSelection } from '@octogee/shared/types/mattermost-session-route';
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
@@ -78,11 +78,18 @@ async function requestRuntimeDemand(input: {
   });
 }
 
+function isMattermostActivitySelection(value: unknown): value is { channelId: string; threadRootPostId?: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const body = value as Record<string, unknown>;
+  return Object.keys(body).every(key => key === 'channelId' || key === 'threadRootPostId')
+    && isMattermostPostId(body.channelId) && (body.threadRootPostId === undefined || isMattermostPostId(body.threadRootPostId));
+}
+
 router.post("/ticket", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uid = req.uid!;
     if (req.body && Object.keys(req.body).length) {
-      if (!isMattermostThreadSelection(req.body)) {
+      if (!isMattermostActivitySelection(req.body)) {
         res.status(400).json({ error: 'invalid_activity_channel' }); return;
       }
       const scope = await resolveActivityConversation({ db, uid, ...req.body });

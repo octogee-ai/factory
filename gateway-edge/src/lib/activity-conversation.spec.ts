@@ -33,9 +33,16 @@ describe('native Activity conversation', () => {
     ]);
     expect([first?.threadRootPostId, second?.threadRootPostId]).toEqual([threadRootPostId, 's'.repeat(26)]);
   });
-  it.each([['O', 'channel', channelId], ['P', 'group', channelId], ['D', 'direct', 'u'.repeat(26)]])('uses the native %s conversation key', async (type, kind, peer) => {
+  it.each([['O', 'channel'], ['P', 'group']])('uses the native %s conversation key for the whole channel without a selected thread', async (type, kind) => {
     const f = fixture(type);
-    expect((await resolveActivityConversation({ ...f, uid, channelId }))?.sessionKey).toBe(`agent:${f.target.agentId}:mattermost:${kind}:${peer}`);
+    expect((await resolveActivityConversation({ ...f, uid, channelId }))?.sessionKey).toBe(`agent:${f.target.agentId}:mattermost:${kind}:${channelId}`);
+    expect(f.client.getJson).not.toHaveBeenCalledWith(['posts', expect.anything()]);
+  });
+  it('still requires a selected thread for a direct-message session', async () => {
+    const f = fixture('D');
+    expect(await resolveActivityConversation({ ...f, uid, channelId })).toBeNull();
+    expect((await resolveActivityConversation({ ...f, uid, channelId, threadRootPostId }))?.sessionKey)
+      .toBe(`agent:${f.target.agentId}:mattermost:direct:${'u'.repeat(26)}:thread:${threadRootPostId}`);
   });
   it('uses the authorized project agent and exact private-channel session', async () => {
     const f = fixture();

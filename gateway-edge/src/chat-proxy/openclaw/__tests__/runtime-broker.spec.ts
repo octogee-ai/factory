@@ -37,6 +37,19 @@ describe("redeemOpenClawWs outcome", () => {
     const result = await brokerWithRedeemStatus(200, activityConversation).getActivityConversation?.('member', activityConversation.channelId, threadRootPostId);
     expect(result).toEqual(activityConversation);
   });
+  it('accepts a channel-scoped native Activity scope without a selected thread', async () => {
+    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}` };
+    const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-bob-coach', activityConversation });
+    expect(await broker.redeemOpenClawWs('ticket')).toMatchObject({ kind: 'redeemed', redeemed: { activityConversation } });
+    const result = await brokerWithRedeemStatus(200, activityConversation).getActivityConversation?.('member', activityConversation.channelId);
+    expect(result).toEqual(activityConversation);
+    expect(result).not.toHaveProperty('threadRootPostId');
+  });
+  it('rejects a direct-message Activity scope without a selected thread', async () => {
+    const activityConversation = { gatewayId: 'default', ownerUid: 'owner', channelId: 'c'.repeat(26), expectedAgentId: 'octogee-bob-coach', sessionKey: `agent:octogee-bob-coach:mattermost:direct:${'u'.repeat(26)}` };
+    const broker = brokerWithRedeemStatus(200, { uid: 'member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId: 'octogee-bob-coach', activityConversation });
+    await expect(broker.redeemOpenClawWs('ticket')).rejects.toThrow('malformed Activity conversation');
+  });
   it.each([{ gatewayId: 'foreign' }, { expectedAgentId: 'other' }, { sessionKey: 'agent:octogee-bob-coach:main' },
     { sessionKey: `agent:octogee-bob-coach:mattermost:group:${'d'.repeat(26)}` },
     { sessionKey: `agent:octogee-bob-coach:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` },

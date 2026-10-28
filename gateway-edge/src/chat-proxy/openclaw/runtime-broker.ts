@@ -33,24 +33,34 @@ function voiceRedeemScope(body: Record<string, unknown> | null, expectedAgentId:
   return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId, threadRootPostId: scope.threadRootPostId, sessionKey: scope.sessionKey as string };
 }
 
-function activitySessionMatches(sessionKey: string, agentId: string, channelId: string, threadRootPostId: string): boolean {
+function activitySessionMatches(sessionKey: string, agentId: string, channelId: string, threadRootPostId: string | undefined): boolean {
   const route = parseMattermostSessionRoute(sessionKey);
   if (!route || route.agentId !== agentId || !isMattermostPostId(route.primaryChannelId)) return false;
   return route.peerKind === 'direct'
-    ? route.threadRootPostId === threadRootPostId
+    ? threadRootPostId !== undefined && route.threadRootPostId === threadRootPostId
     : route.primaryChannelId === channelId && route.threadRootPostId === undefined;
+}
+
+function isOwnerUid(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !value.includes('/');
+}
+
+function isOptionalThreadRootPostId(value: unknown): value is string | undefined {
+  return value === undefined || isMattermostPostId(value);
+}
+
+function isActivityAgentId(value: unknown, expectedAgentId: string | undefined): value is string {
+  return typeof value === 'string' && /^octogee-[a-z0-9-]+$/u.test(value) && (expectedAgentId === undefined || value === expectedAgentId);
 }
 
 function parseActivityConversation(value: unknown, gatewayId: string, expectedAgentId?: string): ActivityConversation {
   const scope = value as Partial<ActivityConversation> | null;
-  if (!scope || scope.gatewayId !== gatewayId || typeof scope.ownerUid !== 'string' || !scope.ownerUid || scope.ownerUid.includes('/') ||
-    typeof scope.channelId !== 'string' || !/^[a-z0-9]{26}$/u.test(scope.channelId) || !isMattermostPostId(scope.threadRootPostId) ||
-    typeof scope.expectedAgentId !== 'string' || !/^octogee-[a-z0-9-]+$/u.test(scope.expectedAgentId) ||
-    (expectedAgentId !== undefined && scope.expectedAgentId !== expectedAgentId) ||
+  if (!scope || scope.gatewayId !== gatewayId || !isOwnerUid(scope.ownerUid) || !isMattermostPostId(scope.channelId) ||
+    !isOptionalThreadRootPostId(scope.threadRootPostId) || !isActivityAgentId(scope.expectedAgentId, expectedAgentId) ||
     typeof scope.sessionKey !== 'string' || !activitySessionMatches(scope.sessionKey, scope.expectedAgentId, scope.channelId, scope.threadRootPostId)) {
     throw new OpenClawRuntimeBrokerError(502, 'malformed Activity conversation');
   }
-  return { gatewayId, ownerUid: scope.ownerUid, channelId: scope.channelId, threadRootPostId: scope.threadRootPostId, expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey };
+  return { gatewayId, ownerUid: scope.ownerUid, channelId: scope.channelId, ...(scope.threadRootPostId === undefined ? {} : { threadRootPostId: scope.threadRootPostId }), expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey };
 }
 
 export interface RedeemedOpenClawWs {
@@ -96,7 +106,7 @@ export type ChatActivityReport =
   | (ChatActivityReportBase & { kind: "reaction"; emojiName: string; createdAt: number });
 
 export interface OpenClawRuntimeBroker {
-  getActivityConversation?(uid: string, channelId: string, threadRootPostId: string): Promise<ActivityConversation | null>;
+  getActivityConversation?(uid: string, channelId: string, threadRootPostId?: string): Promise<ActivityConversation | null>;
   notifyFinalReply(input: NativeFinalReply): Promise<void>;
   redeemOpenClawWs(ticketId: string, purpose?: RedeemableWsTicketPurpose): Promise<RedeemOpenClawWsOutcome>;
   authorizePreviewAccess(uid: string, workspaceSlug: string, projectSlug: string | null): Promise<boolean>;
@@ -361,7 +371,7 @@ export function createOpenClawRuntimeBroker(opts: {
       };
     },
     async getActivityConversation(uid, channelId, threadRootPostId) {
-      const response = await post('/internal/openclaw/activity/conversation-access', { uid, channelId, threadRootPostId }, new Set([200, 403, 404]));
+      const response = await post('/internal/openclaw/activity/conversation-access', { uid, channelId, ...(threadRootPostId === undefined ? {} : { threadRootPostId }) }, new Set([200, 403, 404]));
       if (response.status !== 200) return null;
       return parseActivityConversation(await readJsonOrNull(response), gatewayId);
     },

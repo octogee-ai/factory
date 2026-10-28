@@ -11,8 +11,16 @@ const scope = { gatewayId: 'shared-123456789abc', ownerUid: 'owner', channelId: 
 function app() { const a = express(); a.use(express.json()); a.use('/api/openclaw', router); return a; }
 beforeEach(() => { h.authorize.mockReset().mockResolvedValue(scope); h.mint.mockReset().mockResolvedValue({ ticket: 'ticket' }); });
 describe('native Activity tickets', () => {
-  it('does not mint a conversation ticket without an explicitly selected existing thread', async () => {
-    expect((await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId })).status).toBe(400);
+  it('mints a channel-scoped ticket without a selected thread', async () => {
+    const { threadRootPostId: _thread, ...channelScope } = scope;
+    h.authorize.mockResolvedValue(channelScope);
+    const result = await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId });
+    expect(result.status).toBe(200); expect(result.body.sessionKey).toBe(scope.sessionKey);
+    expect(h.authorize).toHaveBeenCalledWith({ db: expect.anything(), uid: 'member', channelId: scope.channelId });
+    expect(h.mint.mock.calls[0][0].payload).toEqual({ ownerUid: scope.ownerUid, channelId: scope.channelId, expectedAgentId: scope.expectedAgentId, sessionKey: scope.sessionKey });
+  });
+  it('refuses a malformed thread root instead of falling back to the channel', async () => {
+    expect((await request(app()).post('/api/openclaw/ticket').send({ channelId: scope.channelId, threadRootPostId: 'bad' })).status).toBe(400);
     expect(h.authorize).not.toHaveBeenCalled(); expect(h.mint).not.toHaveBeenCalled();
   });
   it('mints the exact verified selected thread rather than its base room', async () => {

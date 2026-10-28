@@ -1,6 +1,7 @@
 import { accountAllowsInteractiveAccess } from '@octogee/shared/types/account-lifecycle';
 import { userAssignmentMatchesGateway } from '@octogee/core/assigned-roster';
 import { isValidGatewayId } from '@octogee/shared/types/glm';
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { authorizeChannel, type AuthorizedChannel, type ChannelSessionMattermostClient } from './channel-session-authorization.js';
 import { ChannelSessionMattermostError } from './channel-session-model-control.js';
 
@@ -51,31 +52,44 @@ async function threadIsInChannel(client: ChannelSessionMattermostClient, channel
   }
 }
 
+const SESSION_KINDS: Record<string, 'direct' | 'group' | 'channel'> = { D: 'direct', P: 'group', O: 'channel' };
+
 function isActiveChannel(channel: Record<string, unknown>, channelId: string): boolean {
-  return Boolean(channel && channel.id === channelId && channel.delete_at === 0 && ['O', 'P', 'D'].includes(String(channel.type)));
+  return Boolean(channel && channel.id === channelId && channel.delete_at === 0 && Object.keys(SESSION_KINDS).includes(String(channel.type)));
+}
+
+async function conversationChannel(
+  client: ChannelSessionMattermostClient, channelId: string, agentMmUserId: string, threadRootPostId: string | undefined,
+): Promise<Record<string, unknown> | null> {
+  const channel = await client.getJson(['channels', channelId]) as Record<string, unknown>;
+  if (!isActiveChannel(channel, channelId)) return null;
+  if (!await agentIsMember(client, channelId, agentMmUserId)) return null;
+  if (threadRootPostId !== undefined && !await threadIsInChannel(client, channelId, threadRootPostId)) return null;
+  return channel;
 }
 
 export async function resolveActivityConversation(input: ActivityConversationInput): Promise<ActivityConversation | null> {
   const { threadRootPostId } = input;
-  if (threadRootPostId !== undefined && !/^[a-z0-9]{26}$/u.test(threadRootPostId)) return null;
+  if (threadRootPostId !== undefined && !isMattermostPostId(threadRootPostId)) return null;
   const access = await (input.authorize ?? authorizeChannel)(input.uid, input.channelId, undefined, {
     requireActiveLedger: true, includeCoachConversation: true,
   });
   if (!access || access.forbidden) return null;
-  const { target, client } = access;
+  const { target } = access;
   const gatewayId = await assignedGateway(input, access);
   if (!gatewayId) return null;
-  const channel = await client.getJson(['channels', input.channelId]) as Record<string, unknown>;
-  if (!isActiveChannel(channel, input.channelId)) return null;
-  if (!await agentIsMember(client, input.channelId, target.agentMmUserId)) return null;
-  if (threadRootPostId !== undefined && !await threadIsInChannel(client, input.channelId, threadRootPostId)) return null;
-  const kinds: Record<string, string> = { D: 'direct', P: 'group', O: 'channel' };
-  const kind = kinds[String(channel.type)];
-  const peer = kind === 'direct' ? access.callerMmUserId : input.channelId;
-  const threadSuffix = kind === 'direct' && threadRootPostId !== undefined ? `:thread:${threadRootPostId}` : '';
+  const channel = await conversationChannel(access.client, input.channelId, target.agentMmUserId, threadRootPostId);
+  if (!channel) return null;
+  const kind = SESSION_KINDS[String(channel.type)];
+  const conversation = { gatewayId, ownerUid: target.ownerUid, channelId: input.channelId, expectedAgentId: target.agentId };
+  if (kind === 'direct') {
+    return threadRootPostId === undefined
+      ? null
+      : { ...conversation, threadRootPostId, sessionKey: `agent:${target.agentId}:mattermost:direct:${access.callerMmUserId}:thread:${threadRootPostId}` };
+  }
   return {
-    gatewayId, ownerUid: target.ownerUid, channelId: input.channelId, expectedAgentId: target.agentId,
+    ...conversation,
     ...(threadRootPostId === undefined ? {} : { threadRootPostId }),
-    sessionKey: `agent:${target.agentId}:mattermost:${kind}:${peer}${threadSuffix}`,
+    sessionKey: `agent:${target.agentId}:mattermost:${kind}:${input.channelId}`,
   };
 }
