@@ -27,7 +27,7 @@ export function splitPlatformManifest(input, namespace, kinds = clusterKinds) {
 export function manifestYaml(resources) { return resources.map(resource => stringify(resource)).join('---\n'); }
 
 export function bootstrapReleaseParameters(release, namespace) {
-  return release.filter(value => /^(octogee-native-context-worker|octogee-project-runner)-(image|parameters)$/.test(value.metadata.name)).map(value => ({
+  return release.filter(value => /^octogee-project-runner-(image|parameters)$/.test(value.metadata.name)).map(value => ({
     ...value,
     metadata: {
       ...value.metadata,

@@ -304,7 +304,7 @@ export async function repairSourceDoctorAgentStores(agentIds: string[], input: P
     await phase("pre-metadata", () => verifyPostgresSourceMetadata(stores, bound, false));
     const commandOptions = { env: {
       PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1",
-      OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath,
+      HOME: privateRoot, OPENCLAW_STATE_DIR: privateRoot, OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_AGENT_STORE_DSN: env.OPENCLAW_AGENT_STORE_DSN,
     } };
     const bootstrap = "octogee-source-doctor-bootstrap";
@@ -314,9 +314,9 @@ export async function repairSourceDoctorAgentStores(agentIds: string[], input: P
     }), { mode: 0o600 });
     await input.assertCurrent();
     assertSourceAnchors(stores);
-    const initialized = await phase("bootstrap", () => run(["doctor", "--fix", "--non-interactive"], commandOptions));
-    await input.assertCurrent();
-    assertSourceAnchors(stores);
+    let initialized;
+    try { initialized = await phase("bootstrap", () => run(["setup", "--baseline", "--skip-bootstrap", "--json"], commandOptions)); }
+    finally { await input.assertCurrent(); assertSourceAnchors(stores); }
     if (initialized.code !== 0) throw new Error(`source Doctor private initialization failed (exit ${initialized.code})`);
     await phase("copy-anchors", async () => {
       await fs.rm(path.join(privateRoot, "agents"), { recursive: true, force: true });

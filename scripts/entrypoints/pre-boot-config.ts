@@ -161,7 +161,7 @@ function applyMattermostStreamingDefaults(
   return changed;
 }
 
-const MATTERMOST_ACTION_GATE_DEFAULTS = ["messageWrites", "fileDownloads", "pins", "search", "memberInfo"] as const;
+const MATTERMOST_ACTION_GATE_DEFAULTS = ["messages", "pins", "search", "memberInfo"] as const;
 
 function applyMattermostActionDefaults(
   mattermost: Record<string, unknown>,
@@ -169,6 +169,12 @@ function applyMattermostActionDefaults(
 ): boolean {
   let changed = false;
   const actions = ensureNullishObjectProperty(mattermost, "actions");
+  for (const key of ["messageWrites", "fileDownloads"]) {
+    if (!actions || !(key in actions)) continue;
+    delete actions[key];
+    changed = true;
+    logFn(`removed unsupported channels.mattermost.actions.${key}`);
+  }
   for (const gate of MATTERMOST_ACTION_GATE_DEFAULTS) {
     if (!actions || actions[gate] !== undefined) continue;
     actions[gate] = true;

@@ -190,6 +190,7 @@ COPY infra/gateway/octo-desktop-style /usr/local/bin/octo-desktop-style
 COPY infra/gateway/builder-toolchain-wrapper.sh /usr/local/libexec/octogee-builder-toolchain
 COPY infra/gateway/verify-openclaw-runtime-deps.sh /usr/local/bin/verify-openclaw-runtime-deps
 COPY infra/gateway/verify-runtime-image.sh /usr/local/bin/verify-runtime-image
+COPY infra/gateway/verify-config-templates.mjs /usr/local/libexec/verify-config-templates.mjs
 ARG OPENCLAW_RUNTIME_PLUGINS=mattermost,parallel-plugin,codex
 ARG ENABLE_BUILDER_TOOLCHAIN_WRAPPER=false
 RUN chmod 755 /usr/local/bin/octogee-hobby-desktop /usr/local/bin/octogee-hobby-session /usr/local/bin/octo-desktop-browser /usr/local/bin/octo-desktop-control /usr/local/bin/entrypoint.sh /usr/local/bin/octogee-desktop-node /usr/local/bin/octogee /usr/local/bin/octo-desk /usr/local/bin/octo-desktop-style /usr/local/bin/verify-openclaw-runtime-deps /usr/local/bin/verify-runtime-image /usr/local/libexec/octogee-builder-toolchain \
@@ -235,6 +236,7 @@ RUN chown node:node /home/node/.bashrc
 # Restore working directory + non-root user
 WORKDIR /home/node
 USER node
+RUN node /usr/local/libexec/verify-config-templates.mjs /octogee/infra/gateway /octogee/extensions /opt/openclaw-runtime-deps/npm
 
 ENV OCTOGEE_TEMPLATES_DIR=/octogee/templates
 ENV PATH=/work/cache/toolchains/active/bin:${PATH}

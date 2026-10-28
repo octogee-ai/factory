@@ -86,14 +86,14 @@ export async function upgradeImportedAgentStores(input: {
       agents: { ownership: "explicit", entries: { "octogee-import-doctor-bootstrap": { workspace: path.join(root, "bootstrap-workspace") } } },
       database: { engine: "sqlite" } }), { mode: 0o600 });
     const run = input.run ?? runOpenClaw;
-    const doctor = async (phase: string) => {
+    const runPrivate = async (args: string[], phase: string) => {
       await assertCurrent();
       let result;
-      try { result = await run(["doctor", "--fix", "--non-interactive"], options); }
+      try { result = await run(args, options); }
       finally { await assertCurrent(); }
-      if (result.code !== 0) throw new Error(`import Doctor ${phase} failed (exit ${result.code})`);
+      if (result.code !== 0) throw new Error(`import ${phase} failed (exit ${result.code})`);
     };
-    await doctor("bootstrap");
+    await runPrivate(["setup", "--baseline", "--skip-bootstrap", "--json"], "bootstrap setup");
     const initialized = JSON.parse(await fs.readFile(configPath, "utf8"));
     await fs.rm(path.join(root, "agents"), { recursive: true, force: true });
     const entries: Record<string, { workspace: string }> = {};
@@ -106,7 +106,7 @@ export async function upgradeImportedAgentStores(input: {
     await fs.writeFile(configPath, JSON.stringify({ ...initialized, gateway: { mode: "local" }, plugins: { enabled: false },
       agents: { ownership: "explicit", entries }, database: { engine: "sqlite", families: { agent: { engine: "postgres" } },
         postgres: { connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee" } } }), { mode: 0o600 });
-    await doctor("PostgreSQL upgrade");
+    await runPrivate(["doctor", "--fix", "--non-interactive"], "PostgreSQL upgrade");
     await verifyMetadata(true);
   } finally {
     await fs.rm(root, { recursive: true, force: true });

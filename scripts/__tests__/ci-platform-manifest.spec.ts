@@ -7,12 +7,12 @@ import { parseAllDocuments } from 'yaml';
 import { bootstrapReleaseParameters, extractPlatformValues, manifestYaml, splitPlatformManifest, valuesTemplate, verifyBootstrapResources, writeNamespaceChart } from '../ci/platform-manifest.mjs';
 
 it.each(['octogee-test', 'octogee'])('gives bootstrapped admission parameters to the %s Helm release', namespace => {
-  const parameters = ['octogee-native-context-worker', 'octogee-project-runner'].flatMap(name => [
+  const parameters = ['octogee-project-runner'].flatMap(name => [
     { kind: 'ConfigMap', metadata: { name: `${name}-image`, namespace }, data: { image: 'image@sha256:reviewed' } },
     { kind: 'Role', metadata: { name: `${name}-parameters`, namespace, labels: { existing: 'retained' } }, rules: [{ resources: ['configmaps'], verbs: ['get'] }] },
     { kind: 'RoleBinding', metadata: { name: `${name}-parameters`, namespace, annotations: { existing: 'retained' } }, roleRef: { kind: 'Role', name: `${name}-parameters` }, subjects: [{ kind: 'ServiceAccount', name: 'controller', namespace }] },
   ]);
-  const unrelated = [{ kind: 'Role', metadata: { name: 'octogee-platform-release', namespace } }, { kind: 'Deployment', metadata: { name: 'octogee-api', namespace } }];
+  const unrelated = [{ kind: 'ConfigMap', metadata: { name: 'octogee-native-context-worker-image', namespace } }, { kind: 'Role', metadata: { name: 'octogee-platform-release', namespace } }, { kind: 'Deployment', metadata: { name: 'octogee-api', namespace } }];
   const source = [...parameters, ...unrelated];
   const original = structuredClone(source);
   expect(bootstrapReleaseParameters(source, namespace)).toEqual(parameters.map(resource => ({

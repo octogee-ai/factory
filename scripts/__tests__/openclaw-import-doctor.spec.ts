@@ -40,6 +40,11 @@ it("runs Native Doctor against only the carried PostgreSQL agent in private stat
   const f = await fixture(); const before = await fs.readFile(f.stores[0]!.anchorPath);
   await upgradeImportedAgentStores(f);
   expect(f.run).toHaveBeenCalledTimes(3);
+  expect(f.run.mock.calls.map(([args]) => args)).toEqual([
+    expect.arrayContaining(["database", "preflight-agent"]),
+    ["setup", "--baseline", "--skip-bootstrap", "--json"],
+    ["doctor", "--fix", "--non-interactive"],
+  ]);
   expect(f.assertCurrent.mock.calls.length).toBeGreaterThanOrEqual(4);
   expect(await fs.readFile(f.stores[0]!.anchorPath)).toEqual(before);
   for (const [, options] of f.run.mock.calls) await expect(fs.stat(options.env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
@@ -110,5 +115,20 @@ it.each(["newer", "wrong-owner", "partial-upgrade"] as const)("refuses agent ado
   const query = vi.fn(async () => [{ store_id: f.stores[0]!.storeId, version, role: "agent",
     agent_id: problem === "wrong-owner" ? "octogee-foreign-coach" : f.stores[0]!.agentId, schema_version: version }]);
   await expect(upgradeImportedAgentStores({ ...f, query: query as unknown as typeof import("@octogee/core/agent-postgres").queryAgentStore })).rejects.toThrow(/metadata mismatch/);
-  expect(f.run.mock.calls.filter(([args]) => args[0] === "doctor")).toHaveLength(problem === "partial-upgrade" ? 2 : 0);
+  expect(f.run.mock.calls.filter(([args]) => args[0] === "doctor")).toHaveLength(problem === "partial-upgrade" ? 1 : 0);
+});
+
+
+it.each(["refused", "timeout", "custody"])("does not upgrade PostgreSQL after private setup %s", async failure => {
+  const f = await fixture(), original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] !== "setup") return original(args, options);
+    expect(options.timeoutMs).toBeGreaterThan(0);
+    expect(options.env.HOME).toBe(options.env.OPENCLAW_STATE_DIR);
+    if (failure === "timeout") throw new Error("setup timeout");
+    if (failure === "custody") f.assertCurrent.mockRejectedValue(new Error("setup custody lost"));
+    return { code: failure === "refused" ? 2 : 0, stdout: "" };
+  });
+  await expect(upgradeImportedAgentStores(f)).rejects.toThrow(failure === "refused" ? /bootstrap setup failed/ : /setup (timeout|custody lost)/);
+  expect(f.run.mock.calls.some(([args]) => args[0] === "doctor")).toBe(false);
 });

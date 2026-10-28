@@ -487,7 +487,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       channels: { mattermost: {
         replyToMode: "all", threadSessionScope: "channel",
         streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
-        actions: { messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
+        actions: { messages: true, pins: true, search: true, memberInfo: true },
         reactionNotifications: "own",
         joinIntro: true,
         commands: { native: false },
@@ -503,6 +503,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     const config: any = { channels: { mattermost: { commands: { native: false } } } };
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(true);
     expect(config.messages).toEqual({ ackReactionScope: "all", queue: { byChannel: { mattermost: "steer" } } });
+    expect(config.channels.mattermost.actions.messages).toBe(true);
   });
 
   it("keeps an explicit ack reaction scope", () => {
@@ -518,15 +519,13 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost.actions).toEqual({
       reactions: true,
       messages: true,
-      messageWrites: true,
-      fileDownloads: true,
       pins: true,
       search: true,
       memberInfo: true,
     });
     expect(config.channels.mattermost.reactionNotifications).toBe("own");
     expect(config.channels.mattermost.joinIntro).toBe(true);
-    for (const gate of ["messageWrites", "fileDownloads", "pins", "search", "memberInfo"]) {
+    for (const gate of ["pins", "search", "memberInfo"]) {
       expect(log).toHaveBeenCalledWith(`set channels.mattermost.actions.${gate}=true`);
     }
     expect(log).toHaveBeenCalledWith("set channels.mattermost.reactionNotifications=own");
@@ -534,17 +533,23 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
   });
 
+  it("removes unsupported persisted Mattermost action keys and preserves the native messages choice", () => {
+    const config: any = { channels: { mattermost: { actions: { messages: false, messageWrites: true, fileDownloads: false } } } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    expect(config.channels.mattermost.actions).toEqual({ messages: false, pins: true, search: true, memberInfo: true });
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
+  });
+
   it("keeps explicit Mattermost action gates, reaction notification, and join introduction choices", () => {
     const config: any = { channels: { mattermost: {
-      actions: { messageWrites: false, fileDownloads: false, pins: false, search: false, memberInfo: false },
+      actions: { messages: false, pins: false, search: false, memberInfo: false },
       reactionNotifications: "all",
       joinIntro: false,
     } } };
     const log = vi.fn();
     applyMattermostPreBootPatches(config, {}, log);
     expect(config.channels.mattermost.actions).toEqual({
-      messageWrites: false,
-      fileDownloads: false,
+      messages: false,
       pins: false,
       search: false,
       memberInfo: false,
@@ -1090,7 +1095,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToModeByChatType: { direct: "all" },
           baseUrl: "${MM_URL}",
           streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
-          actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
+          actions: { reactions: true, messages: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
           joinIntro: true,
           commands: "legacy-commands",
@@ -1204,7 +1209,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
+          actions: { reactions: true, messages: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
           joinIntro: true,
           streaming: {

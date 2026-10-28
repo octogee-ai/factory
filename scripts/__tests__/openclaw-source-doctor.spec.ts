@@ -59,14 +59,16 @@ async function postgresFixture() {
       schema: "openclaw.agent-schema-preflight.v1", databasePath: args[2], agentId: args[4],
       targetVersion: 33, foundVersion: null, status: "indeterminate", requiresWrite: false,
     }) };
-    expect(args).toEqual(["doctor", "--fix", "--non-interactive"]);
     expect(env.OPENCLAW_AGENT_STORE_DSN).toBe("postgresql://synthetic/private");
     const config = JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8"));
     expect(config.database.engine).toBe("sqlite");
     if (config.agents.entries["octogee-source-doctor-bootstrap"]) {
+      expect(args).toEqual(["setup", "--baseline", "--skip-bootstrap", "--json"]);
+      expect(env.HOME).toBe(env.OPENCLAW_STATE_DIR);
       expect(config.database.families).toBeUndefined();
       return { code: 0, stdout: "" };
     }
+    expect(args).toEqual(["doctor", "--fix", "--non-interactive"]);
     expect(config.database.families).toEqual({ agent: { engine: "postgres" } });
     expect(config.plugins).toEqual({ enabled: false });
     expect(config.agents.ownership).toBe("explicit");
@@ -90,7 +92,7 @@ it("isolates PostgreSQL Doctor from original shared state and foreign agents, pr
     expect(await fs.readFile(path.join(f.root, "agents", f.expectedAnchors[index]!.agentId, "agent/openclaw-agent.sqlite"))).toEqual(originals[index]);
     expect(f.metadata.get(f.expectedAnchors[index]!.schema)!.history).toEqual(["original turn"]);
   }
-  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "doctor", "doctor"]);
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "setup", "doctor"]);
   expect(f.run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([180_000, undefined, 300_000]);
   expect(f.assertCurrent).toHaveBeenCalled();
   for (const [, { env }] of f.run.mock.calls) await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
@@ -118,7 +120,7 @@ it("retains Native-initialized config metadata while replacing the private boots
     return original(args, options);
   });
   await repairSourceDoctorAgentStores(f.agentIds, f.input);
-  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "doctor", "doctor"]);
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database", "setup", "doctor"]);
 });
 
 it.each(["owner", "store", "version", "coherence", "duplicate", "anchor-roster", "newer", "sidecar", "claim", "descriptor", "doctor"])("refuses PostgreSQL source repair with %s mismatch", async change => {
@@ -439,7 +441,7 @@ it.each(["bootstrap", "postgres-doctor"])("retains numeric Native refusal output
   roots.push(home);
   const original = f.run.getMockImplementation()!;
   f.run.mockImplementation(async (args, options) => {
-    if (args[0] === "doctor") {
+    if (args[0] === "setup" || args[0] === "doctor") {
       const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
       const bootstrap = Boolean(config.agents.entries["octogee-source-doctor-bootstrap"]);
       if (bootstrap === (phase === "bootstrap")) return { code: 141, stdout: "private-refusal", stderr: "private-stderr" };
@@ -527,3 +529,18 @@ it.each(['foreign-job','implicit-owner','missing-roster','linked-state'])(
     expect(f.run).not.toHaveBeenCalled();
     expect(f.metadata.get('agent_0')!.version).toBe(31);
   });
+
+
+it.each(["refused", "timeout", "custody"])("keeps the source fenced when private setup is %s", async failure => {
+  const f = await postgresFixture(), original = f.run.getMockImplementation()!;
+  const before = await fs.readFile(path.join(f.root, "openclaw.json"));
+  f.run.mockImplementation(async (args, options) => {
+    if (args[0] !== "setup") return original(args, options);
+    if (failure === "timeout") throw new Error("setup timeout");
+    if (failure === "custody") f.assertCurrent.mockRejectedValue(new Error("setup custody lost"));
+    return { code: failure === "refused" ? 2 : 0, stdout: "" };
+  });
+  await expect(repairSourceDoctorAgentStores(f.agentIds, f.input)).rejects.toThrow(failure === "refused" ? /private initialization failed/ : /setup (timeout|custody lost)/);
+  expect(f.run.mock.calls.some(([args]) => args[0] === "doctor")).toBe(false);
+  expect(await fs.readFile(path.join(f.root, "openclaw.json"))).toEqual(before);
+});
