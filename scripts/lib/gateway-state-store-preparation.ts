@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { queryAgentStore, readPostgresAgentAnchor, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { podBelongsToGateway } from "@octogee/core/gateway-live-release";
-import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
+import { OpenClawCommandError, runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { clientCredentialStorePath, clusterBuilderGateway, localStateStorePath, openclawStateRoot } from "./openclaw-state-store.js";
 
 export const GATEWAY_OWNER_RELEASE_WAIT_MS = 4 * 60_000;
@@ -87,15 +87,13 @@ export async function prepareGatewayStateStore(input: {
   if (fs.existsSync(clientCredentialStorePath(stateRoot))) return;
   input.log("[state-store] local client credentials are missing for the PostgreSQL state store; rebinding fresh local credentials (local clients pair again)");
   const run = input.run ?? runOpenClaw;
-  const args = ["doctor", "--fix", "--yes", "--non-interactive"];
-  const options = { env, timeoutMs: 300_000 };
-  let result = await run([...args, "--skip-recovery-backups"], options);
-  if (result.code !== 0) {
-    input.log(`[state-store] credential rebind without recovery backups failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}; retrying full Doctor after checking state ownership`);
-    await waitForOwner(ownerInput);
-    result = await run(args, options);
-  }
-  if (result.code !== 0) {
-    throw new Error(`client credential rebind failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}`);
+  try {
+    const result = await run(["doctor", "--client-credentials", "--repair", "--yes", "--non-interactive"], { env, timeoutMs: 60_000 });
+    if (result.code !== 0) {
+      input.log(`[state-store] credential rebind failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}; continuing to native startup`);
+    }
+  } catch (error) {
+    if (!(error instanceof OpenClawCommandError)) throw error;
+    input.log(`[state-store] credential rebind failed: ${error.message}; continuing to native startup`);
   }
 }
