@@ -22,15 +22,11 @@ function claimedIdentityFields(value) {
         isNullableLeaseId(value.leaseId) && isNullableGeneration(value.generation) &&
         (value.leaseId === null) === (value.generation === null);
 }
-export function parseBuilderIdentity(value, expectedGatewayId) {
-    if (!isRecord(value) || value.gatewayId !== expectedGatewayId || !isValidGatewayId(value.gatewayId))
+function parseClaimedIdentity(value) {
+    if (value.state !== "claimed" || !claimedIdentityFields(value) ||
+        (value.bootMode !== undefined && value.bootMode !== "prelaunch" && value.bootMode !== "normal" && value.bootMode !== "activating"))
         return null;
-    if (value.state === "standby")
-        return { gatewayId: value.gatewayId, state: "standby" };
-    if (value.state === "unavailable" && typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)) {
-        return { gatewayId: value.gatewayId, state: "unavailable", reason: value.reason };
-    }
-    if (value.state !== "claimed" || !claimedIdentityFields(value))
+    if (value.bootMode === "activating" && (typeof value.activationMigrationId !== "string" || !value.activationMigrationId))
         return null;
     return {
         gatewayId: value.gatewayId,
@@ -39,7 +35,19 @@ export function parseBuilderIdentity(value, expectedGatewayId) {
         builderSlug: value.builderSlug,
         leaseId: value.leaseId,
         generation: value.generation,
+        ...(value.bootMode !== undefined ? { bootMode: value.bootMode } : {}),
+        ...(value.bootMode === "activating" ? { activationMigrationId: value.activationMigrationId } : {}),
     };
+}
+export function parseBuilderIdentity(value, expectedGatewayId) {
+    if (!isRecord(value) || value.gatewayId !== expectedGatewayId || !isValidGatewayId(value.gatewayId))
+        return null;
+    if (value.state === "standby")
+        return { gatewayId: value.gatewayId, state: "standby" };
+    if (value.state === "unavailable" && typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)) {
+        return { gatewayId: value.gatewayId, state: "unavailable", reason: value.reason };
+    }
+    return parseClaimedIdentity(value);
 }
 export const BUILDER_CLAIM_FILE = "builder-claim.json";
 function isTimestamp(value) {

@@ -32,6 +32,7 @@ export interface SurgeOpenClawProcessRequest {
 export interface SurgeOpenClawProcessGate {
   ensure: (input: { podUid: string; readinessReleased: boolean }) => Promise<SurgeOpenClawProcessGateState>;
   read: () => Promise<SurgeOpenClawProcessGateState | null>;
+  holdPrelaunch: (input: { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   hold: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   reholdTarget: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
   reholdReleasedTarget: (input: SurgeOpenClawProcessRequest & { podUid: string }) => Promise<SurgeOpenClawProcessGateState>;
@@ -584,6 +585,14 @@ export function createSurgeOpenClawProcessGate(openclawDir: string): SurgeOpenCl
       );
     },
     read: () => readState(gatePath),
+    async holdPrelaunch({ podUid }) {
+      const state = await current(podUid);
+      const terminalTarget = state.role === "target" && state.migrationId && state.slug && state.targetPodUid
+        ? { migrationId: state.migrationId, slug: state.slug, targetPodUid: state.targetPodUid,
+            ...(state.completionStarted !== undefined ? { completionStarted: state.completionStarted } : {}) }
+        : state.terminalTarget;
+      return write({ version: 1, podUid, role: "normal", mode: "held", phase: "held", ...(terminalTarget ? { terminalTarget } : {}) });
+    },
     async hold(input) {
       assertRequest(input);
       const state = await current(input.podUid);

@@ -48,6 +48,8 @@ export interface StartSurgeOpenClawSupervisorOptions {
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
   standbyBoot?: boolean;
+  prelaunchBoot?: boolean;
+  activationMigrationId?: string;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
   prepareDatabases?: () => Promise<void>;
@@ -590,6 +592,26 @@ function terminalSupervisorStop(input: {
   };
 }
 
+async function initializeBootGate(input: {
+  opts: StartSurgeOpenClawSupervisorOptions; gate: ReturnType<typeof createSurgeOpenClawProcessGate>;
+  readiness: ReturnType<typeof createSurgeReadinessGate>; readinessReleased: () => Promise<boolean>;
+  reapOrphanedOpenClaw: () => Promise<void>;
+}): Promise<SurgeOpenClawProcessGateState> {
+  const { opts, gate, readiness, readinessReleased, reapOrphanedOpenClaw } = input;
+  const prior = await gate.read();
+  const matchingActivation = opts.activationMigrationId && prior?.podUid === opts.podUid &&
+    ((prior.role === "target" && prior.migrationId === opts.activationMigrationId) ||
+     (prior.role === "normal" && prior.terminalTarget?.migrationId === opts.activationMigrationId));
+  const holdForPrelaunch = opts.prelaunchBoot || (opts.activationMigrationId && !matchingActivation);
+  if (holdForPrelaunch) {
+    await readiness.hold();
+    await reapOrphanedOpenClaw();
+  }
+  let initial = await gate.ensure({ podUid: opts.podUid, readinessReleased: await readinessReleased() });
+  if (holdForPrelaunch && !matchingActivation) initial = await gate.holdPrelaunch({ podUid: opts.podUid });
+  return initial;
+}
+
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
@@ -760,10 +782,7 @@ export async function startSurgeOpenClawSupervisor(
 
   if (opts.standbyBoot) await selfReleaseStandbyReadiness(readiness, opts);
   const readinessReleased = opts.readinessReleased ?? (() => readiness.released());
-  const initial = await gate.ensure({
-    podUid: opts.podUid,
-    readinessReleased: await readinessReleased(),
-  });
+  const initial = await initializeBootGate({ opts, gate, readiness, readinessReleased, reapOrphanedOpenClaw });
 
   await fs.mkdir(opts.openclawDir, { recursive: true });
   await fs.rm(socketPath, { force: true });
@@ -829,6 +848,18 @@ export function createSurgeOpenClawBootWatcher(input: {
     : undefined });
 }
 
+async function nativeBootMode(gatewayId: string, revisionId: string): Promise<{ prelaunchBoot: boolean; activationMigrationId?: string }> {
+  let prelaunchBoot = false;
+  let activationMigrationId: string | undefined;
+  if (process.env.GATEWAY_RUNTIME_KIND === "gce-vm" && !isStandbyBuilderBoot()) {
+    const identity = await createFleetBrokerClient(gatewayId, revisionId).builderIdentity({ nativeBoot: true });
+    if (identity.state !== "claimed" || !identity.bootMode) throw new Error("Native Builder boot mode is unavailable");
+    prelaunchBoot = identity.bootMode === "prelaunch";
+    activationMigrationId = identity.activationMigrationId;
+  }
+  return { prelaunchBoot, activationMigrationId };
+}
+
 async function main(): Promise<void> {
   const podUid = process.env.POD_UID?.trim();
   if (!podUid) throw new Error("POD_UID is required for the surge OpenClaw supervisor");
@@ -847,12 +878,14 @@ async function main(): Promise<void> {
     releaseKey,
     log,
   });
+  const boot = await nativeBootMode(gatewayId, revisionId);
   const supervisor = await startSurgeOpenClawSupervisor({
     openclawDir,
     podUid,
     log,
     bootWatcher,
     standbyBoot: isStandbyBuilderBoot(),
+    ...boot,
     onUnexpectedChildExit: () => {
       runtimeLogger.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");
       process.exit(1);

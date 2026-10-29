@@ -1013,3 +1013,67 @@ describe("surge OpenClaw process supervisor", () => {
     await supervisor.stop();
   });
 });
+
+describe("Native prelaunch boot mode", () => {
+  it("holds a same-instance released marker during verified prelaunch", async () => {
+    const openclawDir = await temporaryOpenClawDir(), podUid = "native-pod";
+    const readiness = createSurgeReadinessGate(openclawDir, podUid);
+    await readiness.release({ targetPodUid: podUid });
+    const gate = createSurgeOpenClawProcessGate(openclawDir);
+    await gate.ensure({ podUid, readinessReleased: true });
+    const spawnOpenClaw = vi.fn(() => new FakeChild());
+    const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid, log: () => {},
+      socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), prelaunchBoot: true, spawnOpenClaw, probeHealthz: async () => false });
+    try {
+      await expect(supervisor.state()).resolves.toMatchObject({ role: "normal", mode: "held" });
+      expect(spawnOpenClaw).not.toHaveBeenCalled();
+      await expect(readiness.released()).resolves.toBe(false);
+    } finally { await supervisor.stop(); }
+  });
+});
+
+it("restarts a released target only for its currently authorized activation", async () => {
+  const openclawDir = await temporaryOpenClawDir(), podUid = "native-target", children: FakeChild[] = [];
+  const readiness = createSurgeReadinessGate(openclawDir, podUid), gate = createSurgeOpenClawProcessGate(openclawDir);
+  await gate.ensure({ podUid, readinessReleased: false });
+  const request = { podUid, migrationId: "mig-current", slug: "alice", targetPodUid: podUid };
+  await gate.hydrateTarget(request); await gate.claimTargetCompletion(request); await gate.permitTarget(request);
+  await gate.markRunning({ podUid, migrationId: request.migrationId }); await readiness.release({ targetPodUid: podUid });
+  const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid, log: () => {}, activationMigrationId: request.migrationId,
+    socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), prepareTarget: async () => {}, prepareDatabases: async () => {},
+    spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; }, probeHealthz: healthzOf(children) });
+  try { await vi.waitFor(() => expect(children).toHaveLength(1)); await expect(supervisor.state()).resolves.toMatchObject({ mode: "permitted", terminalTarget: { migrationId: request.migrationId } }); }
+  finally { await supervisor.stop(); }
+});
+
+it("holds an old released target receipt when a different activation starts", async () => {
+  const openclawDir = await temporaryOpenClawDir(), podUid = "native-target";
+  const readiness = createSurgeReadinessGate(openclawDir, podUid), gate = createSurgeOpenClawProcessGate(openclawDir);
+  await gate.ensure({ podUid, readinessReleased: false });
+  const request = { podUid, migrationId: "mig-old", slug: "alice", targetPodUid: podUid };
+  await gate.hydrateTarget(request); await gate.claimTargetCompletion(request); await gate.permitTarget(request);
+  await gate.markRunning({ podUid, migrationId: request.migrationId }); await readiness.release({ targetPodUid: podUid });
+  const spawnOpenClaw = vi.fn(() => new FakeChild());
+  const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid, log: () => {}, activationMigrationId: "mig-new",
+    socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), spawnOpenClaw, probeHealthz: async () => false });
+  try {
+    await expect(supervisor.state()).resolves.toMatchObject({ role: "normal", mode: "held", terminalTarget: { migrationId: "mig-old" } });
+    expect(spawnOpenClaw).not.toHaveBeenCalled();
+    await expect(gate.hydrateTarget({ ...request, migrationId: "mig-new" })).resolves.toMatchObject({ role: "target", mode: "held" });
+  } finally { await supervisor.stop(); }
+});
+
+it("preserves a held source fence during a returning lease restart", async () => {
+  const openclawDir = await temporaryOpenClawDir(), podUid = "native-source";
+  const gate = createSurgeOpenClawProcessGate(openclawDir), readiness = createSurgeReadinessGate(openclawDir, podUid);
+  await gate.ensure({ podUid, readinessReleased: true });
+  const request = { podUid, migrationId: "return-1", slug: "alice", targetPodUid: "shared-target" };
+  await gate.hold(request); await gate.markHeld(request); await readiness.release({ targetPodUid: podUid });
+  const spawnOpenClaw = vi.fn(() => new FakeChild());
+  const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid, log: () => {},
+    socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), spawnOpenClaw });
+  try {
+    await expect(supervisor.state()).resolves.toMatchObject({ role: "source", mode: "held", migrationId: request.migrationId });
+    expect(spawnOpenClaw).not.toHaveBeenCalled();
+  } finally { await supervisor.stop(); }
+});

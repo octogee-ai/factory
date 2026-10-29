@@ -13,6 +13,8 @@ export interface ClaimedBuilderIdentity {
   builderSlug: string;
   leaseId: string | null;
   generation: number | null;
+  bootMode?: "prelaunch" | "normal" | "activating";
+  activationMigrationId?: string;
 }
 
 export type BuilderIdentity =
@@ -46,21 +48,29 @@ function claimedIdentityFields(value: Record<string, unknown>): boolean {
     (value.leaseId === null) === (value.generation === null);
 }
 
+function parseClaimedIdentity(value: Record<string, unknown>): ClaimedBuilderIdentity | null {
+  if (value.state !== "claimed" || !claimedIdentityFields(value) ||
+      (value.bootMode !== undefined && value.bootMode !== "prelaunch" && value.bootMode !== "normal" && value.bootMode !== "activating")) return null;
+  if (value.bootMode === "activating" && (typeof value.activationMigrationId !== "string" || !value.activationMigrationId)) return null;
+  return {
+    gatewayId: value.gatewayId as string,
+    state: "claimed",
+    ownerUid: value.ownerUid as string,
+    builderSlug: value.builderSlug as string,
+    leaseId: value.leaseId as string | null,
+    generation: value.generation as number | null,
+    ...(value.bootMode !== undefined ? { bootMode: value.bootMode as "prelaunch" | "normal" | "activating" } : {}),
+    ...(value.bootMode === "activating" ? { activationMigrationId: value.activationMigrationId as string } : {}),
+  };
+}
+
 export function parseBuilderIdentity(value: unknown, expectedGatewayId: string): BuilderIdentity | null {
   if (!isRecord(value) || value.gatewayId !== expectedGatewayId || !isValidGatewayId(value.gatewayId)) return null;
   if (value.state === "standby") return { gatewayId: value.gatewayId, state: "standby" };
   if (value.state === "unavailable" && typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)) {
     return { gatewayId: value.gatewayId, state: "unavailable", reason: value.reason as BuilderIdentityUnavailableReason };
   }
-  if (value.state !== "claimed" || !claimedIdentityFields(value)) return null;
-  return {
-    gatewayId: value.gatewayId,
-    state: "claimed",
-    ownerUid: value.ownerUid as string,
-    builderSlug: value.builderSlug as string,
-    leaseId: value.leaseId as string | null,
-    generation: value.generation as number | null,
-  };
+  return parseClaimedIdentity(value);
 }
 
 export const BUILDER_CLAIM_FILE = "builder-claim.json";

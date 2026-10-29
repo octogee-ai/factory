@@ -1,3 +1,4 @@
+import { disposableBuilderBootMode } from "@octogee/core/disposable-builder-prelaunch";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
 import { readCustomerRestoreAuthoritySnapshot, type FleetStateFirestore } from "@octogee/core/fleet-state";
@@ -11,6 +12,7 @@ import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
   COMPUTER_HOME_CHECKPOINT_KEEP,
+  gatewayVmPodName,
   COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
   computerHomeCheckpointName,
   gatewayVmRuntimeDocPath,
@@ -1992,8 +1994,19 @@ function installBuilderIdentityRoute(router: Router, db: Firestore): void {
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId).get();
-    const identity = builderIdentityForRoot(snapshot.data(), bound.gatewayId);
+    const nativeBoot = req.body?.nativeBoot === true;
+    if (nativeBoot && (!bound.podUid || !/^\d+$/.test(bound.podUid) || bound.podName !== gatewayVmPodName(bound.gatewayId, bound.podUid))) {
+      res.status(403).json(FORBIDDEN);
+      return;
+    }
+    const identity = await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId));
+      const identity = builderIdentityForRoot(snapshot.data(), bound.gatewayId);
+      if (!nativeBoot || !identity || identity.state !== "claimed") return identity;
+      const gateway = projectGatewayDesiredRootForGateway(snapshot.data(), bound.gatewayId) as GatewayDoc & GatewayMutableConfig;
+      const boot = await disposableBuilderBootMode({ db, transaction, gateway });
+      return { ...identity, bootMode: boot.mode, ...(boot.migrationId ? { activationMigrationId: boot.migrationId } : {}) };
+    });
     if (!identity) {
       logger.error("[fleet-broker] builder identity refused: gateway root is missing or illegal", {
         gatewayId: bound.gatewayId,

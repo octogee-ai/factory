@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    "./disposable-builder-prelaunch": {
+      "types": "./dist/disposable-builder-prelaunch.d.ts",
+      "default": "./dist/disposable-builder-prelaunch.js"
+    },
     "./gateway-runtime-restart": {
       "types": "./dist/gateway-runtime-restart.d.ts",
       "default": "./dist/gateway-runtime-restart.js"

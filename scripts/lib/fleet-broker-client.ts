@@ -124,7 +124,7 @@ export interface FleetBrokerClient {
   watchAssignments(wake: () => void, log: (message: string) => void): () => void;
   assignedUsers(opts?: { completeOnly?: boolean }): Promise<FleetBrokerUserSnapshot[]>;
   assignmentRoster(): Promise<FleetBrokerAssignmentRosterEntry[]>;
-  builderIdentity(): Promise<BuilderIdentity>;
+  builderIdentity(opts?: { nativeBoot?: true }): Promise<BuilderIdentity>;
   configuredBuilderBootstrap(slug: string): Promise<FleetBrokerConfiguredBuilderBootstrap>;
   npmRegistryCredentials(slug: string): Promise<FleetBrokerNpmRegistryCredentials>;
   uidForSlug(slug: string): Promise<string | null>;
@@ -317,10 +317,11 @@ function openClawBootClient(
 async function readBuilderIdentity(
   gatewayId: string,
   gatewayCredentialHeaders: () => Promise<Record<string, string>>,
+  opts?: { nativeBoot?: true },
 ): Promise<BuilderIdentity> {
   const data = await postJson<{ identity?: unknown }>(
     BUILDER_IDENTITY_ROUTE,
-    { gatewayId },
+    { gatewayId, ...opts },
     await gatewayCredentialHeaders(),
   );
   const identity = parseBuilderIdentity(data.identity, gatewayId);
@@ -353,7 +354,7 @@ export function createFleetBrokerClient(
     ?? defaultGatewayCredentialHeaders;
   return {
     ...npmRegistryCredentialClient(gatewayId, gatewayCredentialHeaders),
-    builderIdentity: () => readBuilderIdentity(gatewayId, gatewayCredentialHeaders),
+    builderIdentity: (opts) => readBuilderIdentity(gatewayId, gatewayCredentialHeaders, opts),
     watchAssignments: (wake, log) => watchFleetAssignments({
       url: `${baseUrl()}/internal/fleet/assignment-watch`,
       gatewayId, revisionId, headers: gatewayCredentialHeaders, wake, log,
