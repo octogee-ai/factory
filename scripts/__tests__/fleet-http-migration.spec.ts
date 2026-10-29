@@ -4028,6 +4028,23 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     } else { expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200); expect(published).toBe(true); }
   });
 
+  it.each([false, true])("pre-copy never imports or deletes the source mount marker (target marker exists: %s)", async (existing) => {
+    const importDir = await mkTempRoot();
+    const migrationId = `mig-local-mount-marker-${existing}`;
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), mode: "pre" });
+    const relative = "customers/chris/.system/.mounted";
+    await fs.mkdir(path.dirname(path.join(stageDir, relative)), { recursive: true });
+    await fs.writeFile(path.join(stageDir, relative), "source");
+    if (existing) {
+      await fs.mkdir(path.dirname(path.join(importDir, relative)), { recursive: true });
+      await fs.writeFile(path.join(importDir, relative), "target");
+    }
+    spawnMock.mockImplementation(await realMigrationSpawn());
+    expect((await finishImport(deps, migrationId, "pre")).getStatus()).toBe(200);
+    if (existing) expect(await fs.readFile(path.join(importDir, relative), "utf8")).toBe("target");
+    else await expect(fs.stat(path.join(importDir, relative))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("prepares a held Builder from a file-only pre-copy without touching its agent database", async () => {
     const importDir = await mkTempRoot();
     const procRoot = await mkTempRoot();
@@ -5370,8 +5387,15 @@ describe("prepared migration staging", () => {
       await fs.mkdir(path.join(root, "customers/chris/projects/deleted-repo"), { recursive: true });
       await fs.writeFile(path.join(root, "customers/chris/projects/deleted-repo/draft"), "removed after pre-sync");
     }
+    await fs.mkdir(path.join(stageDir, "customers/chris/.system"), { recursive: true });
+    await fs.writeFile(path.join(stageDir, "customers/chris/.system/.mounted"), "source marker");
+    await fs.writeFile(path.join(stageDir, "customers/chris/.system/.mount"), "obsolete source file");
     expect((await finish("pre")).getStatus()).toBe(200);
+    await fs.mkdir(path.join(importDir, "customers/chris/.system"), { recursive: true });
+    await fs.writeFile(path.join(importDir, "customers/chris/.system/.mounted"), "target marker");
+    await fs.writeFile(path.join(importDir, "customers/chris/.system/.mount"), "obsolete target file");
     expect(await prepare("final")).toBe(stageDir);
+    await fs.rm(path.join(stageDir, "customers/chris/.system"), { recursive: true });
     await fs.rm(path.join(stageDir, "customers/chris/projects/deleted-repo"), { recursive: true });
     await writeSharedTargetManifest(stageDir, importDir);
     const completed = await finish("final");
@@ -5381,6 +5405,8 @@ describe("prepared migration staging", () => {
     expect(loadUserSnapshot).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(importDir, "customers/chris/projects/active-repo/README.md"), "utf8")).toBe("source checkout");
     await expect(fs.stat(path.join(importDir, "customers/chris/projects/deleted-repo"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(importDir, "customers/chris/.system/.mounted"), "utf8")).toBe("target marker");
+    await expect(fs.stat(path.join(importDir, "customers/chris/.system/.mount"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("does not finish an existing import while another phase prepares its staging", async () => {

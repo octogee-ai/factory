@@ -962,10 +962,12 @@ export async function shouldReconcileDisposablePrelaunch(
 ): Promise<boolean> {
   if (gateway === null) return false;
   if (isInitialDisposableBuilderPrelaunch(gateway)) return true;
-  if (gateway.liveRelease === null || gateway.liveRelease >= gateway.desiredRelease ||
+  if (gateway.liveRelease === null || gateway.liveRelease > gateway.desiredRelease ||
     !(await disposableBuilderPrelaunchReserved({ db, gateway }))) return false;
   const runtime = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).get();
-  return runtime.data()?.runtime === "gce-vm";
+  const data = runtime.data();
+  return data?.runtime === "gce-vm" &&
+    (gateway.liveRelease !== gateway.desiredRelease || data.lifecycle === "provisioning");
 }
 
 function runtimeReportsDesiredBuild(

@@ -83,6 +83,44 @@ function fixture() {
 }
 
 describe("disposable Builder prelaunch release refresh", () => {
+  it("marks a resumed same-release VM serving only after verifying its held prelaunch", async () => {
+    const h = fixture();
+    h.gateway.liveRelease = 2;
+    h.runtime.lifecycle = "provisioning";
+    Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: { toMillis: () => Date.now() } });
+    await expect(shouldReconcileDisposablePrelaunch(h.db, h.gateway)).resolves.toBe(true);
+    await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
+    await h.markLive();
+    expect(h.documents.get("glmGateways/jefe-run")).toMatchObject({ lifecycle: "serving", release: 2 });
+    expect(h.releaseTarget).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["stale heartbeat", (h: ReturnType<typeof fixture>) => { Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: 1 }); }],
+    ["future heartbeat", (h: ReturnType<typeof fixture>) => { Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: Date.now() + 60_000 }); }],
+    ["serving lifecycle", (h: ReturnType<typeof fixture>) => { h.runtime.lifecycle = "serving"; }],
+    ["failed lifecycle", (h: ReturnType<typeof fixture>) => { h.runtime.lifecycle = "failed"; }],
+    ["released target", (h: ReturnType<typeof fixture>) => { h.targetHealth.handoffReleased = true; }],
+    ["changed source epoch", (h: ReturnType<typeof fixture>) => { h.lease.sourceAssignmentEpoch++; }],
+    ["occupied target", (h: ReturnType<typeof fixture>) => { h.documents.set("gateways/jefe-run/assignments/uid-jefe", { state: "serving" }); }],
+  ])("does not resume a same-release VM with %s", async (_name, change) => {
+    const h = fixture(); h.gateway.liveRelease = 2; h.runtime.lifecycle = "provisioning";
+    Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: Date.now() });
+    change(h);
+    await expect(h.refine()).resolves.toEqual({ kind: "steady" });
+    expect(h.writes).not.toHaveBeenCalled();
+  });
+  it("does not requeue same-release serving gateways as prelaunch", async () => {
+    const h = fixture(); h.gateway.liveRelease = 2;
+    await expect(shouldReconcileDisposablePrelaunch(h.db, h.gateway)).resolves.toBe(false);
+  });
+  it("rechecks same-release heartbeat freshness when committing", async () => {
+    const h = fixture(); h.gateway.liveRelease = 2; h.runtime.lifecycle = "provisioning";
+    Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: Date.now() });
+    await expect(h.refine()).resolves.toEqual({ kind: "mark-live", prelaunchRefresh: true });
+    Object.assign(h.runtime.heartbeat, { lastHeartbeatAt: 1 });
+    await h.markLive();
+    expect(h.writes).not.toHaveBeenCalled();
+  });
   it("converges release 2 while the exact release-1 allocation remains empty and held on Shared", async () => {
     const h = fixture();
     await expect(shouldReconcileDisposablePrelaunch(h.db, h.gateway)).resolves.toBe(true);
