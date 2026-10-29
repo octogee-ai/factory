@@ -326,6 +326,7 @@ llmBroker:
   upstream:
     anthropicBaseUrl: "https://api.anthropic.com"
     openrouterBaseUrl: "https://openrouter.ai/api"
+  prepaidCreditMarkupMultiplier: "1.25"
   providerSecret:
     name: octogee-anthropic
     key: api_key

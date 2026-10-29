@@ -131,6 +131,7 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
+import { prepaidCreditMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
 import {
   WebResearchError,
   createWebResearchService,
@@ -412,7 +413,9 @@ function createDefaultWebResearch(
   const brave = braveKey ? createBraveSearchClient({ apiKey: braveKey }) : null;
   const tavily = tavilyKey ? createTavilyClient({ apiKey: tavilyKey }) : null;
   return createWebResearchService({
-    usageStore: createFirestoreModelBrokerUsageStore(db),
+    usageStore: createFirestoreModelBrokerUsageStore(db, {
+      prepaidCreditMarkupMultiplier: prepaidCreditMarkupMultiplierFromEnv(),
+    }),
     resolveGrant: createCachedOwnerModelBrokerGrantResolver({
       db,
       log: (message, fields) => logger.info(message, fields),

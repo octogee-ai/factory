@@ -13,6 +13,7 @@ import {
   usageWindowStartMs,
   windowOwnerKey,
 } from "../lib/model-broker-usage.js";
+import { prepaidCreditMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
 
 const baseRecord = {
   requestId: "req",
@@ -499,6 +500,63 @@ describe("prepaid credit debits", () => {
     expect(store.rollups.get("uid-builder")?.requestCount).toBe(1);
   });
 
+  it("debits prepaid credits at provider cost times the configured markup and records that as the charge", async () => {
+    const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
+    store.creditBalances.set("uid-builder", 10);
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "m1",
+      ownerUid: "uid-builder",
+      reportedCostUsd: 0.8,
+      debitsCreditBalance: true,
+      countsTowardSpendWindow: false,
+    });
+    expect(await store.readCreditBalance("uid-builder")).toBeCloseTo(9, 8);
+    expect(store.events[0]).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
+    expect(store.rollups.get("uid-builder")).toMatchObject({ costUsd: 0.8, chargeUsd: 1 });
+  });
+
+  it("leaves subscription-rail charges at provider cost when a markup is configured", async () => {
+    const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "s-markup",
+      ownerUid: "uid-a",
+      reportedCostUsd: 0.8,
+      countsTowardSpendWindow: true,
+    });
+    expect(store.events[0]).toMatchObject({ costUsd: 0.8, chargeUsd: 0.8 });
+    await expect(
+      store.readWeekUsage({ gatewayId: "shared-blue", ownerUid: "uid-a", now: baseRecord.now }),
+    ).resolves.toMatchObject({ costUsd: 0.8, chargeUsd: 0.8 });
+  });
+
+  it("does not mark up an explicit charge a second time when it debits credits", async () => {
+    const store = new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: 1.25 });
+    store.creditBalances.set("uid-a", 1);
+    await store.recordUsage({
+      ...baseRecord,
+      eventId: "web-explicit",
+      ownerUid: "uid-a",
+      provider: "brave",
+      model: "brave/web-search",
+      usage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      reportedCostUsd: 0.008,
+      chargeUsd: 0.01,
+      debitsCreditBalance: true,
+      countsTowardSpendWindow: false,
+    });
+    expect(await store.readCreditBalance("uid-a")).toBeCloseTo(0.99, 8);
+  });
+
+  it.each([0, 0.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses a prepaid credit markup multiplier of %s",
+    (multiplier) => {
+      expect(() => new InMemoryModelBrokerUsageStore({ prepaidCreditMarkupMultiplier: multiplier }))
+        .toThrow(/prepaid credit markup multiplier/);
+    },
+  );
+
   it("never debits subscription-rail traffic and defaults unknown owners to zero balance", async () => {
     const store = new InMemoryModelBrokerUsageStore();
     store.creditBalances.set("uid-a", 5);
@@ -518,5 +576,21 @@ describe("prepaid credit debits", () => {
       countsTowardSpendWindow: false,
     });
     expect(await store.readCreditBalance("uid-builder")).toBeLessThan(0);
+  });
+});
+
+describe("prepaid credit markup config", () => {
+  it("defaults to 1.25 when the env var is unset or blank", () => {
+    expect(prepaidCreditMarkupMultiplierFromEnv({})).toBe(1.25);
+    expect(prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: " " })).toBe(1.25);
+  });
+
+  it("reads a configured multiplier", () => {
+    expect(prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: "1.4" })).toBe(1.4);
+  });
+
+  it.each(["abc", "0", "0.9", "-1", "Infinity"])("throws on %s rather than defaulting", (raw) => {
+    expect(() => prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: raw }))
+      .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER must be a finite number >= 1/);
   });
 });

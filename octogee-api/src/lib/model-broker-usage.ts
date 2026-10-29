@@ -96,6 +96,19 @@ export interface ModelBrokerUsageRecordInput {
   providerMetadata?: Record<string, unknown>;
 }
 
+export interface ModelBrokerUsageStoreOptions {
+  prepaidCreditMarkupMultiplier: number;
+}
+
+export function requirePrepaidCreditMarkupMultiplier(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
+    throw new Error(
+      `prepaid credit markup multiplier must be a finite number >= 1, got ${String(value)}`,
+    );
+  }
+  return value;
+}
+
 export interface ModelBrokerUsageStore {
   recordUsage(input: ModelBrokerUsageRecordInput): Promise<void>;
   readWindowUsage?(input: ModelBrokerUsageWindowReadInput): Promise<ModelBrokerUsageWindowSnapshot>;
@@ -408,10 +421,12 @@ export function resolveRecordedCost(
 function resolvedChargeUsd(
   input: ModelBrokerUsageRecordInput,
   cost: ModelBrokerUsageCost,
+  prepaidCreditMarkupMultiplier: number,
 ): number {
   const charge = input.chargeUsd;
-  return typeof charge === "number" && Number.isFinite(charge) && charge >= 0
-    ? charge
+  if (typeof charge === "number" && Number.isFinite(charge) && charge >= 0) return charge;
+  return input.debitsCreditBalance === true
+    ? cost.total * prepaidCreditMarkupMultiplier
     : cost.total;
 }
 
@@ -617,12 +632,19 @@ export class InMemoryModelBrokerUsageStore implements ModelBrokerUsageStore {
   readonly creditBalances = new Map<string, number>();
   readonly signupOfferBudgets = new Map<string, ModelBrokerSignupOfferBudget>();
   private readonly eventIds = new Set<string>();
+  private readonly prepaidCreditMarkupMultiplier: number;
+
+  constructor(options: ModelBrokerUsageStoreOptions = { prepaidCreditMarkupMultiplier: 1 }) {
+    this.prepaidCreditMarkupMultiplier = requirePrepaidCreditMarkupMultiplier(
+      options.prepaidCreditMarkupMultiplier,
+    );
+  }
 
   async recordUsage(input: ModelBrokerUsageRecordInput): Promise<void> {
     const now = input.now ?? Date.now();
     const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
     const cost = resolveRecordedCost(input, cacheWriteTtl);
-    const chargeUsd = resolvedChargeUsd(input, cost);
+    const chargeUsd = resolvedChargeUsd(input, cost, this.prepaidCreditMarkupMultiplier);
     const eventId = input.eventId ?? crypto.randomUUID();
     if (this.eventIds.has(eventId)) return;
     const signupOfferLedger = requireSignupOfferLedger(this.signupOfferBudgets, input.signupOfferBudget);
@@ -915,14 +937,18 @@ function applyUsageWrites(t: Transaction, a: UsageWriteArgs): void {
 
 export function createFirestoreModelBrokerUsageStore(
   db: Pick<Firestore, "collection" | "runTransaction">,
+  options: ModelBrokerUsageStoreOptions,
 ): ModelBrokerUsageStore {
+  const prepaidCreditMarkupMultiplier = requirePrepaidCreditMarkupMultiplier(
+    options.prepaidCreditMarkupMultiplier,
+  );
   return {
     async recordUsage(input) {
       const now = input.now ?? Date.now();
       const eventId = input.eventId ?? crypto.randomUUID();
       const cacheWriteTtl = input.cacheWriteTtl ?? "5m";
       const cost = resolveRecordedCost(input, cacheWriteTtl);
-      const chargeUsd = resolvedChargeUsd(input, cost);
+      const chargeUsd = resolvedChargeUsd(input, cost, prepaidCreditMarkupMultiplier);
       const windowStartMs = usageWindowStartMs(now);
       const weekStartMs = weekWindowStartMs(now);
       const ownerKey = windowOwnerKey(input);
