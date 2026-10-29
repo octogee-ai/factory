@@ -39,12 +39,25 @@ import {
 import { meterExhausted, readPlatformSpendState } from "./lib/platform-usage-allowance.js";
 import type { ModelBrokerOwnerAccessResolver } from "./lib/model-broker-owner-access.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
+import {
+  VertexRequestError,
+  computeVertexCost,
+  translateVertexMessagesRequest,
+  vertexUpstreamUrl,
+  type VertexModelPriceTable,
+  type VertexProviderConfig,
+} from "./lib/vertex-provider.js";
+
+export interface VertexBrokerConfig extends VertexProviderConfig {
+  accessToken: () => Promise<string>;
+}
 
 export interface LlmBrokerAppDeps {
   store: Pick<ModelBrokerTokenStore, "lookupToken">;
   usageStore?: ModelBrokerUsageStore;
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
   providerKeyResolver?: ModelBrokerProviderKeyResolver;
+  vertex?: VertexBrokerConfig;
   upstreamBaseUrl?: string;
   providerUpstreamBaseUrls?: Partial<Record<ModelBrokerProvider, string | undefined>>;
   // Model a builder is degraded to when over budget (or always, on the free tier),
@@ -80,6 +93,7 @@ const DEFAULT_OPENAI_UPSTREAM_BASE_URL = "https://api.openai.com";
 const DEFAULT_HOUSE_MODEL = "claude-haiku-4-5";
 const DEFAULT_OPENROUTER_HOUSE_MODEL = "z-ai/glm-5.2";
 const DEFAULT_OPENAI_HOUSE_MODEL = "gpt-5.4-mini";
+const DEFAULT_VERTEX_HOUSE_MODEL = "claude-haiku-4-5@20251001";
 const PLATFORM_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_BODY_LIMIT = "32mb";
 const DEFAULT_UPSTREAM_HEADER_TIMEOUT_MS = 120_000;
@@ -102,6 +116,8 @@ const ALLOWED_OPENROUTER_ENDPOINTS = new Set([
   "GET /v1/models",
   "POST /v1/chat/completions",
 ]);
+
+const ALLOWED_VERTEX_ENDPOINTS = new Set(["POST /v1/messages"]);
 
 const ALLOWED_OPENAI_MODEL_ENDPOINTS = new Set([
   "GET /v1/models",
@@ -174,6 +190,7 @@ function allowedEndpoint(req: Request, url: URL): boolean {
 
 const ALLOWED_ENDPOINTS_BY_PROVIDER: Record<ModelBrokerProvider, ReadonlySet<string>> = {
   anthropic: ALLOWED_ANTHROPIC_ENDPOINTS,
+  vertex: ALLOWED_VERTEX_ENDPOINTS,
   openai: ALLOWED_OPENAI_MODEL_ENDPOINTS,
   openrouter: ALLOWED_OPENROUTER_ENDPOINTS,
 };
@@ -209,11 +226,29 @@ function upstreamHeaders(req: Request, apiKey: string, provider: ModelBrokerProv
   return headers;
 }
 
+function vertexUpstreamHeaders(req: Request, accessToken: string): Headers {
+  const headers = new Headers();
+  const accept = req.get("accept");
+  if (accept) headers.set("accept", accept);
+  headers.set("content-type", "application/json");
+  headers.set("authorization", `Bearer ${accessToken}`);
+  return headers;
+}
+
+function providerConfigured(deps: LlmBrokerAppDeps, provider: ModelBrokerProvider): boolean {
+  return provider === "vertex" ? Boolean(deps.vertex) : Boolean(deps.providerKeys[provider]);
+}
+
 async function resolveProviderKey(input: {
   record: ModelBrokerTokenRecord;
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
   providerKeyResolver?: ModelBrokerProviderKeyResolver;
+  vertex?: VertexBrokerConfig;
 }): Promise<ModelBrokerProviderKey | null> {
+  if (input.record.provider === "vertex") {
+    if (!input.vertex) return null;
+    return { apiKey: await input.vertex.accessToken(), source: "platform" };
+  }
   if (input.providerKeyResolver) {
     return input.providerKeyResolver({
       provider: input.record.provider,
@@ -228,6 +263,7 @@ async function resolveProviderKeyForRequest(input: {
   record: ModelBrokerTokenRecord;
   providerKeys: Partial<Record<ModelBrokerProvider, string | undefined>>;
   providerKeyResolver?: ModelBrokerProviderKeyResolver;
+  vertex?: VertexBrokerConfig;
   onError: (err: unknown) => void;
 }): Promise<ModelBrokerProviderKey | null> {
   try {
@@ -235,6 +271,7 @@ async function resolveProviderKeyForRequest(input: {
       record: input.record,
       providerKeys: input.providerKeys,
       providerKeyResolver: input.providerKeyResolver,
+      vertex: input.vertex,
     });
   } catch (err) {
     input.onError(err);
@@ -257,7 +294,7 @@ function shouldMeter(
   upstream: globalThis.Response,
 ): boolean {
   if (req.method.toUpperCase() !== "POST" || !upstream.ok) return false;
-  return provider === "anthropic"
+  return provider === "anthropic" || provider === "vertex"
     ? url.pathname === "/v1/messages"
     : url.pathname === "/v1/chat/completions" ||
         (provider === "openai" && ["/v1/embeddings", "/v1/responses"].includes(url.pathname));
@@ -487,18 +524,24 @@ function extractOpenAiResponsesUsage(payload: unknown): AnthropicPayloadExtracti
 
 function usageExtractor(provider: ModelBrokerProvider, pathname: string): PayloadUsageExtractor {
   if (provider === "openai" && pathname === "/v1/responses") return extractOpenAiResponsesUsage;
-  return provider === "anthropic"
+  return provider === "anthropic" || provider === "vertex"
     ? extractAnthropicPayloadUsage
     : extractOpenRouterPayloadUsage;
 }
 
+const PROVIDER_LABELS: Record<ModelBrokerProvider, string> = {
+  anthropic: "Anthropic",
+  vertex: "Vertex AI",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+};
+
 function providerLabel(provider: ModelBrokerProvider): string {
-  if (provider === "anthropic") return "Anthropic";
-  return provider === "openai" ? "OpenAI" : "OpenRouter";
+  return PROVIDER_LABELS[provider];
 }
 
 function isUnknownPricingModel(provider: ModelBrokerProvider, pricingModel: string): boolean {
-  if (provider === "anthropic") return isUnknownAnthropicPricingModel(pricingModel);
+  if (provider === "anthropic" || provider === "vertex") return isUnknownAnthropicPricingModel(pricingModel);
   if (provider === "openai") return isUnknownOpenAiPricingModel(pricingModel);
   return isUnknownOpenRouterPricingModel(pricingModel);
 }
@@ -626,6 +669,7 @@ interface MeteringContext {
   countsTowardSpendWindow: boolean;
   debitsCreditBalance: boolean;
   signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
+  vertexPricing?: { model: string; prices: VertexModelPriceTable };
 }
 
 // The metered outcome of one proxied call, collected identically from a
@@ -638,14 +682,35 @@ interface MeteredUsage {
   reportedCostUsd: number | null;
 }
 
+function meteredModel(ctx: MeteringContext, metered: MeteredUsage): string {
+  return ctx.vertexPricing?.model ?? metered.model ?? ctx.requestModel ?? "unknown";
+}
+
+function resolveReportedCost(
+  ctx: MeteringContext,
+  model: string,
+  usage: AnthropicTokenUsage,
+  upstreamReportedCostUsd: number | null,
+): number | null | undefined {
+  if (!ctx.vertexPricing) return upstreamReportedCostUsd;
+  try {
+    return computeVertexCost(ctx.vertexPricing.prices, model, usage, ctx.cacheWriteTtl).total;
+  } catch (err) {
+    ctx.onMeteringError(err);
+    return undefined;
+  }
+}
+
 async function recordUsage(
   ctx: MeteringContext,
   upstream: globalThis.Response,
   metered: MeteredUsage,
 ): Promise<void> {
-  const { usage, reportedCostUsd } = metered;
+  const { usage } = metered;
   if (!ctx.usageStore || !usage || totalTokens(usage) <= 0) return;
-  const model = metered.model ?? ctx.requestModel ?? "unknown";
+  const model = meteredModel(ctx, metered);
+  const reportedCostUsd = resolveReportedCost(ctx, model, usage, metered.reportedCostUsd);
+  if (reportedCostUsd === undefined) return;
   const cost = estimateModelBrokerCost(ctx.record.provider, model, usage, ctx.cacheWriteTtl);
   const unknownPricing = isUnknownPricingModel(ctx.record.provider, cost.pricingModel);
   // A reported upstream cost makes the table irrelevant for this call — only a
@@ -1188,6 +1253,7 @@ async function logAndForwardAllowed(args: {
   gate: GateDecisionAllowed;
   fetchImpl: typeof fetch;
   upstreamBaseUrl: string;
+  vertex?: VertexBrokerConfig;
   houseModels: Record<ModelBrokerProvider, string>;
   resolveFreeTierModel: LlmBrokerAppDeps["resolveFreeTierModel"];
   requestModel: string | null;
@@ -1255,6 +1321,7 @@ function meteringContextFor(args: {
   usingCredits: boolean;
   offerFunded: boolean;
   signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
+  vertexPricing?: MeteringContext["vertexPricing"];
 }): MeteringContext {
   const { providerKey, gate, usingCredits, offerFunded } = args;
   const platformFundedEmbedding = args.record.purpose === "embeddings";
@@ -1288,7 +1355,86 @@ function meteringContextFor(args: {
     ...(offerFunded && args.signupOfferBudget
       ? { signupOfferBudget: args.signupOfferBudget }
       : {}),
+    ...(args.vertexPricing ? { vertexPricing: args.vertexPricing } : {}),
   };
+}
+
+interface UpstreamCall {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  requestModel: string | null;
+  vertexPricing?: MeteringContext["vertexPricing"];
+}
+
+class VertexUnpricedModelError extends Error {
+  constructor(model: string) {
+    super(`vertex price table has no price entry for model ${model}`);
+    this.name = "VertexUnpricedModelError";
+  }
+}
+
+function vertexUpstreamCall(args: {
+  req: Request;
+  vertex: VertexBrokerConfig;
+  accessToken: string;
+  body: unknown;
+}): UpstreamCall {
+  const translated = translateVertexMessagesRequest({
+    body: args.body,
+    betaHeader: args.req.get("anthropic-beta"),
+  });
+  if (!args.vertex.prices[translated.model]) throw new VertexUnpricedModelError(translated.model);
+  return {
+    url: vertexUpstreamUrl(args.vertex, translated.model, translated.stream),
+    headers: vertexUpstreamHeaders(args.req, args.accessToken),
+    body: translated.body,
+    requestModel: translated.model,
+    vertexPricing: { model: translated.model, prices: args.vertex.prices },
+  };
+}
+
+function upstreamCallFor(args: {
+  req: Request;
+  url: URL;
+  record: ModelBrokerTokenRecord;
+  providerKey: ModelBrokerProviderKey;
+  upstreamBaseUrl: string;
+  vertex?: VertexBrokerConfig;
+  body: unknown;
+}): UpstreamCall {
+  if (args.record.provider === "vertex") {
+    if (!args.vertex) throw new Error("vertex upstream is not configured");
+    return vertexUpstreamCall({
+      req: args.req,
+      vertex: args.vertex,
+      accessToken: args.providerKey.apiKey,
+      body: args.body,
+    });
+  }
+  return {
+    url: `${args.upstreamBaseUrl}${args.url.pathname}${args.url.search}`,
+    headers: upstreamHeaders(args.req, args.providerKey.apiKey, args.record.provider),
+    body: args.body,
+    requestModel: readRequestMetadata(args.body).model,
+  };
+}
+
+function sendVertexRequestRejection(
+  res: ExpressResponse,
+  err: unknown,
+  onMeteringError: (err: unknown) => void,
+): boolean {
+  if (err instanceof VertexRequestError) {
+    res.status(400).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof VertexUnpricedModelError) {
+    onMeteringError(err);
+    res.status(503).json({ error: err.message });
+    return true;
+  }
+  return false;
 }
 
 async function forwardAllowed(args: {
@@ -1300,6 +1446,7 @@ async function forwardAllowed(args: {
   gate: GateDecisionAllowed;
   fetchImpl: typeof fetch;
   upstreamBaseUrl: string;
+  vertex?: VertexBrokerConfig;
   houseModel: string;
   rail: OwnerModelBrokerGrant["rail"];
   signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
@@ -1318,18 +1465,33 @@ async function forwardAllowed(args: {
     includeOpenRouterUsage: includeOpenRouterUsageForRequest(record, req, url),
   });
   const effectiveBody = rewrittenBody ?? req.body;
+  let call: UpstreamCall;
+  try {
+    call = upstreamCallFor({
+      req,
+      url,
+      record,
+      providerKey,
+      upstreamBaseUrl: args.upstreamBaseUrl,
+      vertex: args.vertex,
+      body: effectiveBody,
+    });
+  } catch (err) {
+    if (sendVertexRequestRejection(res, err, args.onMeteringError)) return;
+    throw err;
+  }
   const body =
     req.method === "GET" || req.method === "HEAD"
       ? undefined
-      : (effectiveBody as unknown as BodyInit);
-  const requestMetadata = readRequestMetadata(effectiveBody);
+      : (call.body as unknown as BodyInit);
+  const cacheWriteTtl = readRequestMetadata(effectiveBody).cacheWriteTtl;
   const requestId = crypto.randomUUID();
   const upstream = await fetchAndLogUpstream({
     fetchImpl: args.fetchImpl,
-    url: `${args.upstreamBaseUrl}${url.pathname}${url.search}`,
+    url: call.url,
     init: {
       method: req.method,
-      headers: Object.fromEntries(upstreamHeaders(req, providerKey.apiKey, record.provider).entries()),
+      headers: Object.fromEntries(call.headers.entries()),
       body,
       redirect: "manual",
     },
@@ -1342,7 +1504,7 @@ async function forwardAllowed(args: {
       provider: record.provider,
       path: url.pathname,
       requestId,
-      requestModel: requestMetadata.model,
+      requestModel: call.requestModel,
     },
   });
   const metering: MeteringContext | undefined = shouldMeter(record.provider, req, url, upstream)
@@ -1351,8 +1513,8 @@ async function forwardAllowed(args: {
         url,
         record,
         requestId,
-        requestModel: requestMetadata.model,
-        cacheWriteTtl: requestMetadata.cacheWriteTtl,
+        requestModel: call.requestModel,
+        cacheWriteTtl,
         usageStore: args.usageStore,
         providerKey,
         gate,
@@ -1361,6 +1523,7 @@ async function forwardAllowed(args: {
         usingCredits,
         offerFunded: gate.offerFunded,
         signupOfferBudget: args.signupOfferBudget,
+        vertexPricing: call.vertexPricing,
       })
     : undefined;
   await writeUpstreamResponse(upstream, res, metering);
@@ -1532,14 +1695,16 @@ function createBrokerCatalogHandler(deps: LlmBrokerAppDeps, now: () => number) {
         res.status(403).json({ error: "model catalog requires a model credential" });
         return;
       }
-      const providerKey = await resolveProviderKeyForRequest({
-        record,
-        providerKeys: deps.providerKeys,
-        providerKeyResolver: deps.providerKeyResolver,
-        onError: (error) => reportBrokerResolutionError(deps, error),
-      });
+      const configured = record.provider === "vertex"
+        ? providerConfigured(deps, "vertex")
+        : Boolean(await resolveProviderKeyForRequest({
+            record,
+            providerKeys: deps.providerKeys,
+            providerKeyResolver: deps.providerKeyResolver,
+            onError: (error) => reportBrokerResolutionError(deps, error),
+          }));
       if (!await authorizeBrokerCredential(deps, req, res, now)) return;
-      if (!providerKey) {
+      if (!configured) {
         res.status(503).json({ error: `${record.provider} upstream is not configured` });
         return;
       }
@@ -1589,6 +1754,7 @@ async function resolveBrokerRequest(
     record,
     providerKeys: deps.providerKeys,
     providerKeyResolver: deps.providerKeyResolver,
+    vertex: deps.vertex,
     onError: deps.onMeteringError ?? (() => undefined),
   });
   if (!providerKey) {
@@ -1680,6 +1846,7 @@ function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
         gate,
         fetchImpl,
         upstreamBaseUrl: upstreamBaseUrls[record.provider],
+        vertex: deps.vertex,
         houseModels,
         resolveFreeTierModel: deps.resolveFreeTierModel,
         requestModel,
@@ -1721,6 +1888,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
         DEFAULT_OPENAI_UPSTREAM_BASE_URL,
       ),
     ),
+    vertex: "",
   };
   const houseModels: Record<ModelBrokerProvider, string> = {
     anthropic: configuredString(
@@ -1736,6 +1904,10 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       deps.providerHouseModels?.openai,
       DEFAULT_OPENAI_HOUSE_MODEL,
     ),
+    vertex: configuredString(
+      deps.providerHouseModels?.vertex,
+      DEFAULT_VERTEX_HOUSE_MODEL,
+    ),
   };
   const now = deps.now ?? Date.now;
   const upstreamHeaderTimeoutMs =
@@ -1748,9 +1920,10 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
       status: "ok",
       service: "llm-broker",
       providers: {
-        anthropic: Boolean(deps.providerKeys.anthropic),
-        openrouter: Boolean(deps.providerKeys.openrouter),
-        openai: Boolean(deps.providerKeys.openai),
+        anthropic: providerConfigured(deps, "anthropic"),
+        openrouter: providerConfigured(deps, "openrouter"),
+        openai: providerConfigured(deps, "openai"),
+        vertex: providerConfigured(deps, "vertex"),
       },
     });
   });

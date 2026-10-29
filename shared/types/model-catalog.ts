@@ -1,12 +1,12 @@
 import { OPENROUTER_MODEL_CATALOG } from "./openrouter-model-catalog.generated.js";
 
-export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai"] as const;
+export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai", "vertex"] as const;
 export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
 
 export const MODEL_REASONING_EFFORTS = ["high", "xhigh"] as const;
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
 
-export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
+export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai" | "vertex";
 export const MODEL_INPUT_MODALITIES = ["text", "image"] as const;
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
@@ -23,6 +23,7 @@ export interface ModelCatalogEntry {
   label: string;
   source: ModelCatalogSource;
   aliases?: readonly string[];
+  upstreamId?: string;
   contextTokens?: number;
   input?: readonly ModelInputModality[];
   maxOutputTokens?: number;
@@ -33,33 +34,31 @@ export interface ModelCatalogEntry {
   defaultReasoningEffort?: ModelReasoningEffort;
 }
 
-const DIRECT_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+const CLAUDE_MODELS: readonly {
+  id: string;
+  label: string;
+  vertexId: string;
+  reasoningEfforts: readonly ModelReasoningEffort[];
+  contextTokens?: number;
+  input?: readonly ModelInputModality[];
+}[] = [
   ...[
     ["claude-fable-5-1", "Claude Fable 5.1"],
     ["claude-opus-5", "Claude Opus 5"],
     ["claude-sonnet-5", "Claude Sonnet 5"],
     ["claude-opus-4-8", "Claude Opus 4.8"],
-  ].map(([id, label]): ModelCatalogEntry => ({
-    provider: "anthropic", id: `anthropic/${id}`, label, source: "openclaw-release",
-    aliases: [id], contextTokens: 1_000_000, input: ["text", "image"],
-    reasoningEfforts: ["high"],
+  ].map(([id, label]) => ({
+    id, label, vertexId: id, contextTokens: 1_000_000,
+    input: ["text", "image"] as const, reasoningEfforts: ["high"] as const,
   })),
-  {
-    provider: "anthropic",
-    id: "anthropic/claude-sonnet-4-6",
-    label: "Claude Sonnet 4.6",
-    source: "openclaw-release",
-    aliases: ["claude-sonnet-4-6"],
-    reasoningEfforts: [],
-  },
-  {
-    provider: "anthropic",
-    id: "anthropic/claude-haiku-4-5",
-    label: "Claude Haiku 4.5",
-    source: "openclaw-release",
-    aliases: ["claude-haiku-4-5"],
-    reasoningEfforts: [],
-  },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", vertexId: "claude-sonnet-4-6", reasoningEfforts: [] },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", vertexId: "claude-haiku-4-5@20251001", reasoningEfforts: [] },
+];
+
+const DIRECT_MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+  ...CLAUDE_MODELS.map(({ vertexId: _vertexId, id, ...rest }): ModelCatalogEntry => ({
+    ...rest, provider: "anthropic", id: `anthropic/${id}`, source: "openclaw-release", aliases: [id],
+  })),
   {
     provider: "openai",
     id: "gpt-6-astra",
@@ -132,8 +131,16 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     : entry),
 ];
 
+export const VERTEX_MODEL_CATALOG: readonly ModelCatalogEntry[] = CLAUDE_MODELS.map(
+  ({ vertexId, id, ...rest }): ModelCatalogEntry => ({
+    ...rest, provider: "vertex", id: `vertex/${id}`, source: "vertex", aliases: [id], upstreamId: vertexId,
+  }),
+);
+
+const BROKER_MODEL_CATALOG: readonly ModelCatalogEntry[] = [...MODEL_CATALOG, ...VERTEX_MODEL_CATALOG];
+
 export function isModelCatalogProvider(value: unknown): value is ModelCatalogProvider {
-  return value === "anthropic" || value === "openrouter" || value === "openai";
+  return (MODEL_CATALOG_PROVIDERS as readonly unknown[]).includes(value);
 }
 
 export function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
@@ -143,16 +150,16 @@ export function isModelReasoningEffort(value: unknown): value is ModelReasoningE
 export function modelCatalogForProvider(
   provider: ModelCatalogProvider,
 ): readonly ModelCatalogEntry[] {
-  return MODEL_CATALOG.filter((entry) => entry.provider === provider);
+  return BROKER_MODEL_CATALOG.filter((entry) => entry.provider === provider);
 }
 
 export function modelCatalogEntryFor(
   provider: ModelCatalogProvider,
   model: string,
 ): ModelCatalogEntry | null {
-  return MODEL_CATALOG.find(
+  return BROKER_MODEL_CATALOG.find(
     (entry) =>
       entry.provider === provider &&
-      (entry.id === model || Boolean(entry.aliases?.includes(model))),
+      (entry.id === model || entry.upstreamId === model || Boolean(entry.aliases?.includes(model))),
   ) ?? null;
 }

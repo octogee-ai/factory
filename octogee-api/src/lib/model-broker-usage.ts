@@ -33,6 +33,7 @@ import {
 
 export type ModelBrokerUsageProvider =
   | "anthropic"
+  | "vertex"
   | "openrouter"
   | "openai"
   | "brave"
@@ -334,7 +335,9 @@ export function estimateModelBrokerCost(
   usage: AnthropicTokenUsage,
   cacheWriteTtl: AnthropicCacheWriteTtl = "5m",
 ): ModelBrokerUsageCost {
-  if (provider === "anthropic") return estimateAnthropicCost(model, usage, cacheWriteTtl);
+  if (provider === "anthropic" || provider === "vertex") {
+    return estimateAnthropicCost(model, usage, cacheWriteTtl);
+  }
   if (provider === "brave" || provider === "tavily") {
     return {
       input: 0,
@@ -411,10 +414,7 @@ export function resolveRecordedCost(
     total: reported,
     pricingModel: estimated.pricingModel,
     cacheWriteTtl,
-    source:
-      input.provider === "brave" || input.provider === "tavily"
-        ? "provider_reported"
-        : "openrouter_reported",
+    source: input.provider === "openrouter" ? "openrouter_reported" : "provider_reported",
   };
 }
 

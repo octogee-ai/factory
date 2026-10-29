@@ -325,6 +325,7 @@ export {
   MODEL_CATALOG,
   MODEL_CATALOG_PROVIDERS,
   MODEL_REASONING_EFFORTS,
+  VERTEX_MODEL_CATALOG,
   isModelCatalogProvider,
   isModelReasoningEffort,
   modelCatalogForProvider,

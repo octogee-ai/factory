@@ -88,6 +88,16 @@ spec:
               value: {{ .Values.llmBroker.upstream.openrouterBaseUrl | quote }}
             - name: PLATFORM_CREDIT_MARKUP_MULTIPLIER
               value: {{ required "llmBroker.prepaidCreditMarkupMultiplier is required" .Values.llmBroker.prepaidCreditMarkupMultiplier | quote }}
+            - name: PLATFORM_VERTEX_ENABLED
+              value: {{ .Values.llmBroker.vertex.enabled | quote }}
+            - name: PLATFORM_VERTEX_PROJECT_ID
+              value: {{ .Values.llmBroker.vertex.projectId | default (.Values.global).deploymentProjectId | quote }}
+            - name: PLATFORM_VERTEX_LOCATION
+              value: {{ .Values.llmBroker.vertex.location | quote }}
+            - name: PLATFORM_VERTEX_MODEL_PRICES
+              value: {{ required "llmBroker.vertex.modelPrices is required" .Values.llmBroker.vertex.modelPrices | toJson | quote }}
+            - name: LLM_BROKER_VERTEX_HOUSE_MODEL
+              value: {{ .Values.llmBroker.vertex.houseModel | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:

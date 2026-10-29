@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MODEL_CATALOG,
+  VERTEX_MODEL_CATALOG,
   isModelCatalogProvider,
   isModelReasoningEffort,
   modelCatalogEntryFor,
@@ -115,8 +116,45 @@ describe("MODEL_CATALOG", () => {
   it("guards provider and reasoning-effort strings", () => {
     expect(isModelCatalogProvider("openrouter")).toBe(true);
     expect(isModelCatalogProvider("openai")).toBe(true);
+    expect(isModelCatalogProvider("vertex")).toBe(true);
     expect(isModelCatalogProvider("google")).toBe(false);
     expect(isModelReasoningEffort("xhigh")).toBe(true);
     expect(isModelReasoningEffort("medium")).toBe(false);
+  });
+
+  describe("Vertex rail", () => {
+    it("maps every Claude catalog model to the id Vertex serves, with the direct-rail alias", () => {
+      expect(VERTEX_MODEL_CATALOG.map((e) => [e.id, e.upstreamId])).toEqual([
+        ["vertex/claude-fable-5-1", "claude-fable-5-1"],
+        ["vertex/claude-opus-5", "claude-opus-5"],
+        ["vertex/claude-sonnet-5", "claude-sonnet-5"],
+        ["vertex/claude-opus-4-8", "claude-opus-4-8"],
+        ["vertex/claude-sonnet-4-6", "claude-sonnet-4-6"],
+        ["vertex/claude-haiku-4-5", "claude-haiku-4-5@20251001"],
+      ]);
+      for (const entry of VERTEX_MODEL_CATALOG) {
+        expect(entry.provider).toBe("vertex");
+        expect(entry.source).toBe("vertex");
+        const direct = modelCatalogEntryFor("anthropic", entry.id.replace(/^vertex\//, "anthropic/"));
+        expect(direct?.label).toBe(entry.label);
+        expect(entry.aliases).toContain(entry.id.replace(/^vertex\//, ""));
+      }
+    });
+
+    it("resolves Vertex entries by catalog id, bare alias, or upstream id", () => {
+      expect(modelCatalogEntryFor("vertex", "vertex/claude-haiku-4-5")?.upstreamId).toBe(
+        "claude-haiku-4-5@20251001",
+      );
+      expect(modelCatalogEntryFor("vertex", "claude-haiku-4-5")?.id).toBe("vertex/claude-haiku-4-5");
+      expect(modelCatalogEntryFor("vertex", "claude-haiku-4-5@20251001")?.id).toBe(
+        "vertex/claude-haiku-4-5",
+      );
+      expect(modelCatalogEntryFor("anthropic", "claude-haiku-4-5@20251001")).toBeNull();
+      expect(modelCatalogForProvider("vertex")).toEqual(VERTEX_MODEL_CATALOG);
+    });
+
+    it("keeps the Vertex rail out of the customer-selectable catalog", () => {
+      expect(MODEL_CATALOG.some((entry) => entry.provider === "vertex")).toBe(false);
+    });
   });
 });

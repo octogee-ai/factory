@@ -289,6 +289,24 @@ describe("reported upstream cost", () => {
     expect((event.pricing as Record<string, unknown>).source).toBe("openrouter_reported");
   });
 
+  it("stamps Vertex table cost as provider_reported and attributes it across the Anthropic breakdown", async () => {
+    const store = new InMemoryModelBrokerUsageStore();
+    await store.recordUsage({
+      ...baseRecord,
+      provider: "vertex",
+      model: "claude-haiku-4-5@20251001",
+      usage: { inputTokens: 1_000, outputTokens: 1_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      eventId: "v1",
+      ownerUid: "uid-a",
+      reportedCostUsd: 0.012,
+    });
+    const event = store.events[0];
+    expect(event.costUsd).toBeCloseTo(0.012, 8);
+    expect(event.pricing).toMatchObject({ source: "provider_reported", model: "haiku-4.5" });
+    const breakdown = event.costBreakdown as Record<string, number>;
+    expect(breakdown.output / breakdown.input).toBeCloseTo(5, 8);
+  });
+
   it("scales the cost breakdown so it still sums to the reported total", async () => {
     const store = new InMemoryModelBrokerUsageStore();
     await store.recordUsage({

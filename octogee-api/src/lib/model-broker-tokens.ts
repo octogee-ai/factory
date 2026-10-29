@@ -10,7 +10,7 @@ export {
   MODEL_BROKER_TOKENS_COLLECTION,
 } from "@octogee/shared/types/model-broker-usage";
 
-export type ModelBrokerProvider = "anthropic" | "openrouter" | "openai";
+export type ModelBrokerProvider = "anthropic" | "vertex" | "openrouter" | "openai";
 export type ModelBrokerTokenPurpose = "model" | "embeddings";
 
 export interface ModelBrokerTokenLimits {
@@ -205,6 +205,7 @@ function recordHasRequiredShape(data: Record<string, unknown> | undefined): data
   if (!data) return false;
   return [
     data.provider === "anthropic" ||
+      data.provider === "vertex" ||
       data.provider === "openrouter" ||
       data.provider === "openai",
     data.purpose === undefined ||

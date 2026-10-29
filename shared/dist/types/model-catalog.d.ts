@@ -1,8 +1,8 @@
-export declare const MODEL_CATALOG_PROVIDERS: readonly ["anthropic", "openrouter", "openai"];
+export declare const MODEL_CATALOG_PROVIDERS: readonly ["anthropic", "openrouter", "openai", "vertex"];
 export type ModelCatalogProvider = (typeof MODEL_CATALOG_PROVIDERS)[number];
 export declare const MODEL_REASONING_EFFORTS: readonly ["high", "xhigh"];
 export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number];
-export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai";
+export type ModelCatalogSource = "openclaw-release" | "openrouter" | "openai" | "vertex";
 export declare const MODEL_INPUT_MODALITIES: readonly ["text", "image"];
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 export interface ModelTokenPricing {
@@ -17,6 +17,7 @@ export interface ModelCatalogEntry {
     label: string;
     source: ModelCatalogSource;
     aliases?: readonly string[];
+    upstreamId?: string;
     contextTokens?: number;
     input?: readonly ModelInputModality[];
     maxOutputTokens?: number;
@@ -29,6 +30,7 @@ export interface ModelCatalogEntry {
     defaultReasoningEffort?: ModelReasoningEffort;
 }
 export declare const MODEL_CATALOG: readonly ModelCatalogEntry[];
+export declare const VERTEX_MODEL_CATALOG: readonly ModelCatalogEntry[];
 export declare function isModelCatalogProvider(value: unknown): value is ModelCatalogProvider;
 export declare function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort;
 export declare function modelCatalogForProvider(provider: ModelCatalogProvider): readonly ModelCatalogEntry[];

@@ -1,34 +1,24 @@
 import { OPENROUTER_MODEL_CATALOG } from "./openrouter-model-catalog.generated.js";
-export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai"];
+export const MODEL_CATALOG_PROVIDERS = ["anthropic", "openrouter", "openai", "vertex"];
 export const MODEL_REASONING_EFFORTS = ["high", "xhigh"];
 export const MODEL_INPUT_MODALITIES = ["text", "image"];
-const DIRECT_MODEL_CATALOG = [
+const CLAUDE_MODELS = [
     ...[
         ["claude-fable-5-1", "Claude Fable 5.1"],
         ["claude-opus-5", "Claude Opus 5"],
         ["claude-sonnet-5", "Claude Sonnet 5"],
         ["claude-opus-4-8", "Claude Opus 4.8"],
     ].map(([id, label]) => ({
-        provider: "anthropic", id: `anthropic/${id}`, label, source: "openclaw-release",
-        aliases: [id], contextTokens: 1_000_000, input: ["text", "image"],
-        reasoningEfforts: ["high"],
+        id, label, vertexId: id, contextTokens: 1_000_000,
+        input: ["text", "image"], reasoningEfforts: ["high"],
     })),
-    {
-        provider: "anthropic",
-        id: "anthropic/claude-sonnet-4-6",
-        label: "Claude Sonnet 4.6",
-        source: "openclaw-release",
-        aliases: ["claude-sonnet-4-6"],
-        reasoningEfforts: [],
-    },
-    {
-        provider: "anthropic",
-        id: "anthropic/claude-haiku-4-5",
-        label: "Claude Haiku 4.5",
-        source: "openclaw-release",
-        aliases: ["claude-haiku-4-5"],
-        reasoningEfforts: [],
-    },
+    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", vertexId: "claude-sonnet-4-6", reasoningEfforts: [] },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", vertexId: "claude-haiku-4-5@20251001", reasoningEfforts: [] },
+];
+const DIRECT_MODEL_CATALOG = [
+    ...CLAUDE_MODELS.map(({ vertexId: _vertexId, id, ...rest }) => ({
+        ...rest, provider: "anthropic", id: `anthropic/${id}`, source: "openclaw-release", aliases: [id],
+    })),
     {
         provider: "openai",
         id: "gpt-6-astra",
@@ -99,16 +89,20 @@ export const MODEL_CATALOG = [
         ? { ...entry, reasoningEfforts: ["high", "xhigh"], defaultReasoningEffort: "xhigh" }
         : entry),
 ];
+export const VERTEX_MODEL_CATALOG = CLAUDE_MODELS.map(({ vertexId, id, ...rest }) => ({
+    ...rest, provider: "vertex", id: `vertex/${id}`, source: "vertex", aliases: [id], upstreamId: vertexId,
+}));
+const BROKER_MODEL_CATALOG = [...MODEL_CATALOG, ...VERTEX_MODEL_CATALOG];
 export function isModelCatalogProvider(value) {
-    return value === "anthropic" || value === "openrouter" || value === "openai";
+    return MODEL_CATALOG_PROVIDERS.includes(value);
 }
 export function isModelReasoningEffort(value) {
     return value === "high" || value === "xhigh";
 }
 export function modelCatalogForProvider(provider) {
-    return MODEL_CATALOG.filter((entry) => entry.provider === provider);
+    return BROKER_MODEL_CATALOG.filter((entry) => entry.provider === provider);
 }
 export function modelCatalogEntryFor(provider, model) {
-    return MODEL_CATALOG.find((entry) => entry.provider === provider &&
-        (entry.id === model || Boolean(entry.aliases?.includes(model)))) ?? null;
+    return BROKER_MODEL_CATALOG.find((entry) => entry.provider === provider &&
+        (entry.id === model || entry.upstreamId === model || Boolean(entry.aliases?.includes(model)))) ?? null;
 }

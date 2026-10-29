@@ -327,6 +327,50 @@ llmBroker:
     anthropicBaseUrl: "https://api.anthropic.com"
     openrouterBaseUrl: "https://openrouter.ai/api"
   prepaidCreditMarkupMultiplier: "1.25"
+  vertex:
+    enabled: false
+    projectId: ""
+    location: global
+    houseModel: "claude-haiku-4-5@20251001"
+    # Claude list prices, verified 2026-10-29:
+    # https://platform.claude.com/docs/en/about-claude/pricing
+    modelPrices:
+      claude-fable-5-1:
+        inputPerMTok: 10
+        outputPerMTok: 50
+        cacheReadPerMTok: 0.25
+        cacheWrite5mPerMTok: 12.5
+        cacheWrite1hPerMTok: 20
+      claude-opus-5:
+        inputPerMTok: 5
+        outputPerMTok: 25
+        cacheReadPerMTok: 0.5
+        cacheWrite5mPerMTok: 6.25
+        cacheWrite1hPerMTok: 10
+      claude-opus-4-8:
+        inputPerMTok: 5
+        outputPerMTok: 25
+        cacheReadPerMTok: 0.5
+        cacheWrite5mPerMTok: 6.25
+        cacheWrite1hPerMTok: 10
+      claude-sonnet-5:
+        inputPerMTok: 2
+        outputPerMTok: 10
+        cacheReadPerMTok: 0.2
+        cacheWrite5mPerMTok: 2.5
+        cacheWrite1hPerMTok: 4
+      claude-sonnet-4-6:
+        inputPerMTok: 3
+        outputPerMTok: 15
+        cacheReadPerMTok: 0.3
+        cacheWrite5mPerMTok: 3.75
+        cacheWrite1hPerMTok: 6
+      claude-haiku-4-5@20251001:
+        inputPerMTok: 1
+        outputPerMTok: 5
+        cacheReadPerMTok: 0.1
+        cacheWrite5mPerMTok: 1.25
+        cacheWrite1hPerMTok: 2
   providerSecret:
     name: octogee-anthropic
     key: api_key
