@@ -194,6 +194,7 @@ describe("removeBrokerTokenExpiriesForSlug", () => {
         record(directory, "model", "agent-model-token-octogee-alice-coach"),
         record(directory, "openrouter", "agent-model-token-openrouter-octogee-alice-coach"),
         record(directory, "openai", "agent-model-token-openai-octogee-alice-coach"),
+        record(directory, "vertex", "agent-model-token-vertex-octogee-alice-coach"),
         record(directory, "embedding", "agent-embedding-token-openai-octogee-alice-coach"),
         record(directory, "project", "agent-model-token-openrouter-octogee-alice-proj-demo-coach"),
       ];

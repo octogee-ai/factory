@@ -7,6 +7,7 @@ export type AgentModelSelections = Record<string, AgentModelSelection>;
 export declare const MAX_AGENT_MODEL_FALLBACKS = 3;
 export declare const OPENROUTER_PLATFORM_PROVIDER_ID = "platform-openrouter";
 export declare const OPENAI_PLATFORM_PROVIDER_ID = "platform-openai";
+export declare const VERTEX_PLATFORM_PROVIDER_ID = "platform-vertex";
 export declare function isValidModelRef(value: unknown): value is string;
 export declare function modelRefForCatalogEntry(entry: ModelCatalogEntry): string;
 export declare function platformModelRefs(): string[];

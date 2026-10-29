@@ -169,6 +169,7 @@ import {
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
+  vertexCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
 } from "./agent-model-token-materializer.js";
 import { blobSyncForSlug } from "./blob-sync.js";
@@ -654,6 +655,7 @@ async function materializeCustomerBrokerProfiles(
 ): Promise<void> {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  const platformVertexBaseUrl = process.env.PLATFORM_VERTEX_BASE_URL?.trim();
   const materialized = await materializeBrokerProfilesForAgents(agentIds, {
     logFn,
     ...(openRouterBaseUrl
@@ -661,6 +663,9 @@ async function materializeCustomerBrokerProfiles(
       : {}),
     ...(platformOpenAiBaseUrl
       ? { openAi: openAiCatalogInputForBaseUrl(platformOpenAiBaseUrl) }
+      : {}),
+    ...(platformVertexBaseUrl
+      ? { vertex: vertexCatalogInputForBaseUrl(platformVertexBaseUrl) }
       : {}),
   });
   if (materialized.materialized > 0) {

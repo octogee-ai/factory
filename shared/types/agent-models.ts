@@ -1,4 +1,4 @@
-import { MODEL_CATALOG, type ModelCatalogEntry } from "./model-catalog.js";
+import { MODEL_CATALOG, VERTEX_MODEL_CATALOG, type ModelCatalogEntry } from "./model-catalog.js";
 
 // Per-agent model selection, stored at users/{uid}/system/config.agentModels
 // keyed by OpenClaw agent id. Refs use the gateway's model grammar
@@ -24,6 +24,9 @@ const AGENT_ID_PATTERN = /^octogee-[a-z0-9][a-z0-9-]*-coach$/;
 
 export const OPENROUTER_PLATFORM_PROVIDER_ID = "platform-openrouter";
 export const OPENAI_PLATFORM_PROVIDER_ID = "platform-openai";
+export const VERTEX_PLATFORM_PROVIDER_ID = "platform-vertex";
+
+const ROUTABLE_MODEL_CATALOG: readonly ModelCatalogEntry[] = [...MODEL_CATALOG, ...VERTEX_MODEL_CATALOG];
 
 export function isValidModelRef(value: unknown): value is string {
   return (
@@ -36,15 +39,18 @@ export function isValidModelRef(value: unknown): value is string {
 export function modelRefForCatalogEntry(entry: ModelCatalogEntry): string {
   if (entry.provider === "openrouter") return `${OPENROUTER_PLATFORM_PROVIDER_ID}/${entry.id}`;
   if (entry.provider === "openai") return `${OPENAI_PLATFORM_PROVIDER_ID}/${entry.id}`;
+  if (entry.provider === "vertex") {
+    return `${VERTEX_PLATFORM_PROVIDER_ID}/${entry.id.replace(/^vertex\//, "")}`;
+  }
   return entry.id;
 }
 
 export function platformModelRefs(): string[] {
-  return MODEL_CATALOG.map(modelRefForCatalogEntry);
+  return ROUTABLE_MODEL_CATALOG.map(modelRefForCatalogEntry);
 }
 
 export function catalogEntryForModelRef(ref: string): ModelCatalogEntry | null {
-  return MODEL_CATALOG.find((entry) => modelRefForCatalogEntry(entry) === ref) ?? null;
+  return ROUTABLE_MODEL_CATALOG.find((entry) => modelRefForCatalogEntry(entry) === ref) ?? null;
 }
 
 export function parseAgentModelSelection(value: unknown): AgentModelSelection | null {

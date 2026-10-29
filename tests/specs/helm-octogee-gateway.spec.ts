@@ -1853,6 +1853,27 @@ describe("helm/octogee-gateway/ — platform model catalog convergence", () => {
       /name:\s*PLATFORM_OPENAI_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010\/v1"/,
     );
   });
+
+  it("carries the Vertex rail base URL on both containers only when env.platformVertexEnabled is set", () => {
+    const render = (enabled: boolean) => findDoc(
+      helmTemplate("octogee-gw-builder-alice", {
+        gatewayId: "builder-alice",
+        gatewayClass: "builder",
+        imageProfile: "builder",
+        ...(enabled ? { "env.platformVertexEnabled": "true" } : {}),
+      }),
+      "Deployment",
+      "octogee-gateway-builder-alice",
+    ) ?? "";
+    const off = render(false);
+    expect(off).not.toMatch(/PLATFORM_VERTEX_BASE_URL/);
+    const on = render(true);
+    for (const name of ["gateway", "gateway-edge"] as const) {
+      expect(containerBlock(on, name)).toMatch(
+        /name:\s*PLATFORM_VERTEX_BASE_URL[\s\S]*?value:\s*"http:\/\/llm-broker\.octogee-test\.svc\.cluster\.local:3010"/,
+      );
+    }
+  });
 });
 
 // ── Profile-aware render-time assertions ───────────────────────────────────

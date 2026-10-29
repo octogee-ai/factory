@@ -11,9 +11,10 @@ import { codexAgentDir, purgeCustomerOauthRuntimeArtifacts, removeStaleCodexAuth
 import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-store.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
-import { openAiCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
+import { openAiCatalogInputForBaseUrl, vertexCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalCustomerModelDefinition, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 import { DEFAULT_FREE_TIER_MODEL_REF, parseBuilderAgentModelDefault, } from "@octogee/shared/types/platform-config";
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -1163,7 +1164,7 @@ export async function purgeCustomerOauthRuntime(slug, safeModelRef, deps) {
         resetSessionStores: false,
         directRuntimeModelRefs: initialConfigPlan.directRuntimeModelRefs,
         allowedModelRefs: platformModelRefs(),
-        allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai"],
+        allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai", "platform-vertex"],
         modelProviders: customerBrokerModelProviders(),
     });
     const configResult = await applyCustomerOauthPurgeConfig(slug, safeModelRef, forceSafeAll, options.applyConfigPatch ?? applyConfigPatch);
@@ -1232,10 +1233,12 @@ function mountedAgentIdsForSlug(slug) {
 async function materializePlatformBrokerSurfaces(slug) {
     const baseUrl = configuredOpenRouterBaseUrl();
     const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
+    const vertexBaseUrl = configuredPlatformVertexBaseUrl();
     const result = await materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
         agentsDir: AGENTS_DIR,
         openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
         openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+        vertex: vertexBaseUrl ? vertexCatalogInputForBaseUrl(vertexBaseUrl) : undefined,
         logFn: log,
     });
     if (result.deferred.length > 0) {
@@ -1255,7 +1258,7 @@ export function platformModelAllowlistPatch(current, builder) {
     }
     return { agents: { defaults: {
                 models,
-                modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
+                modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"] },
             } } };
 }
 export async function applyPlatformModelAllowlist(applyConfigPatchFn = applyConfigPatch, builder = isBuilderGateway()) {
@@ -1289,6 +1292,15 @@ function customerBrokerModelProviders() {
         const input = openAiCatalogInputForBaseUrl(openAiBaseUrl);
         providers["platform-openai"] = {
             api: "openai-responses",
+            baseUrl: input.baseUrl,
+            models: input.models.map(openRouterBrokerModelConfig),
+        };
+    }
+    const vertexBaseUrl = configuredPlatformVertexBaseUrl();
+    if (vertexBaseUrl) {
+        const input = vertexCatalogInputForBaseUrl(vertexBaseUrl);
+        providers["platform-vertex"] = {
+            api: "anthropic-messages",
             baseUrl: input.baseUrl,
             models: input.models.map(openRouterBrokerModelConfig),
         };

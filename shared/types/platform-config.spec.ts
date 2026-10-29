@@ -339,6 +339,16 @@ describe("resolveFreeTierModel", () => {
     });
   });
 
+  it("keeps the anthropic vendor prefix on an OpenRouter Claude model id", () => {
+    expect(resolveFreeTierModel("platform-openrouter/anthropic/claude-fable-5.1")).toEqual({
+      ref: "platform-openrouter/anthropic/claude-fable-5.1",
+      provider: "openrouter",
+      upstreamModelId: "anthropic/claude-fable-5.1",
+    });
+    expect(resolveOpsAgentModel("platform-openrouter/anthropic/claude-fable-5.1")?.runtimeModelRef)
+      .toBe("openrouter/anthropic/claude-fable-5.1");
+  });
+
   it("splits a platform-openrouter ref into the broker provider + openrouter model id", () => {
     expect(resolveFreeTierModel("platform-openrouter/z-ai/glm-5.2")).toEqual({
       ref: "platform-openrouter/z-ai/glm-5.2",

@@ -60,6 +60,13 @@ describe("Gateway-owned broker profile materialization", () => {
     expect(h.store).toEqual(once);
   });
 
+  it("installs the platform-vertex profile when the pod carries the Vertex rail", async () => {
+    const h = setup({ PLATFORM_VERTEX_BASE_URL: "http://broker" });
+    await h.request();
+    expect(Object.keys(h.store.profiles)).toEqual(["anthropic:default", "platform-vertex:default"]);
+    expect(h.store.profiles["platform-vertex:default"]).toEqual({ type: "api_key", provider: "platform-vertex", keyRef: { source: "exec", provider: "gcp-secret-manager", id: `agent-model-token-vertex-${AGENT}` } });
+  });
+
   it("installs only configured broker provider surfaces", async () => {
     const h = setup({});
     await h.request();

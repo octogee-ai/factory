@@ -785,6 +785,27 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     });
   });
 
+  it("free-tier vertex pin → declares the platform-vertex ref in agents.defaults.models", () => {
+    expect(
+      byosCoachConfigPatch({
+        slug: "tester-70",
+        model: "platform-vertex/claude-haiku-4-5",
+        source: "free-tier",
+      }),
+    ).toEqual({
+      agents: {
+        defaults: { models: { "platform-vertex/claude-haiku-4-5": {} } },
+        list: [
+          {
+            id,
+            model: { primary: "platform-vertex/claude-haiku-4-5", fallbacks: [] },
+            tools: FREE_TIER_COACH_TOOLS,
+          },
+        ],
+      },
+    });
+  });
+
   it("BYOK fallback on an openai dial declares the platform-openai ref in defaults", () => {
     expect(
       byosCoachConfigPatch({
@@ -4148,19 +4169,22 @@ it("rewrites platform catalogs without credential markers during customer OAuth 
   const id = "octogee-tester-70-coach";
   vi.stubEnv("OPENROUTER_BASE_URL", "http://broker.invalid/openrouter/v1");
   vi.stubEnv("PLATFORM_OPENAI_BASE_URL", "http://broker.invalid/openai/v1");
+  vi.stubEnv("PLATFORM_VERTEX_BASE_URL", "http://broker.invalid/vertex");
   try {
     seedAgent(root, id);
     const file = path.join(codexAgentDir(root, id), "models.json");
-    fs.writeFileSync(file, JSON.stringify({ providers: Object.fromEntries(["platform-openrouter", "platform-openai"].map(provider => [provider, { apiKey: provider + ":default", models: [] }])) }));
+    fs.writeFileSync(file, JSON.stringify({ providers: Object.fromEntries(["platform-openrouter", "platform-openai", "platform-vertex"].map(provider => [provider, { apiKey: provider + ":default", models: [] }])) }));
     await purgeCustomerOauthRuntime("tester-70", "platform-openrouter/z-ai/glm-5.2", {
       config: { agents: { entries: { [id]: {} } } }, openclawDir: root, homeDir: path.join(root, "home"),
       rpc: { sessionsList: async () => ({ sessions: [] }), sessionsReset: async () => ({ ok: true }), close: async () => {} } as never,
       applyConfigPatch: async () => ({ mode: "rpc", attempts: 1, noop: true }),
     });
     const providers = JSON.parse(fs.readFileSync(file, "utf8")).providers;
-    for (const provider of ["platform-openrouter", "platform-openai"]) {
+    for (const provider of ["platform-openrouter", "platform-openai", "platform-vertex"]) {
       expect(providers[provider]).not.toHaveProperty("apiKey");
       expect(providers[provider].models.length).toBeGreaterThan(0);
     }
+    expect(providers["platform-vertex"]).toMatchObject({ api: "anthropic-messages", baseUrl: "http://broker.invalid/vertex" });
+    expect(providers["platform-vertex"].models).toContainEqual(expect.objectContaining({ id: "claude-sonnet-5" }));
   } finally { vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); }
 });

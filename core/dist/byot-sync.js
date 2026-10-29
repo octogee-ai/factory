@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
-import { catalogEntryForModelRef, OPENAI_PLATFORM_PROVIDER_ID, OPENROUTER_PLATFORM_PROVIDER_ID, } from "@octogee/shared/types/agent-models";
+import { catalogEntryForModelRef, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID, OPENROUTER_PLATFORM_PROVIDER_ID, } from "@octogee/shared/types/agent-models";
 import { DEFAULT_FREE_TIER_MODEL_REF } from "@octogee/shared/types/platform-config";
 import { buildModelCredentialConfigForProvider, claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS, } from "./model-credential-materializer.js";
 import { AGENTS_DIR, log } from "./config.js";
@@ -109,7 +109,8 @@ function houseModelRefFrom(ref) {
 // declared by the boot materializer.
 export function isPlatformProviderRef(ref) {
     return (ref.startsWith(`${OPENROUTER_PLATFORM_PROVIDER_ID}/`) ||
-        ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`));
+        ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`) ||
+        ref.startsWith(`${VERTEX_PLATFORM_PROVIDER_ID}/`));
 }
 function platformModelsDef(refs) {
     const platformRefs = refs.filter(isPlatformProviderRef);

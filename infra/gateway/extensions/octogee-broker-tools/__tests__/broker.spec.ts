@@ -28,6 +28,27 @@ describe("credential-scoped catalog", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("lists the Vertex rail's Claude models under platform-vertex with bare ids", async () => {
+    const ctx = context(); const configured = ctx.config.models.providers["platform-openai"];
+    ctx.config.models.providers = { "platform-vertex": { ...configured, api: "anthropic-messages" } }; ctx.env = { PLATFORM_VERTEX_BASE_URL: configured.baseUrl };
+    const payload = catalog(); payload.provider = "vertex"; payload.routes = [{ method: "POST", path: "/v1/messages" }];
+    payload.models[0] = { ...payload.models[0], provider: "vertex", id: "vertex/claude-sonnet-5", label: "Claude Sonnet 5" };
+    const adapter = createBrokerCatalog(async () => Response.json(payload));
+    const result = await adapter.runtime(ctx) as any;
+    expect(result.providers["platform-vertex"].api).toBe("anthropic-messages");
+    expect(result.providers["platform-vertex"].models[0]).toMatchObject({ id: "claude-sonnet-5", api: "anthropic-messages" });
+    expect((await adapter.picker(ctx))[0]).toMatchObject({ provider: "platform-vertex", model: "claude-sonnet-5" });
+  });
+  it("keeps the vendor prefix on OpenRouter model ids", async () => {
+    const ctx = context(); const configured = ctx.config.models.providers["platform-openai"];
+    ctx.config.models.providers = { "platform-openrouter": { ...configured, api: "openai-completions" } }; ctx.env = { OPENROUTER_BASE_URL: configured.baseUrl };
+    const payload = catalog(); payload.provider = "openrouter"; payload.routes = [{ method: "POST", path: "/v1/chat/completions" }];
+    payload.models[0] = { ...payload.models[0], provider: "openrouter", id: "anthropic/claude-fable-5.1", label: "Claude Fable 5.1" };
+    const adapter = createBrokerCatalog(async () => Response.json(payload));
+    const result = await adapter.runtime(ctx) as any;
+    expect(result.providers["platform-openrouter"].models[0]).toMatchObject({ id: "anthropic/claude-fable-5.1" });
+    expect((await adapter.picker(ctx))[0]).toMatchObject({ provider: "platform-openrouter", model: "anthropic/claude-fable-5.1" });
+  });
   it.each([["anthropic", "anthropic", "anthropic-messages", "ANTHROPIC_BASE_URL", "/v1/messages"], ["platform-openrouter", "openrouter", "openai-completions", "OPENROUTER_BASE_URL", "/v1/chat/completions"]])("retains %s provider transport and endpoint scope", async (id, provider, api, env, route) => {
     const ctx = context(); const configured = ctx.config.models.providers["platform-openai"];
     ctx.config.models.providers = { [id]: { ...configured, api } }; ctx.env = { [env]: configured.baseUrl };

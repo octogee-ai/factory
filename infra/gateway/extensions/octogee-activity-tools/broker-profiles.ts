@@ -21,6 +21,8 @@ function brokerProfiles(agentId: string, env: NodeJS.ProcessEnv): Record<string,
       ? { "platform-openrouter:default": profile("platform-openrouter", "openrouter-") } : {}),
     ...(env.PLATFORM_OPENAI_BASE_URL?.trim()
       ? { "platform-openai:default": profile("platform-openai", "openai-") } : {}),
+    ...(env.PLATFORM_VERTEX_BASE_URL?.trim()
+      ? { "platform-vertex:default": profile("platform-vertex", "vertex-") } : {}),
   };
 }
 

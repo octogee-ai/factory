@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { builderNativeInitialStateMatches } from './builder-native-initial-state.js';
 
-const GENERATED_AGENT_FILES = new Set(['models.json', '.platform-openai-managed', '.platform-openrouter-managed']);
+const GENERATED_AGENT_FILES = new Set(['models.json', '.platform-openai-managed', '.platform-openrouter-managed', '.platform-vertex-managed']);
 
 function entries(directory: string): fs.Dirent[] | null {
   try {

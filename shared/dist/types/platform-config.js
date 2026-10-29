@@ -304,7 +304,9 @@ export function resolveFreeTierModel(ref) {
     return {
         ref,
         provider: entry.provider,
-        upstreamModelId: entry.provider === "anthropic" ? entry.id.replace(/^anthropic\//, "") : entry.id,
+        upstreamModelId: entry.provider === "anthropic" || entry.provider === "vertex"
+            ? entry.id.replace(`${entry.provider}/`, "")
+            : entry.id,
     };
 }
 export function resolveOpsAgentModel(ref) {

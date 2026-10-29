@@ -144,6 +144,7 @@ function runPolicyWithDir(
       ANTHROPIC_BASE_URL: "",
       OPENROUTER_BASE_URL: "",
       PLATFORM_OPENAI_BASE_URL: "",
+      PLATFORM_VERTEX_BASE_URL: "",
       ...envOverrides,
     },
   });
@@ -158,6 +159,39 @@ function runPolicyWithDir(
 function runPolicy(gatewayClass: string, config: Record<string, unknown>) {
   return runPolicyWithDir(gatewayClass, config).config;
 }
+
+it("projects the Vertex rail onto disk only when the pod carries it", () => {
+  const agentId = "octogee-vertex-coach";
+  const withRail = runPolicyWithDir("shared", {
+    agents: { entries: { [agentId]: { model: "platform-vertex/claude-sonnet-5" } } },
+  }, (dir) => seedCanonicalAgentRuntimeDisk(dir, agentId), {
+    PLATFORM_VERTEX_BASE_URL: "http://broker",
+  });
+  const agentDir = path.join(withRail.dir, "agents", agentId, "agent");
+  const disk = JSON.parse(readFileSync(path.join(agentDir, "models.json"), "utf8"));
+  expect(disk.providers["platform-vertex"]).toMatchObject({ api: "anthropic-messages", baseUrl: "http://broker", apiKey: "platform-vertex:default" });
+  expect(disk.providers["platform-vertex"].models).toContainEqual(expect.objectContaining({ id: "claude-sonnet-5" }));
+  expect(disk.providers["platform-vertex"].models.map((m: { id: string }) => m.id)).not.toContain("vertex/claude-sonnet-5");
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), { readOnly: true });
+  const row = db.prepare("SELECT store_json AS value FROM auth_profile_store WHERE store_key = ?").get("primary") as { value: string };
+  db.close();
+  expect(JSON.parse(row.value).profiles["platform-vertex:default"]).toEqual({
+    type: "api_key", provider: "platform-vertex",
+    keyRef: { source: "exec", provider: "gcp-secret-manager", id: `agent-model-token-vertex-${agentId}` },
+  });
+  expect(withRail.config.agents.entries[agentId].model).toEqual({ primary: "platform-vertex/claude-sonnet-5", fallbacks: [] });
+  expect(withRail.config.agents.defaults.modelPolicy.allow).toContain("platform-vertex/*");
+
+  const withoutRail = runPolicyWithDir("shared", {
+    agents: { entries: { [agentId]: {} } },
+  }, (dir) => seedCanonicalAgentRuntimeDisk(dir, agentId));
+  const bare = path.join(withoutRail.dir, "agents", agentId, "agent");
+  expect(JSON.parse(readFileSync(path.join(bare, "models.json"), "utf8")).providers).not.toHaveProperty("platform-vertex");
+  const db2 = new DatabaseSync(path.join(bare, "openclaw-agent.sqlite"), { readOnly: true });
+  const row2 = db2.prepare("SELECT store_json AS value FROM auth_profile_store WHERE store_key = ?").get("primary") as { value: string };
+  db2.close();
+  expect(JSON.parse(row2.value).profiles).toEqual(canonicalAgentAuthProfiles(agentId));
+});
 
 it("declares unmatched-route model metadata without granting broker credentials", () => {
   const agentId = "octogee-unmatched-route";
@@ -250,7 +284,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(result.config.agents.defaults.models[astra]).toEqual({ alias: "astra" });
     expect(result.config.agents.defaults.models[grok]).toEqual({ alias: "grok" });
     expect(result.config.agents.defaults.modelPolicy.allow).toEqual([
-      "anthropic/*", "platform-openrouter/*", "platform-openai/*",
+      "anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*",
     ]);
     expect(result.config.agents.defaults.model).toEqual({ primary: astra, fallbacks: [grok] });
     expect(result.config.agents.entries[agentId].model).toEqual({ primary: grok, fallbacks: [astra] });

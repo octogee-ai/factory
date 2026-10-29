@@ -51,6 +51,7 @@ import {
 } from "./config.js";
 import {
   openAiCatalogInputForBaseUrl,
+  vertexCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
   openRouterBrokerCatalogJson,
   openRouterBrokerModelConfig,
@@ -65,6 +66,7 @@ import {
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
   parseBuilderAgentModelDefault,
@@ -1577,7 +1579,7 @@ export async function purgeCustomerOauthRuntime(
     resetSessionStores: false,
     directRuntimeModelRefs: initialConfigPlan.directRuntimeModelRefs,
     allowedModelRefs: platformModelRefs(),
-    allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai"],
+    allowedProviderIds: ["anthropic", "platform-openrouter", "platform-openai", "platform-vertex"],
     modelProviders: customerBrokerModelProviders(),
   });
   const configResult = await applyCustomerOauthPurgeConfig(
@@ -1666,10 +1668,12 @@ function mountedAgentIdsForSlug(slug: string): string[] {
 async function materializePlatformBrokerSurfaces(slug: string): Promise<boolean> {
   const baseUrl = configuredOpenRouterBaseUrl();
   const openAiBaseUrl = configuredPlatformOpenAiBaseUrl();
+  const vertexBaseUrl = configuredPlatformVertexBaseUrl();
   const result = await materializeBrokerProfilesForAgents(mountedAgentIdsForSlug(slug), {
     agentsDir: AGENTS_DIR,
     openRouter: baseUrl ? openRouterCatalogInputForBaseUrl(baseUrl) : undefined,
     openAi: openAiBaseUrl ? openAiCatalogInputForBaseUrl(openAiBaseUrl) : undefined,
+    vertex: vertexBaseUrl ? vertexCatalogInputForBaseUrl(vertexBaseUrl) : undefined,
     logFn: log,
   });
   if (result.deferred.length > 0) {
@@ -1703,7 +1707,7 @@ export function platformModelAllowlistPatch(current: unknown, builder: boolean):
   }
   return { agents: { defaults: {
     models,
-    modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
+    modelPolicy: { allow: builder ? [] : ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"] },
   } } };
 }
 
@@ -1750,6 +1754,15 @@ function customerBrokerModelProviders(): Record<string, unknown> {
     const input = openAiCatalogInputForBaseUrl(openAiBaseUrl);
     providers["platform-openai"] = {
       api: "openai-responses",
+      baseUrl: input.baseUrl,
+      models: input.models.map(openRouterBrokerModelConfig),
+    };
+  }
+  const vertexBaseUrl = configuredPlatformVertexBaseUrl();
+  if (vertexBaseUrl) {
+    const input = vertexCatalogInputForBaseUrl(vertexBaseUrl);
+    providers["platform-vertex"] = {
+      api: "anthropic-messages",
       baseUrl: input.baseUrl,
       models: input.models.map(openRouterBrokerModelConfig),
     };

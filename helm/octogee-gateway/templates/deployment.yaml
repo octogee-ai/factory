@@ -316,6 +316,10 @@ spec:
             # the broker; BYOK OpenAI keeps its provider-standard endpoint.
             - name: PLATFORM_OPENAI_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- if eq (toString .Values.env.platformVertexEnabled) "true" }}
+            - name: PLATFORM_VERTEX_BASE_URL
+              value: {{ trimSuffix "/" $llmBrokerUrl | quote }}
+            {{- end }}
             - name: OPENAI_EMBEDDINGS_ENABLED
               value: {{ .Values.env.openaiEmbeddingsEnabled | toString | quote }}
             - name: OPENAI_EMBEDDINGS_MODEL
@@ -571,6 +575,10 @@ spec:
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
             - name: PLATFORM_OPENAI_BASE_URL
               value: {{ printf "%s/v1" (trimSuffix "/" $llmBrokerUrl) | quote }}
+            {{- if eq (toString .Values.env.platformVertexEnabled) "true" }}
+            - name: PLATFORM_VERTEX_BASE_URL
+              value: {{ trimSuffix "/" $llmBrokerUrl | quote }}
+            {{- end }}
             - name: MM_INTERNAL_URL
               value: {{ required "env.mmInternalUrl is required (in-cluster MM URL — the folded chat-proxy WS bridge + Activity sink use it)" .Values.env.mmInternalUrl | quote }}
             - name: MM_PUBLIC_URL

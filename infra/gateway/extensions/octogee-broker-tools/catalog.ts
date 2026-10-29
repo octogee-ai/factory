@@ -8,7 +8,14 @@ const PROVIDERS = [
   { id: "anthropic", provider: "anthropic", api: "anthropic-messages", route: "/v1/messages", env: "ANTHROPIC_BASE_URL" },
   { id: "platform-openai", provider: "openai", api: "openai-responses", route: "/v1/responses", env: "PLATFORM_OPENAI_BASE_URL" },
   { id: "platform-openrouter", provider: "openrouter", api: "openai-completions", route: "/v1/chat/completions", env: "OPENROUTER_BASE_URL" },
+  { id: "platform-vertex", provider: "vertex", api: "anthropic-messages", route: "/v1/messages", env: "PLATFORM_VERTEX_BASE_URL" },
 ] as const;
+
+const BARE_ID_PROVIDERS: ReadonlySet<string> = new Set(["anthropic", "vertex"]);
+function providerModelId(model: CatalogModel, provider: Provider): string {
+  const prefix = `${provider.provider}/`;
+  return BARE_ID_PROVIDERS.has(provider.provider) && model.id.startsWith(prefix) ? model.id.slice(prefix.length) : model.id;
+}
 
 type Provider = typeof PROVIDERS[number];
 type Api = Provider["api"];
@@ -88,7 +95,7 @@ async function discover(ctx: ProviderCatalogContext, provider: Provider, fetchIm
 
 function runtimeModel(model: CatalogModel, provider: Provider, api: Api): RuntimeModel | null {
   if (!model.pricing || !model.contextTokens || !model.maxOutputTokens || !model.input || model.reasoning === undefined) return null;
-  return { id: provider.provider === "anthropic" ? model.id.replace(/^anthropic\//u, "") : model.id,
+  return { id: providerModelId(model, provider),
     name: model.label, api, reasoning: model.reasoning, input: model.input,
     contextWindow: model.contextTokens, maxTokens: model.maxOutputTokens,
     cost: { input: model.pricing.inputPerMTok, output: model.pricing.outputPerMTok, cacheRead: model.pricing.cacheReadPerMTok, cacheWrite: model.pricing.cacheWritePerMTok } };
@@ -113,7 +120,7 @@ export function createBrokerCatalog(fetchImpl: typeof fetch = fetch) {
         const found = await discover(ctx, provider, fetchImpl);
         if (!found) continue;
         for (const model of found.models) rows.push({ kind: "text", provider: provider.id,
-          model: provider.provider === "anthropic" ? model.id.replace(/^anthropic\//u, "") : model.id,
+          model: providerModelId(model, provider),
           label: model.label, source: "live", configured: true,
           warnings: ["Admission is checked for each inference request", ...(!runtimeModel(model, provider, found.api) ? ["Complete runtime metadata/pricing unavailable"] : [])] });
       }

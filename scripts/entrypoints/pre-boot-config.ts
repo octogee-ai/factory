@@ -8,6 +8,7 @@ import {
   materializeBrokerProfilesForAgents,
   applyOpenClawSecretsPlan,
   openAiCatalogInputForBaseUrl,
+  vertexCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
 } from "../lib/agent-model-token-materializer.js";
 import {
@@ -22,6 +23,7 @@ import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import {
   OPENAI_PLATFORM_PROVIDER_ID,
   OPENROUTER_PLATFORM_PROVIDER_ID,
+  VERTEX_PLATFORM_PROVIDER_ID,
   platformModelRefs,
   canonicalCustomerModelDefinition,
 } from "@octogee/shared/types/agent-models";
@@ -43,15 +45,20 @@ export function shouldMaterializeAnthropicBrokerProfiles(
 export function platformBrokerCatalogOpts(env: NodeJS.ProcessEnv): {
   openRouter?: ReturnType<typeof openRouterCatalogInputForBaseUrl>;
   openAi?: ReturnType<typeof openAiCatalogInputForBaseUrl>;
+  vertex?: ReturnType<typeof vertexCatalogInputForBaseUrl>;
 } {
   const openRouterBaseUrl = env.OPENROUTER_BASE_URL?.trim();
   const platformOpenAiBaseUrl = env.PLATFORM_OPENAI_BASE_URL?.trim();
+  const platformVertexBaseUrl = env.PLATFORM_VERTEX_BASE_URL?.trim();
   return {
     ...(openRouterBaseUrl
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
       : {}),
     ...(platformOpenAiBaseUrl
       ? { openAi: openAiCatalogInputForBaseUrl(platformOpenAiBaseUrl) }
+      : {}),
+    ...(platformVertexBaseUrl
+      ? { vertex: vertexCatalogInputForBaseUrl(platformVertexBaseUrl) }
       : {}),
   };
 }
@@ -575,7 +582,8 @@ function applyPlatformModelAllowlist(config: OpenClawConfig, env: NodeJS.Process
   if (!models) return false;
   const refs = platformModelRefs().filter((ref) =>
     (!ref.startsWith(`${OPENROUTER_PLATFORM_PROVIDER_ID}/`) || Boolean(env.OPENROUTER_BASE_URL?.trim())) &&
-    (!ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_OPENAI_BASE_URL?.trim())),
+    (!ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_OPENAI_BASE_URL?.trim())) &&
+    (!ref.startsWith(`${VERTEX_PLATFORM_PROVIDER_ID}/`) || Boolean(env.PLATFORM_VERTEX_BASE_URL?.trim())),
   );
   let changed = false;
   for (const ref of refs) {

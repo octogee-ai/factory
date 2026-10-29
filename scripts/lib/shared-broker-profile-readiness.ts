@@ -18,7 +18,7 @@ function accountAgent(ownerId: string, agentsDir: string, excluded: Set<string>)
   let tuple: unknown;
   try { tuple = JSON.parse(ownerId); } catch { return null; }
   if (!Array.isArray(tuple) || tuple.length !== 2 || typeof tuple[0] !== "string" ||
-      typeof tuple[1] !== "string" || !["anthropic:default", "platform-openrouter:default", "platform-openai:default"].includes(tuple[1])) return null;
+      typeof tuple[1] !== "string" || !["anthropic:default", "platform-openrouter:default", "platform-openai:default", "platform-vertex:default"].includes(tuple[1])) return null;
   for (const id of excluded) {
     if (tuple[0] === path.join(agentsDir, id, "agent", "openclaw-agent.sqlite")) return id;
   }

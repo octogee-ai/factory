@@ -29,6 +29,7 @@ import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./model-credential-materializer
 import {
   agentModelTokenProfileEntry,
   openAiBrokerProfileEntry,
+  vertexBrokerProfileEntry,
   openRouterBrokerProfileEntry,
 } from "./agent-model-token-materializer.js";
 import { seedOpenClawAgentDbForId } from "./fixtures/openclaw-agent-db.js";
@@ -497,6 +498,29 @@ describe("purgeCustomerOauthRuntimeArtifacts", () => {
     expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual({
       providers: modelProviders,
     });
+  });
+});
+
+describe("purgeCustomerOauthRuntimeArtifacts — vertex rail", () => {
+  it("projects the platform-vertex broker profile only when the pod carries the rail", async () => {
+    const oc = mkTmp();
+    const home = mkTmp();
+    const agentId = "octogee-alice-coach";
+    seedAgent(oc, agentId);
+    const agentDir = codexAgentDir(oc, agentId);
+    writeAuthProfileStore(agentDir, { version: 1, profiles: { "foreign:default": { provider: "foreign", key: "x" } } });
+    vi.stubEnv("PLATFORM_VERTEX_BASE_URL", "http://broker.invalid/vertex");
+    try {
+      await purgeCustomerOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
+      expect(readAuthProfileStore(agentDir)).toEqual({
+        version: 1,
+        profiles: { ...canonicalAuthProfiles(agentId), "platform-vertex:default": vertexBrokerProfileEntry(agentId) },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    await purgeCustomerOauthRuntimeArtifacts({ openclawDir: oc, homeDir: home, agentIds: [agentId], modelProviders: {} });
+    expect(readAuthProfileStore(agentDir)).toEqual({ version: 1, profiles: canonicalAuthProfiles(agentId) });
   });
 });
 

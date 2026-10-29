@@ -5,6 +5,8 @@ export declare const OPENROUTER_BROKER_PROVIDER_ID = "platform-openrouter";
 export declare const OPENROUTER_BROKER_PROFILE_ID = "platform-openrouter:default";
 export declare const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export declare const OPENAI_BROKER_PROFILE_ID = "platform-openai:default";
+export declare const VERTEX_BROKER_PROVIDER_ID = "platform-vertex";
+export declare const VERTEX_BROKER_PROFILE_ID = "platform-vertex:default";
 export interface AnthropicBrokerProfileEntry {
     type: "api_key";
     provider: "anthropic";
@@ -23,7 +25,7 @@ export interface OpenRouterBrokerProfileEntry {
         id: string;
     };
 }
-export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai";
+export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai" | "vertex";
 export interface OpenRouterBrokerModelInput {
     baseUrl: string;
     model: string;
@@ -35,6 +37,7 @@ export interface OpenRouterBrokerModelInput {
 export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
     apiKey: string;
 }
+export type PlatformBrokerApi = "openai-completions" | "openai-responses" | "anthropic-messages";
 export interface OpenRouterBrokerProviderConfig {
     api: "openai-completions";
     baseUrl: string;
@@ -52,7 +55,7 @@ export interface OpenRouterBrokerModelConfig {
 }
 export interface OpenRouterBrokerModelsJson {
     providers: Record<string, {
-        api: "openai-completions";
+        api: PlatformBrokerApi;
         baseUrl: string;
         models: OpenRouterBrokerModelConfig[];
     }>;
@@ -72,6 +75,16 @@ export interface OpenAiBrokerProfileEntry {
     };
 }
 export declare function openAiBrokerProfileEntry(agentId: string): OpenAiBrokerProfileEntry;
+export interface VertexBrokerProfileEntry {
+    type: "api_key";
+    provider: typeof VERTEX_BROKER_PROVIDER_ID;
+    keyRef: {
+        source: "exec";
+        provider: string;
+        id: string;
+    };
+}
+export declare function vertexBrokerProfileEntry(agentId: string): VertexBrokerProfileEntry;
 export declare function openRouterBrokerModelsJson(agentId: string, input: OpenRouterBrokerModelInput): OpenRouterBrokerModelsJson;
 export interface OpenRouterBrokerCatalogInput {
     baseUrl: string;
@@ -79,6 +92,7 @@ export interface OpenRouterBrokerCatalogInput {
 }
 export declare function openRouterCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
+export declare function vertexCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput;
 export declare function openRouterBrokerCatalogJson(_agentId: string, input: OpenRouterBrokerCatalogInput): OpenRouterBrokerModelsJson;
 /** Which broker provider surfaces this pod carries. A profile whose provider is
  *  unconfigured is pure risk: openclaw's exec resolver is batch-fatal, so one
@@ -86,12 +100,14 @@ export declare function openRouterBrokerCatalogJson(_agentId: string, input: Ope
 export interface PlatformBrokerProfileSurfaces {
     openRouter: boolean;
     openAi: boolean;
+    vertex?: boolean;
 }
 export declare function platformBrokerProfileTargets(agentId: string, surfaces: PlatformBrokerProfileSurfaces): AuthProfileApiKeyTarget[];
 export declare function missingPlatformBrokerProfileTargets(agentDir: string, agentId: string, surfaces: PlatformBrokerProfileSurfaces): Promise<AuthProfileApiKeyTarget[]>;
 export declare function upsertOpenRouterBrokerModel(agentDir: string, input: OpenRouterBrokerModelInput): boolean;
 export declare function upsertOpenRouterBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function upsertOpenAiBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
+export declare function upsertVertexBrokerCatalog(agentDir: string, input: OpenRouterBrokerCatalogInput): boolean;
 export declare function removeOpenRouterBrokerModel(agentDir: string): boolean;
 /** Agents whose catalogs landed but whose profiles openclaw has not accepted
  *  yet. `materialized` counts agents with any write. The reason travels with the
@@ -106,6 +122,7 @@ export interface BrokerProfileSweepOptions {
     agentsDir?: string;
     openRouter?: OpenRouterBrokerCatalogInput;
     openAi?: OpenRouterBrokerCatalogInput;
+    vertex?: OpenRouterBrokerCatalogInput;
     logFn?: (m: string) => void;
     secretsApply?: ApplyOpenClawSecretsPlanOptions;
 }

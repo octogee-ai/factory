@@ -4523,7 +4523,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       "platform-openrouter/z-ai/glm-5.2": { alias: "glm", params: { thinking: "xhigh" } },
     });
     expect(patch.agents.defaults?.modelPolicy).toEqual({
-      allow: ["anthropic/*", "platform-openrouter/*", "platform-openai/*"],
+      allow: ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"],
     });
   });
 

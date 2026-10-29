@@ -9,6 +9,7 @@ import {
   applyAnthropicBaseUrlPatch,
   applyOpenClawBeta5CompatibilityPatch,
   applyPreBootPatches,
+  platformBrokerCatalogOpts,
   applyTypingModeDefault,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
@@ -344,6 +345,27 @@ describe("applyPreBootPatches — platform model catalog", () => {
       "platform-openrouter/openai/gpt-5.6-luna": {},
       "platform-openai/gpt-5.4-mini": {},
     });
+    expect(config.agents.defaults.models).not.toHaveProperty("platform-vertex/claude-sonnet-5");
+  });
+
+  it("declares the platform-vertex refs only when the pod carries the Vertex rail", () => {
+    const config: any = { agents: { defaults: { models: {} } } };
+
+    applyPreBootPatches(config, {
+      GATEWAY_CLASS: "builder",
+      PLATFORM_VERTEX_BASE_URL: "http://llm-broker",
+    });
+
+    expect(config.agents.defaults.models).toMatchObject({
+      "platform-vertex/claude-sonnet-5": {},
+      "platform-vertex/claude-haiku-4-5": {},
+    });
+    expect(config.agents.defaults.models).not.toHaveProperty("platform-openai/gpt-5.4-mini");
+    expect(platformBrokerCatalogOpts({ PLATFORM_VERTEX_BASE_URL: "http://llm-broker" }).vertex).toMatchObject({
+      baseUrl: "http://llm-broker",
+      models: expect.arrayContaining([expect.objectContaining({ model: "claude-haiku-4-5" })]),
+    });
+    expect(platformBrokerCatalogOpts({})).not.toHaveProperty("vertex");
   });
 });
 

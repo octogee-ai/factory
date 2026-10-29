@@ -1,10 +1,12 @@
-import { MODEL_CATALOG } from "./model-catalog.js";
+import { MODEL_CATALOG, VERTEX_MODEL_CATALOG } from "./model-catalog.js";
 export const MAX_AGENT_MODEL_FALLBACKS = 3;
 const MODEL_REF_PATTERN = /^[a-z0-9][a-z0-9._:-]*(\/[a-z0-9][a-z0-9._:-]*){1,2}$/i;
 const MAX_MODEL_REF_LENGTH = 128;
 const AGENT_ID_PATTERN = /^octogee-[a-z0-9][a-z0-9-]*-coach$/;
 export const OPENROUTER_PLATFORM_PROVIDER_ID = "platform-openrouter";
 export const OPENAI_PLATFORM_PROVIDER_ID = "platform-openai";
+export const VERTEX_PLATFORM_PROVIDER_ID = "platform-vertex";
+const ROUTABLE_MODEL_CATALOG = [...MODEL_CATALOG, ...VERTEX_MODEL_CATALOG];
 export function isValidModelRef(value) {
     return (typeof value === "string" &&
         value.length <= MAX_MODEL_REF_LENGTH &&
@@ -15,13 +17,16 @@ export function modelRefForCatalogEntry(entry) {
         return `${OPENROUTER_PLATFORM_PROVIDER_ID}/${entry.id}`;
     if (entry.provider === "openai")
         return `${OPENAI_PLATFORM_PROVIDER_ID}/${entry.id}`;
+    if (entry.provider === "vertex") {
+        return `${VERTEX_PLATFORM_PROVIDER_ID}/${entry.id.replace(/^vertex\//, "")}`;
+    }
     return entry.id;
 }
 export function platformModelRefs() {
-    return MODEL_CATALOG.map(modelRefForCatalogEntry);
+    return ROUTABLE_MODEL_CATALOG.map(modelRefForCatalogEntry);
 }
 export function catalogEntryForModelRef(ref) {
-    return MODEL_CATALOG.find((entry) => modelRefForCatalogEntry(entry) === ref) ?? null;
+    return ROUTABLE_MODEL_CATALOG.find((entry) => modelRefForCatalogEntry(entry) === ref) ?? null;
 }
 export function parseAgentModelSelection(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))

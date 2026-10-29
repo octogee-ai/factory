@@ -279,6 +279,7 @@ const CANONICAL_AGENT_AUTH_PROFILE_IDS = new Set([
   "anthropic:default",
   "platform-openrouter:default",
   "platform-openai:default",
+  "platform-vertex:default",
 ]);
 const SESSION_RUNTIME_STATE_FIELDS = [
   "providerOverride",
@@ -324,23 +325,26 @@ const CUSTOMER_MODEL_PROVIDER_IDS = new Set([
   "anthropic",
   "platform-openrouter",
   "platform-openai",
+  "platform-vertex",
 ]);
+const CUSTOMER_DISK_MODEL_PROVIDERS = [
+  { id: "platform-openrouter", env: "OPENROUTER_BASE_URL", catalog: "openrouter", api: "openai-completions" },
+  { id: "platform-openai", env: "PLATFORM_OPENAI_BASE_URL", catalog: "openai", api: "openai-completions" },
+  { id: "platform-vertex", env: "PLATFORM_VERTEX_BASE_URL", catalog: "vertex", api: "anthropic-messages" },
+];
 
 function customerDiskModelProviders(env) {
   const providers = {};
-  for (const [providerId, baseUrlName] of [
-    ["platform-openrouter", "OPENROUTER_BASE_URL"],
-    ["platform-openai", "PLATFORM_OPENAI_BASE_URL"],
-  ]) {
-    const baseUrl = env[baseUrlName]?.trim();
+  for (const provider of CUSTOMER_DISK_MODEL_PROVIDERS) {
+    const baseUrl = env[provider.env]?.trim();
     if (!baseUrl) continue;
-    providers[providerId] = {
-      api: "openai-completions",
+    providers[provider.id] = {
+      api: provider.api,
       baseUrl,
-      apiKey: `${providerId}:default`,
-      models: modelCatalogForProvider(providerId === "platform-openrouter" ? "openrouter" : "openai").map((entry) => ({
-        id: entry.id,
-        name: entry.id,
+      apiKey: `${provider.id}:default`,
+      models: modelCatalogForProvider(provider.catalog).map((entry) => ({
+        id: entry.id.replace(/^vertex\//u, ""),
+        name: entry.id.replace(/^vertex\//u, ""),
         ...(entry.contextTokens !== undefined
           ? { contextTokens: entry.contextTokens, contextWindow: entry.contextTokens } : {}),
         ...(entry.input ? { input: [...entry.input] } : {}),
@@ -1027,7 +1031,7 @@ function scrubCustomerOauthConfig(config, env) {
   config.agents ??= {};
   config.agents.defaults ??= {};
   config.agents.defaults.modelPolicy ??= {};
-  config.agents.defaults.modelPolicy.allow = ["anthropic/*", "platform-openrouter/*", "platform-openai/*"];
+  config.agents.defaults.modelPolicy.allow = ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"];
   const allAgentIds = configuredCustomerAgentIds(config);
   const providers = objectValue(config.models?.providers);
   const expectedProviders = customerModelProviders(env);
@@ -1056,7 +1060,7 @@ function removeFile(targetPath) {
   return true;
 }
 
-function canonicalAgentAuthProfiles(agentId) {
+function canonicalAgentAuthProfiles(agentId, env) {
   const ref = (provider, id) => ({
     type: "api_key",
     provider,
@@ -1069,10 +1073,13 @@ function canonicalAgentAuthProfiles(agentId) {
       `agent-model-token-openrouter-${agentId}`,
     ),
     "platform-openai:default": ref("platform-openai", `agent-model-token-openai-${agentId}`),
+    ...(env.PLATFORM_VERTEX_BASE_URL?.trim()
+      ? { "platform-vertex:default": ref("platform-vertex", `agent-model-token-vertex-${agentId}`) }
+      : {}),
   };
 }
 
-function scrubAgentOauthProfiles(agentDir, agentId) {
+function scrubAgentOauthProfiles(agentDir, agentId, env) {
   fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
   if (!fs.existsSync(dbPath)) return false;
@@ -1096,7 +1103,7 @@ function scrubAgentOauthProfiles(agentDir, agentId) {
     if (!objectValue(store)) {
       throw new Error(`apply-gateway-class-policy: ${dbPath} auth profile store is invalid`);
     }
-    const profiles = canonicalAgentAuthProfiles(agentId);
+    const profiles = canonicalAgentAuthProfiles(agentId, env);
     if (JSON.stringify(store?.profiles) === JSON.stringify(profiles)) {
       fs.chmodSync(agentDir, 0o700);
       fs.chmodSync(dbPath, 0o600);
@@ -1360,7 +1367,7 @@ function scrubCustomerOauthDisk(
     const staging = path.join(agentDir, "codex-home.staging");
     const stagingRemoved = !preserveNativeCredentials && fs.existsSync(staging);
     if (stagingRemoved) fs.rmSync(staging, { recursive: true, force: true });
-    const profilesScrubbed = scrubAgentOauthProfiles(agentDir, agentId);
+    const profilesScrubbed = scrubAgentOauthProfiles(agentDir, agentId, env);
     const modelsScrubbed = projectAgentModelsJson(agentDir, modelProviders);
     scrubUnsafePersistedSessions(openclawDir, agentId, directRuntimeModelRefs);
     if (

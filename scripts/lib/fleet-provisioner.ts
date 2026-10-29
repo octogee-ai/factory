@@ -17,6 +17,7 @@ import { withCustomerRemoval } from "./customer-removal-exclusion.js";
 import {
   materializeBrokerProfilesForAgents,
   openAiCatalogInputForBaseUrl,
+  vertexCatalogInputForBaseUrl,
   openRouterCatalogInputForBaseUrl,
   type BrokerProfileSweepOptions,
 } from "./agent-model-token-materializer.js";
@@ -812,6 +813,7 @@ function brokerProfileSweepOptions(
 ): BrokerProfileSweepOptions {
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL?.trim();
   const openAiBaseUrl = process.env.PLATFORM_OPENAI_BASE_URL?.trim();
+  const vertexBaseUrl = process.env.PLATFORM_VERTEX_BASE_URL?.trim();
   return {
     logFn: log,
     ...(deps.agentsDir ? { agentsDir: deps.agentsDir } : {}),
@@ -820,6 +822,7 @@ function brokerProfileSweepOptions(
       ? { openRouter: openRouterCatalogInputForBaseUrl(openRouterBaseUrl) }
       : {}),
     ...(openAiBaseUrl ? { openAi: openAiCatalogInputForBaseUrl(openAiBaseUrl) } : {}),
+    ...(vertexBaseUrl ? { vertex: vertexCatalogInputForBaseUrl(vertexBaseUrl) } : {}),
   };
 }
 

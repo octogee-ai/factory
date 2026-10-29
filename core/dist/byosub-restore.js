@@ -6,7 +6,8 @@ import { readPostgresAgentAnchor, writeAgentStore } from "./agent-postgres.js";
 import { buildCodexAuthProfilesStore, buildClaudeCliAuthProfilesStore, buildClaudeCliNativeCredentialsJson, CLAUDE_CLI_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
 import { deleteAuthProfileStore, readAuthProfileState, readAuthProfileStore, SHARED_MAIN_AGENT_ID, writeAuthProfileStore, } from "./auth-profile-store.js";
 import { deriveCodexAuthHealth } from "./codex-auth-health.js";
-import { agentModelTokenProfileEntry, openAiBrokerProfileEntry, openRouterBrokerProfileEntry, } from "./agent-model-token-materializer.js";
+import { agentModelTokenProfileEntry, openAiBrokerProfileEntry, openRouterBrokerProfileEntry, vertexBrokerProfileEntry, } from "./agent-model-token-materializer.js";
+import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 /**
  * Every rostered agent id, from either roster form.
  *
@@ -94,6 +95,7 @@ const CANONICAL_AGENT_AUTH_PROFILE_IDS = new Set([
     "anthropic:default",
     "platform-openrouter:default",
     "platform-openai:default",
+    "platform-vertex:default",
 ]);
 const SESSION_RUNTIME_STATE_FIELDS = [
     "providerOverride",
@@ -153,6 +155,9 @@ async function scrubOauthProfiles(agentDir, agentId) {
         "anthropic:default": agentModelTokenProfileEntry(agentId),
         "platform-openrouter:default": openRouterBrokerProfileEntry(agentId),
         "platform-openai:default": openAiBrokerProfileEntry(agentId),
+        ...(configuredPlatformVertexBaseUrl()
+            ? { "platform-vertex:default": vertexBrokerProfileEntry(agentId) }
+            : {}),
     };
     if (JSON.stringify(current.profiles) === JSON.stringify(profiles)) {
         fs.chmodSync(agentDir, 0o700);

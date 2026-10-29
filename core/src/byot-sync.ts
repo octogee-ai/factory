@@ -4,6 +4,7 @@ import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import {
   catalogEntryForModelRef,
   OPENAI_PLATFORM_PROVIDER_ID,
+  VERTEX_PLATFORM_PROVIDER_ID,
   OPENROUTER_PLATFORM_PROVIDER_ID,
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
@@ -184,7 +185,8 @@ function houseModelRefFrom(ref: unknown): string {
 export function isPlatformProviderRef(ref: string): boolean {
   return (
     ref.startsWith(`${OPENROUTER_PLATFORM_PROVIDER_ID}/`) ||
-    ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`)
+    ref.startsWith(`${OPENAI_PLATFORM_PROVIDER_ID}/`) ||
+    ref.startsWith(`${VERTEX_PLATFORM_PROVIDER_ID}/`)
   );
 }
 

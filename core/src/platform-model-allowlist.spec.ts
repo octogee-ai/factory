@@ -28,7 +28,7 @@ describe("native model picker allowlist", () => {
   it("uses provider-wide model permissions for customer broker routes", async () => {
     await applyPlatformModelAllowlist(async (args) => {
       expect(args.buildPatch({})).toMatchObject({ agents: { defaults: {
-        modelPolicy: { allow: ["anthropic/*", "platform-openrouter/*", "platform-openai/*"] },
+        modelPolicy: { allow: ["anthropic/*", "platform-openrouter/*", "platform-openai/*", "platform-vertex/*"] },
       } } });
       return { mode: "rpc", attempts: 1 };
     }, false);

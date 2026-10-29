@@ -8,7 +8,8 @@ import {
   parseAgentModelSelections,
   platformModelRefs,
 } from "./agent-models";
-import { MODEL_CATALOG, modelCatalogEntryFor } from "./model-catalog";
+import { MODEL_CATALOG, VERTEX_MODEL_CATALOG, modelCatalogEntryFor } from "./model-catalog";
+import { resolveFreeTierModel } from "./platform-config";
 
 describe("model refs", () => {
   it.each(["luna", "sol", "astra"].flatMap((model) => [model, `${model}-pro`]))(
@@ -37,9 +38,20 @@ describe("model refs", () => {
     );
   });
 
+  it("routes vertex entries through the platform-vertex provider without adding them to the picker catalog", () => {
+    const entry = modelCatalogEntryFor("vertex", "vertex/claude-sonnet-5")!;
+    const ref = "platform-vertex/claude-sonnet-5";
+    expect(modelRefForCatalogEntry(entry)).toBe(ref);
+    expect(catalogEntryForModelRef(ref)).toBe(entry);
+    expect(platformModelRefs()).toContain(ref);
+    expect(platformModelRefs()).not.toContain("vertex/claude-sonnet-5");
+    expect(MODEL_CATALOG).not.toContain(entry);
+    expect(resolveFreeTierModel(ref)).toEqual({ ref, provider: "vertex", upstreamModelId: "claude-sonnet-5" });
+  });
+
   it("round-trips every catalog entry through platformModelRefs", () => {
     const refs = platformModelRefs();
-    expect(refs).toHaveLength(MODEL_CATALOG.length);
+    expect(refs).toHaveLength(MODEL_CATALOG.length + VERTEX_MODEL_CATALOG.length);
     for (const ref of refs) {
       expect(catalogEntryForModelRef(ref)).toBeTruthy();
     }

@@ -22,7 +22,9 @@ import {
   agentModelTokenProfileEntry,
   openAiBrokerProfileEntry,
   openRouterBrokerProfileEntry,
+  vertexBrokerProfileEntry,
 } from "./agent-model-token-materializer.js";
+import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 
 export type ByosubProvider = "openai" | "anthropic";
 
@@ -149,6 +151,7 @@ const CANONICAL_AGENT_AUTH_PROFILE_IDS = new Set([
   "anthropic:default",
   "platform-openrouter:default",
   "platform-openai:default",
+  "platform-vertex:default",
 ]);
 
 const SESSION_RUNTIME_STATE_FIELDS = [
@@ -210,6 +213,9 @@ async function scrubOauthProfiles(agentDir: string, agentId: string): Promise<bo
     "anthropic:default": agentModelTokenProfileEntry(agentId),
     "platform-openrouter:default": openRouterBrokerProfileEntry(agentId),
     "platform-openai:default": openAiBrokerProfileEntry(agentId),
+    ...(configuredPlatformVertexBaseUrl()
+      ? { "platform-vertex:default": vertexBrokerProfileEntry(agentId) }
+      : {}),
   };
   if (JSON.stringify((current as { profiles?: unknown }).profiles) === JSON.stringify(profiles)) {
     fs.chmodSync(agentDir, 0o700);

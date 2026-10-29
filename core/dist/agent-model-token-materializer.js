@@ -20,6 +20,9 @@ const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
 export const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export const OPENAI_BROKER_PROFILE_ID = `${OPENAI_BROKER_PROVIDER_ID}:default`;
 const OPENAI_PLATFORM_MARKER = ".platform-openai-managed";
+export const VERTEX_BROKER_PROVIDER_ID = "platform-vertex";
+export const VERTEX_BROKER_PROFILE_ID = `${VERTEX_BROKER_PROVIDER_ID}:default`;
+const VERTEX_PLATFORM_MARKER = ".platform-vertex-managed";
 const QUIET_NON_BROKER_AGENT_IDS = new Set(["octogee-unmatched-route"]);
 function isBrokerResolvableAgentId(agentId) {
     return parseAgentId(agentId).kind !== "unknown";
@@ -84,6 +87,17 @@ export function openAiBrokerProfileEntry(agentId) {
         },
     };
 }
+export function vertexBrokerProfileEntry(agentId) {
+    return {
+        type: "api_key",
+        provider: VERTEX_BROKER_PROVIDER_ID,
+        keyRef: {
+            source: "exec",
+            provider: SECRET_RESOLVER_PROVIDER,
+            id: agentModelTokenSecretId(agentId, "vertex"),
+        },
+    };
+}
 export function openRouterBrokerModelsJson(agentId, input) {
     return openRouterBrokerCatalogJson(agentId, {
         baseUrl: input.baseUrl,
@@ -107,6 +121,18 @@ export function openAiCatalogInputForBaseUrl(baseUrl) {
         baseUrl,
         models: modelCatalogForProvider("openai").map((entry) => ({
             model: entry.id,
+            ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+            ...(entry.input ? { input: entry.input } : {}),
+            ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+            ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
+        })),
+    };
+}
+export function vertexCatalogInputForBaseUrl(baseUrl) {
+    return {
+        baseUrl,
+        models: modelCatalogForProvider("vertex").map((entry) => ({
+            model: entry.id.replace(/^vertex\//, ""),
             ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
             ...(entry.input ? { input: entry.input } : {}),
             ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
@@ -158,6 +184,13 @@ function desiredPlatformBrokerProfiles(agentId, surfaces) {
                     profileId: OPENAI_BROKER_PROFILE_ID,
                     provider: OPENAI_BROKER_PROVIDER_ID,
                     entry: openAiBrokerProfileEntry(agentId),
+                }]
+            : []),
+        ...(surfaces.vertex
+            ? [{
+                    profileId: VERTEX_BROKER_PROFILE_ID,
+                    provider: VERTEX_BROKER_PROVIDER_ID,
+                    entry: vertexBrokerProfileEntry(agentId),
                 }]
             : []),
     ];
@@ -218,6 +251,13 @@ export function upsertOpenAiBrokerCatalog(agentDir, input) {
         providerId: OPENAI_BROKER_PROVIDER_ID,
         marker: OPENAI_PLATFORM_MARKER,
         api: "openai-responses",
+    });
+}
+export function upsertVertexBrokerCatalog(agentDir, input) {
+    return upsertPlatformBrokerCatalog(agentDir, input, {
+        providerId: VERTEX_BROKER_PROVIDER_ID,
+        marker: VERTEX_PLATFORM_MARKER,
+        api: "anthropic-messages",
     });
 }
 /** The catalog is plain filesystem state and must land whatever the profile
@@ -284,13 +324,18 @@ async function prepareAgentMaterialization(agentId, agentsDir, opts) {
     const openAiWrote = opts.openAi
         ? upsertOpenAiBrokerCatalog(agentHome, opts.openAi)
         : false;
+    const vertexWrote = opts.vertex
+        ? upsertVertexBrokerCatalog(agentHome, opts.vertex)
+        : false;
     return {
         agentId,
         catalogWrote,
         openAiWrote,
+        vertexWrote,
         missingProfiles: await missingPlatformBrokerProfileTargets(agentHome, agentId, {
             openRouter: opts.openRouter !== undefined,
             openAi: opts.openAi !== undefined,
+            vertex: opts.vertex !== undefined,
         }),
     };
 }
@@ -393,13 +438,14 @@ function reportAgentMaterializations(agents, appliedAgentIds, opts) {
     for (const agent of agents) {
         const profilesApplied = appliedAgentIds.has(agent.agentId);
         const profileWrote = profilesApplied && agent.missingProfiles.length > 0;
-        if (!profileWrote && !agent.catalogWrote && !agent.openAiWrote)
+        if (!profileWrote && !agent.catalogWrote && !agent.openAiWrote && !agent.vertexWrote)
             continue;
         materialized++;
         opts.logFn?.(`[agent-model-token] model-ready: ${agent.agentId}` +
             ` (profiles ${profileMaterializationState(agent, profilesApplied)},` +
             ` openrouter ${catalogState(opts.openRouter, agent.catalogWrote)},` +
-            ` openai ${catalogState(opts.openAi, agent.openAiWrote)})`);
+            ` openai ${catalogState(opts.openAi, agent.openAiWrote)},` +
+            ` vertex ${catalogState(opts.vertex, agent.vertexWrote)})`);
     }
     return materialized;
 }

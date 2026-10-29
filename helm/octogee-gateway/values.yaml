@@ -138,6 +138,7 @@ env:
   gitSshHost: ""
   llmBrokerUrl: ""  # auto-computed from release namespace for builder-class gateways
   openaiEmbeddingsEnabled: "true"
+  platformVertexEnabled: "false"
   openaiEmbeddingsModel: "text-embedding-3-small"
   openclawLogLevel: "info"
   logLevel: "info"

@@ -20,6 +20,10 @@ import {
   platformBrokerProfileTargets,
   upsertOpenAiBrokerCatalog,
   upsertOpenRouterBrokerCatalog,
+  upsertVertexBrokerCatalog,
+  vertexCatalogInputForBaseUrl,
+  VERTEX_BROKER_PROFILE_ID,
+  VERTEX_BROKER_PROVIDER_ID,
   openRouterBrokerModelConfig,
   openRouterBrokerProviderConfig,
   openRouterBrokerModelsJson,
@@ -403,6 +407,67 @@ describe("model-readiness: openai catalog upsert", () => {
     const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
     expect(models.providers[OPENROUTER_BROKER_PROVIDER_ID]).toBeTruthy();
     expect(models.providers[OPENAI_BROKER_PROVIDER_ID]).toBeTruthy();
+  });
+});
+
+describe("model-readiness: vertex catalog upsert", () => {
+  let agentDir: string;
+  beforeEach(() => {
+    agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-vertex-"));
+    seedOpenClawAgentDb(agentDir);
+  });
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it("writes the Vertex rail as an anthropic-messages provider with bare Claude ids and no credential", () => {
+    const input = vertexCatalogInputForBaseUrl("http://llm-broker.octogee.svc.cluster.local:3010");
+    expect(input.models.map((m) => m.model)).toEqual([
+      "claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5",
+    ]);
+    expect(upsertVertexBrokerCatalog(agentDir, input)).toBe(true);
+    expect(upsertVertexBrokerCatalog(agentDir, input)).toBe(false);
+    const models = JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"));
+    const provider = models.providers[VERTEX_BROKER_PROVIDER_ID];
+    expect(provider.api).toBe("anthropic-messages");
+    expect(provider.baseUrl).toBe("http://llm-broker.octogee.svc.cluster.local:3010");
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider.models[0]).toMatchObject({ id: "claude-fable-5-1", contextWindow: 1_000_000, input: ["text", "image"] });
+    expect(fs.existsSync(path.join(agentDir, ".platform-vertex-managed"))).toBe(true);
+  });
+
+  it("pins the platform-vertex profile to the agent's own vertex broker token only when the pod carries the rail", () => {
+    const targets = platformBrokerProfileTargets("octogee-alice-coach", { openRouter: false, openAi: false, vertex: true });
+    expect(targets.map((target) => target.authProfileProvider)).toEqual(["anthropic", VERTEX_BROKER_PROVIDER_ID]);
+    expect(targets[1]).toMatchObject({
+      path: `profiles.${VERTEX_BROKER_PROFILE_ID}.key`,
+      ref: { id: "agent-model-token-vertex-octogee-alice-coach" },
+    });
+    expect(agentModelTokenSecretId("octogee-alice-coach", "vertex")).toBe("agent-model-token-vertex-octogee-alice-coach");
+    expect(
+      platformBrokerProfileTargets("octogee-alice-coach", { openRouter: false, openAi: false, vertex: false })
+        .map((target) => target.authProfileProvider),
+    ).toEqual(["anthropic"]);
+  });
+
+  it("sweeps the vertex catalog and profile alongside the other rails", async () => {
+    const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-amt-vertex-sweep-"));
+    try {
+      seedOpenClawAgentDbForId(agentsDir, "octogee-alice-coach");
+      const { plans, secretsApply } = fakeSecretsApply(agentsDir);
+      const vertex = vertexCatalogInputForBaseUrl("http://llm-broker.octogee.svc.cluster.local:3010");
+      const written = await materializeBrokerProfilesForAgents(["octogee-alice-coach"], { agentsDir, vertex, secretsApply });
+      expect(written.materialized).toBe(1);
+      expect(plans).toEqual([
+        expect.objectContaining({
+          targets: platformBrokerProfileTargets("octogee-alice-coach", { openRouter: false, openAi: false, vertex: true }),
+        }),
+      ]);
+      const models = JSON.parse(fs.readFileSync(path.join(agentsDir, "octogee-alice-coach", "agent", "models.json"), "utf8"));
+      expect(models.providers[VERTEX_BROKER_PROVIDER_ID].models.map((m: { id: string }) => m.id)).toContain("claude-haiku-4-5");
+    } finally {
+      fs.rmSync(agentsDir, { recursive: true, force: true });
+    }
   });
 });
 

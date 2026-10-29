@@ -30,6 +30,9 @@ const OPENROUTER_PLATFORM_MARKER = ".platform-openrouter-managed";
 export const OPENAI_BROKER_PROVIDER_ID = "platform-openai";
 export const OPENAI_BROKER_PROFILE_ID = `${OPENAI_BROKER_PROVIDER_ID}:default`;
 const OPENAI_PLATFORM_MARKER = ".platform-openai-managed";
+export const VERTEX_BROKER_PROVIDER_ID = "platform-vertex";
+export const VERTEX_BROKER_PROFILE_ID = `${VERTEX_BROKER_PROVIDER_ID}:default`;
+const VERTEX_PLATFORM_MARKER = ".platform-vertex-managed";
 const QUIET_NON_BROKER_AGENT_IDS = new Set(["octogee-unmatched-route"]);
 
 function isBrokerResolvableAgentId(agentId: string): boolean {
@@ -48,7 +51,7 @@ export interface OpenRouterBrokerProfileEntry {
   keyRef: { source: "exec"; provider: string; id: string };
 }
 
-export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai";
+export type AgentModelBrokerProvider = "anthropic" | "openrouter" | "openai" | "vertex";
 
 export interface OpenRouterBrokerModelInput {
   baseUrl: string;
@@ -62,6 +65,8 @@ export interface OpenRouterBrokerModelInput {
 export interface OpenRouterBrokerProviderConfigInput extends OpenRouterBrokerModelInput {
   apiKey: string;
 }
+
+export type PlatformBrokerApi = "openai-completions" | "openai-responses" | "anthropic-messages";
 
 export interface OpenRouterBrokerProviderConfig {
   api: "openai-completions";
@@ -82,7 +87,7 @@ export interface OpenRouterBrokerModelConfig {
 
 export interface OpenRouterBrokerModelsJson {
   providers: Record<string, {
-    api: "openai-completions";
+    api: PlatformBrokerApi;
     baseUrl: string;
     models: OpenRouterBrokerModelConfig[];
   }>;
@@ -166,6 +171,24 @@ export function openAiBrokerProfileEntry(agentId: string): OpenAiBrokerProfileEn
   };
 }
 
+export interface VertexBrokerProfileEntry {
+  type: "api_key";
+  provider: typeof VERTEX_BROKER_PROVIDER_ID;
+  keyRef: { source: "exec"; provider: string; id: string };
+}
+
+export function vertexBrokerProfileEntry(agentId: string): VertexBrokerProfileEntry {
+  return {
+    type: "api_key",
+    provider: VERTEX_BROKER_PROVIDER_ID,
+    keyRef: {
+      source: "exec",
+      provider: SECRET_RESOLVER_PROVIDER,
+      id: agentModelTokenSecretId(agentId, "vertex"),
+    },
+  };
+}
+
 export function openRouterBrokerModelsJson(
   agentId: string,
   input: OpenRouterBrokerModelInput,
@@ -207,6 +230,19 @@ export function openAiCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerC
   };
 }
 
+export function vertexCatalogInputForBaseUrl(baseUrl: string): OpenRouterBrokerCatalogInput {
+  return {
+    baseUrl,
+    models: modelCatalogForProvider("vertex").map((entry) => ({
+      model: entry.id.replace(/^vertex\//, ""),
+      ...(typeof entry.contextTokens === "number" ? { contextTokens: entry.contextTokens } : {}),
+      ...(entry.input ? { input: entry.input } : {}),
+      ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+      ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
+    })),
+  };
+}
+
 // Model-readiness: every catalog OpenRouter model rides ONE provider entry
 // backed by the agent's own broker token — "/models switch" needs no further
 // provider surgery, and the broker's plan policy gates what actually serves.
@@ -237,6 +273,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 export interface PlatformBrokerProfileSurfaces {
   openRouter: boolean;
   openAi: boolean;
+  vertex?: boolean;
 }
 
 interface PlatformBrokerProfileDesire {
@@ -273,6 +310,13 @@ function desiredPlatformBrokerProfiles(
         profileId: OPENAI_BROKER_PROFILE_ID,
         provider: OPENAI_BROKER_PROVIDER_ID,
         entry: openAiBrokerProfileEntry(agentId),
+      }]
+      : []),
+    ...(surfaces.vertex
+      ? [{
+        profileId: VERTEX_BROKER_PROFILE_ID,
+        provider: VERTEX_BROKER_PROVIDER_ID,
+        entry: vertexBrokerProfileEntry(agentId),
       }]
       : []),
   ];
@@ -366,6 +410,17 @@ export function upsertOpenAiBrokerCatalog(
   });
 }
 
+export function upsertVertexBrokerCatalog(
+  agentDir: string,
+  input: OpenRouterBrokerCatalogInput,
+): boolean {
+  return upsertPlatformBrokerCatalog(agentDir, input, {
+    providerId: VERTEX_BROKER_PROVIDER_ID,
+    marker: VERTEX_PLATFORM_MARKER,
+    api: "anthropic-messages",
+  });
+}
+
 /** The catalog is plain filesystem state and must land whatever the profile
  *  write does: models.json is what makes the model KNOWN to openclaw, and an
  *  unknown model fails the turn outright. */
@@ -375,7 +430,7 @@ function upsertPlatformBrokerCatalog(
   ids: {
     providerId: string;
     marker: string;
-    api: "openai-completions" | "openai-responses";
+    api: PlatformBrokerApi;
   },
 ): boolean {
   const modelsPath = path.join(agentDir, "models.json");
@@ -450,6 +505,7 @@ export interface BrokerProfileSweepOptions {
   agentsDir?: string;
   openRouter?: OpenRouterBrokerCatalogInput;
   openAi?: OpenRouterBrokerCatalogInput;
+  vertex?: OpenRouterBrokerCatalogInput;
   logFn?: (m: string) => void;
   secretsApply?: ApplyOpenClawSecretsPlanOptions;
 }
@@ -458,6 +514,7 @@ interface AgentMaterializeOutcome {
   agentId: string;
   catalogWrote: boolean;
   openAiWrote: boolean;
+  vertexWrote: boolean;
   missingProfiles: AuthProfileApiKeyTarget[];
 }
 
@@ -485,13 +542,18 @@ async function prepareAgentMaterialization(
   const openAiWrote = opts.openAi
     ? upsertOpenAiBrokerCatalog(agentHome, opts.openAi)
     : false;
+  const vertexWrote = opts.vertex
+    ? upsertVertexBrokerCatalog(agentHome, opts.vertex)
+    : false;
   return {
     agentId,
     catalogWrote,
     openAiWrote,
+    vertexWrote,
     missingProfiles: await missingPlatformBrokerProfileTargets(agentHome, agentId, {
       openRouter: opts.openRouter !== undefined,
       openAi: opts.openAi !== undefined,
+      vertex: opts.vertex !== undefined,
     }),
   };
 }
@@ -620,13 +682,14 @@ function reportAgentMaterializations(
   for (const agent of agents) {
     const profilesApplied = appliedAgentIds.has(agent.agentId);
     const profileWrote = profilesApplied && agent.missingProfiles.length > 0;
-    if (!profileWrote && !agent.catalogWrote && !agent.openAiWrote) continue;
+    if (!profileWrote && !agent.catalogWrote && !agent.openAiWrote && !agent.vertexWrote) continue;
     materialized++;
     opts.logFn?.(
       `[agent-model-token] model-ready: ${agent.agentId}` +
         ` (profiles ${profileMaterializationState(agent, profilesApplied)},` +
         ` openrouter ${catalogState(opts.openRouter, agent.catalogWrote)},` +
-        ` openai ${catalogState(opts.openAi, agent.openAiWrote)})`,
+        ` openai ${catalogState(opts.openAi, agent.openAiWrote)},` +
+        ` vertex ${catalogState(opts.vertex, agent.vertexWrote)})`,
     );
   }
   return materialized;

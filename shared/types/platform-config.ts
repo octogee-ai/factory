@@ -434,7 +434,9 @@ export function resolveFreeTierModel(ref: string): ResolvedFreeTierModel | null 
     ref,
     provider: entry.provider,
     upstreamModelId:
-      entry.provider === "anthropic" ? entry.id.replace(/^anthropic\//, "") : entry.id,
+      entry.provider === "anthropic" || entry.provider === "vertex"
+        ? entry.id.replace(`${entry.provider}/`, "")
+        : entry.id,
   };
 }
 
