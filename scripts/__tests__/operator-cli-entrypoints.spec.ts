@@ -26,7 +26,6 @@ import {
   SUBSCRIPTIONS,
 } from "../ops/setup-stripe-plans.js";
 import {
-  ANNUAL_PRICE_MULTIPLIER,
   BUILDER_TIERS,
   CREDIT_DENOMINATIONS_USD,
   getTierConfig,
@@ -130,7 +129,7 @@ describe("setup-stripe-plans catalog", () => {
     expect(SETUP_STRIPE_PLANS_USAGE).toContain("--dry-run");
   });
 
-  it("sells the Personal lineup at the shared TokenMath prices, monthly + annual", () => {
+  it("sells the Personal lineup at the shared TokenMath prices, monthly only", () => {
     const personal = SUBSCRIPTIONS.filter((sub) => !sub.key.startsWith("builder_"));
     expect(personal.map((sub) => sub.key)).toEqual([
       "personal",
@@ -139,22 +138,18 @@ describe("setup-stripe-plans catalog", () => {
     ]);
     for (const sub of personal) {
       const tier = getTierConfig(sub.key);
-      expect(sub.prices).toHaveLength(2);
-      expect(sub.prices[0]).toMatchObject({
-        key: `${sub.key}_monthly`,
-        amount: tier.monthlyPrice * 100,
-        interval: "month",
-      });
-      expect(sub.prices[1]).toMatchObject({
-        key: `${sub.key}_annual`,
-        amount: tier.monthlyPrice * ANNUAL_PRICE_MULTIPLIER * 100,
-        interval: "year",
-      });
+      expect(sub.prices).toEqual([
+        expect.objectContaining({
+          key: `${sub.key}_monthly`,
+          amount: tier.monthlyPrice * 100,
+          interval: "month",
+        }),
+      ]);
       expect(sub.metadata.tier).toBe(sub.key);
     }
   });
 
-  it("sells the self-serve Builder ladder at infra-only prices, monthly + annual", () => {
+  it("sells the self-serve Builder ladder at infra-only prices, monthly only", () => {
     const builders = SUBSCRIPTIONS.filter((sub) => sub.key.startsWith("builder_"));
     expect(builders.map((sub) => sub.key)).toEqual([
       "builder_hobby",
@@ -165,17 +160,13 @@ describe("setup-stripe-plans catalog", () => {
       const builderTier = BUILDER_TIERS[sub.key.replace("builder_", "") as keyof typeof BUILDER_TIERS];
       const monthly = builderTier.monthlyPrice;
       if (monthly === null) throw new Error(`${sub.key} is not self-serve sellable`);
-      expect(sub.prices).toHaveLength(2);
-      expect(sub.prices[0]).toMatchObject({
-        key: `${sub.key}_monthly`,
-        amount: monthly * 100,
-        interval: "month",
-      });
-      expect(sub.prices[1]).toMatchObject({
-        key: `${sub.key}_annual`,
-        amount: monthly * ANNUAL_PRICE_MULTIPLIER * 100,
-        interval: "year",
-      });
+      expect(sub.prices).toEqual([
+        expect.objectContaining({
+          key: `${sub.key}_monthly`,
+          amount: monthly * 100,
+          interval: "month",
+        }),
+      ]);
       expect(sub.metadata.builderTier).toBe(builderTier.name);
     }
     for (const builder of builders) {

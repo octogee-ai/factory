@@ -202,17 +202,11 @@ validate_stripe_price_ids_json() {
   node - "$1" <<'NODE'
 const allowed = new Set([
   "personal_monthly",
-  "personal_annual",
   "personal_pro_monthly",
-  "personal_pro_annual",
   "personal_pro_max_monthly",
-  "personal_pro_max_annual",
   "builder_hobby_monthly",
-  "builder_hobby_annual",
   "builder_pro_monthly",
-  "builder_pro_annual",
   "builder_team_monthly",
-  "builder_team_annual",
   "credit_10",
   "credit_25",
   "credit_50",

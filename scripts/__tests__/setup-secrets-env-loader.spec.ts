@@ -11,17 +11,11 @@ const verifySecretsPath = path.join(repoRoot, "scripts/verify-secrets.sh");
 const envExamplePath = path.join(repoRoot, ".env.example");
 const completeStripePriceMap = JSON.stringify(Object.fromEntries([
   "personal_monthly",
-  "personal_annual",
   "personal_pro_monthly",
-  "personal_pro_annual",
   "personal_pro_max_monthly",
-  "personal_pro_max_annual",
   "builder_hobby_monthly",
-  "builder_hobby_annual",
   "builder_pro_monthly",
-  "builder_pro_annual",
   "builder_team_monthly",
-  "builder_team_annual",
   "credit_10",
   "credit_25",
   "credit_50",
@@ -265,6 +259,10 @@ describe("setup-secrets env loader", () => {
     expect(stripePriceMapValidity(completeStripePriceMap)).toBe("valid");
     expect(stripePriceMapValidity('{"personal_monthly":"price_test"}')).toBe("invalid");
     expect(stripePriceMapValidity('{"unknown":"price_test"}')).toBe("invalid");
+    expect(stripePriceMapValidity(JSON.stringify({
+      ...JSON.parse(completeStripePriceMap),
+      personal_annual: "price_retired",
+    }))).toBe("invalid");
     expect(stripePriceMapValidity('{"personal_monthly":""}')).toBe("invalid");
     expect(stripePriceMapValidity("not-json")).toBe("invalid");
   });

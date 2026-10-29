@@ -18,9 +18,9 @@ const wrongAlgorithm = generateKeyPairSync("ec", {
   publicKeyEncoding: { type: "spki", format: "pem" },
 });
 const priceNames = [
-  "personal_monthly", "personal_annual", "personal_pro_monthly", "personal_pro_annual",
-  "personal_pro_max_monthly", "personal_pro_max_annual", "builder_hobby_monthly", "builder_hobby_annual",
-  "builder_pro_monthly", "builder_pro_annual", "builder_team_monthly", "builder_team_annual",
+  "personal_monthly", "personal_pro_monthly",
+  "personal_pro_max_monthly", "builder_hobby_monthly",
+  "builder_pro_monthly", "builder_team_monthly",
   "credit_10", "credit_25", "credit_50", "credit_100",
 ];
 
