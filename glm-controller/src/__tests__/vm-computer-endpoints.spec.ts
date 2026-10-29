@@ -132,7 +132,6 @@ describe("first-boot VM gateway handoff", () => {
       flush: vi.fn(async () => ({})),
       transfer: vi.fn(async () => {}),
       discardTargetCustomer: vi.fn(async () => {}),
-      readDurableSessionDigest: vi.fn(async () => ({ fileCount: 0, totalBytes: 0, sha256: "a".repeat(64) })),
       releaseTarget: vi.fn(async () => {}),
       readOwnerOperation: vi.fn(async () => null),
       log: vi.fn(),

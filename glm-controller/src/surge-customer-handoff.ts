@@ -78,12 +78,6 @@ export function assertSurgeAssignmentCoverage(
   }
 }
 
-interface SessionDigest {
-  fileCount: number;
-  totalBytes: number;
-  sha256: string;
-}
-
 class SurgeTargetCleanupError extends Error {}
 
 // A source pod whose image predates the OpenClaw process gate cannot stop its
@@ -185,13 +179,6 @@ export interface SurgeCustomerHandoffDeps {
     targetPod: SurgePod;
   }) => Promise<void>;
   readSystemConfigCommit: (pod: SurgePod) => Promise<string>;
-  readDurableSessionDigest: (input: {
-    gatewayId: string;
-    slug: string;
-    operationId: string;
-    pod: SurgePod;
-    configTransferMode: MigrationConfigTransferMode;
-  }) => Promise<SessionDigest>;
   releaseTarget: (input: {
     gatewayId: string;
     operationId: string;
@@ -468,16 +455,6 @@ async function restoreAbandonedSurgeAssignments(
   }
 }
 
-function sameDigest(left: SessionDigest, right: SessionDigest): boolean {
-  return left.fileCount === right.fileCount &&
-    left.totalBytes === right.totalBytes &&
-    left.sha256 === right.sha256;
-}
-
-function describeDigest(digest: SessionDigest): string {
-  return `files=${digest.fileCount} bytes=${digest.totalBytes} sha256=${digest.sha256}`;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -513,12 +490,6 @@ async function discardTargetCustomers(
   }
 }
 
-// The configured Builder source finalization contract:
-// quiesce → final durable flush → reserve target → stop source → copy → verify.
-// The flush runs while the source still serves so a flush failure never costs
-// availability; the reservation lands before the source stops so the target can
-// never self-release into a half-copied state; the copy begins only after the
-// source process exits so the digests compare frozen state.
 interface AssignmentTransferContext {
   input: ReconcileSurgeCustomerHandoffInput;
   sourcePod: SurgePod;
@@ -569,7 +540,7 @@ async function finalizeSourceForAssignment(
     if (!(error instanceof SurgeOpenClawProcessEndpointMissingError)) throw error;
     deps.log(
       `[surge-handoff] source predates the OpenClaw process gate; copying from the quiesced ` +
-      `source and relying on the digest check ` +
+      `source ` +
       `gateway=${input.gatewayId} source=${sourcePod.name} slug=${assignment.slug}`,
     );
     return sourceSystemConfigCommit;
@@ -578,7 +549,7 @@ async function finalizeSourceForAssignment(
   return sourceSystemConfigCommit;
 }
 
-async function copyAndVerifyAssignment(
+async function copyAssignment(
   deps: SurgeCustomerHandoffDeps,
   context: AssignmentTransferContext,
   assignment: SurgeAssignment,
@@ -598,21 +569,7 @@ async function copyAndVerifyAssignment(
     configTransferMode,
     ...(expectedSystemConfigCommit ? { expectedSystemConfigCommit } : {}),
   });
-  const digestOf = (pod: SurgePod) => deps.readDurableSessionDigest({
-    gatewayId: input.gatewayId,
-    slug: assignment.slug,
-    operationId: ownedBy,
-    pod,
-    configTransferMode,
-  });
-  const [sourceDigest, targetDigest] = await Promise.all([digestOf(sourcePod), digestOf(targetPod)]);
-  if (!sameDigest(sourceDigest, targetDigest)) {
-    throw new Error(
-      `durable session digest mismatch for ${assignment.slug} ` +
-      `sourcePod=${sourcePod.name} targetPod=${targetPod.name}: ` +
-      `source(${describeDigest(sourceDigest)}) target(${describeDigest(targetDigest)})`,
-    );
-  }
+
 }
 
 async function drainWithProgress<T>(
@@ -695,7 +652,7 @@ async function transferAssignments(
         assignment.sharedSurgeForwardRecovery = { operationId: ownedBy, targetPodUid: targetPod.uid, receivingPodUid: targetPod.uid };
       }
       touchedSlugs.push(assignment.slug);
-      await progress.run("transfer-and-verify", () => copyAndVerifyAssignment(deps, context, assignment, sourceSystemConfigCommit));
+      await progress.run("transfer-state", () => copyAssignment(deps, context, assignment, sourceSystemConfigCommit));
       await progress.report("serving-handoff", "pending");
     }
   } catch (error) {
@@ -814,14 +771,6 @@ async function retryHeldBuilderTarget(
     const sourceCommit = requireSystemConfigCommit(await deps.readSystemConfigCommit(context.sourcePod), assignment.slug);
     await deps.transfer({ ...scope, sourcePod: context.sourcePod, targetPod: context.targetPod,
       loadStrategy: "standard", configTransferMode: CONFIGURED_BUILDER_SYSTEM_CONFIG, expectedSystemConfigCommit: sourceCommit });
-  }
-  const [sourceCommit, targetCommit, sourceDigest, targetDigest] = await Promise.all([
-    deps.readSystemConfigCommit(context.sourcePod), deps.readSystemConfigCommit(context.targetPod),
-    deps.readDurableSessionDigest({ ...scope, pod: context.sourcePod, configTransferMode: CONFIGURED_BUILDER_SYSTEM_CONFIG }),
-    deps.readDurableSessionDigest({ ...scope, pod: context.targetPod, configTransferMode: CONFIGURED_BUILDER_SYSTEM_CONFIG }),
-  ]);
-  if (sourceCommit !== targetCommit || !sameDigest(sourceDigest, targetDigest)) {
-    throw new Error("configured Builder forward retry cannot verify matching source and target state");
   }
   const snapshot = await deps.listPods(input.gatewayId);
   if (!physicalPodsProjected(snapshot) || snapshot.pods.length !== 2 ||

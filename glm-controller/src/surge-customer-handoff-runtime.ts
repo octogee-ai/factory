@@ -3,7 +3,6 @@ import * as http from "node:http";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import {
   type FlushGatewayResponse,
-  type MigrationConfigTransferMode,
   SIGNATURE_HEADER,
   type PrepareRsyncImportResponse,
   type SchedulerMigrationResult,
@@ -137,90 +136,12 @@ export async function deleteCancelledSurgePod(runKubectl: SurgeKubectl, namespac
   if (result.code !== 0) throw new Error(`kubectl delete cancelled surge pod ${pod.name} uid=${pod.uid} failed: ${result.stderr.trim() || result.stdout.trim()}`);
 }
 
-export const POD_SESSION_DIGEST_SCRIPT = [
-  'import fs from "node:fs"; import path from "node:path"; import crypto from "node:crypto";',
-  'import { assertConfiguredBuilderPortableStatePlanOnDisk, configuredBuilderPortableStatePlanFromConfig } from "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js";',
-  'import { isCodexDatabase } from "/octogee/scripts/node_modules/@octogee/core/dist/agent-store-inventory.js";',
-  'const state=process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),slug=process.argv[1],mode=process.argv[2];',
-  'const safeDefaultAgentId="octogee-unmatched-route",isSafeDefaultState=(relative)=>{const normalized=relative.split(path.sep).join("/"),roots=[`agents/${safeDefaultAgentId}`,`workspace-${safeDefaultAgentId}`,`workspaces/${safeDefaultAgentId}`];return roots.some((root)=>normalized===root||normalized.startsWith(`${root}/`))||[`memory/${safeDefaultAgentId}.sqlite`,`memory/${safeDefaultAgentId}.sqlite-wal`,`memory/${safeDefaultAgentId}.sqlite-shm`].includes(normalized);};',
-  'const isStartupMigrationBackup=(relative)=>relative.split(path.sep).some((part)=>/\\.sqlite\\.pre-startup-migration-.{8}-.{4}-.{4}-.{4}-.{12}/u.test(part));',
-  'const walk=(dir,prefix="")=>{if(!fs.existsSync(dir))return [];const root=fs.lstatSync(dir);if(root.isSymbolicLink()||!root.isDirectory())throw new Error(`non-regular durable state path: ${prefix||"."}`);const out=[];for(const item of fs.readdirSync(dir,{withFileTypes:true})){const relative=prefix?path.join(prefix,item.name):item.name,abs=path.join(dir,item.name),stat=fs.lstatSync(abs);if(stat.isSymbolicLink())out.push([relative,abs,"link"]);else if(stat.isDirectory())out.push(...walk(abs,relative));else if(stat.isFile())out.push([relative,abs,"file"]);else throw new Error(`non-regular durable state path: ${relative}`);}return out;};',
-  'let files;if(mode==="configured-builder-system-config"){const configPath=process.env.OPENCLAW_CONFIG_PATH||path.join(state,"system_config","openclaw.json");let config;try{config=JSON.parse(fs.readFileSync(configPath,"utf8"));}catch(error){throw new Error(`cannot read configured Builder config: ${error instanceof Error?error.message:String(error)}`);}const plan=configuredBuilderPortableStatePlanFromConfig(config,state),transferPaths=plan.paths.filter((item)=>!isSafeDefaultState(item.relativePath));assertConfiguredBuilderPortableStatePlanOnDisk(state,{...plan,paths:transferPaths});files=transferPaths.flatMap((item)=>{const absolute=path.join(state,item.relativePath);if(!fs.existsSync(absolute))return [];const stat=fs.lstatSync(absolute);if(item.kind==="directory"){if(!stat.isDirectory())throw new Error(`configured Builder durable state directory is not a directory: ${item.relativePath}`);return walk(absolute,item.relativePath);}if(!stat.isFile())throw new Error(`configured Builder durable state file is not a file: ${item.relativePath}`);return [[item.relativePath,absolute,"file"]];}).filter(([relative])=>!isStartupMigrationBackup(relative)&&relative!==path.join("customers",slug,".system",".migrating-in")&&relative!==path.join("customers",slug,".system",".mounted")&&!relative.endsWith(".sqlite-wal")&&!relative.endsWith(".sqlite-shm")&&!isCodexDatabase(relative.split(path.sep).join("/").replace(/-(?:wal|shm|journal)$/u,"")));}else{const root=path.join(state,"agents",`octogee-${slug}-coach`,"sessions");files=walk(root,path.join("agents",`octogee-${slug}-coach`,`sessions`));}',
-  'files.sort(([left],[right])=>left.localeCompare(right));const hash=crypto.createHash("sha256");let totalBytes=0;',
-  'for(const [relative,absolute,kind] of files){const contents=kind==="link"?Buffer.from(`symlink:${fs.readlinkSync(absolute)}`):fs.readFileSync(absolute);totalBytes+=contents.byteLength;hash.update(relative.split(path.sep).join("/"));hash.update("\\0");hash.update(contents);hash.update("\\0");}',
-  'process.stdout.write(JSON.stringify({fileCount:files.length,totalBytes,sha256:hash.digest("hex")}));',
-].join("");
-
-interface SessionDigest {
-  fileCount: number;
-  totalBytes: number;
-  sha256: string;
-}
-
-function parseSessionDigest(value: unknown, context: string): SessionDigest {
-  const digest = value as Partial<SessionDigest> | null;
-  if (
-    !digest ||
-    !Number.isSafeInteger(digest.fileCount) ||
-    (digest.fileCount as number) < 0 ||
-    !Number.isSafeInteger(digest.totalBytes) ||
-    (digest.totalBytes as number) < 0 ||
-    typeof digest.sha256 !== "string" ||
-    !/^[a-f0-9]{64}$/.test(digest.sha256)
-  ) {
-    throw new Error(`${context}: invalid durable session digest`);
-  }
-  return {
-    fileCount: digest.fileCount as number,
-    totalBytes: digest.totalBytes as number,
-    sha256: digest.sha256,
-  };
-}
-
 export async function readPodSystemConfigCommit(runKubectl: SurgeKubectl, namespace: string, pod: SurgePod): Promise<string> {
   const script = `const {execFileSync}=require("node:child_process"),path=require("node:path");const root=process.env.OPENCLAW_STATE_DIR||path.join(process.env.HOME||"/home/node",".openclaw"),repo=path.join(root,"system_config");const run=(...args)=>execFileSync("git",["-C",repo,...args],{encoding:"utf8"}).trim();if(run("status","--porcelain","--untracked-files=no"))throw Error("system config checkout has tracked changes");process.stdout.write(run("rev-parse","HEAD"));`;
   const result = await runKubectl(["-n", namespace, "exec", `pod/${pod.name}`, "-c", "gateway", "--", "node", "-e", script]);
   const commit = result.stdout.trim();
   if (result.code !== 0 || !/^[0-9a-f]{40,64}$/u.test(commit)) throw new Error(`cannot verify system config commit on pod=${pod.name}`);
   return commit;
-}
-
-export async function readPodDurableSessionDigest(
-  runKubectl: SurgeKubectl,
-  namespace: string,
-  pod: SurgePod,
-  slug: string,
-  configTransferMode: MigrationConfigTransferMode = "activation-manifest",
-): Promise<{ fileCount: number; totalBytes: number; sha256: string }> {
-  if (!isValidUsername(slug)) throw new Error(`invalid customer slug for session digest: ${slug}`);
-  const result = await runKubectl([
-    "-n",
-    namespace,
-    "exec",
-    `pod/${pod.name}`,
-    "-c",
-    "gateway",
-    "--",
-    "node",
-    "--input-type=module",
-    "-e",
-    POD_SESSION_DIGEST_SCRIPT,
-    slug,
-    configTransferMode,
-  ]);
-  if (result.code !== 0) {
-    throw new Error(
-      `kubectl session digest pod=${pod.name} slug=${slug} failed: ` +
-      `${result.stderr.trim() || result.stdout.trim()}`,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`kubectl session digest pod=${pod.name} slug=${slug}: invalid JSON`);
-  }
-  return parseSessionDigest(parsed, `pod=${pod.name} slug=${slug}`);
 }
 
 const FLEET_STATE_READ_TIMEOUT_MS = 5_000;

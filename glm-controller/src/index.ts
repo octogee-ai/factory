@@ -129,7 +129,6 @@ import {
   deleteSurgePod,
   deleteCancelledSurgePod,
   listSurgePods,
-  readPodDurableSessionDigest,
   readPodSystemConfigCommit,
 } from "./surge-customer-handoff-runtime.js";
 import {
@@ -2621,8 +2620,6 @@ function buildSurgeHandoffDeps(input: {
       return retained;
     },
     readSystemConfigCommit: (pod) => readPodSystemConfigCommit(runKubectl, NAMESPACE, pod),
-    readDurableSessionDigest: ({ pod, slug, configTransferMode }) =>
-      readPodDurableSessionDigest(runKubectl, NAMESPACE, pod, slug, configTransferMode),
     markSharedSurgeForwardRecovery: (assignment) => markSharedSurgeForwardRecovery(
       { db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log }, assignment),
     rebindSharedSurgeForwardRecovery: (assignment) => rebindSharedSurgeForwardRecovery(

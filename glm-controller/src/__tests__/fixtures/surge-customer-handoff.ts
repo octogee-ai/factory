@@ -66,7 +66,6 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
   stopSourceLegacy?: boolean;
   holdTargetError?: Error;
   holdTargetErrorFromCall?: number;
-  digestByPodUid?: Record<string, { fileCount: number; totalBytes: number; sha256: string }>;
   wait?: (ms: number) => Promise<void>;
 } = {}) {
   const events: string[] = [];
@@ -188,14 +187,6 @@ export function createSurgeHandoffHarness(spy: <T extends (...args: never[]) => 
       if (input.discardError) throw input.discardError;
     }),
     readSystemConfigCommit: spy(async () => "a".repeat(40)),
-    readDurableSessionDigest: spy(async ({ pod, slug }) => {
-      events.push(`digest:${pod.uid}:${slug}`);
-      return input.digestByPodUid?.[pod.uid] ?? {
-        fileCount: 2,
-        totalBytes: 20,
-        sha256: "a".repeat(64),
-      };
-    }),
     releaseTarget: spy(async ({ pod }) => {
       events.push(`release:${pod.uid}`);
       targetReleaseCalls += 1;

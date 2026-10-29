@@ -2,14 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { MigrationDrainPendingError } from "@octogee/core/fleet-migration-client";
 import { gatewayScopedJobId, verifyFleetRequest } from "@octogee/core/fleet-signature";
 import { SIGNATURE_HEADER } from "@octogee/shared/types/fleet-controller";
-import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
-  POD_SESSION_DIGEST_SCRIPT,
   SURGE_OPENCLAW_COMPLETE_TIMEOUT_MS,
   SURGE_OPENCLAW_RESUME_TIMEOUT_MS,
   SURGE_RSYNC_FINISH_TIMEOUT_MS,
@@ -17,7 +11,6 @@ import {
   createSurgePodTransport,
   deleteCancelledSurgePod,
   parseSurgePodSnapshot,
-  readPodDurableSessionDigest,
   readPodSystemConfigCommit,
 } from "../surge-customer-handoff-runtime.js";
 import {
@@ -45,110 +38,6 @@ const target: SurgePod = {
   terminating: false,
   crashLooping: false,
 };
-
-const LOCAL_CORE_DIST = fileURLToPath(new URL(
-  "../../node_modules/@octogee/core/dist/",
-  import.meta.url,
-));
-
-function runBuilderDigest(
-  stateDir: string,
-  configPath?: string,
-): { fileCount: number; totalBytes: number; sha256: string } {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      POD_SESSION_DIGEST_SCRIPT.replaceAll(
-        "/octogee/scripts/node_modules/@octogee/core/dist/",
-        LOCAL_CORE_DIST,
-      ),
-      "alice",
-      "configured-builder-system-config",
-    ],
-    {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath ?? "",
-      },
-      encoding: "utf8",
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error(`digest subprocess failed: ${result.stderr || result.stdout}`);
-  }
-  return JSON.parse(result.stdout) as { fileCount: number; totalBytes: number; sha256: string };
-}
-
-function writeConfiguredBuilderState(
-  stateDir: string,
-  configPath = path.join(stateDir, "openclaw.json"),
-): void {
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify({
-    agents: {
-      list: [
-        {
-          id: "discord-helper",
-          agentDir: path.join(stateDir, "agents", "discord-helper", "runtime"),
-          workspace: path.join(stateDir, "workspaces", "discord-helper"),
-        },
-        { id: "octogee-unmatched-route" },
-      ],
-    },
-    session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
-  }));
-  const files = [
-    ["agents/discord-helper/agent/legacy.json", "legacy"],
-    ["agents/discord-helper/runtime/auth.json", "agent-auth"],
-    ["workspaces/discord-helper/notes.md", "workspace"],
-    ["agents/discord-helper/sessions/sessions.json", "session"],
-    ["memory/discord-helper.sqlite", "sqlite"],
-  ] as const;
-  for (const [relativePath, contents] of files) {
-    const absolutePath = path.join(stateDir, relativePath);
-    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-    fs.writeFileSync(absolutePath, contents);
-  }
-}
-
-function writeSafeDefaultAgentState(stateDir: string, contents: string): void {
-  const files = [
-    ["agents/octogee-unmatched-route/agent/state.json", contents],
-    ["workspace-octogee-unmatched-route/MEMORY.md", contents],
-    ["memory/octogee-unmatched-route.sqlite", contents],
-  ] as const;
-  for (const [relativePath, fileContents] of files) {
-    const absolutePath = path.join(stateDir, relativePath);
-    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-    fs.writeFileSync(absolutePath, fileContents);
-  }
-}
-
-function writeConfiguredBuilderCustomerState(stateDir: string): void {
-  const agentId = "octogee-alice-coach";
-  const agentDir = path.join(stateDir, "agents", agentId, "agent");
-  const workspace = path.join(stateDir, "customers", "alice");
-  const sessionStore = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-  const configPath = path.join(stateDir, "system_config", "openclaw.json");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.mkdirSync(path.join(workspace, ".system"), { recursive: true });
-  fs.mkdirSync(path.dirname(sessionStore), { recursive: true });
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify({
-    agents: {
-      list: [{ id: agentId, agentDir, workspace }],
-    },
-    session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
-  }));
-  fs.writeFileSync(path.join(agentDir, "state.json"), "agent-state");
-  fs.writeFileSync(path.join(workspace, ".system", ".mounted"), "");
-  fs.writeFileSync(path.join(workspace, "notes.md"), "workspace");
-  fs.writeFileSync(sessionStore, "session");
-}
 
 describe("surge handoff Kubernetes projection", () => {
   it("keeps every observed UID while projecting usable pods independently", () => {
@@ -226,207 +115,7 @@ describe("surge handoff Kubernetes projection", () => {
     await expect(readPodSystemConfigCommit(runKubectl, "octogee-test", source)).rejects.toThrow("cannot verify system config commit");
   });
 
-  it("reads the session digest through kubectl exec so the source may run the prior image", async () => {
-    const runKubectl = vi.fn(async () => ({
-      code: 0,
-      stderr: "",
-      stdout: JSON.stringify({ fileCount: 2, totalBytes: 20, sha256: "a".repeat(64) }),
-    }));
 
-    await expect(readPodDurableSessionDigest(
-      runKubectl,
-      "octogee-test",
-      source,
-      "alice",
-    )).resolves.toEqual({ fileCount: 2, totalBytes: 20, sha256: "a".repeat(64) });
-
-    expect(runKubectl).toHaveBeenCalledWith(expect.arrayContaining([
-      "-n",
-      "octogee-test",
-      "exec",
-      "pod/old-pod",
-      "-c",
-      "gateway",
-      "--",
-      "node",
-      "--input-type=module",
-      "-e",
-      expect.any(String),
-      "alice",
-    ]));
-  });
-
-  it("runs the Builder durable-state planner from the scripts package context", async () => {
-    const runKubectl = vi.fn(async () => ({
-      code: 0,
-      stderr: "",
-      stdout: JSON.stringify({ fileCount: 4, totalBytes: 40, sha256: "b".repeat(64) }),
-    }));
-
-    await readPodDurableSessionDigest(
-      runKubectl,
-      "octogee-test",
-      source,
-      "alice",
-      "configured-builder-system-config",
-    );
-
-    const args = runKubectl.mock.calls[0]?.[0] as string[];
-    expect(args).toEqual(expect.arrayContaining([
-      "node",
-      "--input-type=module",
-      "-e",
-      "configured-builder-system-config",
-    ]));
-    const script = args[args.indexOf("-e") + 1] ?? "";
-    expect(script).toContain(
-      "/octogee/scripts/node_modules/@octogee/core/dist/local-coach-wired.js",
-    );
-    expect(script).toContain("configuredBuilderPortableStatePlanFromConfig");
-    expect(script).toContain("assertConfiguredBuilderPortableStatePlanOnDisk");
-  });
-
-  it("hashes matching explicit Builder agent, workspace, and session-store state on distinct pods", () => {
-    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
-    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
-    try {
-      writeConfiguredBuilderState(sourceState);
-      writeConfiguredBuilderState(targetState);
-
-      const sourceDigest = runBuilderDigest(sourceState, path.join(sourceState, "openclaw.json"));
-      const targetDigest = runBuilderDigest(targetState, path.join(targetState, "openclaw.json"));
-
-      expect(sourceDigest).toEqual(targetDigest);
-      expect(sourceDigest.fileCount).toBe(5);
-
-      fs.writeFileSync(
-        path.join(targetState, "workspaces", "discord-helper", "notes.md"),
-        "changed workspace state",
-      );
-      expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).not.toEqual(sourceDigest);
-    } finally {
-      fs.rmSync(sourceState, { recursive: true, force: true });
-      fs.rmSync(targetState, { recursive: true, force: true });
-    }
-  });
-
-  it("excludes neutral fallback state from configured Builder durable digests", () => {
-    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
-    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
-    try {
-      writeConfiguredBuilderState(sourceState);
-      writeConfiguredBuilderState(targetState);
-      writeSafeDefaultAgentState(sourceState, "legacy source fallback");
-      writeSafeDefaultAgentState(targetState, "target fallback");
-
-      const sourceDigest = runBuilderDigest(sourceState, path.join(sourceState, "openclaw.json"));
-      expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).toEqual(sourceDigest);
-
-      fs.writeFileSync(
-        path.join(targetState, "workspaces", "discord-helper", "notes.md"),
-        "changed transferred workspace state",
-      );
-      expect(runBuilderDigest(targetState, path.join(targetState, "openclaw.json"))).not.toEqual(sourceDigest);
-    } finally {
-      fs.rmSync(sourceState, { recursive: true, force: true });
-      fs.rmSync(targetState, { recursive: true, force: true });
-    }
-  });
-
-  it("ignores configured Builder transient markers while hashing transferred state", () => {
-    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
-    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
-    try {
-      writeConfiguredBuilderCustomerState(sourceState);
-      writeConfiguredBuilderCustomerState(targetState);
-      fs.writeFileSync(
-        path.join(sourceState, "agents", "octogee-alice-coach", "agent", "openclaw-agent.sqlite-wal"),
-        "transient wal",
-      );
-      fs.writeFileSync(
-        path.join(sourceState, "agents", "octogee-alice-coach", "agent", "openclaw-agent.sqlite-shm"),
-        "transient shm",
-      );
-      fs.rmSync(path.join(targetState, "customers", "alice", ".system", ".mounted"));
-      fs.writeFileSync(
-        path.join(targetState, "customers", "alice", ".system", ".migrating-in"),
-        "",
-      );
-
-      const sourceDigest = runBuilderDigest(sourceState);
-      const targetDigest = runBuilderDigest(targetState);
-
-      expect(targetDigest).toEqual(sourceDigest);
-
-      fs.writeFileSync(path.join(targetState, "customers", "alice", "notes.md"), "changed");
-      expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
-    } finally {
-      fs.rmSync(sourceState, { recursive: true, force: true });
-      fs.rmSync(targetState, { recursive: true, force: true });
-    }
-  });
-
-  it("excludes Native startup migration backups while verifying durable Builder state", () => {
-    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
-    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
-    try {
-      writeConfiguredBuilderCustomerState(sourceState);
-      writeConfiguredBuilderCustomerState(targetState);
-      const agent = path.join(sourceState, "agents", "octogee-alice-coach", "agent");
-      const backup = path.join(agent, "openclaw-agent.sqlite.pre-startup-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93.postgres.bak");
-      fs.mkdirSync(backup, { recursive: true });
-      for (const name of ["anchor.sqlite", "database.sqlite", "manifest.json"]) fs.writeFileSync(path.join(backup, name), name);
-      fs.writeFileSync(`${backup}.pending`, "pending");
-      const sourceDigest = runBuilderDigest(sourceState);
-      expect(runBuilderDigest(targetState)).toEqual(sourceDigest);
-      fs.writeFileSync(path.join(agent, "openclaw-agent.sqlite.pre-startup-migration-not-a-uuid.postgres.bak"), "durable");
-      expect(runBuilderDigest(sourceState)).not.toEqual(sourceDigest);
-    } finally {
-      fs.rmSync(sourceState, { recursive: true, force: true });
-      fs.rmSync(targetState, { recursive: true, force: true });
-    }
-  });
-
-  it("skips Codex databases the transfer re-materializes from SQLite backups", () => {
-    const sourceState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-source-"));
-    const targetState = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-target-"));
-    try {
-      writeConfiguredBuilderCustomerState(sourceState);
-      writeConfiguredBuilderCustomerState(targetState);
-      const sourceCodexHome = path.join(sourceState, "agents", "octogee-alice-coach", "agent", "codex-home");
-      const targetCodexHome = path.join(targetState, "agents", "octogee-alice-coach", "agent", "codex-home");
-      fs.mkdirSync(sourceCodexHome, { recursive: true });
-      fs.mkdirSync(targetCodexHome, { recursive: true });
-      fs.writeFileSync(path.join(sourceCodexHome, "state_5.sqlite"), "header page");
-      fs.writeFileSync(path.join(sourceCodexHome, "state_5.sqlite-wal"), "uncheckpointed pages");
-      fs.writeFileSync(path.join(sourceCodexHome, "logs_2.sqlite-journal"), "rollback journal");
-      fs.writeFileSync(path.join(sourceCodexHome, "logs_2.sqlite"), "live logs");
-      fs.writeFileSync(path.join(targetCodexHome, "state_5.sqlite"), "header page with folded WAL");
-      for (const home of [sourceCodexHome, targetCodexHome]) {
-        fs.writeFileSync(path.join(home, "installation_id"), "install-1");
-      }
-
-      const sourceDigest = runBuilderDigest(sourceState);
-      expect(runBuilderDigest(targetState)).toEqual(sourceDigest);
-
-      fs.writeFileSync(path.join(targetCodexHome, "installation_id"), "install-2");
-      expect(runBuilderDigest(targetState)).not.toEqual(sourceDigest);
-    } finally {
-      fs.rmSync(sourceState, { recursive: true, force: true });
-      fs.rmSync(targetState, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the configured Builder system config when the gateway does not expose its config path", () => {
-    const state = fs.mkdtempSync(path.join(os.tmpdir(), "builder-digest-system-config-"));
-    try {
-      writeConfiguredBuilderState(state, path.join(state, "system_config", "openclaw.json"));
-
-      expect(runBuilderDigest(state)).toMatchObject({ fileCount: 5, totalBytes: expect.any(Number) });
-    } finally {
-      fs.rmSync(state, { recursive: true, force: true });
-    }
-  });
 });
 
 type SurgeTransportCall = { url: string; body?: Record<string, unknown> };
@@ -838,9 +527,6 @@ describe("surge handoff direct pod transport", () => {
       }
       if (url.includes("/prepare-rsync-import/")) {
         return new Response(JSON.stringify({ port: 30873, host: "0.0.0.0", module: "octogee-import", certificatePem: TARGET_CERTIFICATE_PEM }));
-      }
-      if (url.includes("/durable-session-digest/")) {
-        return new Response(JSON.stringify({ fileCount: 2, totalBytes: 20, sha256: "a".repeat(64) }));
       }
       return new Response(JSON.stringify({ imported: true, released: true }));
     }) as unknown as typeof globalThis.fetch;

@@ -308,8 +308,6 @@ describe("surge customer handoff", () => {
       "hold-target:target-uid:alice",
       "stop-source:old-uid:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.deps.transfer).toHaveBeenCalledWith(expect.objectContaining({
@@ -369,39 +367,6 @@ describe("surge customer handoff", () => {
     ]);
   });
 
-  it("reports the divergent configured Builder digest pair before rolling back", async () => {
-    const sourceDigestHash = "a".repeat(64);
-    const targetDigestHash = "b".repeat(64);
-    const h = harness({
-      assignments: [assignment("u1", "alice")],
-      resumeSourceError: new Error("source resume refused"),
-      digestByPodUid: {
-        [oldPod.uid]: { fileCount: 110, totalBytes: 1_172_920, sha256: sourceDigestHash },
-        [targetPod.uid]: { fileCount: 109, totalBytes: 1_172_920, sha256: targetDigestHash },
-      },
-    });
-
-    await expect(reconcileSurgeCustomerHandoff(h.deps, {
-      gatewayId: "default",
-      desiredImageTag: "new-sha",
-      requiresCustomerMigration: false,
-      disposableBuilderGateway: true,
-    })).rejects.toThrow(
-      "configured Builder handoff failed and its source could not be resumed: " +
-        "handoff=durable session digest mismatch for alice sourcePod=gateway-old targetPod=gateway-new: " +
-        `source(files=110 bytes=1172920 sha256=${sourceDigestHash}) ` +
-        `target(files=109 bytes=1172920 sha256=${targetDigestHash}); resume=source resume refused`,
-    );
-
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining(
-      "preserving configured Builder target state after failed handoff gateway=default slugs=alice: " +
-        "durable session digest mismatch for alice sourcePod=gateway-old targetPod=gateway-new: " +
-        "source(files=110 bytes=1172920",
-    ));
-    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
-    expect(h.deps.resumeSourceOpenClaw).toHaveBeenCalledOnce();
-  });
-
   it("keeps the roster gated when a Builder rollback cannot resume its source", async () => {
     const h = harness({
       assignments: [assignment("u1", "alice")],
@@ -442,7 +407,6 @@ describe("surge customer handoff", () => {
     await expect(reconcileSurgeCustomerHandoff(h.deps, { gatewayId: "default", desiredImageTag: "new-sha",
       requiresCustomerMigration: true, disposableBuilderGateway: true })).resolves.toEqual({ ready: false });
     expect(h.events).toContain("transfer:alice");
-    expect(h.events.indexOf("transfer:alice")).toBeLessThan(h.events.indexOf("digest:target-uid:alice"));
     expect(h.deps.releaseTarget).toHaveBeenCalledOnce();
     expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
   });
@@ -652,8 +616,6 @@ describe("surge customer handoff", () => {
       "hold-target:target-uid:alice",
       "stop-source:old-uid:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
@@ -747,8 +709,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
   });
@@ -766,13 +726,9 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
-      "digest:old-uid:bob",
-      "digest:target-uid:bob",
       "release:target-uid",
     ]);
     expect(h.assignments().every((item) => item.updatedByOperationId === h.operationId)).toBe(true);
@@ -789,7 +745,6 @@ describe("surge customer handoff", () => {
     });
     expect(h.deps.quiesce).toHaveBeenCalled();
     expect(h.deps.transfer).toHaveBeenCalled();
-    expect(h.deps.readDurableSessionDigest).toHaveBeenCalled();
     expect(h.events.at(-1)).toBe("release:target-uid");
   });
 
@@ -1112,8 +1067,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.assignments()[0]).toMatchObject({
@@ -1154,8 +1107,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      `digest:${priorTargetUid}:alice`,
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.assignments()[0]).toMatchObject({
@@ -1434,8 +1385,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
@@ -1458,13 +1407,9 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
-      "digest:old-uid:bob",
-      "digest:target-uid:bob",
       "release:target-uid",
     ]);
   });
@@ -1489,8 +1434,6 @@ describe("surge customer handoff", () => {
       "hold-target:target-uid:alice",
       "stop-source:old-uid:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.deps.discardTargetCustomer).not.toHaveBeenCalled();
@@ -1576,7 +1519,7 @@ describe("surge customer handoff", () => {
       disposableBuilderGateway: true,
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["stop-source:old-uid:alice", "hold-target:target-uid:alice", "digest:old-uid:alice", "digest:target-uid:alice", "stop-source:old-uid:alice", "hold-target:target-uid:alice", "release:target-uid"]);
+    expect(h.events).toEqual(["stop-source:old-uid:alice", "hold-target:target-uid:alice", "stop-source:old-uid:alice", "hold-target:target-uid:alice", "release:target-uid"]);
     expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
   });
 
@@ -1596,24 +1539,6 @@ describe("surge customer handoff", () => {
     });
     expect(h.deps.resumeSourceIngress).not.toHaveBeenCalled();
     expect(h.assignments()[0].state).toBe("quiescing");
-  });
-
-  it("keeps a Builder gated if source and target config commits differ", async () => {
-    const h = harness({
-      pods: [{ ...oldPod, ready: false }, targetPod],
-      assignments: [{ ...assignment("u1", "alice"), state: "quiescing", updatedByOperationId: "surge-default-target-uid" }],
-      bootingUids: [oldPod.uid, targetPod.uid],
-      prelaunchByUid: { [oldPod.uid]: "held", [targetPod.uid]: "hydrated" },
-    });
-    vi.mocked(h.deps.readSystemConfigCommit).mockImplementation(async pod => pod.uid === oldPod.uid ? "a".repeat(40) : "b".repeat(40));
-    await expect(reconcileSurgeCustomerHandoff(h.deps, {
-      gatewayId: "default", desiredImageTag: "new-sha", requiresCustomerMigration: true,
-      disposableBuilderGateway: true,
-    })).rejects.toThrow("cannot verify matching source and target state");
-    expect(h.assignments()[0].state).toBe("quiescing");
-    expect(h.deps.releaseTarget).not.toHaveBeenCalled();
-    expect(h.deps.transfer).not.toHaveBeenCalled();
-    expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
   });
 
   it("does not read assignments for a Barn whose source is missing or NotReady", async () => {
@@ -1747,8 +1672,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "assignment:u2:quiescing",
       "quiesce:bob",
       "transfer:bob",
@@ -1767,8 +1690,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "assignment:u2:quiescing",
     ]);
   });
@@ -1807,13 +1728,11 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
   });
 
-  it("retries a digest-verified Builder target release after it returns to hold", async () => {
+  it("retries a Builder target release after it returns to hold", async () => {
     const wait = vi.fn(async () => undefined);
     const h = harness({
       assignments: [assignment("u1", "alice")],
@@ -1838,8 +1757,6 @@ describe("surge customer handoff", () => {
       "hold-target:target-uid:alice",
       "stop-source:old-uid:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
       "release:target-uid",
     ]);
@@ -1873,8 +1790,6 @@ describe("surge customer handoff", () => {
       "hold-target:target-uid:alice",
       "stop-source:old-uid:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.deps.resumeSourceOpenClaw).not.toHaveBeenCalled();
@@ -1895,8 +1810,6 @@ describe("surge customer handoff", () => {
       "assignment:u1:quiescing",
       "quiesce:alice",
       "transfer:alice",
-      "digest:old-uid:alice",
-      "digest:target-uid:alice",
       "release:target-uid",
     ]);
     expect(h.assignments()[0]).toMatchObject({
@@ -1937,7 +1850,7 @@ describe("surge customer handoff", () => {
       supersedingImageTag: "next-sha",
     })).resolves.toEqual({ ready: false });
 
-    expect(h.events).toEqual(["stop-source:old-uid:alice", "hold-target:target-uid:alice", "digest:old-uid:alice", "digest:target-uid:alice", "stop-source:old-uid:alice", "hold-target:target-uid:alice", "release:target-uid"]);
+    expect(h.events).toEqual(["stop-source:old-uid:alice", "hold-target:target-uid:alice", "stop-source:old-uid:alice", "hold-target:target-uid:alice", "release:target-uid"]);
   });
 
   it("releases a live source voice hold when superseding a held Builder target", async () => {
