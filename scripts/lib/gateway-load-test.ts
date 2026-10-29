@@ -155,22 +155,10 @@ export async function runLoadPlan(plan: LoadPlan, deps: {
               await timed("read", () => client.read());
             }
           } else {
-            const id = randomUUID();
-            const marker = `OCTOGEE_LOAD_${id}`;
-            const timeout = setTimeout(() => client.close(), plan.turnTimeoutMs);
-            try {
-              await timed("coach_complete", async () => {
-                const deadline = now() + plan.turnTimeoutMs;
-                await timed("send_ack", () => client.send(`Capacity test. Reply with exactly ${marker}. Do not use tools or perform any other action.`, id));
-                for (;;) {
-                  signal.throwIfAborted();
-                  if (now() >= deadline) throw new Error("Coach completion deadline exceeded");
-                  const history = await client.read();
-                  if (now() < deadline && hasCoachReply(history, marker)) return;
-                  await deps.sleep(Math.min(2_000, Math.max(0, deadline - now())), signal);
-                }
-              });
-            } finally { clearTimeout(timeout); }
+            await timed("coach_complete", () => performCoachTurn(client, {
+              timeoutMs: plan.turnTimeoutMs, signal, now, sleep: deps.sleep,
+              send: (message, id) => timed("send_ack", () => client.send(message, id)),
+            }));
           }
         } finally { client.close(); clients.delete(client); }
       });
@@ -183,6 +171,33 @@ export async function runLoadPlan(plan: LoadPlan, deps: {
       }
     }
   } finally { for (const client of clients) client.close(); }
+}
+
+export async function performCoachTurn(client: LoadClient, opts: {
+  timeoutMs: number;
+  signal: AbortSignal;
+  sleep(ms: number, signal: AbortSignal): Promise<void>;
+  now?: () => number;
+  pollMs?: number;
+  send?: (message: string, idempotencyKey: string) => Promise<void>;
+}): Promise<void> {
+  const now = opts.now ?? (() => performance.now());
+  const send = opts.send ?? ((message, id) => client.send(message, id));
+  const pollMs = opts.pollMs ?? 2_000;
+  const id = randomUUID();
+  const marker = `OCTOGEE_LOAD_${id}`;
+  const timeout = setTimeout(() => client.close(), opts.timeoutMs);
+  try {
+    const deadline = now() + opts.timeoutMs;
+    await send(`Capacity test. Reply with exactly ${marker}. Do not use tools or perform any other action.`, id);
+    for (;;) {
+      opts.signal.throwIfAborted();
+      if (now() >= deadline) throw new Error("Coach completion deadline exceeded");
+      const history = await client.read();
+      if (now() < deadline && hasCoachReply(history, marker)) return;
+      await opts.sleep(Math.min(pollMs, Math.max(0, deadline - now())), opts.signal);
+    }
+  } finally { clearTimeout(timeout); }
 }
 
 export function summarizeMeasurements(measurements: LoadMeasurement[]) {

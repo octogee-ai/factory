@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { hasCoachReply, parseLoadPlan, runLoadPlan, summarizeMeasurements, type LoadClient, type LoadMeasurement, LoadHttpError } from "../lib/gateway-load-test.js";
-import { stableMediumPod, parseCgroup } from "../lib/gateway-load-sampler.js";
+import { hasCoachReply, parseLoadPlan, performCoachTurn, runLoadPlan, summarizeMeasurements, type LoadClient, type LoadMeasurement, LoadHttpError } from "../lib/gateway-load-test.js";
+import { createSharedPoolSampler, parseCgroup, slotObservation, stableMediumPod } from "../lib/gateway-load-sampler.js";
 import { testToken, testTokens } from "../lib/gateway-load-client.js";
 
 const target = (name = "alice") => ({ name, workspaceSlug: name, tokenEnv: `OCTOGEE_LOAD_TOKEN_${name.toUpperCase()}`,
@@ -86,6 +86,18 @@ describe("staged gateway exercises", () => {
     expect(rows.every((r) => r.ok)).toBe(true);
   });
 
+  it("polls history at the configured interval until the exact nonce reply arrives", async () => {
+    let time = 0, marker = "";
+    const waits: number[] = [];
+    const client: LoadClient = { close: vi.fn(), send: async (message) => { marker = message.match(/OCTOGEE_LOAD_[a-f0-9-]+/)![0]; },
+      read: async () => ({ messages: time >= 9_000 ? [{ role: "assistant", content: marker }] : [] }) };
+    await performCoachTurn(client, { timeoutMs: 60_000, pollMs: 3_000, signal: new AbortController().signal, now: () => time,
+      sleep: async (ms) => { waits.push(ms); time += ms; } });
+    expect(waits).toEqual([3_000, 3_000, 3_000]);
+    await expect(performCoachTurn(client, { timeoutMs: 5_000, pollMs: 3_000, signal: new AbortController().signal, now: () => time,
+      sleep: async (ms) => { time += ms; }, send: async () => { marker = "never"; } })).rejects.toThrow("deadline");
+  });
+
   it("does not count echoed user messages or unrelated assistant replies as completion", () => {
     expect(hasCoachReply({ messages: [{ role: "user", content: "marker" }, { role: "assistant", content: "old" }] }, "marker")).toBe(false);
     expect(hasCoachReply({ messages: [{ role: "assistant", content: "User asked for marker" }] }, "marker")).toBe(false);
@@ -145,5 +157,65 @@ describe("Medium resource preflight", () => {
     const raw = "FILE cpu.stat\nusage_usec 200\nnr_periods 10\nnr_throttled 2\nFILE memory.current\n1024\nFILE memory.stat\ninactive_file 100\nFILE memory.events\noom_kill 0\nFILE cpu.pressure\nsome avg10=0.10 avg60=0.20 total=500\n";
     expect(parseCgroup(raw)).toMatchObject({ "cpu.pressure": { "some.avg60": 0.2 }, "memory.current": { value: 1024 } });
     expect(() => parseCgroup("FILE cpu.stat\nusage_usec 1")).toThrow();
+  });
+});
+
+describe("shared pool sampler", () => {
+  const cgroup = (oom = 0) => `FILE cpu.stat\nusage_usec 200\nnr_periods 10\nnr_throttled 2\nFILE memory.current\n1024\nFILE memory.stat\ninactive_file 100\nFILE memory.events\noom_kill ${oom}\n`;
+  const pod = (gatewayId: string, over: { ready?: boolean; uid?: string; name?: string } = {}) => ({
+    metadata: { name: over.name ?? `${gatewayId}-pod`, uid: over.uid ?? `${gatewayId}-uid`, labels: { tier: "m", "gateway-id": gatewayId, app: "octogee-gateway" } },
+    spec: { nodeName: "node-a", containers: [{ name: "gateway", image: "image", resources: { requests: { cpu: "2", memory: "8Gi" }, limits: { cpu: "2", memory: "8Gi" } } }] },
+    status: { containerStatuses: [{ name: "gateway", ready: over.ready ?? true, restartCount: 0 }] },
+  });
+  const fakeKubectl = (state: { pods: unknown[]; oom: Record<string, number> }) => {
+    const calls: string[][] = [];
+    const kubectl = async (...args: string[]) => {
+      calls.push(args);
+      if (args[0] === "get" && args[1] === "pods") return JSON.stringify({ items: state.pods });
+      if (args[0] === "get" && args[1] === "--raw") return JSON.stringify({ usage: { cpu: "1", memory: "1Gi" }, timestamp: "t" });
+      if (args[0] === "exec" && args.at(-1)!.includes("df")) return "fs";
+      if (args[0] === "exec") return cgroup(state.oom[args[1]] ?? 0);
+      throw new Error(`unexpected kubectl ${args.join(" ")}`);
+    };
+    return { kubectl, calls };
+  };
+
+  it("samples every Ready shared-N slot, lists starting slots without exec, and ignores builder gateways", async () => {
+    const { kubectl, calls } = fakeKubectl({ pods: [pod("shared-0"), pod("shared-1", { ready: false }), pod("builder-7")], oom: {} });
+    const sample = await createSharedPoolSampler(kubectl)();
+    expect(sample.slots.map((s) => s.slot)).toEqual(["shared-0"]);
+    expect(sample.starting).toEqual([{ slot: "shared-1", pod: "shared-1-pod" }]);
+    expect(sample.violations).toEqual([]);
+    expect(calls.filter((c) => c[0] === "exec").map((c) => c[1])).toEqual(["shared-0-pod", "shared-0-pod"]);
+  });
+
+  it("flags OOM kills and pod replacement per slot, and forgets a slot that scales away", async () => {
+    const state = { pods: [pod("shared-0"), pod("shared-1")], oom: {} as Record<string, number> };
+    const { kubectl } = fakeKubectl(state);
+    const sampler = createSharedPoolSampler(kubectl);
+    expect((await sampler()).violations).toEqual([]);
+    state.oom["shared-1-pod"] = 1;
+    state.pods = [pod("shared-0", { uid: "new" }), pod("shared-1")];
+    expect((await sampler()).violations).toEqual(["shared-0:pod-replaced", "shared-1:oom-kill"]);
+    state.pods = [pod("shared-0", { uid: "new" })];
+    expect((await sampler()).violations).toEqual(["shared-0:pod-replaced"]);
+    state.pods = [pod("shared-0", { uid: "new" }), pod("shared-1", { uid: "again" })];
+    expect((await sampler()).violations).toEqual(["shared-0:pod-replaced"]);
+  });
+
+  it("keeps a slot's baseline while its pod is unready so a replacement surfaces when it returns", async () => {
+    const state = { pods: [pod("shared-1")], oom: {} };
+    const { kubectl } = fakeKubectl(state);
+    const sampler = createSharedPoolSampler(kubectl);
+    expect((await sampler()).violations).toEqual([]);
+    state.pods = [pod("shared-1", { uid: "replacement", ready: false })];
+    expect(await sampler()).toMatchObject({ slots: [], starting: [{ slot: "shared-1" }], violations: [] });
+    state.pods = [pod("shared-1", { uid: "replacement" })];
+    expect((await sampler()).violations).toEqual(["shared-1:pod-replaced"]);
+  });
+
+  it("reduces a sample to the serving and starting slot names", async () => {
+    const { kubectl } = fakeKubectl({ pods: [pod("shared-2"), pod("shared-0"), pod("shared-1", { ready: false })], oom: {} });
+    expect(slotObservation(await createSharedPoolSampler(kubectl)())).toMatchObject({ serving: ["shared-0", "shared-2"], starting: ["shared-1"] });
   });
 });
