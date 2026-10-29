@@ -141,6 +141,7 @@ export interface MigrateCustomerDeps {
   useDurableMigration: (
     fromGatewayId: string,
     toGatewayId: string,
+    retainedNativeRelease?: number,
   ) => Promise<boolean>;
 
   findPreemptedComputer: (gatewayId: string, sinceMs: number) => Promise<string | null>;
@@ -1786,6 +1787,7 @@ async function prepareMigration(
     const durable = await deps.useDurableMigration(
       user.currentGatewayId,
       request.toGatewayId,
+      nativeReturn ? resolved.targets.fromRelease : undefined,
     );
     assertRetainedMigrationStrategy(op,durable,nativeReturn);
     if (nativeReturn) {

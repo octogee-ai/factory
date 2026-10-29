@@ -20,3 +20,11 @@ export function migrationSourceRootIsStable(root: MigrationGatewayRoot): boolean
 export function migrationTargetRootIsStable(root: MigrationGatewayRoot): boolean {
   return root.desiredStatus === "running" && releaseIsConverged(root);
 }
+
+export function migrationSourceReady(root: MigrationGatewayRoot & { gatewayClass?: string | null }, retainedNativeRelease?: number): boolean {
+  if (retainedNativeRelease === undefined) return migrationSourceRootIsStable(root);
+  return root.gatewayClass === "builder" &&
+    (root.desiredStatus === "running" || root.desiredStatus === "draining") &&
+    Number.isSafeInteger(retainedNativeRelease) && retainedNativeRelease > 0 &&
+    root.liveRelease === retainedNativeRelease;
+}

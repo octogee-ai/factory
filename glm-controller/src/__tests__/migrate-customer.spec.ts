@@ -1,3 +1,4 @@
+import { migrationSourceReady } from "../migration-root-stability.js";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
@@ -707,6 +708,57 @@ describe("native computer return", () => {
     h.deps.prepareNativeComputerReturn = vi.fn(async () => native);
     return native;
   }
+
+  it("continues a validated Native forward recovery on its live source release", async () => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    const sourceRoot = { gatewayClass: "builder", desiredStatus: "running" as const, desiredRelease: 2, liveRelease: 1 };
+    vi.mocked(h.deps.useDurableMigration).mockImplementation(async (_source, _target, retainedRelease) => {
+      if (!migrationSourceReady(sourceRoot, retainedRelease)) throw new Error("source gateway not migration-ready");
+      return false;
+    });
+    const handoff = { migrationId: "mig-op-1:scheduler:1:claim:4000", uid: "uid-alice", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", forwardRecovery: { schemaVersion: 1 as const, phase: "source-flushed" as const, sourceEpoch: 4 } };
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff }), h.ctx);
+    expect(result).toMatchObject({ success: true });
+    expect(native.park).toHaveBeenCalledOnce();
+    expect(h.deps.useDurableMigration).toHaveBeenCalledWith("gw-blue", "gw-green", 1);
+    expect(h.ctx.assertActiveClaim).toHaveBeenCalledWith(true);
+  });
+
+  it("retains the live Native source release before the forward checkpoint", async () => {
+    const h = mkDeps();
+    const native = nativeReturn(h);
+    const sourceRoot = { gatewayClass: "builder", desiredStatus: "running" as const, desiredRelease: 2, liveRelease: 1 };
+    vi.mocked(h.deps.useDurableMigration).mockImplementation(async (_source, _target, retainedRelease) => {
+      if (!migrationSourceReady(sourceRoot, retainedRelease)) throw new Error("source gateway not migration-ready");
+      return false;
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: true });
+    expect(native.requestCheckpoint).toHaveBeenCalledOnce();
+    expect(native.awaitCheckpoint).toHaveBeenCalledOnce();
+    expect(native.park).toHaveBeenCalledOnce();
+    expect(h.client.scheduler).toHaveBeenCalledWith(expect.objectContaining({ phase: "activate" }));
+  });
+
+  it("rejects an unconverged source for an ordinary migration", async () => {
+    const h = mkDeps();
+    const sourceRoot = { gatewayClass: "builder", desiredStatus: "running" as const, desiredRelease: 2, liveRelease: 1 };
+    vi.mocked(h.deps.useDurableMigration).mockImplementation(async (_source, _target, retainedRelease) => {
+      if (!migrationSourceReady(sourceRoot, retainedRelease)) throw new Error("source gateway not migration-ready");
+      return false;
+    });
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: false, error: "source gateway not migration-ready" });
+    expect(h.client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("does not relax source readiness when the forward recovery scope changed", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    const handoff = { migrationId: "mig-op-1:scheduler:1:claim:4000", uid: "uid-alice", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", forwardRecovery: { schemaVersion: 1 as const, phase: "source-flushed" as const, sourceEpoch: 999 } };
+    await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff }), h.ctx);
+    expect(h.deps.useDurableMigration).not.toHaveBeenCalled();
+  });
 
   it("returns to a Barn after the prior assignment removed its customer SSH key", async () => {
     const h = mkDeps();

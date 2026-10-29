@@ -171,7 +171,7 @@ import {
 import { createAddGatewayHandler } from "./handlers/add-gateway.js";
 import { createMigrateCustomerHandler } from "./handlers/migrate-customer.js";
 import {
-  migrationSourceRootIsStable,
+  migrationSourceReady,
   migrationTargetRootIsStable,
 } from "./migration-root-stability.js";
 import {
@@ -3442,9 +3442,7 @@ async function buildHandlers(
         },
       );
     },
-    // Durable (V2) migration when neither side is shared-class; roots must be
-    // converged (no in-flight release roll) for every class.
-    useDurableMigration: async (fromGatewayId, toGatewayId) => {
+    useDurableMigration: async (fromGatewayId, toGatewayId, retainedNativeRelease) => {
       const [source, target] = await Promise.all([
         db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).get(),
         db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get(),
@@ -3465,7 +3463,7 @@ async function buildHandlers(
       }
       const sourceData = sourceAuthorization.gateway as DurableGateway;
       const targetData = targetAuthorization.gateway as DurableGateway;
-      if (!migrationSourceRootIsStable(sourceData)) {
+      if (!migrationSourceReady(sourceData, retainedNativeRelease)) {
         throw new Error(
           `source gateway ${fromGatewayId} is not migration-ready ` +
           `(desiredStatus=${sourceData.desiredStatus}, desiredRelease=${sourceData.desiredRelease}, ` +
