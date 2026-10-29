@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,10 @@ const directoryDependencies = [
   ["scripts", "@octogee/core", "dependencies", "file:../core"],
   ["scripts", "@octogee/shared", "dependencies", "file:../shared"],
 ] as const;
+
+const trackedNpmrcFiles = execFileSync("git", ["ls-files", "*.npmrc"], { cwd: root, encoding: "utf8" })
+  .split("\n")
+  .filter(Boolean);
 
 function readJson(filePath: string): Record<string, any> {
   return JSON.parse(fs.readFileSync(path.join(root, filePath), "utf8"));
@@ -54,18 +59,34 @@ describe("directory dependency repository contract", () => {
     expect(readJson("core/package.json").peerDependencies["@octogee/shared"]).toBe("^1.0.0");
   });
 
+  it("discovers every tracked consumer npm config", () => {
+    expect(trackedNpmrcFiles).toEqual(expect.arrayContaining([
+      "core/.npmrc",
+      "functions/.npmrc",
+      "gateway-edge/.npmrc",
+      "glm-controller/.npmrc",
+      "octogee-api/.npmrc",
+      "scripts/.npmrc",
+    ]));
+  });
+
+  it.each(trackedNpmrcFiles)("%s enforces the 7-day npm release-age cooldown", (npmrc) => {
+    const lines = fs.readFileSync(path.join(root, npmrc), "utf8").split("\n").map((line) => line.trim());
+    expect(lines).toContain("min-release-age=7");
+  });
+
   it.each(["core", "functions", "gateway-edge", "glm-controller", "octogee-api"])(
-    "%s enables locally linked packages",
+    "%s enables locally linked packages with the release-age cooldown",
     (consumer) => {
       expect(fs.readFileSync(path.join(root, consumer, ".npmrc"), "utf8")).toBe(
-        "install-links=true\n",
+        "install-links=true\nmin-release-age=7\n",
       );
     },
   );
 
-  it("scripts preserves strict install-script review", () => {
+  it("scripts preserves strict install-script review with the release-age cooldown", () => {
     expect(fs.readFileSync(path.join(root, "scripts", ".npmrc"), "utf8")).toBe(
-      "install-links=true\nstrict-allow-scripts=true\n",
+      "install-links=true\nmin-release-age=7\nstrict-allow-scripts=true\n",
     );
   });
 
