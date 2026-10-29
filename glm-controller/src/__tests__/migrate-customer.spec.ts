@@ -2609,6 +2609,16 @@ it("migrates without reading version metadata or a release artifact for a fixed 
 });
 
 describe("legacy migration forward recovery", () => {
+  it("keeps a fenced forward recovery retryable while its target is draining", async () => {
+    const h = mkDeps();
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: false, reason: "revision-not-ready" });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: {
+      migrationId: "mig-op-1:scheduler:1:claim:4000", uid: "uid-alice", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green",
+      forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 },
+    } }), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("status 503") });
+  });
+
   it("restarts a lost final import response with the original scheduler ID and never reopens the old Native writer", async () => {
     const h = mkDeps();
     let saved: Operation["schedulerHandoff"];

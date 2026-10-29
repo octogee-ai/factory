@@ -1715,6 +1715,13 @@ async function prepareSharedSourceAgentStores(input: {
   await assertCurrent();
 }
 
+function migrationPlacementFailure(op: Operation, failure: { error: string }): { error: string; rolledBack?: false } {
+  if (op.schedulerHandoff?.forwardRecovery && failure.error.endsWith(": revision-not-ready")) {
+    return { error: `migration forward recovery pending: status 503: ${failure.error}`, rolledBack: false };
+  }
+  return failure;
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1758,7 +1765,7 @@ async function prepareMigration(
       user,
       request.toGatewayId,
     );
-    if ("error" in resolved) return resolved;
+    if ("error" in resolved) return migrationPlacementFailure(op, resolved);
     if (declaredMigrationSourceChanged(migrationInput, resolved.targets.fromGatewayId)) {
       return {
         error:

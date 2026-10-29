@@ -154,11 +154,11 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 This refresh freezes latest fetched OpenClaw main at
 `d5f7d57eff508f815ef03f6560ca12b2b3d4aa0a`. It independently qualifies that exact
 tip without substituting an older green commit or following newer commits. The
-clean overlay is [`a6f4181f473ea009cb6221fc3c7b56291e643ef2`](https://github.com/ceckert/openclaw/commit/a6f4181f473ea009cb6221fc3c7b56291e643ef2)
-on `codex/doctor-skip-recovery-backups`: the October 28 overlay
+clean overlay is [`4c57514d2392e773146b8e147971ad1bcb82f009`](https://github.com/ceckert/openclaw/commit/4c57514d2392e773146b8e147971ad1bcb82f009)
+on `codex/broker-model-runtime-policy`: the October 28 overlay
 [`8c5ec056f0b36959a78df0aa11d7664884efb2b1`](https://github.com/ceckert/openclaw/commit/8c5ec056f0b36959a78df0aa11d7664884efb2b1)
 plus the two open Mattermost channel contributions and the Octogee-specific
-Doctor option below, carried as their own commits on the same selected base.
+Doctor option and provider-qualified runtime-policy fix below, carried as their own commits on the same selected base.
 
 The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40704141760)
 was cancelled without reporting jobs. It supplies no runtime qualification. The
@@ -234,6 +234,17 @@ metadata and config-doc baseline regenerated for the new schema keys, and the
 preflight ratchets require. Runtime bytes are the PR commits' own. Remove each
 family when the selected base contains the merged behavior and the Mattermost
 consumer controls pass; an open PR or a newer main containing it is not enough.
+
+### Provider-qualified runtime policies
+
+The TEST coach selected `platform-openrouter/openai/gpt-5.6-luna`, but Native
+matched its nested model ID against the direct `openai/gpt-5.6-luna` Codex policy
+and rejected the request. Compare the policy provider before matching the model
+ID. The regression preserves direct OpenAI Codex selection and broker model
+selection without changing credentials or customer preferences. This belongs in
+Native's policy resolver; an Octogee override would hide the routing defect.
+Remove this overlay when the selected Native base has equivalent provider-bound
+matching. The fix is carried in the Octogee artifact; no upstream PR is open.
 
 ### Octogee migration Doctor option
 
@@ -313,8 +324,8 @@ inference and interactive desktop acceptance are not claimed.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-0abfd77d.tgz#1793209433965738` | 137486009 | `0abfd77dfe92e2c23301f2244c7d91671001daacb812b2a3d554876986c83056` |
-| mattermost | `openclaw-mattermost-7ddd6253.tgz#1793209437799591` | 1264830 | `7ddd625377ee7ebee12a2b813be81b8da7f0718f823a384c5cbb8c06a3f5f22f` |
+| root | `openclaw-fork-8aaa9064.tgz#1793242914836499` | 137659399 | `8aaa90641d87a00ac71cff50169995cbe01704b737fb9707b53ba53906247114` |
+| mattermost | `openclaw-mattermost-d9c31354.tgz#1793242917867996` | 1272218 | `d9c31354d0f72cff97bcd93e5461b210ac8b004fd83b80aa8affcb962c3b9327` |
 
 Generation-bound readbacks must reproduce both complete hashes before pins and
 mirrored aliases are accepted. Hash-addressed objects are write-once. Image
