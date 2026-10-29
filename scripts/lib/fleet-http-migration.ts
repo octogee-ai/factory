@@ -61,6 +61,7 @@ import {
   MIGRATION_RSYNC_PORT_DEFAULT,
   SIGNATURE_HEADER,
 } from "../../shared/types/fleet-controller.js";
+import type { FleetBrokerAgentAnchor } from "../../shared/types/fleet-broker.js";
 import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
 import {
   findUnreadableStore,
@@ -122,10 +123,12 @@ import {
   readSystemConfigWatchFenceGeneration,
 } from "./system-config-watch-state.js";
 import { dlog, OPENCLAW_DIR } from "./config.js";
+import { customerFileStatePaths } from "./customer-file-state.js";
 import { openClawConfigPath } from "./openclaw-config-path.js";
 import {
   assertConfiguredBuilderPortableStatePlanOnDisk,
   configuredBuilderPortableStatePlan,
+  configuredBuilderPortableStatePlanFromConfig,
   configuredBuilderStatePlanAllowsEntry,
   isSafeConfiguredAgentId,
   type ConfiguredBuilderPortableStatePlan,
@@ -999,6 +1002,76 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
   });
 }
 
+async function retainedSourcePaths(plan: ConfiguredBuilderPortableStatePlan, stateDir: string, slug: string) {
+  const sources = [];
+  for (const item of plan.paths.filter(item => !isSafeDefaultAgentPortableStatePath(item.relativePath))) {
+    const file = path.join(stateDir, item.relativePath);
+    try { await fs.lstat(file); sources.push({ cwd: stateDir, path: item.relativePath }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  for (const source of await customerFileStatePaths(OPENCLAW_DIR, slug)) {
+    if (!sources.some(item => item.cwd === source.cwd && item.path === source.path)) sources.push(source);
+  }
+  return sources;
+}
+
+async function assertRetainedSourceAnchors(sources: Array<{ cwd: string; path: string }>, authority: FleetBrokerAgentAnchor[]) {
+  const stores = await findPortableAgentStores(sources);
+  if (stores.length !== authority.length) throw new Error("Retained source is missing an authorized agent anchor");
+  for (const store of stores) {
+    const actual = readPostgresAgentAnchor(path.join(store.sourceAgentDir, AGENT_STORE_BASENAME));
+    const expected = authority.find(anchor => anchor.agentId === store.agentId);
+    if (!actual || !expected || actual.storeId !== expected.storeId || actual.schema !== expected.schema) {
+      throw new Error(`Retained source agent anchor does not match migration authority: ${store.agentId}`);
+    }
+  }
+}
+
+async function retainedSourceExport(deps: MigrationHandlerDeps, body: MigrationRequestBody, signal: AbortSignal, sourceHeld: boolean) {
+  const readCustody = deps.adapter.sourceMigrationIdentityCustody;
+  const readAnchors = deps.adapter.sourceMigrationAgentAnchors;
+  if (!readCustody || !readAnchors) throw new Error("Retained source requires current migration anchor authority");
+  const manifest = await readActivationManifest(OPENCLAW_DIR, body.slug);
+  const custody = await readCustody(body.slug, body.migrationId);
+  if (!manifest.sourceWorkspaceIdentities) throw new Error("Retained source requires retained workspace identity custody");
+  assertSourceIdentityCustody(manifest.sourceWorkspaceIdentities, custody);
+  if (custody.gatewayId !== deps.gatewayId || custody.podUid !== process.env.POD_UID) throw new Error("Retained source custody addresses another allocation");
+  const agents = [{ agentId: manifest.agentId, agent: manifest.agent }, ...manifest.projectAgents];
+  const authority = await readAnchors(body.slug, body.migrationId);
+  if (new Set(authority.map(anchor => anchor.agentId)).size !== agents.length || authority.length !== agents.length ||
+      agents.some(agent => !authority.some(anchor => anchor.agentId === agent.agentId))) {
+    throw new Error("Retained source manifest roster does not match migration anchor authority");
+  }
+  const stateDir = resolveOpenClawStateDir();
+  const plan = configuredBuilderPortableStatePlanFromConfig({ agents: { entries: Object.fromEntries(agents.map(agent => [agent.agentId, agent.agent])) } }, stateDir);
+  assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
+  const sources = await retainedSourcePaths(plan, stateDir, body.slug);
+  await assertRetainedSourceAnchors(sources, authority);
+  const assertCurrent = async () => {
+    signal.throwIfAborted();
+    assertSourceIdentityCustody(custody, await readCustody(body.slug, body.migrationId));
+    if ((sourceHeld && await deps.surgeSourceOpenClawHeld?.({ migrationId: body.migrationId, slug: body.slug }) !== true) ||
+        !isDeepStrictEqual(await readAnchors(body.slug, body.migrationId), authority) ||
+        !isDeepStrictEqual(await readActivationManifest(OPENCLAW_DIR, body.slug), manifest)) {
+      throw new Error("Retained source migration export authority changed");
+    }
+    signal.throwIfAborted();
+  };
+  await assertCurrent();
+  return { sources, assertCurrent };
+}
+
+async function sourceExportInventory(deps: MigrationHandlerDeps, body: PushRsyncStateRequestBody, mode: MigrationTransferMode, signal: AbortSignal) {
+  const sourceHeld = mode === "final" && await deps.surgeSourceOpenClawHeld?.({ migrationId: body.migrationId, slug: body.slug }) === true;
+  const retainedManifest = mode === "final" ? await readActivationManifest(OPENCLAW_DIR, body.slug).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }) : null;
+  const retained = retainedManifest?.sourceWorkspaceIdentities ? await retainedSourceExport(deps, body, signal, sourceHeld) : null;
+  const allSources = retained?.sources ?? await deps.adapter.listExportPaths(body.slug);
+  return { sourceHeld, retained, sources: sourcesForPushMode(allSources, body.slug, mode) };
+}
+
 async function maybeMaterializeActivationManifest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody & { includeActivationManifest?: boolean },
@@ -1808,8 +1881,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
     const { controller, detach } = attachImportDisconnectHandlers(res, body.migrationId, body.slug, log, "export");
     const transferTimer = setTimeout(() => controller.abort(new Error("rsync push-state transfer deadline exceeded")), Math.max(0, deadline - Date.now()));
     try {
-      const allSources = await deps.adapter.listExportPaths(body.slug);
-      const sources = sourcesForPushMode(allSources, body.slug, mode);
+      const { sourceHeld, retained, sources } = await sourceExportInventory(deps, body, mode, controller.signal);
       if (sources.length === 0) {
         res
           .status(404)
@@ -1818,7 +1890,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       }
       const postgresHandoff = mode === "final" && (await findPortableAgentStores(sources)).some(store =>
         readPostgresAgentAnchor(path.join(store.sourceAgentDir, AGENT_STORE_BASENAME)) !== null);
-      const sourceHeld = mode === "final" && await deps.surgeSourceOpenClawHeld?.({ migrationId: body.migrationId, slug: body.slug }) === true;
+
       const manifestRequest = configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER ? { ...body, includeActivationManifest: false } : body;
       const activationManifest = mode === "keys"
         ? { source: null, cleanup: async () => {} }
@@ -1837,6 +1909,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
           log,
           detachAgent: async (agentId) => {
             if (sourceHeld) {
+              await retained?.assertCurrent();
               log(`[migration-rsync] OpenClaw is held for migration ${body.migrationId}; carrying ${agentId}'s closed anchor without detach`);
               return;
             }
@@ -1847,6 +1920,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
       }
 
       if (activationManifest.source) sources.push(activationManifest.source);
+      await retained?.assertCurrent();
 
       const passwordFile = path.join(tmpDir, "rsync.pass");
       await fs.writeFile(passwordFile, `${transferKey}\n`, { encoding: "utf-8", mode: 0o600 });

@@ -36,6 +36,14 @@ it("copies editable project state to the separate mount and preserves its source
   expect(await readFile(path.join(projects, "projects/demo/unsaved.txt"), "utf8")).toBe("newer");
   expect(await readdir(path.join(projects, "projects/.octogee-state"))).toEqual(["demo.assets.json"]);
 });
+it("invalidates the Builder fingerprint on boot so cleared project receipts are reconciled", async () => {
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  const marker = path.join(home, ".openclaw/applied-fingerprints.json");
+  await writeFile(marker, JSON.stringify({ alice: "matching-snapshot", other: "unchanged" }));
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  expect(JSON.parse(await readFile(marker, "utf8"))).toEqual({ other: "unchanged" });
+});
+
 it.each([false, true])("removes only empty legacy project placeholders at boot without reimporting them: %s", async (emptyGit) => {
   const source = path.join(home, ".openclaw/customers/alice/projects/demo");
   if (emptyGit) await mkdir(path.join(source, ".git"));

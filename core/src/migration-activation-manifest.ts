@@ -764,6 +764,12 @@ export async function applyOpenClawActivationManifest(
       authInheritanceAnchor.agent,
     ),
   };
+  const activationDefaults = {
+    ...(normalizedAuthInheritanceAnchor
+      ? { authInheritance: { agentId: normalizedAuthInheritanceAnchor.agentId } }
+      : {}),
+    ...(opts.gatewayClass === "builder" ? { systemAgent: { agentId: manifest.agentId } } : {}),
+  };
   const startedAt = Date.now();
   let routingActivationRequired = false;
   let restartExistingAccountIds: string[] = [];
@@ -832,13 +838,7 @@ export async function applyOpenClawActivationManifest(
           agents: {
             ...rosterPatch,
             ownership: "explicit",
-            ...(normalizedAuthInheritanceAnchor
-              ? {
-                defaults: {
-                  authInheritance: { agentId: normalizedAuthInheritanceAnchor.agentId },
-                },
-              }
-              : {}),
+            ...(Object.keys(activationDefaults).length > 0 ? { defaults: activationDefaults } : {}),
           },
           bindings: [
             ...filterOutCustomerBindings(currentBindings, manifest.slug),

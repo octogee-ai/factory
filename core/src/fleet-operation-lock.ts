@@ -1,3 +1,5 @@
+import { isBuilderReturnOperationIdFor } from "./builder-activation-lease.js";
+
 export type RolloutLane = "cluster" | "builder-vm";
 
 export interface FleetOperationLockRef {
@@ -49,11 +51,23 @@ export function serialLockReleasedAfterCutover(operation: FleetOperationLockRef)
   return operation.kind === "migrate-customer" && typeof operation.cutoverCommittedAt === "number";
 }
 
+function nativeReturnBlocksSourceRollout(rollout: FleetOperationLockRef, returning: FleetOperationLockRef): boolean {
+  if (rollout.kind !== "rollout" || rollout.rolloutLane === "cluster" || returning.kind !== "migrate-customer" ||
+      (returning.status !== undefined && !ACTIVE_STATUSES.has(returning.status))) return false;
+  const source = stringFields(returning.input, ["fromGatewayId"])[0];
+  const rolloutGateway = stringFields(rollout.input, ["gatewayId"])[0];
+  const input = returning.input as { source?: unknown; toGatewayId?: unknown } | undefined;
+  return source !== undefined && source === rolloutGateway && input?.source === "builder-activation-lease" &&
+    typeof input.toGatewayId === "string" && input.toGatewayId.startsWith("shared-") &&
+    isBuilderReturnOperationIdFor(returning.id, source);
+}
+
 export function serialFleetOperationsConflict(
   candidate: FleetOperationLockRef,
   other: FleetOperationLockRef,
 ): boolean {
   if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind)) return false;
+  if (nativeReturnBlocksSourceRollout(candidate, other) || nativeReturnBlocksSourceRollout(other, candidate)) return true;
   if (serialLockReleasedAfterCutover(candidate) || serialLockReleasedAfterCutover(other)) return false;
   const candidateResources = fleetOperationLockResources(candidate);
   for (const resource of fleetOperationLockResources(other)) {

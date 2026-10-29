@@ -441,6 +441,24 @@ describe("decideOperationClaim", () => {
     expect(decision).toEqual({ outcome: "claim" });
   });
 
+  it("queues a Native source rollout while post-cutover return cleanup is running", () => {
+    const rollout = { id: "roll", kind: "rollout", status: "pending", createdAt: 2, rolloutLane: "builder-vm" as const, input: { gatewayId: "builder-0" } };
+    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-customer", cutoverCommittedAt: now - 1,
+      input: { source: "builder-activation-lease", fromGatewayId: "builder-0", toGatewayId: "shared-0" } };
+    expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [returning], pendingOpsSameKind: [] })).toMatchObject({ outcome: "queue" });
+    expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [], pendingOpsSameKind: [{ ...returning, createdAt: 1, nextAttemptAt: now + 30_000 }] })).toMatchObject({ outcome: "queue" });
+    expect(decideOperationClaim({ op: { ...rollout, input: { gatewayId: "builder-1" } }, now, runningOpsSameKind: [returning], pendingOpsSameKind: [] })).toEqual({ outcome: "claim" });
+    expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [], pendingOpsSameKind: [] })).toEqual({ outcome: "claim" });
+  });
+
+  it.each([undefined, now + 1_000])("keeps a pending post-cutover Native return ahead of an older source rollout (queuedAt=%s)", (queuedAt) => {
+    const rollout = { id: "roll", kind: "rollout", origin: "operator", status: "pending", createdAt: 1, rolloutLane: "builder-vm" as const, input: { gatewayId: "builder-0" } };
+    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-customer", createdAt: 2, queuedAt, nextAttemptAt: now + 30_000, cutoverCommittedAt: now - 1,
+      input: { source: "builder-activation-lease", fromGatewayId: "builder-0", toGatewayId: "shared-0" } };
+    expect(decideOperationClaim({ op: rollout, now, runningOpsSameKind: [], pendingOpsSameKind: [returning] })).toMatchObject({ outcome: "queue" });
+    expect(decideOperationClaim({ op: { ...returning, status: "pending", nextAttemptAt: now }, now, runningOpsSameKind: [], pendingOpsSameKind: [rollout] })).toEqual({ outcome: "claim" });
+  });
+
   it("keeps a sleeping durable migration's gateway lock", () => {
     const decision = decideOperationClaim({
       op: {

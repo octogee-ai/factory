@@ -1,3 +1,4 @@
+import { isBuilderReturnOperationIdFor } from "./builder-activation-lease.js";
 const SERIAL_KINDS = new Set([
     "rollout",
     "migrate-customer",
@@ -30,9 +31,22 @@ export function fleetOperationLockResources(operation) {
 export function serialLockReleasedAfterCutover(operation) {
     return operation.kind === "migrate-customer" && typeof operation.cutoverCommittedAt === "number";
 }
+function nativeReturnBlocksSourceRollout(rollout, returning) {
+    if (rollout.kind !== "rollout" || rollout.rolloutLane === "cluster" || returning.kind !== "migrate-customer" ||
+        (returning.status !== undefined && !ACTIVE_STATUSES.has(returning.status)))
+        return false;
+    const source = stringFields(returning.input, ["fromGatewayId"])[0];
+    const rolloutGateway = stringFields(rollout.input, ["gatewayId"])[0];
+    const input = returning.input;
+    return source !== undefined && source === rolloutGateway && input?.source === "builder-activation-lease" &&
+        typeof input.toGatewayId === "string" && input.toGatewayId.startsWith("shared-") &&
+        isBuilderReturnOperationIdFor(returning.id, source);
+}
 export function serialFleetOperationsConflict(candidate, other) {
     if (!SERIAL_KINDS.has(candidate.kind) || !SERIAL_KINDS.has(other.kind))
         return false;
+    if (nativeReturnBlocksSourceRollout(candidate, other) || nativeReturnBlocksSourceRollout(other, candidate))
+        return true;
     if (serialLockReleasedAfterCutover(candidate) || serialLockReleasedAfterCutover(other))
         return false;
     const candidateResources = fleetOperationLockResources(candidate);

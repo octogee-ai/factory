@@ -3227,6 +3227,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     req: Request;
   } {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("POD_UID", "source-pod");
     const workspace = path.join(stateDir, "customers", "chris");
     fsSync.mkdirSync(workspace, { recursive: true });
     const body: PushRsyncStateRequestBody = {
@@ -3246,6 +3247,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       ]),
       releaseAgent: vi.fn(options.releaseAgent ?? (async () => undefined)),
       sourceMigrationIdentityCustody: vi.fn(async () => ({ migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 })),
+      sourceMigrationAgentAnchors: vi.fn(async () => [{ agentId: "octogee-chris-coach", storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }]),
       exportOpenClawActivationManifest: vi.fn(async () => ({ version: 2, slug: "chris", appliedFingerprint: "fp-chris", agentId: "octogee-chris-coach", accountId: "chris-coach", agent: { id: "octogee-chris-coach", workspace }, projectAgents: [], mattermostAccount: { botToken: "synthetic-coach-token" }, bindings: [{ agentId: "octogee-chris-coach", match: { channel: "mattermost", accountId: "chris-coach" } }] })),
     });
     return {
@@ -3309,7 +3311,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     ]));
   });
 
-  it("carries a held Builder source's PostgreSQL anchor without detaching through its stopped OpenClaw", async () => {
+  it.each([false, true])("carries a fresh held Builder source without a captured manifest (uncaptured=%s)", async (uncaptured) => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
     const surgeSourceOpenClawHeld = vi.fn(async () => true);
@@ -3324,6 +3326,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       surgeSourceOpenClawHeld,
       releaseAgent: async () => { throw new Error("WS open failed: connect ECONNREFUSED 127.0.0.1:18789"); },
     });
+    if (uncaptured) await writeActivationManifest(OPENCLAW_DIR, await adapter.exportOpenClawActivationManifest!("chris"));
     const { res, getStatus } = mkResponse();
 
     await handler(req, res, vi.fn());
@@ -3332,6 +3335,49 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(surgeSourceOpenClawHeld).toHaveBeenCalledWith({ migrationId: "surge-held-source", slug: "chris" });
     expect(adapter.releaseAgent).not.toHaveBeenCalled();
     expect(snapshotCarried).toBe(true);
+  });
+
+  it.each(["complete", "running", "missing authority", "foreign custody", "foreign anchor", "missing anchor", "authority changed"])("carries the retained roster after current source roster shrinks (%s)", async (scenario) => {
+    const stateDir = await mkTempRoot(), migrationId = "held-roster-retry";
+    vi.stubEnv("POD_UID", "source-pod");
+    const ids = ["octogee-chris-coach", "octogee-chris-proj-one-coach", "octogee-chris-proj-two-coach"];
+    for (const id of ids) await writeStore(stateDir, `agents/${id}/agent/openclaw-agent.sqlite`, () => {});
+    const { handler, adapter, req } = pushRsync(stateDir, migrationId, { surgeSourceOpenClawHeld: async () => scenario !== "running" });
+    const manifest = await adapter.exportOpenClawActivationManifest!("chris");
+    manifest.projectAgents = ids.slice(1).map((agentId, index) => ({ agentId, accountId: agentId.replace(/^octogee-/, "").replace(/-coach$/, ""), agent: { id: agentId, workspace: path.join(stateDir, "customers/chris/projects", index ? "two" : "one") }, mattermostAccount: { botToken: "synthetic-project-token" }, bindings: [{ agentId, match: { channel: "mattermost", accountId: agentId.replace(/^octogee-/, "").replace(/-coach$/, "") } }] }));
+    for (const project of manifest.projectAgents) await fs.mkdir(String(project.agent.workspace), { recursive: true });
+    manifest.sourceWorkspaceIdentities = { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4, files: ids.map(agentId => ({ agentId, content: null, sha256: null })) };
+    await writeActivationManifest(OPENCLAW_DIR, manifest);
+    Object.assign(adapter, { sourceMigrationAgentAnchors: async () => ids.map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" })) });
+    if (scenario === "missing authority") delete adapter.sourceMigrationAgentAnchors;
+    if (scenario === "foreign custody") adapter.sourceMigrationIdentityCustody = async () => ({ migrationId, uid: "foreign", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 });
+    if (scenario === "foreign anchor") adapter.sourceMigrationAgentAnchors = async () => ids.map(agentId => ({ agentId, storeId: "foreign", schema: "octogee_agent_fixture" }));
+    if (scenario === "missing anchor") await fs.rm(path.join(stateDir, `agents/${ids[2]}/agent/openclaw-agent.sqlite`));
+    if (scenario === "authority changed") {
+      let reads = 0;
+      adapter.sourceMigrationAgentAnchors = async () => ++reads === 1 ? ids.map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" })) : [];
+    }
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+    const response = mkResponse(); await handler(req, response.res, vi.fn());
+    if (scenario !== "complete" && scenario !== "running") {
+      const errors = {
+        "missing authority": "Retained source requires current migration anchor authority",
+        "foreign custody": "Source workspace identity custody changed",
+        "foreign anchor": "Retained source agent anchor does not match migration authority",
+        "missing anchor": "Retained source is missing an authorized agent anchor",
+        "authority changed": "Retained source migration export authority changed",
+      };
+      expect(response.getBody()).toMatchObject({ message: expect.stringContaining(errors[scenario]) });
+      expect(response.getStatus()).toBe(500);
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(adapter.releaseAgent).not.toHaveBeenCalled();
+      return;
+    }
+    expect(response.getStatus(), JSON.stringify(response.getBody())).toBe(200);
+    const args = spawnMock.mock.calls[0]![1] as string[];
+    for (const id of ids) expect(args.some(arg => arg.endsWith(`/./agents/${id}/agent/.octogee-snapshot`))).toBe(true);
+    if (scenario === "running") expect(vi.mocked(adapter.releaseAgent!).mock.calls.map(([id]) => id)).toEqual(ids);
+    else expect(adapter.releaseAgent).not.toHaveBeenCalled();
   });
 
   it("detaches through OpenClaw when the source is not held for the migration", async () => {

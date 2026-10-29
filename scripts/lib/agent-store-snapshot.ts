@@ -291,7 +291,12 @@ export async function installPreparedAgentStores(input: {
       input.log?.(`[agent-store-snapshot] releasing ${store.agentId} before replacing its database`);
       await input.releaseAgent(store.agentId);
       const family = sqliteFamily(store.destinationPath);
-      await assertNotHeld(matchFiles(family), input.procRoot);
+      const destination = readPostgresAgentAnchor(store.destinationPath);
+      const incoming = readPostgresAgentAnchor(store.restoredPath);
+      const sameAnchor = destination !== null && incoming !== null &&
+        destination.storeId === incoming.storeId && destination.schema === incoming.schema;
+      await assertNotHeld(matchFiles(family), input.procRoot, { ignoreReadOnlyConnections: sameAnchor });
+      if (sameAnchor) await assertNotHeld(matchFiles(family.slice(1)), input.procRoot);
       for (const file of family) await fs.rm(file, { force: true });
     }
     await fs.mkdir(path.dirname(store.destinationPath), { recursive: true, mode: 0o700 });

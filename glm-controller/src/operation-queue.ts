@@ -134,6 +134,11 @@ export function compareOperationQueueOrder(
   return a.id < b.id ? -1 : 1;
 }
 
+function postCutoverReturnBlocksRollout(rollout: OperationRef, returning: OperationRef): boolean {
+  return rollout.kind === "rollout" && returning.kind === MIGRATE_CUSTOMER_KIND &&
+    typeof returning.cutoverCommittedAt === "number" && operationsConflict(rollout, returning);
+}
+
 function isBackingOffReleasedOperation(pending: PendingOperationRef, now: number): boolean {
   return (pending.kind === ACCOUNT_SUSPENSION_KIND ||
     pending.kind === MIGRATE_CUSTOMER_KIND && pending.queuedAt !== undefined) &&
@@ -253,6 +258,7 @@ function findOlderPendingSameScope(
       (pending) =>
         pending.id !== candidate.id &&
         !rolloutWaitsForBuilderActivation(pending, candidate) &&
+        !postCutoverReturnBlocksRollout(pending, candidate) &&
         !recoveryYieldsToTargetRoll(pending, candidate) &&
         !unstartedReturnYieldsToOperatorRoll(pending, candidate, eligibleRolls) &&
         !placementMoveYieldsToBuilderActivation(pending, candidate) &&
@@ -282,6 +288,9 @@ export function decideOperationClaim(
   }
   const runningConflict = findSerialConflict(op, runningOpsSameKind);
   if (runningConflict) return { outcome: "queue", waitingOn: runningConflict.waitingOn };
+  const postCutoverReturn = pendingOpsSameKind.find((pending) =>
+    pending.id !== op.id && postCutoverReturnBlocksRollout(op, pending));
+  if (postCutoverReturn) return { outcome: "queue", waitingOn: describeWaitingOn(postCutoverReturn) };
   const eligibleRolls = eligibleOperatorPriorityRolls(input);
   const activation = pendingOpsSameKind.find((pending) =>
     rolloutWaitsForBuilderActivation(op, pending) || placementMoveYieldsToBuilderActivation(op, pending) ||

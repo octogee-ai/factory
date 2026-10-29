@@ -167,6 +167,17 @@ describe("serialFleetOperationsConflict", () => {
     });
   });
 
+  it("holds a Native return source rollout after cutover until the return completes", () => {
+    const returning = { id: "builder-return-builder-0-g1", kind: "migrate-customer", status: "running", cutoverCommittedAt: 100,
+      input: { source: "builder-activation-lease", fromGatewayId: "builder-0", toGatewayId: "shared-0" } };
+    const sourceRoll = { id: "roll", kind: "rollout", rolloutLane: "builder-vm" as const, input: { gatewayId: "builder-0" } };
+    expect(serialFleetOperationsConflict(sourceRoll, returning)).toBe(true);
+    expect(serialFleetOperationsConflict(returning, sourceRoll)).toBe(true);
+    expect(serialFleetOperationsConflict({ ...sourceRoll, input: { gatewayId: "elsewhere" } }, returning)).toBe(false);
+    expect(serialFleetOperationsConflict({ ...sourceRoll, rolloutLane: "cluster" }, returning)).toBe(false);
+    expect(serialFleetOperationsConflict(sourceRoll, { ...returning, status: "succeeded" })).toBe(false);
+  });
+
   it("does not let an unclassified rollout bypass a classified rollout", () => {
     expect(serialFleetOperationsConflict(
       { id: "first", kind: "rollout", input: { gatewayId: "first" } },

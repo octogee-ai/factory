@@ -760,6 +760,35 @@ describe("native computer return", () => {
     expect(h.deps.useDurableMigration).not.toHaveBeenCalled();
   });
 
+  it("restores target SSH keys before retrying a fenced Native return", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    let targetHasKey = false;
+    vi.mocked(h.client.transferState).mockImplementation(async request => {
+      if (request.mode === "keys") targetHasKey = true;
+      if (request.mode === "final" && !targetHasKey) throw new Error("local SSH public key is missing for alice");
+      return { migrationId: request.migrationId, slug: request.slug, imported: true };
+    });
+    const handoff = { migrationId: "mig-op-1:scheduler:1:claim:4000", uid: "uid-alice", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", forwardRecovery: { schemaVersion: 1 as const, phase: "source-flushed" as const, sourceEpoch: 4 } };
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff }), h.ctx);
+    expect(result).toMatchObject({ success: true, rolledBack: false });
+    expect(vi.mocked(h.client.transferState).mock.calls.map(([request]) => request.mode)).toEqual(["keys", "final"]);
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.ctx.assertActiveClaim).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps the source fenced when recovery key transfer fails", async () => {
+    const h = mkDeps();
+    nativeReturn(h);
+    vi.mocked(h.client.transferState).mockRejectedValue(new Error("key transfer unavailable"));
+    const handoff = { migrationId: "mig-op-1:scheduler:1:claim:4000", uid: "uid-alice", slug: "alice", fromGatewayId: "gw-blue", toGatewayId: "gw-green", forwardRecovery: { schemaVersion: 1 as const, phase: "source-flushed" as const, sourceEpoch: 4 } };
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff }), h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false, error: expect.stringContaining("key transfer unavailable") });
+    expect(vi.mocked(h.client.transferState).mock.calls.map(([request]) => request.mode)).toEqual(["keys"]);
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+
   it("returns to a Barn after the prior assignment removed its customer SSH key", async () => {
     const h = mkDeps();
     nativeReturn(h);
@@ -2744,7 +2773,7 @@ it.each(["final-transfer", "checkpoint-claim"])("keeps Native writers held acros
   vi.mocked(h.client.scheduler).mockClear();
   expect(await handler(mkOp({ schedulerHandoff: saved!, attempts: 1, startedAt: 6000 }), h.ctx)).toMatchObject({ success: true, rolledBack: false });
   expect(h.client.quiesce).not.toHaveBeenCalled();
-  expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final" }));
+  expect(vi.mocked(h.client.transferState).mock.calls.map(([request]) => request.mode)).toEqual(["keys", "final"]);
   expect(vi.mocked(h.client.scheduler).mock.calls.every(([request]) => request.migrationId === originalSchedulerId)).toBe(true);
   expect(native.release).not.toHaveBeenCalled();
   expect(h.client.resume).not.toHaveBeenCalled();

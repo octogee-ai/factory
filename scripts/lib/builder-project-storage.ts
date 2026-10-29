@@ -3,6 +3,7 @@ import { cp, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir, writeFile
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isValidProjectId, isValidUsername } from "../../shared/types/identity.js";
+import { loadAppliedFingerprints, saveAppliedFingerprints } from "./applied-fingerprint-store.js";
 
 async function clearProjectReadiness(projects: string): Promise<void> {
   const state = path.join(projects, ".octogee-state");
@@ -109,6 +110,9 @@ export async function prepareBuilderProjectStorage(input: { home: string; projec
   try { state = JSON.parse(await readFile(marker, "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   assertStorageState(state, input.slug);
+  const fingerprintFile = path.join(input.home, ".openclaw/applied-fingerprints.json");
+  const fingerprints = loadAppliedFingerprints(fingerprintFile);
+  if (fingerprints.delete(input.slug)) saveAppliedFingerprints(fingerprintFile, fingerprints);
   if (state?.status === "ready") {
     if (!(await lstat(destination)).isDirectory()) throw new Error("project mount is not a directory");
     if (await readHomeGeneration(homeMarker) === state.generation) {

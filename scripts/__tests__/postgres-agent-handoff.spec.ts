@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { exportAgentStoreSnapshots, prepareAgentStoreSnapshots, findPortableAgentStores } from "../lib/agent-store-snapshot.js";
+import { exportAgentStoreSnapshots, prepareAgentStoreSnapshots, findPortableAgentStores, installPreparedAgentStores } from "../lib/agent-store-snapshot.js";
 import { OpenClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 
 const roots: string[] = [];
@@ -120,4 +120,36 @@ it("refuses an unexpected agent SQLite store while allowing Codex's separate SQL
   expect(await findPortableAgentStores(sources)).toHaveLength(1);
   await fs.writeFile(path.join(root, `agents/${agentId}/agent/stray.sqlite`), "unexpected-fixture");
   await expect(findPortableAgentStores(sources)).rejects.toThrow("unexpected OpenClaw SQLite store");
+});
+
+
+it.each(["same-readonly", "same-writable", "writable-sidecar", "different-store", "different-schema", "sqlite"])('protects an occupied destination during anchor replacement (%s)', async scenario => {
+  const { root, agentId, file } = await fixture();
+  const incoming = path.join(root, "incoming.sqlite");
+  await fs.copyFile(file, incoming);
+  if (scenario === "different-store" || scenario === "different-schema") {
+    const db = new DatabaseSync(incoming);
+    if (scenario === "different-store") db.exec("UPDATE openclaw_engine_anchor SET store_id='2514f000-4540-4f4e-92a1-831adeac3d5b'");
+    else db.exec("UPDATE openclaw_engine_anchor SET schema='octogee_other'");
+    db.close();
+  }
+  if (scenario === "sqlite") { const db = new DatabaseSync(file); db.exec("DROP TABLE openclaw_engine_anchor"); db.close(); }
+  const proc = path.join(root, "proc"), fds = path.join(proc, "123", "fd"), info = path.join(proc, "123", "fdinfo");
+  await fs.mkdir(fds, { recursive: true }); await fs.mkdir(info, { recursive: true });
+  await fs.symlink(file, path.join(fds, "4"));
+  await fs.writeFile(path.join(info, "4"), `flags:\t${scenario === "same-writable" ? "02100002" : "02100000"}\n`);
+  if (scenario === "writable-sidecar") {
+    await fs.symlink(`${file}-wal`, path.join(fds, "5"));
+    await fs.writeFile(path.join(info, "5"), "flags:\t02100002\n");
+  }
+  const release = vi.fn(async () => undefined);
+  const install = installPreparedAgentStores({ prepared: { landingRoot: null, stores: [{ agentId, restoredPath: incoming, destinationPath: file }] }, releaseAgent: release, procRoot: proc });
+  if (scenario === "same-readonly") {
+    await expect(install).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledExactlyOnceWith(agentId);
+    expect(await fs.stat(file)).toBeDefined();
+  } else {
+    await expect(install).rejects.toThrow(/still held open/);
+    expect(await fs.stat(incoming)).toBeDefined();
+  }
 });

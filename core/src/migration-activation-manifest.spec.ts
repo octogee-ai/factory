@@ -329,6 +329,20 @@ describe("migration activation manifest", () => {
     expect(accounts["alice-proj-scout"].baseUrl).toBe("${MM_URL}");
   });
 
+  it.each(["builder", "shared"] as const)("only sets the imported coach as system agent on a Builder: %s", async (gatewayClass) => {
+    const configPatch = vi.fn(async (patch: unknown) => ({ hash: "h2", config: patch }));
+    const rpc = {
+      configGet: vi.fn(async () => ({ hash: "h1", config: {
+        agents: { entries: {}, defaults: { systemAgent: { agentId: "octogee-unmatched-route" } } },
+        bindings: [], channels: { mattermost: { accounts: {} } },
+      } })),
+      configPatch,
+    };
+    await applyOpenClawActivationManifest(manifest(), { rpc: rpc as never, log: vi.fn(), gatewayClass });
+    const patch = configPatch.mock.calls[0]![0] as { agents: { defaults?: { systemAgent?: { agentId: string } } } };
+    expect(patch.agents.defaults?.systemAgent?.agentId).toBe(gatewayClass === "builder" ? "octogee-alice-coach" : undefined);
+  });
+
   it("patches agent, account, and bindings without keeping stale entries for the same agent", async () => {
     const configPatch = vi.fn(async (patch: unknown, _hash: string) => ({
       hash: "h2",

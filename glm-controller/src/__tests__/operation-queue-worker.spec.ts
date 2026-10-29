@@ -847,13 +847,12 @@ describe("gateway operation queue — automatic retry with backoff", () => {
     expect((store.get("op-flaky")?.attemptHistory as unknown[]).length).toBe(3);
   });
 
-  it("keeps an automatic Builder return pending after a transient failure beyond the generic cap", async () => {
+  it.each([
+    "/restore/default transport failed: fetch failed",
+    "10 ABORTED: Too much contention on these documents. Please try again.",
+  ])("keeps an automatic Builder return pending beyond the generic cap after %s", async (error) => {
     vi.setSystemTime(1_000_000);
-    const handler: OperationHandler = vi.fn(async () => ({
-      steps: [],
-      success: false,
-      error: "/restore/default transport failed: fetch failed",
-    }));
+    const handler: OperationHandler = vi.fn(async () => { throw new Error(error); });
     const priorAttempts = [
       { attempt: 1, startedAt: 1, completedAt: 2, error: "fetch failed", classification: "transient", steps: [] },
       { attempt: 2, startedAt: 3, completedAt: 4, error: "fetch failed", classification: "transient", steps: [] },

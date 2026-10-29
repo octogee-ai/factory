@@ -213,6 +213,7 @@ export interface CustomerLifecycleAdapter {
         migrationId: string;
     }) => Promise<void>;
     sourceMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<MigrationSourceIdentityCustody>;
+    sourceMigrationAgentAnchors?: (slug: string, migrationId: string) => Promise<import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchor[]>;
     quiesceCustomer: (slug: string, timeoutMs: number, opts?: {
         stopMattermost: boolean;
         schedulerMigrationId?: string;

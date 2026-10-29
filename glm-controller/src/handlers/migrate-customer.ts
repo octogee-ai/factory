@@ -727,6 +727,11 @@ async function runNativeReturn(input: NativeReturnProvision): Promise<OperationR
         createIfMissing: targets.sourceAssignmentMode === "unassigned-live",
       });
       sourceFenced = true;
+    } else {
+      await input.ctx.assertActiveClaim!(true);
+      await step("keys-sync-state", () => client.transferState({
+        migrationId, slug, fromGatewayId: targets.fromGatewayId, toGatewayId: targets.toGatewayId, mode: "keys",
+      }));
     }
     await closeSourceForNativeReturnProvision(input, client, step, handoff);
     await step("cutover-firestore", async () => {

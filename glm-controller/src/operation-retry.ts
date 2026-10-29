@@ -56,6 +56,7 @@ const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
   /\bunexpected end\b/i,
   /\btruncated\b/i,
   /\b14 UNAVAILABLE\b/i,
+  /\b10 ABORTED: Too much contention on these documents\. Please try again\./,
   /\b(status|HTTP) (429|502|503|504)\b/,
   /\bdatabase is locked\b/i,
   /\bpreempt(ed|ion)?\b/i,

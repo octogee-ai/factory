@@ -2402,6 +2402,12 @@ export function buildBrokeredLifecycleAdapter(
     schedulerMigration: (slug, request) => migrateCustomerScheduler(ctx.rpc, slug, agentIdsForMigration(slug), request),
     schedulerReady: async () => { await ctx.rpc.configGet(); },
     sourceMigrationIdentityCustody: (slug, migrationId) => sourceMigrationIdentityCustody(ctx, slug, migrationId),
+    sourceMigrationAgentAnchors: async (slug, migrationId) => {
+      const custody = await sourceMigrationIdentityCustody(ctx, slug, migrationId);
+      const current = await ctx.client.readAgentAnchors({ slug, uid: custody.uid, migrationId });
+      assertSourceIdentityCustody(custody, await sourceMigrationIdentityCustody(ctx, slug, migrationId));
+      return current.anchors.filter(anchor => anchor.agentId !== SAFE_DEFAULT_AGENT_ID);
+    },
     resumeCustomer: (slug, resumeOptions) => openClawRuntimeUpdateGuard.run(async () => {
       const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
