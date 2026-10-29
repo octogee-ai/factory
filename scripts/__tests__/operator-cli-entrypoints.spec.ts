@@ -22,6 +22,7 @@ import {
 import {
   ONE_TIME,
   parseSetupStripePlansMode,
+  runSetupStripePlans,
   SETUP_STRIPE_PLANS_USAGE,
   SUBSCRIPTIONS,
 } from "../ops/setup-stripe-plans.js";
@@ -185,6 +186,43 @@ describe("setup-stripe-plans catalog", () => {
       "2 vCPU / 8GB RAM isolated gateway",
       "4 vCPU / 16GB RAM isolated gateway",
     ]);
+  });
+
+  it("reconciles every existing subscription product's description on re-run", async () => {
+    const existingPrices = [
+      ...SUBSCRIPTIONS.flatMap((sub) =>
+        sub.prices.map((price) => ({
+          id: `price_${price.key}`,
+          lookup_key: price.key,
+          product: `prod_${sub.key}`,
+        })),
+      ),
+      ...ONE_TIME.map((item) => ({
+        id: `price_${item.key}`,
+        lookup_key: item.key,
+        product: `prod_${item.key}`,
+      })),
+    ];
+    const stripe = {
+      prices: {
+        list: () => (async function* () { yield* existingPrices; })(),
+        create: vi.fn(),
+      },
+      products: { create: vi.fn(), update: vi.fn(async () => ({})) },
+    };
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await runSetupStripePlans(stripe as never, "execute");
+
+    expect(stripe.products.create).not.toHaveBeenCalled();
+    expect(stripe.prices.create).not.toHaveBeenCalled();
+    for (const sub of SUBSCRIPTIONS) {
+      expect(stripe.products.update).toHaveBeenCalledWith(
+        `prod_${sub.key}`,
+        expect.objectContaining({ name: sub.name, description: sub.description }),
+      );
+    }
+    vi.restoreAllMocks();
   });
 
   it("sells one-time credit SKUs for every shared denomination", () => {
