@@ -76,18 +76,25 @@ export async function prepareGatewayStateStore(input: {
   const stateRoot = openclawStateRoot(env);
   const anchor = readPostgresAgentAnchor(localStateStorePath(stateRoot));
   if (!anchor) return;
-  await (input.waitForOwner ?? waitForGatewayOwnerRelease)({
+  const ownerInput = {
     anchor,
     gatewayId: env.GATEWAY_ID?.trim() ?? "",
     hostname: input.hostname ?? os.hostname(),
     log: input.log,
-  });
+  };
+  const waitForOwner = input.waitForOwner ?? waitForGatewayOwnerRelease;
+  await waitForOwner(ownerInput);
   if (fs.existsSync(clientCredentialStorePath(stateRoot))) return;
   input.log("[state-store] local client credentials are missing for the PostgreSQL state store; rebinding fresh local credentials (local clients pair again)");
-  const result = await (input.run ?? runOpenClaw)(
-    ["doctor", "--fix", "--yes", "--non-interactive"],
-    { env, timeoutMs: 300_000 },
-  );
+  const run = input.run ?? runOpenClaw;
+  const args = ["doctor", "--fix", "--yes", "--non-interactive"];
+  const options = { env, timeoutMs: 300_000 };
+  let result = await run([...args, "--skip-recovery-backups"], options);
+  if (result.code !== 0) {
+    input.log(`[state-store] credential rebind without recovery backups failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}; retrying full Doctor after checking state ownership`);
+    await waitForOwner(ownerInput);
+    result = await run(args, options);
+  }
   if (result.code !== 0) {
     throw new Error(`client credential rebind failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}`);
   }

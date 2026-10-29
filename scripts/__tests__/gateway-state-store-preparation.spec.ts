@@ -161,16 +161,42 @@ describe("prepareGatewayStateStore", () => {
     const root = stateRoot("anchor", false);
     await prepareGatewayStateStore({ log: () => {}, env: builderEnv(root), hostname: THIS_POD, waitForOwner, run });
     expect(order).toEqual(["release", "rebind"]);
+    expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
-      ["doctor", "--fix", "--yes", "--non-interactive"],
+      ["doctor", "--fix", "--yes", "--non-interactive", "--skip-recovery-backups"],
       { env: builderEnv(root), timeoutMs: 300_000 },
     );
+  });
+
+  it("rechecks ownership and retries full Doctor after a nonzero fast repair", async () => {
+    const order: string[] = [], logs: string[] = [];
+    const waitForOwner = vi.fn(async () => { order.push("owner"); return "absent" as const; });
+    const run = vi.fn(async () => { order.push("doctor"); return { code: run.mock.calls.length === 1 ? 1 : 0, stdout: "", stderr: "fast repair failed" }; });
+    await prepareGatewayStateStore({ log: message => logs.push(message), env: builderEnv(stateRoot("anchor", false)), waitForOwner, run });
+    expect(order).toEqual(["owner", "doctor", "owner", "doctor"]);
+    expect(run.mock.calls[1]?.[0]).toEqual(["doctor", "--fix", "--yes", "--non-interactive"]);
+    expect(logs.join("\n")).toContain("fast repair failed");
+  });
+
+  it("refuses fallback when ownership changes after the fast attempt", async () => {
+    const waitForOwner = vi.fn().mockResolvedValueOnce("absent").mockRejectedValueOnce(new Error("foreign owner"));
+    const run = vi.fn(async () => ({ code: 1, stdout: "" }));
+    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), waitForOwner, run })).rejects.toThrow("foreign owner");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates thrown or cancelled commands without retry", async () => {
+    const failure = new Error("command was killed");
+    const run = vi.fn(async () => { throw failure; });
+    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), waitForOwner: async () => "absent", run })).rejects.toBe(failure);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("fails the start when the credential rebind fails", async () => {
     const run = vi.fn(async () => ({ code: 1, stdout: "", stderr: "Gateway owner is still live" }));
     await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), hostname: THIS_POD, waitForOwner: async () => "absent", run }))
       .rejects.toThrow(/client credential rebind failed \(exit 1\): Gateway owner is still live/);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("does not run Doctor or rebind credentials while a foreign owner remains", async () => {
