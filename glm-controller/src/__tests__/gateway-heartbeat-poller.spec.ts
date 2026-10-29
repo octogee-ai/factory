@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   departedFromAssigned,
+  createBackgroundGatewayRecovery,
   intersectMounted,
   parseFleetStateResponse,
   pollGatewayHeartbeatsOnce,
@@ -8,6 +9,33 @@ import {
   type EvictionStreaks,
   type GatewayHeartbeatPollerDeps,
 } from "../gateway-heartbeat-poller.js";
+
+describe("background gateway recovery", () => {
+  it("continues polling other gateways while recovery waits and deduplicates requests", async () => {
+    let release!: () => void;
+    const recover = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const schedule = createBackgroundGatewayRecovery(recover, vi.fn());
+    const deps = makeDeps({
+      listGatewayIds: vi.fn(async () => ["offline", "healthy"]),
+      fetchFleetState: vi.fn(async (id: string) => id === "offline" ? null : { status: "ready", customers: [] }),
+      readAssignedSlugs: vi.fn(async () => []), onUnreachable: async id => { schedule(id); },
+    });
+    await pollGatewayHeartbeatsOnce(deps);
+    schedule("offline");
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(deps.writeHeartbeat).toHaveBeenCalledWith("healthy", expect.objectContaining({ status: "ready" }));
+    release();
+  });
+  it("logs recovery failures and allows a retry", async () => {
+    const recover = vi.fn().mockRejectedValueOnce(new Error("recovery failed")).mockResolvedValue(undefined);
+    const log = vi.fn();
+    const schedule = createBackgroundGatewayRecovery(recover, log);
+    schedule("b-x");
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("recovery failed")));
+    schedule("b-x");
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
+  });
+});
 
 describe("parseFleetStateResponse", () => {
   it("parses a well-formed /fleet-state body", () => {

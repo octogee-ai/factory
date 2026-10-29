@@ -57,6 +57,7 @@ import {
   gatewayHeartbeatMatchesImageTag,
 } from "@octogee/shared/types/image-tag";
 import {
+  createBackgroundGatewayRecovery,
   startGatewayHeartbeatPoller,
   type GatewayHeartbeatPollerDeps,
 } from "./gateway-heartbeat-poller.js";
@@ -2265,6 +2266,10 @@ export function buildGatewayHeartbeatPollerDeps(
   privateKey: string,
   informer: FleetInformer,
 ): GatewayHeartbeatPollerDeps {
+  const recoverComputer = createBackgroundGatewayRecovery(
+    (gatewayId) => runGatewayRuntimeExclusive(async () => { await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId); }),
+    log,
+  );
   return {
     ...buildHeartbeatPollerCoreDeps(db, log, privateKey, informer, async () => {
       const snap = await db.collection(GLM_GATEWAYS_COLLECTION).get();
@@ -2294,12 +2299,12 @@ export function buildGatewayHeartbeatPollerDeps(
       });
     },
     onUnreachable: async (gatewayId: string) => {
-      await runGatewayRuntimeExclusive(async () => { await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId); });
       const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       const gateway = projectGatewayDesiredRootForGateway(
         snapshot.exists ? snapshot.data() : undefined,
         gatewayId,
       );
+      if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "builder") recoverComputer(gatewayId);
       if (await shouldReconcileDisposablePrelaunch(db, gateway)) {
         requestReconcileTickRef.fire?.(gatewayId);
       }

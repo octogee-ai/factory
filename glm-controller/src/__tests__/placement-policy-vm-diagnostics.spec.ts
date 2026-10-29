@@ -23,7 +23,7 @@ describe("agent computer wiring", () => {
 
   it("scopes the placement pod scan by runtime and recovers preempted computers from the heartbeat poller", () => {
     expect(reconcilerSource).toMatch(/placementPodDiagnosticsScope\(gatewayDocs\.map\(\(doc\) => doc\.id\), runtimes\)/u);
-    expect(indexSource).toMatch(/onUnreachable: async \(gatewayId: string\) => \{\s*await runGatewayRuntimeExclusive\(async \(\) => \{ await vmGatewayRuntimeRef\.current\?\.recoverUnreachable\(gatewayId\); \}\);/u);
+    expect(indexSource).toMatch(/createBackgroundGatewayRecovery\(\s*\(gatewayId\) => runGatewayRuntimeExclusive\(async \(\) => \{ await vmGatewayRuntimeRef\.current\?\.recoverUnreachable\(gatewayId\); \}\)/u);
     expect(indexSource).toMatch(/deleteComputer: async \(uid: string\) => \{/u);
   });
 });

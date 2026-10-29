@@ -24,6 +24,17 @@ import { parseConfiguredBuilderReport, type ConfiguredBuilderReport } from "@oct
 
 export const EVICT_AFTER_STREAK = 2;
 
+export function createBackgroundGatewayRecovery(recover: (gatewayId: string) => Promise<void>, log: (message: string) => void): (gatewayId: string) => void {
+  const pending = new Set<string>();
+  return gatewayId => {
+    if (pending.has(gatewayId)) return;
+    pending.add(gatewayId);
+    void Promise.resolve().then(() => recover(gatewayId))
+      .catch(error => log(`[gateway-poll] ${gatewayId}: computer recovery failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => pending.delete(gatewayId));
+  };
+}
+
 export interface GatewayFleetState {
   status: string;
   version?: string;
