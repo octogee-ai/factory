@@ -1,5 +1,16 @@
 {{- if .Values.edgeIngress.enabled }}
 {{- $name := .Values.edgeIngress.name | default "octogee-edge-ingress" -}}
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: octogee-https-redirect
+  labels:
+    {{- include "octogee.labels" . | nindent 4 }}
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -8,6 +19,7 @@ metadata:
     kubernetes.io/ingress.class: "gce"
     networking.gke.io/managed-certificates: {{ join "," .Values.edgeIngress.managedCertificates | quote }}
     kubernetes.io/ingress.global-static-ip-name: {{ .Values.edgeIngress.staticIpName }}
+    networking.gke.io/v1beta1.FrontendConfig: octogee-https-redirect
 spec:
   ingressClassName: gce
   defaultBackend:

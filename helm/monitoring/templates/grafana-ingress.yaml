@@ -61,6 +61,18 @@ spec:
     - {{ required "iap.domain is required when IAP is enabled" .Values.iap.domain }}
 
 ---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: grafana-https-redirect
+  labels:
+    {{- include "octogee-monitoring.labels" . | nindent 4 }}
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+
+---
 # ── Ingress ──────────────────────────────────────────────────────────────────
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -72,6 +84,7 @@ metadata:
     kubernetes.io/ingress.global-static-ip-name: {{ required "iap.staticIpName is required when IAP is enabled" .Values.iap.staticIpName }}
     networking.gke.io/managed-certificates: grafana-cert
     kubernetes.io/ingress.class: "gce"
+    networking.gke.io/v1beta1.FrontendConfig: grafana-https-redirect
 spec:
   rules:
     - host: {{ .Values.iap.domain }}
