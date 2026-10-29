@@ -86,7 +86,7 @@ import {
   type OpenMigrationTlsEndpoint,
 } from "./migration-rsync-tls.js";
 import type { OpenClawCommand } from "./openclaw-cli.js";
-import { upgradeImportedAgentStores } from "./openclaw-import-doctor.js";
+import { upgradeImportedAgentStores } from "./openclaw-import-upgrade.js";
 import { reattachBuilderAgents } from "./reattach-builder-agents.js";
 import { activeAgentProjectIds } from "./openclaw-config-builders.js";
 import { PROC_ROOT } from "./held-files.js";
@@ -2317,7 +2317,7 @@ async function upgradeSharedImportedAgents(input: StagedImportInput, prepared: P
     input.signal.throwIfAborted();
   };
   await (input.deps.upgradeImportedAgents ?? upgradeImportedAgentStores)({ stores, assertCurrent, signal: input.signal,
-    run: input.deps.runOpenClaw });
+    log: message => input.log(message), run: input.deps.runOpenClaw });
 }
 
 async function deliverStagedImport(input: StagedImportInput): Promise<void> {
@@ -2329,6 +2329,7 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
     await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
     return;
   }
+  const snapshotStartedAt = Date.now();
   const prepared = await prepareAgentStoreSnapshots({
     stageDir: session.stageDir,
     importDir: session.importDir,
@@ -2336,19 +2337,32 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
     signal: input.signal,
     log,
   });
+  log(`[migration-rsync] final-import agent-snapshots migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - snapshotStartedAt });
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
   const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
   try {
     const offlineTarget = await heldBuilderImport(input);
-    if (!offlineTarget) await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+    if (!offlineTarget) {
+      const copyStartedAt = Date.now();
+      await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+      log(`[migration-rsync] final-import file-copy migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - copyStartedAt });
+    }
+    const installStartedAt = Date.now();
     await installPreparedAgentStores({
       prepared,
       releaseAgent: (agentId) => releaseAgentForImport(deps, input.activation, agentId, log, input.heldTarget),
       procRoot: deps.procRoot ?? PROC_ROOT,
       log,
     });
+    log(`[migration-rsync] final-import agent-install migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - installStartedAt });
 
-    await upgradeSharedImportedAgents(input, prepared);
+    if (deps.adapter.isBuilderGateway?.() === false && prepared.stores.length > 0) {
+      const upgradeStartedAt = Date.now();
+      await upgradeSharedImportedAgents(input, prepared);
+      log(`[migration-rsync] final-import agent-upgrade migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - upgradeStartedAt });
+    } else {
+      await upgradeSharedImportedAgents(input, prepared);
+    }
     if (offlineTarget) {
       if (!input.heldTarget) await reattachBuilderAgents({
         stores: prepared.stores,

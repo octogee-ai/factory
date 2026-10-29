@@ -154,12 +154,11 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 This refresh freezes latest fetched OpenClaw main at
 `d5f7d57eff508f815ef03f6560ca12b2b3d4aa0a`. It independently qualifies that exact
 tip without substituting an older green commit or following newer commits. The
-clean overlay is [`ebf32b25df5693f3f2ebca7c81d88df84e621dcc`](https://github.com/ceckert/openclaw/commit/ebf32b25df5693f3f2ebca7c81d88df84e621dcc)
-on `octogee-overlay-20261028-mattermost-parity`: the October 28 overlay
+clean overlay is [`a6f4181f473ea009cb6221fc3c7b56291e643ef2`](https://github.com/ceckert/openclaw/commit/a6f4181f473ea009cb6221fc3c7b56291e643ef2)
+on `codex/doctor-skip-recovery-backups`: the October 28 overlay
 [`8c5ec056f0b36959a78df0aa11d7664884efb2b1`](https://github.com/ceckert/openclaw/commit/8c5ec056f0b36959a78df0aa11d7664884efb2b1)
-plus the two open Mattermost channel contributions below, carried as their own
-commits on the same selected base. The isolated Octogee checkout starts from
-main `6d98ecdf3c3551c0cb4525a183d350d70042dc7c`.
+plus the two open Mattermost channel contributions and the Octogee-specific
+Doctor option below, carried as their own commits on the same selected base.
 
 The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40704141760)
 was cancelled without reporting jobs. It supplies no runtime qualification. The
@@ -235,6 +234,23 @@ metadata and config-doc baseline regenerated for the new schema keys, and the
 preflight ratchets require. Runtime bytes are the PR commits' own. Remove each
 family when the selected base contains the merged behavior and the Mattermost
 consumer controls pass; an open PR or a newer main containing it is not enough.
+
+### Octogee migration Doctor option
+
+`doctor --skip-recovery-backups` skips original-state capture, migration recovery
+backup preparation, and diagnostic PostgreSQL readiness inventory. Octogee uses
+it only for a private import under its existing source fence and target custody.
+Native still owns migrations, maintenance admission, leases, identity validation
+and transactions. A nonzero fast attempt retries ordinary Doctor while custody
+remains valid; cancellation and lost custody stop the operation. Ordinary Doctor
+behavior is unchanged.
+
+Instrumented local PostgreSQL upgrades showed substantial time in original-state
+capture and diagnostic inventory, while the actual schema transition was short.
+The CLI option belongs in Native because an Octogee caller cannot select those
+internal Doctor phases. This is an operator-requested Octogee-only optimization,
+not an upstream contribution. Remove the overlay if Native supplies an equivalent
+public migration path with the same safety boundaries.
 
 ### Retained boundaries and removal conditions
 

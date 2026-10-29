@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { upgradeImportedAgentStores } from "../lib/openclaw-import-doctor.js";
+import { upgradeImportedAgentStores } from "../lib/openclaw-import-upgrade.js";
 import type { OpenClawCommand } from "../lib/openclaw-cli.js";
 
 const roots: string[] = [];
@@ -33,7 +33,7 @@ async function fixture() {
     }
     return { code: 0, stdout: "" };
   });
-  return { root, stores, assertCurrent, run, query: query as unknown as typeof import("@octogee/core/agent-postgres").queryAgentStore, env: { OPENCLAW_AGENT_STORE_DSN: "postgresql://synthetic", OPENCLAW_GATEWAY_TOKEN: "secret" } };
+  return { root, stores, assertCurrent, run, log: vi.fn(), query: query as unknown as typeof import("@octogee/core/agent-postgres").queryAgentStore, env: { OPENCLAW_AGENT_STORE_DSN: "postgresql://synthetic", OPENCLAW_GATEWAY_TOKEN: "secret" } };
 }
 
 it("runs Native Doctor against only the carried PostgreSQL agent in private state and preserves the original anchor", async () => {
@@ -43,7 +43,7 @@ it("runs Native Doctor against only the carried PostgreSQL agent in private stat
   expect(f.run.mock.calls.map(([args]) => args)).toEqual([
     expect.arrayContaining(["database", "preflight-agent"]),
     ["setup", "--baseline", "--skip-bootstrap", "--json"],
-    ["doctor", "--fix", "--non-interactive"],
+    ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"],
   ]);
   expect(f.assertCurrent.mock.calls.length).toBeGreaterThanOrEqual(4);
   expect(await fs.readFile(f.stores[0]!.anchorPath)).toEqual(before);
@@ -81,7 +81,7 @@ it("reports a failing Native Doctor without publishing a successful upgrade", as
   const original = f.run.getMockImplementation()!;
   f.run.mockImplementation(async (args, options) => args[0] === "doctor" && JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8")).database.families?.agent
     ? { code: 1, stdout: "" } : original(args, options));
-  await expect(upgradeImportedAgentStores(f)).rejects.toThrow(/PostgreSQL upgrade failed/);
+  await expect(upgradeImportedAgentStores(f)).rejects.toThrow(/full PostgreSQL repair failed/);
   for (const [, options] of f.run.mock.calls) await expect(fs.stat(options.env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
@@ -131,4 +131,60 @@ it.each(["refused", "timeout", "custody"])("does not upgrade PostgreSQL after pr
   });
   await expect(upgradeImportedAgentStores(f)).rejects.toThrow(failure === "refused" ? /bootstrap setup failed/ : /setup (timeout|custody lost)/);
   expect(f.run.mock.calls.some(([args]) => args[0] === "doctor")).toBe(false);
+});
+
+it("retries full Doctor after a fast refusal while custody remains current", async () => {
+  const f = await fixture(), original = f.run.getMockImplementation()!, log = vi.fn();
+  f.run.mockImplementation(async (args, options) => {
+    if (args.includes("--skip-recovery-backups")) return { code: 2, stdout: "", stderr: "fast refused" };
+    return original(args, options);
+  });
+  await upgradeImportedAgentStores({ ...f, log });
+  expect(f.run.mock.calls.filter(([args]) => args[0] === "doctor").map(([args]) => args)).toEqual([
+    ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"],
+    ["doctor", "--fix", "--non-interactive"],
+  ]);
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("fast"));
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("full"));
+});
+
+it("does not retry full Doctor when custody is lost during the fast attempt", async () => {
+  const f = await fixture(), original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => {
+    if (args.includes("--skip-recovery-backups")) { f.assertCurrent.mockRejectedValue(new Error("custody lost")); return { code: 2, stdout: "" }; }
+    return original(args, options);
+  });
+  await expect(upgradeImportedAgentStores(f)).rejects.toThrow("custody lost");
+  expect(f.run.mock.calls.filter(([args]) => args[0] === "doctor")).toHaveLength(1);
+});
+
+it("does not retry full Doctor after cancellation during the fast attempt", async () => {
+  const f = await fixture(), original = f.run.getMockImplementation()!, controller = new AbortController();
+  f.run.mockImplementation(async (args, options) => {
+    if (args.includes("--skip-recovery-backups")) { controller.abort(new Error("cancelled")); return { code: 2, stdout: "" }; }
+    return original(args, options);
+  });
+  await expect(upgradeImportedAgentStores({ ...f, signal: controller.signal })).rejects.toThrow("cancelled");
+  expect(f.run.mock.calls.filter(([args]) => args[0] === "doctor")).toHaveLength(1);
+});
+
+it("logs and propagates an unsuccessful full Doctor repair", async () => {
+  const f = await fixture(), original = f.run.getMockImplementation()!;
+  f.run.mockImplementation(async (args, options) => args[0] === "doctor" ? { code: 2, stdout: "" } : original(args, options));
+  await expect(upgradeImportedAgentStores(f)).rejects.toThrow(/full PostgreSQL repair failed/);
+  expect(f.log).toHaveBeenCalledWith(expect.stringContaining("fast Doctor failed"));
+  expect(f.log).toHaveBeenCalledWith(expect.stringContaining("full Doctor repair failed"));
+});
+
+it("caches a successful immutable descriptor and retries a rejected probe", async () => {
+  const f = await fixture(), original = f.run.getMockImplementation()!;
+  let fail = true;
+  f.run.mockImplementation(async (args, options) => {
+    if (args[1] === "preflight-agent" && fail) { fail = false; throw new Error("probe failed"); }
+    return original(args, options);
+  });
+  await expect(upgradeImportedAgentStores(f)).rejects.toThrow("probe failed");
+  await upgradeImportedAgentStores(f);
+  await upgradeImportedAgentStores(f);
+  expect(f.run.mock.calls.filter(([args]) => args[1] === "preflight-agent")).toHaveLength(2);
 });

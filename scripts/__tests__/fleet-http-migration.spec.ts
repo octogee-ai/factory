@@ -5494,6 +5494,7 @@ describe("prepared migration staging", () => {
     const completed = mkResponse();
     await createFinishRsyncImportHandler(deps)(mkRequest(finishFinal, { signature: signForPod(migrationId, JSON.stringify(finishFinal)) }), completed.res, vi.fn());
     expect(completed.getStatus()).toBe(200);
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("final-import agent-snapshots"), expect.objectContaining({ durationMs: expect.any(Number) }));
     await expect(fs.stat(path.join(importDir, "customers/chris/draft.txt"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(path.join(importDir, "customers/chris/projects/new-repo/README.md"), "utf8")).toBe("prepared checkout");
     await expect(fs.stat(path.join(importDir, "customers/chris/projects/archived-repo"))).rejects.toMatchObject({ code: "ENOENT" });
