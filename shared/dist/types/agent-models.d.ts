@@ -12,6 +12,16 @@ export declare function isValidModelRef(value: unknown): value is string;
 export declare function modelRefForCatalogEntry(entry: ModelCatalogEntry): string;
 export declare function platformModelRefs(): string[];
 export declare function catalogEntryForModelRef(ref: string): ModelCatalogEntry | null;
+export declare const SIMPLE_MODEL_TIER_IDS: readonly ["errands", "everyday", "hard"];
+export type SimpleModelTierId = (typeof SIMPLE_MODEL_TIER_IDS)[number];
+export interface SimpleModelTier {
+    id: SimpleModelTierId;
+    label: string;
+    description: string;
+    ref: string;
+}
+export declare const SIMPLE_MODEL_TIERS: Readonly<Record<SimpleModelTierId, SimpleModelTier>>;
+export declare function simpleModelTierForRef(ref: string): SimpleModelTier | null;
 export declare function parseAgentModelSelection(value: unknown): AgentModelSelection | null;
 export declare function parseAgentModelSelections(value: unknown): AgentModelSelections;
 export declare function agentIdBelongsToSlug(agentId: string, slug: string): boolean;

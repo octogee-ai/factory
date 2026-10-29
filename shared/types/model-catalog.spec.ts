@@ -81,6 +81,16 @@ describe("MODEL_CATALOG", () => {
     expect(modelCatalogEntryFor("openrouter", "z-ai/glm-5.2")?.input).toEqual(["text"]);
   });
 
+  it.each([
+    ["gpt-6-luna", "GPT-6 Luna", { inputPerMTok: 0.1, cacheReadPerMTok: 0.01, outputPerMTok: 0.5 }],
+    ["gpt-6.1-terra", "GPT-6.1 Terra", { inputPerMTok: 1, cacheReadPerMTok: 0.05, outputPerMTok: 5 }],
+    ["gpt-6.1-sol", "GPT-6.1 Sol", { inputPerMTok: 2, cacheReadPerMTok: 0.1, outputPerMTok: 10 }],
+  ])("carries %s on the OpenAI platform provider at its standard-tier list price", (id, label, pricing) => {
+    const entry = modelCatalogEntryFor("openai", id);
+    expect(entry).toMatchObject({ provider: "openai", label, source: "openai", reasoning: true, input: ["text", "image"] });
+    expect(entry?.pricing).toMatchObject(pricing);
+  });
+
   it("carries GPT-5.4 Mini on the OpenAI platform provider", () => {
     expect(modelCatalogForProvider("openai").map((e) => e.id)).toEqual(expect.arrayContaining(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"]));
     const entry = modelCatalogEntryFor("openai", "gpt-5.4-mini");

@@ -141,14 +141,14 @@ describe("syncModelCredentialsForCustomer", () => {
     );
     expect(purgeCustomerOauthRuntime).toHaveBeenCalledWith(
       "tester-70",
-      "platform-openrouter/deepseek/deepseek-v4-pro",
+      "platform-openai/gpt-6-luna",
       { forceSafeAll: true },
     );
     expect(restoreOauthStoreForSlug).not.toHaveBeenCalled();
     expect(applyCoachModelPatch).toHaveBeenCalledWith({
       slug: "tester-70",
       source: "free-tier",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
     });
     expect(requestGatewayRestart).not.toHaveBeenCalled();
     expect(triggerSecretsReload).toHaveBeenCalledTimes(1);

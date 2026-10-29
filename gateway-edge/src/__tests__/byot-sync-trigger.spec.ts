@@ -125,9 +125,9 @@ describe("model credential sync trigger", () => {
     // No dial doc → the compiled defaults ride along; the pod-side derive must
     // never fall back to its constant on a push while the fleet is dialed away.
     const enriched = {
-      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      freeTierModelRef: "platform-openai/gpt-6-luna",
       builderAgentDefault: {
-        primary: "platform-openrouter/openai/gpt-5.6-luna",
+        primary: "platform-openai/gpt-6.1-terra",
         fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
       },
       ...userData,
@@ -208,9 +208,9 @@ describe("model credential sync trigger", () => {
       logWarn: (m) => warns.push(m),
     });
     const body = JSON.parse(internalFetchSpy.mock.calls[0][1].body as string);
-    expect(body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(body.freeTierModelRef).toBe("platform-openai/gpt-6-luna");
     expect(body.builderAgentDefault).toEqual({
-      primary: "platform-openrouter/openai/gpt-5.6-luna",
+      primary: "platform-openai/gpt-6.1-terra",
       fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
     });
     expect(warns.join("\n")).toContain("platform model dial");

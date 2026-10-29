@@ -48,6 +48,7 @@ describe("buildAnonymousOperationalArchive", () => {
         requestCount: 321,
         models: {
           one: { provider: "openai", model: "gpt-5.4", costUsd: 10, totalTokens: 800_000, requestCount: 300 },
+          four: { provider: "openai", model: "gpt-6-luna-2026-10-01", costUsd: 0.5, totalTokens: 1_000, requestCount: 4 },
           two: { provider: "anthropic", model: "claude-sonnet-4-6", costUsd: 2.34, totalTokens: 187_654, requestCount: 21 },
           three: { provider: "alice@example.com", model: "alice@example.com", costUsd: 1, totalTokens: 10, requestCount: 1 },
         },
@@ -67,6 +68,7 @@ describe("buildAnonymousOperationalArchive", () => {
       totals: { costUsd: 12.34, totalTokens: 987_654, requestCount: 321 },
       models: [
         { provider: "anthropic", model: "sonnet", costUsd: 2.34, totalTokens: 187_654, requestCount: 21 },
+        { provider: "openai", model: "openai:gpt-6-luna", costUsd: 0.5, totalTokens: 1_000, requestCount: 4 },
         { provider: "openai", model: "openai:unknown-fallback", costUsd: 10, totalTokens: 800_000, requestCount: 300 },
         { provider: "unknown", model: "unknown", costUsd: 1, totalTokens: 10, requestCount: 1 },
       ],

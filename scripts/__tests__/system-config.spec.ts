@@ -332,7 +332,7 @@ describe("system_config restore", () => {
     expect(seeded.agents.entries["octogee-robert-coach"]).toMatchObject({
       workspace: expect.stringMatching(/\/robert$/),
       agentDir: expect.stringMatching(/octogee-robert-coach\/agent$/),
-      model: "platform-openrouter/openai/gpt-5.6-luna",
+      model: "platform-openai/gpt-6.1-terra",
     });
     expect(seeded.agents.entries["octogee-unmatched-route"]).not.toHaveProperty("heartbeat");
     expect(seeded.agents.defaults.authInheritance).toEqual({ agentId: "octogee-unmatched-route" });

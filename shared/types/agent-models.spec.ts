@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SIMPLE_MODEL_TIERS,
+  SIMPLE_MODEL_TIER_IDS,
   agentIdBelongsToSlug,
   catalogEntryForModelRef,
   modelRefForCatalogEntry,
   parseAgentModelSelection,
   parseAgentModelSelections,
   platformModelRefs,
+  simpleModelTierForRef,
 } from "./agent-models";
 import { MODEL_CATALOG, VERTEX_MODEL_CATALOG, modelCatalogEntryFor } from "./model-catalog";
 import { resolveFreeTierModel } from "./platform-config";
@@ -57,6 +60,33 @@ describe("model refs", () => {
     }
     expect(catalogEntryForModelRef("platform-openrouter/z-ai/glm-5.2")?.label).toBe("GLM 5.2");
     expect(catalogEntryForModelRef("openai/gpt-5.5")).toBeNull();
+  });
+});
+
+describe("SIMPLE_MODEL_TIERS", () => {
+  it("maps Errands / Everyday / Hard things to the three OpenAI direct platform refs", () => {
+    expect(SIMPLE_MODEL_TIER_IDS).toEqual(["errands", "everyday", "hard"]);
+    expect(SIMPLE_MODEL_TIERS.errands).toMatchObject({ label: "Errands", ref: "platform-openai/gpt-6-luna" });
+    expect(SIMPLE_MODEL_TIERS.everyday).toMatchObject({ label: "Everyday", ref: "platform-openai/gpt-6.1-terra" });
+    expect(SIMPLE_MODEL_TIERS.hard).toMatchObject({ label: "Hard things", ref: "platform-openai/gpt-6.1-sol" });
+  });
+
+  it("every tier ref is a priced OpenAI catalog entry the picker API accepts", () => {
+    for (const id of SIMPLE_MODEL_TIER_IDS) {
+      const tier = SIMPLE_MODEL_TIERS[id];
+      expect(tier.id).toBe(id);
+      expect(tier.description.length).toBeGreaterThan(0);
+      expect(platformModelRefs()).toContain(tier.ref);
+      const entry = catalogEntryForModelRef(tier.ref);
+      expect(entry?.provider).toBe("openai");
+      expect(entry?.pricing?.cacheReadPerMTok).toBeGreaterThan(0);
+    }
+  });
+
+  it("resolves a tier from its ref and null for anything else in the catalog", () => {
+    expect(simpleModelTierForRef("platform-openai/gpt-6.1-terra")?.id).toBe("everyday");
+    expect(simpleModelTierForRef("platform-openrouter/openai/gpt-6-luna")).toBeNull();
+    expect(simpleModelTierForRef("anthropic/claude-haiku-4-5")).toBeNull();
   });
 });
 

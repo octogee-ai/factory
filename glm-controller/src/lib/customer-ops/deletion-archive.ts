@@ -54,9 +54,9 @@ function canonicalProviderModel(provider: string, raw: string): string {
     return known ? `openrouter:${raw}` : "openrouter:unknown-fallback";
   }
   if (provider === "openai") {
-    return raw.startsWith("gpt-5.4-mini")
-      ? "openai:gpt-5.4-mini"
-      : "openai:unknown-fallback";
+    const known = ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-5.4-mini"]
+      .find((id) => raw === id || raw.startsWith(`${id}-`));
+    return known ? `openai:${known}` : "openai:unknown-fallback";
   }
   if (provider === "brave") return raw === "brave/web-search" ? raw : "brave/unknown";
   if (provider === "tavily") {

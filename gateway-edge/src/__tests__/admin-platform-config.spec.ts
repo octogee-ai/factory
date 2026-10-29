@@ -97,8 +97,8 @@ describe("admin platform-config", () => {
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
     expect(res.headers["cache-control"]).toBe("no-store");
-    expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
-    expect(res.body.defaultFreeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.freeTierModelRef).toBe("platform-openai/gpt-6-luna");
+    expect(res.body.defaultFreeTierModelRef).toBe("platform-openai/gpt-6-luna");
     expect(res.body.opsAgentModelRef).toBe(DEFAULT_OPS_AGENT_MODEL_REF);
     expect(res.body.defaultOpsAgentModelRef).toBe(DEFAULT_OPS_AGENT_MODEL_REF);
     const refs = res.body.catalog.map((c: { ref: string }) => c.ref);
@@ -152,7 +152,7 @@ describe("admin platform-config", () => {
       opsAgentModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
     };
     res = await request(app).get("/api/admin/platform-config");
-    expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.freeTierModelRef).toBe("platform-openai/gpt-6-luna");
     expect(res.body.opsAgentModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
   });
 
@@ -160,20 +160,20 @@ describe("admin platform-config", () => {
     platformDocs["platformConfig/models"] = { freeTierModelRef: "platform-openrouter/gone/model" };
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
-    expect(res.body.freeTierModelRef).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+    expect(res.body.freeTierModelRef).toBe("platform-openai/gpt-6-luna");
   });
 
   it("GET serves the Builder Agent default dial with its compiled defaults", async () => {
     const res = await request(app).get("/api/admin/platform-config");
     expect(res.status).toBe(200);
-    expect(res.body.builderAgentModelRef).toBe("platform-openrouter/openai/gpt-5.6-luna");
+    expect(res.body.builderAgentModelRef).toBe("platform-openai/gpt-6.1-terra");
     expect(res.body.defaultBuilderAgentModelRef).toBe(
-      "platform-openrouter/openai/gpt-5.6-luna",
+      "platform-openai/gpt-6.1-terra",
     );
     expect(res.body.catalog).toContainEqual({
-      ref: "platform-openrouter/openai/gpt-5.6-luna",
-      label: "GPT-5.6 Luna",
-      provider: "openrouter",
+      ref: "platform-openai/gpt-6.1-terra",
+      label: "GPT-6.1 Terra",
+      provider: "openai",
     });
     expect(res.body.builderAgentFallbackModelRef).toBe("platform-openrouter/z-ai/glm-5.2");
     expect(res.body.defaultBuilderAgentFallbackModelRef).toBe("platform-openrouter/z-ai/glm-5.2");

@@ -208,7 +208,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     ).toBe(false);
   });
 
-  it("free post-trial non-BYOK derives the compiled DeepSeek house pin without local BYOT materialization", () => {
+  it("free post-trial non-BYOK derives the compiled Errands house pin without local BYOT materialization", () => {
     const desired = deriveDesiredByotState({
       ...ON,
       byotActive: false,
@@ -218,7 +218,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     expect(desired.input).toBeNull();
     expect(desired.coachModelInput).toEqual({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
   });
@@ -228,11 +228,11 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
       ...ON,
       byotActive: false,
       selectedTier: "free",
-      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      freeTierModelRef: "platform-openai/gpt-6-luna",
     });
     expect(desired.coachModelInput).toEqual({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
   });
@@ -246,7 +246,7 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
     });
     expect(desired.coachModelInput).toEqual({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
   });
@@ -254,11 +254,11 @@ describe("deriveDesiredByotState — gating (characterization)", () => {
   it("BYOK coach input carries the dial ref so the fallback chain follows the operator", () => {
     const desired = deriveDesiredByotState({
       ...ON,
-      freeTierModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      freeTierModelRef: "platform-openai/gpt-6-luna",
     });
     expect(desired.coachModelInput).toMatchObject({
       slug: "tester-70",
-      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      houseModelRef: "platform-openai/gpt-6-luna",
     });
   });
 
@@ -725,8 +725,8 @@ describe("brokerFetchByosubCreds — gateway-side broker client (no silent failu
 
 // Every BYOK coach model is a primary+fallback chain to the platform house
 // model baseline (B6) — the operator's free-tier dial, compiled default
-// DeepSeek V4 Pro on the OpenRouter platform key.
-const HOUSE_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+// Errands (GPT-6 Luna) on the OpenAI platform key.
+const HOUSE_REF = "platform-openai/gpt-6-luna";
 const HOUSE_DEFAULTS = { [HOUSE_REF]: {} };
 const withFallback = (primary: string) => ({
   primary,
@@ -830,16 +830,16 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
     expect(
       byosCoachConfigPatch({
         slug: "tester-70",
-        model: "platform-openrouter/deepseek/deepseek-v4-pro",
+        model: "platform-openai/gpt-6-luna",
         source: "free-tier",
       }),
     ).toEqual({
       agents: {
-        defaults: { models: { "platform-openrouter/deepseek/deepseek-v4-pro": {} } },
+        defaults: { models: { "platform-openai/gpt-6-luna": {} } },
         list: [
           {
             id,
-            model: { primary: "platform-openrouter/deepseek/deepseek-v4-pro", fallbacks: [] },
+            model: { primary: "platform-openai/gpt-6-luna", fallbacks: [] },
             tools: FREE_TIER_COACH_TOOLS,
           },
         ],
@@ -852,17 +852,17 @@ describe("byosCoachConfigPatch — durable coach-model patch (#1001 core)", () =
       byosCoachConfigPatch({
         slug: "tester-70",
         provider: "openai",
-        houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+        houseModelRef: "platform-openai/gpt-6-luna",
       }),
     ).toEqual({
       agents: {
-        defaults: { models: { "platform-openrouter/deepseek/deepseek-v4-pro": {} } },
+        defaults: { models: { "platform-openai/gpt-6-luna": {} } },
         list: [
           {
             id,
             model: {
               primary: "openai/gpt-5",
-              fallbacks: ["platform-openrouter/deepseek/deepseek-v4-pro"],
+              fallbacks: ["platform-openai/gpt-6-luna"],
             },
           },
         ],
@@ -2469,7 +2469,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
@@ -2581,7 +2581,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyCoachModelPatchFn).not.toHaveBeenCalled();
     expect(purgeCustomerOauthRuntimeFn).toHaveBeenCalledWith(
       "tester-70",
-      "platform-openrouter/deepseek/deepseek-v4-pro",
+      "platform-openai/gpt-6-luna",
       { forceSafeAll: true },
     );
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
@@ -2610,7 +2610,7 @@ describe("standard gateway — BYOS materialization", () => {
 
     expect(purgeCustomerOauthRuntimeFn).toHaveBeenCalledWith(
       "tester-70",
-      "platform-openrouter/deepseek/deepseek-v4-pro",
+      "platform-openai/gpt-6-luna",
       { forceSafeAll: false },
     );
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
@@ -2657,7 +2657,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(applyOauthRuntimeModelAllowlistFn).toHaveBeenCalledWith([], STANDARD_CODEX_APP_SERVER);
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
     expect(requestGatewayRestartFn).not.toHaveBeenCalled();
@@ -2692,7 +2692,7 @@ describe("standard gateway — BYOS materialization", () => {
     expect(restoreOauthFn).not.toHaveBeenCalled();
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
     expect(triggerSecretsReloadFn).toHaveBeenCalledTimes(1);
@@ -3128,7 +3128,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       provider: "openai-codex",
       baseUrl: undefined,
       model: undefined,
-      houseModelRef: "platform-openrouter/deepseek/deepseek-v4-pro",
+      houseModelRef: "platform-openai/gpt-6-luna",
     });
     expect(requestGatewayRestartFn).toHaveBeenCalledTimes(1);
     expect(triggerSecretsReloadFn).not.toHaveBeenCalled();
@@ -3730,7 +3730,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
           fallbacks: [],
         },
         "octogee-tester-70-proj-web-coach": {
-          primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+          primary: "platform-openai/gpt-6-luna",
           fallbacks: [],
         },
       },
@@ -3776,11 +3776,11 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       "tester-70",
       {
         "octogee-tester-70-coach": {
-          primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+          primary: "platform-openai/gpt-6-luna",
           fallbacks: [],
         },
         "octogee-tester-70-proj-web-coach": {
-          primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+          primary: "platform-openai/gpt-6-luna",
           fallbacks: [],
         },
       },
@@ -3824,14 +3824,14 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
 
     expect(applyCoachModelPatchFn).toHaveBeenCalledWith({
       slug: "tester-70",
-      model: "platform-openrouter/deepseek/deepseek-v4-pro",
+      model: "platform-openai/gpt-6-luna",
       source: "free-tier",
     });
     expect(applyAgentModelOverridesFn).toHaveBeenCalledWith(
       "tester-70",
       {
         "octogee-tester-70-proj-web-coach": {
-          primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+          primary: "platform-openai/gpt-6-luna",
           fallbacks: [],
         },
       },
@@ -3872,7 +3872,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
       "tester-70",
       {
         "octogee-tester-70-proj-web-coach": {
-          primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+          primary: "platform-openai/gpt-6-luna",
           fallbacks: [],
         },
       },
@@ -3890,7 +3890,7 @@ describe("syncByotForCustomer — agent-model overrides ride every class path", 
     applyAgentModelOverrides: applyAgentModelOverridesFn,
   });
   const builderAgentDefault = {
-    primary: "platform-openrouter/deepseek/deepseek-v4-pro",
+    primary: "platform-openai/gpt-6-luna",
     fallbacks: ["platform-openrouter/z-ai/glm-5.2"],
   };
 

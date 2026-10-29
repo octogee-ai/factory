@@ -53,6 +53,41 @@ export function catalogEntryForModelRef(ref: string): ModelCatalogEntry | null {
   return ROUTABLE_MODEL_CATALOG.find((entry) => modelRefForCatalogEntry(entry) === ref) ?? null;
 }
 
+export const SIMPLE_MODEL_TIER_IDS = ["errands", "everyday", "hard"] as const;
+export type SimpleModelTierId = (typeof SIMPLE_MODEL_TIER_IDS)[number];
+
+export interface SimpleModelTier {
+  id: SimpleModelTierId;
+  label: string;
+  description: string;
+  ref: string;
+}
+
+export const SIMPLE_MODEL_TIERS: Readonly<Record<SimpleModelTierId, SimpleModelTier>> = {
+  errands: {
+    id: "errands",
+    label: "Errands",
+    description: "The cheap one. Quick help with reminders, lookups and small stuff.",
+    ref: `${OPENAI_PLATFORM_PROVIDER_ID}/gpt-6-luna`,
+  },
+  everyday: {
+    id: "everyday",
+    label: "Everyday",
+    description: "Good help for most days. Start here.",
+    ref: `${OPENAI_PLATFORM_PROVIDER_ID}/gpt-6.1-terra`,
+  },
+  hard: {
+    id: "hard",
+    label: "Hard things",
+    description: "The sharp one. Slower and costs more, for tricky problems.",
+    ref: `${OPENAI_PLATFORM_PROVIDER_ID}/gpt-6.1-sol`,
+  },
+};
+
+export function simpleModelTierForRef(ref: string): SimpleModelTier | null {
+  return SIMPLE_MODEL_TIER_IDS.map((id) => SIMPLE_MODEL_TIERS[id]).find((tier) => tier.ref === ref) ?? null;
+}
+
 export function parseAgentModelSelection(value: unknown): AgentModelSelection | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const { primary, fallbacks } = value as { primary?: unknown; fallbacks?: unknown };

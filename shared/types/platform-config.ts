@@ -1,4 +1,4 @@
-import { catalogEntryForModelRef } from "./agent-models.js";
+import { SIMPLE_MODEL_TIERS, catalogEntryForModelRef } from "./agent-models.js";
 import type { TrialGrant } from "./billing.js";
 import {
   BUILDER_TIERS,
@@ -321,14 +321,14 @@ export function googleConsentPermission(
   return { permitted, excluded };
 }
 
-// The free-tier house model: DeepSeek V4 Pro on the OpenRouter platform key
-// (operator default 2026-07-08; the dial can point anywhere in the catalog).
-export const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+// The free-tier house model compiles to the Errands tier on the OpenAI platform
+// key; the dial can point anywhere in the catalog.
+export const DEFAULT_FREE_TIER_MODEL_REF = SIMPLE_MODEL_TIERS.errands.ref;
 export const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
 
 // The platform default every Builder's Agent starts on until they pick their
-// own model in Account → Models. Fallback ref null = no fallback.
-export const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-5.6-luna";
+// own model in Account → Models: the Everyday tier. Fallback ref null = no fallback.
+export const DEFAULT_BUILDER_AGENT_MODEL_REF = SIMPLE_MODEL_TIERS.everyday.ref;
 export const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null =
   "platform-openrouter/z-ai/glm-5.2";
 

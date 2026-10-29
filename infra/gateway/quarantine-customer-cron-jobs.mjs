@@ -15,6 +15,9 @@ const SAFE_MODELS = new Set([
   "platform-openrouter/deepseek/deepseek-v4-pro",
   "platform-openrouter/openai/gpt-5.6-luna",
   "platform-openai/gpt-5.4-mini",
+  "platform-openai/gpt-6-luna",
+  "platform-openai/gpt-6.1-terra",
+  "platform-openai/gpt-6.1-sol",
 ]);
 const SAFE_SCHEDULED_TOOLS = new Set([
   ...OCTOGEE_WORKFLOW_TOOLS,

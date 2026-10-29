@@ -229,6 +229,27 @@ describe("OpenAI cost estimation", () => {
     cacheReadInputTokens: 1_000_000,
   };
 
+  it.each([
+    ["gpt-6-luna", 0.1, 0.01, 0.5],
+    ["gpt-6.1-terra", 1, 0.05, 5],
+    ["gpt-6.1-sol", 2, 0.1, 10],
+  ])("prices %s from the catalog row: $%s in / $%s cached / $%s out per 1M", (model, input, cached, output) => {
+    const cost = estimateModelBrokerCost("openai", model, MILLION_EACH);
+    expect(cost.pricingModel).toBe(`openai:${model}`);
+    expect(isUnknownOpenAiPricingModel(cost.pricingModel)).toBe(false);
+    expect(cost.input).toBeCloseTo(input);
+    expect(cost.cacheRead).toBeCloseTo(cached);
+    expect(cost.output).toBeCloseTo(output);
+    expect(cost.cacheWrite).toBe(0);
+    expect(cost.total).toBeCloseTo(input + cached + output);
+  });
+
+  it("prices a dated OpenAI snapshot from its catalog row", () => {
+    const cost = estimateModelBrokerCost("openai", "gpt-6.1-terra-2026-10-01", MILLION_EACH);
+    expect(cost.pricingModel).toBe("openai:gpt-6.1-terra");
+    expect(cost.total).toBeCloseTo(1 + 0.05 + 5);
+  });
+
   it("prices gpt-5.4-mini per the OpenAI table with 10% cached input", () => {
     const cost = estimateModelBrokerCost("openai", "gpt-5.4-mini", MILLION_EACH);
     expect(cost.pricingModel).toBe("openai:gpt-5.4-mini");
@@ -257,6 +278,7 @@ describe("OpenAI cost estimation", () => {
   it("prices unknown OpenAI models at the fallback rate and flags them", () => {
     const cost = estimateModelBrokerCost("openai", "gpt-99", MILLION_EACH);
     expect(cost.pricingModel).toBe("openai:unknown-fallback");
+    expect(cost.total).toBeGreaterThan(0);
     expect(isUnknownOpenAiPricingModel(cost.pricingModel)).toBe(true);
     expect(isUnknownOpenAiPricingModel("openai:gpt-5.4-mini")).toBe(false);
   });

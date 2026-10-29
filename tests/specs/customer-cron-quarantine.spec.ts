@@ -19,6 +19,8 @@ const mikeAccount = "mike-coach";
 const ceckertSession = `agent:${ceckertAgent}:mattermost:channel:ceckert-channel`;
 const mikeSession = `agent:${mikeAgent}:mattermost:channel:mike-channel`;
 
+const simpleTierModels = ["platform-openai/gpt-6-luna", "platform-openai/gpt-6.1-sol", "platform-openai/gpt-6.1-terra"];
+
 type CronRow = Record<string, string | number | null>;
 
 function parsedOrRaw(value: string | number | null) {
@@ -223,6 +225,7 @@ function fixture() {
     row("foreign-delivery-account", { delivery_account_id: mikeAccount }),
     row("foreign-session", { session_key: mikeSession }),
     row("webhook", { delivery_mode: "webhook", delivery_to: "https://attacker.example/hook" }),
+    ...simpleTierModels.map((model) => row(`tier-model-${model}`, { payload_kind: "agentTurn", payload_model: model })),
     row("unsafe-model", { payload_kind: "agentTurn", payload_model: "openai/gpt-attacker" }),
     row("unsafe-fallback", { payload_kind: "agentTurn", payload_fallbacks_json: JSON.stringify(["openai/gpt-attacker"]) }),
     row("unsafe-tools", { payload_kind: "agentTurn", payload_tools_allow_json: JSON.stringify(["exec"]) }),
@@ -335,14 +338,13 @@ describe("customer cron routing quarantine", () => {
       expect(result.stdout).toContain("quarantined 26 unsafe customer cron job(s)");
 
       const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
-      expect(db.prepare("SELECT job_id FROM cron_jobs ORDER BY job_id").all()).toEqual([
+      const survivors = [
         { job_id: "safe" },
         { job_id: "safe-tools" },
-      ]);
-      expect(db.prepare("SELECT job_id FROM cron_job_scratch ORDER BY job_id").all()).toEqual([
-        { job_id: "safe" },
-        { job_id: "safe-tools" },
-      ]);
+        ...simpleTierModels.map((model) => ({ job_id: `tier-model-${model}` })),
+      ];
+      expect(db.prepare("SELECT job_id FROM cron_jobs ORDER BY job_id").all()).toEqual(survivors);
+      expect(db.prepare("SELECT job_id FROM cron_job_scratch ORDER BY job_id").all()).toEqual(survivors);
       db.close();
       const quarantine = JSON.parse(readFileSync(
         path.join(root, "cron", "octogee-customer-cron-quarantine.json"),
@@ -397,7 +399,7 @@ describe("customer cron routing quarantine", () => {
     const result = run(root, "operator" as never);
     expect(result.status, result.stderr).toBe(0);
     const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
-    expect(db.prepare("SELECT count(*) AS count FROM cron_jobs").get()).toEqual({ count: 2 });
+    expect(db.prepare("SELECT count(*) AS count FROM cron_jobs").get()).toEqual({ count: 2 + simpleTierModels.length });
     db.close();
   });
 });

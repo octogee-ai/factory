@@ -14,7 +14,7 @@ describe("crew constants", () => {
     expect(CREW_ROLES).toEqual(["coach"]);
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
     expect(CREW_IDENTITY.coach.model).toBe(DEFAULT_BUILDER_AGENT_MODEL_REF);
-    expect(CREW_IDENTITY.coach.model).toBe("platform-openrouter/openai/gpt-5.6-luna");
+    expect(CREW_IDENTITY.coach.model).toBe("platform-openai/gpt-6.1-terra");
     expect(TIERS).toEqual(["trial", "free", "hobby", "pro", "max"]);
     for (const tier of TIERS) {
       expect(TIER_CREW_ACCESS[tier]).toEqual(["coach"]);

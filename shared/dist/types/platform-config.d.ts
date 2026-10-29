@@ -62,9 +62,9 @@ export interface GoogleConsentPermission {
     excluded: GoogleConnectCapabilityKey[];
 }
 export declare function googleConsentPermission(config: PlatformConnectConfig | null, uid: string, requested: readonly GoogleConnectCapabilityKey[]): GoogleConsentPermission;
-export declare const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
+export declare const DEFAULT_FREE_TIER_MODEL_REF: string;
 export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
-export declare const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-5.6-luna";
+export declare const DEFAULT_BUILDER_AGENT_MODEL_REF: string;
 export declare const DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF: string | null;
 export interface BuilderAgentModelDefault {
     primary: string;

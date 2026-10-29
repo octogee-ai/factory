@@ -14,10 +14,10 @@ describe("CREW_ROLES", () => {
 });
 
 describe("CREW_IDENTITY", () => {
-  it("coach is Octo with octopus emoji and GPT-5.6 Luna via platform OpenRouter as the provisioning default", () => {
+  it("coach is Octo with octopus emoji and GPT-6.1 Terra (Everyday) via platform OpenAI as the provisioning default", () => {
     expect(CREW_IDENTITY.coach.name).toBe("Octo");
     expect(CREW_IDENTITY.coach.emoji).toBe("🐙");
-    expect(CREW_IDENTITY.coach.model).toBe("platform-openrouter/openai/gpt-5.6-luna");
+    expect(CREW_IDENTITY.coach.model).toBe("platform-openai/gpt-6.1-terra");
   });
 });
 

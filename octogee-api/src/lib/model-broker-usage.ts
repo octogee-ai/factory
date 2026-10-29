@@ -207,6 +207,7 @@ const OPENAI_PRICING: Record<string, AnthropicPricing> = {
   ),
 };
 const UNKNOWN_OPENAI_FALLBACK_PRICING = pricing(2.5, 15, "openai:unknown-fallback");
+const OPENAI_SNAPSHOT_SUFFIX = /-\d{4}-\d{2}-\d{2}$/;
 
 function pricing(inputPerMTok: number, outputPerMTok: number, pricingModel: string): AnthropicPricing {
   return {
@@ -368,14 +369,18 @@ export function estimateModelBrokerCost(
   };
 }
 
+function canonicalCatalogModel(provider: "openai" | "openrouter", model: string): string {
+  if (provider === "openai") return model.replace(OPENAI_SNAPSHOT_SUFFIX, "");
+  return model.startsWith("z-ai/glm-5.2-") ? "z-ai/glm-5.2" : model;
+}
+
 function estimateCatalogCost(
   provider: "openai" | "openrouter",
   model: string,
   usage: AnthropicTokenUsage,
   cacheWriteTtl: AnthropicCacheWriteTtl,
 ): ModelBrokerUsageCost | null {
-  const canonicalModel = provider === "openrouter" && model.startsWith("z-ai/glm-5.2-")
-    ? "z-ai/glm-5.2" : model;
+  const canonicalModel = canonicalCatalogModel(provider, model);
   const entry = modelCatalogEntryFor(provider, canonicalModel);
   const inputTokens = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens;
   if (!entry?.pricing) return null;

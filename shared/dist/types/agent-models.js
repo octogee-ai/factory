@@ -28,6 +28,30 @@ export function platformModelRefs() {
 export function catalogEntryForModelRef(ref) {
     return ROUTABLE_MODEL_CATALOG.find((entry) => modelRefForCatalogEntry(entry) === ref) ?? null;
 }
+export const SIMPLE_MODEL_TIER_IDS = ["errands", "everyday", "hard"];
+export const SIMPLE_MODEL_TIERS = {
+    errands: {
+        id: "errands",
+        label: "Errands",
+        description: "The cheap one. Quick help with reminders, lookups and small stuff.",
+        ref: `${OPENAI_PLATFORM_PROVIDER_ID}/gpt-6-luna`,
+    },
+    everyday: {
+        id: "everyday",
+        label: "Everyday",
+        description: "Good help for most days. Start here.",
+        ref: `${OPENAI_PLATFORM_PROVIDER_ID}/gpt-6.1-terra`,
+    },
+    hard: {
+        id: "hard",
+        label: "Hard things",
+        description: "The sharp one. Slower and costs more, for tricky problems.",
+        ref: `${OPENAI_PLATFORM_PROVIDER_ID}/gpt-6.1-sol`,
+    },
+};
+export function simpleModelTierForRef(ref) {
+    return SIMPLE_MODEL_TIER_IDS.map((id) => SIMPLE_MODEL_TIERS[id]).find((tier) => tier.ref === ref) ?? null;
+}
 export function parseAgentModelSelection(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return null;

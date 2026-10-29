@@ -170,8 +170,13 @@ describe("parsePlatformTrialConfig", () => {
 });
 
 describe("DEFAULT_FREE_TIER_MODEL_REF", () => {
-  it("is DeepSeek V4 Pro on the OpenRouter platform key", () => {
-    expect(DEFAULT_FREE_TIER_MODEL_REF).toBe("platform-openrouter/deepseek/deepseek-v4-pro");
+  it("is the Errands tier (GPT-6 Luna) on the OpenAI platform key", () => {
+    expect(DEFAULT_FREE_TIER_MODEL_REF).toBe("platform-openai/gpt-6-luna");
+    expect(resolveFreeTierModel(DEFAULT_FREE_TIER_MODEL_REF)).toEqual({
+      ref: "platform-openai/gpt-6-luna",
+      provider: "openai",
+      upstreamModelId: "gpt-6-luna",
+    });
   });
 
   it("always resolves against the catalog — a compiled default outside it would strand the free tier", () => {
@@ -261,8 +266,8 @@ describe("parsePlatformModelConfig", () => {
 });
 
 describe("Builder Agent default dial", () => {
-  it("compiles to GPT-5.6 Luna through OpenRouter with a GLM 5.2 fallback", () => {
-    expect(DEFAULT_BUILDER_AGENT_MODEL_REF).toBe("platform-openrouter/openai/gpt-5.6-luna");
+  it("compiles to the Everyday tier (GPT-6.1 Terra) on OpenAI direct with a GLM 5.2 fallback", () => {
+    expect(DEFAULT_BUILDER_AGENT_MODEL_REF).toBe("platform-openai/gpt-6.1-terra");
     expect(DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF).toBe("platform-openrouter/z-ai/glm-5.2");
     expect(resolveFreeTierModel(DEFAULT_BUILDER_AGENT_MODEL_REF)).not.toBeNull();
     expect(resolveFreeTierModel(DEFAULT_BUILDER_AGENT_FALLBACK_MODEL_REF!)).not.toBeNull();

@@ -34,7 +34,13 @@ const ANONYMOUS_OPERATIONAL_MODELS_BY_PROVIDER = {
     "openrouter:openai/gpt-5.6-luna",
     "openrouter:unknown-fallback",
   ],
-  openai: ["openai:gpt-5.4-mini", "openai:unknown-fallback"],
+  openai: [
+    "openai:gpt-6-luna",
+    "openai:gpt-6.1-terra",
+    "openai:gpt-6.1-sol",
+    "openai:gpt-5.4-mini",
+    "openai:unknown-fallback",
+  ],
   brave: ["brave/web-search", "brave/unknown"],
   tavily: [
     "tavily/search-basic",
