@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { platformReleaseRecord, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import {
-  deployTestFleet,
-  formatTestFleetSummary,
-  TestFleetDeploymentDeferredError,
-  type TestFleetGateway,
-  type TestFleetSnapshot,
-} from "../lib/test-fleet-deploy.js";
+  deployFleet,
+  formatFleetSummary,
+  FleetDeploymentDeferredError,
+  type FleetGateway,
+  type FleetSnapshot,
+} from "../lib/fleet-deploy.js";
 
 const digest = (character: string) => `sha256:${character.repeat(64)}`;
 const tag = "aaaaaaa-oc2026.10.2";
@@ -18,7 +18,7 @@ const payload: ReleasePayload = {
 };
 const old = { ...payload, imageTag: `old@${digest("d")}` };
 
-function gateway(id: string, patch: Partial<TestFleetGateway> = {}): TestFleetGateway {
+function gateway(id: string, patch: Partial<FleetGateway> = {}): FleetGateway {
   const shared = id.startsWith("shared-");
   const image = shared ? payload : payload.profileImages!.builder;
   return {
@@ -34,18 +34,29 @@ function gateway(id: string, patch: Partial<TestFleetGateway> = {}): TestFleetGa
   };
 }
 
-function harness(snapshots: TestFleetSnapshot[]) {
+function harness(snapshots: FleetSnapshot[]) {
   let time = 100;
   let index = 0;
-  const deploy = vi.fn(async (_target: TestFleetGateway) => ({ release: 2, operationId: "roll-2" }));
+  const deploy = vi.fn(async (_target: FleetGateway) => ({ release: 2, operationId: "roll-2" }));
   const readSnapshot = vi.fn(async () => structuredClone(snapshots[Math.min(index++, snapshots.length - 1)]));
   const deps = { readSnapshot, deploy, now: () => time, sleep: async (ms: number) => { time += ms; }, log: vi.fn() };
-  const run = () => deployTestFleet({ environment: "test", sourceSha: "a".repeat(40), payload, timeoutMs: 500, pollIntervalMs: 100, maxObservationAgeMs: 1000 }, deps);
+  const run = () => deployFleet({ environment: "test", sourceSha: "a".repeat(40), payload, timeoutMs: 500, pollIntervalMs: 100, maxObservationAgeMs: 1000 }, deps);
   return { run, deploy, readSnapshot, deps };
 }
-const snapshot = (...gateways: TestFleetGateway[]): TestFleetSnapshot => ({ gateways, sharedReplacements: [], platform: platformReleaseRecord(payload, 100), retirements: [] });
+const snapshot = (...gateways: FleetGateway[]): FleetSnapshot => ({ gateways, sharedReplacements: [], platform: platformReleaseRecord(payload, 100), retirements: [] });
 
 describe("complete TEST fleet deployment", () => {
+  it("deploys PROD Builders and retains paused gateways without starting them", async () => {
+    const h = harness([
+      snapshot(gateway("shared-0"), gateway("b-live", { latestPayload: old, desiredPayload: old }), gateway("b-paused", { desiredStatus: "paused", latestPayload: old, desiredPayload: old })),
+      snapshot(gateway("shared-0"), gateway("b-live"), gateway("b-paused", { desiredStatus: "paused", runtime: null, live: null })),
+    ]);
+    const report = await deployFleet({ environment: "prod", sourceSha: "a".repeat(40), payload, timeoutMs: 500, pollIntervalMs: 100, maxObservationAgeMs: 1000 }, h.deps);
+    expect(report.environment).toBe("prod");
+    expect(report.outcome).toBe("converged");
+    expect(h.deploy.mock.calls.map(([target]) => target.gatewayId)).toEqual(["b-live", "b-paused"]);
+    expect(report.targets.find((target) => target.gatewayId === "b-paused")?.status).toBe("paused-desired-only");
+  });
   it("deploys every Builder including paused roots, never shared or retired roots, and reports paused desired-only", async () => {
     const shared = gateway("shared-0");
     const before = (id: string, desiredStatus: "running" | "paused") => gateway(id, { desiredStatus, latestRelease: 1, desiredRelease: 1, latestPayload: old, desiredPayload: old });
@@ -85,7 +96,7 @@ describe("complete TEST fleet deployment", () => {
   it("rescans a typed transient ownership fence and deploys once the source becomes idle", async () => {
     const oldBuilder = gateway("b-busy", { latestPayload: old, desiredPayload: old, latestRelease: 1, desiredRelease: 1 });
     const h = harness([snapshot(gateway("shared-0"), oldBuilder), snapshot(gateway("shared-0"), oldBuilder), snapshot(gateway("shared-0"), gateway("b-busy"))]);
-    h.deploy.mockRejectedValueOnce(new TestFleetDeploymentDeferredError("source transfer outcome is unresolved"));
+    h.deploy.mockRejectedValueOnce(new FleetDeploymentDeferredError("source transfer outcome is unresolved"));
     expect((await h.run()).outcome).toBe("converged");
     expect(h.deploy).toHaveBeenCalledTimes(2);
     expect(h.deps.log.mock.calls[0][0]).toContain("source transfer outcome is unresolved");
@@ -93,7 +104,7 @@ describe("complete TEST fleet deployment", () => {
 
   it("reports an eventually retired Builder after a transient retirement race", async () => {
     const h = harness([snapshot(gateway("shared-0"), gateway("b-retiring", { latestPayload: old })), snapshot(gateway("shared-0"), gateway("b-retiring", { desiredStatus: "retired" }))]);
-    h.deploy.mockRejectedValue(new TestFleetDeploymentDeferredError("retirement claim"));
+    h.deploy.mockRejectedValue(new FleetDeploymentDeferredError("retirement claim"));
     const report = await h.run();
     expect(report.outcome).toBe("converged");
     expect(report.targets.find((target) => target.gatewayId === "b-retiring")?.status).toBe("retired-skipped");
@@ -201,7 +212,7 @@ describe("complete TEST fleet deployment", () => {
   it("bounds the final job summary and keeps target text inside table cells", async () => {
     const report = await harness([snapshot(gateway("shared-0"))]).run();
     report.targets = Array.from({ length: 202 }, () => ({ ...report.targets[0], gatewayId: "unsafe|name\n".repeat(100) }));
-    const summary = formatTestFleetSummary(report);
+    const summary = formatFleetSummary(report);
     expect(summary).toContain("Showing 200 of 202 targets");
     expect(summary).toContain("Source: " + "a".repeat(40));
     expect(summary).not.toContain("unsafe|name");
@@ -230,9 +241,9 @@ describe("complete TEST fleet deployment", () => {
     expect(h.deploy).not.toHaveBeenCalled();
   });
 
-  it("rejects PROD before reads or writes", async () => {
+  it("rejects an unknown environment before reads or writes", async () => {
     const h = harness([snapshot(gateway("shared-0"))]);
-    await expect(deployTestFleet({ environment: "prod", sourceSha: "a".repeat(40), payload, timeoutMs: 500 }, h.deps)).rejects.toThrow("TEST only");
+    await expect(deployFleet({ environment: "unknown" as "test", sourceSha: "a".repeat(40), payload, timeoutMs: 500 }, h.deps)).rejects.toThrow("TEST or PROD");
     expect(h.readSnapshot).not.toHaveBeenCalled();
     expect(h.deploy).not.toHaveBeenCalled();
   });

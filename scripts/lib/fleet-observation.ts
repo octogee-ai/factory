@@ -1,5 +1,5 @@
 import { isGatewayVmImageObservation } from "@octogee/shared/types/glm";
-import type { TestFleetLiveObservation } from "./test-fleet-deploy.js";
+import type { FleetLiveObservation } from "./fleet-deploy.js";
 
 export function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -18,7 +18,7 @@ export function observedDigest(value: unknown): string | null {
   return typeof value === "string" ? /(sha256:[a-f0-9]{64})$/.exec(value)?.[1] ?? null : null;
 }
 
-function podInstance(value: Record<string, unknown>): TestFleetLiveObservation["instances"][number] {
+function podInstance(value: Record<string, unknown>): FleetLiveObservation["instances"][number] {
   const metadata = object(value.metadata);
   const status = object(value.status);
   const statuses = array(status.containerStatuses).map(object);
@@ -38,10 +38,10 @@ function podInstance(value: Record<string, unknown>): TestFleetLiveObservation["
   };
 }
 
-export function testFleetPodObservations(value: unknown, observedAt: number): Map<string, TestFleetLiveObservation> {
+export function fleetPodObservations(value: unknown, observedAt: number): Map<string, FleetLiveObservation> {
   const list = object(value);
   if (!Array.isArray(list.items)) throw new Error("Kubernetes pod list has no items array");
-  const result = new Map<string, TestFleetLiveObservation>();
+  const result = new Map<string, FleetLiveObservation>();
   for (const entry of list.items) {
     const pod = object(entry);
     const gatewayId = text(object(object(pod.metadata).labels)["gateway-instance"], "gateway-instance label");
@@ -53,7 +53,7 @@ export function testFleetPodObservations(value: unknown, observedAt: number): Ma
   return result;
 }
 
-export function testFleetVmObservation(runtime: Record<string, unknown>): TestFleetLiveObservation | null {
+export function fleetVmObservation(runtime: Record<string, unknown>): FleetLiveObservation | null {
   const images = runtime.vmImages;
   const vm = object(runtime.vm);
   if (!isGatewayVmImageObservation(images) || images.instanceId !== vm.instanceId || vm.status !== "RUNNING") return null;

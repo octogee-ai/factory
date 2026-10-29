@@ -73,6 +73,14 @@ it.each(['platform', 'site', 'desktop'] as const)('does not advance the fleet af
   await expect(deployRelease({ ...options, shipTest: true }, deps)).rejects.toThrow('failed');
   expect(deps.fleet).not.toHaveBeenCalled();
 });
-it('rejects a request to fan out the PROD fleet', () => {
+it('runs the PROD fleet after platform, desktop and site deployment', async () => {
+  const prod = releaseOptions(['--environment=prod', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-prod']);
+  const deps = dependencies();
+  await deployRelease(prod, deps);
+  expect(deps.fleet).toHaveBeenCalledOnce();
+  for (const stage of [deps.desktop, deps.site]) expect(deps.fleet.mock.invocationCallOrder[0]).toBeGreaterThan(stage.mock.invocationCallOrder[0]);
+});
+it('rejects a shipment targeting the wrong environment', () => {
   expect(() => releaseOptions(['--environment=prod', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-test'])).toThrow();
+  expect(() => releaseOptions(['--environment=test', `--sha=${'a'.repeat(40)}`, '--actor=operator:test', '--ship-prod'])).toThrow();
 });

@@ -41,6 +41,14 @@ it('dispatches Ship TEST as one workflow with its selected SHA', async () => {
   expect(command).not.toHaveBeenCalled();
 });
 
+it('dispatches Ship PROD for the selected existing build', async () => {
+  await import('../ci/ship-prod.mjs');
+  expect(dispatch).toHaveBeenCalledWith('deploy.yml', {
+    source_sha: sha, environment: 'prod', actor: 'operator:test', log_level: 'chart-default', post_deploy_checks: 'true', ship_prod: 'true',
+  });
+  expect(command).not.toHaveBeenCalled();
+});
+
 it('rejects conflicting environments before hosted Ship TEST', async () => {
   process.argv.push('--environment=prod');
   await expect(import('../ci/ship-test.mjs')).rejects.toThrow('Duplicate environment');

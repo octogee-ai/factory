@@ -47,6 +47,7 @@ export interface VmGatewayRuntimeDeps {
   routesConfigMap: string;
   ensureAuthSecret?: (opts: { namespace: string; gatewayId: string }) => Promise<void>;
   readDesiredStatus: (gatewayId: string) => Promise<string | null>;
+  journalBootUpgrade: (input: { gatewayId: string; ownerUid: string; instanceId: string; imageId: string }, work: (assertAuthority: () => Promise<void>) => Promise<void>) => Promise<void>;
   upgradeTimeout?: string;
   wait: (ms: number) => Promise<void>;
   disposableParking?: boolean;
@@ -242,6 +243,8 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     environment: deps.environment,
     vmSpec: deps.vmSpec,
     readDesiredStatus: deps.readDesiredStatus,
+    journalBootUpgrade: deps.journalBootUpgrade,
+    resolveBridge: bridgeIp,
     reconcileRoutes,
     wait: deps.wait,
     disposableParking: deps.disposableParking,

@@ -44,6 +44,8 @@ export interface ComputerLifecycleDeps {
   environment: string;
   vmSpec: GatewayVmSpec;
   readDesiredStatus: (gatewayId: string) => Promise<string | null>;
+  journalBootUpgrade: (input: { gatewayId: string; ownerUid: string; instanceId: string; imageId: string }, work: (assertAuthority: () => Promise<void>) => Promise<void>) => Promise<void>;
+  resolveBridge: () => Promise<string>;
   reconcileRoutes: () => Promise<void>;
   wait: (ms: number) => Promise<void>;
   disposableParking?: boolean;
@@ -556,10 +558,13 @@ function assertReplacementOwner(deps: ComputerLifecycleDeps, data: Record<string
   return ownerUid;
 }
 
-async function assertHomeAssignment(db: Firestore, ownerUid: string, gatewayId: string): Promise<void> {
+async function assertHomeAssignment(db: Firestore, ownerUid: string, gatewayId: string, boot = false): Promise<void> {
   const owner = (await db.collection("users").doc(ownerUid).get()).data();
   const assigned = owner?.provisioning?.openclaw?.gatewayId;
-  if (assigned && assigned !== gatewayId) throw new Error("boot replacement home is assigned to another gateway");
+  if (assigned && assigned !== gatewayId) {
+    const root = boot ? (await db.collection(GATEWAYS_COLLECTION).doc(assigned).get()).data() : null;
+    if (root?.gatewayClass !== "shared") throw new Error("boot replacement home is assigned to another gateway");
+  }
 }
 
 function assertReplacementRecoveryCapacity(data: Record<string, unknown> | undefined, vm: GatewayVmState, description: GatewayVmDescription): void {
@@ -582,8 +587,11 @@ async function replacementRecord(deps: ComputerLifecycleDeps, gatewayId: string,
       internalIp: null, status: "TERMINATED", provisioningModel: null, stopReason: "idle" } };
 }
 
-async function clearReplacementRuntime(deps: ComputerLifecycleDeps, gatewayId: string): Promise<void> {
-  if (await clearReplacedComputer(deps, gatewayId)) return;
+async function clearReplacementRuntime(deps: ComputerLifecycleDeps, gatewayId: string, boot = false): Promise<void> {
+  const cleared = boot
+    ? await recordVmObservation(deps, gatewayId, { vm: null, vmHome: { checkpointRequestedAt: FieldValue.delete(), parkRequestedAt: FieldValue.delete(), checkpointAcknowledgedAt: FieldValue.delete() } }, "replacement")
+    : await clearReplacedComputer(deps, gatewayId);
+  if (cleared) return;
   if (await deps.readDesiredStatus(gatewayId) !== "retired" || (await readVmRecord(deps.db, gatewayId)).data !== undefined) {
     throw new Error("replacement runtime record disappeared; retained home preserved");
   }
@@ -594,19 +602,23 @@ async function assertNoBootProjectStorage(db: ComputerLifecycleDeps["db"], owner
   if (owner?.provisioning?.projectStorage?.nativeBoot === true) throw new Error("boot replacement cannot discard unpublished project work; source boot and home retained");
 }
 
-async function replacementSource(deps: ComputerLifecycleDeps, gatewayId: string): Promise<{ description: GatewayVmDescription; ownerUid: string; spec: GatewayVmSpec }> {
+function replacementStatusAllowed(desired: string | null, boot: boolean): desired is string {
+  return desired === "paused" || desired === "retired" || (boot && desired === "running");
+}
+
+async function replacementSource(deps: ComputerLifecycleDeps, gatewayId: string, boot: boolean): Promise<{ description: GatewayVmDescription; ownerUid: string; spec: GatewayVmSpec }> {
   const desired = await deps.readDesiredStatus(gatewayId);
-  if (desired !== "paused" && desired !== "retired") throw new Error("boot replacement requires a paused or retired gateway; active edits/updates/commits stay on retained home");
+  if (!replacementStatusAllowed(desired, boot)) throw new Error("boot replacement requires a paused or retired gateway, or a stopped computer during boot");
   const { data, vm } = await replacementRecord(deps, gatewayId, desired);
   if (!vm || !vm.instanceId || resolveGatewayRuntime(data?.runtime) !== "gce-vm") throw new Error("boot replacement requires a recorded GCE computer");
   const observed = await deps.vm.describe(vm.instanceName, vm.zone);
   if (!observed || observed.instanceId !== vm.instanceId || observed.gatewayId !== gatewayId || !PARKED_STATUSES.has(observed.status)) throw new Error("boot replacement requires the same verified stopped computer");
   const description = await stopSuspendedComputer(deps, gatewayId, observed, "replace its boot");
   const ownerUid = assertReplacementOwner(deps, data, description);
-  await assertNoBootProjectStorage(deps.db, ownerUid);
+  if (!boot) await assertNoBootProjectStorage(deps.db, ownerUid);
   assertReplacementRecoveryCapacity(data, vm, description);
   await assertComputerUnbound(deps, gatewayId, description);
-  await assertHomeAssignment(deps.db, ownerUid, gatewayId);
+  await assertHomeAssignment(deps.db, ownerUid, gatewayId, boot);
   return { description, ownerUid, spec: recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec) };
 }
 
@@ -619,7 +631,7 @@ function assertAbsentReplacementRecord(input: { gatewayId: string; source: NonNu
   if (vm && (vm.instanceId !== source.instanceId || vm.instanceName !== source.name || vm.zone !== source.zone)) throw new Error("replacement retry runtime belongs to another computer");
 }
 
-async function finishAbsentBootReplacement(deps: ComputerLifecycleDeps, gatewayId: string, operationId: string): Promise<Record<string, unknown> | null> {
+async function finishAbsentBootReplacement(deps: ComputerLifecycleDeps, gatewayId: string, operationId: string, boot: boolean): Promise<Record<string, unknown> | null> {
   const ownerUid = nonEmptyString((await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()).data()?.ownerUid);
   if (!ownerUid) return null;
   const home = await readRetainedBuilderHome(deps.db, ownerUid);
@@ -628,35 +640,44 @@ async function finishAbsentBootReplacement(deps: ComputerLifecycleDeps, gatewayI
   const source = pin.sourceComputer;
   if (await deps.vm.describe(source.name, source.zone)) return null;
   const desired = await deps.readDesiredStatus(gatewayId);
-  if (desired !== "paused" && desired !== "retired") throw new Error("boot replacement retry requires paused or retired status");
+  if (!replacementStatusAllowed(desired, boot)) throw new Error("boot replacement retry requires paused or retired status, or an active boot");
   const record = await readVmRecord(deps.db, gatewayId);
   assertAbsentReplacementRecord({ gatewayId, source, home, record, desired });
-  await assertHomeAssignment(deps.db, ownerUid, gatewayId);
+  await assertHomeAssignment(deps.db, ownerUid, gatewayId, boot);
   await deps.vm.verifyDetachedHome(home, ownerUid);
   const image = await selectRetainedBootImage({ db: deps.db, vm: deps.vm, ownerUid, home, spec: deps.vmSpec });
-  await clearReplacementRuntime(deps, gatewayId);
+  await clearReplacementRuntime(deps, gatewayId, boot);
   const parked = await readParkedComputer(deps.db, ownerUid);
   if (parked?.instanceId === source.instanceId && parked.gatewayId === gatewayId) await releaseParkedComputer(deps.db, ownerUid);
   return { instanceName: source.name, home, previous: pin.previous, image, bootDeleted: true, resumeRequired: true };
 }
 
-async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: string, operationId: string, assertAuthority: () => Promise<void>): Promise<Record<string, unknown>> {
+async function logPossibleUnsavedProjects(deps: ComputerLifecycleDeps, gatewayId: string, ownerUid: string, boot: boolean): Promise<void> {
+  if (boot && (await deps.db.collection("users").doc(ownerUid).get()).data()?.provisioning?.projectStorage?.nativeBoot === true) {
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: project autosave is best-effort; unsaved project work on the old boot disk may be lost`);
+  }
+}
+
+async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: string, operationId: string, assertAuthority: () => Promise<void>, options: { boot?: boolean; expectedImageId?: string } = {}): Promise<Record<string, unknown>> {
+  const { boot = false, expectedImageId } = options;
   await assertAuthority();
-  const completed = await finishAbsentBootReplacement(deps, gatewayId, operationId);
+  const completed = await finishAbsentBootReplacement(deps, gatewayId, operationId, boot);
   if (completed) return completed;
-  const source = await replacementSource(deps, gatewayId);
+  const source = await replacementSource(deps, gatewayId, boot);
+  await logPossibleUnsavedProjects(deps, gatewayId, source.ownerUid, boot);
   const home = await deps.vm.retainHome(source.description.name, source.description.zone, source.ownerUid);
   await recordRetainedBuilderHome(deps.db, source.ownerUid, home);
   const previous = await deps.vm.readBootImage(source.description.name, source.description.zone);
   const selected = await selectRetainedBootImage({ db: deps.db, vm: deps.vm, ownerUid: source.ownerUid, home, spec: source.spec, previous, operationId, sourceComputer: { name: source.description.name, zone: source.description.zone, instanceId: source.description.instanceId!, gatewayId } });
+  if (expectedImageId && selected.id !== expectedImageId) throw new Error("computer image family changed during boot upgrade; retry on a later boot");
   await assertAuthority();
-  const confirmed = await replacementSource(deps, gatewayId);
+  const confirmed = await replacementSource(deps, gatewayId, boot);
   verifiedStoppedComputer(source.description, confirmed.description);
   const retained = await deps.vm.retainHome(confirmed.description.name, confirmed.description.zone, source.ownerUid);
   if (retained.id !== home.id || retained.source !== home.source) throw new Error("boot replacement home changed before deletion");
   await recordRetainedBuilderHome(deps.db, source.ownerUid, retained);
   await deps.vm.deleteRetainingHome(source.description.name, source.description.zone, source.ownerUid, home, source.description.instanceId!);
-  await clearReplacementRuntime(deps, gatewayId);
+  await clearReplacementRuntime(deps, gatewayId, boot);
   const parked = await readParkedComputer(deps.db, source.ownerUid);
   if (parked?.instanceId === source.description.instanceId && parked.gatewayId === gatewayId) await releaseParkedComputer(deps.db, source.ownerUid);
   deps.log(`[vm-gateway-runtime] ${gatewayId}: replaced platform boot; retained home ${home.name}/${home.id}; resume uses ${selected.name}/${selected.id}`);
@@ -715,6 +736,106 @@ async function bindParkedComputer(deps: ComputerLifecycleDeps, gatewayId: string
   await deps.vm.bind(stopped.name, stopped.zone, bindingOf(input));
   return stopped;
 }
+
+async function upgradeStoppedBoot(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, spec: GatewayVmSpec): Promise<GatewayVmDescription | null> {
+  if (!PARKED_STATUSES.has(description.status) || !description.instanceId) return description;
+  try {
+    const [current, latest] = await Promise.all([
+      deps.vm.readBootImage(description.name, description.zone),
+      deps.vm.readFamilyImage(spec.imageFamily, spec.imageProject),
+    ]);
+    if (current.id === latest.id) return description;
+    const instanceId = description.instanceId;
+    const ownerUid = nonEmptyString(description.metadata["octogee-owner-uid"]);
+    if (!ownerUid) throw new Error("computer boot upgrade requires the recorded owner");
+    const operationId = `boot-${gatewayId}-${instanceId}-${latest.id}`;
+    await deps.journalBootUpgrade({ gatewayId, ownerUid, instanceId, imageId: latest.id }, async (assertAuthority) => {
+      await replaceStoppedComputer(deps, gatewayId, operationId, assertAuthority, { boot: true, expectedImageId: latest.id });
+    });
+    return null;
+  } catch (error) {
+    const observed = await deps.vm.describe(description.name, description.zone);
+    if (!observed || observed.instanceId !== description.instanceId || !PARKED_STATUSES.has(observed.status)) throw error;
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: boot image upgrade skipped; retaining ${description.name}: ${errorMessage(error)}`);
+    return observed;
+  }
+}
+
+async function confirmRetainedHome(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, recovery: GatewayVmHomeCheckpoint | null): Promise<void> {
+  if (!recovery || description.instanceId !== recovery.instanceId) return;
+  const retained = await recordVmObservation(deps, gatewayId, { vmHome: { restoreCheckpoint: FieldValue.delete() } }, "retained home");
+  if (!retained) throw new Error(`gateway ${gatewayId}: cannot confirm the retained home`);
+}
+
+async function prepareParkedUpgrade(deps: ComputerLifecycleDeps, input: {
+  gatewayId: string; ownerUid: string; description: GatewayVmDescription; spec: GatewayVmSpec; origin: GatewayVmOrigin | undefined;
+  bind: (description: GatewayVmDescription) => Promise<GatewayVmDescription>;
+}): Promise<GatewayVmDescription | null> {
+  const { gatewayId, ownerUid, spec, origin } = input;
+  let { description } = input;
+  if (!PARKED_STATUSES.has(description.status)) return description;
+  if (description.gatewayId !== gatewayId) {
+    const parked = await readParkedComputer(deps.db, ownerUid);
+    if (parked?.bootRecovery && parked.gatewayId === description.gatewayId && parked.instanceId === description.instanceId
+      && parked.instanceName === description.name && parked.zone === description.zone) {
+      await assertComputerUnbound(deps, gatewayId, description);
+      const recorded = await recordVmObservation(deps, gatewayId, {
+        vm: stateFrom(description, parked.parkedAt, "idle", origin), vmBootRecovery: parked.bootRecovery,
+      }, "parked computer adoption");
+      if (recorded) description = await input.bind(description);
+    }
+  }
+  if (description.metadata["octogee-owner-uid"] === ownerUid) return upgradeStoppedBoot(deps, gatewayId, description, spec);
+  deps.log(`[vm-gateway-runtime] ${gatewayId}: boot image upgrade skipped; computer owner binding requires reconciliation`);
+  return description;
+}
+
+function replacementPinMatches(gatewayId: string, vm: GatewayVmState | null, pin: RetainedBootImage | undefined): boolean {
+  const source = pin?.sourceComputer;
+  if (!pin?.operationId?.startsWith(`boot-${gatewayId}-`) || source?.gatewayId !== gatewayId) return false;
+  return !vm || (vm.instanceId === source.instanceId && vm.instanceName === source.name && vm.zone === source.zone);
+}
+
+async function recoverMissingReplacement(deps: ComputerLifecycleDeps, input: {
+  gatewayId: string; data: Record<string, unknown> | undefined; vm: GatewayVmState | null;
+  ensureVm: ComputerLifecycle["ensureVm"];
+}): Promise<void> {
+  const { gatewayId, data, vm } = input;
+  const instance = data?.vmInstance as { ownerUid?: unknown; image?: { repository?: unknown; tag?: unknown } } | undefined;
+  const owner = nonEmptyString(instance?.ownerUid);
+  const repository = nonEmptyString(instance?.image?.repository);
+  const tag = nonEmptyString(instance?.image?.tag);
+  const home = owner ? await readRetainedBuilderHome(deps.db, owner) : null;
+  const pin = (home as (RetainedBuilderHome & { bootImage?: RetainedBootImage }) | null)?.bootImage;
+  if (owner && repository && tag && replacementPinMatches(gatewayId, vm, pin)) {
+    await input.ensureVm(gatewayId, `${repository}:${tag}`, owner, await deps.resolveBridge());
+    await deps.reconcileRoutes();
+    return;
+  }
+  deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: ${vm?.instanceName ?? "computer"} is absent from Compute while the gateway expects it`);
+}
+
+async function upgradePreemptedBoot(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, ensureVm: ComputerLifecycle["ensureVm"]): Promise<GatewayVmDescription | null> {
+  const image = description.metadata["gateway-image"];
+  const owner = description.metadata["octogee-owner-uid"];
+  let bridge: string | undefined;
+  try {
+    const url = new URL(description.metadata["octogee-api-url"]);
+    if (url.protocol === "http:" && url.port === "3001" && url.pathname === "/") bridge = url.hostname;
+  } catch { bridge = undefined; }
+  if (!image || !owner || !bridge) {
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: boot image upgrade skipped during preemption recovery; computer binding is incomplete`);
+    return description;
+  }
+  const { data } = await readVmRecord(deps.db, gatewayId);
+  const spec = recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec);
+  const upgraded = await upgradeStoppedBoot(deps, gatewayId, description, spec);
+  if (upgraded) return upgraded;
+  await ensureVm(gatewayId, image, owner, bridge);
+  await deps.reconcileRoutes();
+  return null;
+}
+
 
 export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLifecycle {
 
@@ -802,6 +923,8 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     let description = existing ? await deps.vm.describe(existing.instanceName, existing.zone) : null;
     if (!description) description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
     const recovery = await requireHomeRecovery(deps, { gatewayId, ownerUid, data, description });
+    if (description) description = await prepareParkedUpgrade(deps, { gatewayId, ownerUid, description, spec, origin,
+      bind: (parked) => reconcileComputerBinding(gatewayId, ownerUid, input, parked) });
     const retainedHome = await readRetainedBuilderHome(deps.db, ownerUid);
     if (!description && retainedHome) {
       if (!spec.zones.includes(retainedHome.zone)) throw new Error(`Builder ${ownerUid}: retained home is outside configured zones; migration is required`);
@@ -810,10 +933,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       input = { ...input, zones: [retainedHome.zone], retainedHome, image: selected, imageProject: selected.project };
     }
     if (!description) ({ description, origin } = await acquireComputer(gatewayId, ownerUid, input));
-    if (recovery && description.instanceId === recovery.instanceId) {
-      const retained = await recordVmObservation(deps, gatewayId, { vmHome: { restoreCheckpoint: FieldValue.delete() } }, "retained home");
-      if (!retained) throw new Error(`gateway ${gatewayId}: cannot confirm the retained home`);
-    }
+    await confirmRetainedHome(deps, gatewayId, description, recovery);
     if (TRANSITIONAL_STATUSES.has(description.status)) {
       throw new Error(`computer ${description.name} is still ${description.status.toLowerCase()}; retrying on the next converge`);
     }
@@ -872,14 +992,15 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
 
   async function recoverUnreachable(gatewayId: string): Promise<void> {
     const { data, vm } = await readVmRecord(deps.db, gatewayId);
-    if (resolveGatewayRuntime(data?.runtime) !== "gce-vm" || !vm) return;
-    if (vm.stopReason && COWBOY_STOP_REASONS.has(vm.stopReason)) return;
+    if (resolveGatewayRuntime(data?.runtime) !== "gce-vm") return;
+    if (vm?.stopReason && COWBOY_STOP_REASONS.has(vm.stopReason)) return;
     if ((await deps.readDesiredStatus(gatewayId)) !== "running") return;
-    const description = await deps.vm.describe(vm.instanceName, vm.zone);
+    const description = vm ? await deps.vm.describe(vm.instanceName, vm.zone) : null;
     if (!description) {
-      deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: ${vm.instanceName} is absent from Compute while the gateway expects it`);
+      await recoverMissingReplacement(deps, { gatewayId, data, vm, ensureVm });
       return;
     }
+    if (!vm) return;
     if (boundElsewhere(description, gatewayId)) {
       deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: ${description.name} is bound to ${description.gatewayId}; not restarting it for ${gatewayId}`);
       return;
@@ -902,6 +1023,9 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function restartPreempted(gatewayId: string, description: GatewayVmDescription, origin: GatewayVmOrigin | undefined): Promise<void> {
+    const upgraded = await upgradePreemptedBoot(deps, gatewayId, description, ensureVm);
+    if (!upgraded) return;
+    description = upgraded;
     if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", origin), "preempted"))) return;
     deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} was preempted (${description.status}); restarting`);
     const after = await startComputer(gatewayId, description, "restarted");

@@ -186,6 +186,7 @@ import {
   createRuntimeDispatchingHelmRunner,
   createVmGatewayRuntime,
   type VmGatewayRuntime,
+  type VmGatewayRuntimeDeps,
   parseGatewayVmSpec,
   resolveDisposableBuilderParking,
   stampGatewayRuntime,
@@ -2293,7 +2294,7 @@ export function buildGatewayHeartbeatPollerDeps(
       });
     },
     onUnreachable: async (gatewayId: string) => {
-      await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId);
+      await runGatewayRuntimeExclusive(async () => { await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId); });
       const snapshot = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
       const gateway = projectGatewayDesiredRootForGateway(
         snapshot.exists ? snapshot.data() : undefined,
@@ -2679,6 +2680,21 @@ async function readBuilderAgentStoreInventory(db: Firestore, builder: { uid: str
   });
 }
 
+function createBootUpgradeJournal(db: Firestore): VmGatewayRuntimeDeps["journalBootUpgrade"] {
+  return async (input, work) => {
+    const assertAuthority = () => withGatewayRuntimeMutation(db, input.gatewayId, async (transaction) => {
+      const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId));
+      const desired = projectGatewayDesiredRootForGateway(root.data(), input.gatewayId);
+      if (desired?.desiredStatus !== "running" || desired.ownerUid !== input.ownerUid) throw new Error("gateway is no longer starting for this computer owner");
+    });
+    await runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+      actor: "cowboy", forced: false, what: "upgrade-builder-boot", why: "Use the current computer image on boot while retaining the Builder home",
+      target: { gatewayId: input.gatewayId }, preActionStatus: { instanceId: input.instanceId }, mutation: { imageId: input.imageId },
+      action: () => work(assertAuthority),
+    });
+  };
+}
+
 async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -2781,6 +2797,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
         const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
         return projectGatewayDesiredRootForGateway(snap.exists ? snap.data() : undefined, gatewayId)?.desiredStatus ?? null;
       },
+      journalBootUpgrade: createBootUpgradeJournal(db),
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: () => Date.now(),
       log,
@@ -3490,7 +3507,7 @@ async function buildHandlers(
       const runtime = vmGatewayRuntimeRef.current;
       const instanceName = runtime ? await runtime.detectPreemption(gatewayId, sinceMs) : null;
       if (runtime && instanceName) {
-        await runtime.recoverUnreachable(gatewayId).catch((error: unknown) => {
+        await runGatewayRuntimeExclusive(() => runtime.recoverUnreachable(gatewayId)).catch((error: unknown) => {
           logFn(`[migrate-customer] ⚠ ${gatewayId}: restart of preempted computer ${instanceName} deferred to the heartbeat recovery: ${error instanceof Error ? error.message : String(error)}`);
         });
       }

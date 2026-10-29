@@ -9,7 +9,7 @@ import { request } from './gcs.mjs';
 
 const options = releaseOptions(process.argv.slice(2));
 const temporary = mkdtempSync(join(tmpdir(), 'platform-release-'));
-const env = { ...process.env, SOURCE_SHA: options.sha, RELEASE_ENVIRONMENT: options.environment, RELEASE_LOG_LEVEL: options.logLevel, RELEASE_POST_CHECKS: String(options.checks ?? options.shipTest ?? false), RELEASE_ACTOR: options.actor, RELEASE_REASON: `Deploy immutable build ${options.sha}`, RUNNER_TEMP: temporary };
+const env = { ...process.env, SOURCE_SHA: options.sha, RELEASE_ENVIRONMENT: options.environment, RELEASE_LOG_LEVEL: options.logLevel, RELEASE_POST_CHECKS: String(options.checks || options.shipTest || options.shipProd || false), RELEASE_ACTOR: options.actor, RELEASE_REASON: `Deploy immutable build ${options.sha}`, RUNNER_TEMP: temporary };
 const run = (file, args, extra = {}) => execFileSync(file, args, { env, stdio: 'inherit', ...extra });
 const stage = (label, file, args, extra = {}) => new Promise((resolve, reject) => {
   const runnerTemp = join(temporary, label);
@@ -33,6 +33,6 @@ try {
     platform: () => stage('platform', 'bash', ['scripts/ci/platform-deploy.sh']),
     site: () => stage('site', 'node', ['scripts/ci/site-deploy.mjs']),
     desktop: () => stage('desktop', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/release-desktop-image.ts'], { cwd: 'scripts' }),
-    fleet: () => stage('fleet', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/deploy-test-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000'], { cwd: 'scripts' }),
+    fleet: () => stage('fleet', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/deploy-fleet.ts', `--sha=${options.sha}`, '--timeout-ms=3600000'], { cwd: 'scripts' }),
   });
 } finally { rmSync(temporary, { recursive: true, force: true }); }

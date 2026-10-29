@@ -11,7 +11,7 @@ const args = process.argv.slice(2);
 const local = args.includes('--local');
 const options = releaseOptions(args.filter(arg => arg !== '--local'));
 if (!local) {
-  if (options.shipTest) throw new Error('Use ci:ship-test for the hosted fleet workflow');
+  if (options.shipTest || options.shipProd) throw new Error('Use ci:ship-test or ci:ship-prod for hosted fleet shipments');
   await dispatchWorkflow('deploy.yml', {
     source_sha: options.sha, environment: options.environment, actor: options.actor,
     log_level: options.logLevel, post_deploy_checks: String(Boolean(options.checks)),

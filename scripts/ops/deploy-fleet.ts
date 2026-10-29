@@ -19,12 +19,12 @@ import {
   isGatewayRuntimeDoc, isReleasePayload, parsePlatformReleaseRecord, projectGatewayDesiredRootForGateway, releasePayloadHash,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
-import { deployTestFleet, formatTestFleetSummary, matchesTestPlatformRelease, TestFleetDeploymentDeferredError, type TestFleetGateway, type TestFleetSnapshot } from "../lib/test-fleet-deploy.js";
-import { object, testFleetPodObservations, testFleetVmObservation } from "../lib/test-fleet-observation.js";
+import { deployFleet, formatFleetSummary, matchesFleetPlatformRelease, FleetDeploymentDeferredError, type FleetGateway, type FleetSnapshot } from "../lib/fleet-deploy.js";
+import { object, fleetPodObservations, fleetVmObservation } from "../lib/fleet-observation.js";
 
 const execFile = promisify(execFileCallback);
 
-export function parseTestFleetDeployArgs(argv: string[]): { sourceSha: string; timeoutMs: number } {
+export function parseFleetDeployArgs(argv: string[]): { sourceSha: string; timeoutMs: number } {
   const values = new Map<string, string>();
   for (const arg of argv) {
     const match = /^--(sha|timeout-ms)=(.+)$/.exec(arg);
@@ -46,7 +46,7 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-function runtimeOf(value: Record<string, unknown>, gatewayId: string): TestFleetGateway["runtime"] {
+function runtimeOf(value: Record<string, unknown>, gatewayId: string): FleetGateway["runtime"] {
   const heartbeat = object(value.heartbeat);
   if (!isGatewayRuntimeDoc(value) || value.gatewayId !== gatewayId) return null;
   return {
@@ -55,14 +55,14 @@ function runtimeOf(value: Record<string, unknown>, gatewayId: string): TestFleet
   };
 }
 
-function replacementsOf(value: unknown): TestFleetSnapshot["sharedReplacements"] {
+function replacementsOf(value: unknown): FleetSnapshot["sharedReplacements"] {
   return parseSharedPoolReplacements(object(value).replacements);
 }
 
 async function readGateway(input: {
   db: Firestore; gatewayId: string; value: unknown; observedAt: number;
-  pods: ReturnType<typeof testFleetPodObservations>; operations: Array<{ id: string; data: Record<string, unknown> }>;
-}): Promise<TestFleetGateway> {
+  pods: ReturnType<typeof fleetPodObservations>; operations: Array<{ id: string; data: Record<string, unknown> }>;
+}): Promise<FleetGateway> {
   const root = projectGatewayDesiredRootForGateway(input.value, input.gatewayId);
   if (!root) throw new Error(`gateway ${input.gatewayId} has an invalid durable root`);
   const ref = input.db.collection(GATEWAYS_COLLECTION).doc(root.gatewayId);
@@ -78,7 +78,7 @@ async function readGateway(input: {
     desiredStatus: root.desiredStatus, latestRelease: root.latestRelease, desiredRelease: root.desiredRelease, liveRelease: root.liveRelease,
     desiredPayload: payloadOf(desired.data(), root.gatewayId, root.desiredRelease), latestPayload: payloadOf(latest.data(), root.gatewayId, root.latestRelease),
     runtime: runtimeOf(runtime, root.gatewayId),
-    live: runtime.runtime === "gce-vm" ? testFleetVmObservation(runtime) : input.pods.get(root.gatewayId) ?? { observedAt: input.observedAt, instances: [] },
+    live: runtime.runtime === "gce-vm" ? fleetVmObservation(runtime) : input.pods.get(root.gatewayId) ?? { observedAt: input.observedAt, instances: [] },
     assignments: assignments.docs.map((assignment) => {
       const data = assignment.data();
       if (typeof data.slug !== "string" || typeof data.state !== "string") throw new Error(`assignment ${assignment.ref.path} is malformed`);
@@ -92,8 +92,8 @@ async function readGateway(input: {
   };
 }
 
-async function readSnapshot(db: Firestore): Promise<TestFleetSnapshot> {
-  const settings = deploymentEnvironmentSettings("test");
+async function readSnapshot(db: Firestore, environment: "test" | "prod"): Promise<FleetSnapshot> {
+  const settings = deploymentEnvironmentSettings(environment);
   const [roots, operations, scalerState, platform, pods, retired] = await Promise.all([
     db.collection(GATEWAYS_COLLECTION).get(),
     db.collection(GLM_OPERATIONS_COLLECTION).where("kind", "==", "rollout").get(),
@@ -103,7 +103,7 @@ async function readSnapshot(db: Firestore): Promise<TestFleetSnapshot> {
     db.collection(GLM_OPERATIONS_COLLECTION).where("kind", "==", "retire-gateway").get(),
   ]);
   const observedAt = Date.now();
-  const observations = testFleetPodObservations(JSON.parse(pods.stdout), observedAt);
+  const observations = fleetPodObservations(JSON.parse(pods.stdout), observedAt);
   const rolloutOperations = operations.docs.map((doc) => ({ id: doc.id, data: doc.data() }));
   const gateways = await Promise.all(roots.docs.map((doc) => readGateway({ db, gatewayId: doc.id, value: doc.data(), observedAt, pods: observations, operations: rolloutOperations })));
   const retirements = retired.docs.flatMap((doc) => {
@@ -125,61 +125,63 @@ async function hasSucceededRetirement(db: Firestore, gatewayId: string): Promise
 }
 
 async function rethrowMutationError(db: Firestore, gatewayId: string, error: unknown): Promise<never> {
-  if (error instanceof GatewayRetirementConflictError || error instanceof StaleGatewayReleaseError) throw new TestFleetDeploymentDeferredError(error.message);
-  if (error instanceof InvalidGatewayRootError && await hasSucceededRetirement(db, gatewayId)) throw new TestFleetDeploymentDeferredError(`${gatewayId} completed retirement during deployment selection`);
+  if (error instanceof GatewayRetirementConflictError || error instanceof StaleGatewayReleaseError) throw new FleetDeploymentDeferredError(error.message);
+  if (error instanceof InvalidGatewayRootError && await hasSucceededRetirement(db, gatewayId)) throw new FleetDeploymentDeferredError(`${gatewayId} completed retirement during deployment selection`);
   throw error;
 }
 
-export async function deployTestFleetBuilder(db: Firestore, gateway: Pick<TestFleetGateway, "gatewayId">, manifest: ReleaseDigestManifest, payload: ReleasePayload): Promise<{ release: number; operationId: string | null }> {
+export async function deployFleetBuilder(db: Firestore, gateway: Pick<FleetGateway, "gatewayId">, manifest: ReleaseDigestManifest, payload: ReleasePayload, environment: "test" | "prod"): Promise<{ release: number; operationId: string | null }> {
   const [snapshot, platform] = await Promise.all([
     db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId).get(),
     db.doc(PLATFORM_RELEASE_RECORD_DOC_PATH).get(),
   ]);
   const current = asDurableGatewayRoot(snapshot.data(), gateway.gatewayId);
-  if (current?.desiredStatus === "retired") throw new TestFleetDeploymentDeferredError(`${gateway.gatewayId} retired during deployment selection`);
+  if (current?.desiredStatus === "retired") throw new FleetDeploymentDeferredError(`${gateway.gatewayId} retired during deployment selection`);
   if (!snapshot.exists && !current) await rethrowMutationError(db, gateway.gatewayId, new InvalidGatewayRootError(gateway.gatewayId));
   if (!current || current.gatewayClass !== "builder") throw new Error(`${gateway.gatewayId} is no longer a non-retired Builder`);
   if (current.standby != null) throw new Error(`${gateway.gatewayId} is a standby Builder; standbys ride the platform release`);
-  if (!matchesTestPlatformRelease(parsePlatformReleaseRecord(platform.data()), payload, manifest.sourceSha)) throw new Error("platform release was superseded before Builder deployment");
-  const actor = process.env.RELEASE_ACTOR ?? "operator:test-fleet";
+  if (!matchesFleetPlatformRelease(parsePlatformReleaseRecord(platform.data()), payload, manifest.sourceSha)) throw new Error("platform release was superseded before Builder deployment");
+  const actor = process.env.RELEASE_ACTOR ?? `operator:${environment}-fleet`;
   try { return await runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-    actor, forced: false, what: "deploy TEST build to Builder gateway", why: process.env.RELEASE_REASON ?? "operator requested complete TEST fleet deployment",
-    target: { gatewayId: current.gatewayId, environment: "test" },
+    actor, forced: false, what: `deploy ${environment.toUpperCase()} build to Builder gateway`, why: process.env.RELEASE_REASON ?? `operator requested complete ${environment.toUpperCase()} fleet deployment`,
+    target: { gatewayId: current.gatewayId, environment },
     preActionStatus: { desiredStatus: current.desiredStatus, desiredRelease: current.desiredRelease, latestRelease: current.latestRelease },
     mutation: { kind: "deploy-gateway-build", gatewayId: current.gatewayId, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest },
-    testProvenance: { environment: "test", sourceCommit: manifest.sourceSha },
-    action: () => appendGatewayRelease(db, { gateway: current, artifact: payload, payload, createdBy: actor, now: Date.now(), sourceRelease: current.latestRelease, note: `complete TEST deployment of ${manifest.sourceSha}`, origin: "operator" }),
+    ...(environment === "test" ? { testProvenance: { environment: "test" as const, sourceCommit: manifest.sourceSha } } : {}),
+    action: () => appendGatewayRelease(db, { gateway: current, artifact: payload, payload, createdBy: actor, now: Date.now(), sourceRelease: current.latestRelease, note: `complete ${environment.toUpperCase()} deployment of ${manifest.sourceSha}`, origin: "operator" }),
     classifyResult: (result) => ({ outcome: "completed", releaseRollout: { releaseId: `${current.gatewayId}/releases/${result.release}`, ...(result.operationId ? { rolloutOperationId: result.operationId } : {}) } }),
   }); } catch (error) {
     return rethrowMutationError(db, gateway.gatewayId, error);
   }
 }
 
-export async function runTestFleetDeploy(argv: string[]): Promise<void> {
-  const options = parseTestFleetDeployArgs(argv);
-  const settings = deploymentEnvironmentSettings("test");
+export async function runFleetDeploy(argv: string[]): Promise<void> {
+  const options = parseFleetDeployArgs(argv);
+  const environment = process.env.RELEASE_ENVIRONMENT;
+  if (environment !== "test" && environment !== "prod") throw new Error("RELEASE_ENVIRONMENT must be test or prod");
+  const settings = deploymentEnvironmentSettings(environment);
   const authority = createCentralReleaseAuthority({ project: settings.artifactRegistryProjectId, location: settings.artifactRegistryLocation, repository: settings.artifactRegistryName });
   const manifest = await authority.resolveManifest(options.sourceSha);
   if (manifest.sourceSha !== options.sourceSha) throw new Error("resolved immutable manifest differs from requested source SHA");
   const payload = centralGatewayReleasePayload(manifest);
-  const app = initializeApp({ credential: applicationDefault(), projectId: settings.firebaseProjectId }, "deploy-test-fleet");
+  const app = initializeApp({ credential: applicationDefault(), projectId: settings.firebaseProjectId }, "deploy-fleet");
   try {
     const db = getFirestore(app);
-    const report = await deployTestFleet({ ...options, environment: "test", payload }, {
+    const report = await deployFleet({ ...options, environment, payload }, {
       now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      readSnapshot: () => readSnapshot(db), deploy: (gateway) => deployTestFleetBuilder(db, gateway, manifest, payload),
+      readSnapshot: () => readSnapshot(db, environment), deploy: (gateway) => deployFleetBuilder(db, gateway, manifest, payload, environment),
       log: (message) => process.stdout.write(`${message}\n`),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, formatTestFleetSummary(report));
-    if (report.outcome !== "converged") throw new Error(`TEST fleet ${report.outcome}: ${[...report.reasons, ...report.targets.flatMap((target) => target.reasons.map((reason) => `${target.gatewayId}: ${reason}`))].join("; ")}`);
+    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, formatFleetSummary(report));
+    if (report.outcome !== "converged") throw new Error(`${environment.toUpperCase()} fleet ${report.outcome}: ${[...report.reasons, ...report.targets.flatMap((target) => target.reasons.map((reason) => `${target.gatewayId}: ${reason}`))].join("; ")}`);
   } finally {
     await deleteApp(app);
   }
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  runTestFleetDeploy(process.argv.slice(2)).catch((error) => {
+  runFleetDeploy(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
     process.exitCode = 1;
   });

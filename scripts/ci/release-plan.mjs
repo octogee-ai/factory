@@ -6,12 +6,18 @@ export function releaseOptions(args) {
       if (options[match[1]]) throw new Error(`Duplicate ${match[1]}`);
       options[match[1]] = match[2];
     } else if (arg === '--ship-test') options.shipTest = true;
+    else if (arg === '--ship-prod') options.shipProd = true;
     else if (arg === '--post-deploy-checks') options.checks = true;
     else throw new Error(`Unknown release argument ${arg}`);
   }
+  validateReleaseOptions(options);
+  return { ...options, logLevel: options['log-level'] ?? 'chart-default' };
+}
+
+function validateReleaseOptions(options) {
   if (!['test', 'prod'].includes(options.environment) || !/^[a-f0-9]{40}$/.test(options.sha ?? '') || !options.actor || !['chart-default', 'info', 'debug'].includes(options['log-level'] ?? 'chart-default')) throw new Error('Release requires environment, full SHA, actor, and a valid log level');
   if (options.shipTest && options.environment !== 'test') throw new Error('Complete fleet deployment is only supported by Ship TEST');
-  return { ...options, logLevel: options['log-level'] ?? 'chart-default' };
+  if (options.shipProd && options.environment !== 'prod') throw new Error('Ship PROD requires the PROD environment');
 }
 
 export async function deployRelease(options, deps) {
@@ -25,6 +31,6 @@ export async function deployRelease(options, deps) {
     const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
     if (failures.length === 1) throw failures[0];
     if (failures.length) throw new AggregateError(failures, `Platform and site deployments failed: ${failures.map(error => error.message).join('; ')}`);
-    if (options.shipTest) await deps.fleet(manifest);
+    if (options.shipTest || options.shipProd) await deps.fleet(manifest);
   });
 }
