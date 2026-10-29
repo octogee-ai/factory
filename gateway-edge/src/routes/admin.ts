@@ -36,6 +36,7 @@ import {
   resolveOpsAgentModel,
 } from "@octogee/shared/types/platform-config";
 import {
+  MalformedPlatformConnectConfigError,
   platformConnectDoc,
   readPlatformConnectConfig,
 } from "../lib/platform-connect-config.js";
@@ -279,6 +280,10 @@ router.get("/platform-connect-config", async (_req, res) => {
   try {
     res.json(await readPlatformConnectConfig());
   } catch (err) {
+    if (err instanceof MalformedPlatformConnectConfigError) {
+      res.status(409).json({ error: "connect_config_invalid" });
+      return;
+    }
     logger.error("[admin] platform-connect-config read failed", { err });
     res.status(500).json({ error: "platform_config_read_failed" });
   }
@@ -293,24 +298,31 @@ router.put("/platform-connect-config", async (req, res) => {
   try {
     const bodyHasUids =
       !!req.body && typeof req.body === "object" && "googleAllowlistUids" in (req.body as object);
-    const googleAllowlistUids = bodyHasUids
-      ? parsed.googleAllowlistUids
-      : (await readPlatformConnectConfig()).googleAllowlistUids;
-    await platformConnectDoc().set(
-      {
-        googleStage: parsed.googleStage,
-        googleAllowlistUids,
-        updatedAt: FieldValue.serverTimestamp(),
-        updatedBy: req.uid ?? null,
-      },
-      { merge: true },
-    );
+    let googleAllowlistUids = parsed.googleAllowlistUids;
+    if (!bodyHasUids) {
+      try {
+        googleAllowlistUids = (await readPlatformConnectConfig()).googleAllowlistUids;
+      } catch (err) {
+        if (!(err instanceof MalformedPlatformConnectConfigError)) throw err;
+        res.status(409).json({
+          error: "connect_config_invalid",
+          message: "stored doc is malformed; send googleAllowlistUids to replace it",
+        });
+        return;
+      }
+    }
+    await platformConnectDoc().set({
+      googleStages: parsed.googleStages,
+      googleAllowlistUids,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: req.uid ?? null,
+    });
     logger.info("[admin] google connect dial set", {
-      googleStage: parsed.googleStage,
+      googleStages: parsed.googleStages,
       allowlistCount: googleAllowlistUids.length,
       updatedBy: req.uid,
     });
-    res.json({ ok: true, googleStage: parsed.googleStage, googleAllowlistUids });
+    res.json({ ok: true, googleStages: parsed.googleStages, googleAllowlistUids });
   } catch (err) {
     logger.error("[admin] platform-connect-config write failed", { err });
     res.status(500).json({ error: "platform_config_write_failed" });

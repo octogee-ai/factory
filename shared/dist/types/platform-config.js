@@ -143,15 +143,53 @@ export function createSignupOffer(uid, config, claimedAtMs) {
     };
     return { grant, budgetKey: modelBrokerSignupOfferBudgetDocId(budget), budget };
 }
+export const GOOGLE_CONNECT_STAGES = ["off", "allowlist", "on"];
+export const GOOGLE_CONNECT_CAPABILITY_KEYS = [
+    "calendar",
+    "gmail",
+    "drive",
+    "drive-full",
+    "tasks",
+    "contacts",
+];
 export const DEFAULT_PLATFORM_CONNECT_CONFIG = {
-    googleStage: "off",
+    googleStages: {
+        calendar: "off",
+        gmail: "off",
+        drive: "off",
+        "drive-full": "off",
+        tasks: "off",
+        contacts: "off",
+    },
     googleAllowlistUids: [],
 };
+export function isGoogleConnectCapabilityKey(value) {
+    return GOOGLE_CONNECT_CAPABILITY_KEYS.includes(value);
+}
+function isGoogleConnectStage(value) {
+    return GOOGLE_CONNECT_STAGES.includes(value);
+}
+export function parseGoogleConnectStages(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const raw = value;
+    if (!Object.keys(raw).every(isGoogleConnectCapabilityKey))
+        return null;
+    const stages = {};
+    for (const key of GOOGLE_CONNECT_CAPABILITY_KEYS) {
+        const stage = raw[key];
+        if (!isGoogleConnectStage(stage))
+            return null;
+        stages[key] = stage;
+    }
+    return stages;
+}
 export function parsePlatformConnectConfig(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return null;
-    const { googleStage, googleAllowlistUids } = value;
-    if (googleStage !== "off" && googleStage !== "allowlist" && googleStage !== "on")
+    const { googleStages, googleAllowlistUids } = value;
+    const stages = parseGoogleConnectStages(googleStages);
+    if (!stages)
         return null;
     if (googleAllowlistUids !== undefined) {
         if (!Array.isArray(googleAllowlistUids))
@@ -162,16 +200,28 @@ export function parsePlatformConnectConfig(value) {
     const uids = (googleAllowlistUids ?? [])
         .map((uid) => uid.trim())
         .filter((uid) => uid.length > 0);
-    return { googleStage, googleAllowlistUids: uids };
+    return { googleStages: stages, googleAllowlistUids: uids };
 }
-export function googleConnectAllowed(config, uid) {
+export function googleCapabilityConnectAllowed(config, uid, capability) {
     if (!config || uid.length === 0)
         return false;
-    if (config.googleStage === "on")
+    const stage = config.googleStages[capability];
+    if (stage === "on")
         return true;
-    if (config.googleStage === "allowlist")
+    if (stage === "allowlist")
         return config.googleAllowlistUids.includes(uid);
     return false;
+}
+export function googleConnectAllowed(config, uid) {
+    return GOOGLE_CONNECT_CAPABILITY_KEYS.some((capability) => googleCapabilityConnectAllowed(config, uid, capability));
+}
+export function googleConsentPermission(config, uid, requested) {
+    const permitted = [];
+    const excluded = [];
+    for (const capability of requested) {
+        (googleCapabilityConnectAllowed(config, uid, capability) ? permitted : excluded).push(capability);
+    }
+    return { permitted, excluded };
 }
 // The free-tier house model: DeepSeek V4 Pro on the OpenRouter platform key
 // (operator default 2026-07-08; the dial can point anywhere in the catalog).

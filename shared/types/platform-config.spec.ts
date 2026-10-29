@@ -8,12 +8,15 @@ import {
   DEFAULT_PLATFORM_CONNECT_CONFIG,
   DEFAULT_PLATFORM_FREE_CONFIG,
   DEFAULT_PLATFORM_TRIAL_CONFIG,
+  GOOGLE_CONNECT_CAPABILITY_KEYS,
   PLATFORM_CONNECT_CONFIG_DOC,
   PLATFORM_FREE_CONFIG_DOC,
   PLATFORM_TRIAL_CONFIG_DOC,
   TRIAL_CONFIG_SCHEMA_VERSION,
   builderAgentModelDefaultFromDoc,
+  googleCapabilityConnectAllowed,
   googleConnectAllowed,
+  googleConsentPermission,
   parseBuilderAgentModelDefault,
   parsePlatformConnectConfig,
   parsePlatformFreeConfig,
@@ -355,52 +358,134 @@ describe("resolveFreeTierModel", () => {
   });
 });
 
+const ALL_OFF = DEFAULT_PLATFORM_CONNECT_CONFIG.googleStages;
+const SPLIT_STAGES = {
+  calendar: "on",
+  gmail: "allowlist",
+  drive: "on",
+  "drive-full": "allowlist",
+  tasks: "on",
+  contacts: "on",
+} as const;
+
 describe("parsePlatformConnectConfig", () => {
-  it("accepts each stage and normalizes the allowlist", () => {
+  it("accepts a full per-capability stage map and normalizes the allowlist", () => {
     expect(
-      parsePlatformConnectConfig({ googleStage: "allowlist", googleAllowlistUids: ["u1", " u2 ", ""] }),
-    ).toEqual({ googleStage: "allowlist", googleAllowlistUids: ["u1", "u2"] });
-    expect(parsePlatformConnectConfig({ googleStage: "on" })).toEqual({
-      googleStage: "on",
-      googleAllowlistUids: [],
-    });
-    expect(parsePlatformConnectConfig({ googleStage: "off", googleAllowlistUids: [] })).toEqual({
-      googleStage: "off",
+      parsePlatformConnectConfig({ googleStages: SPLIT_STAGES, googleAllowlistUids: ["u1", " u2 ", ""] }),
+    ).toEqual({ googleStages: SPLIT_STAGES, googleAllowlistUids: ["u1", "u2"] });
+    expect(parsePlatformConnectConfig({ googleStages: ALL_OFF })).toEqual({
+      googleStages: ALL_OFF,
       googleAllowlistUids: [],
     });
   });
 
+  it("rejects an unknown capability key", () => {
+    expect(
+      parsePlatformConnectConfig({ googleStages: { ...ALL_OFF, voice: "on" } }),
+    ).toBeNull();
+  });
+
+  it("rejects a map missing a capability key — no silent per-key default", () => {
+    const { gmail: _gmail, ...missingGmail } = ALL_OFF;
+    expect(parsePlatformConnectConfig({ googleStages: missingGmail })).toBeNull();
+  });
+
+  it("rejects the old global googleStage shape", () => {
+    expect(parsePlatformConnectConfig({ googleStage: "on", googleAllowlistUids: ["u1"] })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStage: "allowlist" })).toBeNull();
+  });
+
   it("rejects unknown stages and malformed docs", () => {
-    expect(parsePlatformConnectConfig({ googleStage: "public" })).toBeNull();
-    expect(parsePlatformConnectConfig({ googleStage: 42 })).toBeNull();
-    expect(parsePlatformConnectConfig({ googleStage: "on", googleAllowlistUids: "u1" })).toBeNull();
-    expect(parsePlatformConnectConfig({ googleStage: "on", googleAllowlistUids: [42] })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStages: { ...ALL_OFF, gmail: "public" } })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStages: { ...ALL_OFF, gmail: 42 } })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStages: "on" })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStages: ALL_OFF, googleAllowlistUids: "u1" })).toBeNull();
+    expect(parsePlatformConnectConfig({ googleStages: ALL_OFF, googleAllowlistUids: [42] })).toBeNull();
     expect(parsePlatformConnectConfig({})).toBeNull();
     expect(parsePlatformConnectConfig(null)).toBeNull();
     expect(parsePlatformConnectConfig("on")).toBeNull();
   });
 
-  it("ships dark: the compiled default is off with an empty allowlist", () => {
-    expect(DEFAULT_PLATFORM_CONNECT_CONFIG).toEqual({ googleStage: "off", googleAllowlistUids: [] });
+  it("ships dark: every capability off with an empty allowlist", () => {
+    expect(GOOGLE_CONNECT_CAPABILITY_KEYS).toEqual([
+      "calendar",
+      "gmail",
+      "drive",
+      "drive-full",
+      "tasks",
+      "contacts",
+    ]);
+    expect(DEFAULT_PLATFORM_CONNECT_CONFIG).toEqual({
+      googleStages: {
+        calendar: "off",
+        gmail: "off",
+        drive: "off",
+        "drive-full": "off",
+        tasks: "off",
+        contacts: "off",
+      },
+      googleAllowlistUids: [],
+    });
     expect(PLATFORM_CONNECT_CONFIG_DOC).toBe("connect");
   });
 });
 
-describe("googleConnectAllowed", () => {
-  it("off (or an unreadable doc) admits nobody", () => {
+describe("googleCapabilityConnectAllowed", () => {
+  const config = { googleStages: SPLIT_STAGES, googleAllowlistUids: ["u1", "u2"] };
+
+  it("an unreadable doc admits nobody to anything", () => {
+    expect(googleCapabilityConnectAllowed(null, "u1", "calendar")).toBe(false);
     expect(googleConnectAllowed(null, "u1")).toBe(false);
-    expect(googleConnectAllowed({ googleStage: "off", googleAllowlistUids: ["u1"] }, "u1")).toBe(false);
   });
 
-  it("allowlist admits exactly the listed uids", () => {
-    const config = { googleStage: "allowlist" as const, googleAllowlistUids: ["u1", "u2"] };
-    expect(googleConnectAllowed(config, "u1")).toBe(true);
-    expect(googleConnectAllowed(config, "u3")).toBe(false);
+  it("on admits any authenticated uid to that capability but never a blank one", () => {
+    expect(googleCapabilityConnectAllowed(config, "anyone", "calendar")).toBe(true);
+    expect(googleCapabilityConnectAllowed(config, "", "calendar")).toBe(false);
   });
 
-  it("on admits any authenticated uid but never a blank one", () => {
-    const config = { googleStage: "on" as const, googleAllowlistUids: [] };
-    expect(googleConnectAllowed(config, "anyone")).toBe(true);
-    expect(googleConnectAllowed(config, "")).toBe(false);
+  it("allowlist admits exactly the listed uids to that capability", () => {
+    expect(googleCapabilityConnectAllowed(config, "u1", "gmail")).toBe(true);
+    expect(googleCapabilityConnectAllowed(config, "u3", "gmail")).toBe(false);
+  });
+
+  it("off admits nobody, listed or not", () => {
+    const off = { googleStages: { ...SPLIT_STAGES, gmail: "off" as const }, googleAllowlistUids: ["u1"] };
+    expect(googleCapabilityConnectAllowed(off, "u1", "gmail")).toBe(false);
+    expect(googleCapabilityConnectAllowed(off, "u1", "calendar")).toBe(true);
+  });
+
+  it("googleConnectAllowed is true when any capability admits the uid", () => {
+    expect(googleConnectAllowed({ googleStages: ALL_OFF, googleAllowlistUids: ["u1"] }, "u1")).toBe(false);
+    expect(googleConnectAllowed({ googleStages: { ...ALL_OFF, gmail: "allowlist" }, googleAllowlistUids: ["u1"] }, "u1")).toBe(true);
+    expect(googleConnectAllowed({ googleStages: { ...ALL_OFF, gmail: "allowlist" }, googleAllowlistUids: ["u1"] }, "u3")).toBe(false);
+  });
+});
+
+describe("googleConsentPermission", () => {
+  const config = { googleStages: SPLIT_STAGES, googleAllowlistUids: ["u1"] };
+
+  it("keeps every requested capability the uid may start", () => {
+    expect(googleConsentPermission(config, "u1", ["calendar", "gmail"])).toEqual({
+      permitted: ["calendar", "gmail"],
+      excluded: [],
+    });
+  });
+
+  it("drops only the disallowed capabilities from a mixed request, preserving order", () => {
+    expect(googleConsentPermission(config, "u3", ["gmail", "calendar", "drive-full", "tasks"])).toEqual({
+      permitted: ["calendar", "tasks"],
+      excluded: ["gmail", "drive-full"],
+    });
+  });
+
+  it("leaves nothing permitted when every requested capability is disallowed", () => {
+    expect(googleConsentPermission(config, "u3", ["gmail", "drive-full"])).toEqual({
+      permitted: [],
+      excluded: ["gmail", "drive-full"],
+    });
+    expect(googleConsentPermission({ googleStages: ALL_OFF, googleAllowlistUids: ["u1"] }, "u1", ["calendar"])).toEqual({
+      permitted: [],
+      excluded: ["calendar"],
+    });
   });
 });

@@ -253,6 +253,16 @@ describe("admin platform-config", () => {
   });
 });
 
+const ALL_OFF = {
+  calendar: "off",
+  gmail: "off",
+  drive: "off",
+  "drive-full": "off",
+  tasks: "off",
+  contacts: "off",
+};
+const SPLIT = { ...ALL_OFF, calendar: "on", tasks: "on", contacts: "on", drive: "on", gmail: "allowlist", "drive-full": "allowlist" };
+
 describe("admin platform-connect-config", () => {
   let app: express.Express;
 
@@ -266,53 +276,62 @@ describe("admin platform-connect-config", () => {
   it("GET serves the compiled dark default when no doc exists", async () => {
     const res = await request(app).get("/api/admin/platform-connect-config");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ googleStage: "off", googleAllowlistUids: [] });
+    expect(res.body).toEqual({ googleStages: ALL_OFF, googleAllowlistUids: [] });
   });
 
-  it("GET serves the stored dial, and a malformed doc reads as the dark default", async () => {
+  it("GET serves the stored per-capability dial", async () => {
     platformDocs["platformConfig/connect"] = {
-      googleStage: "allowlist",
+      googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     };
     const stored = await request(app).get("/api/admin/platform-connect-config");
     expect(stored.status).toBe(200);
     expect(stored.body).toEqual({
-      googleStage: "allowlist",
+      googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     });
-
-    platformDocs["platformConfig/connect"] = { googleStage: "public" };
-    const malformed = await request(app).get("/api/admin/platform-connect-config");
-    expect(malformed.status).toBe(200);
-    expect(malformed.body).toEqual({ googleStage: "off", googleAllowlistUids: [] });
   });
 
-  it("PUT writes the dial with audit fields and echoes the normalized value", async () => {
+  it("GET refuses a malformed doc (including the old global googleStage shape) with 409 instead of a dark fallback", async () => {
+    platformDocs["platformConfig/connect"] = { googleStage: "allowlist", googleAllowlistUids: ["uid-chris"] };
+    const malformed = await request(app).get("/api/admin/platform-connect-config");
+    expect(malformed.status).toBe(409);
+    expect(malformed.body.error).toBe("connect_config_invalid");
+  });
+
+  it("PUT replaces the doc with the per-capability map, audit fields, and the normalized allowlist", async () => {
+    platformDocs["platformConfig/connect"] = { googleStage: "allowlist", googleAllowlistUids: ["uid-old"] };
     const res = await request(app)
       .put("/api/admin/platform-connect-config")
-      .send({ googleStage: "allowlist", googleAllowlistUids: [" uid-chris ", ""] });
+      .send({ googleStages: SPLIT, googleAllowlistUids: [" uid-chris ", ""] });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
+    expect(res.body).toEqual({
       ok: true,
-      googleStage: "allowlist",
+      googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris"],
     });
     expect(setCalls).toHaveLength(1);
     expect(setCalls[0].path).toBe("platformConfig/connect");
-    expect(setCalls[0].data).toMatchObject({
-      googleStage: "allowlist",
+    expect(setCalls[0].opts).toBeUndefined();
+    expect(setCalls[0].data).toEqual({
+      googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris"],
       updatedBy: "admin-user",
       updatedAt: "server-now",
     });
   });
 
-  it("PUT rejects an unknown stage with 400 and writes nothing", async () => {
-    const res = await request(app)
-      .put("/api/admin/platform-connect-config")
-      .send({ googleStage: "public" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("invalid_connect_config");
+  it("PUT rejects an unknown stage, an unknown capability, a missing capability, and the old shape with 400 and writes nothing", async () => {
+    for (const body of [
+      { googleStages: { ...ALL_OFF, gmail: "public" } },
+      { googleStages: { ...ALL_OFF, voice: "on" } },
+      { googleStages: { calendar: "on" } },
+      { googleStage: "on" },
+    ]) {
+      const res = await request(app).put("/api/admin/platform-connect-config").send(body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body.error).toBe("invalid_connect_config");
+    }
     expect(setCalls).toHaveLength(0);
   });
 });
@@ -327,34 +346,44 @@ describe("admin platform-connect-config — stage-only updates", () => {
     setCalls.length = 0;
   });
 
-  it("a stage-only PUT preserves the stored allowlist", async () => {
+  it("a stages-only PUT preserves the stored allowlist", async () => {
     platformDocs["platformConfig/connect"] = {
-      googleStage: "allowlist",
+      googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     };
     const res = await request(app)
       .put("/api/admin/platform-connect-config")
-      .send({ googleStage: "on" });
+      .send({ googleStages: { ...SPLIT, gmail: "on" } });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       ok: true,
-      googleStage: "on",
+      googleStages: { ...SPLIT, gmail: "on" },
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     });
     expect(setCalls[0].data).toMatchObject({
-      googleStage: "on",
+      googleStages: { ...SPLIT, gmail: "on" },
       googleAllowlistUids: ["uid-chris", "uid-dan"],
     });
   });
 
+  it("a stages-only PUT over a malformed stored doc is refused with 409 and writes nothing", async () => {
+    platformDocs["platformConfig/connect"] = { googleStage: "allowlist", googleAllowlistUids: ["uid-chris"] };
+    const res = await request(app)
+      .put("/api/admin/platform-connect-config")
+      .send({ googleStages: SPLIT });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("connect_config_invalid");
+    expect(setCalls).toHaveLength(0);
+  });
+
   it("an explicit empty allowlist clears it", async () => {
     platformDocs["platformConfig/connect"] = {
-      googleStage: "allowlist",
+      googleStages: SPLIT,
       googleAllowlistUids: ["uid-chris"],
     };
     const res = await request(app)
       .put("/api/admin/platform-connect-config")
-      .send({ googleStage: "allowlist", googleAllowlistUids: [] });
+      .send({ googleStages: SPLIT, googleAllowlistUids: [] });
     expect(res.status).toBe(200);
     expect(res.body.googleAllowlistUids).toEqual([]);
     expect(setCalls[0].data).toMatchObject({ googleAllowlistUids: [] });

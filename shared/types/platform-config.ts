@@ -214,23 +214,67 @@ export function createSignupOffer(
 
 export type GoogleConnectStage = "off" | "allowlist" | "on";
 
+export const GOOGLE_CONNECT_STAGES: readonly GoogleConnectStage[] = ["off", "allowlist", "on"];
+
+export const GOOGLE_CONNECT_CAPABILITY_KEYS = [
+  "calendar",
+  "gmail",
+  "drive",
+  "drive-full",
+  "tasks",
+  "contacts",
+] as const;
+
+export type GoogleConnectCapabilityKey = (typeof GOOGLE_CONNECT_CAPABILITY_KEYS)[number];
+
+export type GoogleConnectStages = Record<GoogleConnectCapabilityKey, GoogleConnectStage>;
+
 export interface PlatformConnectConfig {
-  googleStage: GoogleConnectStage;
+  googleStages: GoogleConnectStages;
   googleAllowlistUids: string[];
 }
 
 export const DEFAULT_PLATFORM_CONNECT_CONFIG: PlatformConnectConfig = {
-  googleStage: "off",
+  googleStages: {
+    calendar: "off",
+    gmail: "off",
+    drive: "off",
+    "drive-full": "off",
+    tasks: "off",
+    contacts: "off",
+  },
   googleAllowlistUids: [],
 };
 
+export function isGoogleConnectCapabilityKey(value: unknown): value is GoogleConnectCapabilityKey {
+  return (GOOGLE_CONNECT_CAPABILITY_KEYS as readonly unknown[]).includes(value);
+}
+
+function isGoogleConnectStage(value: unknown): value is GoogleConnectStage {
+  return (GOOGLE_CONNECT_STAGES as readonly unknown[]).includes(value);
+}
+
+export function parseGoogleConnectStages(value: unknown): GoogleConnectStages | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (!Object.keys(raw).every(isGoogleConnectCapabilityKey)) return null;
+  const stages = {} as GoogleConnectStages;
+  for (const key of GOOGLE_CONNECT_CAPABILITY_KEYS) {
+    const stage = raw[key];
+    if (!isGoogleConnectStage(stage)) return null;
+    stages[key] = stage;
+  }
+  return stages;
+}
+
 export function parsePlatformConnectConfig(value: unknown): PlatformConnectConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { googleStage, googleAllowlistUids } = value as {
-    googleStage?: unknown;
+  const { googleStages, googleAllowlistUids } = value as {
+    googleStages?: unknown;
     googleAllowlistUids?: unknown;
   };
-  if (googleStage !== "off" && googleStage !== "allowlist" && googleStage !== "on") return null;
+  const stages = parseGoogleConnectStages(googleStages);
+  if (!stages) return null;
   if (googleAllowlistUids !== undefined) {
     if (!Array.isArray(googleAllowlistUids)) return null;
     if (googleAllowlistUids.some((uid) => typeof uid !== "string")) return null;
@@ -238,17 +282,43 @@ export function parsePlatformConnectConfig(value: unknown): PlatformConnectConfi
   const uids = ((googleAllowlistUids ?? []) as string[])
     .map((uid) => uid.trim())
     .filter((uid) => uid.length > 0);
-  return { googleStage, googleAllowlistUids: uids };
+  return { googleStages: stages, googleAllowlistUids: uids };
 }
 
-export function googleConnectAllowed(
+export function googleCapabilityConnectAllowed(
   config: PlatformConnectConfig | null,
   uid: string,
+  capability: GoogleConnectCapabilityKey,
 ): boolean {
   if (!config || uid.length === 0) return false;
-  if (config.googleStage === "on") return true;
-  if (config.googleStage === "allowlist") return config.googleAllowlistUids.includes(uid);
+  const stage = config.googleStages[capability];
+  if (stage === "on") return true;
+  if (stage === "allowlist") return config.googleAllowlistUids.includes(uid);
   return false;
+}
+
+export function googleConnectAllowed(config: PlatformConnectConfig | null, uid: string): boolean {
+  return GOOGLE_CONNECT_CAPABILITY_KEYS.some((capability) =>
+    googleCapabilityConnectAllowed(config, uid, capability),
+  );
+}
+
+export interface GoogleConsentPermission {
+  permitted: GoogleConnectCapabilityKey[];
+  excluded: GoogleConnectCapabilityKey[];
+}
+
+export function googleConsentPermission(
+  config: PlatformConnectConfig | null,
+  uid: string,
+  requested: readonly GoogleConnectCapabilityKey[],
+): GoogleConsentPermission {
+  const permitted: GoogleConnectCapabilityKey[] = [];
+  const excluded: GoogleConnectCapabilityKey[] = [];
+  for (const capability of requested) {
+    (googleCapabilityConnectAllowed(config, uid, capability) ? permitted : excluded).push(capability);
+  }
+  return { permitted, excluded };
 }
 
 // The free-tier house model: DeepSeek V4 Pro on the OpenRouter platform key

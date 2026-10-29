@@ -5,6 +5,10 @@ import {
   setupEmulatorTest,
   useAuthToken,
 } from "@octogee/test-helpers/firestore-emulator";
+import {
+  GOOGLE_CONNECT_CAPABILITY_KEYS,
+  type GoogleConnectCapabilityKey,
+} from "@octogee/shared/types/platform-config";
 import { db } from "../lib/db.js";
 import { _setKmsClientForTesting, type KmsClient } from "../lib/kms.js";
 import { generateConnectState } from "../lib/connect-state.js";
@@ -155,14 +159,31 @@ async function mintAuthUrlState(
   return { state, url };
 }
 
-async function setGoogleStage(
-  stage: "off" | "allowlist" | "on",
-  uids: string[] = [],
-): Promise<void> {
+type Stage = "off" | "allowlist" | "on";
+type Stages = Record<GoogleConnectCapabilityKey, Stage>;
+
+function stagesOf(stage: Stage, overrides: Partial<Stages> = {}): Stages {
+  return {
+    ...(Object.fromEntries(
+      GOOGLE_CONNECT_CAPABILITY_KEYS.map((capability) => [capability, stage]),
+    ) as Stages),
+    ...overrides,
+  };
+}
+
+function scopeSet(url: string): string[] {
+  return (new URL(url).searchParams.get("scope") ?? "").split(" ").sort();
+}
+
+async function setGoogleStages(stages: Stages, uids: string[] = []): Promise<void> {
   await db
     .collection("platformConfig")
     .doc("connect")
-    .set({ googleStage: stage, googleAllowlistUids: uids });
+    .set({ googleStages: stages, googleAllowlistUids: uids });
+}
+
+async function setGoogleStage(stage: Stage, uids: string[] = []): Promise<void> {
+  await setGoogleStages(stagesOf(stage), uids);
 }
 
 describe("connect route module", () => {
@@ -807,6 +828,58 @@ describe("connect — google platform capability flow", () => {
     expect(denied.body.error).toBe("pending_verification");
   });
 
+  it("the dial is per capability: a mixed request drops the gated capabilities from the Google scope set and reports them", async () => {
+    await setGoogleStages(stagesOf("on", { gmail: "allowlist", "drive-full": "allowlist" }), [UID]);
+    const listed = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar,gmail")
+      .set("Authorization", auth.bearer());
+    expect(listed.status, listed.text).toBe(200);
+    expect(listed.body.excluded).toEqual([]);
+    expect(scopeSet(listed.body.url)).toEqual([
+      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ]);
+
+    const unlisted = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar,gmail")
+      .set("Authorization", otherAuth.bearer());
+    expect(unlisted.status, unlisted.text).toBe(200);
+    expect(unlisted.body.excluded).toEqual(["gmail"]);
+    expect(scopeSet(unlisted.body.url)).toEqual([
+      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ]);
+
+    const gmailOnly = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=gmail")
+      .set("Authorization", otherAuth.bearer());
+    expect(gmailOnly.status).toBe(403);
+    expect(gmailOnly.body).toEqual({ error: "pending_verification", excluded: ["gmail"] });
+
+    const escalation = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=drive-full")
+      .set("Authorization", otherAuth.bearer());
+    expect(escalation.status).toBe(403);
+  });
+
+  it("a malformed connect doc (the old global shape) refuses auth-url and availability loudly instead of falling back", async () => {
+    await db
+      .collection("platformConfig")
+      .doc("connect")
+      .set({ googleStage: "on", googleAllowlistUids: [] });
+    const authUrl = await request(createApp())
+      .get("/api/connect/google/auth-url?capability=calendar")
+      .set("Authorization", auth.bearer());
+    expect(authUrl.status).toBe(503);
+    expect(authUrl.body.error).toBe("connect_config_invalid");
+    const availability = await request(createApp())
+      .get("/api/connect/availability")
+      .set("Authorization", auth.bearer());
+    expect(availability.status).toBe(503);
+    expect(availability.body.error).toBe("connect_config_invalid");
+  });
+
   it("the dial gates only google — github mints regardless of the connect doc", async () => {
     await setGoogleStage("off");
     await mintAuthUrlState("github");
@@ -1238,8 +1311,8 @@ describe("connect — availability", () => {
     expect((await request(createApp()).get("/api/connect/availability")).status).toBe(401);
   });
 
-  it("reports configured oauth-web providers and the caller-effective google availability", async () => {
-    await setGoogleStage("allowlist", [UID]);
+  it("reports configured oauth-web providers and the caller-effective per-capability google availability", async () => {
+    await setGoogleStages(stagesOf("on", { gmail: "allowlist", "drive-full": "allowlist" }), [UID]);
     const mine = await request(createApp())
       .get("/api/connect/availability")
       .set("Authorization", auth.bearer());
@@ -1248,19 +1321,29 @@ describe("connect — availability", () => {
     expect(mine.body.providers.microsoft).toEqual({ configured: true, available: true });
     expect(mine.body.providers.google).toEqual({
       configured: true,
-      stage: "allowlist",
       available: true,
       pickerConfigured: true,
+      capabilities: {
+        calendar: { stage: "on", available: true },
+        gmail: { stage: "allowlist", available: true },
+        drive: { stage: "on", available: true },
+        "drive-full": { stage: "allowlist", available: true },
+        tasks: { stage: "on", available: true },
+        contacts: { stage: "on", available: true },
+      },
     });
 
     const theirs = await request(createApp())
       .get("/api/connect/availability")
       .set("Authorization", otherAuth.bearer());
-    expect(theirs.body.providers.google).toEqual({
+    expect(theirs.body.providers.google).toMatchObject({
       configured: true,
-      stage: "allowlist",
-      available: false,
-      pickerConfigured: true,
+      available: true,
+      capabilities: {
+        calendar: { stage: "on", available: true },
+        gmail: { stage: "allowlist", available: false },
+        "drive-full": { stage: "allowlist", available: false },
+      },
     });
   });
 
@@ -1268,11 +1351,11 @@ describe("connect — availability", () => {
     const dark = await request(createApp())
       .get("/api/connect/availability")
       .set("Authorization", auth.bearer());
-    expect(dark.body.providers.google).toEqual({
+    expect(dark.body.providers.google).toMatchObject({
       configured: true,
-      stage: "off",
       available: false,
       pickerConfigured: true,
+      capabilities: { calendar: { stage: "off", available: false }, gmail: { stage: "off", available: false } },
     });
 
     const savedId = process.env.GOOGLE_CLIENT_ID;
@@ -1282,9 +1365,8 @@ describe("connect — availability", () => {
       const placeholder = await request(createApp())
         .get("/api/connect/availability")
         .set("Authorization", auth.bearer());
-      expect(placeholder.body.providers.google).toEqual({
+      expect(placeholder.body.providers.google).toMatchObject({
         configured: false,
-        stage: "on",
         available: false,
         pickerConfigured: true,
       });

@@ -7,7 +7,15 @@ import {
   type ConnectorCaptureMethod,
 } from "@octogee/shared/types/connectors";
 import { GOOGLE_CAPABILITY_CATALOG_VERSION } from "@octogee/shared/types/google-capabilities";
-import { googleConnectAllowed } from "@octogee/shared/types/platform-config";
+import {
+  GOOGLE_CONNECT_CAPABILITY_KEYS,
+  googleCapabilityConnectAllowed,
+  googleConnectAllowed,
+  googleConsentPermission,
+  isGoogleConnectCapabilityKey,
+  type GoogleConnectCapabilityKey,
+  type PlatformConnectConfig,
+} from "@octogee/shared/types/platform-config";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { revokeProviderGrant } from "@octogee/core/connector-revocation";
 import { requireAuth } from "../middleware/auth.js";
@@ -15,7 +23,10 @@ import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
 import { encryptSecret, decryptSecret } from "../lib/kms.js";
 import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation.js";
-import { readPlatformConnectConfig } from "../lib/platform-connect-config.js";
+import {
+  MalformedPlatformConnectConfigError,
+  readPlatformConnectConfig,
+} from "../lib/platform-connect-config.js";
 import {
   generateConnectState,
   verifyConnectState,
@@ -144,6 +155,60 @@ function requestScopesFor(def: ConnectorDef, capability: unknown): string[] | Ro
   }
   const scopes = def.capabilityRequestScopes(capability);
   return scopes ?? routeError(400, { error: `Unknown capability: ${capability}` });
+}
+
+function parseGoogleCapabilityRequest(capability: unknown): GoogleConnectCapabilityKey[] | RouteError {
+  if (typeof capability !== "string" || capability.length === 0) {
+    return routeError(400, { error: "capability required" });
+  }
+  const requested = capability.split(",");
+  if (!requested.every(isGoogleConnectCapabilityKey)) {
+    return routeError(400, { error: `Unknown capability: ${capability}` });
+  }
+  return requested;
+}
+
+function permittedGoogleCapabilityRequest(
+  config: PlatformConnectConfig,
+  uid: string,
+  capability: unknown,
+): { capability: string; excluded: GoogleConnectCapabilityKey[] } | RouteError {
+  const requested = parseGoogleCapabilityRequest(capability);
+  if (isRouteError(requested)) return requested;
+  const { permitted, excluded } = googleConsentPermission(config, uid, requested);
+  if (permitted.length === 0) {
+    logger.info(
+      `[connect] google auth-url refused for uid=${uid}: no requested capability admits this uid (${requested.join(",")})`,
+    );
+    return routeError(403, { error: "pending_verification", excluded });
+  }
+  if (excluded.length > 0) {
+    logger.info(
+      `[connect] google auth-url for uid=${uid} dropped stage-gated capabilities: ${excluded.join(",")}`,
+    );
+  }
+  return { capability: permitted.join(","), excluded };
+}
+
+function googleCapabilityAvailability(
+  config: PlatformConnectConfig,
+  uid: string,
+): Record<GoogleConnectCapabilityKey, { stage: string; available: boolean }> {
+  return Object.fromEntries(
+    GOOGLE_CONNECT_CAPABILITY_KEYS.map((capability) => [
+      capability,
+      {
+        stage: config.googleStages[capability],
+        available: googleCapabilityConnectAllowed(config, uid, capability),
+      },
+    ]),
+  ) as Record<GoogleConnectCapabilityKey, { stage: string; available: boolean }>;
+}
+
+function sendIfMalformedConnectConfig(res: Response, error: unknown): boolean {
+  if (!(error instanceof MalformedPlatformConnectConfigError)) return false;
+  res.status(503).json({ error: "connect_config_invalid" });
+  return true;
 }
 
 async function connectedAccountHint(uid: string, def: ConnectorDef): Promise<Record<string, string>> {
@@ -379,7 +444,12 @@ router.get(
       const config = await readPlatformConnectConfig();
       const providers: Record<
         string,
-        { configured: boolean; available: boolean; stage?: string; pickerConfigured?: boolean }
+        {
+          configured: boolean;
+          available: boolean;
+          pickerConfigured?: boolean;
+          capabilities?: Record<string, { stage: string; available: boolean }>;
+        }
       > = {};
       for (const def of listConnectors()) {
         if (!def.oauth) continue;
@@ -388,14 +458,15 @@ router.get(
           def.meta.id === "google"
             ? {
                 configured,
-                stage: config.googleStage,
                 available: configured && googleConnectAllowed(config, req.uid!),
                 pickerConfigured: googlePickerEnv() !== null,
+                capabilities: googleCapabilityAvailability(config, req.uid!),
               }
             : { configured, available: configured };
       }
       res.json({ providers });
     } catch (e) {
+      if (sendIfMalformedConnectConfig(res, e)) return;
       next(e);
     }
   },
@@ -627,15 +698,17 @@ router.get(
         res.status(404).json({ error: "Unknown connector" });
         return;
       }
+      let capabilityRequest = req.query.capability;
+      let excluded: GoogleConnectCapabilityKey[] = [];
       if (def.meta.id === "google") {
         const config = await readPlatformConnectConfig();
-        if (!googleConnectAllowed(config, req.uid!)) {
-          logger.info(
-            `[connect] google auth-url refused for uid=${req.uid}: stage=${config.googleStage}`,
-          );
-          res.status(403).json({ error: "pending_verification" });
+        const permitted = permittedGoogleCapabilityRequest(config, req.uid!, req.query.capability);
+        if (isRouteError(permitted)) {
+          sendRouteError(res, permitted);
           return;
         }
+        capabilityRequest = permitted.capability;
+        excluded = permitted.excluded;
       }
       const creds = readConnectorClientCreds(def);
       if (!creds) {
@@ -643,7 +716,7 @@ router.get(
         res.status(503).json({ error: `${def.meta.displayName} connection is not configured` });
         return;
       }
-      const scopes = requestScopesFor(def, req.query.capability);
+      const scopes = requestScopesFor(def, capabilityRequest);
       if (isRouteError(scopes)) {
         sendRouteError(res, scopes);
         return;
@@ -686,8 +759,9 @@ router.get(
       });
       res.set("Cache-Control", "no-store");
       res.set("Pragma", "no-cache");
-      res.json({ url: `${def.oauth.authorizeUrl}?${params}` });
+      res.json({ url: `${def.oauth.authorizeUrl}?${params}`, excluded });
     } catch (e) {
+      if (sendIfMalformedConnectConfig(res, e)) return;
       next(e);
     }
   },

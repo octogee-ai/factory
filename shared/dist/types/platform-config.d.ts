@@ -43,13 +43,25 @@ export declare function createSignupOffer(uid: string, config: PlatformTrialConf
     budget: ModelBrokerSignupOfferBudget;
 };
 export type GoogleConnectStage = "off" | "allowlist" | "on";
+export declare const GOOGLE_CONNECT_STAGES: readonly GoogleConnectStage[];
+export declare const GOOGLE_CONNECT_CAPABILITY_KEYS: readonly ["calendar", "gmail", "drive", "drive-full", "tasks", "contacts"];
+export type GoogleConnectCapabilityKey = (typeof GOOGLE_CONNECT_CAPABILITY_KEYS)[number];
+export type GoogleConnectStages = Record<GoogleConnectCapabilityKey, GoogleConnectStage>;
 export interface PlatformConnectConfig {
-    googleStage: GoogleConnectStage;
+    googleStages: GoogleConnectStages;
     googleAllowlistUids: string[];
 }
 export declare const DEFAULT_PLATFORM_CONNECT_CONFIG: PlatformConnectConfig;
+export declare function isGoogleConnectCapabilityKey(value: unknown): value is GoogleConnectCapabilityKey;
+export declare function parseGoogleConnectStages(value: unknown): GoogleConnectStages | null;
 export declare function parsePlatformConnectConfig(value: unknown): PlatformConnectConfig | null;
+export declare function googleCapabilityConnectAllowed(config: PlatformConnectConfig | null, uid: string, capability: GoogleConnectCapabilityKey): boolean;
 export declare function googleConnectAllowed(config: PlatformConnectConfig | null, uid: string): boolean;
+export interface GoogleConsentPermission {
+    permitted: GoogleConnectCapabilityKey[];
+    excluded: GoogleConnectCapabilityKey[];
+}
+export declare function googleConsentPermission(config: PlatformConnectConfig | null, uid: string, requested: readonly GoogleConnectCapabilityKey[]): GoogleConsentPermission;
 export declare const DEFAULT_FREE_TIER_MODEL_REF = "platform-openrouter/deepseek/deepseek-v4-pro";
 export declare const DEFAULT_OPS_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-6-luna";
 export declare const DEFAULT_BUILDER_AGENT_MODEL_REF = "platform-openrouter/openai/gpt-5.6-luna";
