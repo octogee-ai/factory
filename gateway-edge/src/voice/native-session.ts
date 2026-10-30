@@ -7,6 +7,8 @@ import { openNativeUserSocket, type NativeUserSocket } from '../openclaw-control
 import { attachUpstreamRpcClient, type UpstreamRpcClient } from '../chat-proxy/openclaw/bridge-upstream-rpc.js';
 import { VOICE_ARCHIVE_ENTRIES_MAX, VOICE_ARCHIVE_ENTRY_TEXT_MAX, VOICE_ARCHIVE_TEXT_MAX, VOICE_ARCHIVE_TRANSCRIPT_ID_MAX, type VoiceArchiveEntry } from '@octogee/core/voice-conversation';
 
+const OPENAI_NATIVE_PROVIDER = 'octogee-openai';
+
 interface NativeTalkOptions {
   provider?: 'octogee' | 'octogee-openai';
   onUnavailable?: (sessionId: string, reason: string) => void;
@@ -91,6 +93,9 @@ export class NativeTalkSession {
   private readonly archivedTranscripts = new Set<string>();
   private archiveChars = 0;
   private archiveTruncated = false;
+  private draining = false;
+  private nativeEnded = false;
+  private finalization: Promise<void> | undefined;
   constructor(private readonly options: NativeTalkOptions) {}
 
   get boundNativeSessionId(): string | undefined { return this.nativeId; }
@@ -101,6 +106,7 @@ export class NativeTalkSession {
     return (error instanceof Error ? error.message : String(error)).replaceAll(this.options.voiceGrant, '[redacted]');
   }
   private isClosed(): boolean { return this.currentState === 'closed'; }
+  private get continuousOutput(): boolean { return this.options.provider === OPENAI_NATIVE_PROVIDER; }
   private async call<T = Record<string, unknown>>(method: string, params: Record<string, unknown>): Promise<T> {
     if (!this.rpc) throw new Error('Native voice is not connected');
     const response = await this.rpc.call<T>(method, params);
@@ -111,17 +117,20 @@ export class NativeTalkSession {
     this.currentState = state;
     this.options.send({ type: 'state', state, ...(this.outputTurn ? { turnId: this.outputTurn } : {}) });
   }
-  private fail(error: unknown): void {
+  private fail(error: unknown, drain = false): void {
     if (this.isClosed()) return;
+    this.archiveTruncated = true;
     this.options.log('native voice transport failed', { error: this.safeError(error) });
     this.options.send({ type: 'error', code: 'internal', message: this.safeError(error), recoverable: false });
-    this.close();
+    if (drain) void this.finalize();
+    else this.close();
   }
   private readonly onMessage = (data: WebSocket.RawData) => {
-    if (this.isClosed()) return;
+    if (this.isClosed() && !this.draining) return;
     try {
       const frame = nativeEventFrame(JSON.parse(data.toString()));
       if (!frame) return;
+      if (this.isClosed() && frame.event !== 'talk.event') return;
       if (frame.event === 'ui.command') { this.forwardUiCommand(nativeRecord(frame.payload)); return; }
       if (frame.event !== 'talk.event') return;
       const event = nativeTalkPayload(frame.payload);
@@ -155,7 +164,7 @@ export class NativeTalkSession {
     if (event.final) this.recordFinalSpeech(event);
     if (event.role === 'user') {
       this.options.send({ type: event.final ? 'transcript.final' : 'transcript.delta', turnId: this.outputTurn, text: event.text, ...(event.final ? { reason: 'endpoint' as const } : {}) } as TalkServerEvent);
-      if (event.final) this.state('thinking');
+      if (event.final && !this.continuousOutput) this.state('thinking');
     } else if (event.role === 'assistant') {
       this.reply = event.textMode === 'snapshot' ? event.text : this.reply + event.text;
       this.options.send({ type: 'reply.final', turnId: this.outputTurn, text: this.reply });
@@ -184,7 +193,7 @@ export class NativeTalkSession {
     if (typeof event.audioBase64 !== 'string') return;
     if (!this.audioStarted) {
       this.audioStarted = true;
-      this.state('speaking');
+      if (!this.continuousOutput) this.state('speaking');
       this.options.send({ type: 'audio.start', turnId: this.outputTurn, sampleRate: TALK_OUTPUT_SAMPLE_RATE });
     }
     const audio = Buffer.from(event.audioBase64, 'base64');
@@ -200,11 +209,17 @@ export class NativeTalkSession {
     this.outputTurn ||= this.nativeId!;
   }
   private handleNativeEvent(event: Record<string, unknown>): void {
-    if (this.isClosed() || event.relaySessionId !== this.nativeId) return;
+    if (event.relaySessionId !== this.nativeId) return;
+    if (this.isClosed()) {
+      // Native publishes finalized GPT-Live speech during graceful close.
+      // Drain only this call's final text, never audio, UI commands or control.
+      this.drainFinalSpeech(event);
+      return;
+    }
     this.selectOutputTurn(event);
     switch (event.type) {
       case 'ready': this.publishReady(); break;
-      case 'responseStarted': this.state('thinking'); break;
+      case 'responseStarted': if (!this.continuousOutput) this.state('thinking'); break;
       case 'transcript': this.receiveTranscript(event); break;
       case 'audio': this.receiveAudio(event); break;
       case 'audioDone': this.options.send({ type: 'audio.end', turnId: this.outputTurn, cancelled: false }); break;
@@ -216,20 +231,30 @@ export class NativeTalkSession {
         if (typeof event.markName !== 'string') return;
         this.marks.add(event.markName); this.options.send({ type: 'audio.mark', name: event.markName }); break;
       case 'error':
-      case 'close': this.handleUnavailable(this.safeError(event.message ?? 'Native voice session ended')); break;
+      case 'close': this.receiveTerminalEvent(event); break;
     }
+  }
+  private drainFinalSpeech(event: Record<string, unknown>): void {
+    if (this.draining && event.type === 'transcript' && event.final === true) this.recordFinalSpeech(event);
+  }
+  private receiveTerminalEvent(event: Record<string, unknown>): void {
+    if (event.type === 'close') {
+      this.nativeEnded = true;
+      this.options.log('native voice session ended', { reason: event.reason === 'completed' ? 'completed' : 'error', outputCancelled: (event.talkEvent as { payload?: { reason?: string } } | undefined)?.payload?.reason === 'output-cancelled' });
+    }
+    this.handleUnavailable(this.safeError(event.message ?? 'Native voice session ended'));
   }
   private publishReady(): void {
     this.ready = true;
-    const engines = this.options.provider === 'octogee-openai' ? { stt: 'openai:gpt-live-1', tts: 'openai:gpt-live-1' } : { stt: 'native', tts: 'native' };
-    this.options.send({ type: 'session.ready', sessionId: this.sessionId, protocol: TALK_PROTOCOL_VERSION, input: { sampleRate: 24000 }, output: { sampleRate: TALK_OUTPUT_SAMPLE_RATE }, engines, capabilities: { speed: false, interrupt: true, bargeIn: true }, settings: this.settings });
+    const engines = this.options.provider === OPENAI_NATIVE_PROVIDER ? { stt: 'openai:gpt-live-1', tts: 'openai:gpt-live-1' } : { stt: 'native', tts: 'native' };
+    this.options.send({ type: 'session.ready', sessionId: this.sessionId, protocol: TALK_PROTOCOL_VERSION, input: { sampleRate: 24000 }, output: { sampleRate: TALK_OUTPUT_SAMPLE_RATE }, engines, capabilities: { speed: false, interrupt: true, bargeIn: true, ...(this.continuousOutput ? { continuousOutput: true } : {}) }, settings: this.settings });
   }
   private handleUnavailable(reason: string): void {
     if (this.isClosed()) return;
-    if (this.options.provider === 'octogee-openai' && !this.ready && this.options.onUnavailable) {
+    if (this.options.provider === OPENAI_NATIVE_PROVIDER && !this.ready && this.options.onUnavailable) {
       this.close(false);
       this.options.onUnavailable(this.nativeId ?? this.sessionId, reason);
-    } else this.fail(new Error(reason));
+    } else this.fail(new Error(reason), this.ready && Boolean(this.nativeId));
   }
   private async connectNative(): Promise<boolean> {
     const caps = parseAgentId(this.options.conversation.agentId).kind === 'coach' ? ['ui-commands'] : [];
@@ -246,7 +271,7 @@ export class NativeTalkSession {
     try {
       return await this.call('talk.session.create', { sessionKey: this.options.conversation.sessionKey, mode: 'realtime', transport: 'gateway-relay', brain: 'agent-consult', provider: this.options.provider ?? 'octogee', voice: this.settings.voice, silenceDurationMs: 700 });
     } catch (error) {
-      if (!(error instanceof NativeRpcError) || error.code !== 'UNAVAILABLE' || this.options.provider !== 'octogee-openai' || !this.options.onUnavailable) throw error;
+      if (!(error instanceof NativeRpcError) || error.code !== 'UNAVAILABLE' || this.options.provider !== OPENAI_NATIVE_PROVIDER || !this.options.onUnavailable) throw error;
       this.handleUnavailable(this.safeError(error));
       return null;
     }
@@ -257,7 +282,7 @@ export class NativeTalkSession {
     if (message.mode !== 'converse') throw new Error('Native Talk requires conversation mode');
     if (!/^[A-Za-z0-9_-]{43}$/u.test(this.options.voiceGrant) || this.options.voiceGrantExpiresAt <= Date.now()) throw new Error('Native voice grant is unavailable');
     this.settings = { ...resolveTalkSettings(message.settings), endpointing: 'normal' };
-    if (this.options.provider === 'octogee-openai' && !['marin', 'cedar'].includes(this.settings.voice)) this.settings.voice = 'marin';
+    if (this.options.provider === OPENAI_NATIVE_PROVIDER && !['marin', 'cedar'].includes(this.settings.voice)) this.settings.voice = 'marin';
     await this.options.reauthorize();
     if (!await this.connectNative()) return;
     const created = await this.createNativeSession();
@@ -315,7 +340,12 @@ export class NativeTalkSession {
       case 'listen.start': this.listening = true; this.state('listening'); break;
       case 'listen.stop': this.listening = false; this.state('idle'); break;
       case 'turn.commit': this.listening = false; this.state('idle'); break;
-      case 'speak.cancel': await this.options.reauthorize(); await this.call('talk.session.cancelOutput', { sessionId: this.nativeId, reason: 'output-cancelled' }); break;
+      case 'speak.cancel':
+        if (this.continuousOutput) {
+          this.options.send({ type: 'error', code: 'internal', message: 'This voice uses continuous audio. Mute agent audio or speak naturally to continue.', recoverable: true });
+          break;
+        }
+        await this.options.reauthorize(); await this.call('talk.session.cancelOutput', { sessionId: this.nativeId, reason: 'output-cancelled' }); break;
       case 'agent.interrupt': await this.interruptAgent(message.requestId); break;
       case 'playback.mark':
         if (this.marks.delete(message.name)) await this.call('talk.session.acknowledgeMark', { sessionId: this.nativeId, markName: message.name });
@@ -329,7 +359,7 @@ export class NativeTalkSession {
     const message = parseTalkClientMessage(raw);
     if (!message) throw new Error('Invalid voice message');
     if (this.currentState === 'closed') return;
-    if (message.type === 'session.end') { this.close(); return; }
+    if (message.type === 'session.end') { void this.finalize(); return; }
     if (message.type === 'session.start') { await this.startSession(message); return; }
     if (!this.nativeId) throw new Error('Native voice is still connecting');
     await this.handleControl(message);
@@ -338,6 +368,32 @@ export class NativeTalkSession {
     if (!this.nativeId || !this.listening || this.currentState === 'closed') return;
     if (++this.audioInFlight > 64) { this.fail(new Error('Native voice audio connection is too slow')); return; }
     void this.call('talk.session.appendAudio', { sessionId: this.nativeId, audioBase64: audio.toString('base64') }).catch(error => this.fail(error)).finally(() => { this.audioInFlight--; });
+  }
+  finalize(): Promise<void> {
+    if (this.finalization) return this.finalization;
+    if (this.isClosed()) return Promise.resolve();
+    this.currentState = 'closed'; this.marks.clear();
+    this.draining = true;
+    this.finalization = Promise.resolve().then(async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (this.nativeId && !this.nativeEnded) {
+          await Promise.race([
+            this.call('talk.session.close', { sessionId: this.nativeId, disposition: 'detach' }),
+            new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Native voice finalization timed out')), 5_000); }),
+          ]);
+        }
+      } catch (error) {
+        this.archiveTruncated = true;
+        this.options.log('native voice finalization incomplete', { error: this.safeError(error) });
+      } finally {
+        clearTimeout(timer);
+        this.draining = false;
+        this.rpc?.dispose(); this.connection?.ws.off('message', this.onMessage); this.connection?.ws.close();
+      }
+    });
+    this.options.onClose?.();
+    return this.finalization;
   }
   close(notify = true): void {
     if (this.currentState === 'closed') return;

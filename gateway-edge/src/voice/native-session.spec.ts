@@ -19,6 +19,69 @@ function setup(options: Partial<ConstructorParameters<typeof NativeTalkSession>[
 }
 const start = JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'a'.repeat(26), threadRootPostId });
 describe('native Talk transport', () => {
+  it('drains final native transcripts before detaching, without accepting late audio or foreign speech', async () => {
+    const h = setup({ provider: 'octogee-openai' });
+    await h.session.handleText(start); h.event({ type: 'ready' });
+    let finish!: () => void;
+    h.rpc.call.mockImplementation(async method => {
+      if (method === 'talk.session.close') await new Promise<void>(resolve => { finish = resolve; });
+      return { ok: true, result: { ok: true } };
+    });
+    const closing = h.session.finalize();
+    await Promise.resolve();
+    expect(h.rpc.call).toHaveBeenCalledWith('talk.session.close', { sessionId: 'native', disposition: 'detach' });
+    expect(h.ws.close).not.toHaveBeenCalled();
+    h.event({ type: 'transcript', role: 'user', text: 'Final words', final: true, transcriptId: 'voice:native:1' });
+    h.ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'foreign', type: 'transcript', role: 'user', text: 'Wrong call', final: true, transcriptId: 'voice:foreign:1' } })));
+    h.event({ type: 'audio', audioBase64: 'AQI=' });
+    h.session.handleAudio(Buffer.from([1, 2]));
+    expect(h.audio).not.toHaveBeenCalled();
+    expect(h.rpc.call).not.toHaveBeenCalledWith('talk.session.appendAudio', expect.anything());
+    finish(); await closing;
+    expect(h.session.archive.entries).toEqual([{ transcriptId: 'voice:native:1', role: 'user', text: 'Final words' }]);
+    expect(h.ws.close).toHaveBeenCalledOnce();
+    expect(h.rpc.dispose).toHaveBeenCalledOnce();
+  });
+  it('keeps continuous OpenAI audio listening and refuses destructive output cancellation', async () => {
+    const h = setup({ provider: 'octogee-openai' });
+    await h.session.handleText(start); h.event({ type: 'ready' });
+    await h.session.handleText(JSON.stringify({ type: 'listen.start' }));
+    h.event({ type: 'audio', audioBase64: 'AQI=' });
+    expect(h.session.currentState).toBe('listening');
+    await h.session.handleText(JSON.stringify({ type: 'speak.cancel' }));
+    expect(h.rpc.call).not.toHaveBeenCalledWith('talk.session.cancelOutput', expect.anything());
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session.ready', capabilities: expect.objectContaining({ continuousOutput: true }) }));
+    await h.session.close();
+  });
+  it('bounds a stuck final drain and rejects text arriving after the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn(); const h = setup({ onClose });
+      await h.session.handleText(start);
+      h.rpc.call.mockImplementation(() => new Promise(() => undefined));
+      const closing = h.session.finalize();
+      expect(h.session.finalize()).toBe(closing);
+      await vi.advanceTimersByTimeAsync(5_000); await closing;
+      h.event({ type: 'transcript', role: 'user', text: 'Too late', final: true, transcriptId: 'voice:native:9' });
+      expect(h.session.archive).toEqual({ entries: [], truncated: true });
+      expect(h.log).toHaveBeenCalledWith('native voice finalization incomplete', expect.anything());
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(h.ws.close).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+  it('retains finalized speech draining after a valid provider error while marking the interrupted record', async () => {
+    const h = setup({ provider: 'octogee-openai' });
+    await h.session.handleText(start); h.event({ type: 'ready' });
+    h.rpc.call.mockImplementation(async method => {
+      if (method === 'talk.session.close') h.event({ type: 'transcript', role: 'user', text: 'Before the interruption', final: true, transcriptId: 'voice:native:1' });
+      return { ok: true, result: {} };
+    });
+    h.event({ type: 'error', message: 'Realtime provider error.' });
+    await h.session.finalize();
+    expect(h.session.archive).toEqual({ entries: [{ transcriptId: 'voice:native:1', role: 'user', text: 'Before the interruption' }], truncated: true });
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', recoverable: false }));
+    expect(h.ws.close).toHaveBeenCalledOnce();
+  });
   it('binds project voice without workspace surface capabilities or forwarded UI commands', async () => {
     const agentId = 'octogee-alice-proj-orbit-coach';
     const sessionKey = `agent:${agentId}:mattermost:group:${'a'.repeat(26)}`;

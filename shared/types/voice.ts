@@ -21,6 +21,8 @@ export interface TalkCapabilities {
   speed: boolean;
   interrupt?: boolean;
   bargeIn?: boolean;
+  /** Provider owns a continuous audio stream rather than cancellable responses. */
+  continuousOutput?: boolean;
 }
 export const TALK_CAPABILITIES_DEFAULT: TalkCapabilities = { speed: true };
 export type TalkState = "idle" | "listening" | "thinking" | "speaking" | "error";

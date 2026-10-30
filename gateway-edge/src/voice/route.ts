@@ -18,7 +18,7 @@ import { interruptNativeVoiceRun } from "./native-control.js";
 export const VOICE_WS_PATH_RE = /\/api\/voice\/ws\/([a-f0-9-]{36})$/;
 const MAX_CLIENT_AUDIO_FRAME_BYTES = 64 * 1024;
 const MAX_CLIENT_TEXT_FRAME_BYTES = 16 * 1024;
-const VOICE_ARCHIVE_HEADROOM_MS = 10_000;
+const VOICE_ARCHIVE_HEADROOM_MS = 20_000;
 
 export const VOICE_NOT_CONFIGURED_MESSAGE = "Voice is not set up on this server yet.";
 export const VOICE_RELAY_UNAVAILABLE_MESSAGE = "The voice service is not reachable right now.";
@@ -322,6 +322,7 @@ async function settleVoiceArchive(
 ): Promise<void> {
   try {
     if (session instanceof NativeTalkSession && session.boundNativeSessionId) {
+      await session.finalize();
       const archive = session.archive;
       if (archive.entries.length) {
         const post = await (deps.archiveCall ?? archiveVoiceCall)({ voiceGrant: redeemed.voiceGrant, sessionId: session.boundNativeSessionId, ...archive, ...grantOptions(deps) });
@@ -338,6 +339,11 @@ async function settleVoiceArchive(
 
 function sendVoiceEvent(client: WebSocket, event: TalkServerEvent): void {
   if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(event));
+}
+
+function closeVoiceSession(session: VoiceClientSession): void {
+  if (session instanceof NativeTalkSession) void session.finalize();
+  else session?.close();
 }
 
 function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant, releaseAdmission }: VoiceClientContext): void {
@@ -413,7 +419,7 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     clearTimeout(expiryTimer);
     active.dec();
     releaseAdmission?.();
-    session?.close();
+    closeVoiceSession(session);
     try {
       client.close(1000, reason);
     } catch {

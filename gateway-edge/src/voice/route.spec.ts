@@ -200,6 +200,13 @@ describe("voice ws route", () => {
   it.each(['posted', 'rejected', 'wrong-channel'])('settles the %s after-call archive before grant revocation without gating live speech', async outcome => {
     const nativeWs = Object.assign(new EventEmitter(), { close: vi.fn() });
     const rpc = { call: vi.fn(async () => ({ ok: true, result: { sessionId: 'native', relaySessionId: 'native' } })), dispose: vi.fn() };
+    rpc.call.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === 'talk.session.close') {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        nativeWs.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'talk.event', payload: { relaySessionId: 'native', type: 'transcript', role: 'user', text: 'Final words on close', final: true, transcriptId: 'voice:native:3' } })));
+      }
+      return { ok: true, result: { sessionId: 'native', relaySessionId: 'native' } };
+    });
     let nativeSession: NativeTalkSession | undefined;
     let finishArchive!: (value: Awaited<ReturnType<NonNullable<VoiceWsRouteDeps['archiveCall']>>>) => void;
     let rejectArchive!: (error: Error) => void;
@@ -219,9 +226,11 @@ describe("voice ws route", () => {
     expect(archiveCall).not.toHaveBeenCalled(); expect(posts).toEqual([]);
     const closed = once(ws, 'close');
     ws.send(JSON.stringify({ type: 'session.end' })); await closed;
+    await waitFor(() => archiveCall.mock.calls.length === 1);
     expect(archiveCall).toHaveBeenCalledExactlyOnceWith({ voiceGrant: GRANT, sessionId: 'native', entries: [
       { transcriptId: 'voice:native:1', role: 'user', text: 'Find my glasses' },
       { transcriptId: 'voice:native:2', role: 'assistant', text: 'On the kitchen table' },
+      { transcriptId: 'voice:native:3', role: 'user', text: 'Final words on close' },
     ], truncated: false, fetchImpl: deps.fetchImpl });
     expect(deps.endGrant).not.toHaveBeenCalled();
     expect(nativeWs.close.mock.invocationCallOrder[0]).toBeLessThan(archiveCall.mock.invocationCallOrder[0]);
@@ -232,7 +241,7 @@ describe("voice ws route", () => {
     else expect(log).toHaveBeenCalledWith('voice archive failed', expect.anything());
     expect(JSON.stringify(log.mock.calls)).not.toContain(GRANT);
     expect(nativeWs.close).toHaveBeenCalledOnce();
-    expect(rpc.call).not.toHaveBeenCalledWith('talk.session.close', expect.anything());
+    expect(rpc.call).toHaveBeenCalledWith('talk.session.close', { sessionId: 'native', disposition: 'detach' });
   });
   it('closes a timed-out native call with an active grant for its bounded final archive', async () => {
     const expiry = captureVoiceExpiry();
