@@ -245,6 +245,7 @@ export interface CustomerLifecycleAdapter {
     exportOpenClawActivationManifest?: (slug: string, opts?: {
         signal?: AbortSignal;
         timeoutMs?: number;
+        convergeSource?: boolean;
     }) => Promise<MigrationActivationManifest>;
     removeImportedCustomerBySlug?: (slug: string, evictionBatch?: readonly string[], currentEvictionBatch?: () => Promise<readonly string[]>, targetCleanup?: {
         migrationId: string;

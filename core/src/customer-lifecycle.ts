@@ -304,7 +304,7 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
 
   exportOpenClawActivationManifest?: (
     slug: string,
-    opts?: { signal?: AbortSignal; timeoutMs?: number },
+    opts?: { signal?: AbortSignal; timeoutMs?: number; convergeSource?: boolean },
   ) => Promise<MigrationActivationManifest>;
 
   removeImportedCustomerBySlug?: (

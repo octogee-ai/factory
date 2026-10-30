@@ -20,6 +20,7 @@ import { projectAgentsRuntimeReady, reportProjectAgentReadiness } from "./projec
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -221,6 +222,7 @@ import {
   stopStaleMattermostRoutingAccounts,
 } from "./mattermost-routing-activation.js";
 import { snapshotConfigFingerprint } from "./snapshot-fingerprint.js";
+import { loadAppliedFingerprints } from "./applied-fingerprint-store.js";
 import { builderClaimOverlaySlug, builderClaimSlug } from "@octogee/shared/server/builder-claim";
 
 const WORKSPACE_ONLY_PROJECT_CHECKOUT_SCOPE: FleetBrokerProjectCheckoutScope = "workspace-only";
@@ -289,6 +291,34 @@ interface BrokerCtx {
   configRemovedForEviction: Set<string>;
   pendingRuntimeSecrets: Map<string, SecretMaterialLedger>;
   procRoot: string;
+}
+
+async function exportSourceActivationManifest(ctx: BrokerCtx, slug: string,
+  options: { signal?: AbortSignal; timeoutMs?: number; convergeSource?: boolean } = {}): Promise<MigrationActivationManifest> {
+  const deadline = Date.now() + (options.timeoutMs ?? 60_000);
+  let waiting = false;
+  while (true) {
+    options.signal?.throwIfAborted();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`Timed out waiting for source runtime configuration to converge for ${slug}`);
+    const manifest = await openClawRuntimeUpdateGuard.run(async () => {
+      if (options.convergeSource && !ctx.isBuilderGateway()) {
+        const uid = await ctx.client.uidForSlug(slug);
+        const snapshot = uid ? await ctx.client.userSnapshot(uid) : null;
+        if (!snapshot || snapshot.uid !== uid || snapshot.slug !== slug || snapshot.runtimeMutationFenced !== false) {
+          throw new Error(`Source runtime convergence requires unfenced serving custody for ${slug}`);
+        }
+        const applied = loadAppliedFingerprints(path.join(OPENCLAW_DIR, "applied-fingerprints.json")).get(slug);
+        if (applied !== snapshotConfigFingerprint(cacheSnapshot(ctx, snapshot))) return null;
+      }
+      options.signal?.throwIfAborted();
+      return exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug);
+    }, { signal: options.signal, timeoutMs: remaining });
+    if (manifest) return manifest;
+    if (!waiting) ctx.log(`[migration-activation:${slug}] waiting for source runtime configuration to converge`);
+    waiting = true;
+    await delay(Math.min(500, Math.max(0, deadline - Date.now())), undefined, { signal: options.signal });
+  }
 }
 
 // The roster and the departing agents' bindings are `agents.delete`'s job —
@@ -2440,7 +2470,7 @@ export function buildBrokeredLifecycleAdapter(
         signal: callOpts?.signal,
       }),
     exportOpenClawActivationManifest: (slug, options) =>
-      openClawRuntimeUpdateGuard.run(() => exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug), options),
+      exportSourceActivationManifest(ctx, slug, options),
     removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds) =>
       openClawRuntimeUpdateGuard.run(() =>
         removeImportedCustomerBySlug(ctx, slug, { evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds })),

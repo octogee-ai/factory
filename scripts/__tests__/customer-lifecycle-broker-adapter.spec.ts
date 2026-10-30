@@ -47,6 +47,62 @@ import type { Request, Response } from "express";
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("waits for the current source fingerprint without holding the runtime update guard", async () => {
+    vi.useFakeTimers();
+    const snapshot = aliceSnapshot();
+    const fingerprintPath = path.join(testRuntime.dir, "applied-fingerprints.json");
+    saveAppliedFingerprints(fingerprintPath, new Map([["alice", "old-config"]]));
+    const manifest = { slug: "alice", appliedFingerprint: snapshotConfigFingerprint(snapshot) };
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    secretMocks.exportActivationManifestWithSecret.mockResolvedValueOnce(manifest);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({ uidForSlug: vi.fn(async () => snapshot.uid) }), rpc: mkGatewayRpc(), log: vi.fn() });
+    const controller = new AbortController();
+    const exported = adapter.exportOpenClawActivationManifest!("alice", { convergeSource: true, timeoutMs: 10_000, signal: controller.signal });
+    try {
+      await vi.advanceTimersByTimeAsync(500);
+      expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+      await expect(openClawRuntimeUpdateGuard.tryRun(async () => "available")).resolves.toBe("available");
+      saveAppliedFingerprints(fingerprintPath, new Map([["alice", snapshotConfigFingerprint(snapshot)]]));
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(exported).resolves.toEqual(manifest);
+    } finally {
+      controller.abort();
+      await exported.catch(() => undefined);
+      await fs.rm(fingerprintPath, { force: true });
+    }
+  });
+
+  it.each(["deadline", "disconnect", "fenced"])("refuses unconverged source export on %s", async mode => {
+    const fingerprintPath = path.join(testRuntime.dir, "applied-fingerprints.json");
+    saveAppliedFingerprints(fingerprintPath, new Map());
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    const log = vi.fn();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({
+      uidForSlug: vi.fn(async () => "uid-alice"),
+      userSnapshot: vi.fn(async () => aliceSnapshot({ runtimeMutationFenced: mode === "fenced" })),
+    }), rpc: mkGatewayRpc(), log });
+    const controller = new AbortController();
+    const exported = adapter.exportOpenClawActivationManifest!("alice", {
+      convergeSource: true, timeoutMs: mode === "deadline" ? 20 : 10_000, signal: controller.signal,
+    }).catch((error: unknown) => error);
+    try {
+      if (mode === "disconnect") {
+        await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("waiting for source runtime")));
+        controller.abort(new Error("export caller disconnected"));
+      }
+      await expect(exported).resolves.toMatchObject({ message: mode === "deadline"
+        ? "Timed out waiting for source runtime configuration to converge for alice"
+        : mode === "fenced" ? "Source runtime convergence requires unfenced serving custody for alice"
+        : "The operation was aborted" });
+      expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+      await expect(openClawRuntimeUpdateGuard.tryRun(async () => "available")).resolves.toBe("available");
+    } finally {
+      controller.abort();
+      await exported;
+      await fs.rm(fingerprintPath, { force: true });
+    }
+  });
+
   it("waits for a 115-second competing publication before exporting its manifest", async () => {
     vi.useFakeTimers();
     let release!: () => void;

@@ -1075,7 +1075,7 @@ async function sourceExportInventory(deps: MigrationHandlerDeps, body: PushRsync
 async function maybeMaterializeActivationManifest(
   deps: MigrationHandlerDeps,
   body: MigrationRequestBody & { includeActivationManifest?: boolean },
-  options: { signal: AbortSignal; timeoutMs: number; preserveForRollback?: boolean; sourceHeld?: boolean },
+  options: { signal: AbortSignal; timeoutMs: number; preserveForRollback?: boolean; sourceHeld?: boolean; convergeSource?: boolean },
 ): Promise<{ source: { cwd: string; path: string } | null; cleanup: () => Promise<void> }> {
   if (body.includeActivationManifest !== true && !options.preserveForRollback) {
     return { source: null, cleanup: async () => undefined };
@@ -1902,6 +1902,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
             timeoutMs: remainingTransferTimeout(deadline, controller.signal),
             preserveForRollback: postgresHandoff,
             sourceHeld,
+            convergeSource: mode === "pre",
           });
       cleanupActivationManifest = activationManifest.cleanup;
       if (mode === "final") {

@@ -96,6 +96,7 @@ import type {
 } from "@octogee/shared/types/fleet-broker";
 import { BUILDER_RUNTIME_STATE_RECOVERY_TIERS } from "@octogee/shared/types/fleet-broker";
 import type { BuilderIdentity } from "@octogee/shared/types/builder-identity";
+import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 import { isDeveloperToolchainStatus } from "@octogee/shared/types/developer-toolchain";
 import {
   byotSnapshotProjectionFromSystemConfig,
@@ -1740,13 +1741,16 @@ async function loadSnapshot(
   );
   const baseFields = snapshotBaseFields(data, slug);
   const channels = collectedChannels.bindings;
+  const migration = readWorkspaceMigrationMarker(readPath(data, "provisioning.openclaw"));
+  const sourcePreparing = migration?.state === "preparing" && Boolean(migration.operationId)
+    && (migration.phase === "preparing" || migration.phase === "waiting");
   return {
     uid,
     slug,
     ...baseFields,
     greetingPosted: snapshotGreetingPosted(data),
     runtimeMutationFenced: customerRuntimeMutationFenced(data)
-      || readPath(data, "provisioning.openclaw.migration") !== undefined,
+      || (readPath(data, "provisioning.openclaw.migration") !== undefined && !sourcePreparing),
     ...(runtimeReset ? { runtimeReset } : {}),
     ...(restoreAuthority ? { restoreAuthority } : {}),
     byotActive: credentialProjection.byotActive ?? baseFields.byotActive,

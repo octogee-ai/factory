@@ -2174,6 +2174,7 @@ describe("queued-rsync migration control handlers", () => {
       const exportManifest = vi.fn(async (_slug, options) => {
         expect(options.timeoutMs).toBe(310_000);
         expect(options.signal.aborted).toBe(false);
+        expect(options.convergeSource).toBe(true);
         now += 115_000;
         return manifest;
       });
