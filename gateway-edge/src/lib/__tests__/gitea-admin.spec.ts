@@ -69,13 +69,24 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("token admin-tok");
     });
 
-    it("treats 422 (user already exists) as success", async () => {
+    it.each([409, 422])("re-ensures an existing user after %i", async status => {
       fetchMock
-        .mockResolvedValueOnce(res(422, { message: "user already exists" }))
+        .mockResolvedValueOnce(res(status, { message: "user already exists" }))
         .mockResolvedValueOnce(res(200, []))
         .mockResolvedValueOnce(res(201, {}));
       const { ensureGiteaUser } = await import("../gitea-admin.js");
       await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).resolves.toBeUndefined();
+    });
+
+    it("does not hide a conflict when the expected user cannot be reconciled", async () => {
+      fetchMock
+        .mockResolvedValueOnce(res(409, { message: "email already exists" }))
+        .mockResolvedValueOnce(res(404))
+        .mockResolvedValueOnce(res(404))
+        .mockResolvedValueOnce(res(404));
+      const { ensureGiteaUser } = await import("../gitea-admin.js");
+      await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).rejects.toThrow(/register-key.*404/);
+      expect(callsTo(fetchMock)).not.toContainEqual(expect.objectContaining({ method: "DELETE" }));
     });
 
     it("keeps the predecessor pod key while registering a successor key for surge overlap", async () => {
@@ -280,7 +291,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).rejects.toThrow();
     });
 
-    it("throws when user creation fails with a non-422 status", async () => {
+    it("throws when user creation fails with a non-conflict status", async () => {
       fetchMock.mockResolvedValueOnce(res(500, { message: "down" }));
       const { ensureGiteaUser } = await import("../gitea-admin.js");
       await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).rejects.toThrow();
