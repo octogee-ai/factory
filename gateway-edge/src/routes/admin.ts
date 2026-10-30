@@ -398,21 +398,13 @@ router.put("/platform-trial-config", async (req, res) => {
   }
 });
 
-// One-shot config check: Resend API key real, webhook secret real, sender
-// domain verified in Resend. Used after a deploy or rotate-secret to confirm
-// the full delivery path is wired before relying on email.
 router.get("/email/preflight", async (_req, res) => {
   try {
     const result = await runEmailPreflight({
       env: process.env,
-      listDomains: async () => {
-        const resend = getResend();
-        const r = await (resend.domains.list() as Promise<{
-          data?: { data?: Array<{ name?: string; status?: string }> };
-        }>);
-        return (r.data?.data ?? [])
-          .filter((d): d is { name: string; status: string } => !!d.name && !!d.status)
-          .map((d) => ({ name: d.name, status: d.status }));
+      sendTestEmail: async (message) => {
+        const { data, error } = await getResend().emails.send(message);
+        return { data: data ? { id: data.id } : null, error };
       },
     });
     res.json(result);
