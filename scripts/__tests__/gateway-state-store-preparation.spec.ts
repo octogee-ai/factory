@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OpenClawCommandError } from "../lib/openclaw-cli.js";
 import {
   GATEWAY_OWNER_RELEASE_WAIT_MS,
   prepareGatewayStateStore,
@@ -155,7 +154,7 @@ describe("prepareGatewayStateStore", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("bounds the credential rebind after the owner lease", async () => {
+  it("allows five minutes to rebind missing client credentials after the owner lease", async () => {
     const order: string[] = [];
     const waitForOwner = vi.fn(async () => { order.push("release"); return "absent" as const; });
     const run = vi.fn(async () => { order.push("rebind"); return { code: 0, stdout: "" }; });
@@ -164,44 +163,40 @@ describe("prepareGatewayStateStore", () => {
     expect(order).toEqual(["release", "rebind"]);
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
-      ["doctor", "--client-credentials", "--repair", "--yes", "--non-interactive"],
-      { env: builderEnv(root), timeoutMs: 60_000 },
+      ["doctor", "--fix", "--yes", "--non-interactive", "--skip-recovery-backups"],
+      { env: builderEnv(root), timeoutMs: 300_000 },
     );
   });
 
-  it("logs a failed repair and lets native startup validate the credentials", async () => {
-    const log = vi.fn(), waitForOwner = vi.fn(async () => "absent" as const);
-    const run = vi.fn(async () => ({ code: 1, stdout: "", stderr: "repair incomplete" }));
-    await expect(prepareGatewayStateStore({ log, env: builderEnv(stateRoot("anchor", false)), waitForOwner, run })).resolves.toBeUndefined();
-    expect(waitForOwner).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("repair incomplete"));
+  it("rechecks ownership and retries full Doctor after a nonzero fast repair", async () => {
+    const order: string[] = [], logs: string[] = [];
+    const waitForOwner = vi.fn(async () => { order.push("owner"); return "absent" as const; });
+    const run = vi.fn(async () => { order.push("doctor"); return { code: run.mock.calls.length === 1 ? 1 : 0, stdout: "", stderr: "fast repair failed" }; });
+    await prepareGatewayStateStore({ log: message => logs.push(message), env: builderEnv(stateRoot("anchor", false)), waitForOwner, run });
+    expect(order).toEqual(["owner", "doctor", "owner", "doctor"]);
+    expect(run.mock.calls[1]?.[0]).toEqual(["doctor", "--fix", "--yes", "--non-interactive"]);
+    expect(logs.join("\n")).toContain("fast repair failed");
   });
 
-  it("does not rerun Doctor when repair created the local credential store before failing", async () => {
-    const root = stateRoot("anchor", false), log = vi.fn();
-    const run = vi.fn(async () => {
-      fs.mkdirSync(path.join(root, "client"));
-      fs.writeFileSync(path.join(root, "client", "credentials.sqlite"), "created");
-      return { code: 1, stdout: "", stderr: "later maintenance failed" };
-    });
-    await prepareGatewayStateStore({ log, env: builderEnv(root), waitForOwner: async () => "absent", run });
+  it("refuses fallback when ownership changes after the fast attempt", async () => {
+    const waitForOwner = vi.fn().mockResolvedValueOnce("absent").mockRejectedValueOnce(new Error("foreign owner"));
+    const run = vi.fn(async () => ({ code: 1, stdout: "" }));
+    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), waitForOwner, run })).rejects.toThrow("foreign owner");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("later maintenance failed"));
   });
 
-  it("logs a timed-out repair and lets native startup proceed", async () => {
-    const log = vi.fn();
-    const run = vi.fn(async () => { throw new OpenClawCommandError("Doctor timed out", "", ""); });
-    await expect(prepareGatewayStateStore({ log, env: builderEnv(stateRoot("anchor", false)), waitForOwner: async () => "absent", run })).resolves.toBeUndefined();
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Doctor timed out"));
-  });
-
-  it("still propagates unexpected programming failures", async () => {
-    const failure = new Error("unexpected failure");
+  it("propagates thrown or cancelled commands without retry", async () => {
+    const failure = new Error("command was killed");
     const run = vi.fn(async () => { throw failure; });
     await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), waitForOwner: async () => "absent", run })).rejects.toBe(failure);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the start when the credential rebind fails", async () => {
+    const run = vi.fn(async () => ({ code: 1, stdout: "", stderr: "Gateway owner is still live" }));
+    await expect(prepareGatewayStateStore({ log: () => {}, env: builderEnv(stateRoot("anchor", false)), hostname: THIS_POD, waitForOwner: async () => "absent", run }))
+      .rejects.toThrow(/client credential rebind failed \(exit 1\): Gateway owner is still live/);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("does not run Doctor or rebind credentials while a foreign owner remains", async () => {
