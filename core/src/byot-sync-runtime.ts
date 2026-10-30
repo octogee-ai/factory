@@ -67,6 +67,7 @@ import {
 } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
+import { customerModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } from "./system-config-invariants.js";
 import {
   DEFAULT_FREE_TIER_MODEL_REF,
   parseBuilderAgentModelDefault,
@@ -698,18 +699,19 @@ function catalogModelMapPlan(value: unknown, ensureModelRef?: string): {
   };
 }
 
-function customerModelProvidersPlan(current: unknown): {
+function customerModelProvidersPlan(current: unknown, gatewayEnv: GatewayResolutionEnv = process.env): {
   patch: Record<string, unknown>;
   unsafe: boolean;
 } {
   const providers = isRecord(current) ? current : {};
-  const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
-  const expected = anthropicBaseUrl
-    ? { anthropic: { baseUrl: anthropicBaseUrl } }
-    : {};
+  const anthropicBaseUrl = gatewayEnv.ANTHROPIC_BASE_URL?.trim();
+  const expected = {
+    ...(anthropicBaseUrl ? { anthropic: { baseUrl: anthropicBaseUrl } } : {}),
+    ...platformBrokerProviderDeclarations(gatewayEnv),
+  };
   return {
     patch: exactObjectPatch(providers, expected),
-    unsafe: JSON.stringify(providers) !== JSON.stringify(expected),
+    unsafe: !customerModelProviderDeclarationsMatch(providers, expected),
   };
 }
 
@@ -1181,7 +1183,7 @@ function customerSecurityProjectionPatch(current: unknown, gatewayEnv?: GatewayR
     gatewayEnv,
   );
   const providerEntries = recordChild(recordChild(config, "models"), "providers");
-  const modelProviders = customerModelProvidersPlan(providerEntries);
+  const modelProviders = customerModelProvidersPlan(providerEntries, gatewayEnv);
   const hookMappings = safeHookMappings(config);
 
   return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), platformAgentDirectMessagePatch(config), {
@@ -1374,7 +1376,7 @@ function customerOauthRuntimeConfigPlan(
   const defaults = recordChild(agents, "defaults");
   const providerEntries = recordChild(recordChild(config, "models"), "providers");
   const forceSafeOwnedAgents =
-    forceSafeAll || customerModelProvidersPlan(providerEntries).unsafe;
+    forceSafeAll || customerModelProvidersPlan(providerEntries, gatewayEnv).unsafe;
   if (!catalogEntryForModelRef(safeModelRef)) {
     throw new Error(`customer runtime purge: safe model is outside the platform catalog (${safeModelRef})`);
   }

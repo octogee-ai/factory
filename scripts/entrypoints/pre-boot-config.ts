@@ -19,6 +19,7 @@ import {
 import { applyOpenClawComputerBrowserConfig } from "../lib/openclaw-computer-browser.js";
 import { clusterBuilderGateway, localStateStoreKind, localStateStorePath, openclawStateRoot, type LocalStateStoreKind } from "../lib/openclaw-state-store.js";
 import { applyConnectorApprovalDelivery } from "../lib/openclaw-connector-approvals.js";
+import { platformBrokerProviderDeclarations } from "../lib/system-config-invariants.js";
 import { openClawConfigPath } from "../lib/openclaw-config-path.js";
 import {
   OPENAI_PLATFORM_PROVIDER_ID,
@@ -475,6 +476,26 @@ export function applyAnthropicBaseUrlPatch(
   return changed;
 }
 
+function applyPlatformBrokerProviderPatch(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
+  const expected = platformBrokerProviderDeclarations(env);
+  const models = ensureNullishObjectProperty(config, "models");
+  const providers = models ? ensureNullishObjectProperty(models, "providers") : null;
+  if (!providers) return false;
+  let changed = false;
+  for (const id of [OPENROUTER_PLATFORM_PROVIDER_ID, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID]) {
+    if (expected[id]) {
+      if (JSON.stringify(providers[id]) === JSON.stringify(expected[id])) continue;
+      providers[id] = expected[id];
+    } else {
+      if (!Reflect.has(providers, id)) continue;
+      delete providers[id];
+    }
+    changed = true;
+  }
+  return changed;
+}
+
 export function applyMemorySearchPlatformEmbeddingsPatch(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -671,6 +692,26 @@ export function applyTypingModeDefault(
   return true;
 }
 
+function applyWorkspaceIdentityBootstrapPolicy(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  logFn: (msg: string) => void,
+): boolean {
+  if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
+  const agents = ensureNullishObjectProperty(config, "agents");
+  const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
+  if (!defaults) return false;
+  const current = defaults.skipOptionalBootstrapFiles;
+  // Leave invalid authored configuration for Native's normal validation.
+  if (current !== undefined && !Array.isArray(current)) return false;
+  if (Array.isArray(current) && current.includes("IDENTITY.md")) return false;
+  // Identity restoration preserves authored bytes and intentional absence. Native
+  // must not attest a generated IDENTITY.md that restoration will remove.
+  defaults.skipOptionalBootstrapFiles = [...(current ?? []), "IDENTITY.md"];
+  logFn("left IDENTITY.md creation to authored workspace identity restoration");
+  return true;
+}
+
 export function applyPreBootPatches(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -680,6 +721,7 @@ export function applyPreBootPatches(
   const builderGateway = env.GATEWAY_CLASS?.trim() === "builder";
   return [
     applyAgentStoreDatabasePatch(config, env, options.stateStore),
+    applyWorkspaceIdentityBootstrapPolicy(config, env, logFn),
     applyOpenClawBeta5CompatibilityPatch(config, logFn),
     builderGateway ? false : applyToolsProfilePatch(config, logFn),
     applyMattermostPreBootPatches(config, env, logFn),
@@ -687,6 +729,7 @@ export function applyPreBootPatches(
     applyOpenClawComputerBrowserConfig(config, env),
     applyConnectorApprovalDelivery(config),
     applyAnthropicBaseUrlPatch(config, env, logFn),
+    applyPlatformBrokerProviderPatch(config, env),
     applyPlatformModelAllowlist(config, env),
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),
     applyMemorySearchSchemaPatch(config, logFn),

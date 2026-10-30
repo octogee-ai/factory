@@ -27,6 +27,25 @@ function emptyConfig(): any {
   return {};
 }
 
+describe("workspace identity bootstrap policy", () => {
+  it.each(["shared", "builder"])("preserves optional-file choices while leaving restored identity to its owner on %s", gatewayClass => {
+    const config = { agents: { defaults: { skipOptionalBootstrapFiles: ["USER.md"] } } };
+    applyPreBootPatches(config, { GATEWAY_CLASS: gatewayClass });
+    expect(config.agents.defaults.skipOptionalBootstrapFiles).toEqual(["USER.md", "IDENTITY.md"]);
+    applyPreBootPatches(config, { GATEWAY_CLASS: gatewayClass });
+    expect(config.agents.defaults.skipOptionalBootstrapFiles).toEqual(["USER.md", "IDENTITY.md"]);
+  });
+
+  it("keeps unrelated runtimes and invalid optional-file configuration unchanged", () => {
+    const unrelated = { agents: { defaults: { skipOptionalBootstrapFiles: ["USER.md"] } } };
+    applyPreBootPatches(unrelated, { GATEWAY_CLASS: "ops" });
+    expect(unrelated.agents.defaults.skipOptionalBootstrapFiles).toEqual(["USER.md"]);
+    const invalid = { agents: { defaults: { skipOptionalBootstrapFiles: "USER.md" } } };
+    applyPreBootPatches(invalid, { GATEWAY_CLASS: "shared" });
+    expect(invalid.agents.defaults.skipOptionalBootstrapFiles).toBe("USER.md");
+  });
+});
+
 describe("shared Mattermost routing safety", () => {
   it("creates the quarantine roster when a shared config has no explicit agents", () => {
     const config: any = {};
@@ -326,6 +345,14 @@ describe("pre-boot config persistence", () => {
 });
 
 describe("applyPreBootPatches — platform model catalog", () => {
+  it.each(["shared", "builder"])("declares env-owned broker transports before %s startup without global credentials", (gatewayClass) => {
+    const config: { models: { providers: Record<string, unknown> } } = { models: { providers: { "platform-openrouter": { apiKey: "foreign", models: [{ id: "foreign" }] } } } };
+    applyPreBootPatches(config, { GATEWAY_CLASS: gatewayClass, OPENROUTER_BASE_URL: "https://broker.example/openrouter", PLATFORM_OPENAI_BASE_URL: "https://broker.example/openai" });
+    expect(config.models.providers["platform-openrouter"]).toEqual({ baseUrl: "https://broker.example/openrouter", models: [] });
+    expect(config.models.providers["platform-openai"]).toEqual({ baseUrl: "https://broker.example/openai", models: [] });
+    expect(config.models.providers).not.toHaveProperty("platform-vertex");
+  });
+
   it("allowlists every broker-backed platform model for a Builder gateway", () => {
     const config: any = { agents: { defaults: { models: {} } } };
 
@@ -1221,6 +1248,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           verboseDefault: "on",
           typingMode: "instant",
           toolProgressDetail: "raw",
+          skipOptionalBootstrapFiles: ["IDENTITY.md"],
         },
       },
       tools: { profile: "coding" },

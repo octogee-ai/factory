@@ -1,5 +1,5 @@
 {
-  "source": "4c57514d2392e773146b8e147971ad1bcb82f009",
+  "source": "471d2fdce16ab055ed2e766126a1c4757773f90f",
   "inputs": {
     "sha256": "c2e2e3371a7e7fc18b9fccea70008e12eec08e3375ed763bf423cad4bc7254b5",
     "files": [
@@ -26,6 +26,7 @@
   },
   "entry": "ui/src/lib/chat/browser-tab-preview.ts",
   "packages": [
+    "@noble/hashes@2.4.0",
     "character-entities@2.0.2",
     "decode-named-character-reference@1.3.0",
     "entities@8.1.0",

@@ -254,7 +254,12 @@ export function invariantContext(
   identity: ClaimedBuilderIdentity | null,
 ): SystemConfigInvariantContext | null {
   const value = gatewayClass(env);
-  if (value === "shared") return { gatewayClass: value };
+  const brokerProviderEnv = {
+    OPENROUTER_BASE_URL: env.OPENROUTER_BASE_URL,
+    PLATFORM_OPENAI_BASE_URL: env.PLATFORM_OPENAI_BASE_URL,
+    PLATFORM_VERTEX_BASE_URL: env.PLATFORM_VERTEX_BASE_URL,
+  };
+  if (value === "shared") return { gatewayClass: value, brokerProviderEnv };
   if (!identity) return null;
   return {
     gatewayClass: value,
@@ -263,6 +268,7 @@ export function invariantContext(
     controlIdentity: resolveControlIdentityFromEnv(env),
     ownerUid: identity.ownerUid,
     workspaceSlug: identity.builderSlug,
+    brokerProviderEnv,
   };
 }
 

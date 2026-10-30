@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { OCTOGEE_WORKFLOW_TOOLS } from "./apply-gateway-class-policy.mjs";
+import { OCTOGEE_WORKFLOW_TOOLS } from "./workflow-tools.mjs";
 
 const HOST_EXEC_SCHEDULES = new Set(["stream", "on-exit"]);
 const HOST_EXEC_PAYLOADS = new Set(["script", "command"]);

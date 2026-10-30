@@ -7,6 +7,14 @@ declare const PROJECT_AGENT_TOOL_POLICY: "project-agent-tool-policy";
 declare const FORBIDDEN_ARRAY: "forbidden-array";
 export type GatewayConfigClass = "shared" | "builder";
 export type GatewayControlIdentityMode = "shared-operator" | "per-user";
+type BrokerProviderEnvironment = Partial<Pick<NodeJS.ProcessEnv, "OPENROUTER_BASE_URL" | "PLATFORM_OPENAI_BASE_URL" | "PLATFORM_VERTEX_BASE_URL">>;
+/** Declare provider ownership; API, model rows and credentials remain agent-local. */
+export declare function platformBrokerProviderDeclarations(env: BrokerProviderEnvironment): Record<string, {
+    baseUrl: string;
+    models: never[];
+}>;
+/** Missing public declarations are a safe addition; existing routes and auth must match exactly. */
+export declare function customerModelProviderDeclarationsMatch(current: Record<string, unknown>, expected: Record<string, unknown>): boolean;
 export interface SystemConfigInvariantContext {
     gatewayClass: GatewayConfigClass;
     gatewayId?: string;
@@ -14,6 +22,7 @@ export interface SystemConfigInvariantContext {
     controlIdentity?: GatewayControlIdentityMode;
     ownerUid?: string;
     workspaceSlug?: string;
+    brokerProviderEnv?: BrokerProviderEnvironment;
 }
 type ExactInvariant = {
     kind: "exact";

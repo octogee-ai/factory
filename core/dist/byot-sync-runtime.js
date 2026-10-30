@@ -15,6 +15,7 @@ import { openAiCatalogInputForBaseUrl, vertexCatalogInputForBaseUrl, openRouterC
 import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalCustomerModelDefinition, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
 import { resolveBillingProfile } from "@octogee/shared/types/billing";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
+import { customerModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } from "./system-config-invariants.js";
 import { DEFAULT_FREE_TIER_MODEL_REF, parseBuilderAgentModelDefault, } from "@octogee/shared/types/platform-config";
 // byot-sync fires at pod boot, before openclaw is listening on :18789, so the
 // coach-model patch must wait for the runtime to finish booting (ECONNREFUSED)
@@ -457,15 +458,16 @@ function catalogModelMapPlan(value, ensureModelRef) {
         changed,
     };
 }
-function customerModelProvidersPlan(current) {
+function customerModelProvidersPlan(current, gatewayEnv = process.env) {
     const providers = isRecord(current) ? current : {};
-    const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
-    const expected = anthropicBaseUrl
-        ? { anthropic: { baseUrl: anthropicBaseUrl } }
-        : {};
+    const anthropicBaseUrl = gatewayEnv.ANTHROPIC_BASE_URL?.trim();
+    const expected = {
+        ...(anthropicBaseUrl ? { anthropic: { baseUrl: anthropicBaseUrl } } : {}),
+        ...platformBrokerProviderDeclarations(gatewayEnv),
+    };
     return {
         patch: exactObjectPatch(providers, expected),
-        unsafe: JSON.stringify(providers) !== JSON.stringify(expected),
+        unsafe: !customerModelProviderDeclarationsMatch(providers, expected),
     };
 }
 function authProfileRemovalPatch(value) {
@@ -889,7 +891,7 @@ function customerSecurityProjectionPatch(current, gatewayEnv) {
     const pluginEntries = recordChild(recordChild(config, "plugins"), "entries");
     const pluginEntryPatch = exactObjectPatch(pluginEntries, customerPluginEntries(), gatewayEnv);
     const providerEntries = recordChild(recordChild(config, "models"), "providers");
-    const modelProviders = customerModelProvidersPlan(providerEntries);
+    const modelProviders = customerModelProvidersPlan(providerEntries, gatewayEnv);
     const hookMappings = safeHookMappings(config);
     return mergeConfigPatches(customerSecretRefsPatch(config), customerCommandSurfaceRemovalPatch(config), platformAgentDirectMessagePatch(config), {
         plugins: {
@@ -1032,7 +1034,7 @@ function customerOauthRuntimeConfigPlan(current, slug, safeModelRef, forceSafeAl
     const ownedAgentIds = agentIdsForSlug(slug, current);
     const defaults = recordChild(agents, "defaults");
     const providerEntries = recordChild(recordChild(config, "models"), "providers");
-    const forceSafeOwnedAgents = forceSafeAll || customerModelProvidersPlan(providerEntries).unsafe;
+    const forceSafeOwnedAgents = forceSafeAll || customerModelProvidersPlan(providerEntries, gatewayEnv).unsafe;
     if (!catalogEntryForModelRef(safeModelRef)) {
         throw new Error(`customer runtime purge: safe model is outside the platform catalog (${safeModelRef})`);
     }

@@ -204,6 +204,9 @@ it("declares unmatched-route model metadata without granting broker credentials"
   expect(result.config.agents.entries[agentId]).not.toHaveProperty("model");
   const agentDir = path.join(result.dir, "agents", agentId, "agent");
   const catalog = JSON.parse(readFileSync(path.join(agentDir, "models.json"), "utf8"));
+  expect(result.config.models.providers["platform-openrouter"]).toEqual({ baseUrl: "http://broker/openrouter", models: [] });
+  expect(result.config.models.providers["platform-openai"]).toEqual({ baseUrl: "http://broker/openai", models: [] });
+  expect(catalog.providers["platform-openai"].api).toBe("openai-completions");
   expect(catalog.providers["platform-openrouter"].models).toContainEqual(expect.objectContaining({ id: "deepseek/deepseek-v4-pro" }));
   expect(catalog.providers["platform-openai"].models.length).toBeGreaterThan(0);
   for (const provider of Object.values(catalog.providers)) expect(provider).not.toHaveProperty("apiKey");

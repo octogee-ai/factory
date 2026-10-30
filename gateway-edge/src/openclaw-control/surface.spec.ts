@@ -25,6 +25,7 @@ import {
   invariantContext,
 } from "./surface.js";
 import { OpenClawControlSessionManager } from "./session.js";
+import { evaluateOpenClawControlRpc } from "./rpc-policy.js";
 const OPENCLAW_TEST_METHODS = ["health", "status", "config.get", "config.schema", "config.patch", "config.set", "config.apply", "agents.list", "models.list", "channels.status", "tools.catalog", "skills.status", "tools.invoke", "approval.history", "approval.get", "approval.resolve"];
 import { OpenClawControlResourceLimiter } from "./limits.js";
 import { dashboardAssetRateLimit } from "../middleware/security.js";
@@ -166,7 +167,19 @@ describe("OpenClaw Dashboard invariant context", () => {
     expect(invariantContext(env(), "bender", CLAIMED_ALICE)).toMatchObject({
       gatewayClass: "builder", gatewayId: "bender", ownerUid: "uid-owner", workspaceSlug: "alice",
     });
-    expect(invariantContext({ ...env(), GATEWAY_CLASS: "shared" }, "shared-a", null)).toEqual({ gatewayClass: "shared" });
+    expect(invariantContext({ ...env(), GATEWAY_CLASS: "shared" }, "shared-a", null)).toMatchObject({ gatewayClass: "shared" });
+  });
+  it.each(["shared", "builder"])("preserves broker declarations through an unrelated %s Dashboard write and rejects rewiring", (gatewayClass) => {
+    const context = invariantContext({ ...env(), GATEWAY_CLASS: gatewayClass, OPENROUTER_BASE_URL: "https://broker.example/openrouter" }, "bender", CLAIMED_ALICE);
+    if (!context) throw new Error("Expected claimed invariant context");
+    const current = {};
+    reconcilePlatformInvariants(current, context);
+    const policy = { installedMethods: new Set<string>(), invariantContext: context, currentConfig: { raw: current, hash: "h" } };
+    const patch = (value: unknown) => evaluateOpenClawControlRpc({ type: "req", id: "edit", method: "config.patch", params: { raw: JSON.stringify(value), baseHash: "h" } }, policy, true);
+    expect(patch({ talk: { realtime: { providers: { openai: { voice: "custom" } } } } })).toMatchObject({ allowed: true });
+    for (const changed of [{ baseUrl: "https://foreign.example" }, { api: "anthropic-messages" }, { apiKey: "foreign" }, { headers: { authorization: "foreign" } }]) {
+      expect(patch({ models: { providers: { "platform-openrouter": changed } } })).toMatchObject({ allowed: false, reason: "platform-invariant" });
+    }
   });
 });
 

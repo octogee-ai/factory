@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { realpathSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -314,15 +314,14 @@ function run(root: string, gatewayClass: "shared" | "builder", scriptPath = scri
 }
 
 describe("customer cron routing quarantine", () => {
-  it("runs from the gateway scripts and shared types without a core package installation", () => {
+  it("runs standalone from gateway scripts without a Core package installation", () => {
     const standalone = mkdtempSync(path.join(tmpdir(), "octogee-cron-standalone-"));
     const gateway = path.join(standalone, "infra", "gateway");
     mkdirSync(gateway, { recursive: true });
     writeFileSync(path.join(standalone, "package.json"), JSON.stringify({ type: "module" }));
-    for (const name of ["quarantine-customer-cron-jobs.mjs", "apply-gateway-class-policy.mjs"]) {
+    for (const name of ["quarantine-customer-cron-jobs.mjs", "workflow-tools.mjs"]) {
       copyFileSync(path.join(repoRoot, "infra", "gateway", name), path.join(gateway, name));
     }
-    cpSync(path.join(repoRoot, "shared", "dist"), path.join(standalone, "shared", "dist"), { recursive: true });
     const { root } = fixture();
     const result = run(root, "shared", path.join(gateway, "quarantine-customer-cron-jobs.mjs"));
     expect(result.status, result.stderr).toBe(0);

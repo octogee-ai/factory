@@ -1,4 +1,5 @@
 import { parseAgentId, type ParsedAgentId } from "@octogee/shared/types/identity";
+import { isDeepStrictEqual } from "node:util";
 import {
   platformAgentMattermostAccountsProjected,
   projectPlatformAgentMattermostAccounts,
@@ -24,6 +25,30 @@ export type GatewayConfigClass = "shared" | "builder";
 
 export type GatewayControlIdentityMode = "shared-operator" | "per-user";
 
+type BrokerProviderEnvironment = Partial<Pick<NodeJS.ProcessEnv, "OPENROUTER_BASE_URL" | "PLATFORM_OPENAI_BASE_URL" | "PLATFORM_VERTEX_BASE_URL">>;
+const BROKER_PROVIDER_DECLARATIONS = [
+  ["platform-openrouter", "OPENROUTER_BASE_URL"],
+  ["platform-openai", "PLATFORM_OPENAI_BASE_URL"],
+  ["platform-vertex", "PLATFORM_VERTEX_BASE_URL"],
+] as const;
+
+/** Declare provider ownership; API, model rows and credentials remain agent-local. */
+export function platformBrokerProviderDeclarations(env: BrokerProviderEnvironment): Record<string, { baseUrl: string; models: never[] }> {
+  return Object.fromEntries(BROKER_PROVIDER_DECLARATIONS.flatMap(([id, key]) => {
+    const baseUrl = env[key]?.trim();
+    return baseUrl ? [[id, { baseUrl, models: [] }]] : [];
+  }));
+}
+
+/** Missing public declarations are a safe addition; existing routes and auth must match exactly. */
+export function customerModelProviderDeclarationsMatch(current: Record<string, unknown>, expected: Record<string, unknown>): boolean {
+  const required = { ...expected };
+  for (const [id] of BROKER_PROVIDER_DECLARATIONS) {
+    if (!Object.hasOwn(current, id)) delete required[id];
+  }
+  return isDeepStrictEqual(current, required);
+}
+
 export interface SystemConfigInvariantContext {
   gatewayClass: GatewayConfigClass;
   gatewayId?: string;
@@ -31,6 +56,7 @@ export interface SystemConfigInvariantContext {
   controlIdentity?: GatewayControlIdentityMode;
   ownerUid?: string;
   workspaceSlug?: string;
+  brokerProviderEnv?: BrokerProviderEnvironment;
 }
 
 type ExactInvariant = {
@@ -440,6 +466,7 @@ export function platformInvariantTable(
     throw new Error("gatewayId and apiOrigin are required for isolated config invariants");
   }
   const perUser = isolated && context.controlIdentity === "per-user";
+  const brokerProviders = platformBrokerProviderDeclarations(context.brokerProviderEnv ?? {});
   const base: PlatformInvariant[] = [
     { kind: "exact", path: "discovery.mdns.mode", value: "off" },
     { kind: "exact", path: "gateway.port", value: 18789 },
@@ -490,6 +517,9 @@ export function platformInvariantTable(
     { kind: "exact", path: "channels.mattermost.commands.native", value: false },
     { kind: "mattermost-account-projection", path: "channels.mattermost.accounts", platformOwned: !isolated },
     { kind: "exact", path: "models.providers.octogee-broker", value: { baseUrl: "${ANTHROPIC_BASE_URL}", models: [] } },
+    ...(context.brokerProviderEnv === undefined ? [] : BROKER_PROVIDER_DECLARATIONS.map<PlatformInvariant>(([id]) => ({
+      kind: "exact", path: `models.providers.${id}`, value: brokerProviders[id] ?? ABSENT,
+    }))),
     { kind: "exact", path: "plugins.enabled", value: true },
     { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
     { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: RETIRED_PLUGINS },

@@ -21,6 +21,23 @@ const builder = {
 const barn = { gatewayClass: "shared" as const };
 
 describe("system config platform invariants", () => {
+  it("pins authless broker declarations while retaining unrelated providers and endpoint-unaware callers", () => {
+    const context = { ...barn, brokerProviderEnv: { OPENROUTER_BASE_URL: "https://broker.example/openrouter" } };
+    const config: { models: { providers: Record<string, unknown> } } = { models: { providers: {
+      "platform-openrouter": { apiKey: "foreign-key", headers: { authorization: "foreign" }, models: [{ id: "foreign" }] },
+      "platform-openai": { baseUrl: "https://retired.example", models: [] },
+      local: { baseUrl: "http://localhost:8000", models: [] },
+    } } };
+    reconcilePlatformInvariants(config, context);
+    expect(config.models.providers["platform-openrouter"]).toEqual({ baseUrl: "https://broker.example/openrouter", models: [] });
+    expect(config.models.providers).not.toHaveProperty("platform-openai");
+    expect(config.models.providers.local).toEqual({ baseUrl: "http://localhost:8000", models: [] });
+    expect(platformInvariantViolations(config, context)).toEqual([]);
+    expect(reconcilePlatformInvariants(config, context).changedPaths).toEqual([]);
+    reconcilePlatformInvariants(config, barn);
+    expect(config.models.providers["platform-openrouter"]).toEqual({ baseUrl: "https://broker.example/openrouter", models: [] });
+  });
+
   it("restores coach automations through reconciliation while project agents and host execution remain restricted", () => {
     const config = {
       tools: { deny: ["automations"] },

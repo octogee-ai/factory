@@ -149,19 +149,20 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 28 frozen main
+## Current overlay: October 30 frozen main
 
-This refresh freezes latest fetched OpenClaw main at
-`d5f7d57eff508f815ef03f6560ca12b2b3d4aa0a`. It independently qualifies that exact
+This refresh freezes the selected OpenClaw main snapshot at
+`4591070b2f4b1b043b57c306fcd6d235e56b04a2`. It independently qualifies that exact
 tip without substituting an older green commit or following newer commits. The
-clean overlay is [`4c57514d2392e773146b8e147971ad1bcb82f009`](https://github.com/ceckert/openclaw/commit/4c57514d2392e773146b8e147971ad1bcb82f009)
-on `codex/broker-model-runtime-policy`: the October 28 overlay
-[`8c5ec056f0b36959a78df0aa11d7664884efb2b1`](https://github.com/ceckert/openclaw/commit/8c5ec056f0b36959a78df0aa11d7664884efb2b1)
-plus the two open Mattermost channel contributions and the Octogee-specific
-Doctor option and provider-qualified runtime-policy fix below, carried as their own commits on the same selected base.
+clean overlay is [`471d2fdce16ab055ed2e766126a1c4757773f90f`](https://github.com/ceckert/openclaw/commit/471d2fdce16ab055ed2e766126a1c4757773f90f)
+on `codex/gateway-refresh-20261030`: the reassessed overlay recut
+`8dd1e43ff08c263ea2cf161a82eb97b7cc6368df`, including the PostgreSQL Talk fix
+from upstream PR #188580, followed by the account-addition reload repair below.
+The two Mattermost contributions, Octogee Doctor option and provider-qualified
+runtime-policy fix remain only for the stated consumer contracts.
 
-The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/40704141760)
-was cancelled without reporting jobs. It supplies no runtime qualification. The
+The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/41099206021)
+was cancelled and supplies no runtime qualification. The
 most recent successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
 is older `d8612ec864bb4c872616cfda5340c53803655f5f`: 154 jobs pass and nine skip.
 Those skips are Node24 compatibility, PR fail-fast, Android screenshots, check
@@ -177,6 +178,20 @@ provider replacement, current-catalog preparation, supersession and independent
 reader cancellation. All seven corresponding production/test files now match the
 selected native base exactly. The separate configuration-reload settlement and
 waiting-root boundaries remain; they protect different work.
+
+Native [#188350](https://github.com/openclaw/openclaw/pull/188350), landed as
+`76ba4650f082a3f4d1189b45807f4a977fc03ca9` in the selected base, supersedes the
+closed, unmerged [#181951](https://github.com/openclaw/openclaw/pull/181951).
+Its retained-store admission and anchor-publication owners replace the duplicate
+fork guard for unconfigured PostgreSQL agents. That guard is dropped. The
+separate configured-agent detach/reattach handoff remains under its existing
+custody contract; it is not restored as a competing creation or schema owner.
+
+The recut preserves native inbound-context composition and the new channel-start
+deferral owner. Requester identity follows native's extracted reply-authority
+snapshot, which now retains the live authenticated resolver through queued
+steering. Native #185730 retired restart recovery reconstruction; the obsolete
+fork-only queued restart-flag test is removed rather than reviving that path.
 
 Native inline bare-reset threading now owns the equivalent behavior, so the
 redundant fork helper is removed. The requester identity extension follows
@@ -197,9 +212,11 @@ participant labels remain an optional active presentation feature in the full
 native iframe. Moving that header into the current unrelated island bundles
 would not adapt its actual consumer.
 
-An independent Astra source/consumer audit covered all 20 patch families and
-reviewed the resolved high-risk boundaries. It found no introduced P1/P2 in that
-static review. This is separate from runtime qualification. It does not certify
+Fresh independent source/consumer review covered the resolved recut and its
+high-risk native integrations; the subsequent backup-helper extraction and
+account-reload repair received their own scoped review. Those reviews found no
+actionable P0–P2 findings in their reviewed snapshots. This is separate from
+runtime qualification. It does not certify
 that every retained line is unconditionally necessary: active product features
 can be retired or adapted, and retained old cron/state formats depend on the
 supported restore/move input contract. No deployed old-format inventory was
@@ -220,22 +237,78 @@ controls pass.
 
 ### Carried Mattermost channel contributions
 
-Two open upstream pull requests ride on the frozen base as unmodified feature
-commits: [#186891](https://github.com/openclaw/openclaw/pull/186891) (inbound
+Two open upstream contributions are carried on the frozen base:
+[#186891](https://github.com/openclaw/openclaw/pull/186891) (inbound
 parity: acknowledgement reactions, channel system events, join introductions
 and compact tool progress) and [#186893](https://github.com/openclaw/openclaw/pull/186893)
 (message actions and multi-file sends). They are approved Builder channel
 behavior that the current Mattermost pre-boot defaults already select, not a
 reproduced native bug and not a fork-only API; Octogee consumers use only the
-public Mattermost configuration they add. The overlay adds two housekeeping
-commits this base needs and the PRs do not change: the bundled channel
+public Mattermost configuration they add. The recut adapts their behavior to
+the selected native owners instead of replacing newer native code wholesale.
+Its housekeeping includes the bundled channel
 metadata and config-doc baseline regenerated for the new schema keys, and the
 `SAFETY`/`mock-isolation` notes plus pruned assertion baseline that the
-preflight ratchets require. Runtime bytes are the PR commits' own. Remove each
+preflight ratchets require. Remove each
 family when the selected base contains the merged behavior and the Mattermost
 consumer controls pass; an open PR or a newer main containing it is not enough.
 
+### PostgreSQL native voice startup
+
+The selected unpatched main still opens the Talk session-entry database on the
+Gateway thread. The real PostgreSQL regression fails with `PostgreSQL connections
+must run in a worker`; SQLite passes. Upstream
+[#188580](https://github.com/openclaw/openclaw/pull/188580), head
+`8a727467c3e7670ec8a2e86a3c8ef5ad7b4523e1`, is open and its fix is carried here.
+Talk now prepares through its existing worker and consumes the published
+physical source; the public SDK's opaque-guard path retains native database
+adoption. Configuration, schemas, session identity and authority checks stay
+with their native owners. An Octogee voice transport override would not repair
+this canonical session-entry defect.
+
+Both PostgreSQL and SQLite creation/resumption regressions and 54 Talk siblings
+pass. A separate full build at the upstream PR head also passed a real,
+authenticated Gateway WebSocket flow against disposable PostgreSQL: two public
+Talk create/audio/close calls, persisted public history, and exactly one
+canonical session row after shutdown. The bundled OpenAI adapter used a loopback
+provider protocol fixture with synthetic PCM and no external provider requests;
+this proves transport and storage, not speech recognition or TTS quality.
+The [posted proof](https://github.com/openclaw/openclaw/pull/188580#issuecomment-6529979391)
+names that exact head. ClawSweeper's
+[latest review](https://github.com/openclaw/openclaw/pull/188580#issuecomment-6529879820)
+accepts that evidence and reports no actionable findings or before-merge work;
+upstream maintainer review is still pending. Remove the overlay when the selected
+base contains equivalent worker-owned initialization and these controls pass.
+
+### New channel-account reload
+
+Adding a project account could wait for unrelated admitted Gateway work even
+though no existing account needed restarting. The managed-writer regression is
+red on the preceding recut and green with the repair from coordinated source
+`4d2d2f47d96a7814656709571050a503259cf5fc`, applied as final source
+`471d2fdce16ab055ed2e766126a1c4757773f90f`. The reload owner captures the previous
+runtime config before any publication. Only new/removal-only account targets
+skip the global drain, after resolving every added account successfully.
+Existing affected accounts and whole-channel restarts retain their drain;
+resolution failures retain it because the later fallback can widen the restart.
+The real managed write/channel-manager path proves the new account starts while
+siblings and unrelated admitted work remain active; 269 current owner controls
+pass, including the failing-resolution negative control. This belongs in the
+native reload owner, not a caller-side retry. Remove it when the selected native
+base provides the same scoped behavior and controls pass.
+
 ### Provider-qualified runtime policies
+
+Octogee's writers also declare configured platform broker providers through
+Native's existing `{ baseUrl, models: [] }` configuration. Pre-boot, class policy
+and customer projection share the same environment-owned declarations; Dashboard
+write validation receives those trusted endpoints for both gateway classes.
+Provider API selection, complete model rows and credentials remain agent-local.
+The declaration omits `api` because setting it globally changes an existing
+agent's transport. Native inspection controls reduce 295 unknown-provider and
+four selected-model-context findings to zero while preserving both providers'
+full runtime model metadata. This adapts Octogee's configuration writer rather
+than changing Native Doctor or duplicating the model catalog.
 
 The TEST coach selected `platform-openrouter/openai/gpt-5.6-luna`, but Native
 matched its nested model ID against the direct `openai/gpt-5.6-luna` Codex policy
@@ -276,9 +349,9 @@ behavior is present in the selected base and the affected consumer controls pass
 | Channel membership sync and disclosure | Native now owns invitation-only and linked-session membership filtering. Octogee retains its approved `none`-policy channel-member access, authoritative empty-set sync, explicit-grant precedence and publication invalidation; invitation-only visibility does not replace that mutation contract. Native prepared membership facts replace the overlay target lookup callbacks. | Native authoritative membership methods and read/projection owners provide equivalent revocation and incarnation checks. |
 | Mattermost channel session scope | Approved `threadSessionScope: channel` keeps one session per channel while preserving reply roots in both directions. Current writers deliberately select this product behavior. | Native supports that option, or the product explicitly adopts thread sessions and adapts membership/consumers. |
 | Channel startup and strict stop | Channel startup must not borrow invoking identity; strict stop joins startup and running work, retains physical cleanup ownership, and retires only removed accounts. | Native proves hung-startup joins, late-stop retry and active-sibling preservation. |
-| Reload admission, supersession and settlement | Scoped reference-counted waiting roots, supersession wakeups and model/service debt prevent dropped work or a falsely settled baseline. Native subscription exclusions, synchronous and post-wait checkpoints remain. The separate session-list provider-reload fix is now entirely native. | Native owns equivalent held-root, late-join, superseded-tail and post-commit settlement behavior. |
+| Reload admission, supersession and settlement | Scoped reference-counted waiting roots, supersession wakeups and model/service debt prevent dropped work or a falsely settled baseline. New/removal-only account changes avoid unrelated global drain after successful resolution; affected existing accounts and widening fallbacks retain it. Native subscription exclusions, synchronous and post-wait checkpoints remain. The separate session-list provider-reload fix is entirely native. | Native owns equivalent scoped-account, held-root, late-join, superseded-tail and post-commit settlement behavior. |
 | Lifecycle lease and reclamation deadline | One monotonic worker-visible budget prevents late commits. Native's five-second cap is preserved; the overlay carries one worker-visible monotonic deadline and refuses late authorization. | Native carries the same worker-visible absolute deadline and refuses cancelled, expired and late authorization, or the relevant lifecycle consumer is retired. |
-| Detach, reattach and retained PostgreSQL | Approved transfer retains original logical/physical identity under native creation/deletion custody; missing PG anchors must refuse rather than create. | Native public transfer preserves namespace/history and rollback/recovery custody, or a supported migration owner replaces it. |
+| Detach, reattach and retained PostgreSQL | Approved configured-agent transfer retains original logical/physical identity under native creation/deletion custody; missing PG anchors must refuse rather than create. Native #188350 owns unconfigured retained-store creation admission; its duplicate overlay is removed. | Native public transfer preserves namespace/history and rollback/recovery custody, or a supported migration owner replaces it. |
 | Outbound delivery custody | Retirement refuses unfinished authoritative delivery state and fences racing enqueue across all affected agent identities; empty caches are insufficient. | Native detach/deletion fences the same queue and retains idempotent receipts. |
 | Local checkpoint and credential snapshots | Native backup/restore owners publish paired SQLite state exclusively into fresh targets; PG agents retain anchors, not fictional remote rollback. Installation authority is sanitized. | Native public checkpoint supplies equivalent paired-state, no-replace and retained-PG guarantees, or the authorized recovery consumer is removed. |
 | Cron migration custody | Held/exported/staged/activated ownership, retired fences, hash-bound chunks and drain are beyond ordinary native CRUD. Projection identity includes effective agent plus declaration. | Native migration provides equivalent activation, rollback, drain and two-engine round trip. |
@@ -287,6 +360,7 @@ behavior is present in the selected base and the affected consumer controls pass
 | PostgreSQL cron enabled JSON | Native's SQLite JSON-value assumption fails PG bound enabled updates; the codec uses each engine's existing JSON expression. | Native equivalent passes both-engine false/true transitions without losing authored fields. |
 | Memory shadow database retirement | Physical admission must retire before unlinking shadow files, preventing writes through live descriptors. | Native owns equivalent descriptor/late-owner retirement. |
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
+| PostgreSQL Talk entry initialization | Reproduced native main-thread database open prevents canonical realtime voice startup. PR #188580 reuses the native execution worker while preserving opaque SDK adoption. | The selected native base contains equivalent behavior and PostgreSQL/SQLite plus public Talk controls pass. |
 | Final-reply notification | Activity tools require terminal final-content classification, not agent-completion inference. Only the public observer flag is retained; delivery custody is native. | Native supplies equivalent classification or the observer is removed. |
 | Dashboard participant labels | Current same-session history supplies a human label missing from native observation projection. This optional presentation is used by the embedded full native Dashboard, with no access/identity mutation; the current browser/computer/workbench islands do not own its header. | Native projects equivalent labels or the embedded native chat consumer is removed. |
 | Dependency and npm packaging | Exact fast-uri/npm pins and the disposable npm distribution patch need installed-byte verification; version equality does not qualify nested dependencies. | Stock/native installed closures contain the fixes and the dependency gate passes. The expired fast-uri release-age exception is removed. |
@@ -294,50 +368,70 @@ behavior is present in the selected base and the affected consumer controls pass
 
 ### Qualification and explicit limits
 
-Use pinned pnpm 12.15.0, the frozen lockfile and Node 26.12.1. The source is built
-with the full `pnpm build package`; clean source and matching build-info bind the
-sequential root/Mattermost packages and hosted islands to the same commit.
-The exact final check outcomes, behavioral counts, inherited failures, actual
-Linux installer result and complete image digests are recorded in the PR.
-Aggregate `pnpm check` fails with 26 lint errors in files byte-identical to the
-frozen upstream base. Its preflights, all 109 package-lock checks and production,
-scripts and root test typechecks pass. Format and any post-lint policy checks
-are separately qualified; no aggregate native clearance is claimed.
+Pinned pnpm 12.15.0 and the frozen lockfile build the source with full
+`pnpm build package`. The clean final source and `dist/build-info.json.commit`
+both identify `471d2fdce16ab055ed2e766126a1c4757773f90f`; the sequential root and
+Mattermost archives and regenerated hosted islands contain that build. App island
+coexistence and consumer contracts pass (196 tests), with 24 license/runtime
+controls. Pin coherence is checked against the same source SHA.
 
-Installed qualification compares complete Mattermost, Codex and Parallel runtime
-bytes, both patched npm closures, native registry/bundled trust and three native
-hook imports. Native source still pins npm 12.2.1 and fast-uri 4.2.3. Stock npm's
+The aggregate check against explicit base `4591070` passes every preflight,
+all 110 package-lock checks and production, scripts and root test typechecks,
+then fails lint. Three owned lint findings were corrected and their scoped lint
+passes. The remaining 15 errors are in files byte-identical to the frozen base;
+there is no aggregate `pnpm check` success claim. The SQLite worker ratchet is
+unchanged at 169 live calls against that base. Focused formatting and subsequent
+policy checks are separate evidence, not a substitute aggregate result. The
+earlier full overlay Mattermost run retained one macOS loopback-alias fixture
+failure; it is not a demonstrated channel behavior failure or an all-suite pass.
+
+Linux amd64 installed-package qualification passes on Node 26.13.0: all 871
+Mattermost files and all 15 patched files in both npm roots match the prepared
+archives. The actual `openclaw-full-plugin-installer` target also passes native
+registry refresh, bundled trust, source-match verification of 188 Codex and 10
+Parallel runtime files, and all three native-hook imports. Native source still
+pins npm 12.2.1 and fast-uri 4.2.3. Stock npm's
 nested closure does not replace the disposable distribution patch merely by
 matching its version. Root Undici 8.12.3 is distinct from npm's nested patched
-Undici 6.29.1 and ip-address 10.7.4. Actual Linux amd64
-`openclaw-full-plugin-installer` and complete Shared/Builder images remain
-separate required gates.
+Undici 6.29.1 and ip-address 10.7.4. These installed-package and installer results
+do not qualify complete Shared or Builder images. Complete-image config/runtime
+acceptance is a separate gate before TEST shipment; its final-source results are
+recorded in the runtime PR.
 
-Complete image qualification materializes both classes through their real
-policy/pre-boot/agent writers, validates before and after isolated Doctor, and
-strictly compares semantics with negative controls. Do not translate default
+Complete-image qualification must materialize both classes through their real
+policy/pre-boot/agent writers, validate before and after isolated Doctor, and
+strictly compare semantics with negative controls. Do not translate default
 config keys or hide model/provider warnings. Verify actual installed plugins,
 native hooks, Memory/Skills workers, cold/retained Builder plugin roots and
 no-network model resolution. Full Doctor stays off healthy boots; bounded
 failed-boot recovery and driver-artifact checks remain. Arm64, live provider
-inference and interactive desktop acceptance are not claimed.
+inference, browser microphone/duplex/interruption and interactive desktop
+acceptance are not claimed. The upstream PR-head synthetic Talk proof above is
+separate from final Octogee TEST acceptance; building these artifacts deploys
+neither TEST nor PROD.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-8aaa9064.tgz#1793242914836499` | 137659399 | `8aaa90641d87a00ac71cff50169995cbe01704b737fb9707b53ba53906247114` |
-| mattermost | `openclaw-mattermost-d9c31354.tgz#1793242917867996` | 1272218 | `d9c31354d0f72cff97bcd93e5461b210ac8b004fd83b80aa8affcb962c3b9327` |
+| root | `openclaw-fork-f958d0ea.tgz#1793388147057652` | 129301061 | `f958d0eac50414f72f6e39ca0789a2cbe7b699e6c258abeaa84f2a607ee725d5` |
+| mattermost | `openclaw-mattermost-e19347f5.tgz#1793388092260895` | 1272450 | `e19347f5e76a2d5050232766478f6d5a7410e49a5240175272ee1fca93f39a4b` |
 
-Generation-bound readbacks must reproduce both complete hashes before pins and
-mirrored aliases are accepted. Hash-addressed objects are write-once. Image
-digests belong in the PR, outside this recursive build input.
+Generation-bound readbacks reproduce both complete hashes above. Hash-addressed
+objects are write-once. Complete-image qualification results and image digests
+belong in the runtime PR against its final Octogee source SHA, outside this
+recursive build input. Artifact publication alone does not qualify an image or
+a deployment.
 
 ### Upstream contributions
 
 #186891 (Mattermost inbound parity) and #186893 (Mattermost message actions)
 are open and carried on this base as described above; remove each when the
 selected base contains it. #178755 (detach) and #178973 (local checkpoint)
-remain draft/open; #181951 (retained PG refusal) remains open. #182783 is
-closed unmerged because merged #186296 adopted it into this selected base.
+remain draft/open. #181951 (retained PG refusal) is closed unmerged and superseded
+by merged #188350, present in this selected base; its duplicated guard is dropped.
+#188580 (PostgreSQL Talk startup) remains open at the reviewed head above and is
+carried pending native adoption. The account-addition reload repair is carried
+from coordinated source `4d2d2f47`; no upstream PR is recorded for that repair.
+#182783 is closed unmerged because merged #186296 adopted it into this selected base.
 #178970 remains open but native #181198 already supersedes it. Previously adopted PostgreSQL recovery, cache,
 catalog and plugin-preparation fixes are not reintroduced. The worker-backed
 web-secret fix has not been submitted upstream. Contribution status is separate

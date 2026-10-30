@@ -1,4 +1,5 @@
 import { parseAgentId } from "@octogee/shared/types/identity";
+import { isDeepStrictEqual } from "node:util";
 import { platformAgentMattermostAccountsProjected, projectPlatformAgentMattermostAccounts, } from "@octogee/shared/types/openclaw-mattermost-accounts";
 import { openClawOperatorRoles, OPENCLAW_TRUSTED_PROXIES, OPENCLAW_TRUSTED_PROXY_AUTH, openClawIdentityScopes, withOpenClawOperatorRoles, } from "@octogee/shared/types/openclaw-proxy-identity";
 const ABSENT = Symbol("absent");
@@ -7,6 +8,27 @@ const CUSTOMER_AGENT_WORKSPACE = "customer-agent-workspace";
 const CUSTOMER_AGENT_TOOL_POLICY = "customer-agent-tool-policy";
 const PROJECT_AGENT_TOOL_POLICY = "project-agent-tool-policy";
 const FORBIDDEN_ARRAY = "forbidden-array";
+const BROKER_PROVIDER_DECLARATIONS = [
+    ["platform-openrouter", "OPENROUTER_BASE_URL"],
+    ["platform-openai", "PLATFORM_OPENAI_BASE_URL"],
+    ["platform-vertex", "PLATFORM_VERTEX_BASE_URL"],
+];
+/** Declare provider ownership; API, model rows and credentials remain agent-local. */
+export function platformBrokerProviderDeclarations(env) {
+    return Object.fromEntries(BROKER_PROVIDER_DECLARATIONS.flatMap(([id, key]) => {
+        const baseUrl = env[key]?.trim();
+        return baseUrl ? [[id, { baseUrl, models: [] }]] : [];
+    }));
+}
+/** Missing public declarations are a safe addition; existing routes and auth must match exactly. */
+export function customerModelProviderDeclarationsMatch(current, expected) {
+    const required = { ...expected };
+    for (const [id] of BROKER_PROVIDER_DECLARATIONS) {
+        if (!Object.hasOwn(current, id))
+            delete required[id];
+    }
+    return isDeepStrictEqual(current, required);
+}
 const REQUIRED_PLUGINS = [
     "mattermost",
     "anthropic",
@@ -339,6 +361,7 @@ export function platformInvariantTable(context) {
         throw new Error("gatewayId and apiOrigin are required for isolated config invariants");
     }
     const perUser = isolated && context.controlIdentity === "per-user";
+    const brokerProviders = platformBrokerProviderDeclarations(context.brokerProviderEnv ?? {});
     const base = [
         { kind: "exact", path: "discovery.mdns.mode", value: "off" },
         { kind: "exact", path: "gateway.port", value: 18789 },
@@ -389,6 +412,9 @@ export function platformInvariantTable(context) {
         { kind: "exact", path: "channels.mattermost.commands.native", value: false },
         { kind: "mattermost-account-projection", path: "channels.mattermost.accounts", platformOwned: !isolated },
         { kind: "exact", path: "models.providers.octogee-broker", value: { baseUrl: "${ANTHROPIC_BASE_URL}", models: [] } },
+        ...(context.brokerProviderEnv === undefined ? [] : BROKER_PROVIDER_DECLARATIONS.map(([id]) => ({
+            kind: "exact", path: `models.providers.${id}`, value: brokerProviders[id] ?? ABSENT,
+        }))),
         { kind: "exact", path: "plugins.enabled", value: true },
         { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
         { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: RETIRED_PLUGINS },

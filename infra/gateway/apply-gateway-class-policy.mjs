@@ -3,7 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
+import { OCTOGEE_WORKFLOW_TOOLS } from "./workflow-tools.mjs";
+export { OCTOGEE_WORKFLOW_TOOLS } from "./workflow-tools.mjs";
 import {
   canonicalCustomerModelDefinition,
   platformModelRefs,
@@ -19,6 +22,10 @@ import {
   openClawIdentityScopes,
 } from "../../shared/dist/types/openclaw-proxy-identity.js";
 import { readBuilderClaim } from "../../shared/dist/server/builder-claim.js";
+const scriptsRequire = createRequire(new URL("../../scripts/package.json", import.meta.url));
+const { customerModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } = await import(
+  pathToFileURL(scriptsRequire.resolve("@octogee/core/system-config-invariants")).href,
+);
 
 export const CUSTOMER_CODE_DENIED_TOOLS = [
   "exec",
@@ -56,66 +63,7 @@ export const CUSTOMER_STRUCTURED_AVAILABLE_TOOLS = [
   "octogee_board_card_move",
   "octogee_board_card_comment",
 ];
-export const OCTOGEE_WORKFLOW_TOOLS = [
-  "automations",
-  "message",
-  "octogee_project_create",
-  "octogee_project_delegate",
-  "octogee_project_commit",
-  "octogee_project_list",
-  "octogee_project_set_recipe",
-  "octogee_project_capability",
-  "octogee_project_build",
-  "octogee_project_test",
-  "octogee_project_preview",
-  "octogee_project_run_status",
-  "octogee_project_publish",
-  "octogee_board_list",
-  "octogee_board_card_read",
-  "octogee_board_card_create",
-  "octogee_board_card_update",
-  "octogee_board_card_move",
-  "octogee_board_card_comment",
-  "workspace_commit",
-  "brave_search",
-  "tavily_search",
-  "tavily_extract",
-  "octogee_chat_search",
-  "octogee_chat_history",
-  "octogee_chat_set_identity",
-  "octogee_connection_request",
-  "octogee_status",
-  "octogee_ask_ops",
-  "octogee_google_calendar_events",
-  "octogee_google_calendar_create",
-  "octogee_google_calendar_create_approved",
-  "octogee_google_calendar_update",
-  "octogee_google_calendar_update_approved",
-  "octogee_google_calendar_delete",
-  "octogee_google_calendar_delete_approved",
-  "octogee_google_gmail_search",
-  "octogee_google_gmail_get",
-  "octogee_google_gmail_triage",
-  "octogee_google_gmail_triage_approved",
-  "octogee_google_gmail_draft_create",
-  "octogee_google_gmail_draft_create_approved",
-  "octogee_google_gmail_draft_send",
-  "octogee_google_gmail_draft_send_approved",
-  "octogee_google_drive_read",
-  "octogee_google_docs_read",
-  "octogee_google_docs_write",
-  "octogee_google_contacts_read",
-  "octogee_google_tasks_lists",
-  "octogee_google_tasks_list",
-  "octogee_google_tasks_add",
-  "octogee_google_tasks_add_approved",
-  "octogee_google_tasks_update",
-  "octogee_google_tasks_update_approved",
-  "octogee_google_sheets_read",
-  "octogee_google_sheets_write",
-  "octogee_obsidian_read",
-  "octogee_obsidian_write",
-];
+
 const PRODUCTIVITY_TOOL_NAMES = OCTOGEE_WORKFLOW_TOOLS.filter((tool) =>
   tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 const PROJECT_AGENT_ALLOWED_TOOLS = [
@@ -946,9 +894,10 @@ function configuredCustomerAgentIds(config) {
 
 function customerModelProviders(env) {
   const anthropicBaseUrl = env.ANTHROPIC_BASE_URL?.trim();
-  return anthropicBaseUrl
-    ? { anthropic: { baseUrl: anthropicBaseUrl } }
-    : {};
+  return {
+    ...(anthropicBaseUrl ? { anthropic: { baseUrl: anthropicBaseUrl } } : {}),
+    ...platformBrokerProviderDeclarations(env),
+  };
 }
 
 function resetConfiguredAgents(resetAgentIds, agentIds) {
@@ -1035,7 +984,7 @@ function scrubCustomerOauthConfig(config, env) {
   const allAgentIds = configuredCustomerAgentIds(config);
   const providers = objectValue(config.models?.providers);
   const expectedProviders = customerModelProviders(env);
-  const unsafeProviders = JSON.stringify(providers ?? {}) !== JSON.stringify(expectedProviders);
+  const unsafeProviders = !customerModelProviderDeclarationsMatch(providers ?? {}, expectedProviders);
   config.models ??= {};
   config.models.providers = expectedProviders;
   const directRuntimeModelRefs = projectCustomerDefaultRuntime(

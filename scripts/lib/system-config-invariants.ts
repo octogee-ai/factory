@@ -5,6 +5,7 @@ import {
   platformInvariantViolations as corePlatformInvariantViolations,
   reconcilePlatformInvariants as reconcileCorePlatformInvariants,
   reconcilePlatformProjections as reconcileCorePlatformProjections,
+  platformBrokerProviderDeclarations,
   type GatewayConfigClass,
   type PlatformInvariant,
   type SystemConfigInvariantContext,
@@ -14,6 +15,7 @@ import { readBuilderClaimFromEnv } from "@octogee/shared/server/builder-claim";
 
 export {
   PlatformInvariantPolicyError,
+  platformBrokerProviderDeclarations,
   type PlatformInvariant,
   type SystemConfigInvariantContext,
 };
@@ -30,6 +32,11 @@ export function systemConfigInvariantContextFromEnv(
     ...(env.API_PUBLIC_URL ? { apiOrigin: env.API_PUBLIC_URL } : {}),
     controlIdentity: resolveControlIdentityFromEnv(env),
     ...(claim ? { ownerUid: claim.ownerUid, workspaceSlug: claim.builderSlug } : {}),
+    brokerProviderEnv: {
+      OPENROUTER_BASE_URL: env.OPENROUTER_BASE_URL,
+      PLATFORM_OPENAI_BASE_URL: env.PLATFORM_OPENAI_BASE_URL,
+      PLATFORM_VERTEX_BASE_URL: env.PLATFORM_VERTEX_BASE_URL,
+    },
   };
 }
 

@@ -127,6 +127,21 @@ const codexBlob = () =>
 const noCustomerOauthRuntimePurge = vi.fn(async () => ({ changed: false, resetCount: 0 }));
 
 describe("customer mount configuration projection", () => {
+  it("publishes and preserves only env-owned authless broker declarations during customer projection", () => {
+    vi.stubEnv("OPENROUTER_BASE_URL", "https://broker.example/openrouter");
+    vi.stubEnv("PLATFORM_OPENAI_BASE_URL", undefined);
+    vi.stubEnv("PLATFORM_VERTEX_BASE_URL", undefined);
+    try {
+      const expected = { baseUrl: "https://broker.example/openrouter", models: [] };
+      const fresh = customerMountConfigPatch({}, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
+      expect(fresh).toHaveProperty("models.providers.platform-openrouter", expected);
+      const retained = customerMountConfigPatch({ models: { providers: { "platform-openrouter": expected } } }, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
+      expect(retained).toHaveProperty("models.providers.platform-openrouter", expected);
+      const poisoned = customerMountConfigPatch({ models: { providers: { "platform-openrouter": { ...expected, apiKey: "foreign" } } } }, {}, "alice", "platform-openrouter/z-ai/glm-5.2");
+      expect(poisoned).toHaveProperty("models.providers.platform-openrouter.apiKey", null);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("keeps the native voice event publisher enabled when a new customer is attached", () => {
     const patch = customerMountConfigPatch({ plugins: {
       allow: ["octogee-activity-tools"],

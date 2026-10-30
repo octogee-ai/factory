@@ -169,6 +169,7 @@ RUN node /tmp/install-cua-skills.mjs "$(npm root -g)/openclaw" /tmp/cua-skills /
 # ── Entrypoint + config templates ──────────────────────────────────────────
 COPY --chown=node:node infra/gateway/openclaw.template.json /octogee/infra/gateway/openclaw.template.json
 COPY --chown=node:node infra/gateway/openclaw.builder.template.json /octogee/infra/gateway/openclaw.builder.template.json
+COPY --chown=node:node infra/gateway/workflow-tools.mjs /octogee/infra/gateway/workflow-tools.mjs
 COPY --chown=node:node infra/gateway/apply-gateway-class-policy.mjs /octogee/infra/gateway/apply-gateway-class-policy.mjs
 COPY --chown=node:node infra/gateway/quarantine-customer-cron-jobs.mjs /octogee/infra/gateway/quarantine-customer-cron-jobs.mjs
 COPY infra/gateway/entrypoint.sh /usr/local/bin/entrypoint.sh
