@@ -179,6 +179,7 @@ function runPlacementCheck(fixtures: {
   nodes?: unknown;
   pdbs?: unknown;
   computeClasses?: unknown;
+  preferSpot?: boolean;
 }) {
   const directory = mkdtempSync(join(tmpdir(), "octogee-gateway-capacity-placement-"));
   temporaryDirectories.push(directory);
@@ -197,12 +198,13 @@ esac
 
   return spawnSync(
     "bash",
-    ["-c", 'source "$1"; octogee_verify_gateway_capacity_placement test-context test-ns', "--", verifier],
+    ["-c", 'source "$1"; octogee_verify_gateway_capacity_placement test-context test-ns "$PREFER_SPOT"', "--", verifier],
     {
       encoding: "utf8",
       env: {
         ...process.env,
         PATH: `${directory}:${process.env.PATH}`,
+        PREFER_SPOT: String(fixtures.preferSpot ?? true),
         MOCK_DEPLOYMENTS: JSON.stringify(fixtures.deployments ?? {
           items: [deployment("shared-a"), deployment("shared-b"), deployment("builder")],
         }),
@@ -270,6 +272,29 @@ describe("gateway capacity placement verifier", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("must use its stable gateway-id as gateway-instance");
+  });
+
+  it("accepts explicitly configured regional on-demand capacity", () => {
+    const compute = disposableComputeClass();
+    compute.spec.priorities = compute.spec.priorities.filter(priority => !priority.spot);
+    const result = runPlacementCheck({ preferSpot: false, computeClasses: { items: [compute] },
+      nodes: { items: [node("shared-node-shared-a", undefined, false, "us-central1-a"),
+        node("shared-node-shared-b", undefined, false, "us-central1-b"), node("spot-node", disposableComputeClassName, false, "us-central1-c")] } });
+    expect(result.status, result.stdout).toBe(0);
+  });
+
+  it("rejects an owner-bound Spot pod under an on-demand-only policy", () => {
+    const compute = disposableComputeClass();
+    compute.spec.priorities = compute.spec.priorities.filter(priority => !priority.spot);
+    const result = runPlacementCheck({ preferSpot: false, computeClasses: { items: [compute] } });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("owner-bound gateway pod octogee-gateway-builder-abc must run on on-demand capacity");
+  });
+
+  it("rejects Spot-first capacity when the configured policy requires on-demand", () => {
+    const result = runPlacementCheck({ preferSpot: false });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("must use regional on-demand capacity");
   });
 
   it("rejects the retired operator customer gateway class", () => {

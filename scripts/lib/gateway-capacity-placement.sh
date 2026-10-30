@@ -3,10 +3,15 @@
 octogee_verify_gateway_capacity_placement() {
   local context="${1:-}"
   local namespace="${2:-}"
+  local prefer_spot="${3:-true}"
   local deployments_json pods_json nodes_json pdbs_json compute_classes_json
 
   if [[ -z "$context" || -z "$namespace" ]]; then
     echo "gateway capacity placement verification requires context and namespace" >&2
+    return 64
+  fi
+  if [[ "$prefer_spot" != true && "$prefer_spot" != false ]]; then
+    echo "gateway capacity placement requires an explicit boolean Spot policy" >&2
     return 64
   fi
 
@@ -42,6 +47,7 @@ octogee_verify_gateway_capacity_placement() {
     "$compute_classes_json" | python3 -c '
 import json
 import sys
+prefer_spot = sys.argv[1] == "true"
 
 compute_class_label = "cloud.google.com/compute-class"
 spot_label = "cloud.google.com/gke-spot"
@@ -226,7 +232,7 @@ for name in sorted(selected_classes):
         continue
     spec = item.get("spec", {})
     priorities = spec.get("priorities") or []
-    expected_spot_priorities = (True, False)
+    expected_spot_priorities = (True, False) if prefer_spot else (False,)
     valid_priorities = len(priorities) == len(expected_spot_priorities)
     if valid_priorities:
         for index, expected_spot in enumerate(expected_spot_priorities):
@@ -247,7 +253,8 @@ for name in sorted(selected_classes):
                 == set(priorities[1]["location"]["zones"])
             )
     if not valid_priorities:
-        errors.append(f"ComputeClass {name} must prefer regional Spot before on-demand")
+        policy = "prefer regional Spot before on-demand" if prefer_spot else "use regional on-demand capacity"
+        errors.append(f"ComputeClass {name} must {policy}")
     if not (spec.get("autopilot") or {}).get("enabled"):
         errors.append(f"ComputeClass {name} must explicitly enable Autopilot")
     if not (spec.get("activeMigration") or {}).get("optimizeRulePriority"):
@@ -304,6 +311,8 @@ for pod in pods.get("items", []):
                 errors.append(f"shared gateway pod {name} is on a node without a zone label")
             else:
                 shared_zones_by_instance.setdefault(instance, set()).add(zone)
+    elif not prefer_spot and is_spot:
+        errors.append(f"owner-bound gateway pod {name} must run on on-demand capacity")
     elif not is_spot:
         owner_bound_fallback_pods.append(name)
 
@@ -329,14 +338,15 @@ if errors:
     print("; ".join(errors))
     raise SystemExit(1)
 
+owner_capacity = "owner-bound on-demand fallback" if prefer_spot else "owner-bound on-demand"
 summary = (
     f"gateway capacity placement verified: {len(live_deployments)} Deployment(s), "
     f"{len(shared_on_demand_pods)} shared on-demand pod(s), "
-    f"{len(owner_bound_fallback_pods)} owner-bound on-demand fallback pod(s)"
+    f"{len(owner_bound_fallback_pods)} {owner_capacity} pod(s)"
 )
 if owner_bound_fallback_pods:
     fallback_list = ", ".join(sorted(owner_bound_fallback_pods))
     summary += f": {fallback_list}"
 print(summary)
-'
+' "$prefer_spot"
 }

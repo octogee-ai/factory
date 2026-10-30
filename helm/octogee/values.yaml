@@ -87,8 +87,8 @@ mattermost:
   enabled: true
   image:
     repository: us-central1-docker.pkg.dev/octogee/octogee/mattermost
-    tag: "11.11.3-octogee-dccab624"
-    digest: "sha256:74cb36973da56bb568d5a31d05c31f74b5f965919780ca120799f2c6b8437c04"
+    tag: "12.0.1-octogee-abeb43a3"
+    digest: "sha256:b6e8ced3030653a5fb12a55b11cda45ad9bbd223dc37fb7098943dec6532b69e"
   db:
     user: mattermost
     name: mattermost_prod
@@ -136,8 +136,8 @@ mattermost:
 # readable release metadata while the digest is the immutable runtime identity.
 gitea:
   image:
-    tag: "1.27.3"
-    digest: "sha256:1c17ecaead42eb3b5391553d8708103a4beb0e86edf5b9ebc1eb269c318845f2"
+    tag: "28.2.0"
+    digest: "sha256:94807314454f6525994a3b76286ba12bc7e7f8cd14f61d9e67431767f8103306"
   # The chart's helm-test hook (a busybox wget → gitea:3000) can't pass under the
   # networkPolicy below, which intentionally blocks arbitrary pods — and it adds
   # no signal over gitea's own readiness probe + the deploy's `helm --wait` gate.

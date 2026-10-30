@@ -107,14 +107,14 @@ describe("Mattermost fresh-database bootstrap contract", () => {
     expect(
       buildPlanReceipt({
         format_version: "1.2",
-        terraform_version: "1.16.4",
+        terraform_version: "1.17.1",
         resource_changes: [{ address: expectedAddress, change: { actions: ["create"] } }],
       }, options).summary,
     ).toEqual({ create: 1, update: 0, delete: 0, replace: 0 });
     expect(() =>
       buildPlanReceipt({
         format_version: "1.2",
-        terraform_version: "1.16.4",
+        terraform_version: "1.17.1",
         resource_changes: [{
           address: "google_secret_manager_secret_iam_member.unexpected",
           change: { actions: ["create"] },

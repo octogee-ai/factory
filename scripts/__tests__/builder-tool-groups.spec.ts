@@ -68,12 +68,12 @@ describe("Builder tool groups", () => {
     ]);
     expect(manifest.standaloneTools).toEqual({
       gcloud: {
-        version: "590.0.1",
-        sha256: "d1ae7be7e12c4e7d8286fab4774f5441020aca89dc7793ddacbace8d11d20f06",
+        version: "591.0.0",
+        sha256: "78c570f5fcfe58a9311bd98c06b75530595e3cae6277aad75a676a39e6ee7b63",
       },
-      gh: { version: "2.103.2" },
+      gh: { version: "2.103.3" },
       helm: { version: "4.3.1" },
-      terraform: { version: "1.17.0" },
+      terraform: { version: "1.17.1" },
       yq: { version: "4.54.1" },
     });
   });

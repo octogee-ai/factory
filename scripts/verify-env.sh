@@ -519,13 +519,29 @@ fi
 # ── 5a. Gateway capacity placement ───────────────────────────────────────────
 set_section infra
 header "5a. Gateway capacity placement"
-if CAPACITY_PLACEMENT_ERRORS=$(octogee_verify_gateway_capacity_placement "$K8S_CONTEXT" "$NAMESPACE" 2>&1); then
-  pass "$CAPACITY_PLACEMENT_ERRORS"
-else
-  fail "gateway capacity placement is invalid: $CAPACITY_PLACEMENT_ERRORS"
-  if $FIX; then
-    echo -e "  ${YELLOW}FIX:${NC} reconcile the affected Cowboy gateway release, then rerun this verifier"
+if CAPACITY_PREFER_SPOT=$(node - "$REPO_DIR" "$HELM_VALUES_FILE" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const { parse } = require(path.join(root, 'scripts/node_modules/yaml'));
+const base = parse(fs.readFileSync(path.join(root, 'helm/octogee/values.yaml'), 'utf8'));
+const selected = parse(fs.readFileSync(path.resolve(root, process.argv[3]), 'utf8'));
+const override = selected?.gatewayFleet?.computeClass?.preferSpot;
+const policy = override === undefined ? base.gatewayFleet.computeClass.preferSpot : override;
+if (typeof policy !== 'boolean') throw new Error('gatewayFleet.computeClass.preferSpot must be boolean');
+process.stdout.write(String(policy));
+NODE
+); then
+  if CAPACITY_PLACEMENT_ERRORS=$(octogee_verify_gateway_capacity_placement "$K8S_CONTEXT" "$NAMESPACE" "$CAPACITY_PREFER_SPOT" 2>&1); then
+    pass "$CAPACITY_PLACEMENT_ERRORS"
+  else
+    fail "gateway capacity placement is invalid: $CAPACITY_PLACEMENT_ERRORS"
+    if $FIX; then
+      echo -e "  ${YELLOW}FIX:${NC} reconcile the affected Cowboy gateway release, then rerun this verifier"
+    fi
   fi
+else
+  fail "could not read configured gateway capacity policy"
 fi
 
 # ── 5c. Cowboy gateway ServiceAccount ownership ──────────────────────────────

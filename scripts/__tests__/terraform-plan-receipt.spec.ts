@@ -10,7 +10,7 @@ import {
 
 const plan = (changes: TerraformPlan["resource_changes"]): TerraformPlan => ({
   format_version: "1.2",
-  terraform_version: "1.16.4",
+  terraform_version: "1.17.1",
   resource_changes: changes,
 });
 
