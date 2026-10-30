@@ -66,3 +66,59 @@ it('retains accepted desktop artifacts already included in earlier main manifest
   await expect(resolveDesktopRelease({ ...build, manifest: { ...manifest, desktopImage } }, request)).resolves.toEqual({ desktopImage, digest: build.digest });
   expect(request).not.toHaveBeenCalled();
 });
+
+function indexedRegistry() {
+  const fixture = registry(companion, 'desktop-image-manifest.json');
+  const descriptor = { mediaType: 'application/vnd.oci.image.manifest.v1+json', digest: digest(fixture.image), size: fixture.image.length, platform: { os: 'linux', architecture: 'amd64' } };
+  const index = { schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', manifests: [descriptor,
+    { ...descriptor, digest: `sha256:${'9'.repeat(64)}`, annotations: { 'vnd.docker.reference.type': 'attestation-manifest' }, platform: { os: 'unknown', architecture: 'unknown' } }] };
+  const request = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith(`/manifests/${sha}`)) {
+      if (!String(new Headers(init?.headers).get('Accept')).includes(index.mediaType)) return new Response('unsupported media type', { status: 404 });
+      const bytes = Buffer.from(JSON.stringify(index));
+      return new Response(bytes, { headers: { 'docker-content-digest': digest(bytes) } });
+    }
+    if (url.endsWith(`/manifests/${descriptor.digest}`)) return new Response(fixture.image, { headers: { 'docker-content-digest': descriptor.digest } });
+    if (url.endsWith(`/blobs/${digest(fixture.layer)}`)) return new Response(fixture.layer);
+    throw new Error(`unexpected registry request: ${url}`);
+  });
+  return { ...fixture, request, index, descriptor };
+}
+it('reads an OCI-index desktop companion without mistaking its provenance attestation for the artifact', async () => {
+  const fixture = indexedRegistry();
+  const indexDigest = digest(Buffer.from(JSON.stringify(fixture.index)));
+  await expect(resolveDesktopRelease(build, fixture.request)).resolves.toEqual({ ...companion, digest: indexDigest });
+  expect(fixture.request).toHaveBeenCalledTimes(3);
+  expect(fixture.request.mock.calls[1][0]).toContain(`/manifests/${fixture.descriptor.digest}`);
+});
+it('rejects a modified indexed child even when the registry index is authentic', async () => {
+  const fixture = indexedRegistry();
+  const request = fixture.request.getMockImplementation()!;
+  fixture.request.mockImplementation(async (url, init) => url.endsWith(`/manifests/${fixture.descriptor.digest}`)
+    ? new Response('changed', { headers: { 'docker-content-digest': fixture.descriptor.digest } }) : request(url, init));
+  await expect(resolveDesktopRelease(build, fixture.request)).rejects.toThrow('manifest digest mismatch');
+});
+it('does not treat a missing indexed child as an absent optional desktop build', async () => {
+  const fixture = indexedRegistry();
+  const request = fixture.request.getMockImplementation()!;
+  fixture.request.mockImplementation(async (url, init) => url.endsWith(`/manifests/${fixture.descriptor.digest}`)
+    ? new Response('', { status: 404 }) : request(url, init));
+  await expect(resolveDesktopRelease(build, fixture.request)).rejects.toThrow('lookup failed: 404');
+});
+it('rejects ambiguous runtime artifacts in an OCI index before reading a child', async () => {
+  const fixture = indexedRegistry();
+  fixture.index.manifests.push({ ...fixture.descriptor });
+  await expect(resolveDesktopRelease(build, fixture.request)).rejects.toThrow('Invalid release artifact index');
+  expect(fixture.request).toHaveBeenCalledOnce();
+});
+it.each([{ mediaType: 'unexpected' }, { digest: 'invalid' }, { size: 0 }])('rejects an invalid indexed artifact descriptor: %j', async change => {
+  const fixture = indexedRegistry();
+  Object.assign(fixture.descriptor, change);
+  await expect(resolveDesktopRelease(build, fixture.request)).rejects.toThrow('Invalid release artifact index');
+  expect(fixture.request).toHaveBeenCalledOnce();
+});
+it('verifies the indexed child size as well as its digest', async () => {
+  const fixture = indexedRegistry();
+  fixture.descriptor.size += 1;
+  await expect(resolveDesktopRelease(build, fixture.request)).rejects.toThrow('index size mismatch');
+});

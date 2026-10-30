@@ -23,16 +23,33 @@ function manifestFile(bytes, filename) {
   }
   throw new Error(`Release manifest layer has no ${filename}`);
 }
-export async function resolveRegistryArtifact(packageName, sha, filename, fetchAuthenticated, missing = false) {
-  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('A full build SHA is required');
-  const base = `https://us-central1-docker.pkg.dev/v2/octogee/octogee/${packageName}`;
-  const response = await fetchAuthenticated(`${base}/manifests/${sha}`, { headers: { Accept: 'application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' } });
-  if (missing && response.status === 404) return null;
+const IMAGE_MEDIA_TYPES = ['application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json'];
+const MANIFEST_ACCEPT = [...IMAGE_MEDIA_TYPES, 'application/vnd.oci.image.index.v1+json', 'application/vnd.docker.distribution.manifest.list.v2+json'].join(', ');
+async function verifiedManifest(response, expectedDigest) {
   if (!response.ok) throw Object.assign(new Error(`Immutable build lookup failed: ${response.status}`), { status: response.status });
   const bytes = Buffer.from(await response.arrayBuffer());
   const digest = response.headers.get('docker-content-digest');
-  if (digest !== hash(bytes)) throw new Error('Release manifest digest mismatch');
-  const image = JSON.parse(bytes.toString());
+  if (digest !== hash(bytes) || (expectedDigest && digest !== expectedDigest)) throw new Error('Release manifest digest mismatch');
+  return { image: JSON.parse(bytes.toString()), digest, size: bytes.length };
+}
+async function artifactImage(image, base, fetchAuthenticated) {
+  if (!Array.isArray(image.manifests)) return image;
+  const runtime = image.manifests.filter(entry => entry.annotations?.['vnd.docker.reference.type'] !== 'attestation-manifest');
+  const descriptor = runtime[0];
+  if (runtime.length !== 1 || !IMAGE_MEDIA_TYPES.includes(descriptor?.mediaType) || !/^sha256:[a-f0-9]{64}$/.test(descriptor?.digest)
+      || !Number.isSafeInteger(descriptor.size) || descriptor.size <= 0) throw new Error('Invalid release artifact index');
+  const response = await fetchAuthenticated(`${base}/manifests/${descriptor.digest}`, { headers: { Accept: IMAGE_MEDIA_TYPES.join(', ') } });
+  const child = await verifiedManifest(response, descriptor.digest);
+  if (child.size !== descriptor.size) throw new Error('Release manifest index size mismatch');
+  return child.image;
+}
+export async function resolveRegistryArtifact(packageName, sha, filename, fetchAuthenticated, missing = false) {
+  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('A full build SHA is required');
+  const base = `https://us-central1-docker.pkg.dev/v2/octogee/octogee/${packageName}`;
+  const response = await fetchAuthenticated(`${base}/manifests/${sha}`, { headers: { Accept: MANIFEST_ACCEPT } });
+  if (missing && response.status === 404) return null;
+  const { image: manifest, digest } = await verifiedManifest(response);
+  const image = await artifactImage(manifest, base, fetchAuthenticated);
   if (image.layers?.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(image.layers[0].digest)) throw new Error('Invalid release manifest image');
   const layer = await fetchAuthenticated(`${base}/blobs/${image.layers[0].digest}`);
   if (!layer.ok) throw new Error(`Release manifest layer lookup failed: ${layer.status}`);

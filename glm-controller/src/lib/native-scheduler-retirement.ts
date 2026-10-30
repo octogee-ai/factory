@@ -58,7 +58,7 @@ export function nativeSchedulerRetirementForReturn(
 
 type Deps = {
   db: Pick<Firestore, "collection" | "runTransaction">;
-  vm: Pick<GatewayVmClient, "describe" | "retainHome" | "readBootImage">;
+  vm: Pick<GatewayVmClient, "describe" | "retainHome" | "readBootImage" | "readImage">;
   log: (message: string) => void;
 };
 
@@ -137,8 +137,9 @@ async function verifyComputer(deps: Deps, input: NativeSchedulerRetirementInput,
   }
   if (authority.image) {
     const home = await deps.vm.retainHome(pending.instanceName, pending.zone, input.uid);
-    const image = await deps.vm.readBootImage(pending.instanceName, pending.zone);
-    if (home.id !== pending.homeDiskId || home.source !== pending.homeDiskSource || image.id !== authority.image.id ||
+    const boot = await deps.vm.readBootImage(pending.instanceName, pending.zone);
+    const image = await deps.vm.readImage(authority.image.name, authority.image.project);
+    if (boot.id !== authority.image.id || boot.name !== authority.image.name || home.id !== pending.homeDiskId || home.source !== pending.homeDiskSource || image.id !== authority.image.id ||
       image.name !== authority.image.name || !image.homeAdmission) throw new Error("native scheduler retirement retained home/image identity changed");
   }
 }
