@@ -27,23 +27,26 @@ export interface DesktopPublicationPlan {
   project: string; image: string; familyImage: string | null; staleWarmPool: string[]; unchanged: boolean;
 }
 
-function assertDestinationCopy(copy: DesktopCloudImage | null, artifact: ReturnType<typeof validateDesktopImage>): void {
+function assertDestinationCopy(copy: DesktopCloudImage | null, artifact: ReturnType<typeof validateDesktopImage>, source: DesktopCloudImage): void {
   if (copy?.status !== 'READY' || copy.sourceImageId !== artifact.id || copy.labels?.source !== artifact.sourceSha) throw new Error('destination is not a copy of the tested desktop image');
+  if (copy.labels?.['home-admission'] !== source.labels?.['home-admission']) throw new Error('destination copy native home admission differs from the tested image');
 }
 
 export async function planDesktopPublication(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps, controllerPool = false): Promise<DesktopPublicationPlan> {
   const artifact = validateDesktopImage(value);
-  assertDesktopImageIdentity(artifact, await deps.getImage(artifact.project, artifact.name));
+  const source = await deps.getImage(artifact.project, artifact.name);
+  assertDesktopImageIdentity(artifact, source);
   const project = desktopImageProject(environment);
   const familyImage = await deps.resolveFamily(project);
-  if (familyImage === artifact.name && project !== artifact.project) assertDestinationCopy(await deps.getImage(project, artifact.name), artifact);
+  if (familyImage === artifact.name && project !== artifact.project) assertDestinationCopy(await deps.getImage(project, artifact.name), artifact, source!);
   const staleWarmPool = controllerPool ? [] : await deps.staleWarmPool(environment, project, artifact.name);
   return { project, image: artifact.name, familyImage, staleWarmPool, unchanged: familyImage === artifact.name && staleWarmPool.length === 0 };
 }
 
 export async function publishDesktopArtifact(value: unknown, environment: 'test' | 'prod', deps: DesktopPublicationDeps, controllerPool = false) {
   const artifact = validateDesktopImage(value);
-  assertDesktopImageIdentity(artifact, await deps.getImage(artifact.project, artifact.name));
+  const source = await deps.getImage(artifact.project, artifact.name);
+  assertDesktopImageIdentity(artifact, source);
   const targetProject = desktopImageProject(environment);
   if (targetProject !== artifact.project) {
     let copy = await deps.getImage(targetProject, artifact.name);
@@ -51,7 +54,7 @@ export async function publishDesktopArtifact(value: unknown, environment: 'test'
       await deps.copyImage(artifact.project, artifact.name, targetProject, artifact.sourceSha);
       copy = await deps.getImage(targetProject, artifact.name);
     }
-    assertDestinationCopy(copy, artifact);
+    assertDestinationCopy(copy, artifact, source!);
   }
   if (await deps.resolveFamily(targetProject) !== artifact.name) await deps.setFamily(targetProject, artifact.name);
   const retiring = controllerPool ? [] : await deps.retirePool(environment, targetProject, artifact.name);
@@ -133,7 +136,7 @@ export async function retireDesktopPool(environment: string, project: string, im
   return retiring;
 }
 
-function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps {
+export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps {
   const base = 'https://compute.googleapis.com/compute/v1/projects';
   const compute = `${base}/octogee`;
   async function request<T>(url: string, data?: object, method = 'POST'): Promise<T> {
@@ -170,7 +173,8 @@ function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps
   return {
     getImage: (project, name) => requestOrNull<DesktopCloudImage>(`${base}/${project}/global/images/${name}`),
     async copyImage(sourceProject, name, project, sourceSha) {
-      const operation = await request<{ name: string }>(`${base}/${project}/global/images`, { name, sourceImage: `${base}/${sourceProject}/global/images/${name}`, labels: { source: sourceSha, purpose: 'octogee-computer' } });
+      const source = await request<DesktopCloudImage>(`${base}/${sourceProject}/global/images/${name}`);
+      const operation = await request<{ name: string }>(`${base}/${project}/global/images`, { name, sourceImage: `${base}/${sourceProject}/global/images/${name}`, labels: { ...source.labels, source: sourceSha, purpose: 'octogee-computer' } });
       await waitOperation(project, operation);
     },
     async resolveFamily(project) {

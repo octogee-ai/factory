@@ -1,7 +1,8 @@
 import { expect, it, vi } from 'vitest';
-import { planDesktopPublication, publishDesktopArtifact, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
+import { createDesktopPublicationCloud, planDesktopPublication, publishDesktopArtifact, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
+import type { GoogleAuth } from 'google-auth-library';
 const artifact = { project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40), inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1' };
-const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha } };
+const source = { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha, 'home-admission': 'retained-v1' } };
 function cloud(): DesktopPublicationDeps {
   return {
     getImage: vi.fn().mockResolvedValue(source), copyImage: vi.fn(), setFamily: vi.fn(),
@@ -77,6 +78,33 @@ it('rejects a destination image copied from another source', async () => {
   const deps = cloud(); vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce({ ...source, sourceImageId: '789' });
   await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow('not a copy');
   expect(deps.setFamily).not.toHaveBeenCalled();
+});
+it.each(['missing', 'different'])('rejects a PROD copy with %s native home admission before changing its family', async admission => {
+  const deps = cloud();
+  const copy = { ...source, id: '456', sourceImageId: source.id, labels: { source: artifact.sourceSha, ...(admission === 'different' ? { 'home-admission': 'unverified' } : {}) } };
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce(copy);
+  await expect(publishDesktopArtifact(artifact, 'prod', deps)).rejects.toThrow('native home admission');
+  expect(deps.setFamily).not.toHaveBeenCalled();
+  expect(deps.retirePool).not.toHaveBeenCalled();
+});
+it('does not report PROD unchanged when its copy lost native home admission', async () => {
+  const deps = cloud(); vi.mocked(deps.resolveFamily).mockResolvedValue(artifact.name);
+  vi.mocked(deps.getImage).mockResolvedValueOnce(source).mockResolvedValueOnce({ ...source, id: '456', sourceImageId: source.id, labels: { source: artifact.sourceSha } });
+  await expect(planDesktopPublication(artifact, 'prod', deps)).rejects.toThrow('native home admission');
+});
+it('preserves the tested image labels when copying its bytes to PROD', async () => {
+  const labels = { ...source.labels, omarchy: '4-0-6', 'input-a': 'verified-input', purpose: 'octogee-computer' };
+  const request = vi.fn(async (input: { url: string; method: string; data?: unknown }) => {
+    if (input.url.endsWith(`/octogee-test/global/images/${artifact.name}`)) return { data: { ...source, labels } };
+    if (input.url.endsWith('/octogee/global/images')) return { data: { name: 'copy-operation' } };
+    if (input.url.endsWith('/octogee/global/operations/copy-operation')) return { data: { status: 'DONE' } };
+    throw new Error(`Unexpected request ${input.url}`);
+  });
+  const auth = { getClient: async () => ({ request }) } as unknown as GoogleAuth;
+  await createDesktopPublicationCloud(auth).copyImage(artifact.project, artifact.name, 'octogee', artifact.sourceSha);
+  expect(request).toHaveBeenCalledWith(expect.objectContaining({
+    method: 'POST', data: { name: artifact.name, sourceImage: `https://compute.googleapis.com/compute/v1/projects/${artifact.project}/global/images/${artifact.name}`, labels },
+  }));
 });
 
 import { listDesktopPoolMembers, retireDesktopPool, staleDesktopPool, type DesktopPoolVm } from '../lib/desktop-image-publication';
