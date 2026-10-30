@@ -52,6 +52,7 @@ export interface ChannelAuthorizationOptions {
   requireActiveLedger?: boolean;
   includeCoachConversation?: boolean;
   workspaceConversation?: boolean;
+  voiceConversation?: boolean;
   signal?: AbortSignal;
 }
 
@@ -273,6 +274,13 @@ function activeChannelLedger(
   return discoverableChannelId(channel.id, channel.data(), scope.projectId ? "project" : "workspace") === channelId;
 }
 
+function conversationLedgerAllowed(channel: { id: string; data(): FirebaseFirestore.DocumentData | undefined }, scope: ChannelScope, channelId: string, options: ChannelAuthorizationOptions): boolean {
+  if (options.workspaceConversation && !workspaceConversationLedger(channel, scope, channelId)) return false;
+  if (!options.voiceConversation) return true;
+  if (channel.id === 'admin') return false;
+  return scope.projectId ? activeChannelLedger(channel, scope, channelId, options) : workspaceConversationLedger(channel, scope, channelId);
+}
+
 async function resolveTarget(
   channelId: string,
   expectedWorkspaceSlug: string | undefined,
@@ -287,7 +295,7 @@ async function resolveTarget(
   const channel = channels.docs[0];
   const scope = pathScope(channel.ref.path);
   if (!scope) return null;
-  if (options.workspaceConversation && !workspaceConversationLedger(channel, scope, channelId)) return null;
+  if (!conversationLedgerAllowed(channel, scope, channelId, options)) return null;
   if (
     expectedWorkspaceSlug !== undefined &&
     scope.workspaceSlug !== expectedWorkspaceSlug
@@ -306,10 +314,11 @@ async function resolveTarget(
     const project = await resolveProjectTarget(
       scope,
       ownerUid,
-      options.requireActiveLedger === true,
+      options.requireActiveLedger === true || options.voiceConversation === true,
       options.signal,
     );
     if (project.archived) return null;
+    if (options.voiceConversation) return project.target;
     return project.target ?? resolveCoachTarget(scope, ownerUid, options.signal);
   }
   return resolveCoachTarget(scope, ownerUid, options.signal);

@@ -13,6 +13,12 @@ function brokerCall(index = 0) {
   return { origin: parsed.origin, path: parsed.pathname, body: JSON.parse(String(init.body)), redirect: init.redirect, options };
 }
 describe('voice conversation broker', () => {
+  it('accepts a project agent only in the same workspace and exact expected channel session', async () => {
+    const agentId = 'octogee-alice-proj-orbit-coach';
+    const project = { ...answer, agentId, sessionKey: `agent:${agentId}:mattermost:group:${channelId}` };
+    h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(project)));
+    await expect(resolveVoiceConversation({ ...args, expectedAgentId: agentId })).resolves.toEqual(project);
+  });
   it('uses projected service authentication and returns the canonical server context', async () => {
     h.fetch.mockReset(); h.fetch.mockResolvedValue(new Response(JSON.stringify(answer)));
     await expect(resolveVoiceConversation(args)).resolves.toEqual(answer);

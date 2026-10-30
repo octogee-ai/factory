@@ -57,6 +57,7 @@ export interface ProjectAgentIdentity {
 }
 
 export interface ProjectAgentConfig {
+  voice?: string;
   identity?: ProjectAgentIdentity;
   requestedName?: string;
   kickoff?: { status: 'pending' | 'sent'; postId?: string };

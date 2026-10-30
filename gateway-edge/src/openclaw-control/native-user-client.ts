@@ -8,9 +8,16 @@ import { attachUpstreamRpcClient } from "../chat-proxy/openclaw/bridge-upstream-
 import { openProxyIdentitySocket, podClientAddress, profileFor, type OpenClawProfileListItem } from "./proxy-identity.js";
 import { openClawControlUpstreamBase } from "./surface.js";
 import { synchronizeChannelMembership } from "./channel-membership-sync.js";
+import { resolveVoiceConversation } from '@octogee/core/voice-conversation';
 
 export interface NativeUserSocket { ws: WebSocket; scopes: Set<string> }
-interface NativeUserSocketOptions { caps?: readonly string[]; channelSessionKey?: string; threadRootPostId?: string }
+interface NativeUserSocketOptions { caps?: readonly string[]; channelSessionKey?: string; threadRootPostId?: string; purpose?: 'voice' }
+
+async function authorizedChannel(options: NativeUserSocketOptions, claim: { uid: string; gatewayId: string; channelId: string; expectedAgentId: string; env: NodeJS.ProcessEnv }) {
+  if (options.purpose === 'voice') return resolveVoiceConversation({ ...claim, threadRootPostId: options.threadRootPostId! });
+  if (options.threadRootPostId === undefined) return resolveToolChannelForUid(claim);
+  return resolveToolConversationForUid({ ...claim, threadRootPostId: options.threadRootPostId });
+}
 
 function nativeChannelIdentity(options: NativeUserSocketOptions) {
   const channel = options.channelSessionKey === undefined ? null : parseChannelScopedMattermostSessionRoute(options.channelSessionKey);
@@ -48,10 +55,10 @@ export async function openNativeUserSocket(uid: string, gatewayId: string, env: 
     throw new Error("Native workspace permissions require the local per-user Builder gateway");
   }
   const channel = nativeChannelIdentity(options);
+  if (options.purpose === 'voice' && (!channel || !options.threadRootPostId)) throw new Error('Voice requires a bound conversation');
   const reauthorize = async () => { if (channel) {
     const claim = { uid, gatewayId, channelId: channel.primaryChannelId, expectedAgentId: channel.agentId, env };
-    const current = options.threadRootPostId === undefined ? await resolveToolChannelForUid(claim)
-      : await resolveToolConversationForUid({ ...claim, threadRootPostId: options.threadRootPostId });
+    const current = await authorizedChannel(options, claim);
     if (current.sessionKey !== options.channelSessionKey) throw new Error('Native conversation authority changed');
   } };
   await reauthorize();

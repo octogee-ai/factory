@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { parseAgentId } from '@octogee/shared/types/identity';
 import type { WebSocket } from 'ws';
 import { isResponseFrame } from '@octogee/shared/types/openclaw-wire-core';
 import { parseTalkClientMessage, resolveTalkSettings, TALK_PROTOCOL_VERSION, TALK_OUTPUT_SAMPLE_RATE, type ResolvedTalkSettings, type TalkClientMessage, type TalkServerEvent } from '@octogee/shared/types/voice';
@@ -134,6 +135,7 @@ export class NativeTalkSession {
     }
   };
   private forwardUiCommand(payload: Record<string, unknown>): void {
+    if (parseAgentId(this.options.conversation.agentId).kind !== 'coach') { this.options.log('project voice cannot control workspace surfaces'); return; }
     if (!this.nativeId) { this.options.log('native voice UI command rejected before grant binding'); return; }
     const target = this.options.conversation;
     const command = nativeRecord(payload.command);
@@ -230,7 +232,8 @@ export class NativeTalkSession {
     } else this.fail(new Error(reason));
   }
   private async connectNative(): Promise<boolean> {
-    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps: ['ui-commands'], channelSessionKey: this.options.conversation.sessionKey, threadRootPostId: this.options.conversation.threadRootPostId });
+    const caps = parseAgentId(this.options.conversation.agentId).kind === 'coach' ? ['ui-commands'] : [];
+    const connection = await (this.options.open ?? openNativeUserSocket)(this.options.conversation.uid, this.options.conversation.gatewayId, process.env, { caps, purpose: 'voice', channelSessionKey: this.options.conversation.sessionKey, threadRootPostId: this.options.conversation.threadRootPostId });
     if (this.isClosed()) { connection.ws.close(); return false; }
     this.connection = connection;
     this.rpc = (this.options.attachRpc ?? attachUpstreamRpcClient)(connection.ws, { timeoutMs: 15000 });

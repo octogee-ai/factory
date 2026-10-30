@@ -12,7 +12,7 @@ import {
   type TalkVoiceCatalog,
 } from "@octogee/shared/types/voice";
 import { requireAuth } from "../middleware/auth.js";
-import { isMattermostThreadSelection } from '@octogee/shared/types/mattermost-session-route';
+import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { logger } from "../middleware/logging.js";
 import {
   HourlyMintQuotaExceededError,
@@ -31,7 +31,16 @@ export interface VoiceCatalogPort {
 export interface VoiceRoutesDeps {
   featurePolicy?: FeaturePolicy;
   catalog?: VoiceCatalogPort;
-  resolveConversation?: (uid: string, channelId: string, threadRootPostId: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; threadRootPostId: string; sessionKey: string } | null>;
+  resolveChannel?: (uid: string, channelId: string) => Promise<{ gatewayId: string; channelId: string } | null>;
+  resolveConversation?: (uid: string, channelId: string, threadRootPostId?: string) => Promise<{ gatewayId: string; workspaceSlug: string; ownerUid: string; channelId: string; threadRootPostId: string; sessionKey: string } | null>;
+}
+
+function isVoiceSelection(value: unknown): value is { channelId: string; threadRootPostId?: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const body = value as Record<string, unknown>;
+  return isMattermostPostId(body.channelId) &&
+    (body.threadRootPostId === undefined || isMattermostPostId(body.threadRootPostId)) &&
+    Object.keys(body).every(key => ['channelId', 'threadRootPostId'].includes(key));
 }
 
 const VOICE_PREVIEW_NAME_MAX = 60;
@@ -80,7 +89,7 @@ function catalogStatus(err: unknown): number | null {
   return typeof status === "number" && status >= 400 && status < 600 ? status : null;
 }
 
-export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation }: VoiceRoutesDeps = {}): Router {
+export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation, resolveChannel }: VoiceRoutesDeps = {}): Router {
   const router = Router();
 
   const gate = (context: string) => async (req: Request, res: Response, next: NextFunction) => {
@@ -96,21 +105,36 @@ export function createVoiceRoutes({ featurePolicy, catalog, resolveConversation 
     }
   };
 
-  router.post("/ticket", requireAuth, gate("voice-ticket"), async (req: Request, res: Response, next: NextFunction) => {
+  router.get('/context/:channelId', requireAuth, gate('voice-context'), async (req, res, next) => {
+    try {
+      const channelId = req.params.channelId;
+      if (!isMattermostPostId(channelId)) { res.status(400).json({ error: 'invalid_voice_conversation' }); return; }
+      if (!resolveChannel) { res.status(503).json({ error: 'voice_conversation_unavailable' }); return; }
+      const scope = await resolveChannel(req.uid!, channelId);
+      if (!scope) { res.status(403).json({ error: 'voice_conversation_forbidden' }); return; }
+      if (scope.channelId !== channelId) throw new Error('Voice channel resolver returned a different channel');
+      res.set('cache-control', 'no-store').json(scope);
+    } catch (error) { next(error); }
+  });
+
+  const ticketRateLimit = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false,
+    keyGenerator: req => req.uid!, message: { error: 'too_many_voice_tickets' } });
+  router.post("/ticket", requireAuth, gate("voice-ticket"), ticketRateLimit, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = req.uid!;
-      const body = req.body ?? {};
-      if (!isMattermostThreadSelection(body)) {
+      const body: unknown = req.body;
+      if (!isVoiceSelection(body)) {
         res.status(400).json({ error: "invalid_voice_conversation" }); return;
       }
       if (!resolveConversation) { res.status(503).json({ error: "voice_conversation_unavailable" }); return; }
       const scope = await resolveConversation(uid, body.channelId, body.threadRootPostId);
       if (!scope) { res.status(403).json({ error: "voice_conversation_forbidden" }); return; }
-      if (scope.channelId !== body.channelId || scope.threadRootPostId !== body.threadRootPostId) throw new Error('Voice conversation resolver returned a different selection');
+      if (scope.channelId !== body.channelId || !isMattermostPostId(scope.threadRootPostId) ||
+        (body.threadRootPostId !== undefined && scope.threadRootPostId !== body.threadRootPostId)) throw new Error('Voice conversation resolver returned a different selection');
       const { gatewayId, ...payload } = scope;
       const ticket = await mintTicket({ uid, gatewayId, purpose: TALK_TICKET_PURPOSE, payload });
       const proxyUrl = process.env.API_PUBLIC_URL || "";
-      res.json({ wsTicket: ticket.ticket, proxyUrl, gatewayId });
+      res.set('cache-control', 'no-store').json({ wsTicket: ticket.ticket, proxyUrl, gatewayId, threadRootPostId: scope.threadRootPostId });
     } catch (err) {
       if (err instanceof TicketCapExceededError) {
         logger.warn("[voice] ticket cap exceeded", { uid: err.uid, cap: err.cap });

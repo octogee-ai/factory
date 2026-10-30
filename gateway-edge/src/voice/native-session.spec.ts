@@ -19,6 +19,19 @@ function setup(options: Partial<ConstructorParameters<typeof NativeTalkSession>[
 }
 const start = JSON.stringify({ type: 'session.start', protocol: 1, mode: 'converse', channelId: 'a'.repeat(26), threadRootPostId });
 describe('native Talk transport', () => {
+  it('binds project voice without workspace surface capabilities or forwarded UI commands', async () => {
+    const agentId = 'octogee-alice-proj-orbit-coach';
+    const sessionKey = `agent:${agentId}:mattermost:group:${'a'.repeat(26)}`;
+    const h = setup({ conversation: { uid: 'u', gatewayId: 'b-alice', agentId, sessionKey, threadRootPostId },
+      bindSession: async () => ({ sessionId: 'native', sessionKey, expiresAt }) });
+    await h.session.handleText(start);
+    expect(h.open).toHaveBeenCalledWith('u', 'b-alice', process.env, { caps: [], purpose: 'voice', channelSessionKey: sessionKey, threadRootPostId });
+    expect(h.rpc.call).toHaveBeenCalledWith('talk.session.create', expect.objectContaining({ sessionKey }));
+    h.ws.emit('message', Buffer.from(JSON.stringify({ type: 'event', event: 'ui.command', payload: { agentId, sessionKey, command: { kind: 'panel', panel: 'browser', open: true } } })));
+    expect(h.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'ui.command' }));
+    expect(h.log).toHaveBeenCalledWith('project voice cannot control workspace surfaces');
+    h.session.close();
+  });
   it('binds the exact created session through the central owner without a fork-only native RPC', async () => {
     const h = setup();
     await h.session.handleText(start);
@@ -91,7 +104,7 @@ describe('native Talk transport', () => {
   it('initializes only the authorized native channel before creating Talk', async () => {
     const h = setup();
     await h.session.handleText(start);
-    expect(h.open.mock.calls.map(([uid, gatewayId, , options]) => ({ uid, gatewayId, options }))).toEqual([{ uid: 'u', gatewayId: 'b-alice', options: { caps: ['ui-commands'], channelSessionKey: key, threadRootPostId } }]);
+    expect(h.open.mock.calls.map(([uid, gatewayId, , options]) => ({ uid, gatewayId, options }))).toEqual([{ uid: 'u', gatewayId: 'b-alice', options: { caps: ['ui-commands'], purpose: 'voice', channelSessionKey: key, threadRootPostId } }]);
     expect(h.reauthorize.mock.invocationCallOrder[0]).toBeLessThan(h.open.mock.invocationCallOrder[0]);
     expect(h.open.mock.invocationCallOrder[0]).toBeLessThan(h.rpc.call.mock.invocationCallOrder[0]);
     h.session.close();

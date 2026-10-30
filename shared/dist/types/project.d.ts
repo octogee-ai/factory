@@ -25,6 +25,7 @@ export interface ProjectAgentIdentity {
     avatarVersion?: number;
 }
 export interface ProjectAgentConfig {
+    voice?: string;
     identity?: ProjectAgentIdentity;
     requestedName?: string;
     kickoff?: {

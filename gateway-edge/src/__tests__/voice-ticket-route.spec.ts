@@ -6,6 +6,7 @@ import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 const h = vi.hoisted(() => ({
   mintTicket: vi.fn(),
   resolveConversation: vi.fn(),
+  resolveChannel: vi.fn(),
   evaluate: vi.fn(),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -46,6 +47,7 @@ function app(caller: { isAdmin?: boolean; gatewayId?: string | null; noPolicy?: 
     "/api/voice",
     createVoiceRoutes({
       resolveConversation: h.resolveConversation,
+      resolveChannel: h.resolveChannel,
       ...(caller.noPolicy ? {} : { featurePolicy }),
       ...(caller.noCatalog ? {} : { catalog }),
     }),
@@ -58,6 +60,7 @@ const paul = { id: "en_paul_neutral", name: "Paul - Neutral", language: "en_us",
 const jane = { id: "gb_jane_confident", name: "Jane - Confident", language: "en_gb", gender: "female" };
 
 beforeEach(() => {
+  h.resolveChannel.mockReset().mockResolvedValue({ channelId: 'c'.repeat(26), gatewayId: 'gw-project-owner' });
   h.resolveConversation.mockReset().mockResolvedValue({ gatewayId: "gw-workspace", workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}` });
   h.mintTicket.mockReset().mockResolvedValue({ ticket: "t-1", uid: "uid-parent", gatewayId: "gw-mom", purpose: "voice-ws" });
   h.evaluate.mockReset().mockResolvedValue({ state: "enabled", value: true });
@@ -66,10 +69,41 @@ beforeEach(() => {
   process.env.API_PUBLIC_URL = "https://api-test.octogee.com";
 });
 
+describe('voice-only gateway lookup', () => {
+  it('returns only the serving gateway for an authorized conversation without minting or creating a root', async () => {
+    const result = await request(app()).get(`/api/voice/context/${'c'.repeat(26)}`);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ channelId: 'c'.repeat(26), gatewayId: 'gw-project-owner' });
+    expect(result.headers['cache-control']).toBe('no-store');
+    expect(h.resolveChannel).toHaveBeenCalledWith('uid-parent', 'c'.repeat(26));
+    expect(h.mintTicket).not.toHaveBeenCalled(); expect(h.resolveConversation).not.toHaveBeenCalled();
+  });
+  it('denies a channel without voice membership and respects the release flag', async () => {
+    h.resolveChannel.mockResolvedValue(null);
+    expect((await request(app()).get(`/api/voice/context/${'c'.repeat(26)}`)).status).toBe(403);
+    h.resolveChannel.mockClear(); h.evaluate.mockResolvedValue({ state: 'disabled', value: false });
+    expect((await request(app()).get(`/api/voice/context/${'c'.repeat(26)}`)).status).toBe(403);
+    expect(h.resolveChannel).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /api/voice/ticket", () => {
-  it('does not mint a voice ticket without an explicitly selected existing thread', async () => {
-    expect((await request(app()).post('/api/voice/ticket').send({ channelId: 'c'.repeat(26) })).status).toBe(400);
-    expect(h.resolveConversation).not.toHaveBeenCalled(); expect(h.mintTicket).not.toHaveBeenCalled();
+  it('bounds startup requests before they can create archive roots', async () => {
+    const instance = app();
+    for (let i = 0; i < 20; i++) {
+      expect((await request(instance).post('/api/voice/ticket').send({ channelId: 'c'.repeat(26) })).status).toBe(200);
+    }
+    expect((await request(instance).post('/api/voice/ticket').send({ channelId: 'c'.repeat(26) })).status).toBe(429);
+    expect(h.resolveConversation).toHaveBeenCalledTimes(20);
+    expect(h.mintTicket).toHaveBeenCalledTimes(20);
+  });
+  it('resolves channel voice without requiring a thread selection and returns its archive thread', async () => {
+    const channelId = 'c'.repeat(26);
+    const result = await request(app()).post('/api/voice/ticket').send({ channelId });
+    expect(result.status).toBe(200);
+    expect(h.resolveConversation).toHaveBeenCalledWith('uid-parent', channelId, undefined);
+    expect(result.body.threadRootPostId).toBe(threadRootPostId);
+    expect(h.mintTicket.mock.calls[0][0].payload.threadRootPostId).toBe(threadRootPostId);
   });
   it('carries the exact server-verified selected thread in the voice ticket', async () => {
     const channelId = 'c'.repeat(26); const threadRootPostId = 'r'.repeat(26);
@@ -82,7 +116,7 @@ describe("POST /api/voice/ticket", () => {
   it("mints a voice-ws ticket for the selected workspace gateway when the flag is enabled", async () => {
     const res = await request(app()).post("/api/voice/ticket").send({ channelId: "c".repeat(26), threadRootPostId });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ wsTicket: "t-1", proxyUrl: "https://api-test.octogee.com", gatewayId: "gw-workspace" });
+    expect(res.body).toEqual({ wsTicket: "t-1", proxyUrl: "https://api-test.octogee.com", gatewayId: "gw-workspace", threadRootPostId });
     expect(h.mintTicket).toHaveBeenCalledWith({ uid: "uid-parent", gatewayId: "gw-workspace", purpose: "voice-ws", payload: { workspaceSlug: "workspace", ownerUid: "uid-owner", channelId: "c".repeat(26), threadRootPostId, sessionKey: `agent:octogee-workspace-coach:mattermost:channel:${"c".repeat(26)}` } });
     expect(h.resolveConversation).toHaveBeenCalledWith("uid-parent", "c".repeat(26), threadRootPostId);
     expect(h.evaluate).toHaveBeenCalledWith(

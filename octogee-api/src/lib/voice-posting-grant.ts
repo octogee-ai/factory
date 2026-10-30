@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Timestamp, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
 import { VOICE_ARCHIVE_POST_KIND, VOICE_TURN_POST_KIND, voiceTurnMessage, type VoiceArchiveRequest, type VoiceConversation, type VoiceGrantBinding, type VoiceGrantEndRequest, type VoiceGrantRequest, type VoiceTurnPost, type VoiceTurnRequest } from '@octogee/core/voice-conversation';
-import { resolveWorkspaceConversation, type WorkspaceConversationDeps } from './workspace-conversation.js';
+import { resolveVoiceConversationContext, resolveVoiceChannel, type WorkspaceConversationDeps } from './workspace-conversation.js';
+import { parseAgentId } from '@octogee/shared/types/identity';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 
 const PURPOSE = 'voice.turn.post';
@@ -32,8 +33,9 @@ function boundedId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 128 && !value.includes('/');
 }
 function validIdentity(body: Partial<GrantIdentity>): boolean {
+  const agent = parseAgentId(body.agentId ?? '');
   return [body.uid, body.gatewayId, body.ownerUid].every(boundedId) && typeof body.workspaceSlug === 'string' && /^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) &&
-    typeof body.channelId === 'string' && MATTERMOST_ID.test(body.channelId) && isMattermostPostId(body.threadRootPostId) && body.agentId === `octogee-${body.workspaceSlug}-coach` &&
+    typeof body.channelId === 'string' && MATTERMOST_ID.test(body.channelId) && isMattermostPostId(body.threadRootPostId) && agent.kind !== 'unknown' && agent.username === body.workspaceSlug &&
     ['channel', 'group'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${body.channelId}`);
 }
 function grantHash(voiceGrant: string): string {
@@ -67,14 +69,14 @@ function activeGrant(value: unknown, gatewayId: string): GrantDocument {
   if (grant.revokedAt !== null || grant.expiresAt <= Date.now()) deny();
   return grant;
 }
-function matchesResolved(grant: GrantDocument, resolved: NonNullable<Awaited<ReturnType<typeof resolveWorkspaceConversation>>>): boolean {
+function matchesResolved(grant: GrantDocument, resolved: NonNullable<Awaited<ReturnType<typeof resolveVoiceConversationContext>>>): boolean {
   const { context, scope } = resolved;
   return grant.uid === context.uid && grant.gatewayId === context.gatewayId && grant.workspaceSlug === context.workspaceSlug &&
     grant.ownerUid === scope.ownerUid && grant.channelId === context.channelId && grant.threadRootPostId === context.threadRootPostId && grant.agentId === context.agentId && grant.sessionKey === context.sessionKey &&
     (grant.callerMmUserId === null || grant.callerMmUserId === context.callerMmUserId);
 }
 async function authorizeGrant(deps: WorkspaceConversationDeps, grant: GrantDocument) {
-  const resolved = await resolveWorkspaceConversation(deps, grant);
+  const resolved = await resolveVoiceConversationContext(deps, grant);
   if (!resolved || !matchesResolved(grant, resolved)) deny();
   return resolved;
 }
@@ -113,7 +115,7 @@ function replayTurn(turn: TurnReceipt, digest: string): VoiceTurnPost {
   if (turn.state === 'failed') throw new VoicePostingGrantError(502, 'voice_turn_failed');
   throw new VoicePostingGrantError(409, 'voice_turn_pending');
 }
-async function reserveTurn(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceTurnRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveWorkspaceConversation>>>, digest: string) {
+async function reserveTurn(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceTurnRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveVoiceConversationContext>>>, digest: string) {
   const ref = grantRef(deps.db, request.voiceGrant);
   return deps.db.runTransaction(async tx => {
     const grant = activeGrant((await tx.get(ref)).data(), gatewayId);
@@ -198,7 +200,7 @@ function archiveMessage(request: VoiceArchiveRequest, participantMmUserId: strin
   const prefix = text.slice(0, maxChars - notice.length);
   return prefix.replace(/[\uD800-\uDBFF]$/u, '') + notice;
 }
-async function reserveArchive(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveWorkspaceConversation>>>, digest: string) {
+async function reserveArchive(deps: WorkspaceConversationDeps, gatewayId: string, request: VoiceArchiveRequest, resolved: NonNullable<Awaited<ReturnType<typeof resolveVoiceConversationContext>>>, digest: string) {
   const ref = grantRef(deps.db, request.voiceGrant);
   return deps.db.runTransaction(async tx => {
     const grant = activeGrant((await tx.get(ref)).data(), gatewayId);
@@ -216,11 +218,35 @@ async function finishArchive(deps: WorkspaceConversationDeps, gatewayId: string,
     tx.update(ref, { archive: receipt });
   });
 }
-async function workspaceCoachCredential(deps: WorkspaceConversationDeps, ownerUid: string) {
-  const secret = record((await deps.db.doc(`users/${ownerUid}/secrets/coachMattermost`).get()).data());
+async function conversationAgentCredential(deps: WorkspaceConversationDeps, ownerUid: string, agentId: string) {
+  const agent = parseAgentId(agentId);
+  if (agent.kind === 'unknown') deny();
+  const secretId = agent.kind === 'project' ? `projectAgentMattermost-${agent.project}` : 'coachMattermost';
+  const secret = record((await deps.db.doc(`users/${ownerUid}/secrets/${secretId}`).get()).data());
+  const agentMmUserId = agent.kind === 'project' ? secret?.mmUserId : secret?.coachMmUserId;
   if (!secret || typeof secret.personalToken !== 'string' || !secret.personalToken.trim() ||
-    typeof secret.coachMmUserId !== 'string' || !MATTERMOST_ID.test(secret.coachMmUserId)) deny();
-  return { coachMmUserId: secret.coachMmUserId, coachToken: secret.personalToken };
+    typeof agentMmUserId !== 'string' || !MATTERMOST_ID.test(agentMmUserId)) deny();
+  return { coachMmUserId: agentMmUserId, coachToken: secret.personalToken };
+}
+export async function startWorkspaceVoiceConversation(deps: WorkspaceConversationDeps, claim: { uid: string; channelId: string; threadRootPostId?: string }) {
+  if (claim.threadRootPostId !== undefined) return resolveVoiceConversationContext(deps, { ...claim, threadRootPostId: claim.threadRootPostId });
+  const resolved = await resolveVoiceChannel(deps, claim);
+  if (!resolved) return null;
+  const { coachMmUserId, coachToken } = await conversationAgentCredential(deps, resolved.scope.ownerUid, resolved.context.agentId);
+  if (coachMmUserId !== resolved.agentMmUserId) deny();
+  const body = { channel_id: claim.channelId, root_id: '', message: '🎙 Voice conversation',
+    props: { octogee: { kind: 'voice-conversation', participantMmUserId: resolved.context.callerMmUserId } } };
+  let createPost = deps.createPost;
+  if (!createPost) {
+    const { createChannelSessionMattermostClient } = await import('../../../gateway-edge/src/lib/channel-session-model-control.js');
+    const client = createChannelSessionMattermostClient({ baseUrl: process.env.MM_INTERNAL_URL ?? '', token: coachToken });
+    createPost = (_credential, post) => client.postJson(['posts'], post);
+  }
+  const posted = record(await createPost(coachToken, body));
+  if (!posted || !isMattermostPostId(posted.id) || posted.channel_id !== claim.channelId || posted.root_id !== '' || posted.user_id !== coachMmUserId) {
+    throw new VoicePostingGrantError(502, 'voice_conversation_unverified');
+  }
+  return resolveVoiceConversationContext(deps, { ...claim, threadRootPostId: posted.id });
 }
 function verifiedArchivePost(value: unknown, current: GrantDocument, coachMmUserId: string): VoiceTurnPost {
   const posted = record(value);
@@ -232,7 +258,7 @@ export async function archiveWorkspaceVoiceCall(deps: WorkspaceConversationDeps,
   const initial = activeGrant((await ref.get()).data(), gatewayId);
   if (initial.sessionId !== request.sessionId || initial.callerMmUserId === null) deny();
   const resolved = await authorizeGrant(deps, initial);
-  const { coachMmUserId, coachToken } = await workspaceCoachCredential(deps, initial.ownerUid);
+  const { coachMmUserId, coachToken } = await conversationAgentCredential(deps, initial.ownerUid, initial.agentId);
   let createPost = deps.createPost;
   if (!createPost) {
     const { createChannelSessionMattermostClient } = await import('../../../gateway-edge/src/lib/channel-session-model-control.js');

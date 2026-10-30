@@ -5,8 +5,8 @@ import { buildCoachDmEvent } from "../../../gateway-edge/src/notifications/chat-
 import { fanOutNotification } from "../../../gateway-edge/src/notifications/pipeline.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { createVoicePostingGrant } from "../lib/voice-posting-grant.js";
-import { resolveWorkspaceConversation, resolveWorkspaceConversationScope } from "../lib/workspace-conversation.js";
-import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
+import { resolveVoiceConversationContext, resolveWorkspaceConversationScope } from "../lib/workspace-conversation.js";
+import { isMattermostPostId, parseChannelScopedMattermostSessionRoute } from '@octogee/shared/types/mattermost-session-route';
 import { resolveActivityConversation, type ActivityConversation } from '../../../gateway-edge/src/lib/activity-conversation.js';
 import { Router, type Request, type Response } from "express";
 import type { Firestore, Transaction } from "firebase-admin/firestore";
@@ -920,15 +920,20 @@ async function redeemActivityIdentity(db: Firestore, tx: Transaction, payload: R
   return { expectedAgentId: scope.expectedAgentId, activityConversation: scope };
 }
 
+function validVoiceTicketPayload(payload: Record<string, unknown> | undefined): payload is Record<string, unknown> & { channelId: string; threadRootPostId: string; workspaceSlug: string; ownerUid: string } {
+  return Boolean(payload && Object.keys(payload).every(key => ['workspaceSlug', 'ownerUid', 'channelId', 'threadRootPostId', 'sessionKey'].includes(key)) &&
+    isMattermostPostId(payload.channelId) && isMattermostPostId(payload.threadRootPostId) && typeof payload.workspaceSlug === 'string' && typeof payload.ownerUid === 'string');
+}
 async function redeemVoiceIdentity(db: Firestore, tx: Transaction, payload: Record<string, unknown> | undefined, uid: string, gatewayId: string) {
-  if (!payload || Object.keys(payload).some(key => !["workspaceSlug", "ownerUid", "channelId", "threadRootPostId", "sessionKey"].includes(key)) ||
-    typeof payload.channelId !== "string" || !MATTERMOST_ID_RE.test(payload.channelId) ||
-    !isMattermostPostId(payload.threadRootPostId) || typeof payload.workspaceSlug !== "string" || typeof payload.ownerUid !== "string") return null;
-  const { workspaceSlug, ownerUid, channelId, threadRootPostId, sessionKey } = payload;
-  if (typeof sessionKey !== "string" || !["channel", "group"].some(kind => sessionKey === `agent:octogee-${workspaceSlug}-coach:mattermost:${kind}:${channelId}`)) return null;
-  const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid });
+  if (!validVoiceTicketPayload(payload)) return null;
+  const { workspaceSlug, ownerUid, channelId, threadRootPostId } = payload;
+  const sessionKey = payload.sessionKey as string;
+  const route = parseChannelScopedMattermostSessionRoute(sessionKey);
+  const agent = parseAgentId(route?.agentId ?? '');
+  if (!route || route.primaryChannelId !== channelId || agent.kind === 'unknown' || agent.username !== workspaceSlug) return null;
+  const scope = await resolveWorkspaceConversationScope(path => tx.get(db.doc(path)), { uid, gatewayId, workspaceSlug, ownerUid, ...(agent.kind === 'project' ? { projectId: agent.project } : {}) });
   if (!scope) return null;
-  const live = await resolveWorkspaceConversation({ db }, { uid, gatewayId, channelId, threadRootPostId });
+  const live = await resolveVoiceConversationContext({ db }, { uid, gatewayId, channelId, threadRootPostId });
   if (!live || live.scope.ownerUid !== ownerUid || live.context.workspaceSlug !== workspaceSlug || live.context.sessionKey !== sessionKey) return null;
   return { expectedAgentId: live.context.agentId, voiceConversation: { workspaceSlug, ownerUid, channelId, threadRootPostId, sessionKey } };
 }

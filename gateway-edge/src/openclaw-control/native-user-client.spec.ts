@@ -8,13 +8,15 @@ import { WebSocketServer } from "ws";
 import { OPENCLAW_FULL_OPERATOR_SCOPES, OPENCLAW_EDGE_SERVICE_IDENTITY } from "@octogee/shared/types/openclaw-proxy-identity";
 import { openNativeUserClient, openNativeUserSocket } from "./native-user-client.js";
 
-const { authority, channelAuthority } = vi.hoisted(() => ({ authority: vi.fn(), channelAuthority: vi.fn() }));
+const { authority, channelAuthority, voiceAuthority } = vi.hoisted(() => ({ authority: vi.fn(), channelAuthority: vi.fn(), voiceAuthority: vi.fn() }));
+vi.mock('@octogee/core/voice-conversation', () => ({ resolveVoiceConversation: voiceAuthority }));
 vi.mock('../lib/tool-conversation.js', () => ({ resolveToolConversationForUid: authority, resolveToolChannelForUid: channelAuthority }));
 const root = 'r'.repeat(26);
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map(close => close())); });
 
 async function gateway() {
+  voiceAuthority.mockReset().mockImplementation(async args => ({ ...args, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${args.channelId}` }));
   authority.mockReset().mockImplementation(async args => ({ ...args, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${args.channelId}` }));
   channelAuthority.mockReset().mockImplementation(async args => ({ ...args, sessionKey: `agent:${args.expectedAgentId}:mattermost:group:${args.channelId}` }));
   const server = http.createServer();
@@ -82,6 +84,16 @@ async function gateway() {
 }
 
 describe("native user RPC identity", () => {
+  it('authorizes project voice separately from workspace tool access and rechecks before membership sync', async () => {
+    const { state, env } = await gateway();
+    const channelId = 'a'.repeat(26);
+    const agentId = 'octogee-alice-proj-orbit-coach';
+    const native = await openNativeUserSocket('alice', 'b-alice', env, { purpose: 'voice', channelSessionKey: `agent:${agentId}:mattermost:group:${channelId}`, threadRootPostId: root });
+    expect(voiceAuthority).toHaveBeenCalledTimes(2);
+    expect(authority).not.toHaveBeenCalled(); expect(channelAuthority).not.toHaveBeenCalled();
+    expect(state.calls[1].params).toMatchObject({ agentId, peerId: channelId, profileId: 'native-alice' });
+    native.ws.close();
+  });
   it("prepares the authorized channel without selecting or creating a reply thread", async () => {
     const { state, env } = await gateway();
     const channelId = 'a'.repeat(26);

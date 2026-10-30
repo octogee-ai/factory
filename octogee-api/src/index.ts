@@ -66,7 +66,8 @@ import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builde
 import { createSharingRoutes } from "../../gateway-edge/src/routes/sharing/index.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "../../gateway-edge/src/routes/projects/repo-source.js";
-import { resolveWorkspaceConversation } from "./lib/workspace-conversation.js";
+import { startWorkspaceVoiceConversation } from "./lib/voice-posting-grant.js";
+import { resolveVoiceChannel } from './lib/workspace-conversation.js';
 import { createVoiceRoutes } from "../../gateway-edge/src/routes/voice.js";
 import { createProductivityApprovalRoutes } from "../../gateway-edge/src/routes/productivity-approvals.js";
 import { createBillingRoutes } from "../../gateway-edge/src/routes/billing/index.js";
@@ -379,9 +380,12 @@ function clusterRouteOverrides(
     sharingRoutes: createSharingRoutes({ featurePolicy }),
     projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy, prewarmProjectRunCapacity }),
     projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
-    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveConversation: async (uid, channelId, threadRootPostId) => {
-      const result = await resolveWorkspaceConversation({ db }, { uid, channelId, threadRootPostId });
-      return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId, sessionKey: result.context.sessionKey } : null;
+    voiceRoutes: createVoiceRoutes({ featurePolicy, catalog: voiceCatalog, resolveChannel: async (uid, channelId) => {
+      const result = await resolveVoiceChannel({ db }, { uid, channelId });
+      return result ? { gatewayId: result.scope.gatewayId, channelId } : null;
+    }, resolveConversation: async (uid, channelId, threadRootPostId) => {
+      const result = await startWorkspaceVoiceConversation({ db }, { uid, channelId, threadRootPostId });
+      return result ? { gatewayId: result.scope.gatewayId, workspaceSlug: result.scope.workspaceSlug, ownerUid: result.scope.ownerUid, channelId, threadRootPostId: result.context.threadRootPostId, sessionKey: result.context.sessionKey } : null;
     } }),
     productivityApprovalRoutes: express.Router()
       .use(requireAuth)

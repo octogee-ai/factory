@@ -297,3 +297,26 @@ describe("readiness active Coach conversation authority", () => {
     await expect(authorizeChannel("caller", channelId, "alice", options)).resolves.toBeNull();
   });
 });
+
+describe('project voice channel authority', () => {
+  function project() {
+    h.channelLedger.path = 'workspaces/alice/projects/orbit/channels/general';
+    h.documents.set('workspaces/alice/projects/orbit', { agent: { status: 'ready' } });
+    h.documents.set('users/owner-uid/secrets/projectAgentMattermost-orbit', { mmUserId: 'p'.repeat(26), personalToken: 'project-token' });
+  }
+  it('resolves the project agent under live channel membership', async () => {
+    project();
+    await expect(authorizeChannel('caller', channelId, 'alice', { voiceConversation: true })).resolves.toMatchObject({ target: { projectId: 'orbit', agentId: 'octogee-alice-proj-orbit-coach' } });
+    await expect(authorizeChannel('caller', channelId, 'alice', { workspaceConversation: true })).resolves.toBeNull();
+  });
+  it.each(['missing-agent', 'missing-credential', 'archived-project', 'archived-channel', 'revoked-member'])('rejects %s without routing to the workspace coach', async failure => {
+    project();
+    if (failure === 'missing-agent') h.documents.set('workspaces/alice/projects/orbit', {});
+    if (failure === 'missing-credential') h.documents.delete('users/owner-uid/secrets/projectAgentMattermost-orbit');
+    if (failure === 'archived-project') h.documents.set('workspaces/alice/projects/orbit', { agent: {}, commercialLifecycle: { status: 'archived' } });
+    if (failure === 'archived-channel') Object.assign(h.channelLedger.data, { archivedAt: 1 });
+    if (failure === 'revoked-member') h.denyMembership = true;
+    const result = await authorizeChannel('caller', channelId, 'alice', { voiceConversation: true });
+    expect(result === null || result.forbidden).toBe(true);
+  });
+});

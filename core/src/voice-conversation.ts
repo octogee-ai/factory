@@ -1,6 +1,7 @@
 import { trustedBrokerBaseUrl } from './trusted-broker-url.js';
 import { internalFetch } from './internal-fetch.js';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
+import { parseAgentId } from '@octogee/shared/types/identity';
 export class VoiceConversationAccessError extends Error {
   constructor(readonly status: number, message: string) { super(message); this.name = 'VoiceConversationAccessError'; }
 }
@@ -129,9 +130,10 @@ export function isVoiceArchiveRequest(value: unknown): value is VoiceArchiveRequ
 }
 
 function validateConversationIdentity(body: Partial<VoiceConversation>, args: { uid: string; gatewayId: string; channelId: string; threadRootPostId: string; expectedAgentId?: string }): void {
+  const agent = parseAgentId(body.agentId ?? '');
   if (body.uid !== args.uid || body.gatewayId !== args.gatewayId || body.channelId !== args.channelId ||
     typeof body.workspaceSlug !== 'string' || !/^[a-z0-9-]{1,64}$/u.test(body.workspaceSlug) ||
-    !isMattermostPostId(args.threadRootPostId) || body.threadRootPostId !== args.threadRootPostId || body.agentId !== `octogee-${body.workspaceSlug}-coach` ||
+    !isMattermostPostId(args.threadRootPostId) || body.threadRootPostId !== args.threadRootPostId || agent.kind === 'unknown' || agent.username !== body.workspaceSlug ||
     (args.expectedAgentId !== undefined && body.agentId !== args.expectedAgentId) ||
     !['group', 'channel'].some(kind => body.sessionKey === `agent:${body.agentId}:mattermost:${kind}:${args.channelId}`)) {
     throw new Error('Voice conversation broker returned an invalid context');

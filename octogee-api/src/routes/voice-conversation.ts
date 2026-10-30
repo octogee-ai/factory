@@ -3,7 +3,7 @@ import { isValidGatewayId } from '@octogee/shared/types/glm';
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { isVoiceArchiveRequest, isVoiceGrantRequest, isVoiceGrantEndRequest, isVoiceTurnRequest } from '@octogee/core/voice-conversation';
 import { archiveWorkspaceVoiceCall, bindWorkspaceVoiceGrant, endWorkspaceVoiceGrant, postWorkspaceVoiceTurn, VoicePostingGrantError } from '../lib/voice-posting-grant.js';
-import { resolveWorkspaceConversation, type WorkspaceConversationDeps } from '../lib/workspace-conversation.js';
+import { resolveVoiceConversationContext, type WorkspaceConversationDeps } from '../lib/workspace-conversation.js';
 
 interface VoiceConversationRequest {
   gatewayId: string;
@@ -45,7 +45,7 @@ export function createVoiceConversationRoutes(deps: WorkspaceConversationDeps): 
     try {
       const body = req.body ?? {};
       if (!isVoiceConversationRequest(req, body)) { res.status(403).json({ error: 'forbidden' }); return; }
-      const resolved = await resolveWorkspaceConversation(deps, body);
+      const resolved = await resolveVoiceConversationContext(deps, body);
       if (!resolved) { res.status(403).json({ error: 'forbidden' }); return; }
       const { scope, context } = resolved;
       res.set('cache-control', 'no-store').json({
