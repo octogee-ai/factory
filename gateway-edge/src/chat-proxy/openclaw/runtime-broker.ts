@@ -2,7 +2,8 @@ import { ReplyBindingDeniedError, type NativeFinalReply } from "@octogee/core/na
 import { internalFetch } from "../../lib/internal-fetch.js";
 import { sidecarBrokerHeaders } from "@octogee/core/internal-fetch";
 import type { ActivityConversation } from '../../lib/activity-conversation.js';
-import { isMattermostPostId, parseMattermostSessionRoute } from '@octogee/shared/types/mattermost-session-route';
+import { isMattermostPostId, parseChannelScopedMattermostSessionRoute, parseMattermostSessionRoute } from '@octogee/shared/types/mattermost-session-route';
+import { parseAgentId } from '@octogee/shared/types/identity';
 import type {
   AgentIdentity,
   AuthorizedConversationTarget,
@@ -22,12 +23,18 @@ import {
   type ActivityWriteReceiptBrokerPort,
 } from "./activity-write-receipt-broker.js";
 
+function voiceSessionMatches(sessionKey: unknown, expectedAgentId: string, workspaceSlug: unknown, channelId: unknown): boolean {
+  const agent = parseAgentId(expectedAgentId);
+  const route = parseChannelScopedMattermostSessionRoute(sessionKey);
+  return agent.kind !== 'unknown' && agent.username === workspaceSlug && route?.agentId === expectedAgentId && route.primaryChannelId === channelId;
+}
+
 function voiceRedeemScope(body: Record<string, unknown> | null, expectedAgentId: string): RedeemedOpenClawWs["voiceConversation"] {
   const scope = body?.voiceConversation as Record<string, unknown> | undefined;
   if (!scope || typeof scope.ownerUid !== "string" || !scope.ownerUid || scope.ownerUid.length > 128 || scope.ownerUid.includes("/") ||
     typeof scope.workspaceSlug !== "string" || !/^[a-z0-9-]{1,64}$/u.test(scope.workspaceSlug) ||
-    typeof scope.channelId !== "string" || !/^[a-z0-9]{26}$/u.test(scope.channelId) || !isMattermostPostId(scope.threadRootPostId) || expectedAgentId !== `octogee-${scope.workspaceSlug}-coach` ||
-    !["channel", "group"].some(kind => scope.sessionKey === `agent:${expectedAgentId}:mattermost:${kind}:${scope.channelId}`)) {
+    !isMattermostPostId(scope.channelId) || !isMattermostPostId(scope.threadRootPostId) ||
+    !voiceSessionMatches(scope.sessionKey, expectedAgentId, scope.workspaceSlug, scope.channelId)) {
     throw new OpenClawRuntimeBrokerError(502, "malformed redeem response");
   }
   return { ownerUid: scope.ownerUid, workspaceSlug: scope.workspaceSlug, channelId: scope.channelId, threadRootPostId: scope.threadRootPostId, sessionKey: scope.sessionKey as string };

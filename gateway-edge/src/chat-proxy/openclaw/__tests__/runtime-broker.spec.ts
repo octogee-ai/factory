@@ -84,6 +84,32 @@ describe("redeemOpenClawWs outcome", () => {
     const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation, voiceGrant, voiceGrantExpiresAt });
     expect(await broker.redeemOpenClawWs("ticket", "voice-ws")).toMatchObject({ kind: "redeemed", redeemed: { uid: "member", voiceConversation, voiceGrant, voiceGrantExpiresAt } });
   });
+  it.each(['channel', 'group'])('preserves an authorized project voice scope for a %s session', async peerKind => {
+    const expectedAgentId = 'octogee-alice-proj-orbit-coach';
+    const voiceConversation = { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), threadRootPostId,
+      sessionKey: `agent:${expectedAgentId}:mattermost:${peerKind}:${'c'.repeat(26)}` };
+    const voiceGrant = 'g'.repeat(43);
+    const voiceGrantExpiresAt = Date.now() + 60_000;
+    const broker = brokerWithRedeemStatus(200, { uid: 'project-member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId,
+      voiceConversation, voiceGrant, voiceGrantExpiresAt });
+    expect(await broker.redeemOpenClawWs('ticket', 'voice-ws')).toMatchObject({ kind: 'redeemed',
+      redeemed: { uid: 'project-member', expectedAgentId, voiceConversation, voiceGrant, voiceGrantExpiresAt } });
+  });
+  it.each([
+    { expectedAgentId: 'octogee-other-proj-orbit-coach', sessionKey: `agent:octogee-other-proj-orbit-coach:mattermost:group:${'c'.repeat(26)}` },
+    { expectedAgentId: 'not-an-octogee-agent' },
+    { workspaceSlug: 'other' },
+    { sessionKey: `agent:octogee-alice-proj-another-coach:mattermost:group:${'c'.repeat(26)}` },
+    { sessionKey: `agent:octogee-alice-proj-orbit-coach:mattermost:group:${'d'.repeat(26)}` },
+    { sessionKey: `agent:octogee-alice-proj-orbit-coach:mattermost:direct:${'c'.repeat(26)}` },
+    { sessionKey: `agent:octogee-alice-proj-orbit-coach:mattermost:group:${'c'.repeat(26)}:thread:${threadRootPostId}` },
+  ])('rejects mismatched project voice scope %j', async ({ expectedAgentId = 'octogee-alice-proj-orbit-coach', ...patch }) => {
+    const broker = brokerWithRedeemStatus(200, { uid: 'project-member', gatewayId: 'default', gatewayUrl: 'ws://gw', expectedAgentId,
+      voiceGrant: 'g'.repeat(43), voiceGrantExpiresAt: Date.now() + 60_000,
+      voiceConversation: { ownerUid: 'owner', workspaceSlug: 'alice', channelId: 'c'.repeat(26), threadRootPostId,
+        sessionKey: `agent:octogee-alice-proj-orbit-coach:mattermost:group:${'c'.repeat(26)}`, ...patch } });
+    await expect(broker.redeemOpenClawWs('ticket', 'voice-ws')).rejects.toThrow('malformed redeem response');
+  });
   it.each([undefined, { ownerUid: "owner", workspaceSlug: "alice", channelId: "bad" }, { ownerUid: "owner", workspaceSlug: "other", channelId: "c".repeat(26) }])("refuses malformed or mismatched voice scope %j", async voiceConversation => {
     const broker = brokerWithRedeemStatus(200, { uid: "member", gatewayId: "default", gatewayUrl: "ws://gw", expectedAgentId: "octogee-alice-coach", voiceConversation });
     await expect(broker.redeemOpenClawWs("ticket", "voice-ws")).rejects.toThrow("malformed redeem response");
