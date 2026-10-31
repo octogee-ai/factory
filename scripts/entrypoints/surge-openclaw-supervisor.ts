@@ -26,6 +26,7 @@ import {
   createOpenClawBootWatcher,
   type OpenClawBootWatcher,
 } from "../lib/openclaw-boot-watcher.js";
+import { readInstalledOpenClawBuild } from "../lib/openclaw-installed-build.js";
 import { isPerUserControlIdentity } from "@octogee/shared/types/openclaw-proxy-identity";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 600_000;
@@ -840,11 +841,15 @@ export function createSurgeOpenClawBootWatcher(input: {
   log: (message: string) => void;
   env?: NodeJS.ProcessEnv;
   run?: (command: string, args: readonly string[]) => Promise<void>;
+  installedOpenClawBuild?: () => Promise<string>;
 }): OpenClawBootWatcher {
   const env = input.env ?? process.env;
   return createOpenClawBootWatcher({ ...input, inspectBuilderStores: env.GATEWAY_CLASS === "builder"
     ? () => inspectConfiguredBuilderAgentStores({ stateDir: input.openclawDir,
       configPath: env.OPENCLAW_CONFIG_PATH || path.join(input.openclawDir, "openclaw.json") })
+    : undefined,
+  upgradeDoctor: input.installedOpenClawBuild
+    ? { openclawBinary: OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild }
     : undefined });
 }
 
@@ -877,6 +882,7 @@ async function main(): Promise<void> {
     client: createFleetBrokerClient(gatewayId, revisionId),
     releaseKey,
     log,
+    installedOpenClawBuild: () => readInstalledOpenClawBuild(OPENCLAW_BINARY),
   });
   const boot = await nativeBootMode(gatewayId, revisionId);
   const supervisor = await startSurgeOpenClawSupervisor({

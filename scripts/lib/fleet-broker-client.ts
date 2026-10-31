@@ -185,8 +185,8 @@ export interface FleetBrokerClient {
   }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
   reportAgentAnchors(input: { slug: string; uid?: string; migration?: FleetBrokerAgentAnchorMigration; assignmentEpoch?: number; assignmentState?: "serving" | "quiescing"; anchors: FleetBrokerAgentAnchor[]; configuredAgentIds: string[]; state?: FleetBrokerGatewayStateAnchor }): Promise<void>;
   readAgentAnchors(input: { slug: string; uid?: string; migrationId?: string }): Promise<FleetBrokerAgentAnchors>;
-  claimOpenClawBoot(input: { releaseKey: string }): Promise<FleetBrokerOpenClawBootClaim>;
-  completeOpenClawBoot(input: { releaseKey: string }): Promise<void>;
+  claimOpenClawBoot(input: { releaseKey: string; openclawBuild?: string }): Promise<FleetBrokerOpenClawBootClaim>;
+  completeOpenClawBoot(input: { releaseKey: string; openclawBuild?: string }): Promise<void>;
   completeOpenClawDoctor(input: { releaseKey: string; requestId: string; verifiedAgentIds: string[] }): Promise<void>;
   assertOpenClawDoctor(input: { releaseKey: string; requestId: string }): Promise<void>;
 }

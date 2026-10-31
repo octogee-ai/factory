@@ -143,7 +143,7 @@ import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
-import { createOpenClawBootSentinelStore } from "../lib/openclaw-boot-sentinel.js";
+import { createOpenClawBootSentinelStore, OPENCLAW_BUILD_PATTERN } from "../lib/openclaw-boot-sentinel.js";
 import {
   createOwnerWorkspaceTurnVerifier,
   type OwnerWorkspaceTurnVerifier,
@@ -2712,7 +2712,7 @@ async function requireConfiguredBuilderRuntimeState(
 function openClawBootRequest(
   bound: GatewayBinding,
   body: unknown,
-): { releaseKey: string; podUid: string; podName: string } | null {
+): { releaseKey: string; podUid: string; podName: string; openclawBuild?: string } | null {
   const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const revisionId = typeof record.revisionId === "string" ? record.revisionId : "";
   const releaseKey = typeof record.releaseKey === "string" ? record.releaseKey.trim() : "";
@@ -2721,7 +2721,9 @@ function openClawBootRequest(
     return null;
   }
   if (!releaseKey || releaseKey.length > 512) return null;
-  return { releaseKey, podUid: bound.podUid, podName: bound.podName };
+  const openclawBuild = record.openclawBuild;
+  if (openclawBuild !== undefined && (typeof openclawBuild !== "string" || !OPENCLAW_BUILD_PATTERN.test(openclawBuild))) return null;
+  return { releaseKey, podUid: bound.podUid, podName: bound.podName, ...(openclawBuild ? { openclawBuild } : {}) };
 }
 
 function installOpenClawBootRoutes(

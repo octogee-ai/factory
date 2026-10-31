@@ -11,6 +11,7 @@ interface OpenClawBootInput {
   podUid: string;
   podName: string;
   releaseKey: string;
+  openclawBuild?: string;
 }
 
 export interface OpenClawBootSentinelStore {
@@ -18,6 +19,15 @@ export interface OpenClawBootSentinelStore {
   assertDoctor(input: OpenClawBootInput & { requestId: string }): Promise<boolean>;
   complete(input: OpenClawBootInput): Promise<boolean>;
   completeDoctor(input: OpenClawBootInput & { requestId: string; verifiedAgentIds: string[] }): Promise<boolean>;
+}
+
+export const OPENCLAW_BUILD_PATTERN = /^[0-9a-f]{40}$/;
+
+function healthyOpenClawBuild(runtime: DocumentData | undefined): { healthyOpenClawBuild?: string } {
+  const build = runtime?.openclawHealthyBuild;
+  if (build === undefined) return {};
+  if (typeof build !== "string" || !OPENCLAW_BUILD_PATTERN.test(build)) throw new Error("stored healthy OpenClaw build is malformed");
+  return { healthyOpenClawBuild: build };
 }
 
 function record(value: unknown): DocumentData {
@@ -124,9 +134,10 @@ export function createOpenClawBootSentinelStore(
       return db.runTransaction(async (txn) => {
         const runtimeSnap = await txn.get(runtimeRef);
         if (!runtimeSnap.exists) return null;
+        const start = { action: "start" as const, ...healthyOpenClawBuild(runtimeSnap.data()) };
         const context = await sourceDoctorContext(db, txn, input);
         if (context) {
-          if (sourceDoctorCompleted(context, input)) return { action: "start" as const };
+          if (sourceDoctorCompleted(context, input)) return start;
           if (context.doctor.startedAt !== undefined || context.doctor.completedAt !== undefined) throw new Error("source Doctor attempted without matching success acknowledgement");
           const sourceDoctor = sourceDoctorRequest(context);
           if (!context.imageVerified) return { action: "wait" as const, sourceDoctor };
@@ -168,7 +179,7 @@ export function createOpenClawBootSentinelStore(
             "openclawBootSentinel.updatedAt": now(),
           });
         }
-        return { action: "start" };
+        return start;
       });
     },
     async assertDoctor(input) {
@@ -208,12 +219,15 @@ export function createOpenClawBootSentinelStore(
         const sentinel = runtimeSnap.data()?.openclawBootSentinel as
           | Record<string, unknown>
           | undefined;
+        const update: DocumentData = {};
         if (
           sentinel?.releaseKey === input.releaseKey
           && sentinel.podUid === input.podUid
         ) {
-          txn.update(runtimeRef, { openclawBootSentinel: FieldValue.delete() });
+          update.openclawBootSentinel = FieldValue.delete();
         }
+        if (input.openclawBuild) update.openclawHealthyBuild = input.openclawBuild;
+        if (Object.keys(update).length > 0) txn.update(runtimeRef, update);
         return true;
       });
     },

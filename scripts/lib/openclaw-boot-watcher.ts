@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+import { readInstalledOpenClawBuild } from "./openclaw-installed-build.js";
 import { repairSourceDoctorAgentStores } from "./openclaw-source-doctor.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 
@@ -9,6 +10,11 @@ export interface OpenClawBootWatcher {
 }
 
 type RunCommand = (command: string, args: readonly string[]) => Promise<void>;
+
+interface UpgradeDoctor {
+  openclawBinary: string;
+  installedBuild?: () => Promise<string>;
+}
 
 const CLAIM_PATH = "/internal/fleet/openclaw-boot/claim";
 const HEALTHY_PATH = "/internal/fleet/openclaw-boot/healthy";
@@ -49,18 +55,23 @@ export function createOpenClawBootWatcher(input: {
   run?: RunCommand;
   repairSourceDoctor?: typeof repairSourceDoctorAgentStores;
   inspectBuilderStores?: () => Promise<"exact">;
+  upgradeDoctor?: UpgradeDoctor;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }): OpenClawBootWatcher {
   const run = input.run ?? runCommand;
   const now = input.now ?? (() => performance.now());
   const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  async function claimBoot(): Promise<Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>> {
+  const upgrade = input.upgradeDoctor;
+  const installedBuild = async () => upgrade
+    ? { openclawBuild: await (upgrade.installedBuild ?? (() => readInstalledOpenClawBuild(upgrade.openclawBinary)))() }
+    : {};
+  async function claimBoot(build: { openclawBuild?: string }): Promise<Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>> {
     const deadline = now() + 120_000;
     let pendingRequest: string | undefined;
     for (;;) {
       let claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>;
-      try { claim = await input.client.claimOpenClawBoot({ releaseKey: input.releaseKey }); }
+      try { claim = await input.client.claimOpenClawBoot({ releaseKey: input.releaseKey, ...build }); }
       catch (error) {
         if (pendingRequest) throw new Error("source Doctor claim failed while awaiting installed image proof", { cause: error });
         throw error;
@@ -78,9 +89,10 @@ export function createOpenClawBootWatcher(input: {
   }
   return {
     async beforeStart() {
+      const build = await installedBuild();
       let claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>;
       try {
-        claim = await claimBoot();
+        claim = await claimBoot(build);
       } catch (error) {
         if (!missingBrokerRoute(error, CLAIM_PATH)) throw error;
         input.log("[openclaw-boot] boot sentinel unavailable on this platform release; starting normally");
@@ -90,7 +102,13 @@ export function createOpenClawBootWatcher(input: {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
       await input.inspectBuilderStores?.();
-      if (claim.action === "start") return;
+      if (claim.action === "start") {
+        if (upgrade && build.openclawBuild && build.openclawBuild !== claim.healthyOpenClawBuild) {
+          input.log(`[openclaw-boot] OpenClaw ${build.openclawBuild} replaces ${claim.healthyOpenClawBuild ?? "an unrecorded build"}; running openclaw doctor --fix before startup`);
+          await run(upgrade.openclawBinary, ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
+        }
+        return;
+      }
       if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
       else input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
       await runClaimedDoctor(input, claim, run);
@@ -101,7 +119,7 @@ export function createOpenClawBootWatcher(input: {
     },
     async healthy() {
       try {
-        await input.client.completeOpenClawBoot({ releaseKey: input.releaseKey });
+        await input.client.completeOpenClawBoot({ releaseKey: input.releaseKey, ...await installedBuild() });
       } catch (error) {
         if (!missingBrokerRoute(error, HEALTHY_PATH)) throw error;
         input.log("[openclaw-boot] boot sentinel completion unavailable on this platform release");

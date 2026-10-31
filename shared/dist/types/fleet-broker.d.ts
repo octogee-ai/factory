@@ -185,6 +185,7 @@ export interface FleetBrokerComputerEgress {
 export type FleetBrokerOpenClawBootAction = "start" | "doctor" | "wait";
 export interface FleetBrokerOpenClawBootClaim {
     action: FleetBrokerOpenClawBootAction;
+    healthyOpenClawBuild?: string;
     sourceDoctor?: {
         requestId: string;
         agentIds: string[];

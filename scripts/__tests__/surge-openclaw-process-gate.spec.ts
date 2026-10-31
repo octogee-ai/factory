@@ -430,7 +430,7 @@ describe("surge OpenClaw process supervisor", () => {
       await expect(client.status()).resolves.toMatchObject({ phase: "held" });
     } finally { await supervisor.stop(); }
   });
-  it("validates configured Builder anchors before Native runtime admission", async () => {
+  it("validates configured Builder anchors and runs the upgrade Doctor before Native runtime admission", async () => {
     const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const order: string[] = [], children: FakeChild[] = [];
     const inspection = vi.spyOn(builderStores, "inspectConfiguredBuilderAgentStores")
@@ -439,6 +439,7 @@ describe("surge OpenClaw process supervisor", () => {
       openclawDir, releaseKey: "builder-release", log: () => {}, env: { GATEWAY_CLASS: "builder", OPENCLAW_CONFIG_PATH: path.join(openclawDir, "system_config/openclaw.json") },
       client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() },
       run: async () => { expect(children).toHaveLength(0); order.push("doctor"); },
+      installedOpenClawBuild: async () => "b".repeat(40),
     });
     const supervisor = await startSurgeOpenClawSupervisor({
       openclawDir, podUid: "builder-pod", socketPath, log: () => {}, readinessReleased: async () => false,
@@ -448,7 +449,7 @@ describe("surge OpenClaw process supervisor", () => {
     });
     try {
       await createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath }).permitNormal();
-      expect(order).toEqual(["inspect", "spawn"]);
+      expect(order).toEqual(["inspect", "doctor", "spawn"]);
       expect(inspection).toHaveBeenCalledWith({ stateDir: openclawDir, configPath: path.join(openclawDir, "system_config/openclaw.json") });
     } finally { await supervisor.stop(); inspection.mockRestore(); }
   });

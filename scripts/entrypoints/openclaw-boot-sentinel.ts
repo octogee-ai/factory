@@ -1,12 +1,15 @@
 import { pathToFileURL } from "node:url";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
+import { PLATFORM_OPENCLAW_BINARY } from "../lib/openclaw-installed-build.js";
 
 type BootInput = {
   env?: NodeJS.ProcessEnv;
   client?: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor">;
   log?: (message: string) => void;
   run?: Parameters<typeof createOpenClawBootWatcher>[0]["run"];
+  openclawBinary?: string;
+  installedOpenClawBuild?: () => Promise<string>;
 };
 
 function bootIdentity(env: NodeJS.ProcessEnv) {
@@ -28,6 +31,7 @@ export async function runOpenClawBootPhase(phase: string | undefined, input: Boo
     releaseKey,
     log: input.log ?? ((message) => process.stderr.write(`${message}\n`)),
     run: input.run,
+    upgradeDoctor: { openclawBinary: input.openclawBinary ?? PLATFORM_OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild },
   });
   if (phase === "before-start") await watcher.beforeStart();
   else await watcher.healthy();

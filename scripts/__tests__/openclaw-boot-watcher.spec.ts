@@ -233,3 +233,64 @@ describe("operator-requested source Doctor", () => {
   });
 
 });
+
+describe("OpenClaw upgrade Doctor", () => {
+  const installed = "b".repeat(40);
+
+  function upgradeFixture(healthyOpenClawBuild?: string, run = vi.fn(async () => undefined)) {
+    const client = {
+      claimOpenClawBoot: vi.fn(async () => ({ action: "start" as const, ...(healthyOpenClawBuild ? { healthyOpenClawBuild } : {}) })),
+      completeOpenClawDoctor: vi.fn(async () => undefined),
+      completeOpenClawBoot: vi.fn(async () => undefined),
+    };
+    const watcher = createOpenClawBootWatcher({
+      client,
+      releaseKey: "release@sha256:abc",
+      log: () => undefined,
+      run,
+      upgradeDoctor: { openclawBinary: "/opt/fixture/openclaw", installedBuild: async () => installed },
+    });
+    return { client, run, watcher };
+  }
+
+  it("runs Doctor without its own recovery backups when the installed OpenClaw build replaces the healthy one", async () => {
+    const f = upgradeFixture("a".repeat(40));
+
+    await f.watcher.beforeStart();
+
+    expect(f.client.claimOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc", openclawBuild: installed });
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(f.run).toHaveBeenCalledWith("/opt/fixture/openclaw", ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
+  });
+
+  it("runs Doctor when the gateway has no healthy OpenClaw build on record", async () => {
+    const f = upgradeFixture();
+
+    await f.watcher.beforeStart();
+
+    expect(f.run).toHaveBeenCalledOnce();
+  });
+
+  it("starts without Doctor when the installed OpenClaw build is the healthy one", async () => {
+    const f = upgradeFixture(installed);
+
+    await f.watcher.beforeStart();
+
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failed upgrade Doctor so OpenClaw does not start", async () => {
+    const failure = new Error("doctor failed");
+    const f = upgradeFixture("a".repeat(40), vi.fn(async () => { throw failure; }));
+
+    await expect(f.watcher.beforeStart()).rejects.toBe(failure);
+  });
+
+  it("reports the installed OpenClaw build with health", async () => {
+    const f = upgradeFixture(installed);
+
+    await f.watcher.healthy();
+
+    expect(f.client.completeOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc", openclawBuild: installed });
+  });
+});
