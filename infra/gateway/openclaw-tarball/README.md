@@ -149,21 +149,34 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 30 frozen main
+## Current overlay: October 31 frozen main
 
-This refresh freezes the selected OpenClaw main snapshot at
-`4591070b2f4b1b043b57c306fcd6d235e56b04a2`. It independently qualifies that exact
-tip without substituting an older green commit or following newer commits. The
-clean overlay is [`471d2fdce16ab055ed2e766126a1c4757773f90f`](https://github.com/ceckert/openclaw/commit/471d2fdce16ab055ed2e766126a1c4757773f90f)
-on `codex/gateway-refresh-20261030`: the reassessed overlay recut
-`8dd1e43ff08c263ea2cf161a82eb97b7cc6368df`, including the PostgreSQL Talk fix
-from upstream PR #188580, followed by the account-addition reload repair below.
-The two Mattermost contributions, Octogee Doctor option and provider-qualified
+This refresh freezes the latest fetched OpenClaw main at
+`774e96e4d522be600a60baece2a9c6139adb595d`. It independently qualifies that exact
+tip without substituting an older green commit or following newer commits. Newer
+main is not selected: [#188397](https://github.com/openclaw/openclaw/pull/188397)
+raises the agent schema from 38 to 39, and a start-only upgrade of a real
+PostgreSQL agent store leaves the store at 38 while every chat and history request
+for that agent returns `UNAVAILABLE` ("requires stopped-writer maintenance; …
+run openclaw doctor --fix") and Gateway health still reports ready. Doctor
+migrates it cleanly, after which the schema-38 build refuses the store the same
+way. Adopting schema 39 needs a planned stopped-writer Doctor rollout, not an
+ordinary image shipment. The selected tip's native CUA driver is 0.37.0, and the
+CUA section below moves Octogee's driver
+build, discovery patch, installer and skills to that release. The
+clean overlay is [`e10db5d5c8eef6f69cddfa6eb351cb6e7cfc453f`](https://github.com/ceckert/openclaw/commit/e10db5d5c8eef6f69cddfa6eb351cb6e7cfc453f)
+on `codex/gateway-refresh-20261031`: the previous October 30 overlay rebased onto
+that tip with the merged PostgreSQL Talk startup patch dropped, the account-addition
+reload repair below, the PostgreSQL voice agent consult fix from upstream
+[#188965](https://github.com/openclaw/openclaw/pull/188965) (merged after this tip), the bundled channel
+metadata and config-doc baseline regenerated for the new base, and removal of the
+max-lines baseline entry that the carried Mattermost actions made stale. The two
+Mattermost contributions, Octogee Doctor option and provider-qualified
 runtime-policy fix remain only for the stated consumer contracts.
 
-The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/41099206021)
-was cancelled and supplies no runtime qualification. The
-most recent successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+The selected tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/41164241260)
+reports success but ran one job and skipped 42; it supplies no runtime
+qualification. The most recent successful [full scheduled CI](https://github.com/openclaw/openclaw/actions/runs/37419202402)
 is older `d8612ec864bb4c872616cfda5340c53803655f5f`: 154 jobs pass and nine skip.
 Those skips are Node24 compatibility, PR fail-fast, Android screenshots, check
 plan, iOS device-family screenshots, the conditional additional-extension/shared
@@ -186,6 +199,12 @@ Its retained-store admission and anchor-publication owners replace the duplicate
 fork guard for unconfigured PostgreSQL agents. That guard is dropped. The
 separate configured-agent detach/reattach handoff remains under its existing
 custody contract; it is not restored as a competing creation or schema owner.
+
+Native [#188580](https://github.com/openclaw/openclaw/pull/188580), landed as
+`74343d9fc66edc984fe751b3f101dda412e02410` in the selected base, owns
+worker-backed Talk entry initialization. The carried copy is dropped: all seven
+of its production, test-support and worker-registration files match the selected
+base exactly, and its PostgreSQL/SQLite regression passes unchanged.
 
 The recut preserves native inbound-context composition and the new channel-start
 deferral owner. Requester identity follows native's extracted reply-authority
@@ -253,40 +272,41 @@ preflight ratchets require. Remove each
 family when the selected base contains the merged behavior and the Mattermost
 consumer controls pass; an open PR or a newer main containing it is not enough.
 
-### PostgreSQL native voice startup
+### PostgreSQL voice agent consults
 
-The selected unpatched main still opens the Talk session-entry database on the
-Gateway thread. The real PostgreSQL regression fails with `PostgreSQL connections
-must run in a worker`; SQLite passes. Upstream
-[#188580](https://github.com/openclaw/openclaw/pull/188580), head
-`8a727467c3e7670ec8a2e86a3c8ef5ad7b4523e1`, is open and its fix is carried here.
-Talk now prepares through its existing worker and consumes the published
-physical source; the public SDK's opaque-guard path retains native database
-adoption. Configuration, schemas, session identity and authority checks stay
-with their native owners. An Octogee voice transport override would not repair
-this canonical session-entry defect.
+With native voice startup fixed, every delegated voice request still failed on
+PostgreSQL agent stores before the agent run: `OpenAI GPT-Live delegation consult
+failed: PostgreSQL connections must run in a worker`. The consult path validated
+the open call (`readVoiceSessionRecord`) and the model-selection lock
+(`getSessionEntry`) with synchronous agent-database reads on the Gateway thread.
+Upstream [#188965](https://github.com/openclaw/openclaw/pull/188965) reads the
+call through the existing `voice.session.read` worker operation and the lock
+through `getSessionEntryAsync`; the public synchronous SDK helper is unchanged.
+Its commit is carried unmodified. Upstream merged it as
+`d21ccbd811ae9b8653d6b75f829da02039bd2a8a` after the selected tip; every carried
+production file is byte-identical to that merge, which only consolidates the
+regression into the existing Talk PostgreSQL harness.
 
-Both PostgreSQL and SQLite creation/resumption regressions and 54 Talk siblings
-pass. A separate full build at the upstream PR head also passed a real,
-authenticated Gateway WebSocket flow against disposable PostgreSQL: two public
-Talk create/audio/close calls, persisted public history, and exactly one
-canonical session row after shutdown. The bundled OpenAI adapter used a loopback
-provider protocol fixture with synthetic PCM and no external provider requests;
-this proves transport and storage, not speech recognition or TTS quality.
-The [posted proof](https://github.com/openclaw/openclaw/pull/188580#issuecomment-6529979391)
-names that exact head. ClawSweeper's
-[latest review](https://github.com/openclaw/openclaw/pull/188580#issuecomment-6529879820)
-accepts that evidence and reports no actionable findings or before-merge work;
-upstream maintainer review is still pending. Remove the overlay when the selected
-base contains equivalent worker-owned initialization and these controls pass.
+A real PostgreSQL main-thread regression runs the open-call check and
+`consultRealtimeVoiceAgent` against the real plugin agent runtime, replacing only
+the model run. It fails on the unpatched selected base at each read in turn and
+passes on both engines with the fix; 1,753 Talk, Gateway Talk, meeting-bot and
+voice-call cases pass. A built-Gateway
+[proof](https://github.com/openclaw/openclaw/pull/188965#issuecomment-6537740084)
+against disposable PostgreSQL drives a native GPT-Live delegation through a real
+agent turn: unchanged main fails with the worker error and persists no answer;
+the PR head answers and persists it. ClawSweeper reports no actionable findings at
+that head. Steering an active consult still builds its tool authority
+through a synchronous read and remains a separate native gap. Remove this overlay
+when the selected base contains `d21ccbd` and these controls pass.
 
 ### New channel-account reload
 
 Adding a project account could wait for unrelated admitted Gateway work even
 though no existing account needed restarting. The managed-writer regression is
 red on the preceding recut and green with the repair from coordinated source
-`4d2d2f47d96a7814656709571050a503259cf5fc`, applied as final source
-`471d2fdce16ab055ed2e766126a1c4757773f90f`. The reload owner captures the previous
+`4d2d2f47d96a7814656709571050a503259cf5fc`, carried in this overlay as
+`58923e05c0f10c2ab4fdbce47dde3daa7b964f88`. The reload owner captures the previous
 runtime config before any publication. Only new/removal-only account targets
 skip the global drain, after resolving every added account successfully.
 Existing affected accounts and whole-channel restarts retain their drain;
@@ -360,7 +380,7 @@ behavior is present in the selected base and the affected consumer controls pass
 | PostgreSQL cron enabled JSON | Native's SQLite JSON-value assumption fails PG bound enabled updates; the codec uses each engine's existing JSON expression. | Native equivalent passes both-engine false/true transitions without losing authored fields. |
 | Memory shadow database retirement | Physical admission must retire before unlinking shadow files, preventing writes through live descriptors. | Native owns equivalent descriptor/late-owner retirement. |
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
-| PostgreSQL Talk entry initialization | Reproduced native main-thread database open prevents canonical realtime voice startup. PR #188580 reuses the native execution worker while preserving opaque SDK adoption. | The selected native base contains equivalent behavior and PostgreSQL/SQLite plus public Talk controls pass. |
+| PostgreSQL Talk agent consults | Reproduced native main-thread reads of the voice call and model-selection lock refuse every delegated voice request. Upstream #188965 reads both through existing worker-backed owners. | The selected native base contains equivalent behavior and the PostgreSQL/SQLite consult regression plus Talk siblings pass. |
 | Final-reply notification | Activity tools require terminal final-content classification, not agent-completion inference. Only the public observer flag is retained; delivery custody is native. | Native supplies equivalent classification or the observer is removed. |
 | Dashboard participant labels | Current same-session history supplies a human label missing from native observation projection. This optional presentation is used by the embedded full native Dashboard, with no access/identity mutation; the current browser/computer/workbench islands do not own its header. | Native projects equivalent labels or the embedded native chat consumer is removed. |
 | Dependency and npm packaging | Exact fast-uri/npm pins and the disposable npm distribution patch need installed-byte verification; version equality does not qualify nested dependencies. | Stock/native installed closures contain the fixes and the dependency gate passes. The expired fast-uri release-age exception is removed. |
@@ -370,26 +390,39 @@ behavior is present in the selected base and the affected consumer controls pass
 
 Pinned pnpm 12.15.0 and the frozen lockfile build the source with full
 `pnpm build package`. The clean final source and `dist/build-info.json.commit`
-both identify `471d2fdce16ab055ed2e766126a1c4757773f90f`; the sequential root and
-Mattermost archives and regenerated hosted islands contain that build. App island
-coexistence and consumer contracts pass (196 tests), with 24 license/runtime
-controls. Pin coherence is checked against the same source SHA.
+both identify `e10db5d5c8eef6f69cddfa6eb351cb6e7cfc453f`; the sequential root and
+Mattermost archives and regenerated hosted islands contain that build, and native
+`check-openclaw-package-tarball` passes on the root archive. An existing
+write-once Mattermost object already held these exact bytes and is reused after a
+full-hash readback. Pin coherence is checked against the same source SHA.
 
-The aggregate check against explicit base `4591070` passes every preflight,
-all 110 package-lock checks and production, scripts and root test typechecks,
-then fails lint. Three owned lint findings were corrected and their scoped lint
-passes. The remaining 15 errors are in files byte-identical to the frozen base;
-there is no aggregate `pnpm check` success claim. The SQLite worker ratchet is
-unchanged at 169 live calls against that base. Focused formatting and subsequent
-policy checks are separate evidence, not a substitute aggregate result. The
-earlier full overlay Mattermost run retained one macOS loopback-alias fixture
-failure; it is not a demonstrated channel behavior failure or an all-suite pass.
+The aggregate check against explicit base `774e96e` passes every preflight,
+including all 110 package-lock checks, and the production, scripts and root test
+typechecks, then fails lint. All 18 lint errors are `max-lines` findings in files
+byte-identical to the selected base; there is no aggregate `pnpm check` success
+claim. Focused formatting and subsequent policy checks are separate evidence,
+not a substitute aggregate result.
 
-Linux amd64 installed-package qualification passes on Node 26.13.0: all 871
-Mattermost files and all 15 patched files in both npm roots match the prepared
-archives. The actual `openclaw-full-plugin-installer` target also passes native
-registry refresh, bundled trust, source-match verification of 188 Codex and 10
-Parallel runtime files, and all three native-hook imports. Native source still
+Focused owner suites on the final source (configuration reload, reply-tool
+authority, agent database startup, plugin generation worker, npm package locks,
+Talk, Gateway Talk, Mattermost and CUA computer) pass 2,125 of 2,126 cases. The one failure is
+the unchanged Mattermost slash-HTTP boundary fixture, which binds `127.0.0.2` and
+higher loopback aliases that this macOS host does not configure; it is not a
+demonstrated channel behavior failure or an all-suite pass.
+
+Linux amd64 and arm64 installed-package qualification passes on Node 26.13.0
+against the generation-bound readbacks: the installed runtime reports `e10db5d`,
+and on each architecture all 871 Mattermost files and all 15 patched files in
+both npm roots match the prepared archives. The actual
+`openclaw-full-plugin-installer` target passes on both architectures with the
+locally built 0.37.0 driver image: the CUA driver-artifact Doctor check against the
+patched library, source-match verification of 188 Codex and 10 Parallel runtime
+files, and all three native-hook imports. The installed library, its
+`octogee-patch.json` and the single compiled manifest digest match the driver
+image's output. With the runtime image's `libx11-6`, `libxi6` and
+`libxkbcommon0`, every library dependency resolves and the patched SDK loads on
+both architectures; without them the load fails on `libX11.so.6`. Its dependency
+list is identical to the previously qualified 0.36.0 library. Native source still
 pins npm 12.2.1 and fast-uri 4.2.3. Stock npm's
 nested closure does not replace the disposable distribution patch merely by
 matching its version. Root Undici 8.12.3 is distinct from npm's nested patched
@@ -406,14 +439,15 @@ native hooks, Memory/Skills workers, cold/retained Builder plugin roots and
 no-network model resolution. Full Doctor stays off healthy boots; bounded
 failed-boot recovery and driver-artifact checks remain. Arm64, live provider
 inference, browser microphone/duplex/interruption and interactive desktop
-acceptance are not claimed. The upstream PR-head synthetic Talk proof above is
+acceptance are not claimed. The upstream #188965 PR-head Gateway proof (real
+PostgreSQL agent store, native GPT-Live delegation fixture, real agent turn) is
 separate from final Octogee TEST acceptance; building these artifacts deploys
 neither TEST nor PROD.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-f958d0ea.tgz#1793388147057652` | 129301061 | `f958d0eac50414f72f6e39ca0789a2cbe7b699e6c258abeaa84f2a607ee725d5` |
-| mattermost | `openclaw-mattermost-e19347f5.tgz#1793388092260895` | 1272450 | `e19347f5e76a2d5050232766478f6d5a7410e49a5240175272ee1fca93f39a4b` |
+| root | `openclaw-fork-4df07c38.tgz#1793419310408256` | 117963492 | `4df07c383187a0b153f3b85f2ea8d70f5fecfa91322cda2ab11aa7291c42d605` |
+| mattermost | `openclaw-mattermost-41b3b713.tgz#1793414287604477` | 1272386 | `41b3b7130a25e6b861cc44aaf0669451f2be2b814055b250412c62147102dce4` |
 
 Generation-bound readbacks reproduce both complete hashes above. Hash-addressed
 objects are write-once. Complete-image qualification results and image digests
@@ -428,8 +462,10 @@ are open and carried on this base as described above; remove each when the
 selected base contains it. #178755 (detach) and #178973 (local checkpoint)
 remain draft/open. #181951 (retained PG refusal) is closed unmerged and superseded
 by merged #188350, present in this selected base; its duplicated guard is dropped.
-#188580 (PostgreSQL Talk startup) remains open at the reviewed head above and is
-carried pending native adoption. The account-addition reload repair is carried
+#188580 (PostgreSQL Talk startup) is merged and present in this selected base;
+its carried copy is dropped. #188965 (PostgreSQL voice agent consults) is
+carried; it merged upstream as `d21ccbd` after the selected tip, so the next
+recut whose base contains it drops the carried copy. The account-addition reload repair is carried
 from coordinated source `4d2d2f47`; no upstream PR is recorded for that repair.
 #182783 is closed unmerged because merged #186296 adopted it into this selected base.
 #178970 remains open but native #181198 already supersedes it. Previously adopted PostgreSQL recovery, cache,
@@ -440,8 +476,8 @@ from necessity and runtime qualification.
 ## Native CUA desktop-discovery preservation
 
 `Dockerfile.cua-driver` builds the Linux SDK from the official
-[CUA 0.36.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.36.0),
-exact source `6d6c734c127025fb39ad5d585a10382808b39dc1`, with
+[CUA 0.37.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.37.0),
+exact source `2d2f99228d4d2508dc6fcc84c176b296e146714a`, with
 `cua-desktop-discovery.patch`, into the `octogee-cua-driver:inputs-<hash>`
 image keyed by that Dockerfile and patch. `Dockerfile.base` consumes it as the
 `cua-driver-builder` stage through the `CUA_DRIVER_IMAGE` build context, so a
@@ -450,11 +486,13 @@ so the older modifier-only fork is not used. Rust and the other CLI/tool pins
 remain unchanged.
 
 The sparse checkout also includes `libs/cua/Cargo.toml` and
-`libs/cua/crates/cua-telemetry`, the 0.36.0 driver's existing path dependency.
+`libs/cua/crates/cua-telemetry`, the 0.37.0 driver's only external path dependency.
 The selected revision's Cargo lockfile, dependency features and test gates remain
 unchanged; the recipe does not fetch the rest of the CUA workspace.
 
-The 0.36.0 `GetAccessibilityTreeTool` still discovers only X11 windows. The
+The 0.37.0 `GetAccessibilityTreeTool` still discovers only X11 windows: the two
+files the patch changes are byte-identical between 0.36.0 and 0.37.0, whose Linux
+changes are confined to input, pointer shape and X11. The patch applies unchanged. The
 patch keeps discovery on the native Wayland/X11 dispatcher, excludes
 off-screen windows and known dead owners, remembers observed Wayland origins,
 and emits the existing canonical window record (including bounds, app name,
@@ -468,14 +506,17 @@ the focused Wayland tests before the release SDK build with `portal-input`;
 it does not enable `portal-capture` or experimental Hyprland input-v3. Those
 headless tests are not canonical desktop E2E proof. Qualification of this exact
 new source/library pair must include the Linux crate tests, both required image
-architectures, dynamic loading and the installed driver artifact check; old
-0.28.2 build results do not qualify this pair.
+architectures, dynamic loading and the installed driver artifact check; 0.36.0
+build results do not qualify this pair.
 
-The installer requires matching 0.36.0 installed JavaScript bindings, native
+The installer requires matching 0.37.0 installed JavaScript bindings, native
 package, plugin dependency and patch metadata, the exact official source/tag,
 and a patch digest. It first validates the original SDK against OpenClaw's
 native artifact manifest, then replaces only that architecture's SDK digest in
-the plugin and its single compiled manifest. Other binary/platform pins remain
+the plugin and its single compiled manifest. It finds that compiled module by the
+same bundled-module labels native's own region reader accepts: the stable
+`//#region` form and the qualified module-ID labels that the tsdown 0.23.2 /
+Rolldown output adopted by native #188576 emits. Other binary/platform pins remain
 unchanged. `octogee-patch.json` records the source, patch and installed library
 digest. The CUA Dockerfile and patch remain immutable base-fingerprint inputs,
 so a driver change still rebuilds the base.
@@ -488,7 +529,7 @@ artifact and desktop qualification. A version bump or modifier fix alone does
 not meet that removal condition.
 
 The upstream discovery contribution [CUA #5286](https://github.com/trycua/cua/pull/5286)
-is closed unmerged. Selected 0.36.0 still lacks the required discovery behavior;
+is closed unmerged. Selected 0.37.0 still lacks the required discovery behavior;
 contribution status does not qualify or replace this pinned package/library pair.
 Exact-pair architecture qualification is recorded in the current assessment above.
 Real Wayland-session qualification remains separate from headless checks.
@@ -496,8 +537,8 @@ Real Wayland-session qualification remains separate from headless checks.
 ## Vendored computer-use skills
 
 `infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
-0.36.0 skill pack
-([`6d6c734c`](https://github.com/trycua/cua/tree/6d6c734c127025fb39ad5d585a10382808b39dc1/libs/cua-driver/rust/Skills/cua-driver))
+0.37.0 skill pack
+([`2d2f9922`](https://github.com/trycua/cua/tree/2d2f99228d4d2508dc6fcc84c176b296e146714a/libs/cua-driver/rust/Skills/cua-driver))
 and the `cua-omarchy` companion from Omarchy
 [PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
 `provenance.json` records each repository, commit, and the SHA-256 of every
@@ -513,7 +554,11 @@ guidance and maps it onto the `computer` tool. It drops the standalone CLI and
 MCP transport, the install, self-update, and `skills install --from main`
 instructions, permission profiles and approval-bypass flags, cursor overlay,
 recording, embedding, macOS, Windows, and Omarchy package and plugin
-management. CUA's browser guide is replaced by the `browser` tool.
+management. CUA's browser guide is replaced by the `browser` tool. The 0.37.0
+re-adaptation changes only the version: its new macOS install/permission
+guidance, recovery-hint (`hint`/`next_call`) refusal row and `get_guide` MCP tool
+have no counterpart in the managed `computer` tool, and its `LINUX.md` change is
+qualification wording.
 
 When the driver version changes, the build fails until the skills are
 re-adapted: diff the upstream files at the new release against the recorded

@@ -1,6 +1,6 @@
 // @ts-nocheck
 var io = Object.create;
-var We = Object.defineProperty;
+var ze = Object.defineProperty;
 var so = Object.getOwnPropertyDescriptor;
 var ao = Object.getOwnPropertyNames;
 var co = Object.getPrototypeOf, lo = Object.prototype.hasOwnProperty;
@@ -20,11 +20,11 @@ var Tt = (e, t) => () => {
   }
 }, Et = (e, t) => {
   for (var n in t)
-    We(e, n, { get: t[n], enumerable: !0 });
+    ze(e, n, { get: t[n], enumerable: !0 });
 }, uo = (e, t, n, r) => {
   if (t && typeof t == "object" || typeof t == "function")
     for (let o of ao(t))
-      !lo.call(e, o) && o !== n && We(e, o, { get: () => t[o], enumerable: !(r = so(t, o)) || r.enumerable });
+      !lo.call(e, o) && o !== n && ze(e, o, { get: () => t[o], enumerable: !(r = so(t, o)) || r.enumerable });
   return e;
 };
 var It = (e, t, n) => (n = e != null ? io(co(e)) : {}, uo(
@@ -32,7 +32,7 @@ var It = (e, t, n) => (n = e != null ? io(co(e)) : {}, uo(
   // file that has been converted to a CommonJS file using a Babel-
   // compatible transform (i.e. "__esModule" has not been set), then set
   // "default" to the CommonJS "module.exports" for node compatibility.
-  t || !e || !e.__esModule ? We(n, "default", { value: e, enumerable: !0 }) : n,
+  t || !e || !e.__esModule ? ze(n, "default", { value: e, enumerable: !0 }) : n,
   e
 ));
 
@@ -326,7 +326,7 @@ var Sc, qt = S(() => {
 });
 
 // openclaw/packages/gateway-client/src/reconnect-policy.ts
-var Pc, zt = S(() => {
+var Pc, Wt = S(() => {
   Je();
   Pc = /* @__PURE__ */ new Set([
     E.AUTH_TOKEN_MISSING,
@@ -348,7 +348,7 @@ var Pc, zt = S(() => {
 });
 
 // openclaw/packages/normalization-core/src/stable-stringify.ts
-var Wt = S(() => {
+var zt = S(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/gateway-error-details.ts
@@ -473,7 +473,7 @@ var on = S(() => {
   Pt();
   Ft();
   qt();
-  zt();
+  Wt();
   Yt();
   en();
   tn();
@@ -529,7 +529,7 @@ var Xn = Tt((rp, Yn) => {
       n[r] = t(e[r]);
     return n;
   }
-  function Wn(e, t) {
+  function zn(e, t) {
     let n = e.split("@"), r = "";
     n.length > 1 && (r = n[0] + "@", e = n[1]), e = e.replace(bi, ".");
     let o = e.split("."), i = Ri(o, t).join(".");
@@ -549,7 +549,7 @@ var Xn = Tt((rp, Yn) => {
   }
   var xi = (e) => String.fromCodePoint(...e), Ci = function(e) {
     return e >= 48 && e < 58 ? 26 + (e - 48) : e >= 65 && e < 91 ? e - 65 : e >= 97 && e < 123 ? e - 97 : 36;
-  }, zn = function(e, t) {
+  }, Wn = function(e, t) {
     return e + 22 + 75 * (e < 26) - ((t != 0) << 5);
   }, Vn = function(e, t, n) {
     let r = 0;
@@ -599,20 +599,20 @@ var Xn = Tt((rp, Yn) => {
               break;
             let l = g - c, b = 36 - c;
             t.push(
-              ft(zn(c + l % b, 0))
+              ft(Wn(c + l % b, 0))
             ), g = V(l / b);
           }
-          t.push(ft(zn(g, 0))), i = Vn(o, d, a === s), o = 0, ++a;
+          t.push(ft(Wn(g, 0))), i = Vn(o, d, a === s), o = 0, ++a;
         }
       ++o, ++r;
     }
     return t.join("");
   }, ki = function(e) {
-    return Wn(e, function(t) {
+    return zn(e, function(t) {
       return mi.test(t) ? Kn(t.slice(4).toLowerCase()) : t;
     });
   }, _i = function(e) {
-    return Wn(e, function(t) {
+    return zn(e, function(t) {
       return yi.test(t) ? "xn--" + Jn(t) : t;
     });
   }, Ti = {
@@ -1386,6 +1386,7 @@ var aa, fe, kt = S(() => {
       genericSubtitle: "Something went wrong while loading this panel.",
       staleTitle: "This view could not load",
       staleSubtitle: "Some interface files could not be downloaded. Check your connection, then reload.",
+      bootDraftRecovery: "Copy the draft below before clearing it and reloading.",
       reloading: "Reloading\u2026",
       retry: "Retry",
       stylesFailed: "Styles failed to load, so the page may look broken."
@@ -2834,7 +2835,7 @@ function re(e) {
 // openclaw/packages/normalization-core/src/index.ts
 ne();
 D();
-Wt();
+zt();
 H();
 Se();
 le();
@@ -3183,7 +3184,7 @@ function de(e) {
 function Ne() {
   this.protocol = null, this.slashes = null, this.auth = null, this.port = null, this.hostname = null, this.hash = null, this.search = null, this.pathname = null;
 }
-var zo = /^([a-z0-9.+-]+:)/i, Wo = /:[0-9]*$/, $o = /^(\/\/?(?!\/)[^\?\s]*)(\?[^\s]*)?$/, Vo = ["<", ">", '"', "`", " ", "\r", `
+var Wo = /^([a-z0-9.+-]+:)/i, zo = /:[0-9]*$/, $o = /^(\/\/?(?!\/)[^\?\s]*)(\?[^\s]*)?$/, Vo = ["<", ">", '"', "`", " ", "\r", `
 `, "	"], Ko = ["{", "}", "|", "\\", "^", "`"].concat(Vo), Jo = ["'"].concat(Ko), Tn = ["%", "/", "?", ";", "#"].concat(Jo), En = ["/", "?", "#"], Yo = 255, In = /^[+a-z0-9A-Z_-]{0,63}$/, Xo = /^([+a-z0-9A-Z_-]{0,63})(.*)$/, Sn = {
   javascript: !0,
   "javascript:": !0
@@ -3211,7 +3212,7 @@ Ne.prototype.parse = function(e, t) {
     if (d)
       return this.pathname = d[1], d[2] && (this.search = d[2]), this;
   }
-  let s = zo.exec(i);
+  let s = Wo.exec(i);
   if (s && (s = s[0], n = s.toLowerCase(), this.protocol = s, i = i.substr(s.length)), (t || s || i.match(/^\/\/[^@\/]+@[^@\/]+/)) && (o = i.substr(0, 2) === "//", o && !(s && Sn[s]) && (i = i.substr(2), this.slashes = !0)), !Sn[s] && (o || s && !An[s])) {
     let d = -1;
     for (let l = 0; l < En.length; l++)
@@ -3248,7 +3249,7 @@ Ne.prototype.parse = function(e, t) {
   return u !== -1 && (this.search = i.substr(u), i = i.slice(0, u)), i && (this.pathname = i), An[n] && this.hostname && !this.pathname && (this.pathname = ""), this;
 };
 Ne.prototype.parseHost = function(e) {
-  let t = Wo.exec(e);
+  let t = zo.exec(e);
   t && (t = t[0], t !== ":" && (this.port = t.substr(1)), e = e.substr(0, e.length - t.length)), e && (this.hostname = e);
 };
 var we = Zo;
@@ -3311,7 +3312,7 @@ function Mn(e) {
 }
 
 // openclaw/node_modules/.pnpm/entities@8.1.0/node_modules/entities/dist/internal/decode-shared.js
-var W = /* @__PURE__ */ (() => {
+var z = /* @__PURE__ */ (() => {
   let e = new Uint8Array(127), t = 0;
   for (let n = 33; n <= 126; n++)
     n !== 34 && n !== 36 && n !== 92 && (e[n] = t++);
@@ -3319,25 +3320,25 @@ var W = /* @__PURE__ */ (() => {
 })();
 function Dn(e, t, n, r, o, i) {
   let a = e.length, u = i * 90, d = 0, f = () => {
-    let T = W[e.charCodeAt(d++)];
-    return T < i ? T : T * 91 - u + W[e.charCodeAt(d++)];
+    let T = z[e.charCodeAt(d++)];
+    return T < i ? T : T * 91 - u + z[e.charCodeAt(d++)];
   }, g = n - r, y = n + o, c = new Int32Array(y);
   c.fill(-1, r, i), c.fill(-1, i + g, y);
   let l = new Int32Array(y), b = new Int32Array(y);
   function p(T, v) {
     let I = 0, P = v, B = v + T;
     for (; P < B; ) {
-      let N = W[e.charCodeAt(d++)];
+      let N = z[e.charCodeAt(d++)];
       if (N < 89)
         I += N, c[P++] = I;
       else if (N === 89) {
-        let z = W[e.charCodeAt(d++)] + 2;
-        for (; z--; )
+        let W = z[e.charCodeAt(d++)] + 2;
+        for (; W--; )
           c[P++] = ++I;
       } else {
-        let z = W[e.charCodeAt(d++)];
+        let W = z[e.charCodeAt(d++)];
         I += 89 + // eslint-disable-next-line unicorn/prefer-minimal-ternary -- branches read a different number of side-effecting input bytes
-        (z < 90 ? z * 91 + W[e.charCodeAt(d++)] : W[e.charCodeAt(d++)] * 8281 + W[e.charCodeAt(d++)] * 91 + W[e.charCodeAt(d++)]), c[P++] = I;
+        (W < 90 ? W * 91 + z[e.charCodeAt(d++)] : z[e.charCodeAt(d++)] * 8281 + z[e.charCodeAt(d++)] * 91 + z[e.charCodeAt(d++)]), c[P++] = I;
       }
     }
   }
@@ -3347,8 +3348,8 @@ function Dn(e, t, n, r, o, i) {
     for (let I = 0; I < T; I++) {
       let P = v + I, B = f(), N = f();
       m[w * 2] = B, m[w * 2 + 1] = N, w += 1, l[P] = h;
-      let z = (c[B] < 0 ? b[B] : 1) + (c[N] < 0 ? b[N] : 1);
-      b[P] = z, h += z;
+      let W = (c[B] < 0 ? b[B] : 1) + (c[N] < 0 ? b[N] : 1);
+      b[P] = W, h += W;
     }
   }
   R(o - i + r, i + g), R(i - r, r);
@@ -3365,8 +3366,8 @@ function Dn(e, t, n, r, o, i) {
     }
   let _ = new Uint16Array(t), A = 0;
   for (; d < a; ) {
-    let T = W[e.charCodeAt(d++)];
-    T >= i && (T = T * 91 - u + W[e.charCodeAt(d++)]);
+    let T = z[e.charCodeAt(d++)];
+    T >= i && (T = T * 91 - u + z[e.charCodeAt(d++)]);
     let v = c[T];
     if (v < 0) {
       let I = l[T], P = I + b[T];
@@ -4281,12 +4282,12 @@ function qi(e, t) {
   }
   return (t === "string" ? String : Number)(e);
 }
-function zi(e) {
+function Wi(e) {
   var t = qi(e, "string");
   return Ee(t) == "symbol" ? t : t + "";
 }
 function k(e, t, n) {
-  return (t = zi(t)) in e ? Object.defineProperty(e, t, {
+  return (t = Wi(t)) in e ? Object.defineProperty(e, t, {
     value: n,
     enumerable: !0,
     configurable: !0,
@@ -4752,10 +4753,10 @@ var hr = class {
   constructor(e, t, n) {
     k(this, "tokens", []), k(this, "inlineMode", !1), k(this, "Token", ie), this.src = e, this.env = n, this.md = t;
   }
-}, Wi = /\r\n?/g, $i = /\0/g;
+}, zi = /\r\n?/g, $i = /\0/g;
 function Vi(e) {
   let t;
-  t = e.src.replace(Wi, `
+  t = e.src.replace(zi, `
 `), t = t.replace($i, "\uFFFD"), e.src = t;
 }
 function Ki(e) {
@@ -5290,9 +5291,9 @@ function xs(e, t, n, r) {
     i = c, o = e.eMarks[u];
     let R = e.sCount[u] + c - (e.bMarks[u] + e.tShift[u]), C = R;
     for (; i < o; ) {
-      let z = e.src.charCodeAt(i);
-      if (z === 9) C += 4 - (C + e.bsCount[u]) % 4;
-      else if (z === 32) C++;
+      let W = e.src.charCodeAt(i);
+      if (W === 9) C += 4 - (C + e.bsCount[u]) % 4;
+      else if (W === 32) C++;
       else break;
       i++;
     }
@@ -5305,7 +5306,7 @@ function xs(e, t, n, r) {
     let v = e.tight, I = e.tShift[u], P = e.sCount[u], B = e.listIndent;
     if (e.listIndent = e.blkIndent, e.blkIndent = A, e.tight = !0, e.tShift[u] = x - e.bMarks[u], e.sCount[u] = C, x >= o && e.isEmpty(u + 1) ? e.line = Math.min(e.line + 2, n) : e.md.block.tokenize(e, u, n), (!e.tight || m) && (d = !1), m = e.line - u > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = B, e.tShift[u] = I, e.sCount[u] = P, e.tight = v, a = e.push("list_item_close", "li", -1), a.markup = String.fromCharCode(l), u = e.line, T[1] = u, u >= n || e.sCount[u] < e.blkIndent || e.sCount[u] - e.blkIndent >= 4) break;
     let N = !1;
-    for (let z = 0, oo = h.length; z < oo; z++) if (h[z](e, u, n, !0)) {
+    for (let W = 0, oo = h.length; W < oo; W++) if (h[W](e, u, n, !0)) {
       N = !0;
       break;
     }
@@ -6061,7 +6062,7 @@ function qs(e, t) {
   }
   return e.pos = i, e.posMax = y, !0;
 }
-var zs = /^([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/, Ws = /^([a-zA-Z][a-zA-Z0-9+.-]{1,31}):([^<>\x00-\x20]*)$/;
+var Ws = /^([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/, zs = /^([a-zA-Z][a-zA-Z0-9+.-]{1,31}):([^<>\x00-\x20]*)$/;
 function $s(e, t) {
   let n = e.pos;
   if (e.src.charCodeAt(n) !== 60) return !1;
@@ -6073,7 +6074,7 @@ function $s(e, t) {
     if (s === 62) break;
   }
   let i = e.src.slice(r + 1, n);
-  if (Ws.test(i)) {
+  if (zs.test(i)) {
     let s = e.md.normalizeLink(i);
     if (!e.md.validateLink(s)) return !1;
     if (!t) {
@@ -6086,7 +6087,7 @@ function $s(e, t) {
     }
     return e.pos += i.length + 2, !0;
   }
-  if (zs.test(i)) {
+  if (Ws.test(i)) {
     let s = e.md.normalizeLink(`mailto:${i}`);
     if (!e.md.validateLink(s)) return !1;
     if (!t) {
@@ -6923,10 +6924,10 @@ var qr = [
   /(^emoji$|^count$|^identities$)/u,
   /(^id$|^label$)/u
 ], ca = (e) => la(e), la = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "itemId" in e && "phase" in e && "kind" in e && "title" in e && Object.getOwnPropertyNames(e).every(
-  (t, n) => qr[0].test(t) || zr(e[t])
-) && (e.delegation === void 0 || !("delegation" in e) || ua(e.delegation)) && Ra(e.itemId) && xa(e.phase) && Gr(e.kind) && Gr(e.title) && (e.status === void 0 || !("status" in e) || Ta(e.status)) && (e.name === void 0 || !("name" in e) || Q(e.name)) && (e.meta === void 0 || !("meta" in e) || Q(e.meta)) && (e.commandBearing === void 0 || !("commandBearing" in e) || ze(e.commandBearing)) && (e.toolCallId === void 0 || !("toolCallId" in e) || Q(e.toolCallId)) && (e.unpairedCall === void 0 || !("unpairedCall" in e) || ze(e.unpairedCall)) && (e.startedAt === void 0 || !("startedAt" in e) || Hr(e.startedAt)) && (e.endedAt === void 0 || !("endedAt" in e) || Hr(e.endedAt)) && (e.error === void 0 || !("error" in e) || Q(e.error)) && (e.summary === void 0 || !("summary" in e) || Q(e.summary)) && (e.progressText === void 0 || !("progressText" in e) || Q(e.progressText)) && (e.suppressChannelProgress === void 0 || !("suppressChannelProgress" in e) || ze(e.suppressChannelProgress)) && (e.hideFromChannelProgress === void 0 || !("hideFromChannelProgress" in e) || ze(e.hideFromChannelProgress)) && (e.approvalId === void 0 || !("approvalId" in e) || Q(e.approvalId)) && (e.approvalSlug === void 0 || !("approvalSlug" in e) || Q(e.approvalSlug)), zr = (e) => !1, ua = (e) => Array.isArray(e) && e.every((t, n) => da(t)) && e.length <= 32, da = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "runId" in e && "childSessionKey" in e && "status" in e && Object.getOwnPropertyNames(e).every(
-  (t, n) => qr[1].test(t) || zr(e[t])
-) && pa(e.runId) && fa(e.childSessionKey) && (e.label === void 0 || !("label" in e) || jr(e.label)) && (e.groupId === void 0 || !("groupId" in e) || jr(e.groupId)) && (e.runtimeMs === void 0 || !("runtimeMs" in e) || ha(e.runtimeMs)) && ga(e.status), pa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 256 || e.length <= 512 && ae(e) <= 256), fa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 1024 || e.length <= 2048 && ae(e) <= 1024), jr = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 512 || e.length <= 1024 && ae(e) <= 512), ha = (e) => Number.isFinite(e) && e >= 0 && e <= 9007199254740991, ga = (e) => ma(e) || ya(e) || Wr(e) || ba(e) || wa(e), ma = (e) => typeof e == "string" && e === "accepted", ya = (e) => typeof e == "string" && e === "done", Wr = (e) => typeof e == "string" && e === "failed", ba = (e) => typeof e == "string" && e === "killed", wa = (e) => typeof e == "string" && e === "timeout", Ra = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1), xa = (e) => Ca(e) || ka(e) || _a(e), Ca = (e) => typeof e == "string" && e === "start", ka = (e) => typeof e == "string" && e === "update", _a = (e) => typeof e == "string" && e === "end", Gr = (e) => typeof e == "string", Ta = (e) => Ea(e) || Ia(e) || Wr(e) || Sa(e) || Aa(e), Ea = (e) => typeof e == "string" && e === "running", Ia = (e) => typeof e == "string" && e === "completed", Sa = (e) => typeof e == "string" && e === "blocked", Aa = (e) => typeof e == "string" && e === "skipped", Q = (e) => typeof e == "string", ze = (e) => typeof e == "boolean", Hr = (e) => Number.isFinite(e);
+  (t, n) => qr[0].test(t) || Wr(e[t])
+) && (e.delegation === void 0 || !("delegation" in e) || ua(e.delegation)) && Ra(e.itemId) && xa(e.phase) && Gr(e.kind) && Gr(e.title) && (e.status === void 0 || !("status" in e) || Ta(e.status)) && (e.name === void 0 || !("name" in e) || Q(e.name)) && (e.meta === void 0 || !("meta" in e) || Q(e.meta)) && (e.commandBearing === void 0 || !("commandBearing" in e) || We(e.commandBearing)) && (e.toolCallId === void 0 || !("toolCallId" in e) || Q(e.toolCallId)) && (e.unpairedCall === void 0 || !("unpairedCall" in e) || We(e.unpairedCall)) && (e.startedAt === void 0 || !("startedAt" in e) || Hr(e.startedAt)) && (e.endedAt === void 0 || !("endedAt" in e) || Hr(e.endedAt)) && (e.error === void 0 || !("error" in e) || Q(e.error)) && (e.summary === void 0 || !("summary" in e) || Q(e.summary)) && (e.progressText === void 0 || !("progressText" in e) || Q(e.progressText)) && (e.suppressChannelProgress === void 0 || !("suppressChannelProgress" in e) || We(e.suppressChannelProgress)) && (e.hideFromChannelProgress === void 0 || !("hideFromChannelProgress" in e) || We(e.hideFromChannelProgress)) && (e.approvalId === void 0 || !("approvalId" in e) || Q(e.approvalId)) && (e.approvalSlug === void 0 || !("approvalSlug" in e) || Q(e.approvalSlug)), Wr = (e) => !1, ua = (e) => Array.isArray(e) && e.every((t, n) => da(t)) && e.length <= 32, da = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "runId" in e && "childSessionKey" in e && "status" in e && Object.getOwnPropertyNames(e).every(
+  (t, n) => qr[1].test(t) || Wr(e[t])
+) && pa(e.runId) && fa(e.childSessionKey) && (e.label === void 0 || !("label" in e) || jr(e.label)) && (e.groupId === void 0 || !("groupId" in e) || jr(e.groupId)) && (e.runtimeMs === void 0 || !("runtimeMs" in e) || ha(e.runtimeMs)) && ga(e.status), pa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 256 || e.length <= 512 && ae(e) <= 256), fa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 1024 || e.length <= 2048 && ae(e) <= 1024), jr = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 512 || e.length <= 1024 && ae(e) <= 512), ha = (e) => Number.isFinite(e) && e >= 0 && e <= 9007199254740991, ga = (e) => ma(e) || ya(e) || zr(e) || ba(e) || wa(e), ma = (e) => typeof e == "string" && e === "accepted", ya = (e) => typeof e == "string" && e === "done", zr = (e) => typeof e == "string" && e === "failed", ba = (e) => typeof e == "string" && e === "killed", wa = (e) => typeof e == "string" && e === "timeout", Ra = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1), xa = (e) => Ca(e) || ka(e) || _a(e), Ca = (e) => typeof e == "string" && e === "start", ka = (e) => typeof e == "string" && e === "update", _a = (e) => typeof e == "string" && e === "end", Gr = (e) => typeof e == "string", Ta = (e) => Ea(e) || Ia(e) || zr(e) || Sa(e) || Aa(e), Ea = (e) => typeof e == "string" && e === "running", Ia = (e) => typeof e == "string" && e === "completed", Sa = (e) => typeof e == "string" && e === "blocked", Aa = (e) => typeof e == "string" && e === "skipped", Q = (e) => typeof e == "string", We = (e) => typeof e == "boolean", Hr = (e) => Number.isFinite(e);
 var $r = (e) => ca(e);
 
 // openclaw/ui/src/lib/chat/tool-call-grouping.ts
