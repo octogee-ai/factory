@@ -1,5 +1,5 @@
 {
-  "sourceSha": "e10db5d5c8eef6f69cddfa6eb351cb6e7cfc453f",
+  "sourceSha": "0c0b0183cc7ee78d1d64248a44299436a438dbd0",
   "routines": {
     "memory_index_chunks_search_sync": [
       "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd"
@@ -551,6 +551,7 @@
       "43dad97e83d4f2c57b22f2309a5bb5de69995f1e1f9c4829f9d6a4207fa15f3e"
     ],
     "constraint:transcript_events:transcript_events_check": [
+      "a595e1d96224b2bf5e52d62b24ed53db65bddb83692a3ce10432bbaef1afb66e",
       "dc266345901d4e156e9929c00143d1015544ffa858b0a93613afa898d511b530"
     ],
     "constraint:transcript_events:transcript_events_event_utf8_bytes_check": [
