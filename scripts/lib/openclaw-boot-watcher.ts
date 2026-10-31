@@ -48,6 +48,14 @@ function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimO
   return request;
 }
 
+function requestedUpgradeDoctor(claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>,
+  upgrade: UpgradeDoctor | undefined, build: { openclawBuild?: string }): UpgradeDoctor | undefined {
+  if (!claim.openclawUpgrade) return undefined;
+  if (claim.action !== "doctor" || claim.sourceDoctor) throw new Error("invalid OpenClaw upgrade Doctor request");
+  if (!upgrade || !build.openclawBuild) throw new Error("upgrade Doctor requested without a reported OpenClaw build");
+  return upgrade;
+}
+
 export function createOpenClawBootWatcher(input: {
   client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor"> & Partial<Pick<FleetBrokerClient, "assertOpenClawDoctor">>;
   releaseKey: string;
@@ -101,12 +109,12 @@ export function createOpenClawBootWatcher(input: {
       if (claim.action !== "start" && claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
+      const requestedUpgrade = requestedUpgradeDoctor(claim, upgrade, build);
       await input.inspectBuilderStores?.();
-      if (claim.action === "start") {
-        if (upgrade && build.openclawBuild && build.openclawBuild !== claim.healthyOpenClawBuild) {
-          input.log(`[openclaw-boot] OpenClaw ${build.openclawBuild} replaces ${claim.healthyOpenClawBuild ?? "an unrecorded build"}; running openclaw doctor --fix before startup`);
-          await run(upgrade.openclawBinary, ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
-        }
+      if (claim.action === "start") return;
+      if (requestedUpgrade) {
+        input.log(`[openclaw-boot] OpenClaw ${build.openclawBuild} replaces ${claim.openclawUpgrade?.replacesBuild ?? "an unrecorded build"}; running openclaw doctor --fix before startup`);
+        await run(requestedUpgrade.openclawBinary, ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
         return;
       }
       if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");

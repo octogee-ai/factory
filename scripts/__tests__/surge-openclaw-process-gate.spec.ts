@@ -437,7 +437,7 @@ describe("surge OpenClaw process supervisor", () => {
       .mockImplementationOnce(async () => { expect(children).toHaveLength(0); order.push("inspect"); return "exact"; });
     const bootWatcher = createSurgeOpenClawBootWatcher({
       openclawDir, releaseKey: "builder-release", log: () => {}, env: { GATEWAY_CLASS: "builder", OPENCLAW_CONFIG_PATH: path.join(openclawDir, "system_config/openclaw.json") },
-      client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() },
+      client: { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "doctor", openclawUpgrade: { replacesBuild: "a".repeat(40) } }), completeOpenClawBoot: vi.fn(), completeOpenClawDoctor: vi.fn() },
       run: async () => { expect(children).toHaveLength(0); order.push("doctor"); },
       installedOpenClawBuild: async () => "b".repeat(40),
     });

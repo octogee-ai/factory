@@ -42,11 +42,12 @@ import fs from 'node:fs';import {execFileSync} from 'node:child_process';
 import {runOpenClawBootPhase} from ${JSON.stringify(path.join(repo, "scripts/entrypoints/openclaw-boot-sentinel.ts"))};
 const root=process.env.QUAL_BOOT_ROOT,file=root+'/sentinel';
 await runOpenClawBootPhase(process.argv[2],{log:()=>{},openclawBinary:root+'/openclaw',
-client:{claimOpenClawBoot:async()=>{const prior=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
- const action=prior==='starting'?'doctor':'start';
- if(!prior)fs.writeFileSync(file,'starting');else if(action==='doctor')fs.writeFileSync(file,'doctor-attempted');
+client:{claimOpenClawBoot:async({openclawBuild})=>{const prior=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
  const healthy=fs.existsSync(root+'/healthy-build')?fs.readFileSync(root+'/healthy-build','utf8'):undefined;
- return{action,...(healthy?{healthyOpenClawBuild:healthy}:{})};},
+ if(!prior){fs.writeFileSync(file,'starting');
+  return openclawBuild&&openclawBuild!==healthy?{action:'doctor',openclawUpgrade:healthy?{replacesBuild:healthy}:{}}:{action:'start'};}
+ if(prior==='starting'){fs.writeFileSync(file,'doctor-attempted');return{action:'doctor'};}
+ return{action:'start'};},
 completeOpenClawDoctor:async()=>{},completeOpenClawBoot:async({openclawBuild})=>{fs.rmSync(file,{force:true});
  fs.writeFileSync(root+'/healthy-build',openclawBuild);fs.appendFileSync(root+'/order.log','healthy\\n');}},
 run:async(command,args)=>{execFileSync(command,args,{stdio:'inherit'});}});

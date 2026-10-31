@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { FieldValue, type DocumentData, type Firestore, type Transaction } from "firebase-admin/firestore";
+import { FieldValue, type DocumentData, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore";
 
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
@@ -23,11 +23,11 @@ export interface OpenClawBootSentinelStore {
 
 export const OPENCLAW_BUILD_PATTERN = /^[0-9a-f]{40}$/;
 
-function healthyOpenClawBuild(runtime: DocumentData | undefined): { healthyOpenClawBuild?: string } {
+function recordedHealthyOpenClawBuild(runtime: DocumentData | undefined): string | undefined {
   const build = runtime?.openclawHealthyBuild;
-  if (build === undefined) return {};
+  if (build === undefined) return undefined;
   if (typeof build !== "string" || !OPENCLAW_BUILD_PATTERN.test(build)) throw new Error("stored healthy OpenClaw build is malformed");
-  return { healthyOpenClawBuild: build };
+  return build;
 }
 
 function record(value: unknown): DocumentData {
@@ -124,6 +124,52 @@ function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sour
     schedulerStateRecovery: context.schedulerStateRecovery, postgresAgentStores: context.postgresAgentStores };
 }
 
+function claimReleaseSentinel(
+  txn: Transaction,
+  runtimeRef: DocumentReference,
+  runtime: DocumentData | undefined,
+  input: OpenClawBootInput,
+  at: number,
+): FleetBrokerOpenClawBootClaim {
+  const healthyBuild = recordedHealthyOpenClawBuild(runtime);
+  const sentinel = runtime?.openclawBootSentinel as
+    | Record<string, unknown>
+    | undefined;
+  if (sentinel?.releaseKey === input.releaseKey && sentinel.state === "starting") {
+    txn.update(runtimeRef, {
+      openclawBootSentinel: {
+        releaseKey: input.releaseKey,
+        state: "doctor-attempted",
+        podUid: input.podUid,
+        updatedAt: at,
+      },
+    });
+    return { action: "doctor" };
+  }
+  if (sentinel?.releaseKey !== input.releaseKey) {
+    txn.update(runtimeRef, {
+      openclawBootSentinel: {
+        releaseKey: input.releaseKey,
+        state: "starting",
+        podUid: input.podUid,
+        updatedAt: at,
+      },
+    });
+    if (input.openclawBuild && input.openclawBuild !== healthyBuild) {
+      return { action: "doctor" as const, openclawUpgrade: healthyBuild ? { replacesBuild: healthyBuild } : {} };
+    }
+  } else if (
+    sentinel.state === "doctor-attempted"
+    && sentinel.podUid !== input.podUid
+  ) {
+    txn.update(runtimeRef, {
+      "openclawBootSentinel.podUid": input.podUid,
+      "openclawBootSentinel.updatedAt": at,
+    });
+  }
+  return { action: "start" };
+}
+
 export function createOpenClawBootSentinelStore(
   db: Firestore,
   now: () => number,
@@ -134,10 +180,9 @@ export function createOpenClawBootSentinelStore(
       return db.runTransaction(async (txn) => {
         const runtimeSnap = await txn.get(runtimeRef);
         if (!runtimeSnap.exists) return null;
-        const start = { action: "start" as const, ...healthyOpenClawBuild(runtimeSnap.data()) };
         const context = await sourceDoctorContext(db, txn, input);
         if (context) {
-          if (sourceDoctorCompleted(context, input)) return start;
+          if (sourceDoctorCompleted(context, input)) return { action: "start" as const };
           if (context.doctor.startedAt !== undefined || context.doctor.completedAt !== undefined) throw new Error("source Doctor attempted without matching success acknowledgement");
           const sourceDoctor = sourceDoctorRequest(context);
           if (!context.imageVerified) return { action: "wait" as const, sourceDoctor };
@@ -147,39 +192,7 @@ export function createOpenClawBootSentinelStore(
           });
           return { action: "doctor" as const, sourceDoctor };
         }
-        const sentinel = runtimeSnap.data()?.openclawBootSentinel as
-          | Record<string, unknown>
-          | undefined;
-        if (sentinel?.releaseKey === input.releaseKey && sentinel.state === "starting") {
-          txn.update(runtimeRef, {
-            openclawBootSentinel: {
-              releaseKey: input.releaseKey,
-              state: "doctor-attempted",
-              podUid: input.podUid,
-              updatedAt: now(),
-            },
-          });
-          return { action: "doctor" };
-        }
-        if (sentinel?.releaseKey !== input.releaseKey) {
-          txn.update(runtimeRef, {
-            openclawBootSentinel: {
-              releaseKey: input.releaseKey,
-              state: "starting",
-              podUid: input.podUid,
-              updatedAt: now(),
-            },
-          });
-        } else if (
-          sentinel.state === "doctor-attempted"
-          && sentinel.podUid !== input.podUid
-        ) {
-          txn.update(runtimeRef, {
-            "openclawBootSentinel.podUid": input.podUid,
-            "openclawBootSentinel.updatedAt": now(),
-          });
-        }
-        return start;
+        return claimReleaseSentinel(txn, runtimeRef, runtimeSnap.data(), input, now());
       });
     },
     async assertDoctor(input) {
