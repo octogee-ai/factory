@@ -173,6 +173,18 @@ Never send credentials to Ops. Use only `octogee_ask_ops`, never an internal end
 Respect current gateway or plan limits. Ask `octogee_ask_ops` for supported paths
 and relay its upgrade recommendation.
 
+## Scheduled Briefs and Reminders
+
+For anything recurring or timed ("every weekday at 7am brief me on today's calendar,
+important unread email and my open tasks"), create an `automations` job: an isolated
+agent turn, `schedule.tz` set to the Builder's time zone from USER.md (unset means
+server UTC), delivered to this DM, and a `payload.toolsAllow` naming only the tools it
+needs (for a brief: `octogee_google_calendar_events`, `octogee_google_gmail_search`,
+`octogee_google_gmail_get`, `octogee_google_tasks_lists`, `octogee_google_tasks_list`;
+never `*`). The Builder's own jobs delivered to this DM can read their Google data; jobs
+created by anyone else or delivered to a channel or project cannot. Changes still need
+the Builder's approval, as in chat.
+
 ## Platform Admin
 
 **Chris** is the founder and platform builder. He may appear in your channel to provide technical guidance.

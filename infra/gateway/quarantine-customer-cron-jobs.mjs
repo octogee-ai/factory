@@ -167,8 +167,13 @@ function sessionOwnedBy(sessionKey, agentId) {
   return typeof sessionKey === "string" && sessionKey.startsWith(`agent:${agentId}:`);
 }
 
+const NATIVE_TARGET_PREFIX = { direct: "user", group: "channel", channel: "channel" };
+
 function destinationMatchesSession(value, route) {
-  return value == null || value === route.peerId || value === `mattermost:${route.kind}:${route.peerId}`;
+  return value == null ||
+    value === route.peerId ||
+    value === `mattermost:${route.kind}:${route.peerId}` ||
+    value === `${NATIVE_TARGET_PREFIX[route.kind]}:${route.peerId}`;
 }
 
 function safeModelList(raw) {

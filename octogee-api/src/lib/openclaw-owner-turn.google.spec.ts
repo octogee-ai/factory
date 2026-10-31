@@ -286,4 +286,56 @@ describe("createGoogleTurnVerifier", () => {
 
     await expect(verify(input(context(`channel:${CHANNEL_ID}`)))).resolves.toBe(false);
   });
+
+  describe("scheduled turns", () => {
+    function scheduled(overrides: Record<string, unknown> = {}) {
+      return {
+        origin: "scheduled",
+        channel: "mattermost",
+        accountId: "eggman-coach",
+        requesterSenderId: REQUESTER_ID,
+        to: `user:${REQUESTER_ID}`,
+        ...overrides,
+      };
+    }
+
+    it("allows the assigned Builder's own scheduled job delivering to their Coach DM", async () => {
+      const harness = fakeDb({ workspaceOwner: "uid-eggman" });
+      const verify = createGoogleTurnVerifier(harness.db);
+
+      await expect(verify(input(scheduled()))).resolves.toBe(true);
+      expect(harness.collectionGroup).not.toHaveBeenCalled();
+      expect(harness.collection).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a collaborator's job", scheduled({ requesterSenderId: MEMBER_ID, to: `user:${MEMBER_ID}` }), {}],
+      ["a channel route", scheduled({ to: `channel:${CHANNEL_ID}` }), {}],
+      ["a DM to someone other than the creator", scheduled({ to: `user:${MEMBER_ID}` }), {}],
+      ["a creator who is not the gateway's owner", scheduled(), {
+        assignedData: { workspaceId: "eggman", mattermost: { userId: "v".repeat(26) } },
+      }],
+      ["another coach account", scheduled({ accountId: "victim-coach" }), {}],
+      ["a project agent", scheduled(), { agentId: "octogee-eggman-proj-orbit-coach" }],
+      ["a native channel claim", scheduled({ nativeChannelId: CHANNEL_ID }), {}],
+      ["an unknown origin", scheduled({ origin: "replay" }), {}],
+      ["an owner flag", scheduled({ senderIsOwner: true }), {}],
+    ])("rejects %s", async (_label, requestContext, overrides) => {
+      const harness = fakeDb({
+        workspaceOwner: "uid-eggman",
+        channels: [{ path: "workspaces/eggman/channels/general" }],
+        members: [activeMember()],
+      });
+      const verify = createGoogleTurnVerifier(harness.db);
+
+      await expect(verify(input(requestContext, overrides))).resolves.toBe(false);
+    });
+
+    it("rejects a scheduled job when the workspace belongs to another owner", async () => {
+      const harness = fakeDb({ workspaceOwner: "uid-victim" });
+      const verify = createGoogleTurnVerifier(harness.db);
+
+      await expect(verify(input(scheduled()))).resolves.toBe(false);
+    });
+  });
 });

@@ -173,7 +173,7 @@ function rowWithJobPatch(
   return values;
 }
 
-function fixture() {
+function fixture(extraRows: CronRow[] = []) {
   const root = mkdtempSync(path.join(tmpdir(), "octogee-cron-quarantine-"));
   const state = path.join(root, "state");
   mkdirSync(state, { recursive: true });
@@ -266,6 +266,7 @@ function fixture() {
     row("wildcard-session-target", { session_target: "session:*" }),
     row("owned-session-target", { session_target: `session:${ceckertSession}` }),
     row("malformed-session-target", { session_target: "MAIN" }),
+    ...extraRows,
   ];
   const columns = [
     "store_key", "job_id", "declaration_key", "owner_agent_id", "name", "description", "enabled",
@@ -401,4 +402,39 @@ describe("customer cron routing quarantine", () => {
     expect(db.prepare("SELECT count(*) AS count FROM cron_jobs").get()).toEqual({ count: 2 + simpleTierModels.length });
     db.close();
   });
+
+  it("keeps jobs that deliver to their own session through native user and channel targets", () => {
+    const ownerPeer = "o".repeat(26);
+    const directSession = `agent:${ceckertAgent}:mattermost:direct:${ownerPeer}`;
+    const direct = { owner_session_key: directSession, session_key: directSession };
+    const { root } = fixture([
+      row("dm-native-target", { ...direct, delivery_to: `user:${ownerPeer}` }),
+      row("dm-foreign-user", { ...direct, delivery_to: `user:${"x".repeat(26)}` }),
+      row("dm-as-channel", { ...direct, delivery_to: `channel:${ownerPeer}` }),
+      row("channel-native-target", { delivery_to: "channel:ceckert-channel" }),
+      row("channel-foreign-channel", { delivery_to: "channel:mike-channel" }),
+      row("channel-as-user", { delivery_to: "user:ceckert-channel" }),
+      row("dm-foreign-failure-alert", { ...direct, delivery_to: `user:${ownerPeer}`, failure_alert_to: `user:${"x".repeat(26)}` }),
+    ]);
+
+    const result = run(root, "builder");
+
+    expect(result.status, result.stderr).toBe(0);
+    const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
+    const survivors = db.prepare("SELECT job_id FROM cron_jobs").all().map((entry) => String(entry.job_id));
+    db.close();
+    expect(survivors).toEqual(expect.arrayContaining(["dm-native-target", "channel-native-target"]));
+    const reasons = Object.fromEntries(JSON.parse(readFileSync(
+      path.join(root, "cron", "octogee-customer-cron-quarantine.json"),
+      "utf8",
+    )).jobs.map((job: { jobId: string; reason: string }) => [job.jobId, job.reason]));
+    expect(reasons).toMatchObject({
+      "dm-foreign-user": "delivery-destination-mismatch",
+      "dm-as-channel": "delivery-destination-mismatch",
+      "channel-foreign-channel": "delivery-destination-mismatch",
+      "channel-as-user": "delivery-destination-mismatch",
+      "dm-foreign-failure-alert": "failure-alert-destination-mismatch",
+    });
+  });
 });
+

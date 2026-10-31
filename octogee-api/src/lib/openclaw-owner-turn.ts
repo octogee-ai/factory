@@ -18,6 +18,13 @@ const REQUEST_CONTEXT_FIELDS = new Set([
   "nativeChannelId",
   "to",
 ]);
+const SCHEDULED_REQUEST_CONTEXT_FIELDS = new Set([
+  "origin",
+  "channel",
+  "accountId",
+  "requesterSenderId",
+  "to",
+]);
 
 export interface OwnerWorkspaceTurnInput {
   req: Request;
@@ -31,20 +38,38 @@ export type OwnerWorkspaceTurnVerifier = (
   input: OwnerWorkspaceTurnInput,
 ) => Promise<boolean>;
 
-interface OwnerWorkspaceRequestContext {
-  channel: "mattermost";
-  accountId: string;
-  requesterSenderId: string;
-  nativeChannelId: string;
-  routeKind: "user" | "channel";
-  routeId: string;
-}
+type OwnerWorkspaceRequestContext =
+  | {
+    origin: "turn";
+    channel: "mattermost";
+    accountId: string;
+    requesterSenderId: string;
+    nativeChannelId: string;
+    routeKind: "user" | "channel";
+    routeId: string;
+  }
+  | {
+    origin: "scheduled";
+    channel: "mattermost";
+    accountId: string;
+    requesterSenderId: string;
+    routeKind: "user" | "channel";
+    routeId: string;
+  };
 
 interface RequestContextRecord extends Record<string, unknown> {
   channel: "mattermost";
   accountId: string;
   requesterSenderId: string;
   nativeChannelId: string;
+  to: string;
+}
+
+interface ScheduledRequestContextRecord extends Record<string, unknown> {
+  origin: "scheduled";
+  channel: "mattermost";
+  accountId: string;
+  requesterSenderId: string;
   to: string;
 }
 
@@ -73,20 +98,39 @@ function parseQueryContext(value: unknown): unknown {
   }
 }
 
+function hasExactFields(context: Record<string, unknown>, fields: Set<string>): boolean {
+  return Object.keys(context).length === fields.size
+    && Object.keys(context).every((key) => fields.has(key));
+}
+
+function hasMattermostSender(context: Record<string, unknown>): boolean {
+  return context.channel === "mattermost"
+    && typeof context.accountId === "string"
+    && typeof context.requesterSenderId === "string"
+    && MATTERMOST_ID_RE.test(context.requesterSenderId)
+    && typeof context.to === "string";
+}
+
 function isRequestContextRecord(
   context: Record<string, unknown> | null,
 ): context is RequestContextRecord {
   return Boolean(
     context
-    && Object.keys(context).length === REQUEST_CONTEXT_FIELDS.size
-    && Object.keys(context).every((key) => REQUEST_CONTEXT_FIELDS.has(key))
-    && context.channel === "mattermost"
-    && typeof context.accountId === "string"
-    && typeof context.requesterSenderId === "string"
-    && MATTERMOST_ID_RE.test(context.requesterSenderId)
+    && hasExactFields(context, REQUEST_CONTEXT_FIELDS)
+    && hasMattermostSender(context)
     && typeof context.nativeChannelId === "string"
-    && MATTERMOST_ID_RE.test(context.nativeChannelId)
-    && typeof context.to === "string",
+    && MATTERMOST_ID_RE.test(context.nativeChannelId),
+  );
+}
+
+function isScheduledRequestContextRecord(
+  context: Record<string, unknown> | null,
+): context is ScheduledRequestContextRecord {
+  return Boolean(
+    context
+    && hasExactFields(context, SCHEDULED_REQUEST_CONTEXT_FIELDS)
+    && context.origin === "scheduled"
+    && hasMattermostSender(context),
   );
 }
 
@@ -108,11 +152,24 @@ export function ownerWorkspaceRequestContext(req: Request): OwnerWorkspaceReques
   const bodyHasContext = body && Object.hasOwn(body, "requestContext");
   if (bodyHasContext && queryValue !== undefined) return null;
   const context = record(body?.requestContext ?? parseQueryContext(queryValue));
+  if (isScheduledRequestContextRecord(context)) {
+    const route = parseRoute(context.to);
+    return route
+      ? {
+        origin: "scheduled",
+        channel: "mattermost",
+        accountId: context.accountId,
+        requesterSenderId: context.requesterSenderId,
+        ...route,
+      }
+      : null;
+  }
   if (!isRequestContextRecord(context)) return null;
   const route = parseRoute(context.to);
   if (!route) return null;
 
   return {
+    origin: "turn",
     channel: "mattermost",
     accountId: context.accountId,
     requesterSenderId: context.requesterSenderId,
@@ -193,6 +250,15 @@ async function trustedWorkspaceSender(
   return isActiveWorkspaceMember(db, slug, senderId);
 }
 
+export function isOwnerDirectRoute(
+  context: Pick<OwnerWorkspaceRequestContext, "routeKind" | "routeId" | "requesterSenderId">,
+  assignedData: Record<string, unknown>,
+): boolean {
+  return context.routeKind === "user"
+    && context.routeId === context.requesterSenderId
+    && assignedMattermostUserId(assignedData) === context.requesterSenderId;
+}
+
 export function createGoogleTurnVerifier(
   db: Firestore,
 ): OwnerWorkspaceTurnVerifier {
@@ -210,6 +276,8 @@ export function createGoogleTurnVerifier(
     if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
       || workspace.data()?.ownerActive !== true) return false;
 
+    if (context.origin === "scheduled") return isOwnerDirectRoute(context, assignedData);
+
     const channelName = await workspaceChannelName(
       db,
       context.nativeChannelId,
@@ -217,9 +285,7 @@ export function createGoogleTurnVerifier(
     );
     if (!channelName) return false;
     if (context.routeKind === "user") {
-      return context.routeId === context.requesterSenderId
-        && channelName === "coach-dm"
-        && assignedMattermostUserId(assignedData) === context.requesterSenderId;
+      return channelName === "coach-dm" && isOwnerDirectRoute(context, assignedData);
     }
     if (context.routeId !== context.nativeChannelId) return false;
     return trustedWorkspaceSender(db, parsed.username, assignedData, context.requesterSenderId);
