@@ -152,6 +152,19 @@ export class TerminalPlacementMigrationConflictError extends Error {
   }
 }
 
+export class HeldBuilderPlacementError extends GatewayRetirementConflictError {
+  constructor(readonly uid: string) {
+    super(`builder ${uid} is operator-managed`);
+    this.name = "HeldBuilderPlacementError";
+  }
+}
+
+function isSkippablePlacementConflict(
+  error: unknown,
+): error is TerminalPlacementMigrationConflictError | HeldBuilderPlacementError {
+  return error instanceof TerminalPlacementMigrationConflictError || error instanceof HeldBuilderPlacementError;
+}
+
 export interface PlacementPolicyUser {
   uid: string;
   data: Record<string, unknown>;
@@ -2487,7 +2500,7 @@ async function reconcileSharedGatewayRebalance(
         operationId,
       });
     } catch (error) {
-      if (!(error instanceof TerminalPlacementMigrationConflictError)) throw error;
+      if (!isSkippablePlacementConflict(error)) throw error;
       scheduled.add(builder.uid);
       context.deps.log(
         `[placement-policy] rebalance skipped uid=${builder.uid} operationId=${operationId}: ${error.message}`,
@@ -2581,7 +2594,7 @@ async function enqueueDrainMove(
     });
     return "enqueued";
   } catch (error) {
-    if (error instanceof TerminalPlacementMigrationConflictError) {
+    if (isSkippablePlacementConflict(error)) {
       context.deps.log(
         `[placement-policy] drain of ${fromGatewayId} skipped uid=${builder.uid}: ${error.message}; an operator move is needed`,
       );
@@ -3930,7 +3943,7 @@ function supersededSharedDrainMoveCanRearm(
 async function assertBuilderPlacementNotHeld(db: Firestore, transaction: Transaction, uid: string): Promise<void> {
   const owner = await transaction.get(db.collection("users").doc(uid));
   if (record(record(owner.data()?.provisioning)?.openclaw)?.managedBy === "operator") {
-    throw new GatewayRetirementConflictError(`builder ${uid} is operator-managed`);
+    throw new HeldBuilderPlacementError(uid);
   }
 }
 
