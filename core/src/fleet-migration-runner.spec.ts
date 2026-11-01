@@ -1,25 +1,20 @@
 import { describe, it, expect, vi } from "vitest";
+import type { ScheduleRecord, ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
 import { runMigration, type MigrationRunnerDeps } from "./fleet-migration-runner";
-import { MigrationDrainPendingError, MigrationRpcError, type MigrationClient } from "./fleet-migration-client";
+import { MigrationDrainPendingError, type MigrationClient } from "./fleet-migration-client";
 
-// Mirrors the pinned OpenClaw cron.migration kernel: an abort with no row for the
-// operation writes an "aborted" tombstone, and any later non-abort phase for that
-// operation on that gateway is refused.
-function kernelScheduler() {
-  const tombstones = new Set<string>();
-  return vi.fn(async ({ migrationId, phase, gatewayId }: Parameters<MigrationClient["scheduler"]>[0]) => {
-    const key = `${gatewayId}/${migrationId}`;
-    if (phase === "abort") tombstones.add(key);
-    else if (tombstones.has(key)) throw new Error(`/scheduler/${gatewayId}: 500 {"error":"scheduler migration failed","message":"Cron migration already aborted: ${migrationId}"}`);
-    return { operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
-  });
-}
+const STANDUP: ScheduleRecord = { sourceJobId: "job-standup", agentId: "octogee-alice-coach", job: { name: "standup", schedule: { kind: "cron", expr: "0 9 * * *" } } };
 
 function happyClient(): MigrationClient & { calls: string[] } {
   const calls: string[] = [];
   return {
-    scheduler: kernelScheduler(),
-    schedulerReady: vi.fn(async () => undefined),
+    scheduler: vi.fn(),
+    schedules: vi.fn(async (request: Parameters<MigrationClient["schedules"]>[0]) => {
+      calls.push(`schedules:${request.gatewayId}:${request.op}`);
+      if (request.op === "snapshot") return { migrationId: request.migrationId, slug: request.slug, op: "snapshot", records: [STANDUP], skipped: [] };
+      if (request.op === "remove") return { migrationId: request.migrationId, slug: request.slug, op: "remove", removed: request.jobIds.length, failed: [] };
+      return { migrationId: request.migrationId, slug: request.slug, op: "restore", created: request.records.length, existing: 0, failed: [] };
+    }) as unknown as MigrationClient["schedules"],
     resume: vi.fn(async () => undefined),
     restoreTarget: vi.fn(async ({ slug }) => {
       calls.push(`restore:${slug}`);
@@ -65,8 +60,18 @@ function harness(options: HarnessOptions = {}) {
   const client = options.client ?? happyClient();
   const events: string[] = [];
   const assignmentWrites: Array<{ gatewayId: string; uid: string; state: string }> = [];
+  const transfers = new Map<string, ScheduleTransferDoc>();
   const deps: MigrationRunnerDeps = {
     client,
+    readScheduleTransfer: vi.fn(async (migrationId: string) => structuredClone(transfers.get(migrationId)) ?? null),
+    saveScheduleTransfer: vi.fn(async (doc: ScheduleTransferDoc) => {
+      transfers.set(doc.migrationId, structuredClone(doc));
+      events.push(`schedules-saved:${doc.sourceGatewayId}->${doc.targetGatewayId}:${doc.records.length}`);
+    }),
+    recordScheduleRestore: vi.fn(async (migrationId, restore) => {
+      transfers.set(migrationId, { ...transfers.get(migrationId)!, ...restore });
+      events.push(`schedules-restored:${restore.restoredTo}`);
+    }),
     commitCutover: vi.fn(async (commit) => {
       events.push(`cutover:${commit.fromGatewayId}->${commit.toGatewayId}:mirror=${commit.flipMirror}`);
     }),
@@ -88,7 +93,7 @@ function harness(options: HarnessOptions = {}) {
     includeActivationManifest: true,
     ...(options.gateAssignment !== undefined ? { gateAssignment: options.gateAssignment } : {}),
   };
-  return { client, deps, input, events, assignmentWrites };
+  return { client, deps, input, events, assignmentWrites, transfers };
 }
 
 describe("runMigration — happy path", () => {
@@ -103,9 +108,12 @@ describe("runMigration — happy path", () => {
       "transfer:alice:pre",
       "quiesce:alice",
       "quiesce:alice",
+      "schedules:gw-blue:snapshot",
+      "schedules:gw-blue:remove",
       "flush:alice:migration-final",
       "transfer:alice:final",
       "verify:alice",
+      "schedules:gw-green:restore",
       "unmount:gw-blue:alice",
     ]);
     expect(client.restoreTarget).not.toHaveBeenCalled();
@@ -121,7 +129,6 @@ describe("runMigration — happy path", () => {
     expect(reports).toEqual([
       "report:keys-sync-state:running", "report:keys-sync-state:done",
       "report:pre-sync-state:running", "report:pre-sync-state:done",
-      "report:target-scheduler-ready:running", "report:target-scheduler-ready:done",
       "report:wait-for-active-work:running", "report:wait-for-active-work:done",
       "report:quiesce-source:running", "report:quiesce-source:done",
       "report:flush-source:running", "report:flush-source:done",
@@ -365,7 +372,7 @@ describe("runMigration — failures", () => {
     expect(result).toMatchObject({ success: false, finalPhase: "keys-synced", rolledBack: false });
     expect(result.errorAt?.error).toContain(`rollback:unmount-target: ${held}`);
     expect(client.quiesce).not.toHaveBeenCalled();
-    expect(client.scheduler).not.toHaveBeenCalled();
+    expect(client.schedules).not.toHaveBeenCalled();
     expect(deps.commitCutover).not.toHaveBeenCalled();
     expect(events).toContain("report:rollback:unmount-target:failed");
     expect(events).not.toContain("assignment:shared-blue:quiescing");
@@ -491,138 +498,234 @@ it("reports source assignment publication failure after native ingress resumes",
 });
 
 
-describe("scheduled work handoff", () => {
-  it("stages schedules before final copy and activates only after ownership cutover", async () => {
-    const h = harness();
-    const order: string[] = [];
-    const snapshot = { version: 1, agentIds: ["octogee-alice-coach"], jobs: [] };
-    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, gatewayId }) => {
-      order.push(`${gatewayId}:${phase}`);
-      return { operationId: "m1", agentIds: snapshot.agentIds, phase, drained: true, snapshot };
-    }) });
-    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
-      order.push(`copy:${mode}`);
-      return { migrationId: "m1", slug, imported: true };
-    });
-    vi.mocked(h.deps.commitCutover).mockImplementation(async () => { order.push("cutover"); });
-    vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
-      order.push(`unmount:${gatewayId}`);
-      return { migrationId: "m1", slug, unmounted: true };
-    });
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+describe("schedule transfer", () => {
+  it("snapshots the source's jobs once it is quiesced, persists them, and recreates them on the target after cutover before unmounting the source", async () => {
+    const h = harness({ gateAssignment: true });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done" });
+
+    const order = h.events.filter((event) => /^(report:quiesce-source:|report:flush-source:done|schedules-|cutover:|report:unmount-source:done)/.test(event));
     expect(order).toEqual([
-      "copy:keys", "copy:pre", "gw-blue:export", "gw-green:stage",
-      "copy:final", "cutover", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue",
+      "report:quiesce-source:running",
+      "schedules-saved:gw-blue->gw-green:1",
+      "report:quiesce-source:done",
+      "report:flush-source:done",
+      "cutover:gw-blue->gw-green:mirror=true",
+      "schedules-restored:gw-green",
+      "report:unmount-source:done",
     ]);
+    expect(h.client.schedules).toHaveBeenNthCalledWith(1, { migrationId: "m1", slug: "alice", gatewayId: "gw-blue", op: "snapshot" });
+    expect(h.client.schedules).toHaveBeenNthCalledWith(2, { migrationId: "m1", slug: "alice", gatewayId: "gw-blue", op: "remove", jobIds: ["job-standup"] });
+    expect(h.client.schedules).toHaveBeenNthCalledWith(3, { migrationId: "m1", slug: "alice", gatewayId: "gw-green", op: "restore", records: [STANDUP] });
+    expect(h.transfers.get("m1")).toEqual({
+      migrationId: "m1", slug: "alice", sourceGatewayId: "gw-blue", targetGatewayId: "gw-green",
+      records: [STANDUP], skipped: [], snapshotAt: expect.any(Number),
+      restoredTo: "gw-green", restoredAt: expect.any(Number), restoreAttemptedTo: "gw-green", restoreAttemptedAt: expect.any(Number), restoreFailures: [],
+    });
   });
 
-  it("lets the source's quiesce own the scheduler hold: no /scheduler call precedes /quiesce, and the request names the handoff", async () => {
-    const h = harness();
-    const order: string[] = [];
-    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, gatewayId, migrationId }) => {
-      order.push(`${gatewayId}:${phase}`);
-      if (phase === "hold") throw new Error("scheduler hold did not prove a drained matching operation");
-      return { operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
-    }) });
-    vi.mocked(h.client.quiesce).mockImplementation(async (request) => {
-      order.push(`quiesce:${request.gatewayId}`);
-      if (request.stopMattermost !== false) expect(request).toMatchObject({ schedulerHandoff: true, schedulerMigrationId: "m1" });
-      return { migrationId: "m1", slug: "alice", drained: true, runningCount: 0 };
-    });
+  it("quiesces the source without a cron.migration hold and never drives the scheduler handoff", async () => {
+    const h = harness({ gateAssignment: true });
 
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
-    expect(order.slice(0, 4)).toEqual(["quiesce:gw-blue", "quiesce:gw-blue", "gw-blue:export", "gw-green:stage"]);
-    expect(order).not.toContain("gw-blue:hold");
+
+    for (const [request] of vi.mocked(h.client.quiesce).mock.calls) {
+      expect(request).not.toHaveProperty("schedulerHandoff");
+      expect(request).not.toHaveProperty("schedulerMigrationId");
+    }
+    expect(h.client.scheduler).not.toHaveBeenCalled();
   });
 
-  it("stages beside the jobs a partial return left dormant only when the caller accepts them on the target", async () => {
-    const accepting = harness();
-    expect(await runMigration({ ...accepting.input, acceptRetainedTargetJobs: true }, accepting.deps)).toMatchObject({ success: true });
-    const requests = vi.mocked(accepting.client.scheduler).mock.calls.map(([request]) => request);
-    expect(requests.find((request) => request.phase === "stage")).toMatchObject({ gatewayId: "gw-green", retainNonportable: true });
-    expect(requests.filter((request) => request.phase !== "stage").every((request) => request.retainNonportable === undefined)).toBe(true);
-    expect(vi.mocked(accepting.client.quiesce).mock.calls[0][0].retainNonportable).toBeUndefined();
-
-    const strict = harness();
-    expect(await runMigration(strict.input, strict.deps)).toMatchObject({ success: true });
-    expect(vi.mocked(strict.client.scheduler).mock.calls.map(([request]) => request).every((request) => request.retainNonportable === undefined)).toBe(true);
-  });
-
-  it("reports where the final sync spent its time: scheduler export, scheduler stage, and the copy", async () => {
+  it("removes the source jobs only after the snapshot is saved", async () => {
     const h = harness();
-    let clock = 0;
-    h.deps.now = () => clock;
-    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, migrationId }) => {
-      clock += phase === "export" ? 7_000 : phase === "stage" ? 4_000 : 100;
-      return { operationId: migrationId, agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
-    }) });
-    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
-      clock += mode === "final" ? 70_000 : 400;
-      return { migrationId: "m1", slug, imported: true };
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    const removeCall = vi.mocked(h.client.schedules).mock.calls.findIndex(([request]) => request.op === "remove");
+    expect(vi.mocked(h.deps.saveScheduleTransfer).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(h.client.schedules).mock.invocationCallOrder[removeCall]!);
+  });
+
+  it("warns when the source could not remove every saved job and still recreates them all", async () => {
+    const h = harness();
+    const fake = vi.mocked(h.client.schedules).getMockImplementation()!;
+    vi.mocked(h.client.schedules).mockImplementation(async (request) => {
+      if (request.op === "snapshot") return { migrationId: "m1", slug: "alice", op: "snapshot", records: [STANDUP, { ...STANDUP, sourceJobId: "job-digest" }], skipped: [] };
+      if (request.op === "remove") return { migrationId: "m1", slug: "alice", op: "remove", removed: 1, failed: [{ jobId: "job-digest", error: "busy" }] };
+      return fake(request);
     });
 
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
 
-    const finalSync = h.events.find((event) => event.startsWith("log:") && event.includes("final-sync-state ok"));
-    expect(finalSync).toContain("schedulerExportMs=7000");
-    expect(finalSync).toContain("schedulerStageMs=4000");
-    expect(finalSync).toContain("transferMs=70000");
-    const keysSync = h.events.find((event) => event.startsWith("log:") && event.includes("keys-sync-state ok"));
-    expect(keysSync).toContain("transferMs=400");
+    expect(h.events.some((event) => event.startsWith("log:") && event.includes("⚠") && event.includes("gw-blue kept 1 of 2 snapshotted schedule(s)"))).toBe(true);
+    expect(h.client.schedules).toHaveBeenLastCalledWith(expect.objectContaining({ op: "restore", records: [STANDUP, { ...STANDUP, sourceJobId: "job-digest" }] }));
   });
 
-  it("aborts destination scheduling before reopening the source after failed transfer", async () => {
+  it("completes the move when the source cannot be asked to remove the saved jobs", async () => {
     const h = harness();
-    const order: string[] = [];
-    Object.assign(h.client, { scheduler: vi.fn(async ({ phase, gatewayId }) => {
-      order.push(`${gatewayId}:${phase}`);
-      return { operationId: "m1", agentIds: ["octogee-alice-coach"], phase, drained: true, snapshot: {} };
-    }) });
-    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
-      if (mode === "final") throw new Error("transfer failed");
-      return { migrationId: "m1", slug, imported: true };
+    const fake = vi.mocked(h.client.schedules).getMockImplementation()!;
+    vi.mocked(h.client.schedules).mockImplementation(async (request) => {
+      if (request.op === "remove") throw new Error("/schedules/gw-blue: 503 restarting");
+      return fake(request);
     });
-    vi.mocked(h.client.resume).mockImplementation(async () => { order.push("source-ingress-resumed"); });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done" });
+
+    expect(h.events.some((event) => event.startsWith("log:") && event.includes("could not remove") && event.includes("503 restarting"))).toBe(true);
+    expect(h.client.schedules).toHaveBeenLastCalledWith(expect.objectContaining({ gatewayId: "gw-green", op: "restore" }));
+  });
+
+  it("records the jobs the target could not recreate", async () => {
+    const h = harness();
+    const snapshotAndRestore = vi.mocked(h.client.schedules).getMockImplementation()!;
+    vi.mocked(h.client.schedules).mockImplementation(async (request) => request.op === "restore"
+      ? { migrationId: "m1", slug: "alice", op: "restore", created: 0, existing: 0, failed: [{ name: "standup", error: "invalid cron" }] }
+      : snapshotAndRestore(request));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.deps.recordScheduleRestore).toHaveBeenCalledWith("m1", {
+      restoreAttemptedTo: "gw-green", restoreAttemptedAt: expect.any(Number), restoreFailures: [{ name: "standup", error: "invalid cron" }],
+    });
+  });
+
+  it("restores the snapshot on the source when the migration rolls back before cutover", async () => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.flushGateway).mockRejectedValue(new Error("durable checkpoint unavailable"));
+
     expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
-    expect(order).toEqual([
-      "gw-blue:export", "gw-green:stage", "gw-green:abort", "gw-blue:resume", "source-ingress-resumed",
-    ]);
-    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+
+    expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-blue:remove", "schedules:gw-blue:restore"]);
+    expect(h.transfers.get("m1")).toMatchObject({ restoredTo: "gw-blue", restoreFailures: [] });
+    expect(h.events).toContain("assignment:gw-blue:serving");
+  });
+
+  it("never snapshots when the migration fails before the source is quiesced", async () => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.quiesce).mockResolvedValueOnce({ migrationId: "m1", slug: "alice", drained: true, runningCount: 0 }).mockRejectedValue(new Error("agents busy"));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
+
+    expect(h.client.schedules).not.toHaveBeenCalled();
+    expect(h.deps.saveScheduleTransfer).not.toHaveBeenCalled();
+  });
+
+  it("completes the migration without moving schedules when the source snapshot fails", async () => {
+    const h = harness({ gateAssignment: true });
+    vi.mocked(h.client.schedules).mockRejectedValue(new Error("/schedules/gw-blue: 500 cron.list failed"));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
+
+    expect(h.client.schedules).toHaveBeenCalledOnce();
+    expect(h.deps.saveScheduleTransfer).not.toHaveBeenCalled();
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+    expect(h.events.some((event) => event.startsWith("log:") && event.includes("schedule snapshot failed") && event.includes("cron.list failed"))).toBe(true);
+  });
+
+  it("leaves the fenced jobs on the source and still recreates them on the target when persisting the snapshot fails", async () => {
+    const h = harness();
+    vi.mocked(h.deps.saveScheduleTransfer).mockRejectedValue(new Error("firestore unavailable"));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-green:restore"]);
+    expect(h.client.schedules).toHaveBeenLastCalledWith({ migrationId: "m1", slug: "alice", gatewayId: "gw-green", op: "restore", records: [STANDUP] });
+    expect(h.events.some((event) => event.startsWith("log:") && event.includes("could not persist") && event.includes("firestore unavailable"))).toBe(true);
+  });
+
+  it("completes the migration and leaves the snapshot pending when the target restore fails", async () => {
+    const h = harness({ gateAssignment: true });
+    const snapshot = vi.mocked(h.client.schedules).getMockImplementation()!;
+    vi.mocked(h.client.schedules).mockImplementation(async (request) => {
+      if (request.op === "restore") throw new Error("/schedules/gw-green: 503 gateway restarting");
+      return snapshot(request);
+    });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
+
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+    expect(h.deps.recordScheduleRestore).not.toHaveBeenCalled();
+    expect(h.transfers.get("m1")?.restoredTo).toBeUndefined();
+    expect(h.events).toContain("report:unmount-source:done");
+    expect(h.events.some((event) => event.startsWith("log:") && event.includes("schedule restore on gw-green failed") && event.includes("503 gateway restarting"))).toBe(true);
+  });
+
+  it("completes the migration when recording the restore fails", async () => {
+    const h = harness();
+    vi.mocked(h.deps.recordScheduleRestore).mockRejectedValue(new Error("firestore unavailable"));
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done" });
+
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+  });
+
+  it("carries a snapshot an interrupted attempt left pending, and asks the source to remove its jobs again", async () => {
+    const h = harness();
+    const pending: ScheduleTransferDoc = {
+      migrationId: "m1", slug: "alice", sourceGatewayId: "gw-blue", targetGatewayId: "gw-green", records: [STANDUP], skipped: [], snapshotAt: 1,
+    };
+    h.transfers.set("m1", pending);
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:remove", "schedules:gw-green:restore"]);
+    expect(h.deps.saveScheduleTransfer).not.toHaveBeenCalled();
+    expect(h.transfers.get("m1")).toMatchObject({ records: [STANDUP], restoredTo: "gw-green" });
+  });
+
+  it("takes a fresh snapshot when an earlier attempt's jobs were already restored to the source", async () => {
+    const h = harness();
+    h.transfers.set("m1", {
+      migrationId: "m1", slug: "alice", sourceGatewayId: "gw-blue", targetGatewayId: "gw-green", records: [], skipped: [], snapshotAt: 1,
+      restoredTo: "gw-blue", restoredAt: 2, restoreFailures: [],
+    });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-blue:remove", "schedules:gw-green:restore"]);
+    expect(h.transfers.get("m1")).toMatchObject({ records: [STANDUP], restoredTo: "gw-green" });
+  });
+
+  it("finishes an old-protocol scheduler handoff instead of a snapshot restore before unmounting the source", async () => {
+    const h = harness();
+    h.deps.finishLegacySchedulerHandoff = vi.fn(async () => { h.events.push("legacy-handoff-finished"); });
+
+    expect(await runMigration({ ...h.input, resumeForwardRecovery: {} }, h.deps)).toMatchObject({ success: true });
+
+    expect(h.deps.finishLegacySchedulerHandoff).toHaveBeenCalledOnce();
+    expect(h.client.schedules).not.toHaveBeenCalled();
+    expect(vi.mocked(h.deps.finishLegacySchedulerHandoff).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(h.client.unmount).mock.invocationCallOrder[0]!);
+  });
+
+  it("moves no schedules when the customer stays on the same gateway", async () => {
+    const h = harness({ toGatewayId: "gw-blue" });
+
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+    expect(h.client.schedules).not.toHaveBeenCalled();
+    expect(h.deps.readScheduleTransfer).not.toHaveBeenCalled();
   });
 });
 
-it("keeps post-cutover activation failures pending without reopening source", async () => {
+it("reports how long the final copy took", async () => {
   const h = harness();
-  const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-  vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-    if (request.phase === "activate") throw new Error("gateway unavailable");
-    return scheduler(request);
+  let clock = 0;
+  h.deps.now = () => clock;
+  vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
+    clock += mode === "final" ? 70_000 : 400;
+    return { migrationId: "m1", slug, imported: true };
   });
-  const result = await runMigration(h.input, h.deps);
-  expect(result).toMatchObject({ success: false, rolledBack: false, finalPhase: "cutover-done" });
-  expect(result.errorAt?.error).toContain("scheduler handoff cleanup pending");
-  expect(h.client.unmount).not.toHaveBeenCalled();
-  expect(h.client.resume).not.toHaveBeenCalled();
+
+  expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+
+  const finalSync = h.events.find((event) => event.startsWith("log:") && event.includes("final-sync-state ok"));
+  expect(finalSync).toContain("transferMs=70000");
+  const keysSync = h.events.find((event) => event.startsWith("log:") && event.includes("keys-sync-state ok"));
+  expect(keysSync).toContain("transferMs=400");
 });
 
-it("does not reopen the source when target scheduler abort is unconfirmed, and says so in the failure", async () => {
-  const h = harness({ gateAssignment: true });
-  vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("verification failed"));
-  const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-  vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-    if (request.phase === "abort") throw new Error("abort unconfirmed");
-    return scheduler(request);
-  });
-  const result = await runMigration(h.input, h.deps);
-  expect(result).toMatchObject({ success: false, rolledBack: false });
-  expect(result.errorAt?.error).toContain("verification failed");
-  expect(result.errorAt?.error).toContain("abort unconfirmed");
-  expect(h.client.resume).not.toHaveBeenCalled();
-  expect(h.assignmentWrites).not.toContainEqual(expect.objectContaining({ state: "serving" }));
-  expect(h.events).toContain("report:rollback:scheduler-abort:failed");
-});
-
-describe("rollback releases the source scheduler fence", () => {
+describe("rollback releases the source", () => {
   function heldSourceHarness() {
     const h = harness({ gateAssignment: true });
     h.deps.wait = vi.fn(async () => undefined);
@@ -630,44 +733,30 @@ describe("rollback releases the source scheduler fence", () => {
     return h;
   }
 
-  it("retries the source scheduler resume until the fence is confirmed released", async () => {
+  it("retries the source ingress resume until it is confirmed", async () => {
     const h = heldSourceHarness();
-    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-    let resumeAttempts = 0;
-    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-      if (request.phase === "resume" && request.gatewayId === "gw-blue" && ++resumeAttempts < 3) {
-        throw new Error("/scheduler/gw-blue: 500 socket closed before connect response");
-      }
-      return scheduler(request);
-    });
+    vi.mocked(h.client.resume).mockRejectedValueOnce(new Error("/resume/gw-blue: 500 socket closed")).mockRejectedValueOnce(new Error("/resume/gw-blue: 500 socket closed"));
 
     const result = await runMigration(h.input, h.deps);
 
     expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(resumeAttempts).toBe(3);
+    expect(h.client.resume).toHaveBeenCalledTimes(3);
     expect(h.deps.wait).toHaveBeenCalledTimes(2);
-    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
-    expect(h.events).toContain("report:rollback:scheduler-resume:done");
+    expect(h.events).toContain("report:rollback:resume-ingress:done");
     expect(h.events).toContain("assignment:gw-blue:serving");
   });
 
-  it("reports a fence it could not release as a failed rollback instead of leaving it held silently", async () => {
+  it("reports an ingress it could not resume as a failed rollback and keeps the source unpublished", async () => {
     const h = heldSourceHarness();
-    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-      if (request.phase === "resume") throw new Error("/scheduler/gw-blue timed out after 60000ms");
-      return scheduler(request);
-    });
+    vi.mocked(h.client.resume).mockRejectedValue(new Error("/resume/gw-blue timed out after 60000ms"));
 
     const result = await runMigration(h.input, h.deps);
 
     expect(result).toMatchObject({ success: false, rolledBack: false });
     expect(result.errorAt?.error).toContain("/quiesce/gw-blue timed out after 60000ms");
-    expect(result.errorAt?.error).toContain("scheduler fence m1 on gw-blue not released");
-    expect(h.events).toContain("report:rollback:scheduler-resume:failed");
+    expect(result.errorAt?.error).toContain("source ingress on gw-blue not resumed");
+    expect(h.events).toContain("report:rollback:resume-ingress:failed");
     expect(h.assignmentWrites).not.toContainEqual(expect.objectContaining({ state: "serving" }));
-    expect(h.client.resume).toHaveBeenCalledTimes(1);
-    expect(h.events.some((event) => event.startsWith("log:") && event.includes("❌") && event.includes("scheduler fence m1 on gw-blue not released"))).toBe(true);
   });
 
   it("publishes source serving only after native ingress acknowledges resumption", async () => {
@@ -679,7 +768,7 @@ describe("rollback releases the source scheduler fence", () => {
     expect(h.assignmentWrites.at(-1)).toMatchObject({ state: "serving" });
   });
 
-  it("never touches the source scheduler or ingress when the failure precedes the quiesce", async () => {
+  it("never touches source ingress when the failure precedes the quiesce", async () => {
     const h = harness({ gateAssignment: true });
     vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
       if (mode === "keys") throw new Error("key sync broke");
@@ -689,263 +778,7 @@ describe("rollback releases the source scheduler fence", () => {
     const result = await runMigration(h.input, h.deps);
 
     expect(result).toMatchObject({ success: false, rolledBack: false });
-    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("resume");
     expect(h.client.resume).not.toHaveBeenCalled();
-  });
-});
-
-describe("target scheduler readiness", () => {
-  const NOT_READY = '/scheduler/gw-green: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
-  const READY_NOT_READY = '/scheduler-ready/gw-green: 500 {"error":"scheduler readiness failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
-
-  function clockedHarness() {
-    const h = harness({ gateAssignment: true });
-    let clock = 0;
-    h.deps.now = () => clock;
-    h.deps.wait = vi.fn(async (delayMs: number) => { clock += delayMs; });
-    return h;
-  }
-
-  function targetNotReadyFor(h: ReturnType<typeof harness>, notReady: (request: { phase: string; gatewayId: string }) => boolean) {
-    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-      if (request.gatewayId === "gw-green" && notReady(request)) throw new Error(NOT_READY);
-      return scheduler(request);
-    });
-  }
-
-  it("sends nothing to the target's scheduler for the attempt before it stages", async () => {
-    const h = harness({ gateAssignment: true });
-    const calls: string[] = [];
-    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-      calls.push(`${request.gatewayId}:${request.phase}`);
-      return scheduler(request);
-    });
-
-    expect(await runMigration({ ...h.input, schedulerMigrationId: "m1:scheduler:1" }, h.deps)).toMatchObject({ success: true });
-
-    const targetCalls = calls.filter((call) => call.startsWith("gw-green:"));
-    expect(targetCalls[0]).toBe("gw-green:stage");
-  });
-
-  it("asks the target whether its scheduler is ready before fencing the source", async () => {
-    const h = clockedHarness();
-    let probes = 0;
-    vi.mocked(h.client.schedulerReady).mockImplementation(async () => {
-      if (++probes < 3) throw new Error(READY_NOT_READY);
-    });
-
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
-
-    expect(probes).toBe(3);
-    expect(h.client.schedulerReady).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-green", slug: "alice" });
-    const lastProbe = vi.mocked(h.client.schedulerReady).mock.invocationCallOrder[2];
-    expect(lastProbe).toBeLessThan(vi.mocked(h.client.quiesce).mock.invocationCallOrder[0]);
-  });
-
-  it("proceeds without the gate when the target predates the readiness endpoint", async () => {
-    const h = harness({ gateAssignment: true });
-    vi.mocked(h.client.schedulerReady).mockRejectedValue(new MigrationRpcError("/scheduler-ready/gw-green: 404 Cannot POST", { status: 404 }));
-    const calls: string[] = [];
-    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
-    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-      calls.push(`${request.gatewayId}:${request.phase}`);
-      return scheduler(request);
-    });
-
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
-
-    expect(h.client.schedulerReady).toHaveBeenCalledOnce();
-    expect(calls.filter((call) => call.startsWith("gw-green:"))[0]).toBe("gw-green:stage");
-    expect(h.events.filter((event) => event.startsWith("log:") && event.includes("predates the scheduler readiness endpoint") && event.includes("gw-green"))).toHaveLength(1);
-    expect(h.events).toContain("report:target-scheduler-ready:skipped");
-  });
-
-  it.each([401, 403])("fails the migration without fencing the source when the readiness probe is refused with %i", async (status) => {
-    const h = harness({ gateAssignment: true });
-    vi.mocked(h.client.schedulerReady).mockRejectedValue(new MigrationRpcError(`/scheduler-ready/gw-green: ${status} invalid signature`, { status }));
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false });
-    expect(result.errorAt?.error).toContain(`${status} invalid signature`);
-    expect(h.client.quiesce).not.toHaveBeenCalled();
-    expect(h.client.scheduler).not.toHaveBeenCalled();
-  });
-
-  it("never fences the source when the target scheduler stays unready, and fails retryably", async () => {
-    const h = clockedHarness();
-    vi.mocked(h.client.schedulerReady).mockRejectedValue(new Error(READY_NOT_READY));
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(result.errorAt?.error).toMatch(/target gateway gw-green scheduler did not become ready within \d+ms/);
-    expect(h.client.quiesce).not.toHaveBeenCalled();
-    expect(h.client.scheduler).not.toHaveBeenCalled();
-    expect(h.client.resume).not.toHaveBeenCalled();
-    expect(h.assignmentWrites).toEqual([]);
-    expect(h.events).toContain("report:target-scheduler-ready:failed");
-    expect(h.events.some((event) => event.startsWith("report:quiesce-source"))).toBe(false);
-  });
-
-  it("waits out a target that restarts between the readiness gate and the stage", async () => {
-    const h = clockedHarness();
-    let stages = 0;
-    targetNotReadyFor(h, ({ phase }) => phase === "stage" && ++stages < 3);
-
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
-
-    expect(stages).toBe(3);
-  });
-
-  it("releases the source when a stage never reached an unready target", async () => {
-    const h = clockedHarness();
-    let ready = true;
-    targetNotReadyFor(h, ({ phase }) => {
-      if (phase === "stage") ready = false;
-      return !ready;
-    });
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(h.events).toContain("report:rollback:scheduler-abort:skipped");
-    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => `${request.gatewayId}:${request.phase}`))
-      .toContain("gw-blue:resume");
-    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
-    expect(h.events).toContain("assignment:gw-blue:serving");
-  });
-
-  it("keeps the source closed when a stage that may have landed cannot be aborted on an unready target", async () => {
-    const h = clockedHarness();
-    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
-      if (mode === "final") throw new Error("transfer failed");
-      return { migrationId: "m1", slug, imported: true };
-    });
-    let staged = false;
-    targetNotReadyFor(h, ({ phase }) => {
-      if (phase === "stage") { staged = true; return false; }
-      return staged;
-    });
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false, rolledBack: false });
-    expect(result.errorAt?.error).toContain("target scheduler abort unconfirmed on gw-green, source left closed");
-    expect(h.events).toContain("report:rollback:scheduler-abort:failed");
-    expect(vi.mocked(h.client.scheduler).mock.calls.map(([request]) => request.phase)).not.toContain("resume");
-    expect(h.client.resume).not.toHaveBeenCalled();
-  });
-});
-
-describe("held Builder target", () => {
-  const HELD = '/scheduler/gw-green: 500 {"error":"scheduler migration failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
-  const HELD_READY = '/scheduler-ready/gw-green: 500 {"error":"scheduler readiness failed","message":"OpenClaw workspace identities are not initialized for this boot"}';
-
-  function heldHarness(options: { releasedAfterStageAttempts?: number } = {}) {
-    const h = harness({ gateAssignment: true });
-    let clock = 0;
-    h.deps.now = () => clock;
-    h.deps.wait = vi.fn(async (delayMs: number) => { clock += delayMs; });
-    const order: string[] = [];
-    let cutOver = false;
-    let stageAttempts = 0;
-    const kernel = vi.mocked(h.client.scheduler).getMockImplementation()!;
-    vi.mocked(h.client.scheduler).mockImplementation(async (request) => {
-      if (request.gatewayId === "gw-green") {
-        const released = cutOver && (request.phase !== "stage" || ++stageAttempts >= (options.releasedAfterStageAttempts ?? 1));
-        if (!released) {
-          order.push(`gw-green:${request.phase}:held`);
-          throw new Error(HELD);
-        }
-      }
-      order.push(`${request.gatewayId}:${request.phase}${request.retainNonportable ? ":retain" : ""}`);
-      return kernel(request);
-    });
-    vi.mocked(h.client.schedulerReady).mockImplementation(async () => {
-      if (!cutOver) throw new Error(HELD_READY);
-    });
-    vi.mocked(h.client.transferState).mockImplementation(async ({ mode, slug }) => {
-      order.push(`copy:${mode}`);
-      return { migrationId: "m1", slug, imported: true };
-    });
-    vi.mocked(h.deps.commitCutover).mockImplementation(async () => { cutOver = true; order.push("cutover"); });
-    vi.mocked(h.client.unmount).mockImplementation(async ({ gatewayId, slug }) => {
-      order.push(`unmount:${gatewayId}`);
-      return { migrationId: "m1", slug, unmounted: true };
-    });
-    h.deps.recordSchedulesStaged = vi.fn(async () => { order.push("staged-recorded"); });
-    const input = { ...h.input, stageSchedulesAfterCutover: true, acceptRetainedTargetJobs: true };
-    return { ...h, input, order };
-  }
-
-  it("exports before cutover and stages on the computer only after cutover releases it", async () => {
-    const h = heldHarness();
-
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done" });
-
-    expect(h.order).toEqual([
-      "copy:keys", "copy:pre", "gw-blue:export", "copy:final", "cutover",
-      "gw-green:stage:retain", "staged-recorded", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue",
-    ]);
-    expect(h.client.schedulerReady).not.toHaveBeenCalled();
-    expect(h.events.some((event) => event.startsWith("report:target-scheduler-ready"))).toBe(false);
-  });
-
-  it("waits for the released computer's OpenClaw before staging", async () => {
-    const h = heldHarness({ releasedAfterStageAttempts: 4 });
-
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
-
-    expect(h.order.filter((call) => call === "gw-green:stage:held")).toHaveLength(3);
-    expect(h.order.slice(-4)).toEqual(["staged-recorded", "gw-blue:retire", "gw-green:activate", "unmount:gw-blue"]);
-  });
-
-  it("rolls a pre-cutover failure back to the source without touching the held computer's scheduler", async () => {
-    const h = heldHarness();
-    vi.mocked(h.client.verifyTarget).mockRejectedValue(new Error("verify failed"));
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false, rolledBack: true });
-    expect(h.order.filter((call) => call.startsWith("gw-green:"))).toEqual([]);
-    expect(h.order).toContain("gw-blue:resume");
-    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
-    expect(h.events).toContain("assignment:gw-blue:serving");
-  });
-
-  it("keeps the source's exported copy and leaves the handoff pending when the released computer never readies", async () => {
-    const h = heldHarness({ releasedAfterStageAttempts: Number.POSITIVE_INFINITY });
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false, rolledBack: false, finalPhase: "cutover-done" });
-    expect(result.errorAt?.error).toContain("scheduler handoff cleanup pending");
-    expect(h.order).not.toContain("gw-blue:retire");
-    expect(h.order).not.toContain("gw-blue:resume");
-    expect(h.deps.recordSchedulesStaged).not.toHaveBeenCalled();
-    expect(h.client.unmount).not.toHaveBeenCalled();
-  });
-
-  it("does not retire the source until the stage is durably recorded", async () => {
-    const h = heldHarness();
-    vi.mocked(h.deps.recordSchedulesStaged!).mockRejectedValue(new Error("journal unavailable"));
-
-    const result = await runMigration(h.input, h.deps);
-
-    expect(result).toMatchObject({ success: false, rolledBack: false });
-    expect(result.errorAt?.error).toContain("scheduler handoff cleanup pending: journal unavailable");
-    expect(h.order).not.toContain("gw-blue:retire");
-  });
-
-  it("refuses to start without a way to record the post-cutover stage", async () => {
-    const h = heldHarness();
-    delete h.deps.recordSchedulesStaged;
-
-    await expect(runMigration(h.input, h.deps)).rejects.toThrow("recordSchedulesStaged");
-    expect(h.client.transferState).not.toHaveBeenCalled();
   });
 });
 
@@ -1009,7 +842,7 @@ it("retains the source fence after an ambiguous final upgrade and resumes from t
   expect(checkpoint).toEqual({});
   expect(h.client.resume).not.toHaveBeenCalled();
   expect(h.client.unmount).not.toHaveBeenCalled();
-  expect(vi.mocked(h.client.scheduler).mock.calls.some(([request]) => ["resume", "abort"].includes(request.phase))).toBe(false);
+  expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-blue:remove"]);
   vi.mocked(h.client.transferState).mockClear();
   vi.mocked(h.client.quiesce).mockClear();
   const second = await runMigration({ ...h.input, resumeForwardRecovery: checkpoint }, h.deps);
@@ -1017,6 +850,8 @@ it("retains the source fence after an ambiguous final upgrade and resumes from t
   expect(h.client.quiesce).not.toHaveBeenCalled();
   expect(h.client.transferState).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode: "final" }));
   expect(h.client.unmount).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: h.input.fromGatewayId }));
+  expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-blue:remove", "schedules:gw-green:restore"]);
+  expect(h.transfers.get("m1")).toMatchObject({ records: [STANDUP], restoredTo: "gw-green" });
 });
 
 it("does not dispatch final transfer or release the source when critical checkpoint persistence is ambiguous", async () => {

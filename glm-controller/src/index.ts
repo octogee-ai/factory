@@ -25,6 +25,7 @@ import { createNativeReturnSourceRecoveryOwner } from "./native-return-source-re
 import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-target-retirement.js";
 import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-computer-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
+import { readScheduleTransfer, recordScheduleRestore, saveScheduleTransfer } from "./lib/schedule-transfers.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
@@ -3347,6 +3348,9 @@ async function buildHandlers(
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
+    readScheduleTransfer: (uid, migrationId) => readScheduleTransfer(db, uid, migrationId),
+    saveScheduleTransfer: (uid, doc) => saveScheduleTransfer(db, uid, doc),
+    recordScheduleRestore: (uid, migrationId, restore) => recordScheduleRestore(db, uid, migrationId, restore),
     readGatewaySystemConfigCommit: (gatewayId) =>
       readGatewaySystemConfigCommitFromFirestore(db, gatewayId),
     commitCutover: async (commit) => {

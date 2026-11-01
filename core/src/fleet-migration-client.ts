@@ -7,6 +7,13 @@ import {
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_UNMOUNT_TIMEOUT_MS,
   MIGRATION_VERIFY_TIMEOUT_MS,
+  type ScheduleRemoveRequestBody,
+  type ScheduleRemoveResult,
+  type ScheduleRestoreRequestBody,
+  type ScheduleRestoreResult,
+  type ScheduleSnapshotRequestBody,
+  type ScheduleSnapshotResult,
+  type ScheduleTransferRequestBody,
   type SchedulerMigrationRequestBody,
   type SchedulerMigrationResult,
   type FlushGatewayResponse,
@@ -45,6 +52,11 @@ export interface MigrationClientDeps {
   transferState: MigrationClient["transferState"];
 }
 
+interface GatewayAddress {
+  gatewayId: string;
+  transportId?: string;
+}
+
 // `gatewayId` is the TENANT path id — bare, put in the in-pod URL path and
 // matched by the pod's GATEWAY_ID guard. `transportId` defaults to the bare
 // gatewayId; simple-roll has one stable Service per gateway, so tenant and
@@ -52,7 +64,10 @@ export interface MigrationClientDeps {
 export interface MigrationClient {
   abortImport(opts: { migrationId: string; gatewayId: string; slug: string; mode: MigrationSyncMode }): Promise<void>;
   scheduler(opts: SchedulerMigrationRequestBody & { gatewayId: string; transportId?: string }): Promise<SchedulerMigrationResult>;
-  schedulerReady(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
+  schedules(opts: ScheduleSnapshotRequestBody & GatewayAddress): Promise<ScheduleSnapshotResult>;
+  schedules(opts: ScheduleRestoreRequestBody & GatewayAddress): Promise<ScheduleRestoreResult>;
+  schedules(opts: ScheduleRemoveRequestBody & GatewayAddress): Promise<ScheduleRemoveResult>;
+  schedules(opts: ScheduleTransferRequestBody & GatewayAddress): Promise<ScheduleTransferResult>;
   resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
   quiesce(opts: {
     stopMattermost?: boolean;
@@ -278,17 +293,20 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       }
       return result;
     },
-    async schedulerReady({ migrationId, gatewayId, transportId, slug }) {
-      const result = await postSignedJson<{ ready?: unknown }>({
+    schedules: (async ({ gatewayId, transportId, ...body }: ScheduleTransferRequestBody & GatewayAddress) => {
+      const result = await postSignedJson<ScheduleTransferResult>({
         transportId: transportId ?? gatewayId,
-        path: `/scheduler-ready/${gatewayId}`,
+        path: `/schedules/${gatewayId}`,
         gatewayId,
-        migrationId,
-        body: { migrationId, slug },
+        migrationId: body.migrationId,
+        body,
         timeoutMs: quiesceMs,
       });
-      if (result.ready !== true) throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
-    },
+      if (!scheduleTransferAcknowledged(body, result)) {
+        throw new Error(`schedules ${body.op} acknowledgement mismatch`);
+      }
+      return result;
+    }) as MigrationClient["schedules"],
     async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot, resume }) {
       await deps.prepareAgentStores?.(gatewayId, slug);
       const res = await postSignedJson<RestoreMigrationResponse>({
@@ -405,6 +423,15 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
   };
+}
+
+type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult;
+
+function scheduleTransferAcknowledged(request: ScheduleTransferRequestBody, result: ScheduleTransferResult): boolean {
+  if (result.migrationId !== request.migrationId || result.slug !== request.slug || result.op !== request.op) return false;
+  if (result.op === "snapshot") return Array.isArray(result.records) && Array.isArray(result.skipped);
+  if (result.op === "remove") return typeof result.removed === "number" && Array.isArray(result.failed);
+  return Array.isArray(result.failed);
 }
 
 async function migrationRpcError(path: string, response: Response): Promise<MigrationRpcError> {

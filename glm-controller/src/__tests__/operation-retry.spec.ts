@@ -313,7 +313,6 @@ describe("classifyOperationFailure", () => {
     ["cutover already committed but the customer moved on", "migration cutover already committed to shared-1; customer now owned by shared-2 — source cleanup left to the eviction sweep"],
     ["declared source mismatch", "declared source shared-0 does not match resolved source shared-1"],
     ["customer already on target", "customer already on shared-1"],
-    ["quiesce refused because of scheduled jobs", "migration blocked: octogee-alice-coach has enabled scheduled jobs; source retained"],
     ["scheduler proof failure", "scheduler hold did not prove a drained matching operation"],
     ["a socket message that is not the connect drop", "socket hang up while writing"],
   ])("keeps %s terminal", (_name, error) => {
@@ -356,7 +355,7 @@ describe("buildOperationCompletionUpdate", () => {
   const now = 2_000_000;
 
   it.each(["target verification refused", "pre-sync request timed out"].flatMap((forwardError) =>
-    ["unmount-target", "scheduler-abort", "scheduler-resume", "resume-ingress"].map((rollback) => ({ forwardError, rollback })),
+    ["unmount-target", "resume-ingress"].map((rollback) => ({ forwardError, rollback })),
   ))("holds incomplete Shared rollback for source-only recovery: $forwardError/$rollback", ({ forwardError, rollback }) => {
     const steps = [
       { name: "verify-target", status: "failed" as const, error: forwardError },

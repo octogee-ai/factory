@@ -899,6 +899,39 @@ describe("customer lifecycle config patch agent directories", () => {
     },
   );
 
+  it.each(["broker", "prod"] as const)(
+    "%s adapter quiesces a Shared customer that has scheduled jobs without a scheduler handoff",
+    async (adapterKind) => {
+      await withRuntimeMock(async ({ tempRoot }) => {
+        process.env.OPENCLAW_STATE_DIR = tempRoot;
+        const config = { channels: { mattermost: { accounts: { "alice-coach": {} } } } };
+        await fs.writeFile(path.join(tempRoot, "openclaw.json"), JSON.stringify(config));
+        const rpc = {
+          configGet: vi.fn(async () => ({ config, hash: "cfg-hash" })),
+          channelsStop: vi.fn(async () => ({ ok: true as const })),
+          sessionsList: vi.fn<GatewayRpcClient["sessionsList"]>(async () => ({ sessions: [] })),
+          cronJobCount: vi.fn(async () => 3),
+          schedulerMigration: vi.fn(),
+        } as unknown as GatewayRpcClient;
+        const adapter = adapterKind === "broker"
+          ? (await import("../lib/customer-lifecycle-broker-adapter.js")).buildBrokeredLifecycleAdapter({
+            client: mkClient(brokerSnapshot),
+            rpc,
+            log: vi.fn(),
+          })
+          : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
+            db: {} as Firestore,
+            rpc,
+            log: vi.fn(),
+          });
+
+        await expect(adapter.quiesceCustomer("alice", 0)).resolves.toEqual({ drained: true, runningCount: 0 });
+        expect(rpc.channelsStop).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });
+        expect(rpc.schedulerMigration).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it.each(["stopped", "held", "running", "stopping", "other-pod", "unknown"])("retains a configured Builder overlay with proven chat shutdown (%s)", async (state) => {
     await withRuntimeMock(async ({ tempRoot, agentsDir, applyConfigPatch }) => {
       process.env.OPENCLAW_STATE_DIR = tempRoot;

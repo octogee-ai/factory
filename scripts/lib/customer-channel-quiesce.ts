@@ -1,5 +1,5 @@
 import type { SchedulerMigrationRequest, SchedulerMigrationResult } from "@octogee/shared/types/fleet-controller";
-import { customerAgentIdsInRoster, schedulerHandoffAgentIds } from "./agent-roster-deletion.js";
+import { schedulerHandoffAgentIds } from "./agent-roster-deletion.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 
 export async function setCustomerChannelsRunning(
@@ -16,21 +16,6 @@ export async function setCustomerChannelsRunning(
     else await rpc.channelsStop({ channel: "mattermost", accountId });
   }
 }
-
-export async function assertCustomerHasNoScheduledJobs(
-  rpc: Pick<GatewayRpcClient, "configGet" | "cronJobCount">,
-  slug: string,
-  localAgentIds: readonly string[],
-): Promise<void> {
-  const { config } = await rpc.configGet();
-  const agentIds = new Set([...localAgentIds, ...customerAgentIdsInRoster(config, slug)]);
-  for (const agentId of agentIds) {
-    if (await rpc.cronJobCount(agentId) > 0) {
-      throw new Error(`migration blocked: ${agentId} has enabled scheduled jobs; source retained`);
-    }
-  }
-}
-
 
 export async function migrateCustomerScheduler(
   rpc: Pick<GatewayRpcClient, "configGet" | "schedulerMigration">,

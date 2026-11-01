@@ -461,3 +461,79 @@ export interface SchedulerMigrationRequestBody extends MigrationRequestBody {
   snapshot?: unknown;
   retainNonportable?: boolean;
 }
+
+// One customer agent's cron job as OpenClaw `cron.add` accepts it, captured
+// from the source gateway so the target can recreate it. `job` holds only
+// cron.add fields and stays Firestore-safe JSON (no undefined values).
+export interface ScheduleRecord {
+  sourceJobId: string;
+  /** Absent on older snapshots; null means no scratch. */
+  scratch?: string | null;
+  agentId: string;
+  job: Record<string, unknown>;
+}
+
+export interface ScheduleSkip {
+  jobId: string;
+  name: string;
+  reason: string;
+}
+
+export interface ScheduleSnapshotRequestBody extends MigrationRequestBody {
+  op: "snapshot";
+}
+
+export interface ScheduleRestoreRequestBody extends MigrationRequestBody {
+  op: "restore";
+  records: ScheduleRecord[];
+}
+
+export interface ScheduleRemoveRequestBody extends MigrationRequestBody {
+  op: "remove";
+  jobIds: string[];
+}
+
+export type ScheduleTransferRequestBody = ScheduleSnapshotRequestBody | ScheduleRestoreRequestBody | ScheduleRemoveRequestBody;
+
+export interface ScheduleSnapshotResult {
+  migrationId: string;
+  slug: string;
+  op: "snapshot";
+  records: ScheduleRecord[];
+  skipped: ScheduleSkip[];
+}
+
+export interface ScheduleRemoveResult {
+  migrationId: string;
+  slug: string;
+  op: "remove";
+  removed: number;
+  failed: Array<{ jobId: string; error: string }>;
+}
+
+export interface ScheduleRestoreResult {
+  migrationId: string;
+  slug: string;
+  op: "restore";
+  created: number;
+  existing: number;
+  failed: Array<{ name: string; error: string }>;
+}
+
+// users/{uid}/scheduleTransfers/{migrationId}
+export const SCHEDULE_TRANSFERS_SUBCOLLECTION = "scheduleTransfers";
+
+export interface ScheduleTransferDoc {
+  migrationId: string;
+  slug: string;
+  sourceGatewayId: string;
+  targetGatewayId: string;
+  records: ScheduleRecord[];
+  skipped: ScheduleSkip[];
+  snapshotAt: number;
+  restoreAttemptedTo?: string;
+  restoreAttemptedAt?: number;
+  restoredTo?: string;
+  restoredAt?: number;
+  restoreFailures?: Array<{ name: string; error: string }>;
+}

@@ -1,4 +1,4 @@
-import { type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
+import { type ScheduleRemoveRequestBody, type ScheduleRemoveResult, type ScheduleRestoreRequestBody, type ScheduleRestoreResult, type ScheduleSnapshotRequestBody, type ScheduleSnapshotResult, type ScheduleTransferRequestBody, type SchedulerMigrationRequestBody, type SchedulerMigrationResult, type FlushGatewayResponse, type ImportResponse, type MigrationProgressRequestBody, type QuiesceResponse, type RestoreMigrationResponse, type UnmountResponse, type VerifyMigrationResponse } from "@octogee/shared/types/fleet-controller";
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { MigrationSyncMode } from "./fleet-migration.js";
 export interface MigrationClientTimeouts {
@@ -16,6 +16,10 @@ export interface MigrationClientDeps {
     prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
     transferState: MigrationClient["transferState"];
 }
+interface GatewayAddress {
+    gatewayId: string;
+    transportId?: string;
+}
 export interface MigrationClient {
     abortImport(opts: {
         migrationId: string;
@@ -27,12 +31,10 @@ export interface MigrationClient {
         gatewayId: string;
         transportId?: string;
     }): Promise<SchedulerMigrationResult>;
-    schedulerReady(opts: {
-        migrationId: string;
-        gatewayId: string;
-        transportId?: string;
-        slug: string;
-    }): Promise<void>;
+    schedules(opts: ScheduleSnapshotRequestBody & GatewayAddress): Promise<ScheduleSnapshotResult>;
+    schedules(opts: ScheduleRestoreRequestBody & GatewayAddress): Promise<ScheduleRestoreResult>;
+    schedules(opts: ScheduleRemoveRequestBody & GatewayAddress): Promise<ScheduleRemoveResult>;
+    schedules(opts: ScheduleTransferRequestBody & GatewayAddress): Promise<ScheduleTransferResult>;
     resume(opts: {
         migrationId: string;
         gatewayId: string;
@@ -114,4 +116,6 @@ export declare class MigrationTransportError extends Error {
 }
 export declare function isDefinitiveConfigRpcRejection(error: unknown): boolean;
 export declare function createMigrationClient(deps: MigrationClientDeps): MigrationClient;
+type ScheduleTransferResult = ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult;
 export declare function reportMigrationProgress(deps: Pick<MigrationClientDeps, "privateKey" | "resolveGatewayUrl" | "fetch">, gatewayId: string, body: MigrationProgressRequestBody): Promise<void>;
+export {};

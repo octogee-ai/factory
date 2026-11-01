@@ -120,18 +120,20 @@ export function createMigrationClient(deps) {
             }
             return result;
         },
-        async schedulerReady({ migrationId, gatewayId, transportId, slug }) {
+        schedules: (async ({ gatewayId, transportId, ...body }) => {
             const result = await postSignedJson({
                 transportId: transportId ?? gatewayId,
-                path: `/scheduler-ready/${gatewayId}`,
+                path: `/schedules/${gatewayId}`,
                 gatewayId,
-                migrationId,
-                body: { migrationId, slug },
+                migrationId: body.migrationId,
+                body,
                 timeoutMs: quiesceMs,
             });
-            if (result.ready !== true)
-                throw new Error(`/scheduler-ready/${gatewayId} did not confirm readiness`);
-        },
+            if (!scheduleTransferAcknowledged(body, result)) {
+                throw new Error(`schedules ${body.op} acknowledgement mismatch`);
+            }
+            return result;
+        }),
         async restoreTarget({ migrationId, gatewayId, transportId, uid, slug, snapshot, resume }) {
             await deps.prepareAgentStores?.(gatewayId, slug);
             const res = await postSignedJson({
@@ -222,6 +224,15 @@ export function createMigrationClient(deps) {
             return res;
         },
     };
+}
+function scheduleTransferAcknowledged(request, result) {
+    if (result.migrationId !== request.migrationId || result.slug !== request.slug || result.op !== request.op)
+        return false;
+    if (result.op === "snapshot")
+        return Array.isArray(result.records) && Array.isArray(result.skipped);
+    if (result.op === "remove")
+        return typeof result.removed === "number" && Array.isArray(result.failed);
+    return Array.isArray(result.failed);
 }
 async function migrationRpcError(path, response) {
     const text = await response.text().catch(() => "<no body>");

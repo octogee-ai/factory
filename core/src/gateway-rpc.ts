@@ -358,6 +358,7 @@ export interface GatewayRpcClient {
     timeoutMs?: number,
   ): Promise<GatewayToolsCatalogResult>;
   schedulerMigration(params: SchedulerMigrationRequest): Promise<SchedulerMigrationResult>;
+  cronRequest(method: ScheduleTransferCronMethod, params: Record<string, unknown>): Promise<unknown>;
   cronJobCount(agentId: string, opts?: { includeDisabled?: boolean }): Promise<number>;
   cronAdd(spec: CronAddSpec): Promise<CronAddResult>;
   agentsCreate(params: GatewayAgentsCreateParams): Promise<GatewayAgentsCreateResult>;
@@ -368,6 +369,9 @@ export interface GatewayRpcClient {
 }
 
 type GatewayRpcCall = (method: string, params: unknown) => Promise<unknown>;
+
+const SCHEDULE_TRANSFER_CRON_METHODS = ["cron.list", "cron.add", "cron.remove", "cron.scratch.get", "cron.scratch.set", "cron.update"] as const;
+export type ScheduleTransferCronMethod = (typeof SCHEDULE_TRANSFER_CRON_METHODS)[number];
 
 function configChangedHash(data: unknown): string | null {
   let parsed: unknown;
@@ -1066,6 +1070,11 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
         throw new OpenclawWireError(INVALID_RESPONSE, "cron.migration returned a mismatched operation or invalid scheduler state");
       }
       return value;
+    },
+
+    async cronRequest(method, params) {
+      if (!SCHEDULE_TRANSFER_CRON_METHODS.includes(method)) throw new Error(`cronRequest does not allow ${String(method)}`);
+      return call(method, params);
     },
 
     async cronJobCount(agentId, opts) {

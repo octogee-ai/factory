@@ -716,19 +716,70 @@ describe("MigrationClient.resume", () => {
   });
 });
 
-describe("MigrationClient.schedulerReady", () => {
-  it.each([
-    [{ ready: true }, null],
-    [{ ready: false }, "did not confirm readiness"],
-  ])("asks the gateway itself, signed, whether its scheduler is ready (%o)", async (response, rejection) => {
+describe("MigrationClient.schedules", () => {
+  const record = { sourceJobId: "job-1", agentId: "octogee-alice-coach", job: { name: "standup", schedule: { kind: "cron", expr: "0 9 * * *" } } };
+
+  function schedulesClient(response: unknown) {
     const { calls, fakeFetch } = captureFetch(() => new Response(JSON.stringify(response), { status: 200 }));
-    const client = createMigrationClient({ transferState: transferNotUnderTest, privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://target.example.com", fetch: fakeFetch });
-    const result = client.schedulerReady({ migrationId: "m1", gatewayId: "target", slug: "alice" });
-    if (rejection) await expect(result).rejects.toThrow(rejection);
-    else await expect(result).resolves.toBeUndefined();
-    expect(calls[0].url).toBe("https://target.example.com/scheduler-ready/target");
-    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice" });
-    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "target"), calls[0].body!));
+    const client = createMigrationClient({ transferState: transferNotUnderTest, privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "https://fleet-test.example.com", fetch: fakeFetch });
+    return { calls, client };
+  }
+
+  it("signs a snapshot for its exact gateway and returns the captured records", async () => {
+    const result = { migrationId: "m1", slug: "alice", op: "snapshot", records: [record], skipped: [] };
+    const { calls, client } = schedulesClient(result);
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-source", op: "snapshot" })).resolves.toEqual(result);
+
+    expect(calls[0].url).toBe("https://fleet-test.example.com/schedules/gw-source");
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice", op: "snapshot" });
+    expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-source"), calls[0].body!));
+  });
+
+  it("sends the records to restore and returns the target's tally", async () => {
+    const result = { migrationId: "m1", slug: "alice", op: "restore", created: 1, existing: 0, failed: [] };
+    const { calls, client } = schedulesClient(result);
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-target", op: "restore", records: [record] })).resolves.toEqual(result);
+
+    expect(calls[0].url).toBe("https://fleet-test.example.com/schedules/gw-target");
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice", op: "restore", records: [record] });
+  });
+
+  it("asks the source to remove the saved jobs and returns its tally", async () => {
+    const result = { migrationId: "m1", slug: "alice", op: "remove", removed: 1, failed: [] };
+    const { calls, client } = schedulesClient(result);
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-source", op: "remove", jobIds: ["job-1"] })).resolves.toEqual(result);
+
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice", op: "remove", jobIds: ["job-1"] });
+  });
+
+  it.each([
+    { migrationId: "m1", slug: "alice", op: "remove", failed: [] },
+    { migrationId: "m1", slug: "alice", op: "remove", removed: 1 },
+    { migrationId: "m1", slug: "alice", op: "restore", created: 0, existing: 0, failed: [] },
+  ])("refuses a remove acknowledgement that does not match the request %j", async (payload) => {
+    const { client } = schedulesClient(payload);
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-source", op: "remove", jobIds: ["job-1"] })).rejects.toThrow("schedules remove acknowledgement mismatch");
+  });
+
+  it.each([
+    { migrationId: "other", slug: "alice", op: "snapshot", records: [], skipped: [] },
+    { migrationId: "m1", slug: "bob", op: "snapshot", records: [], skipped: [] },
+    { migrationId: "m1", slug: "alice", op: "restore", created: 0, existing: 0, failed: [] },
+    { migrationId: "m1", slug: "alice", op: "snapshot", skipped: [] },
+  ])("refuses a snapshot acknowledgement that does not match the request %j", async (payload) => {
+    const { client } = schedulesClient(payload);
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-source", op: "snapshot" })).rejects.toThrow("schedules snapshot acknowledgement mismatch");
+  });
+
+  it("refuses a restore acknowledgement without a failure list", async () => {
+    const { client } = schedulesClient({ migrationId: "m1", slug: "alice", op: "restore", created: 1, existing: 0 });
+
+    await expect(client.schedules({ migrationId: "m1", slug: "alice", gatewayId: "gw-target", op: "restore", records: [record] })).rejects.toThrow("schedules restore acknowledgement mismatch");
   });
 });
 

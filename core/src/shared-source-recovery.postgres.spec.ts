@@ -12,8 +12,8 @@ function fixture(migration: "identity" | "database" = "identity") {
     startedAt: 100, completedAt: 200, rolledBack: true, error,
     input: { uid: "owner", builderSlug: "livefixture", fromGatewayId: "shared-old", toGatewayId: "shared-new", source: "continuous-placement-policy" },
     schedulerHandoff: { migrationId: "mig-placement:scheduler:1:claim:100", uid: "owner", slug: "livefixture", fromGatewayId: "shared-old", toGatewayId: "shared-new" },
-    steps: [...["keys-sync-state", "pre-sync-state", "target-scheduler-ready", "wait-for-active-work", "quiesce-source", "flush-source"].map(name => ({ name, status: "done" })),
-      { name: "final-sync-state", status: "failed", error }, ...["scheduler-abort", "unmount-target", "scheduler-resume", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
+    steps: [...["keys-sync-state", "pre-sync-state", "wait-for-active-work", "quiesce-source", "flush-source"].map(name => ({ name, status: "done" })),
+      { name: "final-sync-state", status: "failed", error }, ...["unmount-target", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
   return { ...row, attemptHistory: [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }] };
 }
 function rosterFixture() {

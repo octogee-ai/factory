@@ -2388,17 +2388,11 @@ describe("broker migration admission", () => {
     }
   }
 
-  it("refuses migration while a customer has scheduled work without stopping chat", async () => {
+  it("drains a customer with scheduled jobs: the schedule transfer snapshot moves them, not quiesce", async () => {
     const rpc = mkGatewayRpc({ cronJobCount: vi.fn(async () => 1) });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
-    await expect(adapter.quiesceCustomer("migrationqa", 0)).rejects.toThrow("scheduled jobs");
-    expect(rpc.channelsStop).not.toHaveBeenCalled();
-  });
-  it("refuses cutover when a draining turn creates a scheduled job", async () => {
-    const rpc = mkGatewayRpc({ cronJobCount: vi.fn().mockResolvedValueOnce(0).mockResolvedValue(1) });
-    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
-    await expect(adapter.quiesceCustomer("migrationqa", 0)).rejects.toThrow("scheduled jobs");
-    expect(rpc.cronJobCount).toHaveBeenCalledTimes(2);
+    await expect(adapter.quiesceCustomer("migrationqa", 0)).resolves.toMatchObject({ drained: true });
+    expect(rpc.cronJobCount).not.toHaveBeenCalled();
   });
   it("returns a Builder whose agent keeps host-bound jobs: the hold retains them instead of refusing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "broker-migration-partial-hold-"));

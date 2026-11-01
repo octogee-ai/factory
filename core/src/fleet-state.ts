@@ -224,10 +224,10 @@ export function sharedRecoveryTargetCleaned(input: Record<string, unknown>, sche
   if (input.recoverSourceOnly !== true || input.source === "builder-activation-lease") return false;
   const steps = recordOrEmpty(recordOrEmpty(schedulerHandoff).sourceRecovery).steps;
   if (!Array.isArray(steps)) return false;
-  return ["rollback:scheduler-abort", "rollback:unmount-target"].every(name => steps.some(value => {
+  return steps.some(value => {
     const step = recordOrEmpty(value);
-    return step.name === name && step.status === "done";
-  }));
+    return step.name === "rollback:unmount-target" && step.status === "done";
+  });
 }
 
 function assertRecoveryTarget(params: Parameters<typeof builderActivationRecoveryTargetMatches>[0] & { schedulerHandoff: unknown }): void {
@@ -362,12 +362,9 @@ function transferringRollbackConfirmed(operation: Record<string, unknown>): bool
     const matches = steps.filter(step => step.name === name);
     return matches.length === 1 && statuses.includes(String(matches[0]?.status));
   };
-  const abort = steps.filter(step => step.name === "rollback:scheduler-abort");
   return once("quiesce-source", ["done"]) &&
     (once("final-sync-state", ["failed"]) || once("verify-target", ["failed"])) &&
-    once("rollback:unmount-target", ["done"]) && once("rollback:scheduler-resume", ["done"]) &&
-    once("rollback:resume-ingress", ["done"]) && abort.length <= 1 &&
-    (abort.length === 0 || ["done", "skipped"].includes(String(abort[0]?.status)));
+    once("rollback:unmount-target", ["done"]) && once("rollback:resume-ingress", ["done"]);
 }
 
 function preparationCleanupMatches(operation: Record<string, unknown>, phase: unknown): boolean {
@@ -381,7 +378,7 @@ function preparationCleanupMatches(operation: Record<string, unknown>, phase: un
   }
   if (phase !== "preparing" && phase !== "waiting") return false;
   const expected = phase === "preparing" ? [["keys-sync-state", "failed"]] : [
-    ["keys-sync-state", "done"], ["pre-sync-state", "done"], ["target-scheduler-ready", "done"],
+    ["keys-sync-state", "done"], ["pre-sync-state", "done"],
     ["wait-for-active-work", "failed"], ["rollback:unmount-target", "done"],
   ];
   return isDeepStrictEqual(operation.steps.map(value => {

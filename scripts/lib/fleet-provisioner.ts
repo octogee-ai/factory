@@ -47,6 +47,7 @@ import {
   createQuiesceHandler,
   createSchedulerMigrationHandler,
   createSchedulerReadyHandler,
+  createScheduleTransferHandler,
   createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -80,6 +81,8 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
+import { agentIdsForMigration } from "./customer-lifecycle-broker-adapter.js";
+import { createScheduleTransfer } from "./schedule-transfer.js";
 import {
   addCustomerToGateway,
   cloneMissingProjects,
@@ -2172,6 +2175,7 @@ function registerMigrationRoutes(
   app.post("/resume/:gatewayId", createResumeHandler(migrationDeps));
   app.post("/scheduler/:gatewayId", createSchedulerMigrationHandler(migrationDeps));
   app.post("/scheduler-ready/:gatewayId", createSchedulerReadyHandler(migrationDeps));
+  app.post("/schedules/:gatewayId", createScheduleTransferHandler(migrationDeps));
   app.post("/quiesce/:gatewayId", createQuiesceHandler(migrationDeps));
   app.post("/flush/:gatewayId", createFlushHandler(migrationDeps));
   app.post("/verify/:gatewayId", createVerifyHandler(migrationDeps));
@@ -2873,7 +2877,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
 
   const app = express();
   app.disable("x-powered-by");
-  app.use("/scheduler", express.json({
+  app.use(["/scheduler", "/schedules"], express.json({
     limit: "9mb",
     verify: (req: express.Request & { rawBody?: string }, _res, buf) => {
       req.rawBody = buf.toString("utf8");
@@ -2986,6 +2990,12 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     releaseSurgeReadiness: surgeGate.releaseSurgeReadiness,
     surgeReleaseInProgress: surgeGate.surgeReleaseInProgress,
     unreserveSurgeTarget: surgeGate.unreserveSurgeTarget,
+    scheduleTransfer: createScheduleTransfer({
+      readConfig: async () => (await opts.rpc.configGet()).config,
+      localAgentIds: agentIdsForMigration,
+      connect: async () => ({ request: (method, params) => opts.rpc.cronRequest(method, params), close: () => {} }),
+      log: opts.log,
+    }),
   };
   registerMigrationRoutes(app, migrationDeps, {
     publicKey: opts.publicKey,

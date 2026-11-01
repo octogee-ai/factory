@@ -12,8 +12,8 @@ function fixture() {
     startedAt: 100, completedAt: 200, rolledBack: true, error,
     input: { uid: request.uid, builderSlug: request.builderSlug, fromGatewayId: request.fromGatewayId, toGatewayId: request.toGatewayId, source: request.source },
     schedulerHandoff: { migrationId: "mig-placement:scheduler:1:claim:100", uid: request.uid, slug: request.builderSlug, fromGatewayId: request.fromGatewayId, toGatewayId: request.toGatewayId },
-    steps: [...["keys-sync-state", "pre-sync-state", "target-scheduler-ready", "wait-for-active-work", "quiesce-source", "flush-source"].map(name => ({ name, status: "done" })),
-      { name: "final-sync-state", status: "failed", error }, ...["scheduler-abort", "unmount-target", "scheduler-resume", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
+    steps: [...["keys-sync-state", "pre-sync-state", "wait-for-active-work", "quiesce-source", "flush-source"].map(name => ({ name, status: "done" })),
+      { name: "final-sync-state", status: "failed", error }, ...["unmount-target", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
   original.attemptHistory = [{ attempt: 1, startedAt: 100, completedAt: 200, error, steps: structuredClone(original.steps) }];
   const images = { gateway: "registry/gateway:aaaaaaaa@sha256:" + "a".repeat(64), "gateway-edge": "registry/edge:aaaaaaaa@sha256:" + "b".repeat(64) };
   const stores = [assignment.agentId, "octogee-livefixture-proj-launch-coach"].map((agentId, index) => ({ uid: request.uid, slug: request.builderSlug, assignmentEpoch: 7,

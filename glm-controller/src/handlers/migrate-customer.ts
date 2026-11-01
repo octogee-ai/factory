@@ -16,6 +16,7 @@ import {
   MIGRATION_QUIESCE_TIMEOUT_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   type MigrationProgressRequestBody,
+  type ScheduleTransferDoc,
 } from "@octogee/shared/types/fleet-controller";
 import type { NativeComputerReturn, NativeComputerReturnInput, NativeReturnPark, NativeSourcePark } from "../lib/native-computer-return.js";
 import type { NativeSchedulerRetirementInput } from "../lib/native-scheduler-retirement.js";
@@ -47,10 +48,12 @@ import {
 } from "@octogee/core/customer-migration-v2";
 import {
   isTargetSchedulerNotReady,
+  restoreScheduleTransfer,
   runMigration,
   type CutoverCommit,
   type MigrationRunnerDeps,
   type ReportedStep,
+  type ScheduleRestoreRecord,
   type TargetSystemConfigConvergence,
 } from "@octogee/core/fleet-migration-runner";
 
@@ -96,6 +99,10 @@ export interface MigrateCustomerDeps {
   readGatewaySystemConfigCommit: (gatewayId: string) => Promise<string | null>;
 
   commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
+
+  readScheduleTransfer: (uid: string, migrationId: string) => Promise<ScheduleTransferDoc | null>;
+  saveScheduleTransfer: (uid: string, doc: ScheduleTransferDoc) => Promise<void>;
+  recordScheduleRestore: (uid: string, migrationId: string, restore: ScheduleRestoreRecord) => Promise<void>;
 
   resolveGatewayUrl: (gatewayId: string, options?: { allowUnready: boolean }) => Promise<string>;
 
@@ -630,6 +637,17 @@ function targetConvergence(sourceClass: GatewayClass | undefined): TargetSystemC
   return sourceClass === "shared" ? "target-commit" : "source-commit";
 }
 
+function scheduleTransferDeps(
+  deps: MigrateCustomerDeps,
+  uid: string,
+): Pick<MigrationRunnerDeps, "readScheduleTransfer" | "saveScheduleTransfer" | "recordScheduleRestore"> {
+  return {
+    readScheduleTransfer: (migrationId) => deps.readScheduleTransfer(uid, migrationId),
+    saveScheduleTransfer: (doc) => deps.saveScheduleTransfer(uid, doc),
+    recordScheduleRestore: (migrationId, restore) => deps.recordScheduleRestore(uid, migrationId, restore),
+  };
+}
+
 function buildRunnerDeps(
   input: {
     deps: MigrateCustomerDeps;
@@ -644,6 +662,7 @@ function buildRunnerDeps(
   const { deps, client, ctx } = input;
   return {
     client,
+    ...scheduleTransferDeps(deps, input.uid),
     setMigrationPhase: (phase) => deps.setMigrationPhase?.({ uid: input.uid, sourceGatewayId: input.sourceGatewayId, operationId: input.operationId, phase }) ?? Promise.resolve(),
     readTargetSystemConfigCommit: deps.readGatewaySystemConfigCommit,
     commitCutover: async (commit) => {
@@ -927,11 +946,20 @@ async function gatewayClient(deps: MigrateCustomerDeps, gatewayIds: string[]): P
   });
 }
 
-function schedulerRetirementClient(client: MigrationClient, deps: MigrateCustomerDeps, input: Omit<NativeSchedulerRetirementInput, "gatewayId">): MigrationClient {
-  return { ...client, scheduler: async request => {
-    if (request.phase === "stage") await deps.retireNativeSchedulerBeforeStage({ ...input, gatewayId: request.gatewayId }, params => client.scheduler(params));
-    return client.scheduler(request);
-  } };
+function schedulerRetirementClient(client: MigrationClient, deps: MigrateCustomerDeps, target: NativeSchedulerRetirementInput): MigrationClient {
+  const schedules = async (request: Parameters<MigrationClient["schedules"]>[0]) => {
+    if (request.op === "restore" && request.gatewayId === target.gatewayId) await retireNativeSchedulerBeforeRestore(deps, client, target);
+    return client.schedules(request);
+  };
+  return { ...client, schedules: schedules as MigrationClient["schedules"] };
+}
+
+async function retireNativeSchedulerBeforeRestore(deps: MigrateCustomerDeps, client: MigrationClient, input: NativeSchedulerRetirementInput): Promise<void> {
+  try {
+    await deps.retireNativeSchedulerBeforeStage(input, params => client.scheduler(params));
+  } catch (error) {
+    deps.log(`[migrate-customer] ⚠ ${input.slug}: exported native schedules on ${input.gatewayId} were not retired before the schedule restore: ${errorMessage(error)}`);
+  }
 }
 
 function retainedJobIds(snapshot: unknown): string[] {
@@ -1422,27 +1450,9 @@ async function finishNativeReturnAfterCutover(
   });
 }
 
-async function stageAfterCutover(
-  deps: MigrateCustomerDeps,
-  ctx: OperationContext,
-  client: MigrationClient,
-  handoff: SchedulerHandoffState,
-): Promise<void> {
-  if (!handoff.stageAfterCutover || handoff.stagedAt !== undefined) return;
-  if (!ctx.persistSchedulerHandoff) throw new Error("scheduler handoff persistence is required");
-  const { migrationId, slug } = handoff;
-  const exported = await client.scheduler({ migrationId, slug, gatewayId: handoff.fromGatewayId, phase: "export" });
-  await client.scheduler({
-    migrationId, slug, gatewayId: handoff.toGatewayId, phase: "stage",
-    agentIds: exported.agentIds, snapshot: exported.snapshot, retainNonportable: true,
-  });
-  await ctx.persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() });
-}
-
 async function completeSchedulerHandoff(
   deps: MigrateCustomerDeps,
   op: Operation,
-  ctx: OperationContext,
   user: UserGatewayInfo,
   request: { uid: string; toGatewayId: string },
 ): Promise<OperationResult> {
@@ -1450,26 +1460,62 @@ async function completeSchedulerHandoff(
   if (handoff.uid !== request.uid || handoff.slug !== user.slug || handoff.toGatewayId !== request.toGatewayId) {
     return failure("scheduler handoff scope changed after cutover", false);
   }
+  const migrationId = deps.genMigrationId(op.id);
+  if (handoff.scheduleTransfer) await restoreSchedulesAfterCutover(deps, op, handoff, migrationId);
+  else await finishLegacySchedulerHandoff(deps, op, handoff);
+  await unmountSourceAfterCutover(deps, { migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId });
+  return { steps: [], success: true, rolledBack: false };
+}
+
+function legacySchedulerHandoffDeps(deps: MigrateCustomerDeps, op: Operation, handoff: SchedulerHandoffState): Pick<MigrationRunnerDeps, "finishLegacySchedulerHandoff"> {
+  return handoff.scheduleTransfer ? {} : { finishLegacySchedulerHandoff: () => finishLegacySchedulerHandoff(deps, op, handoff) };
+}
+
+async function finishLegacySchedulerHandoff(deps: MigrateCustomerDeps, op: Operation, handoff: SchedulerHandoffState): Promise<void> {
+  const { migrationId, slug, uid, fromGatewayId, toGatewayId } = handoff;
+  try {
+    const client = schedulerRetirementClient(await gatewayClient(deps, [fromGatewayId, toGatewayId]), deps,
+      { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
+    if (handoff.stageAfterCutover && handoff.stagedAt === undefined) {
+      const exported = await client.scheduler({ migrationId, slug, gatewayId: fromGatewayId, phase: "export" });
+      await client.scheduler({ migrationId, slug, gatewayId: toGatewayId, phase: "stage",
+        agentIds: exported.agentIds, snapshot: exported.snapshot, retainNonportable: true });
+    }
+    await client.scheduler({ migrationId, slug, gatewayId: fromGatewayId, phase: "retire" });
+    await client.scheduler({ migrationId, slug, gatewayId: toGatewayId, phase: "activate" });
+  } catch (error) {
+    deps.log(`[migrate-customer] ⚠ legacy schedule transfer failed migrationId=${migrationId} slug=${slug}: ${errorMessage(error)} — target remains serving`);
+  }
+}
+
+async function restoreSchedulesAfterCutover(
+  deps: MigrateCustomerDeps,
+  op: Operation,
+  handoff: SchedulerHandoffState,
+  migrationId: string,
+): Promise<void> {
+  const { uid, slug, toGatewayId } = handoff;
   let client: MigrationClient;
   try {
-    client = schedulerRetirementClient(await gatewayClient(deps, [handoff.fromGatewayId, handoff.toGatewayId]), deps,
-      { uid: request.uid, slug: user.slug, operationId: op.id, claimedStartedAt: op.startedAt });
-    await stageAfterCutover(deps, ctx, client, handoff);
-    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId, phase: "retire" });
-    await client.scheduler({ migrationId: handoff.migrationId, slug: handoff.slug, gatewayId: handoff.toGatewayId, phase: "activate" });
+    client = schedulerRetirementClient(await gatewayClient(deps, [toGatewayId]), deps,
+      { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   } catch (error) {
-    return failure(`scheduler handoff cleanup pending: ${errorMessage(error)}`, false);
+    deps.log(
+      `[migrate-customer] ⚠ schedule restore skipped after durable cutover migrationId=${migrationId} ` +
+      `slug=${slug} target=${toGatewayId}: ${errorMessage(error)}`,
+    );
+    return;
   }
-  await unmountSourceAfterCutover(deps, client, { migrationId: deps.genMigrationId(op.id), slug: handoff.slug, gatewayId: handoff.fromGatewayId });
-  return { steps: [], success: true, rolledBack: false };
+  await restoreScheduleTransfer({ client, log: deps.log, now: deps.now, ...scheduleTransferDeps(deps, uid) },
+    { migrationId, slug, gatewayId: toGatewayId });
 }
 
 async function unmountSourceAfterCutover(
   deps: MigrateCustomerDeps,
-  client: MigrationClient,
   source: { migrationId: string; slug: string; gatewayId: string },
 ): Promise<void> {
   try {
+    const client = await gatewayClient(deps, [source.gatewayId]);
     await client.unmount(source);
   } catch (error) {
     deps.log(
@@ -1671,7 +1717,7 @@ async function recoverCommittedMigration(
     const nativeReturn = await finishNativeReturnAfterCutover(deps, op, ctx, user, request);
     if (nativeReturn) return nativeReturn;
   }
-  if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, ctx, user, request);
+  if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, user, request);
   return convergence ? { steps: [], success: true, rolledBack: false } : null;
 }
 
@@ -1935,7 +1981,7 @@ async function executeMigration(
       throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     }
     return url;
-  }), deps, { uid: prepared.uid, slug: prepared.user.slug, operationId: op.id, claimedStartedAt: op.startedAt });
+  }), deps, { uid: prepared.uid, slug: prepared.user.slug, gatewayId: prepared.toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   const progress = createMigrationProgress({
     now: deps.now,
     log: (message) => deps.log(`${message} migrationId=${prepared.migrationId} builder=${prepared.user.slug}`),
@@ -1975,20 +2021,18 @@ async function executeMigration(
     uid: prepared.uid,
     slug: prepared.user.slug,
     ...(heldTarget ? { stageAfterCutover: true as const } : {}),
+    scheduleTransfer: true,
   };
   await persistSchedulerHandoff(handoff);
   const result = await runMigration(
     {
       migrationId: prepared.migrationId,
       ...(handoff.forwardRecovery ? { resumeForwardRecovery: handoff.forwardRecovery } : {}),
-      schedulerMigrationId,
       uid: prepared.uid,
       slug: prepared.user.slug,
       fromGatewayId: prepared.user.currentGatewayId,
       toGatewayId: prepared.toGatewayId,
       crossGateway: prepared.user.currentGatewayId !== prepared.toGatewayId,
-      acceptRetainedTargetJobs: heldTarget,
-      stageSchedulesAfterCutover: heldTarget,
       ...(heldTarget ? { convergeTargetSystemConfig: targetConvergence(prepared.targets.fromGatewayClass) } : {}),
       gateAssignment: true,
       projectCheckoutScope: prepared.projectCheckoutScope,
@@ -1996,6 +2040,7 @@ async function executeMigration(
     },
     {
       ...buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
+      ...legacySchedulerHandoffDeps(deps, op, handoff),
       persistForwardRecovery: async (state) => {
         if (!ctx.assertActiveClaim) throw new Error("forward recovery requires an active operation claim");
         await ctx.assertActiveClaim(handoff.forwardRecovery !== undefined);
@@ -2012,7 +2057,6 @@ async function executeMigration(
         } };
         await persistSchedulerHandoff(handoff);
       },
-      recordSchedulesStaged: () => persistSchedulerHandoff({ ...handoff, stagedAt: deps.now() }),
     },
   );
   if (shouldClearMigrationPreparation({ preparationFailed, postQuiesceFailed, targetUnmountConfirmed, result })) {

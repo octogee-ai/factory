@@ -28,6 +28,7 @@ import {
   createQuiesceHandler,
   createSchedulerMigrationHandler,
   createSchedulerReadyHandler,
+  createScheduleTransferHandler,
   createResumeHandler,
   createRestoreHandler,
   createUnmountHandler,
@@ -5329,6 +5330,83 @@ describe("scheduler migration signed endpoint", () => {
     );
     expect(response.getStatus()).toBe(400);
     expect(schedulerMigration).not.toHaveBeenCalled();
+  });
+});
+
+describe("schedule transfer signed endpoint", () => {
+  const snapshot = { migrationId: "move-1", slug: "chris", op: "snapshot" as const };
+  const record = { sourceJobId: "job-1", agentId: "octogee-chris-coach", job: { name: "Morning brief", agentId: "octogee-chris-coach" } };
+  const restore = { migrationId: "move-1", slug: "chris", op: "restore" as const, records: [record] };
+  const remove = { migrationId: "move-1", slug: "chris", op: "remove" as const, jobIds: ["job-1"] };
+  const signed = (body: { migrationId: string }) => mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) });
+
+  it("rejects an unsigned schedule transfer", async () => {
+    const scheduleTransfer = vi.fn();
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer }))(mkRequest(snapshot, {}), response.res, vi.fn());
+    expect(response.getStatus()).toBe(401);
+    expect(scheduleTransfer).not.toHaveBeenCalled();
+  });
+  it("snapshots the customer's schedules under the authenticated migration", async () => {
+    const result = { ...snapshot, records: [record], skipped: [] };
+    const scheduleTransfer = vi.fn(async () => result);
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer }))(signed(snapshot), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual(result);
+    expect(scheduleTransfer).toHaveBeenCalledWith(snapshot);
+  });
+  it("restores the recorded schedules", async () => {
+    const result = { migrationId: "move-1", slug: "chris", op: "restore", created: 1, existing: 0, failed: [] };
+    const scheduleTransfer = vi.fn(async () => result);
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer }))(signed(restore), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual(result);
+    expect(scheduleTransfer).toHaveBeenCalledWith(restore);
+  });
+  it("removes the saved source jobs", async () => {
+    const result = { ...remove, removed: 1, failed: [] };
+    const scheduleTransfer = vi.fn(async () => result);
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer }))(signed(remove), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(response.getBody()).toEqual(result);
+    expect(scheduleTransfer).toHaveBeenCalledWith(remove);
+  });
+  it("rejects an unknown op or malformed records before touching the scheduler", async () => {
+    for (const invalid of [
+      { ...snapshot, op: "export" },
+      { ...remove, jobIds: undefined },
+      { ...remove, jobIds: ["job-1", ""] },
+      { ...remove, jobIds: [7] },
+      { ...restore, records: undefined },
+      { ...restore, records: [{ ...record, agentId: "" }] },
+      { ...restore, records: [{ ...record, job: ["name"] }] },
+      { ...restore, records: [{ ...record, sourceJobId: 7 }] },
+    ]) {
+      const scheduleTransfer = vi.fn();
+      const response = mkResponse();
+      await createScheduleTransferHandler(mkDeps({ scheduleTransfer }))(signed(invalid), response.res, vi.fn());
+      expect(response.getStatus()).toBe(400);
+      expect(response.getBody()).toEqual({ error: "invalid schedule transfer request" });
+      expect(scheduleTransfer).not.toHaveBeenCalled();
+    }
+  });
+  it("reports and logs why a transfer failed", async () => {
+    const log = vi.fn();
+    const scheduleTransfer = vi.fn(async () => { throw new Error("gateway down"); });
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps({ scheduleTransfer, log }))(signed(snapshot), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: "gateway down" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("gateway down"), expect.anything());
+  });
+  it("fails loudly on a gateway without schedule transfer wiring", async () => {
+    const response = mkResponse();
+    await createScheduleTransferHandler(mkDeps())(signed(snapshot), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(response.getBody()).toEqual({ error: "schedule transfer failed", message: "schedule transfer is not configured" });
   });
 });
 

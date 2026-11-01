@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "../lib/customer-channel-quiesce.js";
+import { migrateCustomerScheduler, setCustomerChannelsRunning } from "../lib/customer-channel-quiesce.js";
 
 function runtime() {
   return {
@@ -33,22 +33,6 @@ describe("customer migration channel admission", () => {
     await expect(setCustomerChannelsRunning(rpc as never, "alice", false)).rejects.toThrow("stop failed");
   });
 });
-
-describe("scheduled migration eligibility", () => {
-  it("checks local and rostered customer agents without blocking on another customer's jobs", async () => {
-    const rpc = { configGet: vi.fn(async () => ({ config: { agents: { entries: {
-      "octogee-alice-coach": {}, "octogee-alice-proj-app-coach": {}, "octogee-bob-coach": {},
-    } } } })), cronJobCount: vi.fn(async () => 0) };
-    await assertCustomerHasNoScheduledJobs(rpc as never, "alice", ["octogee-alice-coach"]);
-    expect(rpc.cronJobCount.mock.calls).toEqual([["octogee-alice-coach"], ["octogee-alice-proj-app-coach"]]);
-  });
-  it("fails closed if the scheduler cannot be inspected", async () => {
-    const rpc = { configGet: vi.fn(async () => ({ config: {} })), cronJobCount: vi.fn(async () => { throw new Error("scheduler unavailable"); }) };
-    await expect(assertCustomerHasNoScheduledJobs(rpc as never, "alice", ["octogee-alice-coach"]))
-      .rejects.toThrow("scheduler unavailable");
-  });
-});
-
 
 describe("scheduled migration handoff scope", () => {
   it("holds the exact union of local and roster agents for one builder", async () => {

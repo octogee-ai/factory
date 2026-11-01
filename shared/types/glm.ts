@@ -983,6 +983,8 @@ export interface MigrationForwardRecovery {
 }
 
 export interface SchedulerHandoffState {
+  /** New customer moves use best-effort schedule snapshots, not native handoff. */
+  scheduleTransfer?: true;
   forwardRecovery?: MigrationForwardRecovery;
   migrationId: string;
   fromGatewayId: string;

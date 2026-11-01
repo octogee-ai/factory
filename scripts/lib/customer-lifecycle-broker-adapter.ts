@@ -5,7 +5,7 @@ import { readProjectRestoreReady } from "@octogee/core/project-asset-state";
 import { prepareBuilderProjectAssets } from "./builder-project-assets.js";
 import { createBrokeredProjectBlobHydrator } from "./project-blob-materialization.js";
 import { sharedMigrationAgentIds, sharedMigrationExportPaths } from "./source-transfer-plan.js";
-import { assertCustomerHasNoScheduledJobs, migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
+import { migrateCustomerScheduler, setCustomerChannelsRunning } from "./customer-channel-quiesce.js";
 import { quiesceCustomerSessionsBounded, sessionStoreForPath } from "./customer-session-quiesce.js";
 import { customerFileStatePaths, removeDepartedCustomerFileState } from "./customer-file-state.js";
 import { openClawRuntimeUpdateGuard } from "./openclaw-runtime-update-guard.js";
@@ -1669,7 +1669,6 @@ async function quiesceCustomer(
 ): Promise<{ drained: boolean; runningCount: number }> {
   const agentIds = agentIdsForMigration(slug);
   if (opts.stopMattermost) {
-    if (!opts.schedulerMigrationId) await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIds);
     await setCustomerChannelsRunning(ctx.rpc, slug, false);
   }
   const result = await quiesceCustomerSessionsBounded({
@@ -1689,9 +1688,6 @@ async function quiesceCustomer(
       : { graceMs: Math.min(MIGRATION_QUIESCE_GRACE_MS, timeoutMs), abortAfterGrace: false }),
     log: dlog,
   });
-  if (result.drained && opts.stopMattermost && !opts.schedulerMigrationId) {
-    await assertCustomerHasNoScheduledJobs(ctx.rpc, slug, agentIds);
-  }
   return { drained: result.drained, runningCount: result.runningCount };
 }
 
@@ -1708,7 +1704,7 @@ function sessionPathsForMigration(slug: string): string[] {
 }
 
 
-function agentIdsForMigration(slug: string): string[] {
+export function agentIdsForMigration(slug: string): string[] {
   const stateDir = resolveOpenClawStateDir();
   if (isConfiguredGatewayBuilder(slug)) {
     const plan = configuredBuilderPortableStatePlan(OPENCLAW_CONFIG, stateDir);

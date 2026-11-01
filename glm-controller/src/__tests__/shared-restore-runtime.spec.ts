@@ -762,7 +762,7 @@ describe('journaled Shared source schema repair', () => {
           rolledBack: true, schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 250, attemptHistory: [],
           schedulerHandoff: { migrationId: `mig-${operationId}:scheduler:1:claim:${row.startedAt}`, fromGatewayId: 'shared-1', toGatewayId: 'shared-2', uid, slug } });
         Object.assign(row.input, { builderSlug: slug, source: 'continuous-placement-policy' });
-        row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' }, { name: 'target-scheduler-ready', status: 'done' },
+        row.steps = [{ name: 'keys-sync-state', status: 'done' }, { name: 'pre-sync-state', status: 'done' },
           { name: 'wait-for-active-work', status: 'failed', error: row.error }, { name: 'rollback:unmount-target', status: 'done' }];
         row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
         Object.assign(h.store[`users/${uid}`].provisioning.openclaw, { mounted: true });
@@ -826,8 +826,8 @@ describe('journaled Shared source schema repair', () => {
       const row = Object.values(h.store).find((value: any) => value.input?.uid === uid && value.kind === 'migrate-customer')!;
       row.error = '/finish-rsync-import/shared-2: 500 ' + JSON.stringify({ error: 'import failed', message:
         `[import:${slug}] agents.create failed for octogee-${slug}-coach (AgentDatabaseMaintenanceRequiredError: Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)` });
-      row.steps = ['keys-sync-state', 'pre-sync-state', 'target-scheduler-ready', 'wait-for-active-work', 'quiesce-source', 'flush-source',
-        'rollback:scheduler-abort', 'rollback:unmount-target', 'rollback:scheduler-resume', 'rollback:resume-ingress'].map(name => ({ name, status: 'done' }));
+      row.steps = ['keys-sync-state', 'pre-sync-state', 'wait-for-active-work', 'quiesce-source', 'flush-source',
+        'rollback:unmount-target', 'rollback:resume-ingress'].map(name => ({ name, status: 'done' }));
       row.steps.push({ name: 'final-sync-state', status: 'failed', error: row.error });
       row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
       h.store[`workspaces/${slug}/projects/orbit`] = { agent: { status: 'ready' } };

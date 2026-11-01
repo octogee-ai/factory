@@ -1,6 +1,7 @@
 import { type MigrationPhase } from "./fleet-migration.js";
 import { type MigrationClient } from "./fleet-migration-client.js";
 import type { FleetBrokerProjectCheckoutScope } from "@octogee/shared/types/fleet-broker";
+import type { ScheduleTransferDoc } from "@octogee/shared/types/fleet-controller";
 export interface ReportedStep {
     name: string;
     status: "running" | "done" | "failed" | "skipped";
@@ -13,6 +14,7 @@ export interface CutoverCommit {
     fromGatewayId: string;
     flipMirror: boolean;
 }
+export type ScheduleRestoreRecord = Pick<ScheduleTransferDoc, "restoredTo" | "restoredAt"> & Required<Pick<ScheduleTransferDoc, "restoreAttemptedTo" | "restoreAttemptedAt" | "restoreFailures">>;
 export interface MigrationRunnerDeps {
     client: MigrationClient;
     commitCutover: (commit: CutoverCommit) => Promise<void>;
@@ -21,9 +23,12 @@ export interface MigrationRunnerDeps {
         uid: string;
         state: "serving" | "quiescing" | "migrating";
     }) => Promise<void>;
+    readScheduleTransfer: (migrationId: string) => Promise<ScheduleTransferDoc | null>;
+    saveScheduleTransfer: (doc: ScheduleTransferDoc) => Promise<void>;
+    recordScheduleRestore: (migrationId: string, restore: ScheduleRestoreRecord) => Promise<void>;
+    finishLegacySchedulerHandoff?: () => Promise<void>;
     log: (msg: string) => void;
     reportStep?: (step: ReportedStep) => Promise<void> | void;
-    recordSchedulesStaged?: () => Promise<void>;
     setMigrationPhase?: (phase: "preparing" | "waiting" | "transferring" | "connecting") => Promise<void>;
     readTargetSystemConfigCommit?: (gatewayId: string) => Promise<string | null>;
     persistForwardRecovery?: (state: {
@@ -44,11 +49,8 @@ export interface MigrationRunnerInput {
     toGatewayId: string;
     crossGateway?: boolean;
     gateAssignment?: boolean;
-    schedulerMigrationId?: string;
-    acceptRetainedTargetJobs?: boolean;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     includeActivationManifest?: boolean;
-    stageSchedulesAfterCutover?: boolean;
     convergeTargetSystemConfig?: TargetSystemConfigConvergence;
 }
 export type TargetSystemConfigConvergence = "source-commit" | "target-commit";
@@ -62,8 +64,16 @@ export interface MigrationRunnerResult {
     };
     rolledBack: boolean;
 }
+interface ScheduleTransferScope {
+    migrationId: string;
+    slug: string;
+}
+type ScheduleRestoreDeps = Pick<MigrationRunnerDeps, "client" | "log" | "now" | "readScheduleTransfer" | "recordScheduleRestore">;
+export declare function restoreScheduleTransfer(deps: ScheduleRestoreDeps, input: ScheduleTransferScope & {
+    gatewayId: string;
+    doc?: ScheduleTransferDoc;
+}): Promise<void>;
 type SchedulerRequest = Parameters<MigrationClient["scheduler"]>[0];
-type TargetSchedulerDeps = Pick<MigrationRunnerDeps, "client" | "log" | "now" | "wait">;
-export declare function callReleasedTargetScheduler(deps: TargetSchedulerDeps, request: SchedulerRequest): Promise<void>;
+export declare function callReleasedTargetScheduler(deps: Pick<MigrationRunnerDeps, "client" | "log" | "now" | "wait">, request: SchedulerRequest): Promise<void>;
 export declare function runMigration(input: MigrationRunnerInput, deps: MigrationRunnerDeps): Promise<MigrationRunnerResult>;
 export {};

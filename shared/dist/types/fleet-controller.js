@@ -76,3 +76,5 @@ export const MIGRATION_RSYNC_PORT_DEFAULT = 30873;
 export const MIGRATION_ID_HEADER = "X-Migration-Id";
 export const MIGRATION_SLUG_HEADER = "X-Migration-Slug";
 export const MIGRATION_MODE_HEADER = "X-Migration-Mode";
+// users/{uid}/scheduleTransfers/{migrationId}
+export const SCHEDULE_TRANSFERS_SUBCOLLECTION = "scheduleTransfers";

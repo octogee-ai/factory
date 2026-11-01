@@ -26,6 +26,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   type SchedulerMigrationRequestBody,
+  type ScheduleRecord,
+  type ScheduleRemoveResult,
+  type ScheduleRestoreResult,
+  type ScheduleSnapshotResult,
+  type ScheduleTransferRequestBody,
   type AbortRsyncImportRequestBody,
   type ImportResponse,
   type ActivateImportRequestBody,
@@ -151,6 +156,7 @@ export interface MigrationHandlerDeps {
   publicKey: string;
   gatewayId: string;
   adapter: CustomerLifecycleAdapter;
+  scheduleTransfer?: (body: ScheduleTransferRequestBody) => Promise<ScheduleSnapshotResult | ScheduleRestoreResult | ScheduleRemoveResult>;
 
   log?: (msg: string, fields?: LogContext) => void;
 
@@ -582,6 +588,37 @@ export function createSchedulerMigrationHandler(deps: MigrationHandlerDeps): Req
       const message = error instanceof Error ? error.message : String(error);
       log(`[migration-http] scheduler ${body.phase} failed slug=${body.slug}: ${message}`);
       res.status(500).json({ error: "scheduler migration failed", message });
+    }
+  });
+}
+
+function isScheduleRecord(value: unknown): value is ScheduleRecord {
+  return isRecord(value) && typeof value.sourceJobId === "string" && typeof value.agentId === "string" &&
+    value.agentId.length > 0 && isRecord(value.job);
+}
+
+function isScheduleTransferRequest(body: ScheduleTransferRequestBody): boolean {
+  if (body.op === "snapshot") return true;
+  if (body.op === "remove") return Array.isArray(body.jobIds) && body.jobIds.every(id => typeof id === "string" && id.length > 0);
+  return body.op === "restore" && Array.isArray(body.records) && body.records.every(isScheduleRecord);
+}
+
+export function createScheduleTransferHandler(deps: MigrationHandlerDeps): RequestHandler {
+  const log = deps.log ?? provisionerLog;
+  return (req, res) => withLogContext({}, async () => {
+    const body = parseAndVerifyJsonBody<ScheduleTransferRequestBody>(req, res, deps, log);
+    if (!body) return;
+    if (!isScheduleTransferRequest(body)) {
+      res.status(400).json({ error: "invalid schedule transfer request" });
+      return;
+    }
+    try {
+      if (!deps.scheduleTransfer) throw new Error("schedule transfer is not configured");
+      res.status(200).json(await deps.scheduleTransfer(body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[migration-http] schedule ${body.op} failed slug=${body.slug}: ${message}`, { status: "failed" });
+      res.status(500).json({ error: "schedule transfer failed", message });
     }
   });
 }

@@ -84,6 +84,7 @@ export function isAgentNotFoundRpcError(err) {
         err.code === "rpc-error" &&
         AGENT_NOT_FOUND_MESSAGE.test(err.message));
 }
+const SCHEDULE_TRANSFER_CRON_METHODS = ["cron.list", "cron.add", "cron.remove", "cron.scratch.get", "cron.scratch.set", "cron.update"];
 function configChangedHash(data) {
     let parsed;
     try {
@@ -608,6 +609,11 @@ export function createGatewayRpc(opts = {}) {
                 throw new OpenclawWireError(INVALID_RESPONSE, "cron.migration returned a mismatched operation or invalid scheduler state");
             }
             return value;
+        },
+        async cronRequest(method, params) {
+            if (!SCHEDULE_TRANSFER_CRON_METHODS.includes(method))
+                throw new Error(`cronRequest does not allow ${String(method)}`);
+            return call(method, params);
         },
         async cronJobCount(agentId, opts) {
             const payload = await call("cron.list", {

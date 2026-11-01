@@ -263,6 +263,7 @@ export interface GatewayRpcClient {
         includePlugins: true;
     }, timeoutMs?: number): Promise<GatewayToolsCatalogResult>;
     schedulerMigration(params: SchedulerMigrationRequest): Promise<SchedulerMigrationResult>;
+    cronRequest(method: ScheduleTransferCronMethod, params: Record<string, unknown>): Promise<unknown>;
     cronJobCount(agentId: string, opts?: {
         includeDisabled?: boolean;
     }): Promise<number>;
@@ -275,6 +276,8 @@ export interface GatewayRpcClient {
     isGatewayUp(timeoutMs?: number): Promise<boolean>;
     close(): Promise<void>;
 }
+declare const SCHEDULE_TRANSFER_CRON_METHODS: readonly ["cron.list", "cron.add", "cron.remove", "cron.scratch.get", "cron.scratch.set", "cron.update"];
+export type ScheduleTransferCronMethod = (typeof SCHEDULE_TRANSFER_CRON_METHODS)[number];
 export declare function createGatewayRpc(opts?: GatewayRpcClientOptions): GatewayRpcClient;
 export declare function provisionCoachAutomation(rpc: Pick<GatewayRpcClient, "cronAdd">, customer: {
     slug: string;

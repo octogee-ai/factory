@@ -774,6 +774,23 @@ describe("gateway-rpc", () => {
     });
   });
 
+  describe("schedule transfer cron requests", () => {
+    it.each(["cron.list", "cron.add", "cron.remove", "cron.scratch.get", "cron.scratch.set", "cron.update"] as const)("forwards %s with its params and returns the payload", async (method) => {
+      const params = { id: "job-1", offset: 0 };
+      server.setHandler(method, (received) => {
+        expect(received).toEqual(params);
+        return { ok: true, payload: { method } };
+      });
+      await expect(client.cronRequest(method, params)).resolves.toEqual({ method });
+    });
+    it("refuses any other method without calling the gateway", async () => {
+      const handler = vi.fn(() => ({ ok: true, payload: {} }));
+      server.setHandler("cron.migration", handler);
+      await expect(client.cronRequest("cron.migration" as never, {})).rejects.toThrow("cron.migration");
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
   describe("channels lifecycle", () => {
     it("stops and starts one Mattermost account through the channel RPC", async () => {
       const calls: Array<{ method: string; params: unknown }> = [];

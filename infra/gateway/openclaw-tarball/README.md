@@ -153,13 +153,13 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 
 This recut freezes OpenClaw main at `7f345d644b976af9d43264e6617aaacd4ed5f9a2`
 (#189669), 530 commits after the previous `774e96e` base. The clean overlay is
-`0c0b0183cc7ee78d1d64248a44299436a438dbd0` on `codex/gateway-refresh-20261031c`:
+`6093b36c485bedb841e8fdb914e4b78dc63de74d` on `codex/gateway-refresh-20261101`:
 the October 30 overlay squash, the account-addition reload repair, the
 Mattermost max-lines baseline prune, the new scheduled-requester patch below,
 one regeneration commit (gateway protocol predicates, SQLite state catalogs,
-bundled channel metadata and config-doc baseline) and one line-cap override. The
-carried PostgreSQL voice consult fix and the previous metadata regeneration are
-dropped.
+bundled channel metadata and config-doc baseline), one line-cap override and the
+operator cron restore authority below. The carried PostgreSQL voice consult fix
+and the previous metadata regeneration are dropped.
 
 The new base includes [#188397](https://github.com/openclaw/openclaw/pull/188397),
 agent schema 38 to 39, which requires stopped-writer Doctor. The previous recut
@@ -322,6 +322,22 @@ modules so the patch adds no lines to the two capped files it touches. Not
 submitted upstream. Remove it when native exposes an equivalent verified
 scheduled-creator fact to plugin tools.
 
+### Operator cron restore authority
+
+Octogee moves a customer's automations by snapshotting them on the source with
+operator `cron.list` and recreating them on the target with operator `cron.add`
+([#4963](https://github.com/octogee-ai/octogee/issues/4963)). Native derives a
+job's `scheduledToolPolicy` and `toolsAllowProvenance` from the caller, so an
+operator-created job ran with the trusted policy and without its authenticated
+creator: account-scoped tools widened and the scheduled requester above lost its
+source. The overlay lets an operator `cron.add` supply both fields through closed
+schemas, refuses them from agent-runtime callers, requires an account policy to
+match the job's owner, and returns `toolsAllowProvenance` to operator `cron.list`
+and `cron.get` callers only. Its 12 regressions run against a real cron service
+and store and fail on `0c0b018`. The generated protocol predicates are
+regenerated with it. Not submitted upstream. Remove it when Octogee stops
+recreating automations through operator `cron.add`.
+
 ### New channel-account reload
 
 Adding a project account could wait for unrelated admitted Gateway work even
@@ -409,6 +425,17 @@ behavior is present in the selected base and the affected consumer controls pass
 
 ### Qualification and explicit limits
 
+The November 1 recut adds only the operator cron restore authority to
+`0c0b018`; the base and every other overlay commit are unchanged, so the
+qualification below stands for them. For `6093b36`: the packer's full build
+records that commit in `dist/build-info.json`, native
+`check-openclaw-package-tarball` passes on the root archive, its
+`vendor/npm.tgz` is npm 12.2.1 carrying all 15 patched files (reverse-applies,
+refuses forward), an isolated install of the pair reports
+`OpenClaw 2026.10.9 (6093b36)`, the Mattermost archive is again byte-identical
+to `openclaw-mattermost-41b3b713.tgz`, the hosted islands' inputs are unchanged
+and the fork's line-cap, oxlint, typecheck, protocol and validator gates pass.
+
 Pinned pnpm 12.15.0, Node 26.12.1 (toolchain npm 11.20.0) and the frozen
 lockfile built the source with full `pnpm build package` on a 10-CPU, 32 GB
 macOS host. The clean final source and `dist/build-info.json.commit` both
@@ -457,7 +484,7 @@ on upgraded agents remain for Build main and TEST.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-88109db6.tgz#1793477808534077` | 118524896 | `88109db6c9af6761675b3ac9f12d225a098713c26b8793bea1cdaa1cb0be002a` |
+| root | `openclaw-fork-a99c9675.tgz#1793536822932448` | 118518561 | `a99c9675b64a66913db9784b8ad2c743273f298e2b63f51cbb762f1091545b00` |
 | mattermost | `openclaw-mattermost-41b3b713.tgz#1793414287604477` (reused) | 1272386 | `41b3b7130a25e6b861cc44aaf0669451f2be2b814055b250412c62147102dce4` |
 
 Hash-addressed objects are write-once. Complete-image qualification results and
