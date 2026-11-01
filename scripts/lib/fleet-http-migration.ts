@@ -2224,9 +2224,9 @@ function recordRestoredConvergence(
   );
 }
 
-function sharedTargetCustody(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, uid: string): MigrationTargetIdentityCustody {
+function targetIdentityCustody(deps: MigrationHandlerDeps, body: FinishRsyncImportRequestBody, uid: string): MigrationTargetIdentityCustody {
   const podUid = process.env.POD_UID?.trim();
-  if (!podUid) throw new Error("Shared target identity requires its current pod");
+  if (!podUid) throw new Error("target identity requires its current pod");
   const custody = { migrationId: body.migrationId, uid, gatewayId: deps.gatewayId, podUid };
   assertTargetIdentityCustody(custody, custody);
   return custody;
@@ -2244,7 +2244,7 @@ async function sharedManifestWorkspaceRestore({ deps, body, importDir, signal, s
   const readAuthority = deps.adapter.targetMigrationIdentityCustody;
   if (!readAuthority) throw new Error("Shared target requires current migration identity authority");
   const authority = await readAuthority(body.slug, body.migrationId), custody = authority.custody;
-  assertTargetIdentityCustody(custody, sharedTargetCustody(deps, body, custody.uid));
+  assertTargetIdentityCustody(custody, targetIdentityCustody(deps, body, custody.uid));
   const incoming = await readActivationManifest(stageDir ?? importDir, body.slug);
   const agentIds = [incoming.agentId, ...incoming.projectAgents.map(agent => agent.agentId)];
   const previous = stageDir ? await readActivationManifest(importDir, body.slug).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") { return null; } throw error; }) : incoming;
@@ -2267,7 +2267,7 @@ async function sharedManifestWorkspaceRestore({ deps, body, importDir, signal, s
   const assertCurrent = async () => {
     signal.throwIfAborted();
     if (!isDeepStrictEqual(await readAuthority(body.slug, body.migrationId), authority)) throw new Error("Shared target migration identity authority changed");
-    assertTargetIdentityCustody(custody, sharedTargetCustody(deps, body, custody.uid));
+    assertTargetIdentityCustody(custody, targetIdentityCustody(deps, body, custody.uid));
     if (!isDeepStrictEqual(await readActivationManifest(importDir, body.slug), retained)) throw new Error("Shared target workspace identity capture changed");
     signal.throwIfAborted();
   };
@@ -2367,31 +2367,34 @@ async function heldBuilderImport(input: StagedImportInput): Promise<BuilderImpor
   return await input.deps.surgeTargetOpenClawHeld?.(activation.request) === true ? activation.request : null;
 }
 
-async function upgradeSharedImportedAgents(input: StagedImportInput, prepared: PreparedAgentStores): Promise<void> {
-  if (input.deps.adapter.isBuilderGateway?.() !== false) return;
+function upgradesCarriedAgents(input: StagedImportInput): boolean {
+  return input.deps.adapter.isBuilderGateway?.() === false || Boolean(input.activation);
+}
+
+async function upgradeCarriedAgents(input: StagedImportInput, prepared: PreparedAgentStores): Promise<void> {
   const readAuthority = input.deps.adapter.targetMigrationIdentityCustody;
-  if (!readAuthority) throw new Error("Shared target requires current migration agent authority");
+  if (!readAuthority) throw new Error("target requires current migration agent authority");
   const authority = await readAuthority(input.slug, input.session.migrationId);
   const body = { migrationId: input.session.migrationId } as FinishRsyncImportRequestBody;
-  assertTargetIdentityCustody(authority.custody, sharedTargetCustody(input.deps, body, authority.custody.uid));
+  assertTargetIdentityCustody(authority.custody, targetIdentityCustody(input.deps, body, authority.custody.uid));
   const expected = authority.anchors;
   if (!Array.isArray(expected) || expected.length !== prepared.stores.length ||
       new Set(expected.map(anchor => anchor.agentId)).size !== expected.length ||
       new Set(prepared.stores.map(store => store.agentId)).size !== prepared.stores.length) {
-    throw new Error("Shared target carried agent roster does not match migration authority");
+    throw new Error("carried agent roster does not match migration authority");
   }
   if (prepared.stores.length === 0) return;
   const stores = prepared.stores.map(store => {
     const anchor = expected.find(item => item.agentId === store.agentId);
-    if (!anchor) throw new Error(`Shared target carried agent is not authorized: ${store.agentId}`);
+    if (!anchor) throw new Error(`carried agent is not authorized: ${store.agentId}`);
     return { ...anchor, anchorPath: store.destinationPath };
   });
   const assertCurrent = async () => {
     input.signal.throwIfAborted();
     if (!isDeepStrictEqual(await readAuthority(input.slug, input.session.migrationId), authority)) {
-      throw new Error("Shared target migration agent authority changed");
+      throw new Error("target migration agent authority changed");
     }
-    assertTargetIdentityCustody(authority.custody, sharedTargetCustody(input.deps, body, authority.custody.uid));
+    assertTargetIdentityCustody(authority.custody, targetIdentityCustody(input.deps, body, authority.custody.uid));
     input.signal.throwIfAborted();
   };
   await (input.deps.upgradeImportedAgents ?? upgradeImportedAgentStores)({ stores, assertCurrent, signal: input.signal,
@@ -2434,12 +2437,12 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
     });
     log(`[migration-rsync] final-import agent-install migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - installStartedAt });
 
-    if (deps.adapter.isBuilderGateway?.() === false && prepared.stores.length > 0) {
+    if (upgradesCarriedAgents(input)) {
       const upgradeStartedAt = Date.now();
-      await upgradeSharedImportedAgents(input, prepared);
-      log(`[migration-rsync] final-import agent-upgrade migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - upgradeStartedAt });
-    } else {
-      await upgradeSharedImportedAgents(input, prepared);
+      await upgradeCarriedAgents(input, prepared);
+      if (prepared.stores.length > 0) {
+        log(`[migration-rsync] final-import agent-upgrade migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - upgradeStartedAt });
+      }
     }
     if (offlineTarget) {
       if (!input.heldTarget) await reattachBuilderAgents({

@@ -45,14 +45,23 @@ async function sharedCrossGatewayAgentAnchorScope(db: Firestore, txn: Transactio
   if (!sourceRoot) return null;
   const data = user.data(), assigned = assignment.data() ?? {};
   const openclaw = data?.provisioning?.openclaw;
-  const sourceTargetCurrent = input.source === "builder-activation-lease"
-    ? builderActivationRecoveryTargetMatches({ operationId, input, openclaw: openclaw ?? {}, sourceEpoch: assigned.epoch, targetRoot: gateway.data() })
+  const activation = builderActivationTarget({ operationId, input, openclaw, sourceEpoch: assigned.epoch, targetRoot: gateway.data() });
+  const sourceTargetCurrent = activation
+    ? activation.matches
     : target?.gatewayClass === "shared" || sharedRecoveryTargetCleaned(input, operation.schedulerHandoff);
-  if (!migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug,
-    assigned, sourceTargetCurrent, targetAssigned: targetAssignment.exists, data, openclaw, migrationId, sourceGatewayId, targetGatewayId })) return null;
+  if (!migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug, assigned, sourceTargetCurrent,
+    builderTargetActivating: activation?.activating === true, targetAssigned: targetAssignment.exists, data, openclaw, migrationId, sourceGatewayId, targetGatewayId })) return null;
   const migration: FleetBrokerAgentAnchorMigration = { migrationId, claimStartedAt: operation.startedAt, sourceGatewayId, sourceEpoch: assigned.epoch };
   if (!migrationAuthorityMatches(migration, expected)) return null;
   return { gatewayId, uid: input.uid as string, slug, assignmentEpoch: assigned.epoch as number, assignmentState: "quiescing" as const, migration };
+}
+
+function builderActivationTarget({ operationId, input, openclaw, sourceEpoch, targetRoot }: {
+  operationId: string; input: DocumentData; openclaw: DocumentData | undefined; sourceEpoch: number; targetRoot: DocumentData | undefined;
+}): { matches: boolean; activating: boolean } | null {
+  if (input.source !== "builder-activation-lease") return null;
+  const matches = builderActivationRecoveryTargetMatches({ operationId, input, openclaw: openclaw ?? {}, sourceEpoch, targetRoot });
+  return { matches, activating: matches && openclaw?.activationLease?.status === "activating" };
 }
 
 async function sharedSurgeAgentAnchorScope(
@@ -141,7 +150,7 @@ function migrationOperationCurrent(operation: DocumentData, input: DocumentData,
 }
 
 function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationId, operation, input, slug,
-  assigned, sourceTargetCurrent, targetAssigned, data, openclaw, migrationId, sourceGatewayId, targetGatewayId }: {
+  assigned, sourceTargetCurrent, builderTargetActivating, targetAssigned, data, openclaw, migrationId, sourceGatewayId, targetGatewayId }: {
   sourceRequest: boolean;
   sourceRoot: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
   target: ReturnType<typeof projectGatewayDesiredRootForGateway>;
@@ -151,6 +160,7 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
   slug: string;
   assigned: DocumentData;
   sourceTargetCurrent: boolean;
+  builderTargetActivating: boolean;
   targetAssigned: boolean;
   data: DocumentData | undefined;
   openclaw: DocumentData | undefined;
@@ -162,7 +172,7 @@ function migrationCustodyCurrent({ sourceRequest, sourceRoot, target, operationI
     sourceRequest
       ? sourceRoot.gatewayClass === "shared" && ["running", "draining"].includes(sourceRoot.desiredStatus) &&
         assigned.updatedByOperationId === operationId && sourceRecoveryIntentCurrent(operationId, operation, input, slug, assigned.epoch) && sourceTargetCurrent
-      : target?.gatewayClass === "shared" && target.desiredStatus === "running" && target.retirementClaim == null,
+      : (target?.gatewayClass === "shared" || builderTargetActivating) && target?.desiredStatus === "running" && target.retirementClaim == null,
     sourceRoot.retirementClaim == null, !targetAssigned, !customerRuntimeMutationFenced(data),
     slugFromAssignedUser(data) === slug, openclaw?.gatewayId === sourceGatewayId, openclaw?.migration?.operationId === operationId,
     assigned.uid === input.uid, assigned.slug === slug, assigned.gatewayId === sourceGatewayId, assigned.state === "quiescing",

@@ -50,6 +50,31 @@ it("runs Native Doctor against only the carried PostgreSQL agent in private stat
   for (const [, options] of f.run.mock.calls) await expect(fs.stat(options.env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+it("leaves the customer's HEARTBEAT.md for a later Doctor because every workspace the private Doctor sees is its own", async () => {
+  const f = await fixture();
+  const heartbeat = path.join(f.root, "customers", "alice", "HEARTBEAT.md");
+  await fs.mkdir(path.dirname(heartbeat), { recursive: true });
+  await fs.writeFile(heartbeat, "- check the inbox\n");
+  const seen: Array<{ stateDir: string; workspaces: string[] }> = [];
+  const run = f.run;
+  f.run = vi.fn<OpenClawCommand>(async (args, options) => {
+    if (args[0] === "doctor") {
+      const config = JSON.parse(await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+      seen.push({ stateDir: options.env.OPENCLAW_STATE_DIR!,
+        workspaces: Object.values<{ workspace: string }>(config.agents.entries).map(entry => entry.workspace) });
+    }
+    return run(args, options);
+  });
+
+  await upgradeImportedAgentStores(f);
+
+  expect(seen).toHaveLength(1);
+  for (const { stateDir, workspaces } of seen) {
+    for (const workspace of workspaces) expect(workspace.startsWith(stateDir + path.sep)).toBe(true);
+  }
+  expect(await fs.readFile(heartbeat, "utf8")).toBe("- check the inbox\n");
+});
+
 it("refuses an anchor that differs from the authorized roster before running Doctor", async () => {
   const f = await fixture(); f.stores[0]!.schema = "octogee_agent_foreign";
   await expect(upgradeImportedAgentStores(f)).rejects.toThrow(/anchor/i);

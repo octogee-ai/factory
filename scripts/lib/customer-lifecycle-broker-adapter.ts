@@ -2456,12 +2456,12 @@ export function buildBrokeredLifecycleAdapter(
       prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`))),
     prepareKeyImportDir,
     targetMigrationIdentityCustody: async (slug, migrationId) => {
-      if (ctx.isBuilderGateway() || !migrationId) throw new Error("Shared target migration authority is required");
+      if (!migrationId) throw new Error("target migration authority is required");
       const current = await ctx.client.readAgentAnchors({ slug, migrationId });
       const gatewayId = process.env.GATEWAY_ID?.trim(), podUid = process.env.POD_UID?.trim();
       if (!gatewayId || !podUid || current.migration?.migrationId !== migrationId || !current.assignment?.uid || current.assignment.state !== "quiescing" ||
           current.assignment.epoch !== current.migration.sourceEpoch || !Number.isSafeInteger(current.migration.claimStartedAt) || current.migration.claimStartedAt <= 0) {
-        throw new Error("Shared target migration authority changed");
+        throw new Error("Target migration authority changed");
       }
       return { custody: { migrationId, uid: current.assignment.uid, gatewayId, podUid }, migration: current.migration, anchors: current.anchors };
     },

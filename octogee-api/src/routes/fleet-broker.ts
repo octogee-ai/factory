@@ -2315,7 +2315,9 @@ async function requireAgentAnchorScope(db: Firestore, req: Request, res: Respons
   const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId);
   const gateway = await gatewayRef.get();
   if (projectGatewayDesiredRootForGateway(gateway.data(), bound.gatewayId)?.gatewayClass !== "shared") {
-    return requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!migrationAnchorRequest(req)) return requireConfiguredBuilderRuntimeState(db, req, res);
+    if (!req.path.endsWith("/read")) { res.status(403).json(FORBIDDEN); return null; }
+    return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);
   }
   if (migrationAnchorRequest(req)) {
     return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);

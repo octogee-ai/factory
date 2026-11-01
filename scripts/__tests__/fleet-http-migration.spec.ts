@@ -3958,7 +3958,12 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.adapter.activateImportedCustomer).not.toHaveBeenCalled();
   });
 
-  function builderTargetImport(openClawHeld: MigrationHandlerDeps["surgeTargetOpenClawHeld"]): {
+  function carriedAgentAuthority(agentIds: readonly string[]) {
+    return vi.fn(async (slug: string, migrationId: string) => ({ ...sharedTargetAuthority(slug, migrationId),
+      anchors: agentIds.map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" })) }));
+  }
+
+  function builderTargetImport(openClawHeld: MigrationHandlerDeps["surgeTargetOpenClawHeld"], carriedAgentIds: readonly string[] = ["octogee-chris-coach"]): {
     adapter: Partial<CustomerLifecycleAdapter>;
     deps: Partial<MigrationHandlerDeps>;
   } {
@@ -3968,6 +3973,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
         isBuilderGateway: () => true,
         isConfiguredBuilderCustomer: (slug) => slug === "chris",
         releaseAgent: vi.fn(async () => undefined),
+        targetMigrationIdentityCustody: carriedAgentAuthority(carriedAgentIds),
       },
       deps: {
         reserveSurgeTarget: vi.fn(async () => undefined),
@@ -3977,6 +3983,26 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       },
     };
   }
+
+  it("runs the scoped agent upgrade on a held Builder activation target before its OpenClaw starts", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot(), migrationId = "mig-held-builder-upgrade";
+    const upgradeImportedAgents = vi.fn(async (input: { stores: Array<{ agentId: string; anchorPath: string }>; assertCurrent: () => Promise<void> }) => {
+      await input.assertCurrent();
+      expect(input.stores).toMatchObject([{ agentId: "octogee-chris-coach", anchorPath: path.join(importDir, CARRIED_STORE) }]);
+    });
+    const target = builderTargetImport(vi.fn(async () => true));
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(), adapter: target.adapter,
+      deps: { ...target.deps, procRoot, upgradeImportedAgents } });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId);
+
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(200);
+    expect(upgradeImportedAgents).toHaveBeenCalledOnce();
+    expect(target.adapter.targetMigrationIdentityCustody).toHaveBeenCalledWith("chris", migrationId);
+    expect(deps.releaseSurgeReadiness).toHaveBeenCalledOnce();
+  });
 
   it.each(["success", "late-writer", "claim-loss", "capture-loss", "absence"])("preserves the staged Shared activation personas across %s", async mode => {
     const importDir = await mkTempRoot(); vi.stubEnv("OPENCLAW_STATE_DIR", importDir); vi.stubEnv("POD_UID", "target-pod");
@@ -4126,8 +4152,8 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
   it.each(["active", "disabled", "missing-token", "owner-changed", "hold-lost"] as const)("checks current ownership before admitting a carried project absent from a fresh Builder roster: %s", async mode => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     let held = true;
-    const target = builderTargetImport(async () => held);
     const agentId = "octogee-chris-proj-demo-coach";
+    const target = builderTargetImport(async () => held, [agentId]);
     const workspace = path.join(importDir, "customers", "chris", "projects", "demo");
     const agentDir = path.join(importDir, "agents", agentId, "agent");
     const runOpenClaw = vi.fn(async (args: string[]) => {
@@ -4160,8 +4186,8 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
 
   it("preserves carried project persona files after Native registration of a fresh Builder roster", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    const target = builderTargetImport(async () => true);
     const agentId = "octogee-chris-proj-demo-coach";
+    const target = builderTargetImport(async () => true, [agentId]);
     const workspace = path.join(importDir, "customers", "chris", "projects", "demo");
     const agentDir = path.join(importDir, "agents", agentId, "agent");
     const identity = "# IDENTITY.md\n\n- **Name:** Harbor\n\nAuthored project personality.\n";
@@ -4374,7 +4400,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(rowCount(previous)).toBe(1);
   });
 
-  function liveBuilderTargetImport(): {
+  function liveBuilderTargetImport(carriedAgentIds: readonly string[] = ["octogee-chris-coach"]): {
     adapter: Partial<CustomerLifecycleAdapter>;
     deps: Partial<MigrationHandlerDeps>;
   } {
@@ -4385,6 +4411,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
         isBuilderGateway: () => true,
         isConfiguredBuilderCustomer: (slug) => slug === "chris",
         customerMountMarked: vi.fn(() => false),
+        targetMigrationIdentityCustody: carriedAgentAuthority(carriedAgentIds),
         releaseAgent: vi.fn(async () => undefined),
         removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: true, steps: [], retained: true })),
         clearMountMarker: vi.fn(),

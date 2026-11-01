@@ -1197,13 +1197,13 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
-  it.each(["current", "missing-migration", "serving", "changed-epoch"])("reads explicit Shared target migration authority without an assigned-owner fallback: %s", async mode => {
+  it.each(["current", "missing-migration", "serving", "changed-epoch"].flatMap(mode => [[mode, false], [mode, true]] as const))("reads explicit target migration authority without an assigned-owner fallback: %s (builder=%s)", async (mode, builder) => {
     vi.stubEnv("GATEWAY_ID", "shared-target"); vi.stubEnv("POD_UID", "target-pod");
     try {
       const readAgentAnchors = vi.fn(async () => ({ anchors: [], assignment: { uid: "uid-tester10", epoch: mode === "changed-epoch" ? 5 : 4, state: mode === "serving" ? "serving" : "quiescing" },
         ...(mode === "missing-migration" ? {} : { migration: { migrationId: "mig-target", sourceGatewayId: "builder-source", sourceEpoch: 4, claimStartedAt: 123 } }) }));
       const client = mkClient({ uidForSlug: vi.fn(async () => { throw new Error("must not use assigned-owner shortcut"); }), readAgentAnchors: readAgentAnchors as never });
-      const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn() });
+      const adapter = buildBrokeredLifecycleAdapter({ client, rpc: mkGatewayRpc(), log: vi.fn(), isBuilderGateway: () => builder });
       const proof = adapter.targetMigrationIdentityCustody!("tester10", "mig-target");
       if (mode === "current") await expect(proof).resolves.toMatchObject({ custody: { uid: "uid-tester10", gatewayId: "shared-target", podUid: "target-pod", migrationId: "mig-target" } });
       else await expect(proof).rejects.toThrow("authority changed");
