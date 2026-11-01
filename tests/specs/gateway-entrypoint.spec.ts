@@ -159,17 +159,13 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(retryBlock).not.toMatch(/exit\s+[1-9]/);
   });
 
-  it("restores builder-global SQLite before OpenClaw and supervises its periodic snapshotter", () => {
+  it("restores the Builder PostgreSQL identity before OpenClaw", () => {
     const hydrateIdx = entrypoint.indexOf("configured-builder-bootstrap.ts");
     const runtimeRestoreIdx = entrypoint.indexOf("builder-runtime-state-restore.ts");
     const supervisorIdx = entrypoint.indexOf("supervise_runner surge-openclaw-supervisor");
-    const snapshotterIdx = entrypoint.indexOf("builder-runtime-state-snapshotter.ts");
 
     expect(runtimeRestoreIdx).toBeGreaterThan(hydrateIdx);
     expect(runtimeRestoreIdx).toBeLessThan(supervisorIdx);
-    expect(snapshotterIdx).toBeGreaterThan(supervisorIdx);
-    expect(entrypoint.slice(entrypoint.lastIndexOf("\n", snapshotterIdx), snapshotterIdx))
-      .toMatch(/\$BUILDER_OVERLAY_GATE "\$TSX"/);
   });
 
   it("lands recorded PostgreSQL agent anchors after the runtime-state restore and before OpenClaw", () => {
@@ -245,7 +241,6 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint.slice(entrypoint.lastIndexOf("if [", gateIdx), gateIdx)).toMatch(/OCTOGEE_BUILDER_STANDBY_BOOT:-0\}" = 1/);
     for (const overlayRunner of [
       "github-cli-auth-hydrate.ts",
-      "builder-runtime-state-snapshotter.ts",
       "builder-toolchain-hydrator.ts",
       "system-config-watch.ts",
     ]) {

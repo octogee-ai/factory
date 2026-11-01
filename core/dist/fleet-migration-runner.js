@@ -14,7 +14,7 @@ export function isTargetSchedulerNotReady(error) {
 function errorText(error) {
     return error instanceof Error ? error.message : String(error);
 }
-async function snapshotSchedules(deps, scope) {
+async function snapshotSchedules(deps, scope, state) {
     const { migrationId, slug, sourceGatewayId } = scope;
     let pending;
     let doc;
@@ -23,9 +23,11 @@ async function snapshotSchedules(deps, scope) {
         doc = pending && pending.restoredTo === undefined ? pending : await takeScheduleSnapshot(deps, scope);
     }
     catch (error) {
-        deps.log(`[migration-runner] ⚠ schedule snapshot failed on ${sourceGatewayId} migrationId=${migrationId} slug=${slug}: ${errorText(error)} — migrating without schedules`);
-        return undefined;
+        throw new Error(`Schedule snapshot failed on ${sourceGatewayId}; source retained: ${errorText(error)}`, { cause: error });
     }
+    // Snapshot fences can already have disabled source jobs. Keep their original
+    // enabled state available to rollback even if durable publication fails.
+    state.doc = doc;
     if (doc === pending) {
         deps.log(`[migration-runner] carrying ${doc.records.length} schedule(s) an earlier attempt snapshotted migrationId=${migrationId} slug=${slug}`);
     }
@@ -34,12 +36,10 @@ async function snapshotSchedules(deps, scope) {
             await deps.saveScheduleTransfer(doc);
         }
         catch (error) {
-            deps.log(`[migration-runner] ⚠ could not persist ${doc.records.length} snapshotted schedule(s) migrationId=${migrationId} slug=${slug}: ${errorText(error)}; they stay disabled on ${sourceGatewayId}`);
-            return doc;
+            throw new Error(`Could not persist schedules for ${slug}; source retained: ${errorText(error)}`, { cause: error });
         }
     }
     await removeSnapshottedSchedules(deps, { migrationId, slug, sourceGatewayId }, doc.records);
-    return doc;
 }
 async function takeScheduleSnapshot(deps, scope) {
     const { migrationId, slug, sourceGatewayId } = scope;
@@ -131,9 +131,9 @@ async function executeStep(params) {
         case QUIESCE_SOURCE:
             await deps.client.quiesce({ migrationId, gatewayId: step.gateway, slug: step.slug });
             if (crossGateway) {
-                params.schedules.doc = await snapshotSchedules(deps, {
+                await snapshotSchedules(deps, {
                     migrationId, slug: step.slug, sourceGatewayId: step.gateway, targetGatewayId: params.targetGatewayId,
-                });
+                }, params.schedules);
             }
             return;
         case "flush-source": {

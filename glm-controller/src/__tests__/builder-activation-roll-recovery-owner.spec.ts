@@ -7,7 +7,7 @@ import { createBuilderActivationRollRecoveryOwner } from '../builder-activation-
 import { readBuilderActivationRollRecovery, hasBuilderActivationTargetRollback } from '../builder-activation-roll-recovery.js';
 import { createSurgePodTransport } from '../surge-customer-handoff-runtime.js';
 import { FLEET_KEY_PAIR } from './fixtures/fleet-keys.js';
-import { buildOperationCompletionUpdate } from '../operation-retry.js';
+import { buildOperationCompletionUpdate, classifyOperationFailure } from '../operation-retry.js';
 import { rearmOwnedLegacyMigration } from '../legacy-migration-recovery.js';
 
 function fixture(scenario = 'success') {
@@ -89,6 +89,21 @@ describe('rollout owner settles a held abandoned activation', () => {
     expect(h.assignment).toMatchObject({ state: 'quiescing', epoch: 7 });
     expect(h.deps.helm.upsertInstance).toHaveBeenCalledWith(expect.objectContaining({ imageTag: expect.stringContaining('abc1234'), builderIdentity: { ownerUid: 'alice', builderSlug: 'alice' } }));
   });
+  it('ends a held VM target rollout without Helm work so its exact pending source recovery can run', async () => {
+    const h = fixture();
+    h.documents.set('glmGateways/builder-a', { runtime: 'gce-vm', release: 1, vm: { instanceId: 'held-vm' } });
+    const readInstalled = vi.spyOn(h.deps.helm, 'readDeployedInstance');
+    const error = await h.run().then(() => null, failure => failure as Error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain(`source recovery ${h.operationId}`);
+    expect(classifyOperationFailure(error?.message)).toBe('terminal');
+    expect(readInstalled).not.toHaveBeenCalled();
+    expect(h.deps.helm.upsertInstance).not.toHaveBeenCalled();
+    expect(h.events).toEqual(['exclusive']);
+    expect(h.recovery).toMatchObject({ status: 'pending', startedAt: null });
+    expect(h.assignment).toMatchObject({ state: 'quiescing', epoch: 7 });
+  });
+
   it.each(['template-drift', 'hold-unavailable'])('keeps original target-repair behavior when predecessor proof is unavailable: %s', async scenario => {
     const h = fixture(scenario); await expect(h.run()).resolves.toBeNull();
     expect(h.events).not.toContain('helm-old-artifact'); expect(h.events).not.toContain('journal-proof'); expect(h.deps.log).toHaveBeenCalled();
@@ -100,8 +115,9 @@ describe('rollout owner settles a held abandoned activation', () => {
     const h = fixture(); h.lease.generation++;
     await expect(h.run()).resolves.toBeNull(); expect(h.events).toEqual(['exclusive']);
   });
-  it('does not repair a source whose canonical Shared assignment is already serving', async () => {
+  it.each(['cluster', 'gce-vm'])('does not stop a %s roll after canonical Shared serving is restored', async runtime => {
     const h = fixture(); h.assignment.state = 'serving';
+    h.documents.set('glmGateways/builder-a', { runtime, release: 2 });
     await expect(h.run()).resolves.toBeNull(); expect(h.events).toEqual(['exclusive']);
   });
 });

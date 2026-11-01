@@ -242,6 +242,8 @@
       "actions": {
         "reactions": true,
         "messages": true,
+        "messageWrites": true,
+        "fileDownloads": true,
         "pins": true,
         "search": true,
         "memberInfo": true

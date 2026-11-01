@@ -1,13 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createPreStopBuilderRuntimeStateFlush,
   createPreStopGiteaKeyRelease,
   createPreStopSessionQuiesce,
   createPreStopSystemConfigFlush,
   PRESTOP_SESSION_QUIESCE_TIMEOUT_MS,
   resolvePreStopFlushConfig,
 } from "../entrypoints/prestop-flush.js";
-import { snapshotBuilderRuntimeState } from "../lib/builder-runtime-state.js";
 import { withBuilderClaim } from "./helpers/builder-claim.js";
 
 describe("prestop-flush entrypoint config", () => {
@@ -67,43 +65,6 @@ describe("prestop-flush entrypoint config", () => {
 
     expect(createPreStopSystemConfigFlush("", () => {}, sync)).toBeUndefined();
     expect(sync).not.toHaveBeenCalled();
-  });
-
-  it("treats an absent runtime database as a safe builder preStop no-op", async () => {
-    const snapshot = vi.fn(async () => ({ status: "missing" as const })) as unknown as
-      typeof snapshotBuilderRuntimeState;
-    const flush = createPreStopBuilderRuntimeStateFlush(
-      { gatewayId: "builder-alice", gatewayClass: "builder", builderSlug: "alice" },
-      { builderRuntimeStateSnapshotUrls: vi.fn(), builderRuntimeStatePrune: vi.fn() },
-      snapshot,
-    );
-
-    await expect(flush?.()).resolves.toBeUndefined();
-    expect(snapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it("waits briefly for an active runtime snapshot without failing the preStop flush", async () => {
-    const snapshot = vi.fn()
-      .mockResolvedValueOnce({ status: "locked" })
-      .mockResolvedValueOnce({
-        status: "uploaded",
-        path: "/state/openclaw.sqlite",
-        size: 42,
-        recoveryCount: 3,
-        prunedCount: 0,
-      }) as unknown as
-      typeof snapshotBuilderRuntimeState;
-    const wait = vi.fn(async () => {});
-    const flush = createPreStopBuilderRuntimeStateFlush(
-      { gatewayId: "builder-alice", gatewayClass: "builder", builderSlug: "alice" },
-      { builderRuntimeStateSnapshotUrls: vi.fn(), builderRuntimeStatePrune: vi.fn() },
-      snapshot,
-      wait,
-    );
-
-    await expect(flush?.()).resolves.toBeUndefined();
-    expect(snapshot).toHaveBeenCalledTimes(2);
-    expect(wait).toHaveBeenCalledWith(250);
   });
 
   it("quiesces only the dedicated builder before its preStop checkpoint", async () => {

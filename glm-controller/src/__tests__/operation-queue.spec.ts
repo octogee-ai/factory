@@ -258,11 +258,25 @@ describe("decideOperationClaim", () => {
       id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
       input: { uid: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
     };
-    const rollout = { id: 'repair', kind: 'rollout', status: 'pending', createdAt, input: { gatewayId: 'builder-a' } };
+    const rollout = { id: 'repair', kind: 'rollout', rolloutLane: 'cluster' as const, status: 'pending', createdAt, input: { gatewayId: 'builder-a' } };
     expect(decideOperationClaim({ op: rollout, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [recovery] })).toEqual({ outcome: 'claim' });
     expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [rollout] })).toEqual({ outcome: 'queue', waitingOn: 'roll builder-a' });
     expect(decideOperationClaim({ op: rollout, now: 10000, runningOpsSameKind: [recovery], pendingOpsSameKind: [] })).toEqual({ outcome: 'queue', waitingOn: 'migration shared-a → builder-a' });
     expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [rollout], pendingOpsSameKind: [] })).toEqual({ outcome: 'queue', waitingOn: 'roll builder-a' });
+  });
+
+  it.each([0, 2])('runs source recovery before a held VM target roll regardless of queue order: %s', createdAt => {
+    const recovery = {
+      id: 'builder-activate-builder-a-g1', kind: 'migrate-customer', status: 'pending', createdAt: 1,
+      input: { uid: 'alice', source: 'builder-activation-lease', fromGatewayId: 'shared-a', toGatewayId: 'builder-a', recoverSourceOnly: true },
+    };
+    const rollout = { id: 'vm-roll', kind: 'rollout', rolloutLane: 'builder-vm' as const, status: 'pending', createdAt, input: { gatewayId: 'builder-a' } };
+    expect(decideOperationClaim({ op: rollout, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [recovery] }))
+      .toEqual({ outcome: 'queue', waitingOn: 'migration shared-a → builder-a' });
+    expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [], pendingOpsSameKind: [rollout] }))
+      .toEqual({ outcome: 'claim' });
+    expect(decideOperationClaim({ op: recovery, now: 10000, runningOpsSameKind: [rollout], pendingOpsSameKind: [] }))
+      .toEqual({ outcome: 'queue', waitingOn: 'roll builder-a' });
   });
 
   it('finishes exact source recovery after its rollout retained a proven cleaned predecessor', () => {

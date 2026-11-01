@@ -22,12 +22,15 @@ export function agentStoreTriggerFingerprint(trigger, schema) {
     const definition = trigger.definition.replaceAll(`${pg.escapeIdentifier(schema)}.`, "$schema.").replaceAll(`${schema}.`, "$schema.");
     return createHash("sha256").update(JSON.stringify([trigger.tgname, trigger.relname, definition])).digest("hex");
 }
+// PostgreSQL 18 adds non-executable NOT NULL constraints to pg_constraint. Earlier
+// versions store them only in pg_attribute; Native owns nullability admission.
+// Exclude only that type, never CHECK constraints or other executable expressions.
 export const agentStoreExpressionsQuery = `WITH relations AS (
   SELECT c.* FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1)
   SELECT 'default' AS kind, r.relname, a.attname AS name, pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS definition
     FROM relations r JOIN pg_catalog.pg_attrdef d ON d.adrelid = r.oid JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid AND a.attnum = d.adnum
   UNION ALL SELECT 'constraint', r.relname, c.conname, pg_catalog.pg_get_constraintdef(c.oid)
-    FROM relations r JOIN pg_catalog.pg_constraint c ON c.conrelid = r.oid
+    FROM relations r JOIN pg_catalog.pg_constraint c ON c.conrelid = r.oid WHERE c.contype <> 'n'
   UNION ALL SELECT 'index', r.relname, i.relname, pg_catalog.pg_get_indexdef(x.indexrelid)
     FROM relations r JOIN pg_catalog.pg_index x ON x.indrelid = r.oid JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
   ORDER BY kind, relname, name`;

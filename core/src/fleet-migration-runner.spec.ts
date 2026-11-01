@@ -610,27 +610,30 @@ describe("schedule transfer", () => {
     expect(h.deps.saveScheduleTransfer).not.toHaveBeenCalled();
   });
 
-  it("completes the migration without moving schedules when the source snapshot fails", async () => {
+  it.each(["404 endpoint unavailable", "500 cron.list failed"])("retains the source when its schedule snapshot fails: %s", async (failure) => {
     const h = harness({ gateAssignment: true });
-    vi.mocked(h.client.schedules).mockRejectedValue(new Error("/schedules/gw-blue: 500 cron.list failed"));
+    vi.mocked(h.client.schedules).mockRejectedValue(new Error(`/schedules/gw-blue: ${failure}`));
 
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true, finalPhase: "done", rolledBack: false });
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
 
     expect(h.client.schedules).toHaveBeenCalledOnce();
     expect(h.deps.saveScheduleTransfer).not.toHaveBeenCalled();
-    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
-    expect(h.events.some((event) => event.startsWith("log:") && event.includes("schedule snapshot failed") && event.includes("cron.list failed"))).toBe(true);
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "m1", gatewayId: "gw-blue", slug: "alice" });
+    expect(h.events).toContain("assignment:gw-blue:serving");
   });
 
-  it("leaves the fenced jobs on the source and still recreates them on the target when persisting the snapshot fails", async () => {
+  it("restores fenced jobs on the source before rollback when persisting the snapshot fails", async () => {
     const h = harness();
     vi.mocked(h.deps.saveScheduleTransfer).mockRejectedValue(new Error("firestore unavailable"));
 
-    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: true });
+    expect(await runMigration(h.input, h.deps)).toMatchObject({ success: false, rolledBack: true });
 
-    expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-green:restore"]);
-    expect(h.client.schedules).toHaveBeenLastCalledWith({ migrationId: "m1", slug: "alice", gatewayId: "gw-green", op: "restore", records: [STANDUP] });
-    expect(h.events.some((event) => event.startsWith("log:") && event.includes("could not persist") && event.includes("firestore unavailable"))).toBe(true);
+    expect(h.client.calls.filter((call) => call.startsWith("schedules:"))).toEqual(["schedules:gw-blue:snapshot", "schedules:gw-blue:restore"]);
+    expect(h.client.schedules).toHaveBeenLastCalledWith({ migrationId: "m1", slug: "alice", gatewayId: "gw-blue", op: "restore", records: [STANDUP] });
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(vi.mocked(h.client.schedules).mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(h.client.resume).mock.invocationCallOrder[0]!);
   });
 
   it("completes the migration and leaves the snapshot pending when the target restore fails", async () => {

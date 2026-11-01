@@ -1331,7 +1331,6 @@ var aa, fe, kt = S(() => {
       workspaceLabel: "Workspace",
       branchLabel: "Branch",
       runsOn: "Runs on {providerId} \xB7 {profileId}",
-      machineLabel: "Machine",
       machineCpu: "{cpu} vCPU",
       machineMemory: "{memory} GB",
       more: "+{count} more",
@@ -6765,7 +6764,7 @@ D();
 function se(e, t) {
   return t.map((n) => [n, e]);
 }
-var Th = new Map([
+var Eh = new Map([
   // A launched subagent is a worker, not one more operation of the launcher.
   ...se("subagents", ["sessions_spawn"]),
   ...se("commands", ["exec", "bash", "shell", "run_command", "run_terminal_cmd"]),
@@ -7169,11 +7168,11 @@ function ro(e, t) {
 }
 
 // octogee/app/openclaw-browser/resources.ts
-function ag(e, t) {
+function cg(e, t) {
   return [...ro(e, []).values()].filter((r) => r.tab.target === "host" && r.tab.profile === t).at(-1) ?? null;
 }
 export {
-  ag as latestNativeBrowserTab
+  cg as latestNativeBrowserTab
 };
 /*!
 TypeBox

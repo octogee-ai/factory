@@ -620,7 +620,7 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
     }
   });
 
-  it("admits Native-declared ACP index definitions independently of schema admission", async () => {
+  it("admits Native-declared ACP nullability and indexes but rejects a CHECK disguised as NOT NULL", async () => {
     const pool = new pg.Pool({ connectionString: dsn, max: 1 }), client = await pool.connect();
     const schema = `acp_order_${randomUUID().replaceAll("-", "")}`, table = `${pg.escapeIdentifier(schema)}.acp_parent_stream_events`;
     try {
@@ -632,6 +632,8 @@ describe.skipIf(!dsn)("PostgreSQL agent store", () => {
       await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
       await client.query(`ALTER TABLE ${table} ALTER COLUMN seq DROP NOT NULL`);
       await expect(assertTrustedAgentStoreRoutines(client, schema)).resolves.toBeUndefined();
+      await client.query(`ALTER TABLE ${table} ADD CONSTRAINT acp_parent_stream_events_seq_not_null CHECK (seq > 0)`);
+      await expect(assertTrustedAgentStoreRoutines(client, schema)).rejects.toThrow("untrusted expression constraint:acp_parent_stream_events:acp_parent_stream_events_seq_not_null");
     } finally { await client.query("ROLLBACK");client.release();await pool.end(); }
   });
 

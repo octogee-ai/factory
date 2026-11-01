@@ -97,8 +97,8 @@ Before publication:
   that patched closure in a disposable package stage; a relative tarball
   dependency cannot be resolved before global install extracts the root. The
   normal npm package inventory supplies stage files and modes, with escaping
-  paths refused. Installed source dependencies remain unchanged. Native's
-  source uses stock npm 12.2.1. Octogee owns the nested Undici 6.29.1 and
+  paths refused. Installed source dependencies remain unchanged. Selected main pins npm 12.2.0; the overlay
+  pins stock npm 12.2.1 before the disposable distribution patch. Octogee owns the nested Undici 6.29.1 and
   ip-address 10.7.4 fixes because pnpm 12.15 loses these bundled-file patches on
   a cached import. Reassess this patch against each selected npm release.
 - Install the exact root and Mattermost pair in an isolated npm prefix and
@@ -149,250 +149,114 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: October 31 main recut
+## Current overlay: November 1 latest-main refresh
 
-This recut freezes OpenClaw main at `7f345d644b976af9d43264e6617aaacd4ed5f9a2`
-(#189669), 530 commits after the previous `774e96e` base. The clean overlay is
-`6093b36c485bedb841e8fdb914e4b78dc63de74d` on `codex/gateway-refresh-20261101`:
-the October 30 overlay squash, the account-addition reload repair, the
-Mattermost max-lines baseline prune, the new scheduled-requester patch below,
-one regeneration commit (gateway protocol predicates, SQLite state catalogs,
-bundled channel metadata and config-doc baseline), one line-cap override and the
-operator cron restore authority below. The carried PostgreSQL voice consult fix
-and the previous metadata regeneration are dropped.
+This refresh freezes the latest fetched OpenClaw main at
+`ddd4d963854581a9890c00847e807ccff9e32f10` (#190520), 541 commits after the
+previous `7f345d6` base. The operator selected this tip for independent
+qualification; it is not an older green commit. Subsequent upstream commits do
+not change this build's input.
 
-The new base includes [#188397](https://github.com/openclaw/openclaw/pull/188397),
-agent schema 38 to 39, which requires stopped-writer Doctor. The previous recut
-excluded it for that reason. Octogee runs `openclaw doctor --fix
---non-interactive --skip-recovery-backups` on a release's first boot when the
-installed build differs from `glmGateways/{id}.openclawHealthyBuild`
-([Handbook 22](../../../docs/handbook/22-gateway-rollouts-cowboy.md)), so this
-shipment exercises that path on every Builder and Shared gateway; TEST must
-confirm each upgraded agent answers, not just that the Gateway reports ready.
-Doctor's migration is one-way.
+The clean built overlay is `71ac89f1a39768dbb2b3fa2fd7333d707ef3454b` on
+`ceckert/openclaw:codex/gateway-refresh-20261101-latest`. Gateway archives and
+committed hosted islands are generated from that same source.
 
-The base also includes [#189639](https://github.com/openclaw/openclaw/pull/189639)
-(`c89a101`), which replaced the closed #189587. Before it, Doctor's auth-profile
-migration snapshotted the SQLite anchor of a PostgreSQL agent store and exited 1
-with "Auth profile backup differs from the planned source" whenever the store
-held a legacy alias such as `claude-cli:work`; that failure looped the PROD
-Builder on October 31. `fbbcf0c`, the first candidate for this recut, predates
-it. A local control seeds the same schema 38 PostgreSQL store with the pinned
-`e10db5d` build and runs the upgrade Doctor with Octogee's flags: an `fbbcf0c`
-overlay build migrates the schema but exits 1 and leaves the alias, while this
-build exits 0, reaches schema 39 and rewrites the alias to `anthropic:work`
-after saving its backup.
+Its [push CI run](https://github.com/openclaw/openclaw/actions/runs/41327479152)
+completed successfully, but ran only `security-fast`: build artifacts, native
+checks/types/lint/tests, PostgreSQL conformance and UI/platform jobs were skipped.
+The most recent successful scheduled full run remains
+[37419202402](https://github.com/openclaw/openclaw/actions/runs/37419202402)
+on `d8612ec864bb4c872616cfda5340c53803655f5f` (October 6): 154 jobs passed and
+nine skipped (Node 24 compatibility, PR fail-fast, Android/iOS screenshots,
+check-plan, shared-SDK declarations, iOS release e2e, iOS screenshot evidence and
+release-child sealing). The newer scheduled
+[41326266921](https://github.com/openclaw/openclaw/actions/runs/41326266921)
+on `e330464` was still running during selection, with UI e2e shards 1/7 and 3/7
+and compact Node shard 14 failed. Neither run qualifies this selected tip.
 
-CI qualification is an operator-selected exception. Push CI on main runs only
-`security-fast`; the full suite runs on schedule, and its most recent
-all-green run is
-[37419202402](https://github.com/openclaw/openclaw/actions/runs/37419202402) on
-`d8612ec864bb4c872616cfda5340c53803655f5f` (October 6). The scheduled full run on
-exactly this base,
-[41234198377](https://github.com/openclaw/openclaw/actions/runs/41234198377),
-passed 144 jobs and failed four: Control UI e2e shards 2/7
-(`cloud-session-disk-space`) and 5/7 (`chat-pull-requests`),
-`checks-windows-node-test-2` (`update-repair-handoff`) and the aggregate
-`openclaw/ci-gate`. It skipped `check-plan`, `control-ui-i18n`,
-`checks-node-compat-node24`, `shared-sdk-declarations`, the iOS/Android release
-e2e and screenshot jobs, `pr-failure-report` and `Seal full release child
-evidence`. None of the failures covers a Gateway, agent-store or channel path
-Octogee runs; this tip is otherwise qualified by the results below.
+### Native adoption and retained product boundaries
 
-### Line-cap override
+The source is rebased onto that exact tip. Previously adopted session-list,
+retained-PG creation, Talk initialization/consult and Doctor auth-alias fixes
+remain native; their fork copies are not restored. Native schemas remain
+canonical (GLOBAL39 and AGENT39). Native inbound-context composition, bot-loop
+protection, worker ownership and backup source-artifact preservation remain.
 
-The overlay's three gateway method rows (`sessions.channel.sync`,
-`cron.migration`, `agents.detach`) put `src/gateway/methods/core-descriptors.ts`
-at 701 counted lines against native's 700. `.oxlintrc.json` caps that one file
-at 710. Splitting the rows into a sibling module would also need
-`scripts/check-protocol-since.mts` and the `core-method-policy.ts` family type to
-read a second table. Remove the override when those rows leave the overlay or
-native splits the table.
+Requested upstream fixes are included even while their PRs are open:
+[#189036](https://github.com/openclaw/openclaw/pull/189036) at reviewed head
+`bfc19c0c863f6f7b55bae25f0a7cc95f69294809` (worker-backed PG Talk steering) and
+[#189418](https://github.com/openclaw/openclaw/pull/189418) at
+`6b4438cd18818764968ebe4dd63619f093fd3ee1` (owner steering for native direct
+attempts). The combined callback awaits authority preparation and rechecks the
+current owner and backend at insertion.
+Their prior exact-head green upstream checks are distinct from this runtime's
+qualification. [#177823](https://github.com/openclaw/openclaw/pull/177823) is closed
+unmerged and its optional superseded-retry guard and synthetic regression are
+removed. Native #183964 already fixes the original SecretRef reload failure;
+the exact frozen-native control passes. Remaining reload custody is assessed
+separately below; its contract tests pass after this retirement.
 
-### Native adoption and overlay reassessment
+Mattermost inbound parity (#186891) and message actions/multi-file sends
+(#186893) remain approved channel behavior. Current action gates must retain
+opt-in writes/downloads/pins/search/member information and final live-authority
+checks; channel-scoped sessions retain reply roots. Their upstream contribution
+readiness is tracked separately from installed artifact proof.
 
-Native [#186296](https://github.com/openclaw/openclaw/pull/186296), commit
-`c8a753a0a4df2dbdba73a1a4b52187800c497950`, supersedes #182783 and owns session-list
-provider replacement, current-catalog preparation, supersession and independent
-reader cancellation. All seven corresponding production/test files now match the
-selected native base exactly. The separate configuration-reload settlement and
-waiting-root boundaries remain; they protect different work.
+The scoped reload-account repair remains: only resolved new/removal-only account
+targets skip unrelated global drain; affected existing accounts and widening
+fallbacks retain it. Requester propagation, one approval reviewer, authoritative
+membership revocation, strict stop joining physical startup/cleanup, worker
+reclamation deadlines, retained-store detach/reattach and outbound delivery
+custody remain under their existing owners.
 
-Native [#188350](https://github.com/openclaw/openclaw/pull/188350), landed as
-`76ba4650f082a3f4d1189b45807f4a977fc03ca9` in the selected base, supersedes the
-closed, unmerged [#181951](https://github.com/openclaw/openclaw/pull/181951).
-Its retained-store admission and anchor-publication owners replace the duplicate
-fork guard for unconfigured PostgreSQL agents. That guard is dropped. The
-separate configured-agent detach/reattach handoff remains under its existing
-custody contract; it is not restored as a competing creation or schema owner.
+Scheduled plugin tools receive a separate verified `scheduledRequester` only
+for account-policy jobs delivered through their creator's channel account. It
+never becomes ordinary invoking requester authority. Operator cron restore
+retains closed `scheduledToolPolicy`/`toolsAllowProvenance` schemas, account/owner
+matching and operator-only reads; native human-owner transfer changes a different
+contract. Remove these extensions when native supplies the equivalent creator
+fact or Octogee stops recreating jobs through operator `cron.add`.
 
-Native [#188580](https://github.com/openclaw/openclaw/pull/188580), landed as
-`74343d9fc66edc984fe751b3f101dda412e02410` in the selected base, owns
-worker-backed Talk entry initialization. The carried copy is dropped: all seven
-of its production, test-support and worker-registration files match the selected
-base exactly, and its PostgreSQL/SQLite regression passes unchanged.
+The Octogee-only `doctor --skip-recovery-backups` option remains limited to
+existing externally protected private-import/upgrade paths. It does not replace
+the ordinary source Doctor required before a native SQLite-to-PG port. Native
+maintenance admission, migrations, leases and commit authority remain intact.
 
-The recut preserves native inbound-context composition and the new channel-start
-deferral owner. Requester identity follows native's extracted reply-authority
-snapshot, which now retains the live authenticated resolver through queued
-steering. Native #185730 retired restart recovery reconstruction; the obsolete
-fork-only queued restart-flag test is removed rather than reviving that path.
+### PostgreSQL-only Octogee policy and checkpoint retirement
 
-Native inline bare-reset threading now owns the equivalent behavior, so the
-redundant fork helper is removed. The requester identity extension follows
-native's extracted `hook-tool-context.types.ts` owner; the standalone requester
-type and duplicate export are removed. The live authenticated-identity resolver
-remains because static sender metadata cannot express revocation. Native's new
-hook trigger metadata, captured account-restart owner, subscription-root
-semantics, Mattermost bot-loop protection and Template names are preserved.
-GLOBAL36 and AGENT38 are native's canonical schemas; protocol remains 4.
+Both Gateway classes now author `database.engine: postgres` for every configurable
+portable family: state, agent, Workboard, Logbook and Team Reports. There is no
+older-Builder or older-account SQLite runtime mode. Native-required local
+credentials, PG anchors and safety/recovery journals remain native SQLite files;
+they are not user data engine fallbacks.
 
-The reclamation decision cap returns to native's five seconds. The previous
-six-second control injected a delay; it did not measure a production cold path
-and does not justify a ten-second allowance. Worker-visible monotonic deadline,
-remaining-request budget, cancellation and late-authorization refusal remain.
-The test now proves over-cap refusal. Test-only MCP cleanup differences and the
-Dashboard panel-control type extraction are removed. Dashboard history-derived
-participant labels remain an optional active presentation feature in the full
-native iframe. Moving that header into the current unrelated island bundles
-would not adapt its actual consumer.
+The old periodic/preStop SQLite-state checkpoint and download/restore consumer
+is removed. It already skipped PG GLOBAL anchors. Its fork-only `backup local`
+CLI and paired mixed-engine snapshot owner are therefore removed too, restoring
+native backup/restore and credential handling exactly. Native's all-PG
+`backup create --local-companion` remains available; it is not claimed to be the
+same API. Upstream #178973 was closed unmerged at the user's request because
+Octogee no longer uses that proposal. PG GLOBAL recovery retains verified
+recorded anchors and never falls back to an old SQLite checkpoint. Detach,
+delivery-queue retirement and no-replace physical publication are preserved.
 
-Fresh independent source/consumer review covered the resolved recut and its
-high-risk native integrations; the subsequent backup-helper extraction and
-account-reload repair received their own scoped review. Those reviews found no
-actionable P0–P2 findings in their reviewed snapshots. This is separate from
-runtime qualification. It does not certify
-that every retained line is unconditionally necessary: active product features
-can be retired or adapted, and retained old cron/state formats depend on the
-supported restore/move input contract. No deployed old-format inventory was
-inspected; do not cite historical fixtures alone as evidence of such inventory.
-Those readers remain bounded by exact recognized schemas and refusal of unknown
-partial state while their recovery contract remains supported.
+Retained SQLite data or explicit non-PG family selection refuses before the
+writer changes config. GLOBAL absence alone cannot prove other stores are
+fresh. With the Gateway and embedded writers stopped under their existing
+service/hold authority, preserve source config/stores, run ordinary native
+`doctor --fix --non-interactive`, and use native `database port --family <family>
+--to postgres --dry-run` followed by the actual port for each SQLite family.
+Native owns capture, verification, recovery manifests and config publication.
+An empty-family port currently reports a verified no-op without rewriting its
+selector: after inventory proves every populated store is PG and remaining
+families are empty, use native's config writer to select PG for those empty
+families. Never flip engine keys over retained SQLite files. Interrupted ports
+must resume or roll back through the native manifest owner.
 
-The hosted adapter now follows native Pele asset names and URL imports instead
-of the retired Mermaid engine entry. Source-map custody, exact frame bytes and
-opaque-iframe ownership remain checked; the generated native engine renders a
-real diagram in the retained runtime regression. Native deletion-journal
-coverage absorbs the duplicate fork test fixture while keeping distinct detach
-phase, stale-owner and durable-completion assertions. The retained-custody
-schema input now has its missing generated catalog: two table descriptors and
-one fingerprint, with no canonical SQLite or PostgreSQL DDL change. Historical
-fixtures use native Template/version restoration; all 36 retained recovery
-controls pass.
-
-### Carried Mattermost channel contributions
-
-Two open upstream contributions are carried on the frozen base:
-[#186891](https://github.com/openclaw/openclaw/pull/186891) (inbound
-parity: acknowledgement reactions, channel system events, join introductions
-and compact tool progress) and [#186893](https://github.com/openclaw/openclaw/pull/186893)
-(message actions and multi-file sends). They are approved Builder channel
-behavior that the current Mattermost pre-boot defaults already select, not a
-reproduced native bug and not a fork-only API; Octogee consumers use only the
-public Mattermost configuration they add. The recut adapts their behavior to
-the selected native owners instead of replacing newer native code wholesale.
-Its housekeeping includes the bundled channel
-metadata and config-doc baseline regenerated for the new schema keys, and the
-`SAFETY`/`mock-isolation` notes plus pruned assertion baseline that the
-preflight ratchets require. Remove each
-family when the selected base contains the merged behavior and the Mattermost
-consumer controls pass; an open PR or a newer main containing it is not enough.
-
-### Dropped: PostgreSQL voice agent consults
-
-Upstream merged #188965 as `d21ccbd811ae9b8653d6b75f829da02039bd2a8a`, which is
-in the selected base. Every carried production file is byte-identical to the
-base; only the pre-merge test layout differed. The carried commit is dropped.
-
-### Scheduled requester for plugin tools
-
-Scheduled runs carry only the owner bit, so a plugin tool cannot tell whose job
-is running. Octogee's connector tools (#4957) need the verified creator to read
-an owner's Google data for a scheduled briefing delivered to that owner's DM.
-`resolveCronScheduledRequester` exposes the job's stored authenticated channel
-requester as a separate `scheduledRequester {channel, accountId, senderId, to}`
-plugin-context field, never as `requesterSenderId`, and only for
-account-policy jobs whose run delivers through the creator's own channel account
-with a resolved target. Native has no equivalent field; an Octogee adapter
-cannot reconstruct the creator because the plugin context carries no job
-identity. Its three regressions fail on the unpatched source (8 provenance
-cases, the plugin-context forward, the attempt projection) and pass with it.
-Embedded delivery-route and scheduled-authority projection moved into sibling
-modules so the patch adds no lines to the two capped files it touches. Not
-submitted upstream. Remove it when native exposes an equivalent verified
-scheduled-creator fact to plugin tools.
-
-### Operator cron restore authority
-
-Octogee moves a customer's automations by snapshotting them on the source with
-operator `cron.list` and recreating them on the target with operator `cron.add`
-([#4963](https://github.com/octogee-ai/octogee/issues/4963)). Native derives a
-job's `scheduledToolPolicy` and `toolsAllowProvenance` from the caller, so an
-operator-created job ran with the trusted policy and without its authenticated
-creator: account-scoped tools widened and the scheduled requester above lost its
-source. The overlay lets an operator `cron.add` supply both fields through closed
-schemas, refuses them from agent-runtime callers, requires an account policy to
-match the job's owner, and returns `toolsAllowProvenance` to operator `cron.list`
-and `cron.get` callers only. Its 12 regressions run against a real cron service
-and store and fail on `0c0b018`. The generated protocol predicates are
-regenerated with it. Not submitted upstream. Remove it when Octogee stops
-recreating automations through operator `cron.add`.
-
-### New channel-account reload
-
-Adding a project account could wait for unrelated admitted Gateway work even
-though no existing account needed restarting. The managed-writer regression is
-red on the preceding recut and green with the repair from coordinated source
-`4d2d2f47d96a7814656709571050a503259cf5fc`, carried in this overlay as
-`6dc2946a5e8d28103f91ad2fb05ab89dc032e15a`. The reload owner captures the previous
-runtime config before any publication. Only new/removal-only account targets
-skip the global drain, after resolving every added account successfully.
-Existing affected accounts and whole-channel restarts retain their drain;
-resolution failures retain it because the later fallback can widen the restart.
-The real managed write/channel-manager path proves the new account starts while
-siblings and unrelated admitted work remain active; 269 current owner controls
-pass, including the failing-resolution negative control. This belongs in the
-native reload owner, not a caller-side retry. Remove it when the selected native
-base provides the same scoped behavior and controls pass.
-
-### Provider-qualified runtime policies
-
-Octogee's writers also declare configured platform broker providers through
-Native's existing `{ baseUrl, models: [] }` configuration. Pre-boot, class policy
-and customer projection share the same environment-owned declarations; Dashboard
-write validation receives those trusted endpoints for both gateway classes.
-Provider API selection, complete model rows and credentials remain agent-local.
-The declaration omits `api` because setting it globally changes an existing
-agent's transport. Native inspection controls reduce 295 unknown-provider and
-four selected-model-context findings to zero while preserving both providers'
-full runtime model metadata. This adapts Octogee's configuration writer rather
-than changing Native Doctor or duplicating the model catalog.
-
-The TEST coach selected `platform-openrouter/openai/gpt-5.6-luna`, but Native
-matched its nested model ID against the direct `openai/gpt-5.6-luna` Codex policy
-and rejected the request. Compare the policy provider before matching the model
-ID. The regression preserves direct OpenAI Codex selection and broker model
-selection without changing credentials or customer preferences. This belongs in
-Native's policy resolver; an Octogee override would hide the routing defect.
-Remove this overlay when the selected Native base has equivalent provider-bound
-matching. The fix is carried in the Octogee artifact; no upstream PR is open.
-
-### Octogee migration Doctor option
-
-`doctor --skip-recovery-backups` skips original-state capture, migration recovery
-backup preparation, and diagnostic PostgreSQL readiness inventory. Octogee uses
-it only for a private import under its existing source fence and target custody.
-Native still owns migrations, maintenance admission, leases, identity validation
-and transactions. A nonzero fast attempt retries ordinary Doctor while custody
-remains valid; cancellation and lost custody stop the operation. Ordinary Doctor
-behavior is unchanged.
-
-Instrumented local PostgreSQL upgrades showed substantial time in original-state
-capture and diagnostic inventory, while the actual schema transition was short.
-The CLI option belongs in Native because an Octogee caller cannot select those
-internal Doctor phases. This is an operator-requested Octogee-only optimization,
-not an upstream contribution. Remove the overlay if Native supplies an equivalent
-public migration path with the same safety boundaries.
+No deployed old-format/store inventory or live migration is claimed by this
+isolated refresh. Build main publishes images; it does not deploy or migrate a
+running Gateway. Any operational cutover still needs its stopped-source port and
+post-port data/Memory/Skills verification.
 
 ### Retained boundaries and removal conditions
 
@@ -411,7 +275,6 @@ behavior is present in the selected base and the affected consumer controls pass
 | Lifecycle lease and reclamation deadline | One monotonic worker-visible budget prevents late commits. Native's five-second cap is preserved; the overlay carries one worker-visible monotonic deadline and refuses late authorization. | Native carries the same worker-visible absolute deadline and refuses cancelled, expired and late authorization, or the relevant lifecycle consumer is retired. |
 | Detach, reattach and retained PostgreSQL | Approved configured-agent transfer retains original logical/physical identity under native creation/deletion custody; missing PG anchors must refuse rather than create. Native #188350 owns unconfigured retained-store creation admission; its duplicate overlay is removed. | Native public transfer preserves namespace/history and rollback/recovery custody, or a supported migration owner replaces it. |
 | Outbound delivery custody | Retirement refuses unfinished authoritative delivery state and fences racing enqueue across all affected agent identities; empty caches are insufficient. | Native detach/deletion fences the same queue and retains idempotent receipts. |
-| Local checkpoint and credential snapshots | Native backup/restore owners publish paired SQLite state exclusively into fresh targets; PG agents retain anchors, not fictional remote rollback. Installation authority is sanitized. | Native public checkpoint supplies equivalent paired-state, no-replace and retained-PG guarantees, or the authorized recovery consumer is removed. |
 | Cron migration custody | Held/exported/staged/activated ownership, retired fences, hash-bound chunks and drain are beyond ordinary native CRUD. Projection identity includes effective agent plus declaration. | Native migration provides equivalent activation, rollback, drain and two-engine round trip. |
 | Retained legacy cron/state inputs | Fingerprints/order/schema checks admit only recognized retained formats and refuse unknown partial schemas; native canonical schemas remain authoritative. | The supported retained restore/move inputs are retired, or native adopts their exact migration. Historical fixtures alone do not prove a deployed inventory; no deployed old-format inventory was inspected in this recut. |
 | PostgreSQL web-secret index reads | Cold GLOBAL state makes native's synchronous installed-index read fail during Builder `secrets.reload`; the existing async reader owns worker access and validation. | Native awaits the worker-backed reader here and the same cold-GLOBAL/provider conformance control passes without this overlay. |
@@ -420,96 +283,121 @@ behavior is present in the selected base and the affected consumer controls pass
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
 | Final-reply notification | Activity tools require terminal final-content classification, not agent-completion inference. Only the public observer flag is retained; delivery custody is native. | Native supplies equivalent classification or the observer is removed. |
 | Dashboard participant labels | Current same-session history supplies a human label missing from native observation projection. This optional presentation is used by the embedded full native Dashboard, with no access/identity mutation; the current browser/computer/workbench islands do not own its header. | Native projects equivalent labels or the embedded native chat consumer is removed. |
-| Dependency and npm packaging | Exact fast-uri/npm pins and the disposable npm distribution patch need installed-byte verification; version equality does not qualify nested dependencies. | Stock/native installed closures contain the fixes and the dependency gate passes. The expired fast-uri release-age exception is removed. |
+| Dependency and npm packaging | The exact npm 12.2.1 pin and disposable npm distribution patch need installed-byte verification; version equality does not qualify nested dependencies. Native already owns the fast-uri pin, with no fork-only version change. | Native installed closures contain the fixes and the dependency gate passes. |
 | Generated schemas, inventories and test support | Describe retained APIs and canonical native owners, not independent features. | Regeneration after the owning feature's removal eliminates them. |
 
-### Qualification and explicit limits
 
-The November 1 recut adds only the operator cron restore authority to
-`0c0b018`; the base and every other overlay commit are unchanged, so the
-qualification below stands for them. For `6093b36`: the packer's full build
-records that commit in `dist/build-info.json`, native
-`check-openclaw-package-tarball` passes on the root archive, its
-`vendor/npm.tgz` is npm 12.2.1 carrying all 15 patched files (reverse-applies,
-refuses forward), an isolated install of the pair reports
-`OpenClaw 2026.10.9 (6093b36)`, the Mattermost archive is again byte-identical
-to `openclaw-mattermost-41b3b713.tgz`, the hosted islands' inputs are unchanged
-and the fork's line-cap, oxlint, typecheck, protocol and validator gates pass.
+### Rollout handoff fixes in this cut
 
-Pinned pnpm 12.15.0, Node 26.12.1 (toolchain npm 11.20.0) and the frozen
-lockfile built the source with full `pnpm build package` on a 10-CPU, 32 GB
-macOS host. The clean final source and `dist/build-info.json.commit` both
-identify `0c0b0183cc7ee78d1d64248a44299436a438dbd0`. The sequential root and
-Mattermost archives and the regenerated hosted islands come from that build, and
-prepack/postpack leave the source clean. Native `check-openclaw-package-tarball`
-passes on the root archive. Its `vendor/npm.tgz` is npm 12.2.1 carrying all 15
-files of the distribution patch (the patch reverse-applies cleanly and refuses to
-apply forward). An isolated install of the root and Mattermost pair reports
-`OpenClaw 2026.10.9 (0c0b018)`. The Mattermost archive is byte-identical to the
-existing write-once `openclaw-mattermost-41b3b713.tgz` (full hash below) and is
-reused.
+The November 1 rollout handoff identified Octogee migration/rollout issues, not
+another native cron schema owner. The already-merged #4968 carries coach monitor
+declarations with their original key and idempotent restore, while plugin-owned
+declarations remain native. A failed source schedule snapshot (including an old
+provisioner's 404), or failed durable snapshot publication, now stops the move
+before cutover/removal; rollback attempts to restore known fenced jobs on the source before ingress
+resumes; failed restoration remains a recovery limitation. Existing retained schedule snapshots remain available to recovery.
+Builder recovery now classifies malformed retained local state as fatal, keeping
+transient broker failures retryable; real CLI controls prove both classifications
+without modifying retained bytes. The operational PostgreSQL runbook matches
+this cut's five-family policy and checkpoint retirement.
+Old builds that cannot export authenticated creator provenance still need an
+explicit rescue/recreation through their rightful owner; this cut never invents
+creator identity or runs the live rescue scripts.
 
-The Linux amd64 `openclaw-full-plugin-installer` target of
-`infra/gateway/Dockerfile.base` builds from these archives with the CUA 0.37.0
-driver image: the CUA driver-artifact lint, `config.changed` publication,
-Parallel source match (10 files), plugin registry refresh, Codex source match
-(188 runtime files) and the native-hook imports pass.
+A held computer VM can no longer give a release roll priority over its pending
+source recovery. An already-running roll of that exact unadmitted VM target ends
+its own claim after current recovery/claim checks, leaving cleanup with the
+source recovery owner. Cluster/Helm rollback behavior stays with its existing
+owner. Live workspace wire tests refresh canonical fixture placement before each
+request while reusing the authenticated token. This removes suite-long stale
+routing; it does not eliminate a move between a lookup and its HTTP request.
+Native Proactive check jobs with empty scratch are preserved as requested.
 
-`pnpm check` passes every stage except lint: conflict markers, the line-cap growth
-ratchet, the SQLite worker and dialect ratchets, the max-lines, assertion,
-timeout-race and mock-export ratchets, every policy guard, the npm package-lock
-guard (all locks validate) and `tsgo` prod, scripts and test root. Lint fails on
-18 `max-lines` findings, all in files byte-identical to the base. `pnpm
-config:channels:check` passes.
+### Qualification and publication
 
-Focused regressions on the final head: tools-allow provenance 8/8, plugin
-context 9/9, the reload repair's channel-restart 14/14 and startup publication
-6/6, `before_tool_call` hooks 32/32, phase hooks 46/46 (including native
-#189652's tool enumeration, which also edits `hooks.ts`), host-hook contracts
-54/54 and native's PostgreSQL auth-alias migration 4/4 against PostgreSQL 18.
-`attempt-tool-run-context.test.ts` passes 6/7; the inherited failure
-`keeps forced tools and frozen traces equivalent when overriding without a copy`
-also fails without the scheduled-requester patch. Both projections differ only
-in the requester-identity overlay's command-sender-authority symbol key, which
-the native test's deep equality does not accept.
+Pinned pnpm 12.15.0, Node 26.12.1 and the frozen lockfile built this clean source
+with full `pnpm build package`; `dist/build-info.json.commit` matches the overlay
+SHA above. Root and Mattermost were packed sequentially from that build with the
+maintained packers in a clean isolated Octogee checkout. Prepack/postpack restored
+clean source and removed temporary vendor/pending-install state.
 
-The schema 39 path ran on PostgreSQL 18: the pinned `e10db5d` build created a
-schema 38 agent store holding a legacy `claude-cli:work` profile, and this
-build's `doctor --fix --non-interactive --skip-recovery-backups` upgraded it to
-39 in 20 seconds, migrated the alias after saving its backup and exited 0. The
-installed Gateway then reported ready and listed that agent's sessions without a
-stopped-writer refusal. Complete-image qualification, both gateway classes
-through their real writers, Memory/Skills workers and a live chat/history turn
-on upgraded agents remain for Build main and TEST.
+Octogee's executable-SQL trust check excludes only PostgreSQL 18's built-in
+`NOT NULL` catalog type (`contype = n`), which PostgreSQL 16 does not expose in
+`pg_constraint`. Native still owns schema/nullability admission. CHECK constraints
+(including one disguised with a `_not_null` name), functions, triggers, defaults,
+generated expressions and hostile index predicates remain qualified or refused.
+The real PG16.15 and PG18.6 integration/recovery/handoff/trust suites pass 76/76
+each; final installed-image checks are tracked separately in the runtime PR.
+See the [PG18 catalog contract](https://www.postgresql.org/docs/18/catalog-pg-constraint.html).
+
+Native tarball integrity passes. An isolated install reports
+`OpenClaw 2026.10.9 (71ac89f)`. The actual Linux amd64
+`openclaw-full-plugin-installer` target passes CUA 0.37 driver-artifact lint,
+`config.changed` publication, Parallel source matching (10 files, only the
+approved bundledDist metadata change), registry refresh, Codex source matching
+(188 runtime files), and all three native-hook imports. Both the independent
+global npm and nested OpenClaw npm match all 15 patched npm 12.2.1 files;
+reverse-patch/refuse-second-forward controls and Undici 6.29.1/ip-address 10.7.4
+checks pass. All 874 installed Mattermost package files match the archive bytes.
+A separate read-only/no-network Linux container repeats the installed byte proof.
+
+The native `pnpm check` run passes preflight and production, scripts and test-root
+types, but is not aggregate-green: lint reports 17 max-lines findings in files
+byte-identical to the frozen base, plus one unused test import introduced by the
+recut. That import was removed; focused native lint, its 17 delivery tests and
+the complete clean build were rerun on the final source. Retained authorization,
+membership, strict-stop/reload/recovery controls pass 218/218; native
+Talk/backup/CLI controls pass 71/71. Removing #177823 also passes 266 reload
+contract tests and 33 routing checks. The PostgreSQL executable-SQL catalog is
+regenerated against this exact source and CI-equivalent PostgreSQL 16/vector
+0.8.7: its 11 routines, 15 triggers and 308 expressions retain the same
+fingerprints; only the recorded source SHA changes. Integrated Mattermost passes 515 tests and
+fails only the slash HTTP capacity case also reproduced on exact unpatched
+`ddd4d96` (native control: 6 pass, 1 same failure). No budget or assertion was
+weakened to hide it. The successful build still emits three advisory UI bundle
+budget overages (CSS gzip/raw and chat boot JS gzip); a complete native UI
+performance or visual comparison is not claimed.
+
+Hosted islands and Browser resources are regenerated from this build. Their
+focused app checks pass 98/98 and runtime/license artifact checks pass 24/24;
+pin coherence is checked against the final `current.json`. Full hashes were
+verified again after downloading the exact published object generations:
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-a99c9675.tgz#1793536822932448` | 118518561 | `a99c9675b64a66913db9784b8ad2c743273f298e2b63f51cbb762f1091545b00` |
-| mattermost | `openclaw-mattermost-41b3b713.tgz#1793414287604477` (reused) | 1272386 | `41b3b7130a25e6b861cc44aaf0669451f2be2b814055b250412c62147102dce4` |
+| root | `openclaw-fork-779b49de.tgz#1793556964067060` | 119397643 | `779b49de11a6905bcbea1010c6bd75f5fe14e3951348cf9db70abdc006667b9e` |
+| mattermost | `openclaw-mattermost-6758b57d.tgz#1793554855718230` | 1266404 | `6758b57de1fbac9d7b29602537306266b024096874c945c5185fa0eab96a53ef` |
 
-Hash-addressed objects are write-once. Complete-image qualification results and
-image digests belong in the runtime PR against its final Octogee source SHA.
-Artifact publication alone does not qualify an image or a deployment.
+The fresh Mattermost pack is byte-identical to the previously published object;
+its original generation is reused after complete-hash readback. Its immutable
+metadata still records the earlier `861f33f` pack, while the fresh sequential-pack
+proof binds those same bytes to the current build. No object or metadata was
+overwritten.
+
+The [runtime PR #4969](https://github.com/octogee-ai/octogee/pull/4969) tracks
+complete-image Shared/Builder strict Doctor, installed workers, published image
+digests and final-head CI against the final Octogee source. At this package-pin
+commit, those image/final-head checks remain pending and still gate merge.
+Package publication alone does not qualify an image. Post-merge Build main
+status is a separate record; it does not deploy or migrate live stores.
 
 ### Upstream contributions
 
-#186891 (Mattermost inbound parity) and #186893 (Mattermost message actions)
-are open and carried on this base as described above; remove each when the
-selected base contains it. #178755 (detach) and #178973 (local checkpoint)
-remain draft/open. #181951 (retained PG refusal) is closed unmerged and superseded
-by merged #188350, present in this selected base; its duplicated guard is dropped.
-#188580 (PostgreSQL Talk startup) and #188965 (PostgreSQL voice agent
-consults, `d21ccbd`) are merged and present in this selected base; their carried
-copies are dropped. The scheduled-requester patch is Octogee-only and not
-submitted. The account-addition reload repair is carried
-from coordinated source `4d2d2f47`; no upstream PR is recorded for that repair.
-#182783 is closed unmerged because merged #186296 adopted it into this selected base.
-#178970 is closed; native #181198 supersedes it. #189587 (PostgreSQL Doctor
-auth-profile backup) closed in favor of #189639, present in this selected base.
-Previously adopted PostgreSQL recovery, cache,
-catalog and plugin-preparation fixes are not reintroduced. The worker-backed
-web-secret fix has not been submitted upstream. Contribution status is separate
-from necessity and runtime qualification.
+#189036 and #189418 had successful enforced checks at their reviewed heads and
+remain open for maintainer review. #177823 is closed unmerged after native
+adoption of its original bug fix; the remaining optional guard is retired from
+the runtime. #167431's code checks passed but
+maintainer approval is still required. #186891 (`1d18f8eb784`) and #186893 (`d4fd7a5c5de`) have been
+refreshed and published with current-main conflicts resolved and native ratchets
+passing; their prior live evidence is labeled separately from refreshed-head
+checks. #178755 (`d576caa76fe`) is refreshed and ready for maintainer review for
+the active non-destructive detach consumer; downstream-only held cron tests/docs
+have been removed from its upstream proof. Hosted final-head checks remain
+separate from local readiness. #178973 is closed unmerged
+because its mixed-engine consumer was retired, not because native adopted its
+API unchanged. Earlier superseded PostgreSQL PRs remain closed/merged as already
+recorded in repository history. Contribution status never substitutes for runtime
+necessity or image qualification.
 
 ## Native CUA desktop-discovery preservation
 
@@ -569,8 +457,9 @@ not meet that removal condition.
 The upstream discovery contribution [CUA #5286](https://github.com/trycua/cua/pull/5286)
 is closed unmerged. Selected 0.37.0 still lacks the required discovery behavior;
 contribution status does not qualify or replace this pinned package/library pair.
-Exact-pair architecture qualification is recorded in the current assessment above.
-Real Wayland-session qualification remains separate from headless checks.
+The actual Linux amd64 installer qualifies the unchanged exact driver/source
+pair for this package set. Complete-image results belong in the runtime PR; a
+new ARM64 or real Wayland-session run is not claimed by this refresh.
 
 ## Vendored computer-use skills
 

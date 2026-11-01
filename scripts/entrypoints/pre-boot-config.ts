@@ -170,24 +170,47 @@ function applyMattermostStreamingDefaults(
 }
 
 const MATTERMOST_ACTION_GATE_DEFAULTS = ["messages", "pins", "search", "memberInfo"] as const;
+const MATTERMOST_MESSAGE_ACTION_GATES = ["messageWrites", "fileDownloads"] as const;
+
+function migrateMattermostAccountMessageActions(
+  mattermost: Record<string, unknown>,
+  actions: Record<string, unknown> | null,
+  logFn: (msg: string) => void,
+): boolean {
+  let changed = false;
+  // Preserve old account message overrides before generated provider defaults
+  // become the inherited write/download policy. Authored new gates retain priority.
+  for (const [accountId, account] of Object.entries(objectProperty(mattermost, "accounts") ?? {})) {
+    if (!isPlainObject(account)) continue;
+    const accountActions = objectProperty(account, "actions");
+    if (!accountActions || accountActions.messages === undefined) continue;
+    for (const gate of MATTERMOST_MESSAGE_ACTION_GATES) {
+      if (accountActions[gate] !== undefined || actions?.[gate] !== undefined) continue;
+      accountActions[gate] = (accountActions.messages ?? actions?.messages) !== false;
+      changed = true;
+      logFn(`set channels.mattermost.accounts.${accountId}.actions.${gate}=${accountActions[gate]}`);
+    }
+  }
+  return changed;
+}
 
 function applyMattermostActionDefaults(
   mattermost: Record<string, unknown>,
   logFn: (msg: string) => void,
 ): boolean {
-  let changed = false;
   const actions = ensureNullishObjectProperty(mattermost, "actions");
-  for (const key of ["messageWrites", "fileDownloads"]) {
-    if (!actions || !(key in actions)) continue;
-    delete actions[key];
-    changed = true;
-    logFn(`removed unsupported channels.mattermost.actions.${key}`);
-  }
+  let changed = migrateMattermostAccountMessageActions(mattermost, actions, logFn);
   for (const gate of MATTERMOST_ACTION_GATE_DEFAULTS) {
     if (!actions || actions[gate] !== undefined) continue;
     actions[gate] = true;
     changed = true;
     logFn(`set channels.mattermost.actions.${gate}=true`);
+  }
+  for (const gate of MATTERMOST_MESSAGE_ACTION_GATES) {
+    if (!actions || actions[gate] !== undefined) continue;
+    actions[gate] = actions.messages !== false;
+    changed = true;
+    logFn(`set channels.mattermost.actions.${gate}=${actions[gate]}`);
   }
   if (mattermost.reactionNotifications === undefined) {
     mattermost.reactionNotifications = "own";
@@ -740,23 +763,33 @@ export function applyPreBootPatches(
 const BUILDER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
   absent: "Builder state family on PostgreSQL (fresh store)",
   anchor: "Builder state family on PostgreSQL (reattaching its anchor)",
-  sqlite: "Builder state family stays SQLite: this allocation already holds SQLite state",
+  sqlite: "Retained SQLite state requires the native PostgreSQL port before startup",
 };
 
 export function applyAgentStoreDatabasePatch(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  stateStore: LocalStateStoreKind = "sqlite",
+  stateStore?: LocalStateStoreKind,
 ): boolean {
   if (env.GATEWAY_CLASS !== "shared" && env.GATEWAY_CLASS !== "builder") return false;
   const current = isPlainObject(config.database) ? config.database : {};
-  const { state: _hostState, ...families } = isPlainObject(current.families) ? current.families : {};
+  const families = isPlainObject(current.families) ? current.families : {};
+  let sqliteFamily: string | undefined;
+  if (stateStore === "sqlite") sqliteFamily = "state";
+  else if (stateStore === "anchor" || Object.hasOwn(config, "database")) {
+    sqliteFamily = ["state", "agent", "workboard", "logbook", "team-reports"].find(family => {
+      const override = isPlainObject(families[family]) ? families[family].engine : undefined;
+      return (override ?? current.engine ?? "sqlite") !== "postgres";
+    });
+  }
+  if (sqliteFamily) {
+    throw new Error(`Retained SQLite-configured Gateway stores cannot start under the PostgreSQL-only policy. Keep the Gateway stopped, preserve its current config and stores, run native openclaw doctor --fix --non-interactive, then openclaw database port --family ${sqliteFamily} --to postgres. Port every other SQLite-configured family individually before restarting; do not change engine selectors by hand.`);
+  }
+  const { families: _families, ...database } = current;
   const postgres = isPlainObject(current.postgres) ? current.postgres : {};
-  const state = clusterBuilderGateway(env) ? { state: { engine: stateStore === "sqlite" ? "sqlite" : "postgres" } } : {};
   const next = {
-    ...current,
-    engine: current.engine ?? "sqlite",
-    families: { ...state, ...families, agent: { engine: "postgres" } },
+    ...database,
+    engine: "postgres",
     postgres: {
       ...postgres,
       connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" },

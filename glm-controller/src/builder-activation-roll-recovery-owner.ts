@@ -80,20 +80,36 @@ function artifactHasEdge(artifact: ReleasePayload | null): artifact is ReleasePa
   return artifact?.gatewayEdgeImage !== undefined;
 }
 
+async function readClusterRollbackRelease(
+  deps: OwnerDeps, op: Operation, ctx: OperationContext, expected: BuilderActivationRollRecovery,
+): Promise<number | null> {
+  const gatewayId = expected.targetGatewayId;
+  const runtime = (await deps.db.doc(`glmGateways/${gatewayId}`).get()).data();
+  if (runtime?.runtime === 'gce-vm') {
+    const current = await readBuilderActivationRollRecovery({ db: deps.db, gatewayId });
+    await assertOwnedRoll(deps, op, ctx);
+    if (!sameRecovery(expected, current?.recovery)) return null;
+    // A held VM cannot adopt this release, and only source recovery owns its
+    // cleanup. End this roll's claim rather than keeping recovery serialized.
+    throw new Error(`rollout ${gatewayId} cannot replace an unadmitted gce-vm target; source recovery ${expected.operationId} must finish`);
+  }
+  return runtime?.runtime === 'cluster' && Number.isSafeInteger(runtime.release) ? runtime.release : null;
+}
+
 async function rollbackOwnedTarget(deps: OwnerDeps, op: Operation, ctx: OperationContext): Promise<BuilderActivationTargetRollbackProof | null> {
   const gatewayId = String(op.input.gatewayId);
   await assertOwnedRoll(deps, op, ctx);
   const initial = await readBuilderActivationRollRecovery({ db: deps.db, gatewayId });
   if (!initial || initial.recovery.latestRelease !== op.input.targetRelease || typeof op.startedAt !== 'number') return null;
-  const runtime = (await deps.db.doc(`glmGateways/${gatewayId}`).get()).data();
-  if (runtime?.runtime !== 'cluster' || !Number.isSafeInteger(runtime.release)) return null;
+  const installedRelease = await readClusterRollbackRelease(deps, op, ctx, initial.recovery);
+  if (installedRelease === null) return null;
   const installed = await deps.helm.readDeployedInstance({ namespace: deps.namespace, gatewayId });
   if (!installed) return null;
   const liveArtifact = await deps.readRelease(gatewayId, initial.recovery.liveRelease);
   if (!artifactHasEdge(liveArtifact)) return null;
   const liveGatewayImage = gatewayImageFor(initial.gateway, liveArtifact);
   const installedIsLive = installed.image.repository === liveGatewayImage.imageRepository && installed.image.tag === liveGatewayImage.imageTag;
-  const installedArtifact = installedIsLive ? liveArtifact : await deps.readRelease(gatewayId, runtime.release);
+  const installedArtifact = installedIsLive ? liveArtifact : await deps.readRelease(gatewayId, installedRelease);
   if (!artifactHasEdge(installedArtifact)) return null;
   const installedGatewayImage = gatewayImageFor(initial.gateway, installedArtifact);
   if (installed.image.repository !== installedGatewayImage.imageRepository || installed.image.tag !== installedGatewayImage.imageTag) return null;

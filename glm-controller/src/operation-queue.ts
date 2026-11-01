@@ -167,7 +167,7 @@ function recoveryYieldsToTargetRoll(recovery: OperationRef, rollout: OperationRe
     recovery.customerMigrationV2 === undefined &&
     typeof recovery.cutoverCommittedAt !== "number" &&
     isBuilderActivateOperationIdFor(recovery.id, target) &&
-    rollout.kind === "rollout" && rollout.input?.gatewayId === target;
+    rollout.kind === "rollout" && rollout.rolloutLane === "cluster" && rollout.input?.gatewayId === target;
 }
 
 function absentOrEmpty(value: unknown): boolean {

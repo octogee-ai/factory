@@ -255,7 +255,7 @@ elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
       restore_status=$?
     fi
     if [ "$restore_status" -eq 2 ]; then
-      log "FATAL: Builder runtime state is corrupt or unauthorized"
+      log "FATAL: Builder runtime state recovery stopped for a permanent local-state or policy refusal"
       exit 2
     fi
     log "Pre-boot: Builder runtime state restore unavailable; retrying in 5s..."
@@ -453,8 +453,6 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
   log "Starting OpenClaw process supervisor (hold-capable Builder boot: ${BUILD_SHA:-unknown})..."
   supervise_runner surge-openclaw-supervisor 5000 "$TSX" /octogee/scripts/entrypoints/surge-openclaw-supervisor.ts
   OPENCLAW_PID=$!
-  # shellcheck disable=SC2086
-  supervise_runner builder-runtime-state-snapshotter 5000 $BUILDER_OVERLAY_GATE "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-snapshotter.ts
 else
   "$TSX" /octogee/scripts/entrypoints/prepare-openclaw-sqlite-journals.ts
   "$TSX" /octogee/scripts/entrypoints/openclaw-boot-sentinel.ts before-start

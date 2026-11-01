@@ -536,7 +536,7 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
       channels: { mattermost: {
         replyToMode: "all", threadSessionScope: "channel",
         streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
-        actions: { messages: true, pins: true, search: true, memberInfo: true },
+        actions: { messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
         reactionNotifications: "own",
         joinIntro: true,
         commands: { native: false },
@@ -568,13 +568,15 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(config.channels.mattermost.actions).toEqual({
       reactions: true,
       messages: true,
+      messageWrites: true,
+      fileDownloads: true,
       pins: true,
       search: true,
       memberInfo: true,
     });
     expect(config.channels.mattermost.reactionNotifications).toBe("own");
     expect(config.channels.mattermost.joinIntro).toBe(true);
-    for (const gate of ["pins", "search", "memberInfo"]) {
+    for (const gate of ["messageWrites", "fileDownloads", "pins", "search", "memberInfo"]) {
       expect(log).toHaveBeenCalledWith(`set channels.mattermost.actions.${gate}=true`);
     }
     expect(log).toHaveBeenCalledWith("set channels.mattermost.reactionNotifications=own");
@@ -582,16 +584,66 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
   });
 
-  it("removes unsupported persisted Mattermost action keys and preserves the native messages choice", () => {
+  it("preserves explicit Mattermost write and download gates independently of messages", () => {
     const config: any = { channels: { mattermost: { actions: { messages: false, messageWrites: true, fileDownloads: false } } } };
     applyMattermostPreBootPatches(config, {}, vi.fn());
-    expect(config.channels.mattermost.actions).toEqual({ messages: false, pins: true, search: true, memberInfo: true });
+    expect(config.channels.mattermost.actions).toEqual({ messages: false, messageWrites: true, fileDownloads: false, pins: true, search: true, memberInfo: true });
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
+  });
+
+  it.each([undefined, true, false])("inherits absent write and download gates from messages=%s", messages => {
+    const config: any = { channels: { mattermost: { actions: { ...(messages === undefined ? {} : { messages }) } } } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    expect(config.channels.mattermost.actions).toMatchObject({
+      messages: messages !== false,
+      messageWrites: messages !== false,
+      fileDownloads: messages !== false,
+    });
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
+  });
+
+  it("does not broaden explicit write or download refusals while messages are enabled", () => {
+    const config: any = { channels: { mattermost: { actions: { messages: true, messageWrites: false, fileDownloads: false } } } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    expect(config.channels.mattermost.actions).toMatchObject({ messages: true, messageWrites: false, fileDownloads: false });
+  });
+
+  it.each([[true, false], [false, true]])("preserves account messages=%s against provider messages=%s", (accountMessages, providerMessages) => {
+    const config: any = { channels: { mattermost: {
+      actions: { messages: providerMessages },
+      accounts: { coach: { actions: { messages: accountMessages } } },
+    } } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    expect(config.channels.mattermost.actions).toMatchObject({ messageWrites: providerMessages, fileDownloads: providerMessages });
+    expect(config.channels.mattermost.accounts.coach.actions).toEqual({ messages: accountMessages, messageWrites: accountMessages, fileDownloads: accountMessages });
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
+  });
+
+  it("retains authored provider download refusal over an old account messages override", () => {
+    const config: any = { channels: { mattermost: {
+      actions: { messages: false, fileDownloads: false },
+      accounts: { coach: { actions: { messages: true } } },
+    } } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    const account = config.channels.mattermost.accounts.coach.actions;
+    expect(account).toEqual({ messages: true, messageWrites: true });
+    expect({ ...config.channels.mattermost.actions, ...account }).toMatchObject({ messageWrites: true, fileDownloads: false });
+    expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
+  });
+
+  it("retains an explicit account write refusal and download override", () => {
+    const config: any = { channels: { mattermost: {
+      actions: { messages: true, fileDownloads: false },
+      accounts: { coach: { actions: { messages: true, messageWrites: false, fileDownloads: true } } },
+    } } };
+    applyMattermostPreBootPatches(config, {}, vi.fn());
+    expect(config.channels.mattermost.accounts.coach.actions).toEqual({ messages: true, messageWrites: false, fileDownloads: true });
     expect(applyMattermostPreBootPatches(config, {}, vi.fn())).toBe(false);
   });
 
   it("keeps explicit Mattermost action gates, reaction notification, and join introduction choices", () => {
     const config: any = { channels: { mattermost: {
-      actions: { messages: false, pins: false, search: false, memberInfo: false },
+      actions: { messages: false, messageWrites: false, fileDownloads: false, pins: false, search: false, memberInfo: false },
       reactionNotifications: "all",
       joinIntro: false,
     } } };
@@ -599,6 +651,8 @@ describe("applyPreBootPatches — Mattermost runtime", () => {
     applyMattermostPreBootPatches(config, {}, log);
     expect(config.channels.mattermost.actions).toEqual({
       messages: false,
+      messageWrites: false,
+      fileDownloads: false,
       pins: false,
       search: false,
       memberInfo: false,
@@ -1144,7 +1198,7 @@ describe("applyMattermostPreBootPatches — non-object preservation", () => {
           replyToModeByChatType: { direct: "all" },
           baseUrl: "${MM_URL}",
           streaming: { mode: "progress", preview: { toolProgress: true }, progress: { toolProgress: true } },
-          actions: { reactions: true, messages: true, pins: true, search: true, memberInfo: true },
+          actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
           joinIntro: true,
           commands: "legacy-commands",
@@ -1259,7 +1313,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
           requireMention: false,
           replyToMode: "all",
           replyToModeByChatType: { direct: "all" },
-          actions: { reactions: true, messages: true, pins: true, search: true, memberInfo: true },
+          actions: { reactions: true, messages: true, messageWrites: true, fileDownloads: true, pins: true, search: true, memberInfo: true },
           reactionNotifications: "own",
           joinIntro: true,
           streaming: {
@@ -1497,42 +1551,50 @@ const AGENT_STORE_POSTGRES = { schemaPrefix: "octogee", connection: { source: "e
 
 it.each([
   { GATEWAY_CLASS: "shared" },
+  { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster" },
   { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" },
-])("selects the PostgreSQL agent family while keeping local state SQLite for %o", env => {
-  const config: any = {};
+])("selects PostgreSQL for every supported family on %o", env => {
+  const config: any = { database: { engine: "postgres", families: Object.fromEntries(
+    ["state", "agent", "workboard", "logbook", "team-reports"].map(family => [family, { engine: "postgres" }]),
+  ) } };
   expect(applyAgentStoreDatabasePatch(config, env, "absent")).toBe(true);
-  expect(config.database).toEqual({ engine: "sqlite", families: { agent: { engine: "postgres" } }, postgres: AGENT_STORE_POSTGRES });
-  expect(applyAgentStoreDatabasePatch(config, env, "absent")).toBe(false);
+  expect(config.database).toEqual({ engine: "postgres", postgres: AGENT_STORE_POSTGRES });
+  expect(applyAgentStoreDatabasePatch(config, env, "anchor")).toBe(false);
 });
 
-it.each([
-  ["absent", "postgres"],
-  ["anchor", "postgres"],
-  ["sqlite", "sqlite"],
-] as const)("puts a cluster Builder's state family on %s local state → %s", (stateStore, engine) => {
-  const env = { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster" };
-  const config: any = { database: { families: { state: { engine: engine === "postgres" ? "sqlite" : "postgres" } } } };
-  expect(applyAgentStoreDatabasePatch(config, env, stateStore)).toBe(true);
-  expect(config.database).toEqual({
-    engine: "sqlite",
-    families: { state: { engine }, agent: { engine: "postgres" } },
-    postgres: AGENT_STORE_POSTGRES,
-  });
-  expect(applyAgentStoreDatabasePatch(config, env, stateStore)).toBe(false);
+it.each(["shared", "builder"])("refuses retained %s SQLite before changing engine selectors", gatewayClass => {
+  const config: any = { database: { engine: "sqlite", families: { agent: { engine: "postgres" } } } };
+  const original = structuredClone(config);
+  expect(() => applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: gatewayClass }, "sqlite"))
+    .toThrow("openclaw database port --family state --to postgres");
+  expect(config).toEqual(original);
 });
 
-it.each([
-  { GATEWAY_CLASS: "shared" },
-  { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "gce-vm" },
-])("drops a state family carried in from a cluster Builder's tracked config for %o", env => {
-  const config: any = { database: { engine: "sqlite", families: { state: { engine: "postgres" }, agent: { engine: "postgres" } }, postgres: AGENT_STORE_POSTGRES } };
-  expect(applyAgentStoreDatabasePatch(config, env, "absent")).toBe(true);
-  expect(config.database.families).toEqual({ agent: { engine: "postgres" } });
-});
-
-it("passes the local state store kind through the pre-boot patch set", () => {
-  const env = { GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster", MM_URL: "https://mm.example" };
+it("passes the observed local state through the pre-boot patch set", () => {
   const config: any = {};
-  applyPreBootPatches(config, env, () => {}, { stateStore: "anchor" });
-  expect(config.database.families.state).toEqual({ engine: "postgres" });
+  expect(() => applyPreBootPatches(config, { GATEWAY_CLASS: "builder" }, () => {}, { stateStore: "sqlite" }))
+    .toThrow("Keep the Gateway stopped");
+  expect(config).toEqual({});
+});
+
+it("does not flip an existing PostgreSQL host's remaining SQLite families", () => {
+  const config: any = { database: { engine: "postgres", families: { workboard: { engine: "sqlite" } }, postgres: AGENT_STORE_POSTGRES } };
+  const original = structuredClone(config);
+  expect(() => applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: "builder" }, "anchor"))
+    .toThrow("database port --family workboard --to postgres");
+  expect(config).toEqual(original);
+});
+
+it.each(["state", "agent", "workboard", "logbook", "team-reports"])("refuses configured SQLite %s even when GLOBAL is absent", family => {
+  const config: any = { database: { engine: "postgres", families: { [family]: { engine: "sqlite" } } } };
+  const original = structuredClone(config);
+  expect(() => applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: "shared" }, "absent"))
+    .toThrow(`database port --family ${family} --to postgres`);
+  expect(config).toEqual(original);
+});
+
+it.each(["shared", "builder"])("defaults a fresh %s config to PostgreSQL", gatewayClass => {
+  const config: any = {};
+  expect(applyAgentStoreDatabasePatch(config, { GATEWAY_CLASS: gatewayClass }, "absent")).toBe(true);
+  expect(config.database).toEqual({ engine: "postgres", postgres: AGENT_STORE_POSTGRES });
 });
