@@ -191,9 +191,22 @@ describe("schedule snapshot", () => {
     expect(record.job.agentId).toBe(ALICE);
   });
 
+  it("carries the coach monitor with its own declaration key, since only first provisioning creates it", async () => {
+    const key = `octogee:coach-monitor:${ALICE}`;
+    const source = fakeGateway([listedJob("monitor", { name: `Proactive check (${ALICE})`, declarationKey: key })]);
+    const { records, skipped } = await snapshotSchedules(source.call, ALICE_AGENTS, vi.fn());
+    const target = fakeGateway([]);
+
+    await expect(restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).resolves.toEqual({ created: 1, existing: 0, failed: [] });
+    await expect(restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).resolves.toEqual({ created: 0, existing: 1, failed: [] });
+
+    expect(skipped).toEqual([]);
+    expect(target.store.map(job => [job.agentId, job.declarationKey])).toEqual([[ALICE, key]]);
+  });
+
   it("skips jobs that cannot move safely and leaves them running", async () => {
     const unsafe = [
-      listedJob("declared", { declarationKey: `octogee:coach-monitor:${ALICE}` }),
+      listedJob("declared", { declarationKey: "memory-core:memory-dreaming-promotion" }),
       listedJob("plugin", { payloadSource: { kind: "pluginCommand", pluginId: "p", command: "c" } }),
       listedJob("stream", { schedule: { kind: "stream", command: ["tail", "-f", "log"] }, streamExecutionHost: "gateway" }),
       listedJob("on-exit", { schedule: { kind: "on-exit", command: "make build" } }),

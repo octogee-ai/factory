@@ -30,6 +30,7 @@ const LIST_PAGE_SIZE = 200;
 const FENCE_WAIT_MS = 30_000;
 const FENCE_POLL_MS = 1_000;
 const TRANSFER_KEY_PREFIX = "octogee:transfer:";
+const CARRIED_DECLARATION_PREFIXES = [TRANSFER_KEY_PREFIX, "octogee:coach-monitor:"] as const;
 const CRON_ADD_FIELDS = [
   "name", "declarationKey", "displayName", "owner", "agentId", "sessionKey", "description", "enabled", "deleteAfterRun",
   "schedule", "pacing", "activeHours", "idleOnly", "trigger", "sessionTarget", "wakeMode", "payload",
@@ -246,7 +247,7 @@ function runningAgentId(job: CronJob): string | undefined {
 function unmovableReason(job: CronJob): string | null {
   const scheduleKind = isRecord(job.schedule) ? job.schedule.kind : undefined;
   const payloadKind = isRecord(job.payload) ? job.payload.kind : undefined;
-  if (typeof job.declarationKey === "string" && !job.declarationKey.startsWith(TRANSFER_KEY_PREFIX)) return "declared job; the platform recreates it on the target";
+  if (typeof job.declarationKey === "string" && !carriedDeclaration(job.declarationKey)) return "declared job; the platform recreates it on the target";
   if (job.payloadSource !== undefined) return "plugin command job";
   if (job.streamExecutionHost !== undefined || scheduleKind === "stream" || scheduleKind === "on-exit") {
     return "host-bound process schedule";
@@ -273,9 +274,13 @@ function identityKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
 }
 
+function carriedDeclaration(key: unknown): key is string {
+  return typeof key === "string" && CARRIED_DECLARATION_PREFIXES.some(prefix => key.startsWith(prefix));
+}
+
 function transferKey(record: ScheduleRecord): string {
   const key = record.job.declarationKey;
-  if (typeof key === "string" && key.startsWith(TRANSFER_KEY_PREFIX)) return key;
+  if (carriedDeclaration(key)) return key;
   return TRANSFER_KEY_PREFIX + createHash("sha256").update(identityKey(record.agentId, record.sourceJobId)).digest("hex");
 }
 
