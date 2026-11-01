@@ -4,6 +4,8 @@ export const MAX_LOAD_RUN_MS = 30 * 60_000;
 export const TEST_API_ORIGIN = "https://api-test.octogee.com";
 export const TEST_CONTEXT = "gke_octogee_us-central1_octogee-gateway";
 export const TEST_NAMESPACE = "octogee-test";
+// Numbered slots predate the scaler; it mints shared-<12 hex> (glm-controller shared-pool-scaler).
+export const SHARED_SLOT_RE = /^shared-(?:\d+|[a-f0-9]{12})$/;
 
 export interface LoadTarget {
   name: string;
@@ -64,7 +66,7 @@ export function parseLoadPlan(input: unknown): LoadPlan {
   if (Object.keys(plan).some((key) => ![
     "gatewayId", "targets", "readConcurrency", "coachConcurrency", "readRounds", "maxCoachTurns", "turnTimeoutMs",
   ].includes(key))) throw new Error("Unknown plan field; API origin and namespace cannot be overridden");
-  if (typeof plan.gatewayId !== "string" || !/^shared-\d+$/.test(plan.gatewayId)) throw new Error("Expected a shared gateway ID");
+  if (typeof plan.gatewayId !== "string" || !SHARED_SLOT_RE.test(plan.gatewayId)) throw new Error("Expected a shared gateway ID");
   const targets = parseTargets(plan.targets);
   const readConcurrency = concurrency(plan.readConcurrency ?? [1, Math.min(2, targets.length), targets.length], targets.length, "readConcurrency");
   const coachConcurrency = concurrency(plan.coachConcurrency ?? [], targets.length, "coachConcurrency");

@@ -16,6 +16,14 @@ describe("TEST gateway load boundaries", () => {
     expect(() => parseLoadPlan({ ...input, readConcurrency: [0] })).toThrow("integer");
   });
 
+  it("accepts numbered and minted shared slot IDs and nothing else", () => {
+    expect(parseLoadPlan({ ...input, gatewayId: "shared-1d4ef9d5a9da" }).gatewayId).toBe("shared-1d4ef9d5a9da");
+    expect(parseLoadPlan({ ...input, gatewayId: "shared-0" }).gatewayId).toBe("shared-0");
+    for (const gatewayId of ["shared-1D4EF9D5A9DA", "shared-1d4ef9d5a9", "shared-", "builder-1d4ef9d5a9da"]) {
+      expect(() => parseLoadPlan({ ...input, gatewayId })).toThrow("shared");
+    }
+  });
+
   it("bounds reconnect rounds", () => {
     expect(() => parseLoadPlan({ ...input, readRounds: 6 })).toThrow("readRounds");
   });
@@ -162,16 +170,21 @@ describe("Medium resource preflight", () => {
 
 describe("shared pool sampler", () => {
   const cgroup = (oom = 0) => `FILE cpu.stat\nusage_usec 200\nnr_periods 10\nnr_throttled 2\nFILE memory.current\n1024\nFILE memory.stat\ninactive_file 100\nFILE memory.events\noom_kill ${oom}\n`;
-  const pod = (gatewayId: string, over: { ready?: boolean; uid?: string; name?: string } = {}) => ({
+  const pod = (gatewayId: string, over: { ready?: boolean; uid?: string; name?: string; runtimeClassName?: string; restartCount?: number; lastTerminated?: string } = {}) => ({
     metadata: { name: over.name ?? `${gatewayId}-pod`, uid: over.uid ?? `${gatewayId}-uid`, labels: { tier: "m", "gateway-id": gatewayId, app: "octogee-gateway" } },
-    spec: { nodeName: "node-a", containers: [{ name: "gateway", image: "image", resources: { requests: { cpu: "2", memory: "8Gi" }, limits: { cpu: "2", memory: "8Gi" } } }] },
-    status: { containerStatuses: [{ name: "gateway", ready: over.ready ?? true, restartCount: 0 }] },
+    spec: { nodeName: "node-a", ...(over.runtimeClassName ? { runtimeClassName: over.runtimeClassName } : {}),
+      containers: [{ name: "gateway", image: "image", resources: { requests: { cpu: "2", memory: "8Gi" }, limits: { cpu: "2", memory: "8Gi" } } }] },
+    status: { containerStatuses: [{ name: "gateway", ready: over.ready ?? true, restartCount: over.restartCount ?? 0,
+      ...(over.lastTerminated ? { lastState: { terminated: { reason: over.lastTerminated } } } : {}) }] },
   });
-  const fakeKubectl = (state: { pods: unknown[]; oom: Record<string, number> }) => {
+  const fakeKubectl = (state: { pods: unknown[]; oom: Record<string, number>; podUsage?: Record<string, { name: string; usage: { cpu: string; memory: string } }[]> }) => {
     const calls: string[][] = [];
     const kubectl = async (...args: string[]) => {
       calls.push(args);
       if (args[0] === "get" && args[1] === "pods") return JSON.stringify({ items: state.pods });
+      if (args[0] === "get" && args[1] === "--raw" && args[2].includes("/pods/")) {
+        return JSON.stringify({ containers: state.podUsage?.[args[2].split("/").at(-1)!] ?? [] });
+      }
       if (args[0] === "get" && args[1] === "--raw") return JSON.stringify({ usage: { cpu: "1", memory: "1Gi" }, timestamp: "t" });
       if (args[0] === "exec" && args.at(-1)!.includes("df")) return "fs";
       if (args[0] === "exec") return cgroup(state.oom[args[1]] ?? 0);
@@ -187,6 +200,11 @@ describe("shared pool sampler", () => {
     expect(sample.starting).toEqual([{ slot: "shared-1", pod: "shared-1-pod" }]);
     expect(sample.violations).toEqual([]);
     expect(calls.filter((c) => c[0] === "exec").map((c) => c[1])).toEqual(["shared-0-pod", "shared-0-pod"]);
+  });
+
+  it("samples minted shared slots alongside numbered ones", async () => {
+    const { kubectl } = fakeKubectl({ pods: [pod("shared-7bf0dde2d0a4"), pod("shared-1d4ef9d5a9da"), pod("qa-octogee-s-6e7df6e1")], oom: {} });
+    expect((await createSharedPoolSampler(kubectl)()).slots.map((s) => s.slot)).toEqual(["shared-1d4ef9d5a9da", "shared-7bf0dde2d0a4"]);
   });
 
   it("flags OOM kills and pod replacement per slot, and forgets a slot that scales away", async () => {
@@ -212,6 +230,59 @@ describe("shared pool sampler", () => {
     expect(await sampler()).toMatchObject({ slots: [], starting: [{ slot: "shared-1" }], violations: [] });
     state.pods = [pod("shared-1", { uid: "replacement" })];
     expect((await sampler()).violations).toEqual(["shared-1:pod-replaced"]);
+  });
+
+  it("samples a gVisor slot from the metrics API without reading its emulated cgroups", async () => {
+    const { kubectl, calls } = fakeKubectl({
+      pods: [pod("shared-0", { runtimeClassName: "gvisor" })],
+      oom: {},
+      podUsage: { "shared-0-pod": [{ name: "gateway", usage: { cpu: "500000000n", memory: "2097152Ki" } }, { name: "gateway-edge", usage: { cpu: "50m", memory: "200Mi" } }] },
+    });
+    const sample = await createSharedPoolSampler(kubectl)();
+    expect(sample.slots[0]).toMatchObject({
+      telemetry: "metrics-api",
+      cpuCores: 0.5,
+      workingSetBytes: 2 * 1024 ** 3,
+      memoryRatio: 0.25,
+      chargedBytes: null,
+      throttledPeriodRatio: null,
+      cgroup: null,
+    });
+    expect(sample.violations).toEqual([]);
+    expect(calls.filter((c) => c[0] === "exec").every((c) => c.at(-1)!.includes("df"))).toBe(true);
+  });
+
+  it("flags an OOM-killed gVisor gateway from its container status", async () => {
+    const usage = [{ name: "gateway", usage: { cpu: "1", memory: "1Gi" } }];
+    const state = { pods: [pod("shared-0", { runtimeClassName: "gvisor" })], oom: {}, podUsage: { "shared-0-pod": usage } };
+    const { kubectl } = fakeKubectl(state);
+    const sampler = createSharedPoolSampler(kubectl);
+    expect((await sampler()).violations).toEqual([]);
+    state.pods = [pod("shared-0", { runtimeClassName: "gvisor", restartCount: 1, lastTerminated: "OOMKilled" })];
+    expect((await sampler()).violations).toEqual(["shared-0:container-restart", "shared-0:oom-kill"]);
+  });
+
+  it("keeps sidecar OOMs out of gateway telemetry while still flagging the restart", async () => {
+    const sandbox = pod("shared-0", { runtimeClassName: "gvisor" });
+    sandbox.spec.containers.push({ ...sandbox.spec.containers[0], name: "gateway-edge" });
+    sandbox.status.containerStatuses.push({ name: "gateway-edge", ready: true, restartCount: 0 });
+    const state = { pods: [sandbox], oom: {}, podUsage: { "shared-0-pod": [{ name: "gateway", usage: { cpu: "1", memory: "1Gi" } }] } };
+    const { kubectl } = fakeKubectl(state);
+    const sampler = createSharedPoolSampler(kubectl);
+    expect((await sampler()).violations).toEqual([]);
+    sandbox.status.containerStatuses[1].restartCount = 1;
+    sandbox.status.containerStatuses[1].lastState = { terminated: { reason: "OOMKilled" } };
+    expect((await sampler()).violations).toEqual(["shared-0:container-restart"]);
+  });
+
+  it("fails closed when the metrics API has no gateway usage for a gVisor slot", async () => {
+    const { kubectl } = fakeKubectl({ pods: [pod("shared-0", { runtimeClassName: "gvisor" })], oom: {}, podUsage: {} });
+    await expect(createSharedPoolSampler(kubectl)()).rejects.toThrow("gateway usage");
+  });
+
+  it("keeps reading cgroups on the standard runtime", async () => {
+    const { kubectl } = fakeKubectl({ pods: [pod("shared-0")], oom: {} });
+    expect((await createSharedPoolSampler(kubectl)()).slots[0]).toMatchObject({ telemetry: "cgroup", chargedBytes: 1024 });
   });
 
   it("reduces a sample to the serving and starting slot names", async () => {
