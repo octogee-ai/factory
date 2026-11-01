@@ -499,7 +499,8 @@ describe("abandoned Shared migration recovery", () => {
       expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
       expect(reserve).toHaveBeenCalledExactlyOnceWith({ recovery: { uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: id, sourceEpoch: 4, claimStartedAt: 4_000 },
         targetGatewayId: target, migrationId: `mig-${id}`, slug: "alice" });
-      expect(events.slice(0, 5)).toEqual(["authority", "authority", "reserve", "authority", "abort:keys"]);
+      expect(events.slice(0, 7)).toEqual(["authority", "authority", "reserve", "authority", "authority", "authority", "abort:keys"]);
+      expect(h.deps.prepareMigrationAgentStores).toHaveBeenNthCalledWith(1, target, "alice", expect.objectContaining({ expectedBuilderUid: "uid-alice" }));
       expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
     } else {
       expect(result.rolledBack).not.toBe(true);
@@ -511,6 +512,45 @@ describe("abandoned Shared migration recovery", () => {
       expect(h.client.resume).not.toHaveBeenCalled();
       expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
     }
+  });
+
+  it("hands the carried stores to the customer's Builder for target cleanup and back to the source before it resumes", async () => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const target = "alice-m-12345678", id = `builder-activate-${target}-g1`;
+    const op = mkOp({ id, status: "running", startedAt: 4_000, attempts: 1,
+      input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease", recoverSourceOnly: true },
+      schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, fromGatewayId: "shared-blue", toGatewayId: target,
+        uid: "uid-alice", slug: "alice", stageAfterCutover: true },
+    });
+    op.schedulerHandoff!.sourceRecovery = { migrationId: op.schedulerHandoff!.migrationId, sourceEpoch: 4,
+      steps: [{ name: "quiesce-source", status: "done" }] };
+    const events: string[] = [];
+    let owner = "shared-blue";
+    h.deps.prepareBuilderRecoveryTarget = vi.fn(async () => { events.push("reserve"); });
+    h.deps.prepareMigrationAgentStores = vi.fn(async (gatewayId, slug, authority) => {
+      expect({ slug, uid: authority?.expectedBuilderUid }).toEqual({ slug: "alice", uid: "uid-alice" });
+      await authority!.assertCurrent();
+      owner = gatewayId;
+      events.push(`stores:${gatewayId}`);
+    });
+    h.client.abortImport = vi.fn(async request => {
+      if (owner !== target) throw new Error("PostgreSQL search capability unavailable: insufficient CREATE privilege");
+      events.push(`abort:${request.mode}`);
+    });
+    const unmount = h.client.unmount;
+    h.client.unmount = vi.fn(async request => { events.push(`unmount:${request.gatewayId}`); return unmount(request); });
+    const resume = h.client.resume;
+    h.client.resume = vi.fn(async request => {
+      if (owner !== "shared-blue") throw new Error("source resumed without its stores");
+      events.push("resume");
+      return resume(request);
+    });
+
+    const result = await createMigrateCustomerHandler(h.deps)(op, h.ctx);
+
+    expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
+    expect(events).toEqual(["reserve", `stores:${target}`, "abort:keys", "abort:pre", "abort:final", `unmount:${target}`, "stores:shared-blue", "resume"]);
+    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
   });
 
   const previous = { migrationId: "mig-op-1:scheduler:1:claim:1000", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };

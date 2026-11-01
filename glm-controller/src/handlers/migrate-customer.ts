@@ -1546,7 +1546,7 @@ function ownershipCheckedSourceRecovery(op: Operation, previous: SchedulerHandof
     (previous.toGatewayId.startsWith("shared-") || builderActivationSourceRecoveryPending(op));
 }
 
-async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Operation, previous: SchedulerHandoffState, input: {
+async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Operation, ctx: OperationContext, previous: SchedulerHandoffState, input: {
   sharedScope: boolean; recovery?: WorkspaceMigrationRecoveryParams; assertNativeReturnCurrent?: () => Promise<void>;
 }): Promise<void> {
   const { sharedScope, recovery, assertNativeReturnCurrent } = input;
@@ -1558,25 +1558,27 @@ async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Ope
     await deps.assertMigrationRecoveryAuthority!(recovery);
     await deps.prepareBuilderRecoveryTarget({ recovery, targetGatewayId: previous.toGatewayId, migrationId: deps.genMigrationId(op.id), slug: previous.slug });
     await deps.assertMigrationRecoveryAuthority!(recovery);
+    await prepareRecoveryAgentStores(deps, ctx, recovery, previous.toGatewayId, previous.slug);
   }
   if (sharedScope || assertNativeReturnCurrent) await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId, assertNativeReturnCurrent);
 }
 
-async function prepareSourceRecoveryAgentStores(
+async function prepareRecoveryAgentStores(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   recovery: WorkspaceMigrationRecoveryParams,
+  gatewayId: string,
   slug: string,
 ): Promise<void> {
   if (!deps.prepareMigrationAgentStores || !ctx.assertActiveClaim) {
-    throw new Error("Source agent-store recovery requires ownership preparation and an active operation claim");
+    throw new Error("Agent-store recovery requires ownership preparation and an active operation claim");
   }
   const assertCurrent = async () => {
     await ctx.assertActiveClaim!();
     await deps.assertMigrationRecoveryAuthority!(recovery);
   };
   await assertCurrent();
-  await deps.prepareMigrationAgentStores(recovery.sourceGatewayId, slug, { expectedBuilderUid: recovery.uid, assertCurrent });
+  await deps.prepareMigrationAgentStores(gatewayId, slug, { expectedBuilderUid: recovery.uid, assertCurrent });
   await assertCurrent();
 }
 
@@ -1605,7 +1607,7 @@ async function preparePreviousSourceAgentStores(deps: MigrateCustomerDeps, ctx: 
   resumeSourceScheduler: boolean; recovery?: WorkspaceMigrationRecoveryParams; assertNativeReturnCurrent?: () => Promise<void>;
 }): Promise<void> {
   if (!input.resumeSourceScheduler) return;
-  if (input.recovery) await prepareSourceRecoveryAgentStores(deps, ctx, input.recovery, previous.slug);
+  if (input.recovery) await prepareRecoveryAgentStores(deps, ctx, input.recovery, input.recovery.sourceGatewayId, previous.slug);
   const assertCurrent = input.assertNativeReturnCurrent;
   if (!assertCurrent) return;
   if (!deps.prepareMigrationAgentStores) throw new Error("native return source ownership preparation is unavailable");
@@ -1636,7 +1638,7 @@ async function resumePreviousSchedulerAttempt(
   const scope = previousAttemptScope(op, previous);
   const recovery = scope.recoveryRequired ? await sharedRecoveryAuthority(deps, op, user, uid) : undefined;
   const assertNativeReturnCurrent = await previousNativeReturnCleanupAuthority(deps, op, ctx, previous);
-  await cleanupPreviousSchedulerTarget(deps, op, previous, { sharedScope: scope.sharedScope, recovery, assertNativeReturnCurrent });
+  await cleanupPreviousSchedulerTarget(deps, op, ctx, previous, { sharedScope: scope.sharedScope, recovery, assertNativeReturnCurrent });
   await preparePreviousSourceAgentStores(deps, ctx, previous, { resumeSourceScheduler: scope.resumeSourceScheduler, recovery, assertNativeReturnCurrent });
   const url = await deps.resolveGatewayUrl(previous.fromGatewayId);
   const client = deps.buildClient(() => url);
