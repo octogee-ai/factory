@@ -96,6 +96,34 @@ resource "google_logging_log_view_iam_member" "ops_agent" {
   member   = "serviceAccount:${google_service_account.ops_agent.email}"
 }
 
+# ── Data-access audit trail ─────────────────────────────────────────────────
+# Secret payload reads are Data Access audit logs, which GCP leaves off by
+# default. octogee-api writes one data-access record per brokered internal
+# call; those records are kept for 400 days instead of _Default's 30.
+resource "google_project_iam_audit_config" "secretmanager_data_read" {
+  project = var.project_id
+  service = "secretmanager.googleapis.com"
+
+  audit_log_config {
+    log_type = "DATA_READ"
+  }
+}
+
+resource "google_logging_project_bucket_config" "data_access_audit" {
+  project        = var.cluster_project_id
+  location       = "global"
+  bucket_id      = "data-access-audit-${var.environment}"
+  retention_days = 400
+}
+
+resource "google_logging_project_sink" "data_access_audit" {
+  project                = var.cluster_project_id
+  name                   = "data-access-audit-${var.environment}"
+  destination            = "logging.googleapis.com/${google_logging_project_bucket_config.data_access_audit.id}"
+  filter                 = "resource.type=\"k8s_container\" AND resource.labels.namespace_name=\"${var.namespace}\" AND jsonPayload.category=\"data-access\""
+  unique_writer_identity = true
+}
+
 # ── Cloud SQL Client role ───────────────────────────────────────────────────
 # Platform API SA needs cloudsql.client to back the Cloud SQL Proxy.
 resource "google_project_iam_member" "cloudsql_client" {

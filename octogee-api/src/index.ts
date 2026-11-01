@@ -558,7 +558,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     reviewer: tenantBindingReviewer,
     metrics: tenantBindingMetrics,
   });
-  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db });
+  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db, enforceWhen: shouldEnforceTenantBinding });
   const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
@@ -650,7 +650,7 @@ export function createApp(opts: CreateAppOptions = {}) {
     tenantBindingMiddleware(req, res, next);
   });
   app.use((req, res, next) => {
-    if (!shouldEnforceTenantBinding(req)) {
+    if (!shouldAttemptTenantBinding(req.path)) {
       next();
       return;
     }

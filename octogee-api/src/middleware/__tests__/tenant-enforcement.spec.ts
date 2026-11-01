@@ -1,8 +1,9 @@
 import express from "express";
+import { EventEmitter } from "node:events";
 import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { createTenantEnforcementMiddleware } from "../tenant-enforcement.js";
+import { createTenantEnforcementMiddleware, type TenantAccessRecord } from "../tenant-enforcement.js";
 import type { TenantDenial, TenantDenialReporter } from "../tenant-denial.js";
 
 type UserDoc = Record<string, unknown>;
@@ -82,6 +83,8 @@ function app(opts: {
   operations?: Record<string, OperationDoc>;
   gateways?: Record<string, Record<string, unknown>>;
   onDenied?: TenantDenialReporter;
+  onAccess?: (record: TenantAccessRecord) => void;
+  handlerStatus?: number;
 }) {
   const a = express();
   a.use(express.json());
@@ -91,6 +94,7 @@ function app(opts: {
   });
   const enforcement = createTenantEnforcementMiddleware({
     onDenied: opts.onDenied ?? (async () => {}),
+    onAccess: opts.onAccess ?? (() => {}),
     db: fakeDb({
       users:
         opts.users ?? {
@@ -108,8 +112,10 @@ function app(opts: {
       gateways: opts.gateways,
     }),
   });
-  const handler = (_req: express.Request, res: express.Response) => res.json({ ok: true });
+  const handler = (_req: express.Request, res: express.Response) =>
+    res.status(opts.handlerStatus ?? 200).json({ ok: true });
   a.post("/internal/probe", enforcement, handler);
+  a.post("/internal/fleet/assignment-roster", enforcement, handler);
   a.post("/internal/probe/:uid", enforcement, handler);
   a.post("/internal/connectors/access-token", enforcement, handler);
   a.post("/internal/connectors/github-project-clone-access", enforcement, handler);
@@ -508,6 +514,130 @@ const STILL_ON_SHARED = {
       const res = await request(app({ boundTenant: BENDER, onDenied })).post("/internal/probe").send({});
       expect(res.status).toBe(403);
       expect(onDenied).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("access audit", () => {
+    function accessCapture() {
+      const records: TenantAccessRecord[] = [];
+      const onAccess = vi.fn((record: TenantAccessRecord) => { records.push(record); });
+      return { records, onAccess };
+    }
+
+    it("records an admitted call with the bound tenant, calling agent, and final status", async () => {
+      const { records, onAccess } = accessCapture();
+      await request(app({ boundTenant: BENDER_R2, onAccess, handlerStatus: 404 }))
+        .post("/internal/agent-projects/list")
+        .send({ agentId: "octogee-alice-coach" })
+        .expect(404);
+
+      expect(records).toEqual([{
+        method: "POST",
+        path: "/internal/agent-projects/list",
+        decision: "admitted",
+        status: 404,
+        responseCompleted: true,
+        tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+        podName: "octogee-gateway-bender-r2-5bc5949d46-p946t",
+        agentId: "octogee-alice-coach",
+      }]);
+    });
+
+    it("captures the full broker path before a mounted router handles the request", async () => {
+      const { records, onAccess } = accessCapture();
+      const server = express();
+      server.use((req, _res, next) => {
+        req.boundTenant = { kind: "platform", actor: "artifact-worker" };
+        next();
+      });
+      server.use(createTenantEnforcementMiddleware({ onAccess }));
+      const router = express.Router();
+      router.get("/:artifactId/source", (_req, res) => res.send("data"));
+      server.use("/internal/chat-artifacts", router);
+
+      await request(server).get("/internal/chat-artifacts/demo/source?token=private").expect(200);
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ path: "/internal/chat-artifacts/demo/source", responseCompleted: true });
+    });
+
+    it.each([false, true])("records a response exactly once when finish=%s precedes close", (finished) => {
+      const { records, onAccess } = accessCapture();
+      const req = {
+        method: "GET", path: "/internal/chat-artifacts/demo/source",
+        boundTenant: { kind: "platform", actor: "artifact-worker" },
+      } as express.Request;
+      const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: finished });
+      createTenantEnforcementMiddleware({ onAccess })(req, res as unknown as express.Response, () => {});
+
+      if (finished) res.emit("finish");
+      res.emit("close");
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        path: "/internal/chat-artifacts/demo/source", status: 200, responseCompleted: finished,
+      });
+    });
+
+    it("does not mark a disconnect during authorization as admitted", () => {
+      const { records, onAccess } = accessCapture();
+      const req = { method: "POST", path: "/internal/agent-projects/list", boundTenant: BENDER } as express.Request;
+      const res = Object.assign(new EventEmitter(), { statusCode: 200, writableFinished: false });
+      createTenantEnforcementMiddleware({ onAccess, db: fakeDb({ users: {} }), onDenied: async () => {} })(
+        req, res as unknown as express.Response, () => {},
+      );
+      res.emit("close");
+      expect(records[0]).toMatchObject({ decision: "pending", responseCompleted: false });
+    });
+
+    it("records a denied call with its reason", async () => {
+      const { records, onAccess } = accessCapture();
+      await request(app({ boundTenant: BENDER, onAccess }))
+        .post("/internal/agent-projects/list")
+        .send({ gatewayId: "other", agentId: "octogee-alice-coach" })
+        .expect(403);
+
+      expect(records).toEqual([{
+        method: "POST",
+        path: "/internal/agent-projects/list",
+        decision: "denied",
+        status: 403,
+        responseCompleted: true,
+        reason: "request names a gatewayId other than the bound gateway",
+        tenant: { kind: "gateway", gatewayId: "bender", ownerUid: "owner-bender" },
+        agentId: "octogee-alice-coach",
+      }]);
+    });
+
+    it("records platform actors and unbound callers", async () => {
+      const { records, onAccess } = accessCapture();
+      await request(app({ boundTenant: { kind: "platform", actor: "llm-broker" }, onAccess }))
+        .post("/internal/product-analytics/events")
+        .send({});
+      await request(app({ onAccess })).post("/internal/probe").send({}).expect(403);
+
+      expect(records.map((r) => [r.tenant, r.decision])).toEqual([
+        [{ kind: "platform", actor: "llm-broker" }, "admitted"],
+        [{ kind: "unbound" }, "denied"],
+      ]);
+    });
+
+    it("does not record the once-a-second assignment roster poll", async () => {
+      const { records, onAccess } = accessCapture();
+      await request(app({ boundTenant: BENDER, onAccess }))
+        .post("/internal/fleet/assignment-roster")
+        .send({ revisionId: "bender" });
+
+      expect(records).toEqual([]);
+    });
+
+    it("still answers when the access recorder throws", async () => {
+      const onAccess = vi.fn(() => { throw new Error("log sink down"); });
+      await request(app({ boundTenant: BENDER, onAccess }))
+        .post("/internal/agent-projects/list")
+        .send({ agentId: "octogee-alice-coach" })
+        .expect(200);
+      expect(onAccess).toHaveBeenCalledOnce();
     });
   });
 

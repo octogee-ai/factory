@@ -10,7 +10,7 @@ import {
 import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
-import { logger } from "../../../gateway-edge/src/middleware/logging.js";
+import { logger, redactRequestPath } from "../../../gateway-edge/src/middleware/logging.js";
 import {
   createTenantDenialReporter,
   type TenantDenial,
@@ -22,9 +22,34 @@ import {
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 type PlatformBinding = Extract<Express.Request["boundTenant"], { kind: "platform" }>;
 
+export interface TenantAccessRecord {
+  method: string;
+  path: string;
+  decision: "pending" | "admitted" | "denied";
+  status: number;
+  responseCompleted: boolean;
+  reason?: string;
+  tenant: TenantDenialTenant;
+  podName?: string;
+  agentId: string | null;
+}
+
+export type TenantAccessRecorder = (record: TenantAccessRecord) => void;
+
 export interface TenantEnforcementOptions {
   db?: Pick<Firestore, "collection">;
   onDenied?: TenantDenialReporter;
+  onAccess?: TenantAccessRecorder;
+  enforceWhen?: (req: Request) => boolean;
+}
+
+const UNRECORDED_POLL_ROUTES = new Set(["/internal/fleet/assignment-roster"]);
+
+function logAccess(record: TenantAccessRecord): void {
+  logger.info(`[data-access] ${record.method} ${record.path} ${record.decision} ${record.status}`, {
+    category: "data-access",
+    ...record,
+  });
 }
 
 // The only internal routes a platform tenant (the octogee-cron KSA) may reach.
@@ -405,12 +430,58 @@ function requestedAgentId(req: Request): string | null {
   return stringValue(body(req).agentId);
 }
 
+interface AccessOutcome {
+  decision: TenantAccessRecord["decision"];
+  deniedReason?: string;
+}
+
+function recordAccessOnResponse(
+  req: Request,
+  res: Response,
+  outcome: AccessOutcome,
+  onAccess: TenantAccessRecorder,
+): void {
+  if (UNRECORDED_POLL_ROUTES.has(normalizeTenantPolicyPath(req.path))) return;
+  const path = redactRequestPath(req.path);
+  const method = req.method;
+  const agentId = requestedAgentId(req);
+  let recorded = false;
+  const recordAccess = () => {
+    if (recorded) return;
+    recorded = true;
+    res.off("finish", recordAccess);
+    res.off("close", recordAccess);
+    const bound = req.boundTenant;
+    const record: TenantAccessRecord = {
+      method,
+      path,
+      decision: outcome.decision,
+      status: res.statusCode,
+      responseCompleted: res.writableFinished,
+      ...(outcome.deniedReason === undefined ? {} : { reason: outcome.deniedReason }),
+      tenant: denialTenant(bound),
+      ...(bound?.kind === "gateway" && bound.podName ? { podName: bound.podName } : {}),
+      agentId,
+    };
+    try {
+      onAccess(record);
+    } catch (error: unknown) {
+      logger.error("[tenant-enforcement] access recorder threw", { ...record, error });
+    }
+  };
+  res.once("finish", recordAccess);
+  res.once("close", recordAccess);
+}
+
 export function createTenantEnforcementMiddleware(
   opts: TenantEnforcementOptions = {},
 ): (req: Request, res: Response, next: NextFunction) => void {
   const db = opts.db ?? defaultDb;
   const onDenied = opts.onDenied ?? createTenantDenialReporter({ db });
-  const deny = (req: Request, res: Response, reason: string): void => {
+  const onAccess = opts.onAccess ?? logAccess;
+  const deny = (req: Request, res: Response, outcome: AccessOutcome, reason: string): void => {
+    outcome.decision = "denied";
+    outcome.deniedReason = reason;
     const denial: TenantDenial = {
       method: req.method,
       path: req.path,
@@ -425,30 +496,40 @@ export function createTenantEnforcementMiddleware(
     res.status(403).json({ error: `forbidden: ${reason}`, code: "tenant-enforcement" });
   };
   return (req, res, next) => {
+    const outcome: AccessOutcome = { decision: "pending" };
+    const admit = () => {
+      outcome.decision = "admitted";
+      next();
+    };
+    recordAccessOnResponse(req, res, outcome, onAccess);
+    if (opts.enforceWhen && !opts.enforceWhen(req)) {
+      admit();
+      return;
+    }
     const bound = req.boundTenant;
     if (bound?.kind === "platform") {
       if (platformBindingAuthorized(bound, req.path)) {
-        next();
+        admit();
       } else {
-        deny(req, res, `platform actor ${bound.actor} is not admitted on this route`);
+        deny(req, res, outcome, `platform actor ${bound.actor} is not admitted on this route`);
       }
       return;
     }
     if (!bound || bound.kind !== "gateway") {
-      deny(req, res, "request carries no gateway tenant binding");
+      deny(req, res, outcome, "request carries no gateway tenant binding");
       return;
     }
 
     gatewayDenialReason(db, bound, req)
       .then((reason) => {
         if (reason !== null) {
-          deny(req, res, reason);
+          deny(req, res, outcome, reason);
           return;
         }
-        next();
+        admit();
       })
       .catch((error: unknown) => {
-        deny(req, res, `authorization check failed: ${error instanceof Error ? error.message : String(error)}`);
+        deny(req, res, outcome, `authorization check failed: ${error instanceof Error ? error.message : String(error)}`);
       });
   };
 }
