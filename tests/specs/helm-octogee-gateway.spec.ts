@@ -698,7 +698,7 @@ const out = helmTemplate();
     expect(svc).not.toMatch(/migration-rsync/);
   });
 
-  it("runs exec-capable builder gateways in the registered gVisor RuntimeClass", () => {
+  it("runs builder and shared gateways in the registered gVisor RuntimeClass", () => {
     const builder = findDoc(helmTemplate("octogee-gw-builder", {
       gatewayId: "builder",
       gatewayClass: "builder",
@@ -706,7 +706,7 @@ const out = helmTemplate();
     const shared = findDoc(helmTemplate(), "Deployment", "octogee-gateway-default") ?? "";
 
     expect(builder).toMatch(/^ {6}runtimeClassName:\s*gvisor\s*$/m);
-    expect(shared).not.toMatch(/^ {6}runtimeClassName:/m);
+    expect(shared).toMatch(/^ {6}runtimeClassName:\s*gvisor\s*$/m);
   });
 
   it("renders Restricted-compliant runtime containers and bounded home initialization capabilities", () => {
