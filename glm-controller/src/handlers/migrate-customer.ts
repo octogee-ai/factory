@@ -1559,8 +1559,23 @@ async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Ope
     await deps.prepareBuilderRecoveryTarget({ recovery, targetGatewayId: previous.toGatewayId, migrationId: deps.genMigrationId(op.id), slug: previous.slug });
     await deps.assertMigrationRecoveryAuthority!(recovery);
     await prepareRecoveryAgentStores(deps, ctx, recovery, previous.toGatewayId, previous.slug);
+    await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId, activeRecoveryAuthority(deps, ctx, recovery));
+    return;
   }
   if (sharedScope || assertNativeReturnCurrent) await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId, assertNativeReturnCurrent);
+}
+
+function activeRecoveryAuthority(
+  deps: MigrateCustomerDeps,
+  ctx: OperationContext,
+  recovery: WorkspaceMigrationRecoveryParams,
+): () => Promise<void> {
+  const assertActiveClaim = ctx.assertActiveClaim;
+  if (!assertActiveClaim) throw new Error("Shared migration recovery requires an active operation claim");
+  return async () => {
+    await assertActiveClaim();
+    await deps.assertMigrationRecoveryAuthority!(recovery);
+  };
 }
 
 async function prepareRecoveryAgentStores(
@@ -1570,13 +1585,8 @@ async function prepareRecoveryAgentStores(
   gatewayId: string,
   slug: string,
 ): Promise<void> {
-  if (!deps.prepareMigrationAgentStores || !ctx.assertActiveClaim) {
-    throw new Error("Agent-store recovery requires ownership preparation and an active operation claim");
-  }
-  const assertCurrent = async () => {
-    await ctx.assertActiveClaim!();
-    await deps.assertMigrationRecoveryAuthority!(recovery);
-  };
+  if (!deps.prepareMigrationAgentStores) throw new Error("Agent-store recovery requires ownership preparation");
+  const assertCurrent = activeRecoveryAuthority(deps, ctx, recovery);
   await assertCurrent();
   await deps.prepareMigrationAgentStores(gatewayId, slug, { expectedBuilderUid: recovery.uid, assertCurrent });
   await assertCurrent();

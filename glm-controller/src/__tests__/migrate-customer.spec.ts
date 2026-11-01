@@ -499,7 +499,8 @@ describe("abandoned Shared migration recovery", () => {
       expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
       expect(reserve).toHaveBeenCalledExactlyOnceWith({ recovery: { uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: id, sourceEpoch: 4, claimStartedAt: 4_000 },
         targetGatewayId: target, migrationId: `mig-${id}`, slug: "alice" });
-      expect(events.slice(0, 7)).toEqual(["authority", "authority", "reserve", "authority", "authority", "authority", "abort:keys"]);
+      expect(events.slice(0, 16)).toEqual(["authority", "authority", "reserve", "authority", "authority", "authority", "authority", "authority",
+        "abort:keys", "authority", "abort:pre", "authority", "abort:final", "authority", "unmount", "authority"]);
       expect(h.deps.prepareMigrationAgentStores).toHaveBeenNthCalledWith(1, target, "alice", expect.objectContaining({ expectedBuilderUid: "uid-alice" }));
       expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
     } else {
@@ -514,7 +515,7 @@ describe("abandoned Shared migration recovery", () => {
     }
   });
 
-  it("hands the carried stores to the customer's Builder for target cleanup and back to the source before it resumes", async () => {
+  it.each(["handed-back", "authority-lost", "claim-lost"] as const)("hands the carried stores to the customer's Builder for target cleanup and back to the source before it resumes: %s", async scenario => {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     const target = "alice-m-12345678", id = `builder-activate-${target}-g1`;
     const op = mkOp({ id, status: "running", startedAt: 4_000, attempts: 1,
@@ -525,7 +526,13 @@ describe("abandoned Shared migration recovery", () => {
     op.schedulerHandoff!.sourceRecovery = { migrationId: op.schedulerHandoff!.migrationId, sourceEpoch: 4,
       steps: [{ name: "quiesce-source", status: "done" }] };
     const events: string[] = [];
-    let owner = "shared-blue";
+    let owner = "shared-blue", changed = false;
+    vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async (gatewayId, options) => {
+      if (gatewayId === target && options?.allowUnready) changed = scenario !== "handed-back";
+      return `http://${gatewayId}.svc:3003`;
+    });
+    h.deps.assertMigrationRecoveryAuthority = vi.fn(async () => { if (changed && scenario === "authority-lost") throw new Error("recovery authority changed during target cleanup"); });
+    h.ctx.assertActiveClaim = vi.fn(async () => { if (changed && scenario === "claim-lost") throw new Error("operation re-claimed during target cleanup"); });
     h.deps.prepareBuilderRecoveryTarget = vi.fn(async () => { events.push("reserve"); });
     h.deps.prepareMigrationAgentStores = vi.fn(async (gatewayId, slug, authority) => {
       expect({ slug, uid: authority?.expectedBuilderUid }).toEqual({ slug: "alice", uid: "uid-alice" });
@@ -548,9 +555,17 @@ describe("abandoned Shared migration recovery", () => {
 
     const result = await createMigrateCustomerHandler(h.deps)(op, h.ctx);
 
-    expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
-    expect(events).toEqual(["reserve", `stores:${target}`, "abort:keys", "abort:pre", "abort:final", `unmount:${target}`, "stores:shared-blue", "resume"]);
-    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+    if (scenario === "handed-back") {
+      expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
+      expect(events).toEqual(["reserve", `stores:${target}`, "abort:keys", "abort:pre", "abort:final", `unmount:${target}`, "stores:shared-blue", "resume"]);
+      expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+    } else {
+      expect(result.rolledBack).not.toBe(true);
+      expect(events).toEqual(["reserve", `stores:${target}`]);
+      expect(h.client.scheduler).not.toHaveBeenCalled();
+      expect(h.client.resume).not.toHaveBeenCalled();
+      expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+    }
   });
 
   const previous = { migrationId: "mig-op-1:scheduler:1:claim:1000", fromGatewayId: "shared-blue", toGatewayId: "shared-green", uid: "uid-alice", slug: "alice" };
