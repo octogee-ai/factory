@@ -113,6 +113,7 @@ const PROJECT_AGENT_DENIED_TOOLS = [
   "octogee_status",
   "octogee_chat_search",
   "octogee_chat_history",
+  "octogee_owner_automations",
   "bundle-mcp",
   "automations",
   "skill_workshop",

@@ -170,7 +170,7 @@ describe("buildCustomerAgent", () => {
     }
   });
 
-  it("keeps productivity policy synchronized, excluding setup-only connection requests allowed to project agents", () => {
+  it("keeps productivity policy synchronized, excluding setup-only connection requests and coach-only owner automations", () => {
     const manifest = JSON.parse(readFileSync(
       new URL(
         "../../infra/gateway/extensions/octogee-connector-tools/openclaw.plugin.json",
@@ -180,7 +180,9 @@ describe("buildCustomerAgent", () => {
     )) as { contracts: { tools: string[] } };
 
     expect(PRODUCTIVITY_TOOL_NAMES).toHaveLength(29);
-    expect([...PRODUCTIVITY_TOOL_NAMES].sort()).toEqual(manifest.contracts.tools.filter((tool) => tool !== "octogee_connection_request").sort());
+    expect([...PRODUCTIVITY_TOOL_NAMES].sort()).toEqual(manifest.contracts.tools
+      .filter((tool) => tool !== "octogee_connection_request" && tool !== "octogee_owner_automations").sort());
+    expect(PROJECT_AGENT_DENIED_TOOLS).toContain("octogee_owner_automations");
   });
 });
 

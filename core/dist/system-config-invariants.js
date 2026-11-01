@@ -203,6 +203,7 @@ export const CUSTOMER_WORKFLOW_TOOLS = [
     "octogee_google_sheets_write",
     "octogee_obsidian_read",
     "octogee_obsidian_write",
+    "octogee_owner_automations",
 ];
 export const PRODUCTIVITY_TOOL_NAMES = CUSTOMER_WORKFLOW_TOOLS.filter((tool) => tool.startsWith("octogee_google_") || tool.startsWith("octogee_obsidian_"));
 export const PROJECT_AGENT_ALLOWED_TOOLS = [
@@ -252,6 +253,7 @@ export const PROJECT_AGENT_DENIED_TOOLS = [
     "octogee_status",
     "octogee_chat_search",
     "octogee_chat_history",
+    "octogee_owner_automations",
     "bundle-mcp",
     "automations",
     "skill_workshop",

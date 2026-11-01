@@ -19,6 +19,7 @@ import { mattermostMintRoutes, mmRestProxyHandler } from "./routes/mattermost-pr
 import { createOpenClawRuntimeBrokerRoutes } from "./routes/openclaw-runtime-broker.js";
 import { createConnectorTokenBrokerRoutes } from "./routes/connector-token-broker.js";
 import { createWorkspaceCommitProofBrokerRoutes } from "./routes/workspace-commit-proof-broker.js";
+import { createOwnerAutomationAuthorizationBrokerRoutes } from "./routes/owner-automation-authorization-broker.js";
 import { createByokBrokerRoutes } from "./routes/byok-broker.js";
 import { createAgentProjectRoutes } from "./routes/agent-projects.js";
 import { createAgentProjectRunRoutes, finalizeProjectRun } from "./routes/agent-project-runs.js";
@@ -195,6 +196,7 @@ export const SIDECAR_BROKER_ROUTES = new Set([
   "/internal/connectors/github-project-clone-access",
   "/internal/openclaw/activity/agent-identity",
   "/internal/workspace-commit/verify-proof",
+  "/internal/owner-automations/authorize",
 ]);
 
 export interface CreateAppOptions {
@@ -729,6 +731,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   // so cattle pods do not need Firestore or KMS access to user secrets.
   app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
   app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ db }));
+  app.use("/internal/owner-automations", createOwnerAutomationAuthorizationBrokerRoutes({ db }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).

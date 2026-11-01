@@ -57,4 +57,5 @@ export const OCTOGEE_WORKFLOW_TOOLS = [
   "octogee_google_sheets_write",
   "octogee_obsidian_read",
   "octogee_obsidian_write",
+  "octogee_owner_automations",
 ];

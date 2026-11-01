@@ -403,6 +403,48 @@ describe("customer cron routing quarantine", () => {
     db.close();
   });
 
+  it("keeps an owner automation: isolated, no session key, delivered to the Coach channel it is owned by", () => {
+    const coachChannel = "c".repeat(26);
+    const coachSession = `agent:${ceckertAgent}:mattermost:group:${coachChannel}`;
+    const job = {
+      id: "owner-automation",
+      name: "weekday-brief",
+      displayName: "Weekday morning brief",
+      declarationKey: `octogee:owner-automation:${ceckertAgent}:weekday-brief`,
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      owner: { agentId: ceckertAgent, sessionKey: coachSession, accountId: ceckertAccount },
+      agentId: ceckertAgent,
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      schedule: { kind: "cron", expr: "0 7 * * 1-5", tz: "America/Los_Angeles" },
+      payload: {
+        kind: "agentTurn",
+        message: "Brief me.",
+        toolsAllow: ["octogee_google_calendar_events", "octogee_google_gmail_search", "octogee_google_gmail_get", "octogee_google_tasks_lists", "octogee_google_tasks_list"],
+      },
+      delivery: { mode: "announce", channel: "mattermost", accountId: ceckertAccount, to: `channel:${coachChannel}` },
+      scheduledToolPolicy: { version: 1, mode: "account", ownerSessionKey: coachSession, ownerAccountId: ceckertAccount },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "external", channel: "mattermost" },
+        channelRequester: { version: 1, channel: "mattermost", accountId: ceckertAccount, senderId: "o".repeat(26) },
+      },
+      state: {},
+    };
+    const { root } = fixture([row("owner-automation", { payload_kind: "agentTurn", job_json: JSON.stringify(job) })]);
+
+    const result = run(root, "shared");
+
+    expect(result.status, result.stderr).toBe(0);
+    const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
+    const survivors = db.prepare("SELECT job_id FROM cron_jobs").all().map((entry) => String(entry.job_id));
+    db.close();
+    expect(survivors).toContain("owner-automation");
+  });
+
   it("keeps jobs that deliver to their own session through native user and channel targets", () => {
     const ownerPeer = "o".repeat(26);
     const directSession = `agent:${ceckertAgent}:mattermost:direct:${ownerPeer}`;

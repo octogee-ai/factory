@@ -156,7 +156,7 @@ Skills describe tools.
   `octogee_project_preview`, `octogee_project_run_status`.
 - Board: `octogee_board_list`, `octogee_board_card_create`/`octogee_board_card_read`/`octogee_board_card_update`/`octogee_board_card_move`/`octogee_board_card_comment`.
 - Delivery: `workspace_commit`; `octogee_project_publish` successful builds after Builder approval.
-- Account: `octogee_status`; `octogee_connection_request` offers owner-only connection setup.
+- Account: `octogee_status`; `octogee_connection_request` offers owner-only connection setup; `octogee_owner_automations` schedules briefs.
 - Google (bearer-blind): `octogee_google_calendar_events`/`octogee_google_calendar_create`/`octogee_google_calendar_create_approved`/`octogee_google_calendar_update`/`octogee_google_calendar_update_approved`/`octogee_google_calendar_delete`/`octogee_google_calendar_delete_approved`,
   `octogee_google_gmail_search`/`octogee_google_gmail_get`/`octogee_google_gmail_triage`/`octogee_google_gmail_triage_approved`/`octogee_google_gmail_draft_create`/`octogee_google_gmail_draft_create_approved`/`octogee_google_gmail_draft_send`/`octogee_google_gmail_draft_send_approved`, `octogee_google_drive_read`,
   `octogee_google_docs_read`/`octogee_google_docs_write`,
@@ -175,15 +175,14 @@ and relay its upgrade recommendation.
 
 ## Scheduled Briefs and Reminders
 
-For anything recurring or timed ("every weekday at 7am brief me on today's calendar,
-important unread email and my open tasks"), create an `automations` job: an isolated
-agent turn, `schedule.tz` set to the Builder's time zone from USER.md (unset means
-server UTC), delivered to this DM, and a `payload.toolsAllow` naming only the tools it
-needs (for a brief: `octogee_google_calendar_events`, `octogee_google_gmail_search`,
-`octogee_google_gmail_get`, `octogee_google_tasks_lists`, `octogee_google_tasks_list`;
-never `*`). The Builder's own jobs delivered to this DM can read their Google data; jobs
-created by anyone else or delivered to a channel or project cannot. Changes still need
-the Builder's approval, as in chat.
+For anything recurring ("every weekday at 7am brief me on today's calendar, important
+unread email and my open tasks"), use `octogee_owner_automations` with `action: "save"`:
+a short `key`, a `name`, `schedule.expr` (5-field cron with a fixed minute) with
+`schedule.tz` set to the Builder's time zone from USER.md, and a `prompt` that says in
+full what each run does, since it runs without this conversation. Each run delivers to
+this Coach chat and can read the Builder's Google Calendar, Gmail, and Tasks, read-only.
+Only the Builder can create or change these, from this chat. Save with an existing key
+to change one; `list` shows them and `remove` deletes one by key.
 
 ## Platform Admin
 

@@ -81,7 +81,7 @@ function readPage(value: unknown, offset: number): NativePage {
   return { rows, total: page.total, revision: page.snapshotRevision, next };
 }
 interface Inventory { jobs: AutomationRecord[]; revision: string }
-async function scanInventory(invoke: AutomationInvoke, scope: AutomationScope, base: AutomationRecord): Promise<Inventory | null> {
+async function scanInventory(invoke: AutomationInvoke, keep: (job: AutomationRecord) => boolean, base: AutomationRecord): Promise<Inventory | null> {
   const jobs: AutomationRecord[] = [], ids = new Set<unknown>();
   let offset: number | null = 0, revision = "", total = -1;
   while (offset !== null) {
@@ -92,20 +92,27 @@ async function scanInventory(invoke: AutomationInvoke, scope: AutomationScope, b
     for (const job of page.rows) {
       if (ids.has(job.id)) fail(502, "invalid_native_automation_inventory");
       ids.add(job.id);
-      if (ownsJob(job, scope)) jobs.push(job);
+      if (keep(job)) jobs.push(job);
     }
     offset = page.next;
   }
   const check = readPage(await invoke("cron.list", { ...base, offset: 0 }), 0);
   return check.revision === revision && check.total === total ? { jobs, revision } : null;
 }
-async function inventory(invoke: AutomationInvoke, scope: AutomationScope, filters: AutomationRecord = {}): Promise<Inventory> {
+export async function scanAutomationInventory(
+  invoke: AutomationInvoke,
+  keep: (job: AutomationRecord) => boolean,
+  filters: AutomationRecord = {},
+): Promise<Inventory> {
   const base = { includeDisabled: true, includeDeliveryPreviews: false, ...filters, limit: PAGE_SIZE };
   for (let attempt = 0; attempt < 2; attempt++) {
-    const snapshot = await scanInventory(invoke, scope, base);
+    const snapshot = await scanInventory(invoke, keep, base);
     if (snapshot) return snapshot;
   }
   return fail(409, "automation_inventory_changed");
+}
+function inventory(invoke: AutomationInvoke, scope: AutomationScope, filters: AutomationRecord = {}): Promise<Inventory> {
+  return scanAutomationInventory(invoke, (job) => ownsJob(job, scope), filters);
 }
 function revisionFor(jobs: AutomationRecord[]): string { return createHash("sha256").update(JSON.stringify(jobs)).digest("hex"); }
 function pageParams(params: AutomationRecord): { offset: number; limit: number } {

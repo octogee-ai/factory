@@ -192,6 +192,14 @@ describe("gateway-edge sidecar surface", () => {
     expect(publish.status).toBe(404);
   });
 
+  it("mounts the owner automation deputy on the sidecar alone", async () => {
+    const invalid = { agentId: "octogee-alice-coach", action: "save", params: {} };
+    const sidecar = await request(createApp({ surface: "sidecar" })).post("/internal/owner-automations").send(invalid);
+    expect(sidecar.status).toBe(400);
+    expect(sidecar.body).toEqual({ error: "invalid_owner_automation" });
+    expect((await request(createApp({ surface: "cluster" })).post("/internal/owner-automations").send(invalid)).status).toBe(404);
+  });
+
   it("fronts the Builder computer's style and Desk note for the gateway's own identity only, on the sidecar alone", async () => {
     configureGatewayServiceAccountAuth();
     const sidecar = createApp({ surface: "sidecar" });

@@ -33,6 +33,7 @@ function activeMember(overrides: FakeMember = {}): FakeMember {
 function fakeDb(input: {
   workspaceOwner?: string;
   coachId?: string;
+  coachDm?: Record<string, unknown>;
   channels?: FakeChannel[];
   members?: FakeMember[];
 } = {}) {
@@ -60,12 +61,14 @@ function fakeDb(input: {
   const collectionGroup = vi.fn(() => ({ where }));
   const db = {
     doc: (path: string) => ({
-      get: async () => ({
-        exists: path === "workspaces/eggman" && input.workspaceOwner !== undefined,
-        data: () => path === "workspaces/eggman"
-          ? { ownerUid: input.workspaceOwner, ownerActive: true }
-          : path === "agents/uid-eggman" ? { mattermost: { userId: input.coachId } } : undefined,
-      }),
+      get: async () => path === "workspaces/eggman/channels/coach-dm"
+        ? { exists: input.coachDm !== undefined, data: () => input.coachDm }
+        : {
+          exists: path === "workspaces/eggman" && input.workspaceOwner !== undefined,
+          data: () => path === "workspaces/eggman"
+            ? { ownerUid: input.workspaceOwner, ownerActive: true }
+            : path === "agents/uid-eggman" ? { mattermost: { userId: input.coachId } } : undefined,
+        },
     }),
     collectionGroup,
     collection,
@@ -329,6 +332,27 @@ describe("createGoogleTurnVerifier", () => {
       const verify = createGoogleTurnVerifier(harness.db);
 
       await expect(verify(input(requestContext, overrides))).resolves.toBe(false);
+    });
+
+    it("allows the assigned Builder's own scheduled job delivering to their Coach channel", async () => {
+      const harness = fakeDb({
+        workspaceOwner: "uid-eggman",
+        coachDm: { mattermost: { channelId: CHANNEL_ID } },
+      });
+      const verify = createGoogleTurnVerifier(harness.db);
+
+      await expect(verify(input(scheduled({ to: `channel:${CHANNEL_ID}` })))).resolves.toBe(true);
+    });
+
+    it.each([
+      ["another channel", { mattermost: { channelId: "o".repeat(26) } }, {}],
+      ["an archived Coach channel", { mattermost: { channelId: CHANNEL_ID }, archivedAt: 1 }, {}],
+      ["a collaborator's job", { mattermost: { channelId: CHANNEL_ID } }, { requesterSenderId: MEMBER_ID }],
+    ])("rejects a scheduled channel route to %s", async (_label, coachDm, contextOverrides) => {
+      const harness = fakeDb({ workspaceOwner: "uid-eggman", coachDm, members: [activeMember()] });
+      const verify = createGoogleTurnVerifier(harness.db);
+
+      await expect(verify(input(scheduled({ to: `channel:${CHANNEL_ID}`, ...contextOverrides })))).resolves.toBe(false);
     });
 
     it("rejects a scheduled job when the workspace belongs to another owner", async () => {

@@ -30,7 +30,7 @@ const LIST_PAGE_SIZE = 200;
 const FENCE_WAIT_MS = 30_000;
 const FENCE_POLL_MS = 1_000;
 const TRANSFER_KEY_PREFIX = "octogee:transfer:";
-const CARRIED_DECLARATION_PREFIXES = [TRANSFER_KEY_PREFIX, "octogee:coach-monitor:"] as const;
+const CARRIED_DECLARATION_PREFIXES = [TRANSFER_KEY_PREFIX, "octogee:coach-monitor:", "octogee:owner-automation:"] as const;
 const CRON_ADD_FIELDS = [
   "name", "declarationKey", "displayName", "owner", "agentId", "sessionKey", "description", "enabled", "deleteAfterRun",
   "schedule", "pacing", "activeHours", "idleOnly", "trigger", "sessionTarget", "wakeMode", "payload",

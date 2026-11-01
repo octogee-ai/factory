@@ -1024,6 +1024,7 @@ describe("tier-derived coach tools — house_only trims the model-visible tool s
         "octogee_google_sheets_write",
         "octogee_obsidian_read",
         "octogee_obsidian_write",
+        "octogee_owner_automations",
         "octogee_project_create",
         "octogee_project_list",
         "workspace_commit",

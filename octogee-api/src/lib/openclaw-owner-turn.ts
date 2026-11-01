@@ -151,7 +151,11 @@ export function ownerWorkspaceRequestContext(req: Request): OwnerWorkspaceReques
   const queryValue = req.query?.requestContext;
   const bodyHasContext = body && Object.hasOwn(body, "requestContext");
   if (bodyHasContext && queryValue !== undefined) return null;
-  const context = record(body?.requestContext ?? parseQueryContext(queryValue));
+  return parseOwnerWorkspaceRequestContext(body?.requestContext ?? parseQueryContext(queryValue));
+}
+
+export function parseOwnerWorkspaceRequestContext(value: unknown): OwnerWorkspaceRequestContext | null {
+  const context = record(value);
   if (isScheduledRequestContextRecord(context)) {
     const route = parseRoute(context.to);
     return route
@@ -259,6 +263,64 @@ export function isOwnerDirectRoute(
     && assignedMattermostUserId(assignedData) === context.requesterSenderId;
 }
 
+export async function activeCoachChannelId(db: Firestore, slug: string): Promise<string | null> {
+  const snap = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
+  const data = snap.exists ? snap.data() ?? {} : null;
+  const channelId = data ? readPath(data, "mattermost.channelId") : undefined;
+  return data && channelIsActive(data) && typeof channelId === "string" && MATTERMOST_ID_RE.test(channelId)
+    ? channelId
+    : null;
+}
+
+export async function isOwnerScheduledRoute(
+  db: Firestore,
+  agentId: string,
+  context: Pick<OwnerWorkspaceRequestContext, "routeKind" | "routeId" | "requesterSenderId">,
+  assignedData: Record<string, unknown>,
+): Promise<boolean> {
+  if (isOwnerDirectRoute(context, assignedData)) return true;
+  const parsed = parseAgentId(agentId);
+  return parsed.kind === "coach"
+    && context.routeKind === "channel"
+    && assignedMattermostUserId(assignedData) === context.requesterSenderId
+    && context.routeId === await activeCoachChannelId(db, parsed.username);
+}
+
+export interface OwnerAutomationTurn {
+  ownerMattermostUserId: string;
+  coachChannelId: string;
+}
+
+export async function verifyOwnerAutomationTurn(
+  db: Firestore,
+  input: {
+    agentId: string;
+    ownerUid: string;
+    assignedData: Record<string, unknown>;
+    requestContext: unknown;
+  },
+): Promise<OwnerAutomationTurn | null> {
+  const parsed = parseAgentId(input.agentId);
+  const context = parseOwnerWorkspaceRequestContext(input.requestContext);
+  const ownerMattermostUserId = assignedMattermostUserId(input.assignedData);
+  if (
+    parsed.kind !== "coach"
+    || context?.origin !== "turn"
+    || context.accountId !== workspaceCoachMmUsername(parsed.username)
+    || input.assignedData.workspaceId !== parsed.username
+    || !ownerMattermostUserId
+    || context.requesterSenderId !== ownerMattermostUserId
+  ) return null;
+  const directRoute = context.routeKind === "user" && context.routeId === ownerMattermostUserId;
+  const channelRoute = context.routeKind === "channel" && context.routeId === context.nativeChannelId;
+  if (!directRoute && !channelRoute) return null;
+  if (!await activeOwnedWorkspace(db, parsed.username, input.ownerUid)) return null;
+  const coachChannelId = await activeCoachChannelId(db, parsed.username);
+  return coachChannelId === context.nativeChannelId
+    ? { ownerMattermostUserId, coachChannelId }
+    : null;
+}
+
 export function createGoogleTurnVerifier(
   db: Firestore,
 ): OwnerWorkspaceTurnVerifier {
@@ -276,7 +338,7 @@ export function createGoogleTurnVerifier(
     if (!workspace.exists || workspace.data()?.ownerUid !== ownerUid
       || workspace.data()?.ownerActive !== true) return false;
 
-    if (context.origin === "scheduled") return isOwnerDirectRoute(context, assignedData);
+    if (context.origin === "scheduled") return isOwnerScheduledRoute(db, agentId, context, assignedData);
 
     const channelName = await workspaceChannelName(
       db,

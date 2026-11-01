@@ -174,7 +174,7 @@ describe("schedule snapshot", () => {
   it("carries the job's account-scoped tool policy and authenticated creator so restore keeps its authority", async () => {
     const scheduledToolPolicy = { version: 1, mode: "account", ownerSessionKey: `agent:${ALICE}:mattermost:channel:abc`, ownerAccountId: "alice-coach" };
     const toolsAllowProvenance = { version: 1, source: "authenticated-requester",
-      channelRequester: { channel: "mattermost", accountId: "alice-coach", senderId: "mm-alice", to: "channel:abc" } };
+      channelRequester: { version: 1, channel: "mattermost", accountId: "alice-coach", senderId: "mm-alice" } };
     const gateway = fakeGateway([listedJob("a1", { scheduledToolPolicy, toolsAllowProvenance })]);
 
     const [record] = (await snapshotSchedules(gateway.call, ALICE_AGENTS, vi.fn())).records;
@@ -202,6 +202,26 @@ describe("schedule snapshot", () => {
 
     expect(skipped).toEqual([]);
     expect(target.store.map(job => [job.agentId, job.declarationKey])).toEqual([[ALICE, key]]);
+  });
+
+  it("carries an owner automation with its key and authenticated creator", async () => {
+    const key = `octogee:owner-automation:${ALICE}:weekday-brief`;
+    const ownerSessionKey = `agent:${ALICE}:mattermost:group:abc`;
+    const toolsAllowProvenance = { version: 1, source: "authenticated-requester",
+      callerOrigin: { kind: "external", channel: "mattermost" },
+      channelRequester: { version: 1, channel: "mattermost", accountId: "alice-coach", senderId: "mm-alice" } };
+    const source = fakeGateway([listedJob("brief", {
+      declarationKey: key,
+      scheduledToolPolicy: { version: 1, mode: "account", ownerSessionKey, ownerAccountId: "alice-coach" },
+      toolsAllowProvenance,
+    })]);
+    const { records, skipped } = await snapshotSchedules(source.call, ALICE_AGENTS, vi.fn());
+    const target = fakeGateway([]);
+
+    await expect(restoreSchedules(target.call, ALICE_AGENTS, records, vi.fn())).resolves.toEqual({ created: 1, existing: 0, failed: [] });
+
+    expect(skipped).toEqual([]);
+    expect(target.call).toHaveBeenCalledWith("cron.add", expect.objectContaining({ declarationKey: key, toolsAllowProvenance }));
   });
 
   it("skips jobs that cannot move safely and leaves them running", async () => {

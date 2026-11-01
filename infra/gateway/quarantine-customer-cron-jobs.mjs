@@ -233,7 +233,7 @@ function jobAuthorityReason(row, job, authority) {
     owner.sessionKey !== row.owner_session_key ||
     owner.accountId !== accountId;
   if (ownerMismatch) return "job-owner-mismatch";
-  if (job.agentId !== effectiveAgentId || job.sessionKey !== row.session_key) {
+  if (job.agentId !== effectiveAgentId || (job.sessionKey ?? null) !== row.session_key) {
     return "job-routing-mismatch";
   }
   const scheduledPolicy = objectValue(job.scheduledToolPolicy);
