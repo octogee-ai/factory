@@ -233,7 +233,8 @@ RUN /usr/local/bin/verify-runtime-image "$IMAGE_PROFILE" \
 
 COPY infra/gateway/.bashrc /etc/skel/.bashrc
 COPY infra/gateway/.bashrc /home/node/.bashrc
-RUN chown node:node /home/node/.bashrc
+RUN chown node:node /home/node/.bashrc \
+    && install -d -o node -g node /home/node/.cache
 
 # Restore working directory + non-root user
 WORKDIR /home/node
