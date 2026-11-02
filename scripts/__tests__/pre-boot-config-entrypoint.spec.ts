@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { assertBuilderPostgresSelection } from "../lib/builder-store-migration.js";
 
 const temporaryDirectories: string[] = [];
 const scriptsDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -18,6 +20,35 @@ afterEach(() => {
 });
 
 describe("pre-boot config entrypoint", () => {
+  it.each([undefined, { engine: "postgres" }])("starts a fresh PostgreSQL Builder whose anchor precedes pre-boot config (database=%j)", async database => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-pg-preboot-"));
+    temporaryDirectories.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify({ database }));
+    fs.mkdirSync(path.join(root, "state"));
+    const anchorPath = path.join(root, "state", "openclaw.sqlite");
+    const anchor = new DatabaseSync(anchorPath);
+    try {
+      anchor.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)");
+      anchor.exec("INSERT INTO openclaw_engine_anchor VALUES ('92c817cc-770f-466d-b4a6-4e9b02998363', 'postgres', 'octogee_state_92c817cc770f466d')");
+    } finally { anchor.close(); }
+    const before = fs.readFileSync(anchorPath);
+    const env = {
+      ...process.env, HOME: root, GATEWAY_CLASS: "builder", GATEWAY_RUNTIME_KIND: "cluster",
+      OPENCLAW_DIR: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath,
+    };
+    const result = spawnSync(tsx, [entrypoint, "--defer-builder-store-migration"], { encoding: "utf8", env });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Builder stores require migration");
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8")).database).toEqual({
+      engine: "postgres", postgres: {
+        connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee",
+      },
+    });
+    await expect(assertBuilderPostgresSelection(env)).resolves.toBeUndefined();
+    expect(fs.readFileSync(anchorPath)).toEqual(before);
+  });
+
   it("exits nonzero when the durable OpenClaw config is malformed", () => {
     const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "octogee-preboot-fatal-"));
     temporaryDirectories.push(openclawDir);

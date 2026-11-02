@@ -333,9 +333,12 @@ describe("system_config restore", () => {
     expect(applyAgentStoreDatabasePatch(config, env, "anchor")).toBe(false);
   });
 
-  it.each([undefined, { engine: "sqlite", families: { state: { engine: "postgres" } } }])(
-    "preserves retained database selection %j when restoring with the PostgreSQL Builder template",
-    async database => {
+  it.each([
+    { database: undefined, stateStore: "sqlite" as const },
+    { database: { engine: "sqlite", families: { state: { engine: "postgres" } } }, stateStore: "anchor" as const },
+  ])(
+    "preserves retained SQLite selection when restoring with the PostgreSQL Builder template: %j",
+    async ({ database, stateStore }) => {
       writeJson(path.join(repoDir, "openclaw.json"), database ? { database } : {});
       const env = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
       await restoreSystemConfigForSlug("acme", {
@@ -346,7 +349,8 @@ describe("system_config restore", () => {
       });
       const config = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
       expect(config.database).toEqual(database);
-      expect(() => applyAgentStoreDatabasePatch(config, env, "anchor")).toThrow("database port --family");
+      expect(() => applyAgentStoreDatabasePatch(config, env, stateStore)).toThrow("database port --family");
+      expect(config.database).toEqual(database);
     },
   );
 

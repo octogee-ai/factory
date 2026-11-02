@@ -1163,6 +1163,7 @@ const RSYNC_BIN = "/usr/bin/rsync";
 
 interface RSyncImportSession {
   key: string;
+  transferAttemptId?: string;
   migrationId: string;
   slug: string;
   mode: MigrationTransferMode;
@@ -1177,7 +1178,9 @@ interface RSyncImportSession {
 }
 
 const rsyncImportSessions = new Map<string, RSyncImportSession>();
+const rsyncImportAttempts = new Map<string, { attempt: number; id: string }>();
 let preparingRsyncImport = false;
+let abortingRsyncImport = false;
 const finishingRsyncImports = new Set<string>();
 
 function rsyncSessionKey(
@@ -1264,6 +1267,42 @@ function validateRsyncCredential(value: unknown, name: string, res: Response): s
     return null;
   }
   return value;
+}
+
+function validateTransferAttempt(value: unknown, res: Response): boolean {
+  return value === undefined || validateRsyncCredential(value, "transferAttemptId", res) !== null;
+}
+
+function ownsRsyncSession(session: RSyncImportSession | undefined, attemptId: string | undefined, res: Response): boolean {
+  if (session?.transferAttemptId === attemptId) return true;
+  res.status(409).json({ error: "rsync transfer attempt does not own the import session" });
+  return false;
+}
+
+function admitRsyncPrepareAttempt(key: string, body: PrepareRsyncImportRequestBody, res: Response): boolean {
+  const prior = rsyncImportAttempts.get(key);
+  if (body.transferAttemptId === undefined && body.transferAttempt === undefined && !prior) return true;
+  if (prior && body.transferAttemptId === undefined) {
+    res.status(409).json({ error: "transfer attempt has already been superseded or admitted" });
+    return false;
+  }
+  if (!body.transferAttemptId || !Number.isSafeInteger(body.transferAttempt) || body.transferAttempt! < 1) {
+    res.status(400).json({ error: "transfer attempt requires a positive sequence and ID" });
+    return false;
+  }
+  if (prior && body.transferAttempt! <= prior.attempt) {
+    res.status(409).json({ error: "transfer attempt has already been superseded or admitted" });
+    return false;
+  }
+  rsyncImportAttempts.set(key, { attempt: body.transferAttempt!, id: body.transferAttemptId });
+  return true;
+}
+
+function ownsRsyncCleanup(key: string, attemptId: string | undefined, res: Response): boolean {
+  const id = rsyncImportAttempts.get(key)?.id ?? rsyncImportSessions.get(key)?.transferAttemptId;
+  if (id === undefined || id === attemptId) return true;
+  res.status(409).json({ error: "rsync transfer attempt does not own the import session" });
+  return false;
 }
 
 function validateRsyncTargetHost(value: unknown, res: Response): string | null {
@@ -1654,6 +1693,7 @@ function parseRsyncPhaseRequest<
     rpcPhase?: unknown;
     mode?: unknown;
     configTransferMode?: unknown;
+    transferAttemptId?: unknown;
   },
 >(
   req: Request,
@@ -1665,6 +1705,7 @@ function parseRsyncPhaseRequest<
   const body = parseAndVerifyJsonBody<T>(req, res, deps, log);
   if (!body) return null;
   if (!validateRsyncRpcPhase(body.rpcPhase, phase, res)) return null;
+  if (!validateTransferAttempt(body.transferAttemptId, res)) return null;
   const mode = validateTransferMode(body.mode, res);
   if (!mode) return null;
   const configTransferMode = validateRsyncConfigTransferMode(body.configTransferMode, mode, res);
@@ -1757,11 +1798,17 @@ async function prepareRsyncImportDirectories(
 }
 
 export function migrationImportBusy(): boolean {
-  return preparingRsyncImport || finishingRsyncImports.size > 0;
+  return preparingRsyncImport || abortingRsyncImport || finishingRsyncImports.size > 0;
 }
 
 export function ownsFinalMigrationImport(migrationId: string, slug: string): boolean {
   return !preparingRsyncImport && finishingRsyncImports.size === 1 && finishingRsyncImports.has(rsyncSessionKey(migrationId, slug, "final"));
+}
+
+function validateRsyncSourceAddress(sourcePodIp: string | undefined, res: Response): boolean {
+  if (sourcePodIp === undefined || net.isIP(sourcePodIp)) return true;
+  res.status(400).json({ error: "invalid sourcePodIp" });
+  return false;
 }
 
 export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
@@ -1779,18 +1826,16 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
     const credentials = validateRsyncTransferCredentials(body, res);
     if (!credentials) return;
     const { transferUser, transferKey } = credentials;
-    if (body.sourcePodIp !== undefined && !net.isIP(body.sourcePodIp)) {
-      res.status(400).json({ error: "invalid sourcePodIp" });
-      return;
-    }
+    if (!validateRsyncSourceAddress(body.sourcePodIp, res)) return;
 
     if (migrationImportBusy()) {
       res.status(409).json({ error: "migration import preparation is already in progress" });
       return;
     }
-    preparingRsyncImport = true;
     const port = rsyncPortFromDeps(deps);
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
+    if (!admitRsyncPrepareAttempt(key, body, res)) return;
+    preparingRsyncImport = true;
     let activation: ConfiguredBuilderActivation | null = null;
     try {
       activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
@@ -1819,6 +1864,7 @@ export function createPrepareRsyncImportHandler(deps: MigrationHandlerDeps): Req
       });
       const session: RSyncImportSession = {
         key,
+        transferAttemptId: body.transferAttemptId,
         migrationId: body.migrationId,
         slug: body.slug,
         mode,
@@ -2563,6 +2609,7 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
     if (!loadStrategy) return;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
     const session = rsyncImportSessions.get(key);
+    if (!ownsRsyncSession(session, body.transferAttemptId, res)) return;
     if (!session) {
       res.status(404).json({ error: "rsync import session not found" });
       return;
@@ -2643,43 +2690,47 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
 export function createAbortRsyncImportHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
-    const body = parseAndVerifyJsonBody<AbortRsyncImportRequestBody>(
-      req,
-      res,
-      deps,
-      log,
-    );
-    if (!body) return;
-    if (!validateRsyncRpcPhase(body.rpcPhase, "abort-rsync-import", res)) return;
-    const mode = validateTransferMode(body.mode, res);
-    if (!mode) return;
-    const configTransferMode = validateRsyncConfigTransferMode(body.configTransferMode, mode, res);
-    if (!configTransferMode) return;
-    if (!requireConfiguredBuilderSystemConfigTransfer(body.slug, configTransferMode, res)) return;
+    const parsed = parseRsyncPhaseRequest<AbortRsyncImportRequestBody>(req, res, deps, "abort-rsync-import", log);
+    if (!parsed) return;
+    const { body, mode, configTransferMode } = parsed;
     const key = rsyncSessionKey(body.migrationId, body.slug, mode);
-    await stopRsyncSession(rsyncImportSessions.get(key));
-    await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, configTransferMode));
-    let activation: ConfiguredBuilderActivation | null = null;
-    try {
-      activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
-      if (activation && !await releaseAbortedBuilderImport(deps, activation)) {
-        log(`[migration-rsync] abort-import left the live Builder untouched: import was never admitted migrationId=${body.migrationId} slug=${body.slug}`);
-        res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
-        return;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`🔴 [migration-rsync] abort-import failed migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
-      res.status(500).json({ error: "abort-import failed", message });
+    if (migrationImportBusy()) {
+      res.status(409).json({ error: "migration import is still in progress" });
       return;
     }
-    if (activation || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
-      deps.adapter.clearMountMarker?.(body.slug);
-      deps.adapter.clearCustomerMigratingIn?.(body.slug);
-      deps.adapter.onUnmounted?.(body.slug);
+    if (!ownsRsyncCleanup(key, body.transferAttemptId, res)) return;
+    if (!rsyncImportSessions.has(key) && rsyncImportSessions.size > 0) {
+      res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
+      return;
     }
-    log(`🟢 [migration-rsync] abort-import migrationId=${body.migrationId} slug=${body.slug}`);
-    res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
+    abortingRsyncImport = true;
+    try {
+      await stopRsyncSession(rsyncImportSessions.get(key));
+      await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, configTransferMode));
+      let activation: ConfiguredBuilderActivation | null = null;
+      try {
+        activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
+        if (activation && !await releaseAbortedBuilderImport(deps, activation)) {
+          log(`[migration-rsync] abort-import left the live Builder untouched: import was never admitted migrationId=${body.migrationId} slug=${body.slug}`);
+          res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
+          return;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`🔴 [migration-rsync] abort-import failed migrationId=${body.migrationId} slug=${body.slug}: ${message}`, { status: "failed" });
+        res.status(500).json({ error: "abort-import failed", message });
+        return;
+      }
+      if (activation || configTransferMode === BUILDER_SYSTEM_CONFIG_TRANSFER) {
+        deps.adapter.clearMountMarker?.(body.slug);
+        deps.adapter.clearCustomerMigratingIn?.(body.slug);
+        deps.adapter.onUnmounted?.(body.slug);
+      }
+      log(`🟢 [migration-rsync] abort-import migrationId=${body.migrationId} slug=${body.slug}`);
+      res.status(200).json({ migrationId: body.migrationId, slug: body.slug, imported: false });
+    } finally {
+      abortingRsyncImport = false;
+    }
   });
 }
 

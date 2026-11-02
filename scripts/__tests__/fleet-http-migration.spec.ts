@@ -1558,6 +1558,78 @@ const adapter = mkAdapter();
 });
 
 describe("queued-rsync migration control handlers", () => {
+  it("serializes abort cleanup with prepare and remembers superseded attempts after cleanup", async () => {
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "rsync-abort-fence-"));
+    migrationTempRoots.push(importDir);
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const close = vi.fn(async () => {}).mockImplementationOnce(() => blocked);
+    const deps = mkDeps({ adapter: mkAdapter({ prepareImportDir: vi.fn(async () => importDir) }),
+      waitForRsyncReady: vi.fn(async () => {}),
+      openMigrationTlsEndpoint: vi.fn(async () => ({ certificatePem: TARGET_CERTIFICATE_PEM, close })),
+    });
+    const prepare = { migrationId: "abort-cleanup-fence", slug: "chris", mode: "pre", rpcPhase: "prepare-rsync-import",
+      transferAttempt: 1, transferAttemptId: "first", transferUser: "migration", transferKey: "a".repeat(64) };
+    const send = async (handler: ReturnType<typeof createPrepareRsyncImportHandler>, body: object) => {
+      const response = mkResponse();
+      await handler(mkRequest(body, { signature: signForPod(prepare.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      return response;
+    };
+    spawnMock.mockImplementation(() => mkFakeChild());
+    const prepareHandler = createPrepareRsyncImportHandler(deps), abortHandler = createAbortRsyncImportHandler(deps);
+    const replacement = { ...prepare, transferAttempt: 2, transferAttemptId: "replacement" };
+    expect((await send(prepareHandler, prepare)).getStatus()).toBe(200);
+    const abort = send(abortHandler, { ...prepare, rpcPhase: "abort-rsync-import" });
+    try {
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      expect((await send(prepareHandler, replacement)).getStatus()).toBe(409);
+      expect(deps.adapter.prepareImportDir).toHaveBeenCalledTimes(1);
+      release();
+      expect((await abort).getStatus()).toBe(200);
+      expect((await send(abortHandler, { ...prepare, rpcPhase: "abort-rsync-import" })).getStatus()).toBe(200);
+      expect((await send(prepareHandler, prepare)).getStatus()).toBe(409);
+      expect((await send(prepareHandler, replacement)).getStatus()).toBe(200);
+      expect((await send(abortHandler, { ...prepare, rpcPhase: "abort-rsync-import" })).getStatus()).toBe(409);
+      expect(deps.adapter.prepareImportDir).toHaveBeenCalledTimes(2);
+    } finally {
+      release(); await abort;
+      await send(abortHandler, { ...replacement, rpcPhase: "abort-rsync-import" });
+    }
+  });
+
+  it.each(["prepare-rsync-import", "finish-rsync-import", "abort-rsync-import"] as const)("rejects a stale %s without touching the replacement transfer session", async rpcPhase => {
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "rsync-attempt-fence-"));
+    migrationTempRoots.push(importDir);
+    const closeTransport = vi.fn(async () => undefined);
+    const deps = mkDeps({
+      adapter: mkAdapter({ prepareImportDir: vi.fn(async () => importDir) }),
+      waitForRsyncReady: vi.fn(async () => undefined),
+      openMigrationTlsEndpoint: vi.fn(async () => ({ certificatePem: TARGET_CERTIFICATE_PEM, close: closeTransport })),
+    });
+    const prepare = { migrationId: `attempt-fence-${rpcPhase}`, slug: "chris", mode: "pre", rpcPhase: "prepare-rsync-import",
+      transferAttempt: 2, transferAttemptId: "new-attempt", transferUser: "migration", transferKey: "a".repeat(64) };
+    const send = async (handler: ReturnType<typeof createPrepareRsyncImportHandler>, body: object) => {
+      const response = mkResponse();
+      await handler(mkRequest(body, { signature: signForPod(prepare.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      return response;
+    };
+    const daemon = mkFakeChild();
+    spawnMock.mockReturnValueOnce(daemon);
+    expect((await send(createPrepareRsyncImportHandler(deps), prepare)).getStatus()).toBe(200);
+    try {
+      for (const transferAttemptId of ["old-attempt", undefined]) {
+        const handler = rpcPhase === "prepare-rsync-import" ? createPrepareRsyncImportHandler(deps)
+          : rpcPhase === "finish-rsync-import" ? createFinishRsyncImportHandler(deps) : createAbortRsyncImportHandler(deps);
+        const response = await send(handler, { ...prepare, rpcPhase, transferAttemptId, transferAttempt: transferAttemptId ? 1 : undefined });
+        expect(response.getStatus()).toBe(409);
+        expect(response.getBody()).toMatchObject({ error: expect.stringContaining("attempt") });
+        expect(daemon.kill).not.toHaveBeenCalled();
+      }
+    } finally {
+      await send(createAbortRsyncImportHandler(deps), { ...prepare, rpcPhase: "abort-rsync-import" });
+    }
+  });
+
   it("createExportPathsHandler filters key-only mode down to the customer key dir", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [
@@ -5447,6 +5519,10 @@ describe("prepared migration staging", () => {
       await vi.waitFor(() => expect(closeTransport).toHaveBeenCalledTimes(2));
       expect(finished.getBody()).toBeUndefined();
       expect(nextPreparation).toBeUndefined();
+      const abort = { ...finish, rpcPhase: "abort-rsync-import" };
+      const abortResponse = mkResponse();
+      await createAbortRsyncImportHandler(deps)(mkRequest(abort, { signature: signForPod(migrationId, JSON.stringify(abort)) }), abortResponse.res, vi.fn());
+      expect(abortResponse.getStatus()).toBe(409);
       if (disconnected) finished.res.emit("close");
     } finally {
       releaseCleanup();

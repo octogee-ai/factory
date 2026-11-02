@@ -273,6 +273,7 @@ import {
   isCustomerMigrationV2Transition,
 } from "@octogee/core/customer-migration-v2";
 import { abortRetainedSourceImport, createRsyncMigrationTransfer, createSubprocessCommandRunner, resolveMigrationRecoveryUrl } from "./lib/migration-rsync-transfer.js";
+import { readTransferAttemptForCleanup } from "./lib/migration-transfer-lease.js";
 import {
   beginCustomerRestore,
   acknowledgeCustomerRestore,
@@ -3046,6 +3047,7 @@ function createMigrationClientBuilder(
       resolveGatewayUrl: resolveSync,
       log: logFn,
       prepareAgentStores,
+      resolveTransferAttemptForCleanup: input => readTransferAttemptForCleanup({ db, namespace: NAMESPACE, now: Date.now, runCommand: createSubprocessCommandRunner() }, input),
       transferState: async (request) => {
         if (request.mode === "final" && !prepareAgentStores) throw new Error("Final agent-store transfer requires ownership preparation");
         return createRsyncMigrationTransfer({

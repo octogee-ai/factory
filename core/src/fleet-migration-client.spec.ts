@@ -48,6 +48,18 @@ function captureFetch(handler: (call: CapturedCall) => Response | Promise<Respon
 const PRIVATE_KEY = FLEET_KEY_PAIR.privateKey;
 
 describe("MigrationClient abandoned import cleanup", () => {
+  it("resolves abandoned attempt ownership before signing recovery cleanup", async () => {
+    const { calls, fakeFetch } = captureFetch(() => Response.json({ migrationId: "mig-1", slug: "alice", imported: false }));
+    const resolveTransferAttemptForCleanup = vi.fn(async () => "abandoned-attempt");
+    const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://target", fetch: fakeFetch,
+      transferState: transferNotUnderTest, resolveTransferAttemptForCleanup });
+    await client.abortImport({ gatewayId: "target", migrationId: "mig-1", slug: "alice", mode: "final" });
+    expect(resolveTransferAttemptForCleanup).toHaveBeenCalledWith({ gatewayId: "target", migrationId: "mig-1", slug: "alice", mode: "final" });
+    expect(JSON.parse(calls[0].body!)).toMatchObject({ transferAttemptId: "abandoned-attempt" });
+    resolveTransferAttemptForCleanup.mockRejectedValueOnce(new Error("newer owner is running"));
+    await expect(client.abortImport({ gatewayId: "target", migrationId: "mig-1", slug: "alice", mode: "final" })).rejects.toThrow("newer owner");
+    expect(calls).toHaveLength(1);
+  });
   it("does not accept an unmount acknowledgement for another migration", async () => {
     const client = createMigrationClient({ privateKey: PRIVATE_KEY, resolveGatewayUrl: () => "http://target", fetch: captureFetch(() => Response.json({ migrationId: "other", slug: "alice", unmounted: true })).fakeFetch, transferState: transferNotUnderTest });
     await expect(client.unmount({ gatewayId: "target", migrationId: "mig-1", slug: "alice" })).rejects.toThrow(/acknowledgement/);

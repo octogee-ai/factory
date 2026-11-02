@@ -69,14 +69,15 @@ describe("fleet controller port surface", () => {
     vi.unstubAllEnvs();
   });
 
-  it("answers the unauthenticated probe with liveness only — no roster, no tenant identity", async () => {
+  it("answers the unauthenticated probe with liveness and capabilities but no roster or tenant identity", async () => {
     controller = await startFleetController(controllerOpts());
 
     const res = await fetch(`http://127.0.0.1:${controller.port}/health`);
     const body = await res.json() as Record<string, unknown>;
 
     expect(res.status).toBe(200);
-    expect(Object.keys(body).sort()).toEqual(["podUid", "startedAt", "status"]);
+    expect(Object.keys(body).sort()).toEqual(["podUid", "rsyncAttemptFencing", "startedAt", "status"]);
+    expect(body.rsyncAttemptFencing).toBe(true);
     expect(body.podUid).toBe("pod-uid-1");
     expect(JSON.stringify(body)).not.toContain(GATEWAY_ID);
   });

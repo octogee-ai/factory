@@ -762,7 +762,7 @@ export function applyPreBootPatches(
 
 const BUILDER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
   absent: "Builder state family on PostgreSQL (fresh store)",
-  anchor: "Builder state family on PostgreSQL (reattaching its anchor)",
+  anchor: "Builder state family on PostgreSQL (anchor present)",
   sqlite: "Retained SQLite state requires the native PostgreSQL port before startup",
 };
 
@@ -782,7 +782,7 @@ export function applyAgentStoreDatabasePatch(
   const families = isPlainObject(current.families) ? current.families : {};
   let sqliteFamily: string | undefined;
   if (stateStore === "sqlite") sqliteFamily = "state";
-  else if (stateStore === "anchor" || Object.hasOwn(config, "database")) {
+  else if (Object.hasOwn(config, "database")) {
     sqliteFamily = ["state", "agent", "workboard", "logbook", "team-reports"].find(family => {
       const override = isPlainObject(families[family]) ? families[family].engine : undefined;
       return (override ?? current.engine ?? "sqlite") !== "postgres";

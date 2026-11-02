@@ -54,6 +54,7 @@ export interface FleetHealthResponse {
     status: string;
     podUid: string | null;
     startedAt: number;
+    rsyncAttemptFencing: boolean;
 }
 export interface FleetStateRequestBody {
     requestId: string;
@@ -155,6 +156,8 @@ export interface ActivateImportRequestBody extends MigrationRequestBody {
 }
 export type RsyncMigrationRpcPhase = "prepare-rsync-import" | "push-rsync-state" | "finish-rsync-import" | "abort-rsync-import";
 export interface PrepareRsyncImportRequestBody extends MigrationRequestBody {
+    transferAttempt?: number;
+    transferAttemptId?: string;
     rpcPhase: "prepare-rsync-import";
     mode: MigrationTransferMode;
     configTransferMode?: MigrationConfigTransferMode;
@@ -183,12 +186,14 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
     includeActivationManifest?: boolean;
 }
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
+    transferAttemptId?: string;
     rpcPhase: "finish-rsync-import";
     mode: MigrationTransferMode;
     configTransferMode?: MigrationConfigTransferMode;
     loadStrategy?: MigrationLoadStrategy;
 }
 export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
+    transferAttemptId?: string;
     rpcPhase: "abort-rsync-import";
     mode: MigrationTransferMode;
     configTransferMode?: MigrationConfigTransferMode;

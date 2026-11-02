@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
 import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
+import { readTransferAttemptForCleanup } from "../lib/migration-transfer-lease.js";
 import {
   createRsyncMigrationTransfer,
   migrationTransferTaskId,
@@ -124,6 +125,7 @@ function makeFetch(
 ): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith("/health")) return jsonResponse({ status: "ready", rsyncAttemptFencing: true });
     calls.push(url);
     const body = JSON.parse(String(init?.body ?? "{}")) as { migrationId: string; slug: string };
     if (url.includes("/prepare-rsync-import/")) {
@@ -185,6 +187,127 @@ describe("migrationTransferTaskId", () => {
 });
 
 describe("createRsyncMigrationTransfer", () => {
+  const evictedTask = () => ({
+    kind: "gateway-rsync-transfer", migrationId: "evicted", slug: "alice", mode: "final",
+    sourceGatewayId: "gw-from", targetGatewayId: "gw-to", status: "running", attempt: 1,
+    leaseOwner: "old-process", leasePod: { name: "old-controller", uid: "old-pod-uid" },
+    attemptId: "old-attempt", leaseExpiresAt: 4_000_000, createdAt: 1, updatedAt: 1, startedAt: 1,
+  });
+
+  function evictionFixture(observe: () => Promise<{ stdout: string; stderr: string; code: number }>, supportsFencing = true) {
+    const store: Store = { evicted__final: evictedTask() };
+    const calls: string[] = [];
+    const fallback = makeCommandRunner([]);
+    const runCommand: CommandRunner = async (command, args, options) => {
+      if (args.includes("old-controller")) return observe();
+      return fallback(command, args, options);
+    };
+    const transfer = createRsyncMigrationTransfer({
+      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
+      fetch: (async (url, init) => !supportsFencing && String(url).endsWith("/health") ? jsonResponse({ status: "ready" }) : makeFetch(calls)(url, init)) as typeof globalThis.fetch,
+      runCommand, now: () => 10_000,
+      controllerPod: { name: "new-controller", uid: "new-pod-uid" },
+    });
+    const run = () => transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
+    return { store, calls, run };
+  }
+
+  it.each(["", JSON.stringify({ metadata: { name: "old-controller", uid: "replacement-uid" } })])("recovers an unexpired transfer when its exact controller pod is gone (%s)", async stdout => {
+    const h = evictionFixture(async () => ({ stdout, stderr: "", code: 0 }));
+    await expect(h.run()).resolves.toMatchObject({ imported: true });
+    expect(h.store.evicted__final).toMatchObject({ status: "succeeded", attempt: 2 });
+    expect(h.calls.some(url => url.includes("/finish-rsync-import/"))).toBe(true);
+  });
+
+  it.each([{}, { deletionTimestamp: "2026-11-02T03:05:34Z" }])("preserves a transfer whose owner pod still exists, including termination (%j)", async metadata => {
+    const h = evictionFixture(async () => ({ stdout: JSON.stringify({ metadata: { name: "old-controller", uid: "old-pod-uid", ...metadata } }), stderr: "", code: 0 }));
+    await expect(h.run()).rejects.toThrow("already running");
+    expect(h.store.evicted__final).toEqual(evictedTask());
+    expect(h.calls).toEqual([]);
+  });
+
+  it.each([{ stdout: "", stderr: "API unavailable", code: 1 }, { stdout: "{}", stderr: "", code: 0 }])("fails closed when controller absence cannot be established (%j)", async result => {
+    const h = evictionFixture(async () => result);
+    await expect(h.run()).rejects.toThrow(/controller pod|owner pod/);
+    expect(h.store.evicted__final).toEqual(evictedTask());
+    expect(h.calls).toEqual([]);
+  });
+
+  it.each(["running", "succeeded", "failed"])("rechecks the lease after observing the owner pod even if a competing claim is %s", async status => {
+    const h = evictionFixture(async () => {
+      h.store.evicted__final = { ...evictedTask(), status, attempt: 2, attemptId: "competing-attempt" };
+      if (status !== "running") delete h.store.evicted__final.leaseExpiresAt;
+      return { stdout: "", stderr: "", code: 0 };
+    });
+    await expect(h.run()).rejects.toThrow(/changed|already running/);
+    expect(h.store.evicted__final.attemptId).toBe("competing-attempt");
+    expect(h.calls).toEqual([]);
+  });
+
+  it.each(["gone", "present", "changed", "failed", "wrong-target", "untracked"])("resolves recovery cleanup ownership only for the abandoned attempt: %s", async owner => {
+    const store: Store = owner === "untracked" ? {} : { evicted__final: evictedTask() };
+    if (owner === "failed") store.evicted__final.status = "failed";
+    if (owner === "wrong-target") store.evicted__final.targetGatewayId = "another-target";
+    const runCommand = vi.fn(async () => {
+      if (owner === "changed") store.evicted__final = { ...evictedTask(), attemptId: "replacement" };
+      return { code: 0, stderr: "", stdout: owner === "present" ? JSON.stringify({ metadata: evictedTask().leasePod }) : "" };
+    });
+    const result = readTransferAttemptForCleanup({ db: makeDb(store), now: () => 10_000, namespace: "test", runCommand },
+      { migrationId: "evicted", slug: "alice", gatewayId: "gw-to", mode: "final" });
+    if (["present", "changed", "wrong-target"].includes(owner)) await expect(result).rejects.toThrow(/owner|claim|identity/);
+    else await expect(result).resolves.toBe(owner === "untracked" ? undefined : "old-attempt");
+    if (["failed", "untracked", "wrong-target"].includes(owner)) expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it.each(["completion", "failure"])("does not overwrite or abort a newer attempt when an old %s arrives", async outcome => {
+    const store: Store = {};
+    const calls: string[] = [];
+    const baseFetch = makeFetch(calls);
+    const fetch = (async (url, init) => {
+      if (String(url).includes("/finish-rsync-import/")) {
+        store.evicted__final = { ...store.evicted__final, attempt: 2, attemptId: "newer-attempt", leaseOwner: "newer-worker" };
+        if (outcome === "failure") throw new Error("old request failed");
+      }
+      return baseFetch(url, init);
+    }) as typeof globalThis.fetch;
+    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]) });
+    await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).rejects.toThrow(/ownership|claim|attempt/);
+    expect(store.evicted__final).toMatchObject({ status: "running", attemptId: "newer-attempt", leaseOwner: "newer-worker" });
+    expect(calls.some(url => url.includes("/abort-rsync-import/"))).toBe(false);
+  });
+
+  it("does not reclaim, prepare or abort an import on a target without attempt fencing", async () => {
+    const h = evictionFixture(async () => ({ stdout: "", stderr: "", code: 0 }), false);
+    await expect(h.run()).rejects.toThrow("does not support fenced transfer attempts");
+    expect(h.store.evicted__final).toEqual(evictedTask());
+    expect(h.calls).toEqual([]);
+  });
+
+  it.each([false, true])("binds every target mutation to the stored attempt and pod (failed=%s)", async failed => {
+    const store: Store = {};
+    const bodies: Array<Record<string, unknown>> = [];
+    const baseFetch = makeFetch([]);
+    const fetch = (async (url, init) => {
+      if (init?.method === "POST" && !String(url).includes("/push-rsync-state/")) {
+        const body = JSON.parse(String(init.body));
+        expect(store.binding__final.leasePod).toEqual({ name: "current-controller", uid: "current-uid" });
+        expect(body.transferAttemptId).toBe(store.binding__final.attemptId);
+        bodies.push(body);
+        if (failed && String(url).includes("/finish-rsync-import/")) throw new Error("target failed");
+      }
+      return baseFetch(url, init);
+    }) as typeof globalThis.fetch;
+    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]),
+      controllerPod: { name: "current-controller", uid: "current-uid" } });
+    const result = transfer({ migrationId: "binding", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
+    if (failed) await expect(result).rejects.toThrow("target failed");
+    else await result;
+    expect(bodies.map(body => body.rpcPhase)).toEqual(failed ? ["prepare-rsync-import", "finish-rsync-import", "abort-rsync-import"] : ["prepare-rsync-import", "finish-rsync-import"]);
+  });
+
   it.each(["keys", "pre", "final"] as const)("prepares ownership after detach and before adoption only for final import (%s)", async mode => {
     const calls: string[] = [];
     const prepareAgentStores = vi.fn(async (gatewayId: string, slug: string) => {
@@ -218,6 +341,10 @@ describe("createRsyncMigrationTransfer", () => {
         const body = raw ? JSON.parse(raw) : {};
         const reply = () => {
           res.setHeader("content-type", "application/json");
+          if (req.url === "/health") {
+            res.end(JSON.stringify({ rsyncAttemptFencing: true }));
+            return;
+          }
           res.end(JSON.stringify(req.url!.includes("prepare-rsync-import")
             ? { ...body, port: 30873, certificatePem: TARGET_CERTIFICATE_PEM }
             : { migrationId: body.migrationId, slug: body.slug, imported: true }));

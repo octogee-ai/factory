@@ -38,6 +38,14 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             - name: OPENCLAW_AGENT_STORE_ADMIN_DSN
               valueFrom:
                 secretKeyRef:

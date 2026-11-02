@@ -49,6 +49,7 @@ export interface MigrationClientDeps {
   timeouts?: MigrationClientTimeouts;
 
   prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
+  resolveTransferAttemptForCleanup?: (input: Parameters<MigrationClient["abortImport"]>[0]) => Promise<string | undefined>;
   transferState: MigrationClient["transferState"];
 }
 
@@ -268,9 +269,10 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
 
   return {
     async abortImport({ migrationId, gatewayId, slug, mode }) {
+      const transferAttemptId = await deps.resolveTransferAttemptForCleanup?.({ migrationId, gatewayId, slug, mode });
       const result = await postSignedJson<ImportResponse>({
         transportId: gatewayId, path: `/abort-rsync-import/${gatewayId}`, gatewayId, migrationId,
-        body: { migrationId, slug, mode, rpcPhase: "abort-rsync-import" }, timeoutMs: unmountMs,
+        body: { migrationId, slug, mode, rpcPhase: "abort-rsync-import", ...(transferAttemptId ? { transferAttemptId } : {}) }, timeoutMs: unmountMs,
       });
       if (result.migrationId !== migrationId || result.slug !== slug || result.imported !== false) {
         throw new Error("import cleanup acknowledgement mismatch");

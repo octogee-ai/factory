@@ -1,13 +1,9 @@
 import { Agent, fetch as undiciFetch } from "undici";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { GatewayVmAddress } from "./gateway-address.js";
-import {
-  FieldValue,
-  type DocumentReference,
-  type Firestore,
-} from "firebase-admin/firestore";
-import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
+import type { Firestore } from "firebase-admin/firestore";
+import { assertTransferClaim, claimTransferTask, controllerPodIdentity, finishTransferTask, type ControllerPodIdentity } from "./migration-transfer-lease.js";
 import {
   type FinishRsyncImportRequestBody,
   type ImportResponse,
@@ -25,7 +21,7 @@ import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signat
 
 const DEFAULT_LEASE_MS = MIGRATION_TRANSFER_LEASE_MS;
 const controlDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
-const DEFAULT_WORKER_ID = `glm-${process.pid}`;
+const DEFAULT_WORKER_ID = `glm-${randomUUID()}`;
 const MIGRATION_TRANSFER_USER = "migration";
 
 export type MigrationTransferTaskStatus =
@@ -43,6 +39,8 @@ export interface MigrationTransferTaskDoc {
   status: MigrationTransferTaskStatus;
   attempt: number;
   leaseOwner?: string;
+  leasePod?: ControllerPodIdentity;
+  attemptId?: string;
   leaseExpiresAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -79,6 +77,7 @@ export interface RSyncMigrationTransferDeps {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   workerId?: string;
+  controllerPod?: ControllerPodIdentity;
   leaseMs?: number;
   log?: (msg: string) => void;
 }
@@ -232,100 +231,6 @@ async function postSignedJson<Resp>(
   }
 }
 
-function buildClaimedTaskDoc(
-  input: Parameters<MigrationClient["transferState"]>[0],
-  existing: Partial<MigrationTransferTaskDoc> | undefined,
-  deps: { workerId: string; leaseMs: number },
-  now: number,
-  attempt: number,
-): MigrationTransferTaskDoc {
-  return {
-    kind: "gateway-rsync-transfer",
-    migrationId: input.migrationId,
-    slug: input.slug,
-    mode: input.mode ?? "pre",
-    sourceGatewayId: input.fromGatewayId,
-    targetGatewayId: input.toGatewayId,
-    status: "running",
-    attempt,
-    leaseOwner: deps.workerId,
-    leaseExpiresAt: now + deps.leaseMs,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    startedAt: existing?.startedAt ?? now,
-  };
-}
-
-async function claimTask(
-  deps: Required<Pick<RSyncMigrationTransferDeps, "db" | "now" | "workerId" | "leaseMs">>,
-  input: Parameters<MigrationClient["transferState"]>[0],
-): Promise<
-  { kind: "claimed"; taskId: string; ref: DocumentReference; attempt: number }
-> {
-  const taskId = migrationTransferTaskId(input);
-  const ref = deps.db
-    .collection(GLM_MIGRATION_TRANSFER_TASKS_COLLECTION)
-    .doc(taskId);
-  const now = deps.now();
-
-  return deps.db.runTransaction(async (txn) => {
-    const snap = await txn.get(ref);
-    const existing = snap.exists
-      ? (snap.data() as Partial<MigrationTransferTaskDoc> | undefined)
-      : undefined;
-
-    if (
-      existing?.status === "running" &&
-      typeof existing.leaseExpiresAt === "number" &&
-      existing.leaseExpiresAt > now
-    ) {
-      throw new Error(
-        `transfer task ${taskId} is already running (leaseOwner=${existing.leaseOwner ?? "unknown"})`,
-      );
-    }
-
-    const attempt = (existing?.attempt ?? 0) + 1;
-    const doc = buildClaimedTaskDoc(input, existing, deps, now, attempt);
-    txn.set(ref, doc, { merge: true });
-    return { kind: "claimed", taskId, ref, attempt } as const;
-  });
-}
-
-async function markTaskSucceeded(
-  ref: DocumentReference,
-  now: () => number,
-): Promise<void> {
-  await ref.set(
-    {
-      status: "succeeded",
-      completedAt: now(),
-      updatedAt: now(),
-      leaseOwner: FieldValue.delete(),
-      leaseExpiresAt: FieldValue.delete(),
-      error: FieldValue.delete(),
-    },
-    { merge: true },
-  );
-}
-
-async function markTaskFailed(
-  ref: DocumentReference,
-  now: () => number,
-  err: unknown,
-): Promise<void> {
-  const message = err instanceof Error ? err.message : String(err);
-  await ref.set(
-    {
-      status: "failed",
-      error: message,
-      updatedAt: now(),
-      leaseOwner: FieldValue.delete(),
-      leaseExpiresAt: FieldValue.delete(),
-    },
-    { merge: true },
-  );
-}
-
 interface PodList {
   items?: Array<{
     metadata?: { name?: string; deletionTimestamp?: string };
@@ -335,6 +240,13 @@ interface PodList {
       conditions?: Array<{ type?: string; status?: string }>;
     };
   }>;
+}
+
+async function assertTargetTransferFencing(fetchImpl: typeof globalThis.fetch, baseUrl: string, name: string): Promise<void> {
+  const health = await fetchImpl(`${baseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
+  if (!health.ok || (await health.json() as { rsyncAttemptFencing?: unknown }).rsyncAttemptFencing !== true) {
+    throw new Error(`migration target ${name} does not support fenced transfer attempts: status 503`);
+  }
 }
 
 async function resolveRunningGatewayPod(params: {
@@ -455,6 +367,7 @@ export function createRsyncMigrationTransfer(
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const now = deps.now ?? (() => Date.now());
   const workerId = deps.workerId ?? DEFAULT_WORKER_ID;
+  const controllerPod = deps.controllerPod ?? controllerPodIdentity(process.env);
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
   const log = deps.log ?? (() => undefined);
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -511,8 +424,18 @@ export function createRsyncMigrationTransfer(
     const toTransportId = input.toTransportId ?? input.toGatewayId;
     if (deps.retainedSource && mode === "final") return transferRetained(input);
     const transferKey = randomBytes(32).toString("hex");
-    const claimed = await claimTask(
-      { db: deps.db, now, workerId, leaseMs },
+    let recoveryTarget: GatewayEndpoint | undefined;
+    const resolveTarget = async () => recoveryTarget ?? resolveGatewayEndpoint({
+      namespace: deps.namespace, transportId: toTransportId, runCommand, requireReady: false, resolveGatewayVm: deps.resolveGatewayVm,
+    });
+    const claimed = await claimTransferTask(
+      { db: deps.db, now, workerId, leaseMs, namespace: deps.namespace, runCommand, controllerPod, log,
+        beforeRecovery: async () => {
+          recoveryTarget = await resolveTarget();
+          await assertTargetTransferFencing(fetchImpl, podBaseUrl(recoveryTarget.podIP, deps.fleetControllerPort), recoveryTarget.name);
+        },
+      },
+      migrationTransferTaskId({ ...input, mode }),
       { ...input, mode },
     );
 
@@ -527,17 +450,14 @@ export function createRsyncMigrationTransfer(
           requireReady: true,
           resolveGatewayVm: deps.resolveGatewayVm,
         }),
-        resolveGatewayEndpoint({
-          namespace: deps.namespace,
-          transportId: toTransportId,
-          runCommand,
-          requireReady: false,
-          resolveGatewayVm: deps.resolveGatewayVm,
-        }),
+        resolveTarget(),
       ]);
       targetPod = resolvedTargetPod;
       const targetBaseUrl = podBaseUrl(targetPod.podIP, deps.fleetControllerPort);
+      await assertTransferClaim(claimed);
       const prepareBody: PrepareRsyncImportRequestBody = {
+        transferAttempt: claimed.attempt,
+        transferAttemptId: claimed.attemptId,
         migrationId: input.migrationId,
         slug: input.slug,
         rpcPhase: "prepare-rsync-import",
@@ -558,6 +478,7 @@ export function createRsyncMigrationTransfer(
       log(
         `[migration-rsync] task=${claimed.taskId} attempt=${claimed.attempt} mode=${mode} ${input.fromGatewayId}/${sourcePod.name} → ${input.toGatewayId}/${targetPod.name} target=${targetPod.podIP}:${prepared.port}`,
       );
+      await assertTransferClaim(claimed);
       const pushBody: PushRsyncStateRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
@@ -577,7 +498,9 @@ export function createRsyncMigrationTransfer(
         migrationId: input.migrationId,
         body: pushBody as unknown as Record<string, unknown>,
       });
+      await assertTransferClaim(claimed);
       const finishBody: FinishRsyncImportRequestBody = {
+        transferAttemptId: claimed.attemptId,
         migrationId: input.migrationId,
         slug: input.slug,
         rpcPhase: "finish-rsync-import",
@@ -599,7 +522,7 @@ export function createRsyncMigrationTransfer(
           await waitForTargetPodReady(runCommand, deps.namespace, targetPod.name);
         }
       }
-      await markTaskSucceeded(claimed.ref, now);
+      await finishTransferTask(deps.db, claimed, now);
       // The target committed the import and told us which post-commit step it could
       // not confirm. Aborting here would unmount work that landed and send the retry
       // back into the same reload, so the state stands and the reconcile converges it.
@@ -614,6 +537,7 @@ export function createRsyncMigrationTransfer(
       );
       return finished;
     } catch (err) {
+      await assertTransferClaim(claimed);
       if (targetPrepareAttempted && targetPod) {
         await control<ImportResponse>({
           transportId: toTransportId,
@@ -624,6 +548,7 @@ export function createRsyncMigrationTransfer(
             migrationId: input.migrationId,
             slug: input.slug,
             rpcPhase: "abort-rsync-import",
+            transferAttemptId: claimed.attemptId,
             mode,
           },
           baseUrl: podBaseUrl(targetPod.podIP, deps.fleetControllerPort),
@@ -633,7 +558,7 @@ export function createRsyncMigrationTransfer(
           );
         });
       }
-      await markTaskFailed(claimed.ref, now, err).catch((markErr) => {
+      await finishTransferTask(deps.db, claimed, now, err).catch((markErr) => {
         log(
           `[migration-rsync] ⚠ failed to mark task=${claimed.taskId} failed: ${markErr instanceof Error ? markErr.message : String(markErr)}`,
         );

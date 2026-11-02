@@ -105,6 +105,7 @@ export interface FleetHealthResponse {
   status: string;
   podUid: string | null;
   startedAt: number;
+  rsyncAttemptFencing: boolean;
 }
 
 // Tenant-bearing fleet state. Signed with the fleet controller key, which only
@@ -271,6 +272,8 @@ export type RsyncMigrationRpcPhase =
   | "abort-rsync-import";
 
 export interface PrepareRsyncImportRequestBody extends MigrationRequestBody {
+  transferAttempt?: number;
+  transferAttemptId?: string;
   rpcPhase: "prepare-rsync-import";
   mode: MigrationTransferMode;
   configTransferMode?: MigrationConfigTransferMode;
@@ -302,6 +305,7 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
 }
 
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
+  transferAttemptId?: string;
   rpcPhase: "finish-rsync-import";
   mode: MigrationTransferMode;
   configTransferMode?: MigrationConfigTransferMode;
@@ -309,6 +313,7 @@ export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
 }
 
 export interface AbortRsyncImportRequestBody extends MigrationRequestBody {
+  transferAttemptId?: string;
   rpcPhase: "abort-rsync-import";
   mode: MigrationTransferMode;
   configTransferMode?: MigrationConfigTransferMode;

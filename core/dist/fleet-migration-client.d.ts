@@ -14,6 +14,7 @@ export interface MigrationClientDeps {
     log?: (msg: string) => void;
     timeouts?: MigrationClientTimeouts;
     prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
+    resolveTransferAttemptForCleanup?: (input: Parameters<MigrationClient["abortImport"]>[0]) => Promise<string | undefined>;
     transferState: MigrationClient["transferState"];
 }
 interface GatewayAddress {
