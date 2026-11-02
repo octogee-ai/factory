@@ -308,6 +308,13 @@ export function createChannelSessionMattermostClient(input: {
   return {
     getJson: (segments: readonly string[]) => requestJson("GET", segments),
     postJson: (segments: readonly string[], body: unknown) => requestJson("POST", segments, body),
+    uploadFiles: async (channelId: string, files: readonly { fileName: string; mimeType: string; bytes: Buffer }[]) => {
+      if (!MATTERMOST_ID.test(channelId) || files.length < 1 || files.length > 8) throw new Error('Invalid Mattermost upload');
+      const form = new FormData();
+      form.set('channel_id', channelId);
+      for (const file of files) form.append('files', new Blob([new Uint8Array(file.bytes)], { type: file.mimeType }), file.fileName);
+      return fetchJson(`${baseUrl}/api/v4/files`, { method: 'POST', body: form });
+    },
     async getCurrentUserId(): Promise<string> {
       const value = await requestJson("GET", ["users", "me"]);
       const id = (value as { id?: unknown } | null)?.id;

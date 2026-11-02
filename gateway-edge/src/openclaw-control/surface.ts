@@ -1030,7 +1030,18 @@ export function openClawControlRpcDeadlineMs(args: {
   return DEFAULT_RPC_TIMEOUT_MS;
 }
 
-interface BridgeControlSocketArgs {
+export interface MobileControlTransport {
+  role: 'node' | 'operator';
+  prepareConnect(frame: Record<string, unknown>, nonce: string): Promise<string>;
+  acceptFrame(frame: Record<string, unknown>): Promise<Record<string, unknown>>;
+  observeRequest(frame: Record<string, unknown>): void;
+  prepareRequest?(frame: Record<string, unknown>): Promise<Record<string, unknown>>;
+  projectFrame?(frame: Record<string, unknown>): Record<string, unknown>;
+  authorize(): Promise<boolean>;
+}
+
+export interface BridgeControlSocketArgs {
+  mobile?: MobileControlTransport;
   desktopTickets: DesktopObserverTickets;
   browser: WebSocket;
   requestPath: string;
@@ -1108,6 +1119,9 @@ class OpenClawControlSocketBridge {
   private authorizationTimer?: NodeJS.Timeout;
   private nextProfileSyncAt = 0;
   private profileSyncPending = false;
+  private upstreamMessages = Promise.resolve();
+  private queuedUpstreamFrames = 0;
+  private queuedUpstreamBytes = 0;
   private closing = false;
   private socketReleased = false;
 
@@ -1162,8 +1176,29 @@ class OpenClawControlSocketBridge {
 
   private attachSocketHandlers(): void {
     const upstream = this.upstreamSocket();
-    upstream.on("message", (data) => this.handleUpstreamMessage(data));
-    upstream.once("close", () => this.closeBoth("upstream-closed"));
+    upstream.on("message", (data) => {
+      if (this.closing) return;
+      const bytes = frameBytes(data);
+      if (this.args.mobile && (this.queuedUpstreamFrames >= 64 || this.queuedUpstreamBytes + bytes > 32 * 1024 * 1024)) {
+        this.closeBoth('mobile-buffer-limited');
+        return;
+      }
+      this.queuedUpstreamFrames += 1;
+      this.queuedUpstreamBytes += bytes;
+      this.upstreamMessages = this.upstreamMessages.then(() => {
+        if (!this.closing) return this.handleUpstreamMessage(data);
+      }).catch((error: unknown) => {
+        logger.warn("OpenClaw control transport rejected", { errorType: error instanceof Error ? error.name : typeof error });
+        this.closeBoth("transport-rejected");
+      }).finally(() => {
+        this.queuedUpstreamFrames -= 1;
+        this.queuedUpstreamBytes -= bytes;
+      });
+    });
+    upstream.once("close", () => {
+      if (this.args.mobile) void this.upstreamMessages.finally(() => this.closeBoth("upstream-closed"));
+      else this.closeBoth("upstream-closed");
+    });
     upstream.once("error", () => this.closeBoth("upstream-unavailable"));
     this.args.browser.once("close", () => this.closeBoth("browser-closed"));
     this.args.browser.once("error", () => this.closeBoth("browser-error"));
@@ -1176,7 +1211,7 @@ class OpenClawControlSocketBridge {
   }
 
   private checkAuthorization(): void {
-    const local = this.args.sessions.verify({
+    const local = this.args.mobile ? this.activeSession : this.args.sessions.verify({
       cookieHeader: this.args.cookieHeader,
       gatewayId: this.activeSession.gatewayId,
       revisionId: this.activeSession.revisionId,
@@ -1185,12 +1220,12 @@ class OpenClawControlSocketBridge {
       this.closeBoth("session-expired");
       return;
     }
-    void this.args.authorizationCache.authorize({
+    void (this.args.mobile ? this.args.mobile.authorize() : this.args.authorizationCache.authorize({
       sessionId: this.activeSession.sessionId,
       gatewayId: this.activeSession.gatewayId,
       revisionId: this.activeSession.revisionId,
       env: this.args.env,
-    }, { forceRefresh: true }).then(async (allowed) => {
+    }, { forceRefresh: true })).then(async (allowed) => {
       if (allowed) {
         if (this.args.proxyIdentity.enabled) {
           await this.args.proxyIdentity.syncChannelMemberships(this.activeSession, { force: true });
@@ -1234,6 +1269,7 @@ class OpenClawControlSocketBridge {
   }
 
   private touch(): boolean {
+    if (this.args.mobile) return true;
     const touched = this.args.sessions.touchSession(this.activeSession);
     if (!touched) return false;
     this.activeSession = touched.session;
@@ -1417,8 +1453,8 @@ class OpenClawControlSocketBridge {
     }
   }
 
-  private handleUpstreamMessage(data: RawData): void {
-    const frame = parseFrame(data);
+  private async handleUpstreamMessage(data: RawData): Promise<void> {
+    let frame = parseFrame(data);
     if (!frame) {
       this.closeBoth("protocol-invalid");
       return;
@@ -1426,6 +1462,8 @@ class OpenClawControlSocketBridge {
     const receivedNonce = challengeNonce(frame);
     this.nonce = receivedNonce ?? this.nonce;
     if (receivedNonce) this.flushBufferedConnect();
+    frame = await this.prepareMobileUpstreamFrame(frame, receivedNonce);
+    if (!frame) return;
     const response = isResponseFrame(frame) ? frame : undefined;
     if (frame.type === "res" && !response) {
       this.closeBoth("protocol-invalid");
@@ -1440,13 +1478,20 @@ class OpenClawControlSocketBridge {
     this.forwardProjectedFrame(request?.responseProjector?.(frame) ?? frame, request);
   }
 
+  private async prepareMobileUpstreamFrame(frame: Record<string, unknown>, receivedNonce: string | null): Promise<Record<string, unknown> | null> {
+    if (!this.args.mobile || receivedNonce) return frame;
+    const responsePending = frame.type === 'res' && typeof frame.id === 'string' && this.pending.has(frame.id);
+    if (!this.installedMethods && !responsePending) return null;
+    return this.args.mobile.acceptFrame(frame);
+  }
+
   private forwardProjectedFrame(
     frame: Record<string, unknown>,
     request: PendingRpc | undefined,
   ): void {
     if (request?.internal || this.args.browser.readyState !== WebSocket.OPEN) return;
     let projected = frame;
-    if (projected && request?.method === "desktop.observe") {
+    if (!this.args.mobile && projected && request?.method === "desktop.observe") {
       try {
         projected = this.args.desktopTickets.project(projected, this.activeSession);
       } catch (error) {
@@ -1457,9 +1502,14 @@ class OpenClawControlSocketBridge {
           error: { code: "UNAVAILABLE", message: "Desktop observer could not be attached" } };
       }
     }
-    if (projected) {
-      this.args.browser.send(sanitizeOpenClawControlServerFrame(projected, [this.gatewayToken]));
-    }
+    if (projected) this.sendProjectedFrame(projected);
+  }
+
+  private sendProjectedFrame(frame: Record<string, unknown>): void {
+    if (this.args.mobile) {
+      if (this.args.browser.bufferedAmount > 32 * 1024 * 1024) { this.closeBoth('mobile-buffer-limited'); return; }
+      this.args.browser.send(JSON.stringify(this.args.mobile.projectFrame?.(frame) ?? frame));
+    } else this.args.browser.send(sanitizeOpenClawControlServerFrame(frame, [this.gatewayToken]));
   }
 
   private acceptNativeScopes(frame: Record<string, unknown>, request: PendingRpc | undefined): void {
@@ -1493,10 +1543,18 @@ class OpenClawControlSocketBridge {
     upstream.send(JSON.stringify({ type: "req", id: refreshId, method: "config.get", params: {} }));
   }
 
+  private browserFrameLimit(): number {
+    return this.args.mobile && this.installedMethods ? MAX_UPSTREAM_WS_FRAME_BYTES : MAX_BROWSER_WS_FRAME_BYTES;
+  }
+
   private handleBrowserMessage(data: RawData, isBinary: boolean): void {
     const upstream = this.upstreamSocket();
-    if (!this.touch() || isBinary || frameBytes(data) > MAX_BROWSER_WS_FRAME_BYTES) {
+    if (!this.touch() || isBinary || frameBytes(data) > this.browserFrameLimit()) {
       this.closeBoth("invalid-dashboard-frame");
+      return;
+    }
+    if (this.args.mobile?.role === 'node' && this.installedMethods) {
+      this.upstreamSocket().send(data);
       return;
     }
     const frame = browserRpcFrame(data);
@@ -1577,7 +1635,7 @@ class OpenClawControlSocketBridge {
       this.args.browser.send(openClawControlPolicyError(frame, "inflight-limited"));
       return;
     }
-    const rewritten = rewriteTrustedOpenClawConnect({
+    const rewritten = this.args.mobile ? JSON.stringify(frame) : rewriteTrustedOpenClawConnect({
       frame,
       nonce: this.nonce,
       identity: this.connectIdentity(),
@@ -1599,7 +1657,17 @@ class OpenClawControlSocketBridge {
       () => {
         if (this.closing || this.upstreamSocket().readyState !== WebSocket.OPEN) return;
         this.nextProfileSyncAt = Date.now() + 60_000;
-        this.upstreamSocket().send(rewritten);
+        if (this.args.mobile) {
+          void this.args.mobile.prepareConnect(frame, this.nonce!).then(value => {
+            if (!this.closing && this.upstreamSocket().readyState === WebSocket.OPEN) this.upstreamSocket().send(value);
+          }).catch((error: unknown) => {
+            this.settlePending(frame.id);
+            if (this.args.browser.readyState === WebSocket.OPEN) this.args.browser.send(JSON.stringify({ type: 'res', id: frame.id, ok: false,
+              error: { code: 'INVALID_REQUEST', message: 'Mobile connection rejected. Create a new QR if setup was interrupted.', details: { code: 'AUTH_BOOTSTRAP_TOKEN_INVALID' } } }));
+            logger.warn('Mobile connect rejected', { errorType: error instanceof Error ? error.name : typeof error });
+            this.closeBoth('mobile-connect-rejected');
+          });
+        } else this.upstreamSocket().send(rewritten);
       },
       (error: unknown) => {
         logger.error("OpenClaw Dashboard identity profile sync failed", {
@@ -1622,6 +1690,7 @@ class OpenClawControlSocketBridge {
   }
 
   private freshWriteAuthority(category: OpenClawControlRpcCategory): Promise<boolean> {
+    if (this.args.mobile) return this.args.mobile.authorize();
     if (category === "read" || category === "approval_read") return Promise.resolve(true);
     return this.args.authorizationCache.authorize({
       sessionId: this.activeSession.sessionId,
@@ -1750,6 +1819,12 @@ class OpenClawControlSocketBridge {
     return remainingMs;
   }
 
+  private async prepareMobileRequest(frame: BrowserRpcFrame, signal: AbortSignal, decision: OpenClawControlRpcDecision): Promise<BrowserRpcFrame> {
+    frame = (decision.outbound ?? frame) as BrowserRpcFrame;
+    if (!this.args.mobile?.prepareRequest) return frame;
+    return await awaitWithAbort(this.args.mobile.prepareRequest(frame), signal) as BrowserRpcFrame;
+  }
+
   private async forwardAllowed(
     frame: BrowserRpcFrame,
     decision: OpenClawControlRpcDecision,
@@ -1801,6 +1876,8 @@ class OpenClawControlSocketBridge {
         this.deny(frame, decision, "capability-revoked");
         return;
       }
+      frame = await this.prepareMobileRequest(frame, preparationController.signal, decision);
+      decision = { ...decision, outbound: frame };
       mattermost = await awaitWithAbort(
         this.args.mattermostChat.prepare(
           frame,
@@ -1832,10 +1909,7 @@ class OpenClawControlSocketBridge {
     if (mattermost?.watch) this.watchMattermost(mattermost.watch);
     if (mattermost?.kind === "response") {
       releaseRequest();
-      this.args.browser.send(sanitizeOpenClawControlServerFrame(
-        mattermost.frame,
-        [this.gatewayToken],
-      ));
+      this.forwardProjectedFrame(mattermost.frame, undefined);
       this.args.metrics?.rpc(this.metricsIdentity, decision.category, "ok");
       return;
     }
@@ -1866,10 +1940,10 @@ class OpenClawControlSocketBridge {
     this.mattermostWatches.set(watch.sessionKey, controller);
     void watch.run(() => {
       if (controller.signal.aborted || browserCannotReceive(this.closing, this.args.browser)) return;
-      this.args.browser.send(JSON.stringify({
+      this.forwardProjectedFrame({
         type: "event", event: "sessions.changed",
         payload: { key: watch.sessionKey, sessionKey: watch.sessionKey, agentId: watch.agentId, phase: "message", reason: "message" },
-      }));
+      }, undefined);
     }, controller.signal).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       logger.error("OpenClaw Dashboard Mattermost change feed failed", {
@@ -1887,6 +1961,7 @@ class OpenClawControlSocketBridge {
   ): void {
     const outbound = decision.outbound ?? frame;
     try {
+      this.args.mobile?.observeRequest(frame);
       this.upstreamSocket().send(JSON.stringify(mattermostOutboundFrame(outbound, mattermost)));
     } catch (error) {
       this.settlePending(frame.id);
@@ -1926,7 +2001,7 @@ class OpenClawControlSocketBridge {
   }
 }
 
-async function bridgeControlSocket(args: BridgeControlSocketArgs): Promise<void> {
+export async function bridgeControlSocket(args: BridgeControlSocketArgs): Promise<void> {
   await new OpenClawControlSocketBridge(args).start();
 }
 

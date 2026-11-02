@@ -40,6 +40,7 @@ import { createObsidianPairingRoutes } from "./routes/obsidian-pairing.js";
 import { createAgentSupportRoutes } from "./routes/agent-support.js";
 import { createAgentComputerContextRoutes } from "./routes/agent-computer-context.js";
 import { createFleetBrokerRoutes } from "./routes/fleet-broker.js";
+import { createMobileDeviceRoutes, createMobileDeviceBrokerRoutes } from "./routes/mobile-devices.js";
 import { createOpenClawControlBrokerRoutes } from "./routes/openclaw-control-broker.js";
 import { createAutomationAuthorizationBrokerRoutes } from "./routes/automation-authorization-broker.js";
 import { createWorkspaceGitAuthorizationBrokerRoutes } from "./routes/workspace-git-authorization-broker.js";
@@ -598,6 +599,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   app.use("/api/signup-offer", createSignupOfferRoutes({ db }));
   app.use("/api/auth/desktop", createDesktopAuthRoutes({ db, auth }));
   mountProductRoutes(app, product);
+  app.use("/api/mobile-devices", requireAuth, createMobileDeviceRoutes({ db }));
   app.use("/api/projects", createProjectPreviewDiscoveryRoutes({
     db,
     store: projectRunStore,
@@ -810,6 +812,7 @@ export function createApp(opts: CreateAppOptions = {}) {
   );
   app.use("/internal/computer", createAgentComputerContextRoutes({ db }));
   app.use("/internal/openclaw-control", createOpenClawControlBrokerRoutes({ db }));
+  app.use("/internal/mobile-devices", createMobileDeviceBrokerRoutes({ db }));
   app.use(
     "/internal/automations",
     requireAuthenticatedUid,

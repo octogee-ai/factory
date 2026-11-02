@@ -7,6 +7,20 @@ import {
 } from "../lib/channel-session-model-control.js";
 
 describe("channel session native model control", () => {
+  it('sends caller-authenticated multipart files to the fixed internal Mattermost upload endpoint', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ file_infos: [] }), { status: 200 }));
+    const client = createChannelSessionMattermostClient({ baseUrl: 'http://mattermost.octogee.svc.cluster.local:8065', token: 'a'.repeat(32), fetchImpl });
+    await client.uploadFiles('c'.repeat(26), [{ fileName: 'photo.png', mimeType: 'image/png', bytes: Buffer.from([0, 1, 2]) }]);
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith('http://mattermost.octogee.svc.cluster.local:8065/api/v4/files', expect.objectContaining({ method: 'POST', redirect: 'error' }));
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    expect(init.headers).toMatchObject({ authorization: `Bearer ${'a'.repeat(32)}` });
+    expect(init.headers).not.toHaveProperty('content-type');
+    const form = init.body as FormData;
+    expect(form.get('channel_id')).toBe('c'.repeat(26));
+    const file = form.get('files') as File;
+    expect(file.name).toBe('photo.png'); expect(file.type).toBe('image/png');
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(Buffer.from([0, 1, 2]));
+  });
   it("accepts only the earliest correlated reply from the bound Agent", () => {
     const reply = pickCorrelatedAgentReply([
       { id: "foreign", type: "", root_id: "root", channel_id: "channel", user_id: "other", create_at: 11, message: "no" },

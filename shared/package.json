@@ -269,10 +269,17 @@
     "./server/builder-claim": {
       "types": "./dist/server/builder-claim.d.ts",
       "default": "./dist/server/builder-claim.js"
+    },
+    "./types/native-mobile": {
+      "types": "./dist/types/native-mobile.d.ts",
+      "default": "./dist/types/native-mobile.js"
     }
   },
   "typesVersions": {
     "*": {
+      "types/native-mobile": [
+        "dist/types/native-mobile.d.ts"
+      ],
       "types/agent-characters": [
         "dist/types/agent-characters.d.ts"
       ],

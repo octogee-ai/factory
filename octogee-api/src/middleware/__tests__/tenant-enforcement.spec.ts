@@ -123,6 +123,7 @@ function app(opts: {
   a.post("/internal/byok/broker-inspect", enforcement, handler);
   a.post("/internal/byok/byosub-flow", enforcement, handler);
   a.post("/internal/byok/byosub-cred-syncback", enforcement, handler);
+  for (const op of ['inspect', 'authorize', 'issued', 'reserve', 'commit', 'active', 'http', 'tokens', 'revoke', 'session']) a.post(`/internal/mobile-devices/${op}`, enforcement, handler);
   a.post("/internal/openclaw-control/redeem", enforcement, handler);
   a.post("/internal/openclaw-control/authorize", enforcement, handler);
   a.post("/internal/openclaw-control/profile", enforcement, handler);
@@ -899,6 +900,13 @@ const STILL_ON_SHARED = {
     expect(ownedGateway.status).toBe(200);
     expect(foreignGateway.status).toBe(403);
     expect(platform.status).toBe(403);
+  });
+
+  it.each(['inspect', 'authorize', 'issued', 'reserve', 'commit', 'active', 'http', 'tokens', 'revoke', 'session'])('binds mobile %s to the authenticated gateway workload', async operation => {
+    const path = `/internal/mobile-devices/${operation}`;
+    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: 'bender' })).status).toBe(200);
+    expect((await request(app({ boundTenant: BENDER })).post(path).send({ gatewayId: 'other' })).status).toBe(403);
+    expect((await request(app({ boundTenant: { kind: 'platform', actor: 'cron' } })).post(path).send({ gatewayId: 'bender' })).status).toBe(403);
   });
 
   it("passes dispatch context only to the bound gateway tenant", async () => {

@@ -65,6 +65,7 @@ import {
   attachOpenClawControlWsRoute,
   createOpenClawControlHttpRouter,
 } from "./openclaw-control/surface.js";
+import { createMobileGateway } from "./openclaw-control/mobile.js";
 import { startOpenClawDashboardCapabilityHeartbeat } from "./openclaw-control/capability-heartbeat.js";
 import {
   createOpenClawControlMetrics,
@@ -284,12 +285,15 @@ function mountClusterSurface(app: Express, featurePolicy?: FeaturePolicy): void 
   } : {});
 }
 
+let nativeMobileGateway: ReturnType<typeof createMobileGateway> | undefined;
 function mountSidecarLocalitySurface(app: Express, options: {
   dashboardEnabled: boolean;
   openClawControlMetrics: OpenClawControlMetrics;
   openClawControlAuthorizationCache: OpenClawControlAuthorizationCache;
 }): void {
   if (options.dashboardEnabled) {
+    nativeMobileGateway = createMobileGateway();
+    app.use("/api/g/:gatewayId/openclaw/mobile", nativeMobileGateway.router);
     app.use("/api/g/:gatewayId/openclaw", createOpenClawControlHttpRouter({
       env: process.env,
       metrics: options.openClawControlMetrics,
@@ -535,6 +539,7 @@ if (process.env.NODE_ENV !== "test") {
       });
     }
     if (process.env.OPENCLAW_DASHBOARD_BRIDGE_ENABLED === "true") {
+      nativeMobileGateway?.attach((server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter);
       attachOpenClawControlWsRoute({
         router: (server as unknown as { wsRouter: WsUpgradeRouter }).wsRouter,
         env: process.env,

@@ -1941,6 +1941,33 @@ describe("Mattermost-backed OpenClaw Control chat", () => {
     expect(postJson).not.toHaveBeenCalled();
   });
 
+  it('uploads native phone attachments as the caller into the canonical channel before posting one turn', async () => {
+    const fileId = 'f'.repeat(26);
+    const uploadFiles = vi.fn(async () => ({ file_infos: [{ id: fileId, user_id: humanId, channel_id: channelId }] }));
+    const postJson = vi.fn(async () => post({ id: rootId, message: '', file_ids: [fileId] }));
+    const adapter = createMattermostControlChat({ allowAttachments: true, authorize: vi.fn(async () => authorized({ postJson, uploadFiles })) });
+    const prepared = await adapter.prepare({ id: 'mobile-file', method: 'chat.send', params: {
+      sessionKey, agentId, message: '', idempotencyKey: 'phone-upload',
+      attachments: [{ type: 'file', mimeType: 'text/plain', fileName: 'note.txt', content: Buffer.from('note').toString('base64') }],
+    } }, session());
+    expect(prepared).toMatchObject({ kind: 'response', frame: { ok: true, payload: { runId: 'phone-upload' } } });
+    expect(uploadFiles).toHaveBeenCalledWith(channelId, [{ fileName: 'note.txt', mimeType: 'text/plain', bytes: Buffer.from('note') }]);
+    expect(postJson).toHaveBeenCalledExactlyOnceWith(['posts'], expect.objectContaining({ channel_id: channelId, file_ids: [fileId], pending_post_id: 'phone-upload' }));
+  });
+
+  it.each(['../secret', 'invalid-base64', 'foreign-upload'])('rejects invalid native attachment %s without posting', async kind => {
+    const uploadFiles = vi.fn(async () => ({ file_infos: [{ id: 'f'.repeat(26), user_id: 'other', channel_id: channelId }] }));
+    const postJson = vi.fn();
+    const adapter = createMattermostControlChat({ allowAttachments: true, authorize: vi.fn(async () => authorized({ postJson, uploadFiles })) });
+    const response = await adapter.prepare({ id: 'bad-upload', method: 'chat.send', params: {
+      sessionKey, agentId, message: 'File', idempotencyKey: 'phone-upload', attachments: [{ type: 'file', mimeType: 'text/plain',
+        fileName: kind === '../secret' ? kind : 'note.txt', content: kind === 'invalid-base64' ? 'https://private.example/file' : Buffer.from('note').toString('base64') }],
+    } }, session());
+    expect(response).toMatchObject({ kind: 'response', frame: { ok: false } });
+    expect(postJson).not.toHaveBeenCalled();
+    if (kind !== 'foreign-upload') expect(uploadFiles).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["group", "O", 0],
     ["channel", "P", 0],

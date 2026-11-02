@@ -12,7 +12,7 @@ function fixture(type = 'P') {
     ? { id: threadRootPostId, channel_id: channelId, root_id: '', delete_at: 0 }
     : path.length === 2
     ? { id: channelId, type, delete_at: 0 }
-    : { channel_id: channelId, user_id: target.agentMmUserId }), postJson: vi.fn(async () => null), getCurrentUserId: vi.fn(async () => 'u'.repeat(26)), listChannelPosts: vi.fn(async () => ({ posts: [], reachedEnd: true })) };
+    : { channel_id: channelId, user_id: target.agentMmUserId }), postJson: vi.fn(async () => null), uploadFiles: vi.fn(async () => ({ file_infos: [] })), getCurrentUserId: vi.fn(async () => 'u'.repeat(26)), listChannelPosts: vi.fn(async () => ({ posts: [], reachedEnd: true })) };
   const authorize = vi.fn(async () => ({ forbidden: false as const, target, client, callerMmUserId: 'u'.repeat(26) }));
   const owner = { provisioning: { openclaw: { gatewayId, slug: 'alice' } }, username: 'alice' };
   const db = { doc: vi.fn(() => ({ get: async () => ({ exists: true, data: () => owner }) })) };

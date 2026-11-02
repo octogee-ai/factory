@@ -26,6 +26,7 @@ import {
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 import { setGatewayAccessDenialAudit } from "../../../gateway-edge/src/lib/gateway-access-audit.js";
+import { nativeMobileAllocation } from '../lib/native-mobile-allocation.js';
 
 type GatewayBinding = Extract<Express.Request["boundTenant"], { kind: "gateway" }>;
 
@@ -36,6 +37,7 @@ export const OPENCLAW_CONTROL_REQUEST_MAX_BYTES = 16 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CAPABILITY_DISABLED = "capability-disabled";
 const INVALID_REQUEST = "invalid-request";
+const SESSION_INVALID = "session-invalid";
 const ASSIGNMENT_MISSING = "assignment-missing";
 const WORKSPACE_NOT_SERVING = "workspace-not-serving";
 const MOVING_ASSIGNMENT_STATES = new Set<unknown>(["quiescing", "migrating"]);
@@ -50,7 +52,7 @@ interface ControlSession {
 
 type SessionAccess =
   | { kind: "allowed"; session: ControlSession }
-  | { kind: "session-invalid" }
+  | { kind: typeof SESSION_INVALID }
   | { kind: "capability-disabled" }
   | { kind: typeof ASSIGNMENT_MISSING }
   | { kind: typeof WORKSPACE_NOT_SERVING }
@@ -274,14 +276,16 @@ function parseSession(
   };
 }
 
-async function sessionAccessInTransaction(args: {
+interface ControlSessionAccessArgs {
   db: Firestore;
   tx: Transaction;
   gatewayId: string;
   revisionId: string;
   sessionHash: string;
   now: number;
-}): Promise<SessionAccess> {
+}
+
+async function sessionAccessInTransaction(args: ControlSessionAccessArgs): Promise<SessionAccess> {
   const [rootSnap, revisionSnap, sessionSnap] = await Promise.all([
     args.tx.get(args.db.doc(`gateways/${args.gatewayId}`)),
     args.tx.get(args.db.doc(`glmGateways/${args.revisionId}`)),
@@ -293,7 +297,8 @@ async function sessionAccessInTransaction(args: {
     args.revisionId,
     args.now,
   );
-  if (!session) return { kind: "session-invalid" };
+  if (!session) return { kind: SESSION_INVALID };
+  if (!await mobileSessionCurrent(args, session, sessionSnap.data()?.mobileEnrollmentId, rootSnap.data())) return { kind: SESSION_INVALID };
   const root = rootSnap.data();
   const stored = await storedPrincipalAccess({
     db: args.db,
@@ -307,16 +312,7 @@ async function sessionAccessInTransaction(args: {
   if (stored?.assignmentMissing) return { kind: ASSIGNMENT_MISSING };
   const principal = stored?.principal;
   if (!stored || !principal || principal.kind === "denied") {
-    if (stored && principal) {
-      auditPrincipalDenial({
-        db: args.db,
-        tx: args.tx,
-        scope: stored.scope,
-        uid: session.uid,
-        principal,
-        now: args.now,
-      });
-    }
+    auditStoredPrincipalDenial(args, stored, session);
     return { kind: CAPABILITY_DISABLED };
   }
   const authorization = controlUiAuthorization(root, args.gatewayId, principal);
@@ -334,8 +330,8 @@ async function sessionAccessInTransaction(args: {
 }
 
 function sendSessionAccessFailure(result: Exclude<SessionAccess, { kind: "allowed" }>, res: Response): void {
-  if (result.kind === "session-invalid") {
-    res.status(404).json({ error: "session-invalid" });
+  if (result.kind === SESSION_INVALID) {
+    res.status(404).json({ error: SESSION_INVALID });
   } else if (result.kind === CAPABILITY_DISABLED || result.kind === WORKSPACE_NOT_SERVING) {
     res.status(403).json({ error: result.kind });
   } else if (result.kind === ASSIGNMENT_MISSING) {
@@ -844,4 +840,23 @@ export function createOpenClawControlBrokerRoutes(args: {
       controlMattermostRequest({ ...context, mattermost: args.mattermost ?? mattermostDefaults, operation }, req, res, next));
   }
   return router;
+}
+
+function matchingMobileEnrollment(enrollment: DocumentData | undefined, session: ControlSession, now: number): enrollment is DocumentData {
+  if (!enrollment) return false;
+  return enrollment.uid === session.uid && enrollment.gatewayId === session.gatewayId && enrollment.workspaceSlug === session.workspaceSlug &&
+    ['pending', 'reserved', 'awaiting-operator', 'active'].includes(enrollment.state) && (enrollment.state === 'active' || enrollment.setupExpiresAt > now);
+}
+async function mobileSessionCurrent(args: ControlSessionAccessArgs, session: ControlSession, id: unknown, root: DocumentData | undefined): Promise<boolean> {
+  if (id === undefined) return true;
+  if (typeof id !== 'string' || !UUID.test(id)) return false;
+  const enrollment = (await args.tx.get(args.db.doc(`nativeMobileDevices/${id}`))).data();
+  if (!matchingMobileEnrollment(enrollment, session, args.now)) return false;
+  const auth = gatewayAuthorizationFromRootDocument(root, args.gatewayId);
+  const assignment = (await args.tx.get(args.db.doc(`gateways/${args.gatewayId}/assignments/${session.uid}`))).data();
+  return !!auth && !!assignment && enrollment.allocation === nativeMobileAllocation(auth.gateway.createdAt, auth.config.allocation, assignment, session.uid, session.workspaceSlug);
+}
+
+function auditStoredPrincipalDenial(args: ControlSessionAccessArgs, stored: Awaited<ReturnType<typeof storedPrincipalAccess>>, session: ControlSession): void {
+  if (stored && stored.principal) auditPrincipalDenial({ db: args.db, tx: args.tx, scope: stored.scope, uid: session.uid, principal: stored.principal, now: args.now });
 }

@@ -1604,8 +1604,20 @@ function validSendParams(
   ].every(Boolean);
 }
 
-function validSendAttachments(value: unknown): boolean {
-  return value === undefined || Array.isArray(value) && value.length === 0;
+function sendAttachments(value: unknown, allowAttachments: boolean): Array<{ fileName: string; mimeType: string; bytes: Buffer }> | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 8 || (!allowAttachments && value.length > 0)) return null;
+  const files: Array<{ fileName: string; mimeType: string; bytes: Buffer }> = [];
+  let size = 0;
+  for (const raw of value) {
+    const file = record(raw);
+    if (!validSendAttachment(file)) return null;
+    const bytes = Buffer.from(file.content, 'base64');
+    size += bytes.length;
+    if (!bytes.length || bytes.toString('base64') !== file.content || size > 16 * 1024 * 1024) return null;
+    files.push({ fileName: file.fileName, mimeType: file.mimeType, bytes });
+  }
+  return files;
 }
 
 function validCreatedPost(
@@ -1626,6 +1638,7 @@ async function prepareSend(
   frame: OpenClawControlRequestFrame,
   session: OpenClawControlSession,
   authorize: Authorize,
+  allowAttachments: boolean,
   signal?: AbortSignal,
 ): Promise<MattermostChatPreparation | null> {
   const { params } = frame;
@@ -1644,17 +1657,20 @@ async function prepareSend(
   if (!validSendParams(params, access.route.agentId, runId)) {
     return rpcError(frame, "INVALID_REQUEST", "Unsupported Mattermost channel send request");
   }
-  if (!validSendAttachments(params.attachments)) {
+  const attachments = sendAttachments(params.attachments, allowAttachments);
+  if (!attachments) {
     return rpcError(frame, "INVALID_REQUEST", "Invalid Mattermost channel attachments");
   }
   const message = params.message as string;
-  if (!message.trim()) {
+  if (!message.trim() && attachments.length === 0) {
     return rpcError(frame, "INVALID_REQUEST", "Mattermost channel messages cannot be empty");
   }
+  const fileIds = await uploadSendAttachments(access, attachments);
   const createdValue = await access.authorization.client.postJson(["posts"], {
     channel_id: access.route.primaryChannelId,
     message,
     pending_post_id: runId,
+    ...(fileIds.length ? { file_ids: fileIds } : {}),
     props: { octogeeControlSubmission: { id: runId, userId: access.authorization.callerMmUserId } },
   });
   const created = record(createdValue);
@@ -1703,6 +1719,7 @@ function watchPreparedHistory(
 
 export function createMattermostControlChat(options: {
   perUserIdentity?: boolean;
+  allowAttachments?: boolean;
   resolveChatProfile?: OpenClawControlProxyIdentity["resolveChatProfile"];
   authorize?: Authorize;
   listWorkspaceChannels?: ListWorkspaceChannels;
@@ -1726,7 +1743,7 @@ export function createMattermostControlChat(options: {
             { signal, perUserIdentity: options.perUserIdentity },
           );
         }
-        if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, signal);
+        if (frame.method === "chat.send") return await prepareSend(frame, session, authorize, options.allowAttachments === true, signal);
         const history = await prepareHistory(frame, session, authorize, options.resolveChatProfile, {
           signal, onStage: (next) => { stage = next; },
         });
@@ -1744,4 +1761,25 @@ export function createMattermostControlChat(options: {
       }
     },
   };
+}
+
+function validSendAttachment(file: Record<string, unknown> | null): file is Record<string, unknown> & { fileName: string; mimeType: string; content: string } {
+  return file !== null && [
+    ['image', 'file', 'audio'].includes(String(file.type)),
+    typeof file.fileName === 'string' && /^[^/\\\p{Cc}]{1,128}$/u.test(file.fileName) && !['.', '..'].includes(file.fileName),
+    typeof file.mimeType === 'string' && /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/iu.test(file.mimeType) && file.mimeType.length <= 128,
+    typeof file.content === 'string' && file.content.length <= 24 * 1024 * 1024,
+  ].every(Boolean);
+}
+
+async function uploadSendAttachments(access: NonNullable<Awaited<ReturnType<typeof authorized>>>, attachments: Array<{ fileName: string; mimeType: string; bytes: Buffer }>): Promise<string[]> {
+  let fileIds: string[] = [];
+  if (attachments.length) {
+    const uploaded = record(await access.authorization.client.uploadFiles(access.route.primaryChannelId, attachments));
+    const infos = uploaded?.file_infos;
+    if (!Array.isArray(infos) || infos.length !== attachments.length || infos.some(info => !isMattermostId(info?.id) ||
+      info.user_id !== access.authorization.callerMmUserId || info.channel_id !== access.route.primaryChannelId)) throw new ChannelSessionMattermostError('Mattermost upload response was invalid');
+    fileIds = infos.map(info => info.id as string);
+  }
+  return fileIds;
 }
