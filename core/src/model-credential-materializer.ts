@@ -249,7 +249,7 @@ export interface AuthProfilesStoreV1 {
   profiles: Record<string, OAuthCredential>;
 }
 
-export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:octogee-chatgpt";
 export const CLAUDE_CLI_DEFAULT_PROFILE_ID = "anthropic:claude-cli";
 const CLAUDE_CLI_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -280,7 +280,7 @@ function parseClaudeCliSsoCredentialObject(parsed: unknown): OAuthCredential {
   }
   return {
     type: "oauth",
-    provider: "claude-cli",
+    provider: "anthropic",
     access: accessToken,
     refresh: refreshToken,
     expires: Math.floor(expiresAt),
@@ -337,7 +337,7 @@ export function buildClaudeCliAuthProfilesStore(
     profiles: {
       [CLAUDE_CLI_DEFAULT_PROFILE_ID]: profile ?? {
         type: "oauth",
-        provider: "claude-cli",
+        provider: "anthropic",
         access: trimmed,
         expires: nowMs + CLAUDE_CLI_TOKEN_TTL_MS,
         copyToAgents: true,

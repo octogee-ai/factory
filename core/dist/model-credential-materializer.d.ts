@@ -81,7 +81,7 @@ export interface AuthProfilesStoreV1 {
     version: 1;
     profiles: Record<string, OAuthCredential>;
 }
-export declare const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+export declare const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:octogee-chatgpt";
 export declare const CLAUDE_CLI_DEFAULT_PROFILE_ID = "anthropic:claude-cli";
 export declare function buildClaudeCliNativeCredentialsJson(raw: string): string | null;
 export declare function buildClaudeCliAuthProfilesStore(token: string, nowMs: number): AuthProfilesStoreV1;

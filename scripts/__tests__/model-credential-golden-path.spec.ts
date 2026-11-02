@@ -79,7 +79,7 @@ describe("model credential catalog golden paths", () => {
     expect(buildModelCredentialConfigForProvider({ slug: "tester-70", provider: "claude-cli" })).toEqual({
       authProfiles: {
         profiles: {
-          [CLAUDE_CLI_DEFAULT_PROFILE_ID]: { type: "oauth", provider: "claude-cli" },
+          [CLAUDE_CLI_DEFAULT_PROFILE_ID]: { type: "oauth", provider: "anthropic" },
         },
       },
       models: null,
@@ -90,7 +90,7 @@ describe("model credential catalog golden paths", () => {
     expect(Object.keys(store.profiles)).toEqual([CLAUDE_CLI_DEFAULT_PROFILE_ID]);
     expect(store.profiles[CLAUDE_CLI_DEFAULT_PROFILE_ID]).toEqual({
       type: "oauth",
-      provider: "claude-cli",
+      provider: "anthropic",
       access: "sk-ant-oat01-current",
       expires: NOW + 365 * 24 * 60 * 60 * 1000,
       copyToAgents: true,

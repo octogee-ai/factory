@@ -73,7 +73,7 @@ describe("MODEL_CREDENTIAL_CATALOG", () => {
       openclaw: {
         authProvider: "openai",
         configProfileId: "openai-codex",
-        storeProfileId: "openai-codex:default",
+        storeProfileId: "openai:octogee-chatgpt",
         secretRefAllowed: false,
       },
     });
@@ -84,7 +84,7 @@ describe("MODEL_CREDENTIAL_CATALOG", () => {
       storage: { kind: "oauth-secret-manager", secretNamePrefix: "byosub" },
       materialization: { kind: "oauth-profile-store", writesAuthJson: false },
       openclaw: {
-        authProvider: "claude-cli",
+        authProvider: "anthropic",
         configProfileId: "anthropic:claude-cli",
         storeProfileId: "anthropic:claude-cli",
         secretRefAllowed: false,

@@ -195,7 +195,7 @@ export declare const MODEL_CREDENTIAL_CATALOG: readonly [{
     readonly openclaw: {
         readonly authProvider: 'openai';
         readonly configProfileId: 'openai-codex';
-        readonly storeProfileId: 'openai-codex:default';
+        readonly storeProfileId: 'openai:octogee-chatgpt';
         readonly secretRefAllowed: false;
     };
     readonly defaults: {
@@ -258,7 +258,7 @@ export declare const MODEL_CREDENTIAL_CATALOG: readonly [{
         readonly required: false;
     };
     readonly openclaw: {
-        readonly authProvider: 'claude-cli';
+        readonly authProvider: 'anthropic';
         readonly configProfileId: 'anthropic:claude-cli';
         readonly storeProfileId: 'anthropic:claude-cli';
         readonly secretRefAllowed: false;

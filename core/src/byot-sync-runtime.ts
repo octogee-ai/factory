@@ -27,6 +27,7 @@ import {
   claudeCliRuntimeConfig,
   codexRuntimeConfig,
   isModelCredentialOauthProvider,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./model-credential-materializer.js";
 import {
   codexAgentDir,
@@ -645,6 +646,7 @@ export function agentIdsForSlug(slug: string, config: unknown): string[] {
 }
 
 const CUSTOMER_OAUTH_PROFILE_IDS = new Set([
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
   "openai-codex:default",
   "anthropic:claude-cli",
 ]);

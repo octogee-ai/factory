@@ -59,7 +59,7 @@ function codexStore(refresh: string, iat: number): unknown {
   return {
     version: 1,
     profiles: {
-      "openai-codex:default": {
+      "openai:octogee-chatgpt": {
         type: "oauth",
         provider: "openai",
         access: jwt({ iat, exp: iat + 864_000 }),

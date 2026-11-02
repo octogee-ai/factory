@@ -640,7 +640,7 @@ describe("restoreByosubCredentials", () => {
     expect(store.version).toBe(1);
     expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
       type: "oauth",
-      provider: "claude-cli",
+      provider: "anthropic",
       access: "claude-access-1",
     });
   });
@@ -722,6 +722,10 @@ describe("restoreByosubCredentials", () => {
   it("restores the Codex profile into the auth store only and removes a stale codex-home/auth.json", async () => {
     const oc = mkTmp();
     seedAgent(oc, "octogee-a-coach");
+    writeAuthProfileStore(codexAgentDir(oc, "octogee-a-coach"), {
+      version: 1,
+      profiles: { "openai:default": { type: "api_key", provider: "openai", key: "separate-api-key" } },
+    });
     const stale = codexAuthJsonPath(oc, "octogee-a-coach");
     fs.mkdirSync(path.dirname(stale), { recursive: true });
     fs.writeFileSync(stale, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "stale" } }));
@@ -750,7 +754,7 @@ describe("restoreByosubCredentials", () => {
     };
     expect(store).not.toBeNull();
     expect(store.version).toBe(1);
-    expect(store.profiles["openai-codex:default"]).toMatchObject({
+    expect(store.profiles["openai:octogee-chatgpt"]).toMatchObject({
       type: "oauth",
       provider: "openai",
       access: "acc-1",
@@ -761,6 +765,16 @@ describe("restoreByosubCredentials", () => {
       email: "u@example.com",
       copyToAgents: true,
     });
+    expect(store.profiles).not.toHaveProperty("openai-codex:default");
+    expect(store.profiles["openai:default"]).toEqual({ type: "api_key", provider: "openai", key: "separate-api-key" });
+
+    const fetchSecret = vi.fn(async () => { throw new Error("Healthy managed profile must not be restored again"); });
+    expect(await restoreByosubCredentials({
+      plan: [{ agentId: "octogee-a-coach", provider: "openai", secretName: "byosub-a-openai", openclawDir: oc }],
+      fetchSecret,
+    })).toEqual({ restored: 0, failed: 0, skipped: 1 });
+    expect(fetchSecret).not.toHaveBeenCalled();
+    expect(apReadFor(oc, "octogee-a-coach")).toEqual(store);
   });
 
   it("validate-before-write: an unmappable blob fails the item — no codex-home, no auth-profiles (never half-flip routing)", async () => {
@@ -838,7 +852,7 @@ describe("restoreByosubCredentials", () => {
     });
     expect(r).toEqual({ restored: 1, failed: 1, skipped: 0 });
     const profileOf = (a: string) =>
-      (apReadFor(oc, a) as { profiles?: Record<string, unknown> } | null)?.profiles?.["openai-codex:default"];
+      (apReadFor(oc, a) as { profiles?: Record<string, unknown> } | null)?.profiles?.["openai:octogee-chatgpt"];
     expect(profileOf("octogee-a-coach")).toBeDefined();
     expect(profileOf("octogee-b-coach")).toBeUndefined();
     expect(logs.join("\n")).toMatch(/octogee-b-coach|secret access denied/);
@@ -1116,7 +1130,7 @@ describe("restoreByosubCredentials", () => {
     const store = readAuthProfileStore(agentDir) as {
       profiles: Record<string, { access?: string }>;
     };
-    expect(store.profiles["openai-codex:default"].access).toBe("acc-1");
+    expect(store.profiles["openai:octogee-chatgpt"].access).toBe("acc-1");
   });
 
   it("recovery: on-disk cred present but openclaw flagged auth_permanent → restore REPLACES the dead cred", async () => {
@@ -1131,7 +1145,7 @@ describe("restoreByosubCredentials", () => {
       JSON.stringify({
         version: 1,
         usageStats: {
-          "openai-codex:default": {
+          "openai:octogee-chatgpt": {
             disabledReason: "auth_permanent",
             disabledUntil: Date.now() + 3_600_000,
           },
@@ -1153,7 +1167,7 @@ describe("restoreByosubCredentials", () => {
     const store = readAuthProfileStore(agentDir) as {
       profiles: Record<string, { access?: string }>;
     };
-    expect(store.profiles["openai-codex:default"].access).toBe("acc-1");
+    expect(store.profiles["openai:octogee-chatgpt"].access).toBe("acc-1");
   });
 });
 
@@ -1192,7 +1206,7 @@ describe("readCodexAuthStateText — SQLite state row preferred, JSON file fallb
     const sqlitePayload = {
       version: 1,
       usageStats: {
-        "openai-codex:default": { disabledReason: "auth_permanent", disabledUntil: 2_000_000_000_000 },
+        "openai:octogee-chatgpt": { disabledReason: "auth_permanent", disabledUntil: 2_000_000_000_000 },
       },
     };
     seedSqliteState(agentDir, sqlitePayload);
@@ -1222,7 +1236,7 @@ describe("restoreByosubCredentials — honors SQLite auth_profile_state (the P1 
       JSON.stringify({
         version: 1,
         usageStats: {
-          "openai-codex:default": {
+          "openai:octogee-chatgpt": {
             disabledReason: "auth_permanent",
             disabledUntil: Date.now() + 3_600_000,
           },
@@ -1247,7 +1261,7 @@ describe("restoreByosubCredentials — honors SQLite auth_profile_state (the P1 
     const store = readAuthProfileStore(agentDir) as {
       profiles: Record<string, { access?: string }>;
     };
-    expect(store.profiles["openai-codex:default"].access).toBe("acc-1");
+    expect(store.profiles["openai:octogee-chatgpt"].access).toBe("acc-1");
   });
 });
 

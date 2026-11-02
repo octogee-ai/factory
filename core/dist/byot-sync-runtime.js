@@ -6,7 +6,7 @@ import { applyByotState, byosCoachConfigPatch, coachAgentExists, coachAgentPatch
 import { createGatewayRpc, OpenclawWireError } from "./gateway-rpc.js";
 import { fingerprintCoachRuntimePolicy, reconcileCoachRuntimeSessionPolicy, } from "./coach-session-policy.js";
 import { internalFetch } from "./internal-fetch.js";
-import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, } from "./model-credential-materializer.js";
+import { claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, OPENAI_CODEX_DEFAULT_PROFILE_ID, } from "./model-credential-materializer.js";
 import { codexAgentDir, purgeCustomerOauthRuntimeArtifacts, removeStaleCodexAuthJson, removeSubscriptionProfiles, restoreByosubCredentials, sharedAuthAgentDir, } from "./byosub-restore.js";
 import { SHARED_MAIN_AGENT_ID, sharedAuthStoreUsable } from "./auth-profile-store.js";
 import { applyConfigPatch } from "./apply-config-patch.js";
@@ -415,6 +415,7 @@ export function agentIdsForSlug(slug, config) {
     return Array.from(new Set([...fromList, ...fromEntries]));
 }
 const CUSTOMER_OAUTH_PROFILE_IDS = new Set([
+    OPENAI_CODEX_DEFAULT_PROFILE_ID,
     "openai-codex:default",
     "anthropic:claude-cli",
 ]);

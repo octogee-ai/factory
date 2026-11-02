@@ -500,7 +500,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
       profiles: Record<string, unknown>;
     };
     expect(prof.version).toBe(1);
-    expect(prof.profiles["openai-codex:default"]).toMatchObject({
+    expect(prof.profiles["openai:octogee-chatgpt"]).toMatchObject({
       type: "oauth",
       provider: "openai",
       access: "acc-1",
@@ -528,7 +528,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     writeAuthProfileStore(codexAgentDir(oc, coach), {
       version: 1,
       profiles: {
-        "openai-codex:default": { type: "oauth", provider: "openai", access: "stale" },
+        "openai:octogee-chatgpt": { type: "oauth", provider: "openai", access: "stale" },
         "platform-openrouter:default": { type: "api_key", provider: "platform-openrouter" },
       },
     });
@@ -548,9 +548,9 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
 
     expect(r).toMatchObject({ restored: true, present: true });
     const shared = readAuthProfileStore(sharedAuthAgentDir(oc)) as { profiles: Record<string, unknown> };
-    expect(shared.profiles["openai-codex:default"]).toMatchObject({ access: "acc-1", refresh: "ref-1" });
+    expect(shared.profiles["openai:octogee-chatgpt"]).toMatchObject({ access: "acc-1", refresh: "ref-1" });
     const coachStore = readAuthProfileStore(codexAgentDir(oc, coach)) as { profiles: Record<string, unknown> };
-    expect(coachStore.profiles["openai-codex:default"]).toBeUndefined();
+    expect(coachStore.profiles["openai:octogee-chatgpt"]).toBeUndefined();
     expect(coachStore.profiles["platform-openrouter:default"]).toBeDefined();
     expect(readAuthProfileStore(codexAgentDir(oc, project))).toBeNull();
     expect(fs.existsSync(codexAuthJsonPath(oc, coach))).toBe(false);
@@ -585,7 +585,7 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
 
     const shared = readAuthProfileStore(sharedAuthAgentDir(oc)) as { profiles: Record<string, unknown> };
     expect(shared.profiles["anthropic:claude-cli"]).toBeUndefined();
-    expect(shared.profiles["openai-codex:default"]).toMatchObject({ access: "acc-1" });
+    expect(shared.profiles["openai:octogee-chatgpt"]).toMatchObject({ access: "acc-1" });
   });
 
   it("materializes Claude and Codex from one hosted-agent broker response", async () => {
@@ -621,12 +621,12 @@ describe("restoreOauthStoreForSlug — post-boot-mount oauth-store materializati
     const prof = readAuthProfileStore(codexAgentDir(oc, "octogee-tester-70-coach")) as {
       profiles: Record<string, { provider?: string; access?: string }>;
     };
-    expect(prof.profiles["openai-codex:default"]).toMatchObject({
+    expect(prof.profiles["openai:octogee-chatgpt"]).toMatchObject({
       provider: "openai",
       access: "acc-1",
     });
     expect(prof.profiles["anthropic:claude-cli"]).toMatchObject({
-      provider: "claude-cli",
+      provider: "anthropic",
       access: "claude-access-1",
     });
   });
@@ -1982,7 +1982,7 @@ describe("customer OAuth runtime purge", () => {
     writeAuthProfileStore(sharedAuthAgentDir(oc), {
       version: 1,
       profiles: {
-        "openai-codex:default": { type: "oauth", provider: "openai", access: "a" },
+        "openai:octogee-chatgpt": { type: "oauth", provider: "openai", access: "a" },
         "anthropic:claude-cli": { type: "oauth", provider: "claude-cli", access: "c" },
         "operator:default": { type: "api_key", provider: "operator" },
       },
@@ -3092,7 +3092,7 @@ describe("operator gateway — runtime sync stays narrow", () => {
       profiles: Record<string, { provider?: string; access?: string }>;
     };
     expect(store.profiles["anthropic:claude-cli"]).toMatchObject({
-      provider: "claude-cli",
+      provider: "anthropic",
       access: "sk-ant-oat01-operator-token",
     });
   });

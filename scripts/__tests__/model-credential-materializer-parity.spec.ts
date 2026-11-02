@@ -152,7 +152,7 @@ describe("codexRuntimeConfig — BYOS coach model + agentRuntime:codex routing",
 });
 
 describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (beta.6)", () => {
-  it("maps a codex auth.json into the proven openai-codex:default OAuthCredential", () => {
+  it("maps a codex auth.json into the proven openai:octogee-chatgpt OAuthCredential", () => {
     const idToken = jwt({
       email: "u@example.com",
       "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
@@ -171,7 +171,7 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
     expect(buildCodexAuthProfilesStore(authJson)).toEqual({
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:octogee-chatgpt": {
           type: "oauth",
           provider: "openai",
           access: "acc-123",
@@ -191,7 +191,7 @@ describe("buildCodexAuthProfilesStore — codex-shape per-agent OAuth profile (b
     const out = buildCodexAuthProfilesStore(
       JSON.stringify({ tokens: { access_token: "a", refresh_token: "r", account_id: "x" } }),
     );
-    const p = out.profiles["openai-codex:default"];
+    const p = out.profiles["openai:octogee-chatgpt"];
     expect(p).toEqual({
       type: "oauth",
       provider: "openai",
@@ -227,7 +227,7 @@ expect(() =>
       }),
     );
     
-    expect(out.profiles["openai-codex:default"].expires).toBe(1_893_456_000_000);
+    expect(out.profiles["openai:octogee-chatgpt"].expires).toBe(1_893_456_000_000);
   });
 
   it("fail-safe: non-JWT / no exp / non-numeric exp access_token → expires 0 (force refresh, prior behavior)", () => {
@@ -237,7 +237,7 @@ expect(() =>
           auth_mode: "chatgpt",
           tokens: { access_token: accessToken, refresh_token: "r" },
         }),
-      ).profiles["openai-codex:default"].expires;
+      ).profiles["openai:octogee-chatgpt"].expires;
     expect(exp0("not-a-jwt")).toBe(0); 
     expect(exp0(jwt({}))).toBe(0); 
     expect(exp0(jwt({ exp: "soon" }))).toBe(0); 
@@ -296,14 +296,14 @@ describe("buildCodexAuthJsonFromStore — Chunk B inverse-mapper (sync-back)", (
     expect(
       buildCodexAuthJsonFromStore(
         JSON.stringify({
-          profiles: { "openai-codex:default": { type: "oauth", access: "a" } },
+          profiles: { "openai:octogee-chatgpt": { type: "oauth", access: "a" } },
         }),
       ),
     ).toBeNull(); 
     expect(
       buildCodexAuthJsonFromStore(
         JSON.stringify({
-          profiles: { "openai-codex:default": { type: "api_key", access: "a", refresh: "r" } },
+          profiles: { "openai:octogee-chatgpt": { type: "api_key", access: "a", refresh: "r" } },
         }),
       ),
     ).toBeNull(); 
@@ -347,7 +347,7 @@ describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile
       profiles: {
         [CLAUDE_CLI_DEFAULT_PROFILE_ID]: {
           type: "oauth",
-          provider: "claude-cli",
+          provider: "anthropic",
           access: "sk-ant-oat01-abc",
           expires: NOW + ONE_YEAR_MS,
           copyToAgents: true,
@@ -362,7 +362,7 @@ describe("buildClaudeCliAuthProfilesStore — claude-cli per-agent OAuth profile
       profiles: {
         [CLAUDE_CLI_DEFAULT_PROFILE_ID]: {
           type: "oauth",
-          provider: "claude-cli",
+          provider: "anthropic",
           access: "sk-ant-oat01-access",
           refresh: "sk-ant-oat01-refresh",
           expires: 1_782_344_797_336,
@@ -408,7 +408,7 @@ describe("buildModelCredentialConfigForProvider — claude-cli (Claude subscript
   it("emits an oauth profile (no keyRef) — the credential is the per-agent claude-cli store", () => {
     const out = buildModelCredentialConfigForProvider(base);
     expect(out.authProfiles).toEqual({
-      profiles: { "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" } },
+      profiles: { "anthropic:claude-cli": { type: "oauth", provider: "anthropic" } },
     });
     expect(out.models).toBeNull();
   });

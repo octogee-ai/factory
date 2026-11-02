@@ -268,7 +268,7 @@ export const MODEL_CREDENTIAL_CATALOG = [
     openclaw: {
       authProvider: 'openai',
       configProfileId: 'openai-codex',
-      storeProfileId: 'openai-codex:default',
+      storeProfileId: 'openai:octogee-chatgpt',
       secretRefAllowed: false,
     },
     defaults: { model: 'openai/gpt-5.6-luna' },
@@ -309,7 +309,7 @@ export const MODEL_CREDENTIAL_CATALOG = [
     baseUrl: { kind: 'none' },
     model: { required: false },
     openclaw: {
-      authProvider: 'claude-cli',
+      authProvider: 'anthropic',
       configProfileId: 'anthropic:claude-cli',
       storeProfileId: 'anthropic:claude-cli',
       secretRefAllowed: false,
