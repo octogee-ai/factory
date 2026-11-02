@@ -123,7 +123,7 @@ describe("scaling configuration", () => {
   it("parses the operator autoscaling knobs with defaults", () => {
     expect(parseSharedGatewayAutoscalingConfig(undefined)).toEqual({
       enabled: true,
-      buildersPerGateway: 4,
+      buildersPerGateway: 10,
     });
     expect(parseSharedGatewayAutoscalingConfig({ enabled: false, buildersPerGateway: 2 })).toEqual({
       enabled: false,
@@ -133,7 +133,7 @@ describe("scaling configuration", () => {
     expect(parseSharedGatewayAutoscalingConfig({ enabled: "yes" })).toBeNull();
     expect(parseSharedGatewayAutoscalingConfig({ minHotMembers: 2 })).toEqual({
       enabled: true,
-      buildersPerGateway: 4,
+      buildersPerGateway: 10,
     });
   });
 
