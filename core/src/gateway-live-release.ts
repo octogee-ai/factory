@@ -219,13 +219,16 @@ export async function readGatewayArtifact(
   db: FirestoreReader,
   gatewayId: string,
   release: number | null,
+  transaction?: Pick<Transaction, "get">,
 ): Promise<GatewayArtifact | null> {
   if (!isBareGatewayId(gatewayId)) return null;
   if (typeof release !== "number" || !Number.isInteger(release) || release < 1) return null;
-  const releaseSnap = await db
-    .doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`)
-    .get();
-  const releaseData = releaseSnap.exists ? releaseSnap.data() : undefined;
+  const releaseRef = db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`);
+  const releaseSnap = await (transaction ? transaction.get(releaseRef) : releaseRef.get());
+  return artifactFromStoredRelease(releaseSnap.exists ? releaseSnap.data() : undefined, gatewayId, release);
+}
+
+function artifactFromStoredRelease(releaseData: unknown, gatewayId: string, release: number): GatewayArtifact | null {
   const payload = isRecord(releaseData) ? releaseData.payload : undefined;
   let artifact: ReleasePayload | null = isGatewayArtifact(payload) ? payload : null;
   if (artifact === null) {

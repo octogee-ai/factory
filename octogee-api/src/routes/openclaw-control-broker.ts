@@ -9,24 +9,20 @@ import {
 } from "firebase-admin/firestore";
 
 import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
-import { gatewayAuthorizationFromRootDocument } from "@octogee/core/gateway-live-release";
+import { gatewayAuthorizationFromRootDocument, readGatewayArtifact } from "@octogee/core/gateway-live-release";
 import {
   OPENCLAW_CONTROL_TICKETS_COLLECTION,
   inspectOpenClawControlTicket,
   openClawControlTicketHash,
   type OpenClawControlTicketInspection,
 } from "@octogee/core/openclaw-control-tickets";
-import { isOpenClawControlRevisionRuntimeReady } from "@octogee/core/openclaw-control-runtime-ready";
+import { isOpenClawControlRevisionRuntimeReady, isOpenClawControlServingRevision } from "@octogee/core/openclaw-control-runtime-ready";
 import {
   resolveGatewayPrincipalAccess,
   type GatewayPrincipalAccess,
   workspacePermissionsEnabled,
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
-import {
-  isGatewayRuntimeDoc,
-  projectGatewayDesiredRootForGateway,
-} from "@octogee/shared/types/gateway-releases";
 import { isGatewayClassControlUiAccessEnabled, resolveGatewayClass } from "@octogee/shared/types/glm";
 import { revisionIdFromGatewayPodName } from "../lib/gateway-pod-revision.js";
 import { setGatewayAccessDenialAudit } from "../../../gateway-edge/src/lib/gateway-access-audit.js";
@@ -244,34 +240,6 @@ function auditPrincipalDenial(args: {
   });
 }
 
-function isLiveServingRevision(
-  root: unknown,
-  revision: unknown,
-  gatewayId: string,
-  revisionId: string,
-): boolean {
-  const gateway = projectGatewayDesiredRootForGateway(root, gatewayId);
-  return gateway !== null &&
-    gateway.desiredStatus === "running" &&
-    gateway.desiredRelease === gateway.liveRelease &&
-    revisionId === gatewayId &&
-    isGatewayRuntimeDoc(revision) &&
-    revision.gatewayId === gatewayId &&
-    revision.release === gateway.liveRelease &&
-    revision.lifecycle === "serving";
-}
-
-function isReadyLiveServingRevision(
-  root: unknown,
-  revision: unknown,
-  gatewayId: string,
-  revisionId: string,
-  now: number,
-): boolean {
-  return isLiveServingRevision(root, revision, gatewayId, revisionId) &&
-    isOpenClawControlRevisionRuntimeReady(revision, { gatewayId, revisionId, now });
-}
-
 export function openClawControlSessionHash(sessionId: string): string {
   return createHash("sha256").update("openclaw-control-session\0").update(sessionId).digest("hex");
 }
@@ -356,7 +324,10 @@ async function sessionAccessInTransaction(args: {
   if (MOVING_ASSIGNMENT_STATES.has(stored.assignmentState)) {
     return { kind: WORKSPACE_NOT_SERVING };
   }
-  if (stored.assignmentState !== "serving" || !isLiveServingRevision(root, revisionSnap.data(), args.gatewayId, args.revisionId)) {
+  if (stored.assignmentState !== "serving" || !await isOpenClawControlServingRevision(root, revisionSnap.data(), {
+    gatewayId: args.gatewayId, revisionId: args.revisionId, now: args.now,
+    readArtifact: (release) => readGatewayArtifact(args.db, args.gatewayId, release, args.tx),
+  })) {
     return { kind: "not-ready" };
   }
   return { kind: "allowed", session };
@@ -610,13 +581,16 @@ async function applyRedeemAttempt(
     tx,
   });
   if (principalFailure) return principalFailure;
-  if (!isReadyLiveServingRevision(
-    documents.root,
-    documents.revision,
-    attempt.authenticated.bound.gatewayId,
-    attempt.authenticated.revisionId,
-    attempt.attemptAt,
-  )) return { kind: "not-ready" };
+  const identity = {
+    gatewayId: attempt.authenticated.bound.gatewayId,
+    revisionId: attempt.authenticated.revisionId,
+    now: attempt.attemptAt,
+  };
+  if (!isOpenClawControlRevisionRuntimeReady(documents.revision, identity) ||
+    !await isOpenClawControlServingRevision(documents.root, documents.revision, {
+      ...identity,
+      readArtifact: (release) => readGatewayArtifact(context.db, identity.gatewayId, release, tx),
+    })) return { kind: "not-ready" };
   return persistRedeemedSession({ attempt, documents, inspected, tx });
 }
 

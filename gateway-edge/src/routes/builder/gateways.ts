@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
+import type { Transaction } from "firebase-admin/firestore";
 import { requireAuth } from "../../middleware/auth.js";
 import { db, FieldValue, Timestamp } from "../../lib/db.js";
 import {
@@ -33,7 +34,7 @@ import {
   type ResolvedGatewayAccess,
 } from "@octogee/core/gateway-principal-access";
 import { slugFromAssignedUser, userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
-import { isOpenClawControlRevisionRuntimeReady } from "../../openclaw-control/runtime-ready.js";
+import { isOpenClawControlRevisionRuntimeReady, isOpenClawControlServingRevision } from "../../openclaw-control/runtime-ready.js";
 import {
   recordGatewayAccessDenial,
   setGatewayAccessDenialAudit,
@@ -58,7 +59,7 @@ const openClawTicketRateLimit = rateLimit({
   message: { error: "ticket-rate-limited", retryable: true },
 });
 
-function builderViewOf({
+async function builderViewOf({
   authorization,
   scope,
   access,
@@ -74,7 +75,7 @@ function builderViewOf({
   heartbeat: Record<string, unknown> | null;
   runtime: unknown;
   isCurrentAssignment: boolean;
-}): GatewayControlListEntry {
+}): Promise<GatewayControlListEntry> {
   const { gateway, config } = authorization;
   const explicitProfile = config.profile ?? undefined;
   const profile = explicitProfile ?? "standard";
@@ -102,7 +103,7 @@ function builderViewOf({
     desiredStatus: gateway.desiredStatus,
     imageTag,
     controlUiEnabled,
-    controlUiReady: openClawControlReachable({
+    controlUiReady: await openClawControlReachable({
       authorization,
       runtime,
       controlUiEnabled,
@@ -289,7 +290,7 @@ async function builderGatewayEntry(
   );
   return {
     scopeKey: `${scope.gatewayId}\0${scope.workspaceSlug}`,
-    entry: builderViewOf({
+    entry: await builderViewOf({
       authorization,
       scope,
       access,
@@ -385,17 +386,29 @@ function servingRevisionId(
 ): string | null {
   const { gateway } = authorization;
   if (gateway.desiredStatus !== "running" ||
-    gateway.desiredRelease !== gateway.liveRelease ||
     typeof gateway.liveRelease !== "number") return null;
   return gateway.gatewayId;
 }
 
-function openClawControlRuntimeReachable(
+async function openClawControlRuntimeReachable(
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>,
   runtime: unknown,
-): boolean {
+  transaction?: Transaction,
+): Promise<boolean> {
   const revisionId = servingRevisionId(authorization);
   if (!revisionId) return false;
+  const { gateway } = authorization;
+  if (gateway.desiredRelease !== gateway.liveRelease) {
+    const ownerUid = authorization.config.ownerUid;
+    if (!ownerUid) return false;
+    const assignmentRef = db.doc(`gateways/${gateway.gatewayId}/assignments/${ownerUid}`);
+    const assignment = await (transaction ? transaction.get(assignmentRef) : assignmentRef.get());
+    if (assignment.data()?.state !== "serving") return false;
+  }
+  if (!await isOpenClawControlServingRevision(gateway, runtime, {
+    gatewayId: gateway.gatewayId, revisionId,
+    readArtifact: (release) => readGatewayArtifact(db, gateway.gatewayId, release, transaction),
+  })) return false;
   return isOpenClawControlRevisionRuntimeReady(runtime, {
     gatewayId: authorization.gateway.gatewayId,
     revisionId,
@@ -403,15 +416,15 @@ function openClawControlRuntimeReachable(
 }
 
 /** Every condition `mintOpenClawTicket` would reject on, answered from the list. */
-function openClawControlReachable(input: {
+async function openClawControlReachable(input: {
   authorization: Extract<GatewayAuthorization, { kind: "durable" }>;
   runtime: unknown;
   controlUiEnabled: boolean;
   isCurrentAssignment: boolean;
-}): boolean {
+}): Promise<boolean> {
   return input.controlUiEnabled &&
     input.isCurrentAssignment &&
-    openClawControlRuntimeReachable(input.authorization, input.runtime);
+    await openClawControlRuntimeReachable(input.authorization, input.runtime);
 }
 
 async function mintOpenClawTicket(
@@ -457,9 +470,10 @@ async function mintOpenClawTicket(
     const revisionId = servingRevisionId(serving);
     if (!revisionId) return { kind: NOT_READY };
     const revisionSnap = await tx.get(db.doc(`glmGateways/${revisionId}`));
-    if (!openClawControlRuntimeReachable(
+    if (!await openClawControlRuntimeReachable(
       serving,
       revisionSnap.exists ? revisionSnap.data() : undefined,
+      tx,
     )) return { kind: NOT_READY };
     const minted = createOpenClawControlTicket({
       uid,

@@ -1,4 +1,6 @@
 import { GATEWAY_HEARTBEAT_INTERVAL_MS, OPENCLAW_DASHBOARD_BRIDGE_CAPABILITY_TTL_MS, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL, OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION, } from "@octogee/shared/types/fleet-controller";
+import { isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
+import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 export const OPENCLAW_CONTROL_RUNTIME_FRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 4;
 const MAX_CLOCK_SKEW_MS = 5_000;
 function record(value) {
@@ -64,4 +66,25 @@ export function isOpenClawControlRevisionRuntimeReady(value, input) {
     return hasExpectedRuntimeIdentity(configStatus) &&
         hasReadyDashboard(configStatus, now) &&
         hasFreshRuntimeProof(heartbeat, configStatus, now);
+}
+export async function isOpenClawControlServingRevision(root, runtime, input) {
+    const gateway = projectGatewayDesiredRootForGateway(root, input.gatewayId);
+    if (!gateway || gateway.desiredStatus !== "running" || gateway.liveRelease === null ||
+        input.revisionId !== input.gatewayId || !isGatewayRuntimeDoc(runtime) ||
+        runtime.gatewayId !== input.gatewayId || runtime.lifecycle !== "serving")
+        return false;
+    if (gateway.desiredRelease === gateway.liveRelease)
+        return runtime.release === gateway.liveRelease;
+    return isServingBuilderDuringRoll(root, gateway, runtime, input);
+}
+async function isServingBuilderDuringRoll(root, gateway, runtime, input) {
+    if (gateway.gatewayClass !== "builder" || gateway.liveRelease === null || gateway.desiredRelease < gateway.liveRelease ||
+        gateway.retireAfter != null ||
+        record(root)?.retirementClaim != null || record(root)?.runtimeRestartFence !== undefined ||
+        (runtime.release !== gateway.liveRelease && runtime.release !== gateway.desiredRelease) ||
+        !isOpenClawControlRevisionRuntimeReady(runtime, input))
+        return false;
+    const artifact = await input.readArtifact(gateway.liveRelease);
+    const image = artifact?.profileImages?.builder;
+    return image !== undefined && gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, image.imageTag);
 }

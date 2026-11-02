@@ -4,6 +4,9 @@ import {
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL,
   OPENCLAW_DASHBOARD_BRIDGE_PROTOCOL_VERSION,
 } from "@octogee/shared/types/fleet-controller";
+import { isGatewayRuntimeDoc, projectGatewayDesiredRootForGateway, type GatewayDoc, type GatewayRuntimeDoc } from "@octogee/shared/types/gateway-releases";
+import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
+import type { GatewayArtifact, GatewayMutableConfig } from "./gateway-live-release.js";
 
 export const OPENCLAW_CONTROL_RUNTIME_FRESH_MS = GATEWAY_HEARTBEAT_INTERVAL_MS * 4;
 const MAX_CLOCK_SKEW_MS = 5_000;
@@ -92,4 +95,38 @@ export function isOpenClawControlRevisionRuntimeReady(
   return hasExpectedRuntimeIdentity(configStatus) &&
     hasReadyDashboard(configStatus, now) &&
     hasFreshRuntimeProof(heartbeat, configStatus, now);
+}
+
+export async function isOpenClawControlServingRevision(
+  root: unknown,
+  runtime: unknown,
+  input: {
+    gatewayId: string;
+    revisionId: string;
+    now?: number;
+    readArtifact: (release: number) => Promise<GatewayArtifact | null>;
+  },
+): Promise<boolean> {
+  const gateway = projectGatewayDesiredRootForGateway(root, input.gatewayId);
+  if (!gateway || gateway.desiredStatus !== "running" || gateway.liveRelease === null ||
+    input.revisionId !== input.gatewayId || !isGatewayRuntimeDoc(runtime) ||
+    runtime.gatewayId !== input.gatewayId || runtime.lifecycle !== "serving") return false;
+  if (gateway.desiredRelease === gateway.liveRelease) return runtime.release === gateway.liveRelease;
+  return isServingBuilderDuringRoll(root, gateway, runtime, input);
+}
+
+async function isServingBuilderDuringRoll(
+  root: unknown,
+  gateway: GatewayDoc & GatewayMutableConfig,
+  runtime: GatewayRuntimeDoc,
+  input: Parameters<typeof isOpenClawControlServingRevision>[2],
+): Promise<boolean> {
+  if (gateway.gatewayClass !== "builder" || gateway.liveRelease === null || gateway.desiredRelease < gateway.liveRelease ||
+    gateway.retireAfter != null ||
+    record(root)?.retirementClaim != null || record(root)?.runtimeRestartFence !== undefined ||
+    (runtime.release !== gateway.liveRelease && runtime.release !== gateway.desiredRelease) ||
+    !isOpenClawControlRevisionRuntimeReady(runtime, input)) return false;
+  const artifact = await input.readArtifact(gateway.liveRelease);
+  const image = artifact?.profileImages?.builder;
+  return image !== undefined && gatewayHeartbeatMatchesImageTag(runtime.heartbeat.version, image.imageTag);
 }

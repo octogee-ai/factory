@@ -108,15 +108,16 @@ export function gatewayArtifactFromReleasePayload(payload) {
 function isGatewayArtifact(value) {
     return isReleasePayload(value);
 }
-export async function readGatewayArtifact(db, gatewayId, release) {
+export async function readGatewayArtifact(db, gatewayId, release, transaction) {
     if (!isBareGatewayId(gatewayId))
         return null;
     if (typeof release !== "number" || !Number.isInteger(release) || release < 1)
         return null;
-    const releaseSnap = await db
-        .doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`)
-        .get();
-    const releaseData = releaseSnap.exists ? releaseSnap.data() : undefined;
+    const releaseRef = db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`);
+    const releaseSnap = await (transaction ? transaction.get(releaseRef) : releaseRef.get());
+    return artifactFromStoredRelease(releaseSnap.exists ? releaseSnap.data() : undefined, gatewayId, release);
+}
+function artifactFromStoredRelease(releaseData, gatewayId, release) {
     const payload = isRecord(releaseData) ? releaseData.payload : undefined;
     let artifact = isGatewayArtifact(payload) ? payload : null;
     if (artifact === null) {
