@@ -218,6 +218,63 @@ describe("shapeBundle", () => {
     expect(out.posts[0].snippet.length).toBeLessThan(220);
   });
 
+  it.each([
+    { query: undefined, character: "😀" },
+    { query: "absent", character: "😀" },
+    { query: "countdown", character: "😀" },
+    { query: "countdown", character: "👩🏽‍💻" },
+    { query: "countdown", character: "🇺🇸" },
+    { query: "countdown", character: "e\u0301" },
+  ])("keeps $character whole at the snippet end for query=$query", ({ query, character }) => {
+    const prefix = "countdown " + "x".repeat(189);
+    const out = shapeBundle(
+      {
+        posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message: prefix + character + " tail", create_at: 1 } },
+        order: ["p"],
+      },
+      { ...baseCtx, query },
+    );
+    expect(out.posts[0].snippet).toBe(prefix + character + "…");
+    expect(out.posts[0].snippet.isWellFormed()).toBe(true);
+  });
+
+  it.each(["😀", "👩🏽‍💻", "🇺🇸", "e\u0301"])("keeps %s whole at the start of a query-anchored snippet", (character) => {
+    const message = "x".repeat(150) + character + "y".repeat(65) + "countdown" + "z".repeat(250);
+    const out = shapeBundle(
+      {
+        posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message, create_at: 1 } },
+        order: ["p"],
+      },
+      { ...baseCtx, query: "countdown" },
+    );
+    expect(out.posts[0].snippet).toBe("…" + character + "y".repeat(65) + "countdown" + "z".repeat(125) + "…");
+    expect(out.posts[0].snippet.isWellFormed()).toBe(true);
+  });
+
+  it("leaves 200 visible Unicode characters untruncated", () => {
+    const message = "👩🏽‍💻".repeat(200);
+    const out = shapeBundle(
+      {
+        posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message, create_at: 1 } },
+        order: ["p"],
+      },
+      baseCtx,
+    );
+    expect(out.posts[0].snippet).toBe(message);
+  });
+
+  it("keeps the query in view after Unicode case folding expands preceding text", () => {
+    const message = "İ".repeat(120) + "x".repeat(80) + "countdown" + "y".repeat(250);
+    const out = shapeBundle(
+      {
+        posts: { p: { id: "p", channel_id: "ch1", user_id: "u-taylor", message, create_at: 1 } },
+        order: ["p"],
+      },
+      { ...baseCtx, query: "countdown" },
+    );
+    expect(out.posts[0].snippet).toBe("…" + "x".repeat(66) + "countdown" + "y".repeat(125) + "…");
+  });
+
   it("strips MM operators from query when picking snippet anchor", () => {
     const out = shapeBundle(
       {

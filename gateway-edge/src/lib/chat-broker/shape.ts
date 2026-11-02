@@ -69,6 +69,7 @@ export interface CoachPost {
 }
 
 const SNIPPET_LEN = 200;
+const SNIPPET_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function displayName(u: MmUserMeta | undefined): string {
   if (!u) return "(unknown)";
@@ -93,8 +94,9 @@ function isoFromMs(ms: number): string {
 
 function makeSnippet(message: string, query?: string): string {
   const text = (message ?? "").replace(/\s+/g, " ").trim();
-  if (text.length <= SNIPPET_LEN) return text;
-  if (!query) return text.slice(0, SNIPPET_LEN) + "…";
+  const characters = Array.from(SNIPPET_SEGMENTER.segment(text), ({ segment }) => segment);
+  if (characters.length <= SNIPPET_LEN) return text;
+  if (!query) return characters.slice(0, SNIPPET_LEN).join("") + "…";
 
   // Find the longest token from the query and anchor the snippet around it.
   // Strip MM search operators (from:, in:, before:, after:) before tokenizing.
@@ -110,13 +112,14 @@ function makeSnippet(message: string, query?: string): string {
   for (const tok of tokens) {
     const idx = lower.indexOf(tok);
     if (idx === -1) continue;
-    const start = Math.max(0, idx - Math.floor(SNIPPET_LEN / 3));
-    const end = Math.min(text.length, start + SNIPPET_LEN);
+    const anchor = Array.from(SNIPPET_SEGMENTER.segment(lower.slice(0, idx))).length;
+    const start = Math.max(0, anchor - Math.floor(SNIPPET_LEN / 3));
+    const end = Math.min(characters.length, start + SNIPPET_LEN);
     const prefix = start > 0 ? "…" : "";
-    const suffix = end < text.length ? "…" : "";
-    return prefix + text.slice(start, end) + suffix;
+    const suffix = end < characters.length ? "…" : "";
+    return prefix + characters.slice(start, end).join("") + suffix;
   }
-  return text.slice(0, SNIPPET_LEN) + "…";
+  return characters.slice(0, SNIPPET_LEN).join("") + "…";
 }
 
 export interface ShapedBundle {
