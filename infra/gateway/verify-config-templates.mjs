@@ -23,6 +23,7 @@ try {
     const result = spawnSync(process.execPath, [cli, "config", "validate", "--json"], {
       encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_OFFLINE: "1",
+        OPENCLAW_AGENT_STORE_DSN: "postgresql://config-validation@127.0.0.1:5432/config_validation",
         MM_URL: "http://127.0.0.1:8065", MM_SITE_URL: "http://127.0.0.1:8065",
         MM_INTERACTIONS_CALLBACK_BASE_URL: "http://127.0.0.1:3000", MM_INTERACTIONS_ALLOWED_SOURCE_IPS: "127.0.0.1/32",
         FLEET_BROKER_URL: "http://127.0.0.1:3001/internal/fleet", OCTOGEE_API_SA_TOKEN_PATH: tokenPath,

@@ -15,14 +15,14 @@ function fixture(builder: Record<string, unknown> = {}) {
   const cli = join(root, "bin/openclaw"), log = join(root, "calls.jsonl");
   writeFileSync(cli, `#!${process.execPath}
 const fs=require('fs');const path=require('path');const config=JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH,'utf8'));
-fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),config,configPath:process.env.OPENCLAW_CONFIG_PATH,gatewayClass:process.env.GATEWAY_CLASS,
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),config,configPath:process.env.OPENCLAW_CONFIG_PATH,gatewayClass:process.env.GATEWAY_CLASS,databaseDsn:process.env.OPENCLAW_AGENT_STORE_DSN,
  projected:fs.realpathSync(path.join(process.env.OPENCLAW_STATE_DIR,'extensions')),npm:fs.realpathSync(path.join(process.env.OPENCLAW_STATE_DIR,'npm'))})+'\\n');
 if(config.reject){process.stderr.write('unsupported config key');process.exit(2);}
 process.stdout.write(JSON.stringify({valid:config.invalidReport!==true}));
 `);
   chmodSync(cli, 0o755);
   const run = () => spawnSync(process.execPath, [helper, join(root, "templates"), join(root, "extensions"), join(root, "npm"), cli], {
-    encoding: "utf8", env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}` },
+    encoding: "utf8", env: { ...process.env, OPENCLAW_AGENT_STORE_DSN: "postgresql://inherited.invalid/runtime", PATH: `${join(root, "bin")}:${process.env.PATH}` },
   });
   const calls = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
   return { root, run, calls };
@@ -31,6 +31,17 @@ process.stdout.write(JSON.stringify({valid:config.invalidReport!==true}));
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Native config template image gate", () => {
+  it("resolves PostgreSQL templates against a build-only DSN instead of inherited runtime credentials", () => {
+    const f = fixture({ database: { engine: "postgres", postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" },
+    } } });
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(f.calls().map(call => call.databaseDsn)).toEqual([
+      "postgresql://config-validation@127.0.0.1:5432/config_validation",
+      "postgresql://config-validation@127.0.0.1:5432/config_validation",
+    ]);
+  });
   it("validates both raw templates with projected image plugins and isolated runtime state", () => {
     const f = fixture(), result = f.run();
     expect(result.status, result.stderr).toBe(0);
