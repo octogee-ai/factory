@@ -29,7 +29,7 @@ try {
       if (sha !== env.SOURCE_SHA) throw new Error('Release source changed');
       return JSON.parse(readFileSync(process.env.CI_RELEASE_MANIFEST, 'utf8'));
     },
-    lock: task => withBuildLock(`deploy-${options.environment}`, request, task),
+    lock: task => withBuildLock(`deploy-${options.environment}`, request, task, { takeOverFinishedRuns: true }),
     platform: () => stage('platform', 'bash', ['scripts/ci/platform-deploy.sh']),
     site: () => stage('site', 'node', ['scripts/ci/site-deploy.mjs']),
     desktop: () => stage('desktop', 'node', ['--import', './node_modules/tsx/dist/loader.mjs', 'ops/release-desktop-image.ts'], { cwd: 'scripts' }),
