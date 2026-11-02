@@ -804,6 +804,13 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(install).toContain("kubectl rollout status deployment/octogee-gitea");
   });
 
+  it("prints a pod restart that leaves Cowboy's gateway Deployments alone", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain("kubectl rollout restart deploy -n octogee-test --context gke_octogee_us-central1_octogee-gateway -l 'app!=octogee-gateway'");
+  });
+
   it("allows an already-empty target Storage bucket to complete the reset", () => {
     const result = runPrivateCentralTeardown({ storageEmpty: true });
 
