@@ -280,6 +280,26 @@ describe("shared pool sampler", () => {
     await expect(createSharedPoolSampler(kubectl)()).rejects.toThrow("gateway usage");
   });
 
+  it("waits for metrics on a slot that only just became Ready instead of failing the run", async () => {
+    const now = Date.parse("2026-11-02T17:00:00Z");
+    const fresh = { ...pod("shared-1", { runtimeClassName: "gvisor" }) } as ReturnType<typeof pod> & { status: { conditions?: unknown[] } };
+    fresh.status = { ...fresh.status, conditions: [{ type: "Ready", status: "True", lastTransitionTime: "2026-11-02T16:59:30Z" }] };
+    const state = { pods: [pod("shared-0"), fresh], oom: {}, podUsage: {} };
+    const { kubectl } = fakeKubectl(state);
+    const sample = await createSharedPoolSampler(kubectl, () => now)();
+    expect(sample.slots.map((s) => s.slot)).toEqual(["shared-0"]);
+    expect(sample.metricsPending).toEqual([{ slot: "shared-1", pod: "shared-1-pod" }]);
+    expect(slotObservation(sample).serving).toEqual(["shared-0", "shared-1"]);
+  });
+
+  it("still fails closed when a long-Ready slot has no metrics", async () => {
+    const now = Date.parse("2026-11-02T17:00:00Z");
+    const stale = { ...pod("shared-1", { runtimeClassName: "gvisor" }) } as ReturnType<typeof pod> & { status: { conditions?: unknown[] } };
+    stale.status = { ...stale.status, conditions: [{ type: "Ready", status: "True", lastTransitionTime: "2026-11-02T16:50:00Z" }] };
+    const { kubectl } = fakeKubectl({ pods: [stale], oom: {}, podUsage: {} });
+    await expect(createSharedPoolSampler(kubectl, () => now)()).rejects.toThrow("gateway usage");
+  });
+
   it("keeps reading cgroups on the standard runtime", async () => {
     const { kubectl } = fakeKubectl({ pods: [pod("shared-0")], oom: {} });
     expect((await createSharedPoolSampler(kubectl)()).slots[0]).toMatchObject({ telemetry: "cgroup", chargedBytes: 1024 });

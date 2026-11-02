@@ -6,8 +6,21 @@ const execute = promisify(execFile);
 type Pod = {
   metadata: { name: string; uid: string; deletionTimestamp?: string; labels?: Record<string, string> };
   spec: { nodeName: string; runtimeClassName?: string; containers: { name: string; resources?: { limits?: Record<string, string>; requests?: Record<string, string> }; image: string }[] };
-  status: { containerStatuses?: { name: string; ready: boolean; restartCount: number; lastState?: { terminated?: { reason?: string } } }[] };
+  status: {
+    containerStatuses?: { name: string; ready: boolean; restartCount: number; lastState?: { terminated?: { reason?: string } } }[];
+    conditions?: { type: string; status: string; lastTransitionTime?: string }[];
+  };
 };
+
+// metrics-server publishes a pod's or node's usage only after its first scrape window.
+const METRICS_WARMUP_MS = 3 * 60_000;
+
+export class MetricsNotYetPublishedError extends Error {}
+
+function readyForMs(pod: Pod, now: number): number {
+  const ready = pod.status.conditions?.find((c) => c.type === "Ready" && c.status === "True")?.lastTransitionTime;
+  return ready ? now - Date.parse(ready) : Infinity;
+}
 
 // gVisor emulates /sys/fs/cgroup inside the sandbox without the cgroup v2 files
 // sampled below, so sandboxed gateways are read from the kubelet metrics API.
@@ -106,7 +119,7 @@ async function gatewayMetricsUsage(kubectl: Kubectl, pod: Pod): Promise<{ cpuCor
   const metrics = JSON.parse(await kubectl("get", "--raw", `/apis/metrics.k8s.io/v1beta1/namespaces/${TEST_NAMESPACE}/pods/${pod.metadata.name}`));
   const gateway = (metrics.containers as { name: string; usage?: { cpu?: string; memory?: string } }[] | undefined)
     ?.find((c) => c.name === "gateway");
-  if (!gateway?.usage) throw new Error("Missing gateway usage in the metrics API");
+  if (!gateway?.usage) throw new MetricsNotYetPublishedError("Missing gateway usage in the metrics API");
   return { cpuCores: cpuQuantityCores(gateway.usage.cpu), memoryBytes: memoryQuantityBytes(gateway.usage.memory, "gateway memory usage") };
 }
 
@@ -187,7 +200,7 @@ function nodeMetricsReader(kubectl: Kubectl) {
     if (!pending) {
       pending = (async () => {
         const metrics = JSON.parse(await kubectl("get", "--raw", `/apis/metrics.k8s.io/v1beta1/nodes/${node}`));
-        if (typeof metrics.usage?.cpu !== "string" || typeof metrics.usage?.memory !== "string") throw new Error("Missing node usage metrics");
+        if (typeof metrics.usage?.cpu !== "string" || typeof metrics.usage?.memory !== "string") throw new MetricsNotYetPublishedError("Missing node usage metrics");
         return metrics;
       })();
       cache.set(node, pending);
@@ -219,7 +232,7 @@ export function sharedSlotPods(pods: Pod[]): { serving: Map<string, Pod>; starti
 
 export type SharedPoolSample = Awaited<ReturnType<ReturnType<typeof createSharedPoolSampler>>>;
 
-export function createSharedPoolSampler(kubectl: Kubectl = testKubectl()) {
+export function createSharedPoolSampler(kubectl: Kubectl = testKubectl(), now: () => number = Date.now) {
   const states = new Map<string, PodSampleState>();
   return async () => {
     const pods: Pod[] = JSON.parse(await kubectl("get", "pods", "-l", "app=octogee-gateway", "-o", "json")).items;
@@ -227,18 +240,29 @@ export function createSharedPoolSampler(kubectl: Kubectl = testKubectl()) {
     const present = new Set([...serving.keys(), ...starting.map((s) => s.slot)]);
     for (const slot of [...states.keys()]) if (!present.has(slot)) states.delete(slot);
     const nodeMetrics = nodeMetricsReader(kubectl);
-    const slots = await Promise.all([...serving].map(async ([slot, pod]) => {
+    const sampled = await Promise.all([...serving].map(async ([slot, pod]) => {
       let state = states.get(slot);
       if (!state) { state = {}; states.set(slot, state); }
-      return { slot, ...(await samplePod(kubectl, pod, state, nodeMetrics)) };
+      try {
+        return { sample: { slot, ...(await samplePod(kubectl, pod, state, nodeMetrics)) } };
+      } catch (error) {
+        if (error instanceof MetricsNotYetPublishedError && readyForMs(pod, now()) < METRICS_WARMUP_MS) {
+          return { pending: { slot, pod: pod.metadata.name } };
+        }
+        throw error;
+      }
     }));
+    const slots = sampled.flatMap((s) => s.sample ? [s.sample] : []);
+    const metricsPending = sampled.flatMap((s) => s.pending ? [s.pending] : []);
     return {
-      at: new Date().toISOString(), slots, starting,
+      at: new Date().toISOString(), slots, starting, metricsPending,
       violations: slots.flatMap((s) => s.violations.map((v) => `${s.slot}:${v}`)),
     };
   };
 }
 
 export function slotObservation(sample: SharedPoolSample): { at: string; serving: string[]; starting: string[] } {
-  return { at: sample.at, serving: sample.slots.map((s) => s.slot), starting: sample.starting.map((s) => s.slot) };
+  const serving = [...sample.slots, ...sample.metricsPending].map((s) => s.slot)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return { at: sample.at, serving, starting: sample.starting.map((s) => s.slot) };
 }
