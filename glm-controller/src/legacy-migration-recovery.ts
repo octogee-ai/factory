@@ -36,7 +36,7 @@ export function attemptMayHoldSourceIngress(operation: Partial<Operation>): bool
 }
 
 function failedActivationHeldSource(operation: Partial<Operation>): boolean {
-  return operation.input?.recoverSourceOnly === true ||
+  return operation.input?.recoverSourceOnly === true || operation.schedulerHandoff?.forwardRecovery !== undefined ||
     handoffAttemptEvidence(operation)?.steps?.some((step) => step.name === "quiesce-source") !== false;
 }
 
@@ -49,6 +49,21 @@ export function builderActivationSourceRecoveryPending(operation: Partial<Operat
     operation.cutoverCommittedAt === undefined && operation.rolledBack !== true &&
     (operation.status === "pending" || operation.status === "running" ||
       operation.status === "failed" && failedActivationHeldSource(operation));
+}
+
+export function releasedBuilderActivationSourceRecovery(operation: Partial<Operation>): boolean {
+  const handoff = operation.schedulerHandoff;
+  const checkpoint = handoff?.forwardRecovery;
+  if (!handoff || !checkpoint || !builderActivationSourceRecoveryPending(operation)) return false;
+  const input = operation.input!;
+  return [
+    checkpoint.targetReleased === true, checkpoint.schemaVersion === 1, checkpoint.phase === "source-flushed",
+    Number.isSafeInteger(checkpoint.sourceEpoch), checkpoint.sourceEpoch >= 0,
+    readSchedulerMigrationIdentity(operation.id, handoff.migrationId) !== null,
+    handoff.uid === input.uid, handoff.fromGatewayId === input.fromGatewayId,
+    handoff.toGatewayId === input.toGatewayId, handoff.slug === input.builderSlug,
+    handoff.sourceRecovery === undefined || handoff.sourceRecovery.sourceEpoch === checkpoint.sourceEpoch,
+  ].every(Boolean);
 }
 
 function failedPreSyncCleanup(operation: Operation): boolean {
@@ -96,7 +111,7 @@ function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt
   if (!handoff || typeof input.fromGatewayId !== "string" || typeof input.toGatewayId !== "string") return false;
   const identity = readSchedulerMigrationIdentity(operation.id, handoff.migrationId);
   return [
-    operation.kind === "migrate-customer", operation.customerMigrationV2 === undefined, handoff.forwardRecovery === undefined,
+    operation.kind === "migrate-customer", operation.customerMigrationV2 === undefined, handoff.forwardRecovery === undefined || releasedBuilderActivationSourceRecovery(operation),
     operation.cutoverCommittedAt === undefined, operation.cancellationRequestedAt === undefined,
     operation.sourceTransferExecution === undefined, input.sourceTransferMode === undefined,
     Array.isArray(operation.steps),
@@ -137,7 +152,7 @@ function recoveryIntent(operation: Operation, sourceEpoch: number): NonNullable<
   const handoff = operation.schedulerHandoff!;
   const prior = handoff.sourceRecovery;
   if (prior) return prior.migrationId === handoff.migrationId && prior.sourceEpoch === sourceEpoch && Array.isArray(prior.steps) ? prior : null;
-  const steps = handoffAttemptEvidence(operation)?.steps;
+  const steps = releasedBuilderActivationSourceRecovery(operation) ? operation.steps : handoffAttemptEvidence(operation)?.steps;
   if (!steps) return null;
   return { migrationId: handoff.migrationId, sourceEpoch, steps };
 }
@@ -186,7 +201,7 @@ export async function rearmOwnedLegacyMigration(input: {
     ]);
     if (!ownsLegacySource(operation, user.data(), source.data(), target.exists)) return false;
     const intent = recoveryIntent(operation, source.data()!.epoch);
-    if (!intent) return false;
+    if (!intent || operation.schedulerHandoff!.forwardRecovery && operation.schedulerHandoff!.forwardRecovery.sourceEpoch !== intent.sourceEpoch) return false;
     if (builderActivationSourceRecoveryPending(operation)) {
       const root = await txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(toGatewayId));
       if (!builderActivationRecoveryTargetMatches({ operationId: operation.id, input: operation.input,

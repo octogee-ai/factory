@@ -8,6 +8,7 @@ import {
   attemptMayHoldSourceIngress,
   attemptNeverHeldSource,
   builderActivationSourceRecoveryPending,
+  releasedBuilderActivationSourceRecovery,
   legacyAttemptNeverQuiesced,
 } from "../legacy-migration-recovery.js";
 import { PendingCustomerRestoreError } from "../operation-context.js";
@@ -52,12 +53,14 @@ import {
   runMigration,
   type CutoverCommit,
   type MigrationRunnerDeps,
+  type MigrationRunnerResult,
   type ReportedStep,
   type ScheduleRestoreRecord,
   type TargetSystemConfigConvergence,
 } from "@octogee/core/fleet-migration-runner";
 
 const RETAINED_POD = "retained-pod";
+const RELEASED_BUILDER_TARGET_ERROR = "Builder activation target released before cutover; source recovery required";
 const COACH_ATTACH_POLL_MS = 5_000;
 
 // At most one migration per target gateway at a time. Enforced durably, before
@@ -1629,7 +1632,7 @@ async function preparePreviousSourceAgentStores(deps: MigrateCustomerDeps, ctx: 
 }
 
 function previousSchedulerNeedsRecovery(op: Operation, previous: SchedulerHandoffState, migrationId: string): boolean {
-  return previous.forwardRecovery === undefined && op.schedulerHandoffReleased !== true &&
+  return (previous.forwardRecovery === undefined || op.input.recoverSourceOnly === true && releasedBuilderActivationSourceRecovery(op)) && op.schedulerHandoffReleased !== true &&
     previous.migrationId !== claimSchedulerMigrationId(migrationId, op);
 }
 
@@ -1738,7 +1741,7 @@ function assertRetainedMigrationStrategy(op: Operation, durable: boolean, native
 }
 
 function sourceRecoveryOwnershipChanged(op: Operation, user: UserGatewayInfo): boolean {
-  return op.input.recoverSourceOnly === true && (op.schedulerHandoff?.forwardRecovery !== undefined ||
+  return op.input.recoverSourceOnly === true && (op.schedulerHandoff?.forwardRecovery !== undefined && !releasedBuilderActivationSourceRecovery(op) ||
     op.cutoverCommittedAt !== undefined || user.currentGatewayId !== op.input.fromGatewayId);
 }
 
@@ -1786,6 +1789,25 @@ function migrationPlacementFailure(op: Operation, failure: { error: string }): {
   return failure;
 }
 
+function terminalMigrationPreparationError(
+  op: Operation,
+  user: UserGatewayInfo,
+  toGatewayId: string,
+): { error: string; rolledBack: false } | null {
+  if (op.cutoverCommittedAt !== undefined) {
+    return {
+      error:
+        `migration cutover already committed to ${toGatewayId}; customer now owned by ${user.currentGatewayId} — ` +
+        "source cleanup left to the eviction sweep",
+      rolledBack: false,
+    };
+  }
+  if (op.input.recoverSourceOnly !== true && releasedBuilderActivationSourceRecovery(op)) {
+    return { error: RELEASED_BUILDER_TARGET_ERROR, rolledBack: false };
+  }
+  return null;
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1809,14 +1831,8 @@ async function prepareMigration(
   }
   const recovered = await recoverCommittedMigration(deps, op, ctx, user, request);
   if (recovered) return { result: recovered };
-  if (op.cutoverCommittedAt !== undefined) {
-    return {
-      error:
-        `migration cutover already committed to ${request.toGatewayId}; customer now owned by ${user.currentGatewayId} — ` +
-        "source cleanup left to the eviction sweep",
-      rolledBack: false,
-    };
-  }
+  const terminal = terminalMigrationPreparationError(op, user, request.toGatewayId);
+  if (terminal) return terminal;
   const migrationId = deps.genMigrationId(op.id);
 
   try {
@@ -1978,6 +1994,36 @@ function assertForwardRecovery(op: Operation, targets: MigrationTargets, slug: s
   }
 }
 
+function releasedTargetImportFailure(error: string | undefined, targetGatewayId: string): boolean {
+  const prefix = `/prepare-rsync-import/${targetGatewayId}: 500 `;
+  if (!error?.startsWith(prefix)) return false;
+  try {
+    const body = JSON.parse(error.slice(prefix.length));
+    return body?.error === "prepare-rsync-import failed" &&
+      body.message === "surge OpenClaw process gate target migration already released";
+  } catch {
+    return false;
+  }
+}
+
+async function recordReleasedBuilderTarget(input: {
+  deps: MigrateCustomerDeps; ctx: OperationContext; op: Operation; handoff: SchedulerHandoffState;
+}): Promise<boolean> {
+  const { deps, ctx, op, handoff } = input;
+  if (!handoff.forwardRecovery) return false;
+  const released = { ...handoff, forwardRecovery: { ...handoff.forwardRecovery, targetReleased: true as const } };
+  if (!releasedBuilderActivationSourceRecovery({ ...op, schedulerHandoff: released })) return false;
+  if (!ctx.assertActiveClaim || !ctx.persistSchedulerHandoff) throw new Error("released Builder target requires claimed persistence");
+  await ctx.assertActiveClaim(true);
+  const owner = await deps.readUser(handoff.uid);
+  const source = await deps.resolveSourcePlacement(handoff.uid, handoff.fromGatewayId);
+  if (op.cutoverCommittedAt !== undefined || owner?.currentGatewayId !== handoff.fromGatewayId || owner.slug !== handoff.slug ||
+      source?.assignmentMode !== "assigned" || source.epoch !== handoff.forwardRecovery.sourceEpoch) return false;
+  await ctx.persistSchedulerHandoff(released);
+  deps.log(`[migrate-customer] target released before cutover migrationId=${handoff.migrationId}; native source recovery required`);
+  return true;
+}
+
 async function executeMigration(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
@@ -2011,6 +2057,7 @@ async function executeMigration(
   let targetUnmountConfirmed = false;
   let preparationFailed = false;
   let postQuiesceFailed = false;
+  let targetReleased = false;
   const destinationContext: OperationContext = {
     ...ctx,
     reportStep: async (step) => {
@@ -2018,6 +2065,7 @@ async function executeMigration(
       if (step.name === "rollback:unmount-target" && step.status === "done") targetUnmountConfirmed = true;
       if (["keys-sync-state", "pre-sync-state", "wait-for-active-work"].includes(step.name) && step.status === "failed") preparationFailed = true;
       if (["final-sync-state", "verify-target"].includes(step.name) && step.status === "failed") postQuiesceFailed = true;
+      if (step.name === "final-sync-state" && step.status === "failed") targetReleased = releasedTargetImportFailure(step.error, prepared.toGatewayId);
       await progress.report(step.name, step.status);
     },
   };
@@ -2071,11 +2119,25 @@ async function executeMigration(
       },
     },
   );
+  return finishMigrationAttempt({
+    deps, ctx, op, handoff, prepared, result, targetReleased, preparationFailed, postQuiesceFailed, targetUnmountConfirmed,
+  });
+}
+
+async function finishMigrationAttempt(input: {
+  deps: MigrateCustomerDeps; ctx: OperationContext; op: Operation; handoff: SchedulerHandoffState;
+  prepared: PreparedMigration; result: MigrationRunnerResult; targetReleased: boolean;
+  preparationFailed: boolean; postQuiesceFailed: boolean; targetUnmountConfirmed: boolean;
+}): Promise<OperationResult> {
+  const { deps, ctx, op, handoff, prepared, result, targetReleased, preparationFailed, postQuiesceFailed, targetUnmountConfirmed } = input;
+  if (!result.success && targetReleased && await recordReleasedBuilderTarget({ deps, ctx, op, handoff })) {
+    return failure(RELEASED_BUILDER_TARGET_ERROR, false);
+  }
   if (shouldClearMigrationPreparation({ preparationFailed, postQuiesceFailed, targetUnmountConfirmed, result })) {
     await deps.clearMigrationPreparation?.({
       uid: prepared.uid,
       sourceGatewayId: prepared.user.currentGatewayId,
-      operationId,
+      operationId: op.id,
       sourceAssignmentMode: prepared.targets.sourceAssignmentMode,
       sourceRelease: prepared.targets.fromRelease,
       sourceEpoch: prepared.targets.fromEpoch,

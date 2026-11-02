@@ -2813,6 +2813,82 @@ it("migrates without reading version metadata or a release artifact for a fixed 
 });
 
 describe("legacy migration forward recovery", () => {
+  it.each(["released", "first-attempt", "held", "committed", "source-moved", "other-target", "other-rpc"] as const)("settles a forward-only Builder activation only after its target released before cutover: %s", async scenario => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const target = "alice-s-12345678", id = `builder-activate-${target}-g1`;
+    const op = mkOp({ id, attempts: 1,
+      input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease" },
+      schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, uid: "uid-alice", slug: "alice",
+        fromGatewayId: "shared-blue", toGatewayId: target, stageAfterCutover: true,
+        forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4 } },
+    });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 4, assignmentMode: "assigned", gatewayClass: "shared" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    let saved: Operation["schedulerHandoff"];
+    vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async state => { saved = structuredClone(state); });
+    if (scenario === "first-attempt") delete op.schedulerHandoff;
+    const transfer = h.client.transferState;
+    h.client.transferState = vi.fn(async request => {
+      if (request.mode !== "final") return transfer(request);
+      if (scenario === "committed") op.cutoverCommittedAt = 4_500;
+      if (scenario === "source-moved") vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "shared-other" });
+      const path = scenario === "other-rpc" ? "finish-rsync-import" : "prepare-rsync-import";
+      const body = { error: "prepare-rsync-import failed", message: scenario === "held"
+        ? "surge OpenClaw process gate is held for migration other" : "surge OpenClaw process gate target migration already released" };
+      throw new Error(`/${path}/${scenario === "other-target" ? "other" : target}: 500 ${JSON.stringify(body)}`);
+    });
+    const handler = createMigrateCustomerHandler(h.deps);
+    const result = await handler(op, h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    const released = scenario === "released" || scenario === "first-attempt";
+    expect(classifyOperationFailure(result.error)).toBe(released ? "terminal" : "transient");
+    if (!released) return;
+    expect(buildOperationCompletionUpdate({ op, result, steps: h.steps, now: 5_000 })).toMatchObject({ status: "failed" });
+    expect(saved?.forwardRecovery).toMatchObject({ targetReleased: true });
+    const transferCount = vi.mocked(h.client.transferState).mock.calls.length;
+    expect(await handler({ ...op, schedulerHandoff: saved!, attempts: 50, startedAt: 5_500 }, h.ctx))
+      .toMatchObject({ success: false, rolledBack: false, error: result.error });
+    expect(h.client.transferState).toHaveBeenCalledTimes(transferCount);
+    const recovery = mkOp({ ...op, startedAt: 6_000, attempts: 2, steps: [],
+      input: { ...op.input, recoverSourceOnly: true },
+      schedulerHandoff: { ...saved!, sourceRecovery: { migrationId: saved!.migrationId, sourceEpoch: 4, steps: h.steps } },
+    });
+    const order: string[] = [];
+    h.deps.prepareMigrationAgentStores = vi.fn(async gatewayId => { order.push(`stores:${gatewayId}`); });
+    h.client.scheduler = vi.fn(async ({ migrationId, phase }) => {
+      order.push(`scheduler:${phase}`);
+      return { operationId: migrationId, phase, agentIds: [], drained: true };
+    });
+    const resume = h.client.resume;
+    h.client.resume = vi.fn(async request => { order.push("resume"); return resume(request); });
+    expect(await handler(recovery, h.ctx)).toMatchObject({ success: false, rolledBack: true });
+    expect(order).toEqual([`stores:${target}`, "stores:shared-blue", "scheduler:resume", "resume"]);
+    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
+    expect(vi.mocked(h.client.transferState).mock.calls.filter(([request]) => request.mode === "final")).toHaveLength(1);
+  });
+
+  it.each(["held", "committed", "epoch-changed", "cleanup-failed"] as const)("keeps the source fenced when released-target recovery is unsafe: %s", async scenario => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const target = "alice-s-12345678", id = `builder-activate-${target}-g1`;
+    const migrationId = `mig-${id}:scheduler:1:claim:1000`;
+    const op = mkOp({ id, attempts: 2, startedAt: 6_000,
+      input: { uid: "uid-alice", builderSlug: "alice", source: "builder-activation-lease", fromGatewayId: "shared-blue", toGatewayId: target, recoverSourceOnly: true },
+      schedulerHandoff: { migrationId, uid: "uid-alice", slug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, stageAfterCutover: true,
+        forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 4, ...(scenario === "held" ? {} : { targetReleased: true }) },
+        sourceRecovery: { migrationId, sourceEpoch: scenario === "epoch-changed" ? 5 : 4, steps: [{ name: "final-sync-state", status: "failed" }] } },
+    });
+    if (scenario === "committed") op.cutoverCommittedAt = 5_000;
+    if (scenario === "cleanup-failed") vi.mocked(h.client.abortImport).mockRejectedValue(new Error("target cleanup failed"));
+    expect(await createMigrateCustomerHandler(h.deps)(op, h.ctx)).toMatchObject({ success: false, rolledBack: false });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.scheduler).not.toHaveBeenCalled();
+    expect(h.deps.completeMigrationRecovery).not.toHaveBeenCalled();
+    expect(h.deps.prepareMigrationAgentStores).not.toHaveBeenCalledWith("shared-blue", expect.anything(), expect.anything());
+    if (scenario !== "cleanup-failed") expect(h.deps.prepareBuilderRecoveryTarget).not.toHaveBeenCalled();
+  });
+
   it("keeps a fenced forward recovery retryable while its target is draining", async () => {
     const h = mkDeps();
     vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: false, reason: "revision-not-ready" });

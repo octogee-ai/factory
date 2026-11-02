@@ -429,6 +429,7 @@ export interface MigrationForwardRecovery {
     phase: "source-flushed";
     sourceEpoch: number;
     sourceSystemConfigCommit?: string;
+    targetReleased?: true;
 }
 export interface SchedulerHandoffState {
     /** New customer moves use best-effort schedule snapshots, not native handoff. */
