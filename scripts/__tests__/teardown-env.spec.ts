@@ -20,6 +20,10 @@ type TeardownOptions = {
   pvcFailure?: "inspect" | "delete" | "finalize";
   secretFailure?: "absent" | "error";
   storageFailure?: boolean;
+  storageDescribeFailure?: boolean;
+  firebaseProbeFailure?: boolean;
+  sqlWritersAbsent?: boolean;
+  resume?: boolean;
   storageListFailure?: boolean;
   storageEmpty?: boolean;
   storageResidual?: boolean;
@@ -133,7 +137,12 @@ case "$1 $2 $3" in
     printf '%b' "$FAKE_FUNCTION_INVENTORY"
     ;;
   "functions delete "*) [[ "$FAKE_FUNCTION_DELETE_FAILURE" != "true" ]] ;;
-  "storage buckets describe") ;;
+  "storage buckets describe")
+    [[ "$FAKE_STORAGE_DESCRIBE_FAILURE" != "true" ]] || {
+      printf "ERROR: gcloud crashed (CommandLoadFailure): Problem loading gcloud.storage.buckets.describe\\n" >&2
+      exit 1
+    }
+    ;;
   "storage ls --all-versions")
     if [[ "$FAKE_STORAGE_LIST_FAILURE" == "true" ]]; then
       printf 'PERMISSION_DENIED\\n' >&2
@@ -202,6 +211,7 @@ case "$1 $2" in
     exit 0
     ;;
   "get deployment,statefulset")
+    [[ "$FAKE_SQL_WRITERS_ABSENT" != "true" ]] || exit 0
     case "$*" in
       *"app=mattermost"*) printf 'deployment.apps/mattermost\\n' ;;
       *"app.kubernetes.io/name=gitea"*) printf 'deployment.apps/%s\\n' "$FAKE_GITEA_WORKLOAD_NAME" ;;
@@ -364,12 +374,20 @@ esac
   executable(path.join(temp, "lsof"), "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n");
   executable(path.join(temp, "nc"), "#!/usr/bin/env bash\nset -euo pipefail\n");
   executable(path.join(temp, "psql"), "#!/usr/bin/env bash\nset -euo pipefail\necho 'connection to server failed: Connection refused' >&2\nexit 1\n");
-  executable(path.join(temp, "firebase"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'firebase %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
+  executable(path.join(temp, "firebase"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'firebase %s\\n' "$*" >> "$FAKE_CALL_LOG"
+if [[ "$FAKE_FIREBASE_PROBE_FAILURE" == "true" && "$1" == "firestore:databases:get" ]]; then
+  printf 'Authentication Error: Your credentials are no longer valid.\\n' >&2
+  exit 1
+fi
+`);
   executable(path.join(temp, "npx"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'npx %s\\n' \"$*\" >> \"$FAKE_CALL_LOG\"\n");
 
   const args = [teardown, "--env=test", "--deployment-target=test-central"];
   if (options.full ?? true) args.push("--full");
   if (!options.interactiveInput) args.push("--yes");
+  if (options.resume) args.push("--resume");
   const result = spawnSync("bash", args, {
     cwd: repoRoot,
     env: {
@@ -393,6 +411,9 @@ esac
       FAKE_PVC_FAILURE: options.pvcFailure ?? "",
       FAKE_SECRET_FAILURE: options.secretFailure ?? "",
       FAKE_STORAGE_FAILURE: options.storageFailure ? "true" : "false",
+      FAKE_STORAGE_DESCRIBE_FAILURE: options.storageDescribeFailure ? "true" : "false",
+      FAKE_FIREBASE_PROBE_FAILURE: options.firebaseProbeFailure ? "true" : "false",
+      FAKE_SQL_WRITERS_ABSENT: options.sqlWritersAbsent ? "true" : "false",
       FAKE_STORAGE_LIST_FAILURE: options.storageListFailure ? "true" : "false",
       FAKE_STORAGE_EMPTY: options.storageEmpty ? "true" : "false",
       FAKE_STORAGE_RESIDUAL: options.storageResidual ? "true" : "false",
@@ -721,6 +742,58 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.calls.some((call) => call.startsWith("npx ") && !call.includes("--verify"))).toBe(false);
   });
 
+  it.each([
+    ["Firebase CLI", { firebaseProbeFailure: true }, "Firebase CLI preflight failed"],
+    ["Storage bucket", { storageDescribeFailure: true }, "Firebase Storage preflight failed"],
+  ] as const)("stops before any destructive step when the %s cannot reach the target", (_name, options, message) => {
+    const result = runPrivateCentralTeardown(options);
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain(message);
+    expect(result.calls.some((call) => call.startsWith("kubectl delete pvc"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("kubectl scale"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("helm uninstall"))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("functions delete"))).toBe(false);
+    expect(result.sqlOwnerManifest).toBe("");
+  });
+
+  it("refuses to reset private databases whose Mattermost and Gitea are already gone unless resumed", () => {
+    const result = runPrivateCentralTeardown({ sqlWritersAbsent: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("rerun with --resume");
+    expect(result.sqlOwnerManifest).toBe("");
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
+  it("resumes a full reset whose previous run already reset the databases and removed Mattermost and Gitea", () => {
+    const result = runPrivateCentralTeardown({ sqlWritersAbsent: true, resume: true });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.sqlOwnerManifest).toBe("");
+    expect(result.calls).toContain("firebase firestore:delete --all-collections --project octogee-test --force");
+    expect(result.calls).toContain("npx -y tsx ops/delete-firebase-auth-users.ts --project=octogee-test");
+  });
+
+  it("refuses --resume while Mattermost and Gitea still run", () => {
+    const result = runPrivateCentralTeardown({ resume: true });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stderr}\n${result.stdout}`).toContain("--resume");
+    expect(result.sqlOwnerManifest).toBe("");
+    expect(result.calls.some((call) => call.startsWith("firebase firestore:delete"))).toBe(false);
+  });
+
+  it("prints a rebuild sequence that waits for any Shared slot and deploys Firebase through CI", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain("kubectl wait --for=condition=Available deploy -l app=octogee-gateway,gateway-class=shared");
+    expect(result.stdout).toContain('npm run ci:deploy -- --environment=test --sha="$PLATFORM_SOURCE_SHA"');
+    expect(result.stdout).not.toContain("octogee-gateway-shared-0");
+    expect(result.stdout).not.toContain("firebase deploy --project");
+  });
+
   it("allows an already-empty target Storage bucket to complete the reset", () => {
     const result = runPrivateCentralTeardown({ storageEmpty: true });
 
@@ -765,7 +838,7 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
       "unexpected Cloud Function inventory row 'mystery,GEN_3'",
     );
     expect(result.calls.some((call) => call.startsWith("functions delete"))).toBe(false);
-    expect(result.calls.some((call) => call.startsWith("storage "))).toBe(false);
+    expect(result.calls.some((call) => call.startsWith("storage ") && !call.startsWith("storage buckets describe"))).toBe(false);
   });
 
   it("waits for every Cloud Function deletion and stops on the first failure", () => {

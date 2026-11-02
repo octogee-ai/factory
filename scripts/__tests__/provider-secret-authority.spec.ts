@@ -89,3 +89,66 @@ describe.each(providers)("$name setup credential authority", (provider) => {
     expect(result.stdout).toContain(`PERSIST:${provider.variable}:retired-local-value:${project}`);
   });
 });
+
+function materializeOAuth(input: { state: "present" | "absent"; envValue?: string; k8sValue?: string }) {
+  const script = [
+    'source "$SHELL_ENV_HELPER"',
+    'source "$COMPLETENESS_HELPER"',
+    shellFunction("read_authoritative_secret_manager_value"),
+    shellFunction("resolve_environment_secret_value"),
+    shellFunction("oauth_secret"),
+    'info() { :; }; warn() { :; }; fail() { printf "%s\\n" "$*" >&2; exit 1; }',
+    'secret_manager_secret_state() { [[ "$2" == "$FAKE_EXPECTED_PROJECT" ]] || { printf absent; return 0; }; printf "%s" "$FAKE_SM_STATE"; }',
+    'gcloud() { [[ " $* " == *" --project=$FAKE_EXPECTED_PROJECT "* ]] || return 1; printf "%s-%s" "$FAKE_SM_VALUE" "${*: -2:1}"; }',
+    'sm_get() { [[ "${2:-$SM_PROJECT}" == "$FAKE_EXPECTED_PROJECT" ]] || return 1; printf "%s" "$FAKE_SM_VALUE"; }',
+    'ksecret_key() { printf "%s" "$FAKE_K8S_VALUE"; }',
+    'ksecret() { printf "KSECRET %s\\n" "$*"; }',
+    "oauth_secret github github-oauth GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET",
+  ].join("\n");
+  return spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ENV: "test",
+      ENV_FILE: "/unused-oauth-test.env",
+      TARGET_ID: "test-central",
+      FIREBASE_PROJECT: "octogee-test",
+      SM_PROJECT: "octogee",
+      SHELL_ENV_HELPER: path.join(root, "scripts/lib/shell-env.sh"),
+      COMPLETENESS_HELPER: path.join(root, "scripts/lib/secret-completeness.sh"),
+      FAKE_SM_STATE: input.state,
+      FAKE_EXPECTED_PROJECT: "octogee-test",
+      FAKE_SM_VALUE: input.state === "absent" ? "" : "managed",
+      FAKE_K8S_VALUE: input.k8sValue ?? "",
+      GITHUB_CLIENT_ID: input.envValue ?? "",
+      GITHUB_CLIENT_SECRET: input.envValue ?? "",
+    },
+  });
+}
+
+describe("GitHub OAuth setup credential authority", () => {
+  it("reads the pair from the environment's own Secret Manager project, not the Cloud SQL project", () => {
+    const result = materializeOAuth({ state: "present" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("KSECRET github-oauth");
+    expect(result.stdout).not.toContain("--from-literal=client_id= ");
+    expect(result.stdout).toMatch(/--from-literal=client_id=managed\S*/);
+  });
+
+  it("keeps the namespace's existing pair when neither Secret Manager nor the env file has one", () => {
+    const result = materializeOAuth({ state: "absent", k8sValue: "namespace-value" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("--from-literal=client_id=namespace-value");
+    expect(result.stdout).toContain("--from-literal=client_secret=namespace-value");
+  });
+
+  it("fails instead of writing an empty secret when no source has the pair", () => {
+    const result = materializeOAuth({ state: "absent" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are required for test-central");
+    expect(result.stdout).not.toContain("KSECRET");
+  });
+});

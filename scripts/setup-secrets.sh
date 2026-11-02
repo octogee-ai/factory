@@ -645,15 +645,17 @@ oauth_secret() {
     info "  skipped — provider disabled"
     return 0
   fi
-  set +u; local id="${!id_var:-}" sec="${!sec_var:-}"; set -u
-  [[ -z "$id" ]]  && id=$(sm_get "$id_var" 2>/dev/null || echo "")
-  [[ -z "$sec" ]] && sec=$(sm_get "$sec_var" 2>/dev/null || echo "")
-  if [[ -n "$id" && -n "$sec" ]]; then
-    ksecret "$secret" --from-literal=client_id="$id" --from-literal=client_secret="$sec"
-  else
-    warn "$id_var/$sec_var not set — creating empty $secret (optional; OAuth connect disabled for this provider)"
-    ksecret "$secret" --from-literal=client_id="" --from-literal=client_secret=""
-  fi
+  local id sec
+  set +u
+  id="$(resolve_environment_secret_value "${!id_var:-}" "$id_var" "$secret" client_id configured_secret_value)" \
+    || fail "could not resolve $id_var for $TARGET_ID"
+  sec="$(resolve_environment_secret_value "${!sec_var:-}" "$sec_var" "$secret" client_secret configured_secret_value)" \
+    || fail "could not resolve $sec_var for $TARGET_ID"
+  set -u
+  [[ -n "$id" && -n "$sec" ]] \
+    || fail "$id_var and $sec_var are required for $TARGET_ID; add them to $ENV_FILE or Secret Manager ($FIREBASE_PROJECT). $secret was left unchanged."
+  export "$id_var=$id" "$sec_var=$sec"
+  ksecret "$secret" --from-literal=client_id="$id" --from-literal=client_secret="$sec"
 }
 oauth_secret github    github-oauth    GITHUB_CLIENT_ID    GITHUB_CLIENT_SECRET
 oauth_secret microsoft microsoft-oauth MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET

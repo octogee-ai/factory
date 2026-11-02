@@ -52,6 +52,7 @@ ENV="prod"
 DEPLOYMENT_TARGET=""
 FORCE=false
 FULL=false
+RESUME=false
 PROXY_PID=""
 PRIVATE_SQL_OWNER_RESET_DONE=false
 GATEWAY_RUNTIME_CLEANUP_DONE=false
@@ -62,8 +63,9 @@ for arg in "$@"; do
     --deployment-target=*) DEPLOYMENT_TARGET="${arg#*=}" ;;
     --force|--yes|-y) FORCE=true ;;
     --full)         FULL=true ;;
+    --resume)       RESUME=true ;;
     --help|-h)
-      echo "Usage: $0 [--env=prod|test] [--deployment-target=TARGET] [--force|--yes] [--full]"
+      echo "Usage: $0 [--env=prod|test] [--deployment-target=TARGET] [--force|--yes] [--full [--resume]]"
       echo ""
       echo "  (default)  helm uninstall only — preserves PVCs, K8s secrets,"
       echo "             namespace, Secret Manager, Cloud SQL, Firebase Storage, Firestore, Auth"
@@ -72,6 +74,9 @@ for arg in "$@"; do
       echo "             Still preserves platform/static K8s secrets, Secret Manager infra entries,"
       echo "             and namespace; removes dynamic per-gateway identities/secrets and"
       echo "             database-bound Gitea API token material."
+      echo ""
+      echo "  --resume   With --full: finish a full teardown whose earlier run already reset the"
+      echo "             private Cloud SQL databases and removed Mattermost and Gitea."
       echo ""
       echo "  To rotate a secret: scripts/rotate-secret.sh"
       exit 0
@@ -94,6 +99,10 @@ case "$ENV" in
     ;;
   *) echo "Unknown environment: $ENV (use prod or test)"; exit 1 ;;
 esac
+if $RESUME && ! $FULL; then
+  echo "--resume only applies to --full"
+  exit 1
+fi
 GCP_PROJECT="$TARGET_FIREBASE_PROJECT"
 FIREBASE_PROJECT="$TARGET_FIREBASE_PROJECT"
 CLUSTER_PROJECT="$TARGET_CLUSTER_PROJECT"
@@ -222,6 +231,11 @@ if $FULL; then
     (cd "$SCRIPT_DIR" && npx -y tsx ops/delete-firebase-auth-users.ts "$@" --project="$FIREBASE_PROJECT")
   }
   run_auth_cleanup --verify || die "Firebase Auth cleanup preflight failed for $FIREBASE_PROJECT"
+  FIREBASE_STORAGE_BUCKET="gs://${FIREBASE_PROJECT}.firebasestorage.app"
+  gcloud storage buckets describe "$FIREBASE_STORAGE_BUCKET" --project="$TARGET_STORAGE_PROJECT" >/dev/null \
+    || die "Firebase Storage preflight failed for $FIREBASE_STORAGE_BUCKET; nothing has been torn down"
+  firebase firestore:databases:get "(default)" --project "$FIREBASE_PROJECT" >/dev/null \
+    || die "Firebase CLI preflight failed for $FIREBASE_PROJECT (try 'firebase login --reauth'); nothing has been torn down"
 fi
 
 # ── 1a. Full: delete PVCs ────────────────────────────────────────────────
@@ -294,6 +308,17 @@ verify_database_through_api() {
   [[ "$verified_name" == "$dbname" ]] \
     || die "Cloud SQL Admin API verification returned '$verified_name' for $dbname"
   ok "$dbname — Cloud SQL API confirmed the app-owned recreated database"
+}
+
+private_sql_writers_absent() {
+  local selector resources
+  for selector in 'app=mattermost' 'app.kubernetes.io/name=gitea'; do
+    resources=$(kubectl get deployment,statefulset -n "$K8S_NAMESPACE" --context "$K8S_CONTEXT" \
+      -l "$selector" -o name) \
+      || die "could not inspect SQL writer workloads ($selector) before private Cloud SQL reset"
+    [[ -z "$resources" ]] || return 1
+  done
+  return 0
 }
 
 quiesce_private_sql_writers() {
@@ -749,8 +774,14 @@ if $FULL; then
     || die "Cloud SQL instance inspection failed; refusing to classify a transport/config failure as a credential failure"
   if [[ "$instance_ip_types" != *"PRIMARY"* ]]; then
     prepare_gateway_runtime_for_database_reset
-    info "Cloud SQL has no public IP; resetting application-owned databases through exact-target in-cluster credentials..."
-    reset_private_cloud_sql_databases
+    if private_sql_writers_absent; then
+      $RESUME || die "Mattermost and Gitea are not running in $K8S_NAMESPACE, so the private Cloud SQL reset cannot run. A full teardown resets both databases before it removes them; if an earlier run got that far, rerun with --resume to finish the remaining wipes."
+      info "Resuming: an earlier full teardown reset the private Cloud SQL databases before removing Mattermost and Gitea"
+    else
+      $RESUME && die "--resume finishes a teardown whose Mattermost and Gitea are already gone, but they are still running in $K8S_NAMESPACE; rerun without --resume"
+      info "Cloud SQL has no public IP; resetting application-owned databases through exact-target in-cluster credentials..."
+      reset_private_cloud_sql_databases
+    fi
     PRIVATE_SQL_OWNER_RESET_DONE=true
     ok "Private Cloud SQL owner reset completed before Helm uninstall"
   fi
@@ -1188,10 +1219,6 @@ fi
 if $FULL; then
   echo ""
   if confirm "Wipe ALL Firebase Storage objects in '$FIREBASE_PROJECT'?"; then
-    FIREBASE_STORAGE_BUCKET="gs://${FIREBASE_PROJECT}.firebasestorage.app"
-    gcloud storage buckets describe "$FIREBASE_STORAGE_BUCKET" \
-      --project="$TARGET_STORAGE_PROJECT" >/dev/null \
-      || die "Firebase Storage bucket inspection failed for $FIREBASE_PROJECT"
     list_storage_versions() {
       local output
       if output="$(gcloud storage ls --all-versions "$FIREBASE_STORAGE_BUCKET/**" --project="$TARGET_STORAGE_PROJECT" 2>&1)"; then
@@ -1304,21 +1331,23 @@ echo "  ./scripts/setup-secrets.sh --env=$ENV$TARGET_ARG --phase=launch${YES_FLA
 echo ""
 echo "  # 6. Roll pods so they pick up the freshly-populated secret env vars"
 echo "  kubectl rollout restart deploy -n $K8S_NAMESPACE"
-echo "  # Cowboy mints shared-0.. from the platform release; existing durable"
+echo "  # Cowboy mints shared-<id> slots from the platform release; existing durable"
 echo "  # roots/releases are never reconstructed or overwritten."
-echo "  kubectl rollout status deploy/octogee-gateway-shared-0 -n $K8S_NAMESPACE --timeout=180s"
+echo "  until kubectl get deploy -n $K8S_NAMESPACE --context $K8S_CONTEXT -l app=octogee-gateway,gateway-class=shared -o name | grep -q .; do sleep 15; done"
+echo "  kubectl wait --for=condition=Available deploy -l app=octogee-gateway,gateway-class=shared -n $K8S_NAMESPACE --context $K8S_CONTEXT --timeout=30m"
 echo ""
-echo "  # 7. Deploy Firebase functions"
-echo "  firebase deploy --project $FIREBASE_PROJECT"
+echo "  # 7. Deploy the platform and site through CI (Firestore rules and indexes, Functions, site, hosting)"
+echo "  npm run ci:deploy -- --environment=$ENV --sha=\"\$PLATFORM_SOURCE_SHA\" --actor=operator:<you>"
 echo ""
 echo "  # 8. Verify"
 echo "  ./scripts/verify-env.sh --env=$ENV$TARGET_ARG$(if [[ "$ENV" == "test" ]]; then echo " --fix"; fi)"
 echo ""
 echo "  ──────────────────────────────────────────────────────────────────"
 echo "  In-pod smoke checks (run after step 6):"
-echo "    kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway-shared-a -- curl -s http://127.0.0.1:9081/health"
-echo "    kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway-shared-a -- curl -s http://127.0.0.1:3001/api/site/health"
-echo "    kubectl exec -n $K8S_NAMESPACE deploy/octogee-gateway-shared-a -- curl -s http://127.0.0.1:9080/health"
+echo "    SLOT=\$(kubectl get deploy -n $K8S_NAMESPACE --context $K8S_CONTEXT -l app=octogee-gateway,gateway-class=shared -o name | head -1)"
+echo "    kubectl exec -n $K8S_NAMESPACE --context $K8S_CONTEXT \"\$SLOT\" -- curl -s http://127.0.0.1:9081/health"
+echo "    kubectl exec -n $K8S_NAMESPACE --context $K8S_CONTEXT \"\$SLOT\" -- curl -s http://127.0.0.1:3001/api/site/health"
+echo "    kubectl exec -n $K8S_NAMESPACE --context $K8S_CONTEXT \"\$SLOT\" -- curl -s http://127.0.0.1:9080/health"
 echo "  Public smoke (Option C — MM must be reachable directly with PAT auth):"
 case "$ENV" in
   prod) echo "    curl -sk https://mattermost.octogee.com/api/v4/system/ping" ;;
