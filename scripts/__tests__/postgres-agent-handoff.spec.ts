@@ -101,15 +101,35 @@ it("refuses duplicate source roots for one agent before detaching either store",
   expect(detachAgent).not.toHaveBeenCalled();
 });
 
-it("carries the anchor while ignoring OpenClaw doctor's retained pre-migration PostgreSQL backup beside it", async () => {
+it.each([
+  "pre-startup-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93.postgres.bak",
+  "auth-profile-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93.bak",
+])("carries the live anchor without consuming Native's retained %s archive", async backupName => {
   const { root, agentId, file } = await fixture();
-  const backupDir = path.join(root, `agents/${agentId}/agent/openclaw-agent.sqlite.pre-startup-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93.postgres.bak`);
+  const backupDir = path.join(root, `agents/${agentId}/agent/openclaw-agent.sqlite.${backupName}`);
   await fs.mkdir(backupDir);
   await fs.copyFile(file, path.join(backupDir, "anchor.sqlite"));
   await fs.writeFile(path.join(backupDir, "database.sqlite"), "doctor-export-fixture");
   await fs.writeFile(path.join(backupDir, "manifest.json"), "{}");
   const sources = [{ cwd: root, path: `agents/${agentId}` }];
   expect((await findPortableAgentStores(sources)).map((store) => store.sourceAgentDir)).toEqual([path.dirname(file)]);
+  const detachAgent = vi.fn(async () => undefined);
+  await exportAgentStoreSnapshots({ sources, exportRoot: path.join(root, "stage"), detachAgent });
+  expect(detachAgent).toHaveBeenCalledExactlyOnceWith(agentId);
+  expect(await fs.readFile(path.join(backupDir, "anchor.sqlite"))).toEqual(await fs.readFile(file));
+  expect(await fs.readFile(path.join(backupDir, "database.sqlite"), "utf8")).toBe("doctor-export-fixture");
+});
+
+it.each([
+  "auth-profile-migration-not-a-uuid.bak",
+  "auth-profile-migration-331ddc36-f8a4-4c66-bd6b-e0c626343f93",
+  "other-repair-331ddc36-f8a4-4c66-bd6b-e0c626343f93.bak",
+])("refuses an unrecognized archive-shaped SQLite directory %s", async backupName => {
+  const { root, agentId } = await fixture();
+  const backupDir = path.join(root, `agents/${agentId}/agent/openclaw-agent.sqlite.${backupName}`);
+  await fs.mkdir(backupDir);
+  await fs.writeFile(path.join(backupDir, "database.sqlite"), "unexpected-fixture");
+  await expect(findPortableAgentStores([{ cwd: root, path: `agents/${agentId}` }])).rejects.toThrow("unexpected OpenClaw SQLite store");
 });
 
 it("refuses an unexpected agent SQLite store while allowing Codex's separate SQLite family", async () => {
