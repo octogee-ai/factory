@@ -68,8 +68,7 @@ const copiedFiles = (dockerfile, cwd) => readFileSync(join(cwd, dockerfile), "ut
   .flatMap(line => line.split(/\s+/).slice(1).filter(token => !token.startsWith("--")).slice(0, -1));
 
 const recipe = (dockerfile, cwd) => [...new Set([dockerfile, ...copiedFiles(dockerfile, cwd)])]
-  .filter(file => !file.startsWith("infra/gateway/openclaw-tarball/"));
+  .filter(file => !(file.startsWith("infra/gateway/openclaw-tarball/") && file.endsWith(".tgz")));
 
-export const cuaDriverRecipe = (cwd = process.cwd()) => recipe("infra/gateway/Dockerfile.cua-driver", cwd);
-export const gatewayBaseRecipe = (cwd = process.cwd()) => [".dockerignore", ...recipe("infra/gateway/Dockerfile.base", cwd), ...cuaDriverRecipe(cwd)];
+export const gatewayBaseRecipe = (cwd = process.cwd()) => [".dockerignore", ...recipe("infra/gateway/Dockerfile.base", cwd)];
 export const builderBaseRecipe = (cwd = process.cwd()) => recipe("infra/gateway/Dockerfile.builder-base", cwd);

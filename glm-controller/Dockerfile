@@ -1,11 +1,19 @@
-FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec
-COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
-ARG NPM_VERSION=12.1.0
+FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS platform-npm
+ARG NPM_VERSION=12.2.1
+RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
+COPY infra/gateway/openclaw-tarball/npm-12.2.1.patch infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/
 RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
-    && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.12 --ignore-scripts --no-audit --no-fund \
-    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
-    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
+    && patch --batch --forward --directory=/usr/local/lib/node_modules/npm -p1 < /tmp/npm-12.2.1.patch \
+    && node /tmp/npm-distribution.test.mjs /usr/local/lib/node_modules/npm \
+    && test "$(npm --version)" = "$NPM_VERSION" \
+    && test "$(npx --version)" = "$NPM_VERSION"
+
+FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
+ARG OS_PACKAGE_REFRESH=2026-11-02
+RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
+COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+COPY infra/cloud-sql/octogee-pg-server-ca.pem /etc/ssl/certs/octogee-postgres-ca.pem
 
 # Helm is PINNED to one version across every path that runs `helm upgrade`
 # against the cluster — CI's toolchain (ci/install-tools.sh) and the Builder
@@ -20,20 +28,28 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 # which the per-image build-fingerprint (.github/actions/build-image-fingerprint/)
 # can't see: two builds from an identical git tree could silently get
 # different kubectl versions, defeating fingerprint-based reuse.
-ARG HELM_VERSION=v4.3.0
-ARG KUBECTL_VERSION=v1.36.5
+ARG HELM_VERSION=v4.3.1
+ARG KUBECTL_VERSION=v1.36.6
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tini \
   && rm -rf /var/lib/apt/lists/* \
+  && case "$(dpkg --print-architecture)" in \
+       amd64) HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b; KUBECTL_SHA256=29818b6729dc9262b692307470d0558d027725e738be5dd47c760261868a2634 ;; \
+       arm64) HELM_SHA256=8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88; KUBECTL_SHA256=35507ef408c3d38849e5d3203e18f8e861db822aa664101a9ced0869edd06046 ;; \
+       *) echo "Unsupported controller architecture" >&2; exit 1 ;; \
+     esac \
   && echo "Installing helm ${HELM_VERSION}" \
   && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "https://get.helm.sh/helm-${HELM_VERSION}-linux-$(dpkg --print-architecture).tar.gz" \
-       | tar -xz -C /tmp \
+       --output /tmp/helm.tar.gz \
+  && echo "${HELM_SHA256}  /tmp/helm.tar.gz" | sha256sum -c - \
+  && tar -xz -f /tmp/helm.tar.gz -C /tmp \
   && mv "/tmp/linux-$(dpkg --print-architecture)/helm" /usr/local/bin/helm \
-  && rm -rf "/tmp/linux-$(dpkg --print-architecture)" \
+  && rm -rf "/tmp/linux-$(dpkg --print-architecture)" /tmp/helm.tar.gz \
   && echo "Installing kubectl ${KUBECTL_VERSION}" \
   && curl -fsSL -o /usr/local/bin/kubectl \
        "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \
+  && echo "${KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c - \
   && chmod +x /usr/local/bin/kubectl \
   && helm version --short \
   && helm upgrade --help | grep -q -- '--server-side' \

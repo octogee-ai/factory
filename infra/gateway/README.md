@@ -25,6 +25,15 @@ remain enabled.
 Older or hand-edited Builder configuration may still need native Doctor repair;
 the no-transformation requirement applies to freshly authored platform defaults.
 
+## Builder dependency audit
+
+The remaining five moderate audit entries derive from minimatch's broad
+`<11.0.1` advisory range. Installed minimatch 3.1.5, 5.1.9, and 6.2.3 do not
+implement the preprocessing expansion described by GHSA-g3hv-75wg-m249. Their
+legacy APIs remain required by native consumers; retain them until those owners
+migrate, without suppressing the advisory or forcing an incompatible major.
+The Builder toolchain dependency graph uses glob 14.0.3 and minimatch 11.0.4.
+
 ## Build
 
 Build main (`.github/workflows/build-main.yml`, running `scripts/ci/main.mjs`)

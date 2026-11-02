@@ -1,3 +1,13 @@
+FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS platform-npm
+ARG NPM_VERSION=12.2.1
+RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
+COPY infra/gateway/openclaw-tarball/npm-12.2.1.patch infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/
+RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
+    && patch --batch --forward --directory=/usr/local/lib/node_modules/npm -p1 < /tmp/npm-12.2.1.patch \
+    && node /tmp/npm-distribution.test.mjs /usr/local/lib/node_modules/npm \
+    && test "$(npm --version)" = "$NPM_VERSION" \
+    && test "$(npx --version)" = "$NPM_VERSION"
+
 # Build context: repo root.
 #
 # octogee-api compiles gateway-edge/src/* in addition to its own src/ —
@@ -9,7 +19,9 @@
 #
 # Mirror of gateway-edge's build pattern: rootDir=.. so tsc emits
 # dist/octogee-api/src/ alongside dist/gateway-edge/src/ (the routes).
-FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS builder
+FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS builder
+RUN rm -rf /usr/local/lib/node_modules/npm
+COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 WORKDIR /octogee-api
 
 # Packed internal directory dependencies must be present at their declared sibling paths.
@@ -46,10 +58,12 @@ RUN npm run build
 # Project code runs only in this deliberately narrow image. It contains the
 # fixed runner wrapper, archive validator, npm, and JSZip—no API routes, core
 # runtime, cloud SDKs, platform credentials, or production dependency tree.
-FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS project-runner
+FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS project-runner
+ARG OS_PACKAGE_REFRESH=2026-11-02
+RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
+COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 WORKDIR /runner
-ARG NPM_VERSION=12.1.0
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund
 COPY octogee-api/runner/package.json octogee-api/runner/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY --from=builder /octogee-api/dist/octogee-api/src/project-runner.js ./dist/octogee-api/src/project-runner.js
@@ -59,14 +73,12 @@ USER node
 ENTRYPOINT ["node", "dist/octogee-api/src/project-runner.js"]
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec
+FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
+ARG OS_PACKAGE_REFRESH=2026-11-02
+RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm
+COPY --from=platform-npm /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 WORKDIR /octogee-api
-ARG NPM_VERSION=12.1.0
-RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fund \
-    && npm_root="$(npm root --global)" \
-    && npm install --global brace-expansion@5.0.12 --ignore-scripts --no-audit --no-fund \
-    && rm -rf "$npm_root/npm/node_modules/brace-expansion" \
-    && mv "$npm_root/brace-expansion" "$npm_root/npm/node_modules/brace-expansion"
 
 # The runtime install also packs the direct internal directory dependencies.
 COPY core/package.json /core/package.json

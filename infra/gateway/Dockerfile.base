@@ -1,20 +1,22 @@
-ARG CUA_DRIVER_IMAGE=octogee-cua-driver
 FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS gateway-core-system
 
 ARG NPM_VERSION=12.2.1
+ARG OS_PACKAGE_REFRESH=2026-11-02
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN test -n "$OS_PACKAGE_REFRESH" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates curl git jq openssh-client rsync tar \
     && rm -rf /var/lib/apt/lists/*
 
+COPY infra/gateway/openclaw-tarball/npm-distribution.test.mjs /tmp/npm-distribution.test.mjs
 RUN --mount=type=bind,source=infra/gateway/openclaw-tarball/openclaw-fork.tgz,target=/tmp/openclaw-fork.tgz,readonly \
     tar -xOf /tmp/openclaw-fork.tgz package/vendor/npm.tgz > /tmp/npm.tgz \
     && npm install --global /tmp/npm.tgz --ignore-scripts --no-audit --no-fund \
     && test "$(npm --version)" = "$NPM_VERSION" \
     && test "$(npx --version)" = "$NPM_VERSION" \
-    && rm /tmp/npm.tgz \
+    && node /tmp/npm-distribution.test.mjs "$(npm root --global)"/npm \
+    && rm /tmp/npm.tgz /tmp/npm-distribution.test.mjs \
     && npm cache clean --force \
     && install -d -o node -g node /home/node/.npm
 
@@ -23,7 +25,7 @@ ENV HOME=/home/node
 FROM gateway-core-system AS gateway-system
 
 ARG FD_VERSION=10.5.0
-ARG CLAUDE_CODE_VERSION=2.1.314
+ARG CLAUDE_CODE_VERSION=2.1.316
 ARG CODEX_VERSION=0.166.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -62,21 +64,17 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version")" = "$CLAUDE_CODE_VERSION" \
     && test "$(node -p "require('$(npm root -g)/@openai/codex/package.json').version")" = "$CODEX_VERSION"
 
-FROM ${CUA_DRIVER_IMAGE} AS cua-driver-builder
 
 FROM gateway-core-system AS openclaw-installer
 
 COPY infra/gateway/openclaw-tarball/openclaw-fork.tgz /tmp/openclaw-fork.tgz
-COPY --from=cua-driver-builder /out/ /tmp/cua-driver-patch/
-COPY infra/gateway/install-cua-driver-patch.mjs /tmp/install-cua-driver-patch.mjs
 RUN set -e; \
     npm install -g --strict-allow-scripts --allow-scripts=@google/genai,esbuild,protobufjs,file:/tmp/openclaw-fork.tgz /tmp/openclaw-fork.tgz; \
     OPENCLAW_ROOT="$(npm root -g)/openclaw"; \
     test ! -e "$OPENCLAW_ROOT/.openclaw-lifecycle-pending"; \
-    node /tmp/install-cua-driver-patch.mjs "$OPENCLAW_ROOT" /tmp/cua-driver-patch; \
     printf '%s\n' '{"plugins":{"entries":{"cua-computer":{"enabled":true}}}}' > /tmp/cua-driver-check.json; \
     OPENCLAW_CONFIG_PATH=/tmp/cua-driver-check.json openclaw doctor --lint --only cua-computer/driver-artifacts; \
-    rm -rf /tmp/cua-driver-patch /tmp/install-cua-driver-patch.mjs /tmp/cua-driver-check.json; \
+    rm -f /tmp/cua-driver-check.json; \
     OPENCLAW_CORE_VERSION="$(node -e 'const pkg = require(process.argv[1]); if (pkg.name !== "openclaw") process.exit(1); process.stdout.write(pkg.version);' "$OPENCLAW_ROOT/package.json")"; \
     test -n "$OPENCLAW_CORE_VERSION"; \
     openclaw --version; \

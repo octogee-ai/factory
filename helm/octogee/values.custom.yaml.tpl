@@ -20,8 +20,8 @@ cloud-sql-proxy:
 mattermost:
   image:
     repository: us-central1-docker.pkg.dev/octogee/octogee/mattermost
-    tag: "12.0.1-octogee-abeb43a3"
-    digest: "sha256:b6e8ced3030653a5fb12a55b11cda45ad9bbd223dc37fb7098943dec6532b69e"
+    tag: "12.0.1-octogee-4ee2e9ab"
+    digest: "sha256:6fa50729743aaf50e839e33d33c709bdf3cbdbde718b0306cb9574f112fdf2a4"
   db:
     name: mattermost___DB_SLUG__
   siteUrl: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"

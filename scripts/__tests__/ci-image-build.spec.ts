@@ -119,9 +119,7 @@ describe("base image recipes", () => {
     expect(gatewayBaseRecipe(repoRoot).sort()).toEqual([
       ".dockerignore",
       "infra/gateway/Dockerfile.base",
-      "infra/gateway/Dockerfile.cua-driver",
-      "infra/gateway/cua-desktop-discovery.patch",
-      "infra/gateway/install-cua-driver-patch.mjs",
+      "infra/gateway/openclaw-tarball/npm-distribution.test.mjs",
       "infra/gateway/verify-codex-native-hook-runtime.mjs",
       "infra/gateway/verify-codex-source-match.mjs",
       "infra/gateway/verify-parallel-source-match.mjs",

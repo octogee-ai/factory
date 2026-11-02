@@ -62,7 +62,6 @@ function gatewayImageArgs(): Record<string, Record<string, string>> {
   const { target } = gatewayBakePlan({
     repository: "us-central1-docker.pkg.dev/octogee/octogee",
     sha: "a".repeat(40),
-    cuaDriver: `inputs-${"f".repeat(64)}`,
     base,
     builderBase: `${base}-builder-${"c".repeat(12)}`,
     toolchain: { lockSha256: "d".repeat(64), groupsSha256: "e".repeat(64) },
@@ -129,7 +128,7 @@ describe("gateway base image", () => {
     ) as { packages: Record<string, { version?: string; integrity?: string }> };
 
     expect(packageJson.dependencies).toEqual({
-      "@anthropic-ai/claude-code": "2.1.314",
+      "@anthropic-ai/claude-code": "2.1.316",
       "@openai/codex": "0.166.0",
       "@sparticuz/chromium": "153.0.0",
       "firebase-tools": "15.34.2",
@@ -139,14 +138,14 @@ describe("gateway base image", () => {
       "typescript": "7.0.2",
     });
     expect(packageJson.allowScripts).toEqual({
-      "@anthropic-ai/claude-code@2.1.314": true,
+      "@anthropic-ai/claude-code@2.1.316": true,
       "esbuild@0.28.2": true,
       "pnpm@12.16.1": true,
       "protobufjs@7.6.6": true,
       "re2@1.26.1": true,
     });
     expect(packageLock.packages["node_modules/@anthropic-ai/claude-code"]).toMatchObject({
-      version: "2.1.314",
+      version: "2.1.316",
       integrity: expect.stringMatching(/^sha512-/),
     });
     expect(packageLock.packages["node_modules/@openai/codex"]).toMatchObject({
@@ -406,19 +405,5 @@ describe("gateway base image", () => {
     expect(gate).toContain('test ! -e "$global_root/@sparticuz/chromium"');
     expect(gate).toContain("OCTOGEE_BUILDER_TOOLCHAIN_LOCK_SHA256");
     expect(gate).toContain("OCTOGEE_BUILDER_TOOL_GROUPS_SHA256");
-  });
-});
-
-describe("CUA driver image", () => {
-  it("compiles the driver in its own input-keyed image and consumes it through a named context", () => {
-    const base = readRepoFile("infra/gateway/Dockerfile.base");
-    const driver = readRepoFile("infra/gateway/Dockerfile.cua-driver");
-    expect(base).toMatch(/^ARG CUA_DRIVER_IMAGE=octogee-cua-driver$/mu);
-    expect(base).toContain("FROM ${CUA_DRIVER_IMAGE} AS cua-driver-builder");
-    expect(base).toContain("COPY --from=cua-driver-builder /out/ /tmp/cua-driver-patch/");
-    expect(base).not.toContain("cargo build");
-    expect(driver).toMatch(/^FROM rust:\d+\.\d+\.\d+-slim-bookworm@sha256:[0-9a-f]{64} AS cua-driver-builder$/mu);
-    expect(driver).toContain("cargo build --locked --release -p cua-driver-sdk --features portal-input");
-    expect(driver).toMatch(/^FROM scratch\nCOPY --from=cua-driver-builder \/out\/ \/out\/$/mu);
   });
 });

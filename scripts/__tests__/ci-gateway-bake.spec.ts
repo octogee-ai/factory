@@ -3,25 +3,21 @@ import { buildGatewayImages, gatewayBakePlan } from "../ci/gateway-bake.mjs";
 
 const repository = "us-central1-docker.pkg.dev/octogee/octogee";
 const sha = "a".repeat(40);
-const cuaDriver = `inputs-${"f".repeat(64)}`;
 const base = `inputs-${"b".repeat(64)}`;
 const builderBase = `${base}-builder-123456789abc`;
 const toolchain = { lockSha256: "c".repeat(64), groupsSha256: "d".repeat(64) };
 const images = ["gateway-edge", "octogee-gateway", "octogee-gateway-builder"];
-const plan = (build: { cuaDriver?: boolean; base: boolean; builderBase: boolean; images: string[] }) =>
-  gatewayBakePlan({ repository, sha, cuaDriver, base, builderBase, toolchain, build: { cuaDriver: false, ...build } });
-const cuaRef = `${repository}/octogee-cua-driver:${cuaDriver}`;
+const plan = (build: { base: boolean; builderBase: boolean; images: string[] }) =>
+  gatewayBakePlan({ repository, sha, base, builderBase, toolchain, build });
 const baseRef = `${repository}/octogee-gateway-base:${base}`;
 const builderBaseRef = `${repository}/octogee-gateway-builder-base:${builderBase}`;
 
 describe("gateway bake plan", () => {
   it("builds unpublished bases in the same run and links every dependent to them in-process", () => {
-    const { group, target } = plan({ cuaDriver: true, base: true, builderBase: true, images });
-    expect(group.default.targets.sort()).toEqual([...images, "octogee-cua-driver", "octogee-gateway-base", "octogee-gateway-builder-base"].sort());
-    expect(target["octogee-cua-driver"]).toMatchObject({ dockerfile: "infra/gateway/Dockerfile.cua-driver", tags: [cuaRef] });
+    const { group, target } = plan({ base: true, builderBase: true, images });
+    expect(group.default.targets.sort()).toEqual([...images, "octogee-gateway-base", "octogee-gateway-builder-base"].sort());
     expect(target["octogee-gateway-base"]).toMatchObject({
       dockerfile: "infra/gateway/Dockerfile.base", target: "gateway-runtime", tags: [baseRef],
-      contexts: { "octogee-cua-driver": "target:octogee-cua-driver" },
     });
     expect(target["octogee-gateway-builder-base"]).toMatchObject({
       dockerfile: "infra/gateway/Dockerfile.builder-base", tags: [builderBaseRef],
@@ -44,10 +40,10 @@ describe("gateway bake plan", () => {
     });
   });
 
-  it("rebuilds the gateway base over the published cua-driver image keyed by its inputs", () => {
+  it("builds the gateway base from its packaged native dependencies", () => {
     const { group, target } = plan({ base: true, builderBase: false, images: [] });
     expect(group.default.targets).toEqual(["octogee-gateway-base"]);
-    expect(target["octogee-gateway-base"].contexts).toEqual({ "octogee-cua-driver": `docker-image://${cuaRef}` });
+    expect(target["octogee-gateway-base"]).not.toHaveProperty("contexts");
   });
 
   it("builds a new Builder base over a published gateway base", () => {
@@ -74,9 +70,7 @@ describe("gateway bake plan", () => {
   });
 
   it("exports registry cache for the bases only", () => {
-    const { target } = plan({ cuaDriver: true, base: true, builderBase: true, images });
-    expect(target["octogee-cua-driver"]).not.toHaveProperty("cache-from");
-    expect(target["octogee-cua-driver"]).not.toHaveProperty("cache-to");
+    const { target } = plan({ base: true, builderBase: true, images });
     for (const name of ["octogee-gateway-base", "octogee-gateway-builder-base"]) {
       expect(target[name]["cache-from"]).toEqual([`type=registry,ref=${repository}/cache/${name}:buildcache`]);
       expect(target[name]["cache-to"]).toEqual([`type=registry,ref=${repository}/cache/${name}:buildcache,mode=max`]);
@@ -88,7 +82,7 @@ describe("gateway bake plan", () => {
   });
 
   it("pushes every target for linux/amd64 without attestations", () => {
-    const { target } = plan({ cuaDriver: true, base: true, builderBase: true, images });
+    const { target } = plan({ base: true, builderBase: true, images });
     for (const definition of Object.values(target)) {
       expect(definition).toMatchObject({
         context: ".", platforms: ["linux/amd64"], output: ["type=registry"],
@@ -102,12 +96,11 @@ describe("gateway bake plan", () => {
   });
 
   it.each([
-    ["a mutable cua-driver image", { cuaDriver: "latest" }, "cua-driver image"],
     ["a mutable gateway base", { base: "latest" }, "gateway base"],
     ["a Builder base over another gateway base", { builderBase: `inputs-${"e".repeat(64)}-builder-123456789abc` }, "Builder base"],
     ["a short SHA", { sha: "aaaaaaa" }, "full source SHA"],
   ])("rejects %s", (_, override, message) => {
-    expect(() => gatewayBakePlan({ repository, sha, cuaDriver, base, builderBase, toolchain, build: { cuaDriver: true, base: true, builderBase: true, images }, ...override })).toThrow(message);
+    expect(() => gatewayBakePlan({ repository, sha, base, builderBase, toolchain, build: { base: true, builderBase: true, images }, ...override })).toThrow(message);
   });
 
   it("rejects an image outside the gateway family", () => {
@@ -124,7 +117,7 @@ describe("gateway image family build", () => {
     return {
       calls,
       bakes,
-      run: () => buildGatewayImages({ repository, sha, cuaDriver, base, builderBase, toolchain }, {
+      run: () => buildGatewayImages({ repository, sha, base, builderBase, toolchain }, {
         exists: async (ref: string) => existing.includes(ref),
         script: async (file: string, args: string[]) => {
           calls.push([file, ...args]);
@@ -147,14 +140,13 @@ describe("gateway image family build", () => {
     const { calls, bakes, run } = harness();
     const rows = await run();
     expect(bakes).toHaveLength(1);
-    expect(bakes[0].group.default.targets).toHaveLength(6);
+    expect(bakes[0].group.default.targets).toHaveLength(5);
     expect(calls.indexOf(calls.find(call => call[0] === "prepare-base")!)).toBeLessThan(calls.findIndex(call => call[0] === "bake"));
     const afterBake = calls.slice(calls.findIndex(call => call[0] === "bake") + 1);
     expect(afterBake[0]).toEqual(sizeCheck);
     expect(scriptCalls(afterBake, "image-fingerprint-reuse.sh").map(call => call.slice(1))).toEqual(images.map(image => ["record", image, repository, short, `f-${image}`]));
     expect(scriptCalls(afterBake, "publish-full-sha-image-tag.sh").map(call => call[1])).toEqual(images);
     expect(rows).toEqual([
-      { image: "octogee-cua-driver", tag: cuaDriver, result: "built", seconds: 60 },
       { image: "octogee-gateway-base", tag: base, result: "built", seconds: 60 },
       { image: "octogee-gateway-builder-base", tag: builderBase, result: "built", seconds: 60 },
       ...images.map(image => ({ image, tag: short, result: "built", seconds: 60 })),
@@ -162,27 +154,27 @@ describe("gateway image family build", () => {
   });
 
   it("skips the bake, the tarballs and the size check when everything already has its full-SHA tag", async () => {
-    const { calls, bakes, run } = harness({ existing: [cuaRef, baseRef, builderBaseRef, ...images.map(image => `${repository}/${image}:${sha}`)] });
+    const { calls, bakes, run } = harness({ existing: [baseRef, builderBaseRef, ...images.map(image => `${repository}/${image}:${sha}`)] });
     const rows = await run();
     expect(bakes).toEqual([]);
     expect(calls).toEqual([]);
-    expect(rows.map(row => row.result)).toEqual(["found", "found", "found", ...images.map(() => "reused (full-SHA tag)")]);
+    expect(rows.map(row => row.result)).toEqual(["found", "found", ...images.map(() => "reused (full-SHA tag)")]);
   });
 
   it("publishes reused images without baking them", async () => {
-    const { calls, bakes, run } = harness({ existing: [cuaRef, baseRef, builderBaseRef, `${repository}/gateway-edge:${sha}`], reusable: ["octogee-gateway", "octogee-gateway-builder"] });
+    const { calls, bakes, run } = harness({ existing: [baseRef, builderBaseRef, `${repository}/gateway-edge:${sha}`], reusable: ["octogee-gateway", "octogee-gateway-builder"] });
     const rows = await run();
     expect(bakes).toEqual([]);
     expect(calls.some(call => call[0] === "prepare-base" || call[1] === "record")).toBe(false);
     expect(scriptCalls(calls, "publish-full-sha-image-tag.sh").map(call => call[1])).toEqual(["octogee-gateway", "octogee-gateway-builder"]);
-    expect(rows.map(row => row.result)).toEqual(["found", "found", "found", "reused (full-SHA tag)", "reused (fingerprint)", "reused (fingerprint)"]);
+    expect(rows.map(row => row.result)).toEqual(["found", "found", "reused (full-SHA tag)", "reused (fingerprint)", "reused (fingerprint)"]);
   });
 
   it.each([
     ["fingerprint", { reusable: ["octogee-gateway-builder"] }],
     ["short tag", { existing: [`${repository}/octogee-gateway-builder:${short}`] }],
   ])("size-checks a Builder reused by %s before promoting it to its full-SHA tag", async (_, state) => {
-    const { calls, bakes, run } = harness({ existing: [cuaRef, baseRef, builderBaseRef, `${repository}/gateway-edge:${sha}`, `${repository}/octogee-gateway:${sha}`, ...(state.existing ?? [])], reusable: state.reusable });
+    const { calls, bakes, run } = harness({ existing: [baseRef, builderBaseRef, `${repository}/gateway-edge:${sha}`, `${repository}/octogee-gateway:${sha}`, ...(state.existing ?? [])], reusable: state.reusable });
     await run();
     expect(bakes).toEqual([]);
     expect(calls.findIndex(call => call.join(" ") === sizeCheck.join(" "))).toBeLessThan(
@@ -192,7 +184,7 @@ describe("gateway image family build", () => {
   });
 
   it("bakes only what changed over published bases", async () => {
-    const { calls, bakes, run } = harness({ existing: [cuaRef, baseRef, builderBaseRef, `${repository}/octogee-gateway-builder:${sha}`], reusable: ["gateway-edge"] });
+    const { calls, bakes, run } = harness({ existing: [baseRef, builderBaseRef, `${repository}/octogee-gateway-builder:${sha}`], reusable: ["gateway-edge"] });
     await run();
     expect(bakes[0].group.default.targets).toEqual(["octogee-gateway"]);
     expect(bakes[0].target["octogee-gateway"].contexts).toEqual({ "octogee-gateway-base": `docker-image://${baseRef}` });
@@ -201,7 +193,7 @@ describe("gateway image family build", () => {
   });
 
   it("salts each gateway fingerprint with the base it runs on", async () => {
-    const { calls, run } = harness({ existing: [cuaRef, baseRef, builderBaseRef] });
+    const { calls, run } = harness({ existing: [baseRef, builderBaseRef] });
     await run();
     expect(scriptCalls(calls, "image-fingerprint-reuse.sh").filter(call => call[1] === "check").map(call => [call[2], call.at(-1)])).toEqual([
       ["gateway-edge", ""], ["octogee-gateway", base], ["octogee-gateway-builder", builderBase],

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainBuild } from './main-build.mjs';
 import { withBuildLock } from './build-lock.mjs';
-import { buildImage, buildSummary, builderBaseRecipe, cuaDriverRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
+import { buildImage, buildSummary, builderBaseRecipe, ensureImage as ensureRegistryImage, gatewayBaseRecipe } from './image-build.mjs';
 import { buildGatewayImages } from './gateway-bake.mjs';
 import { awaitDiskRoom } from './disk-room.mjs';
 import { gcsObjectIdentityFromMetadata, openclawBaseKey } from '../../.github/actions/openclaw-base-key/base-key.mjs';
@@ -68,12 +68,11 @@ async function gateway() {
   const base = openclawBaseKey({ objects: openclawObjects(), recipeFiles: gatewayBaseRecipe() }).tag;
   const hash = value => createHash('sha256').update(value).digest('hex');
   const recipeHash = files => hash(files.map(file => `${hash(readFileSync(file))}  ${file}\n`).join(''));
-  const cuaDriver = `inputs-${recipeHash(cuaDriverRecipe())}`;
   const toolchain = {
     lockSha256: hash(readFileSync('infra/gateway/builder-toolchain/package-lock.json')),
     groupsSha256: hash(readFileSync('infra/gateway/builder-toolchain/groups.json')),
   };
-  summary.push(...await buildGatewayImages({ repository, sha, cuaDriver, base, builderBase: `${base}-builder-${recipeHash(builderBaseRecipe()).slice(0, 12)}`, toolchain, force }, {
+  summary.push(...await buildGatewayImages({ repository, sha, base, builderBase: `${base}-builder-${recipeHash(builderBaseRecipe()).slice(0, 12)}`, toolchain, force }, {
     exists: async ref => Boolean(lookup(ref)),
     script: async (file, args) => run('bash', [file, ...args]),
     prepareBase: openclawTarballs,

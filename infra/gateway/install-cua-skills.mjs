@@ -9,19 +9,20 @@ if (!openclawRoot || !source || !destination) {
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const provenance = json(path.join(source, "provenance.json"));
 const nativeRoot = path.join(openclawRoot, `node_modules/@trycua/cua-driver-linux-${process.arch}-gnu`);
-const patch = json(path.join(nativeRoot, "octogee-patch.json"));
 const installed = {
   native: json(path.join(nativeRoot, "package.json")).version,
-  patch: patch.version,
+  plugin: json(path.join(openclawRoot, "dist/extensions/cua-computer/package.json")).dependencies?.["@trycua/cua-driver"],
   sdk: json(path.join(openclawRoot, "node_modules/@trycua/cua-driver/package.json")).version,
 };
-if (installed.native !== provenance.driverVersion || installed.patch !== provenance.driverVersion || installed.sdk !== provenance.driverVersion) {
+if (installed.native !== provenance.driverVersion || installed.plugin !== provenance.driverVersion || installed.sdk !== provenance.driverVersion) {
   throw new Error(
-    `CUA skills target driver ${provenance.driverVersion}, but the installed driver is ${installed.native} (patch ${installed.patch})`,
+    `CUA skills target driver ${provenance.driverVersion}, but the installed driver is ${installed.native} (SDK ${installed.sdk}, plugin ${installed.plugin})`,
   );
 }
-if (!/^[0-9a-f]{40}$/.test(provenance.driverSourceCommit ?? "") || patch.sourceCommit !== provenance.driverSourceCommit) {
-  throw new Error("CUA skills must match the installed driver's exact source commit");
+if (provenance.driverVersion !== "0.38.0" ||
+    provenance.driverSourceCommit !== "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19" ||
+    provenance.skills?.["cua-driver"]?.commit !== provenance.driverSourceCommit) {
+  throw new Error("CUA skills must pin the official driver release source");
 }
 
 function frontmatter(file) {

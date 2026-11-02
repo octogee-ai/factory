@@ -1,14 +1,14 @@
 {
-  "driverVersion": "0.37.0",
-  "driverSourceCommit": "2d2f99228d4d2508dc6fcc84c176b296e146714a",
+  "driverVersion": "0.38.0",
+  "driverSourceCommit": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
   "skills": {
     "cua-driver": {
       "repository": "https://github.com/trycua/cua",
-      "commit": "2d2f99228d4d2508dc6fcc84c176b296e146714a",
+      "commit": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
       "path": "libs/cua-driver/rust/Skills/cua-driver",
-      "version": "0.37.0",
+      "version": "0.38.0",
       "adaptedFrom": {
-        "SKILL.md": "6a9aca777840bc7f7d514a9ecb3aed8ab299abe78fa1e001555b02f24f84b60b",
+        "SKILL.md": "f771345ea9656ce7e2ace7a5940ef325e8eea3e4eada316cbeeea62747d540fd",
         "LINUX.md": "286f3eae22b70c1dcba90ebb1d0c789546ab5f819baeb3f53c94b2b6588afa7b"
       },
       "files": [
@@ -16,7 +16,7 @@
       ],
       "localEdits": [
         "SKILL.md: adapt official driver and Linux contracts to the managed computer tool, paired node, observation references and explicit computer browser profile; omit standalone driver installation and unsupported tool routes",
-        "SKILL.md: 0.37.0 adds a macOS install/permission row and rule-7 exception, a hint/next_call refusal row and the get_guide MCP tool; all are omitted because the managed computer tool on this Linux desktop exposes none of them"
+        "SKILL.md: omit standalone macOS install/permission guidance, hint/next_call refusal advice and get_guide because the managed computer tool on this Linux desktop exposes none of them"
       ]
     },
     "cua-omarchy": {

@@ -100,7 +100,21 @@ Before publication:
   paths refused. Installed source dependencies remain unchanged. Selected main pins npm 12.2.0; the overlay
   pins stock npm 12.2.1 before the disposable distribution patch. Octogee owns the nested Undici 6.29.1 and
   ip-address 10.7.4 fixes because pnpm 12.15 loses these bundled-file patches on
-  a cached import. Reassess this patch against each selected npm release.
+  a cached import. The glob 13.0.6 cancellation backport follows upstream commit
+  `4682e8c9babee1b385202ede36389634e12076d7`; minimatch 10.2.5 preprocessing limits
+  follow `77a0f5c4b80bdc641c3c930a1d9edf5ad2db57f8`. Versions remain unchanged
+  for these backports, so version-only advisory scans still report them.
+  Both glob public `index.min.js` bundles are regenerated from the patched closure
+  with esbuild 0.27.3 using upstream `scripts/build.sh` options (`--minify
+  --platform=node --bundle`, each format's `index.js`, matching `--format=cjs`
+  or `--format=esm`), omitting source maps absent from npm's distribution.
+  Run `node npm-distribution.test.mjs <npm-root>` against the staged and installed
+  copies: all 24 raw/public CJS/ESM controls must pass. Reassess this patch against
+  each selected npm release; retire each backport when the stock installed closure
+  supplies the equivalent fix.
+  Platform Dockerfiles stage npm 12.2.1 with this same distribution patch and
+  run the same 24 controls before copying only the patched npm tree into runtimes;
+  the patch and test bytes are platform/site release and per-image fingerprint inputs.
 - Install the exact root and Mattermost pair in an isolated npm prefix and
   verify installed build-info. Core, Codex, Parallel and Mattermost must come
   from the same checkout, not merely share a version.
@@ -149,19 +163,19 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 2 Shared worker retirement fix
+## Current overlay: November 2 weekly runtime refresh
 
 This refresh freezes OpenClaw main at
-`adabd2b4b1e9607047925e50b59959b4245415c2`, 495 commits after the previous
-`ddd4d963854581a9890c00847e807ccff9e32f10` base. The operator selected today's
+`c1b0fc1415a09138c48e3f81055aca0f8e4f12aa`, 42 commits after the previous
+`adabd2b4b1e9607047925e50b59959b4245415c2` base. The operator selected today's
 updated main for independent qualification. Subsequent upstream commits do not
 change this build's input.
 
-The clean built overlay is `3d3422eeddc04e1dd5e9cdba64a351b079871379` on
-`ceckert/openclaw:codex/gateway-refresh-20261102-worker`. Gateway archives and
+The clean built overlay is `1f9f1e4687adbf30e3cf5e53ca15e2bc931ca89b` on
+`ceckert/openclaw:codex/gateway-maintenance-20261102`. Gateway archives and
 hosted islands come from that same source.
 
-The selected tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41491531110)
+The selected tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41518259691)
 was cancelled before any jobs ran. The latest successful scheduled
 [full CI run](https://github.com/openclaw/openclaw/actions/runs/41377849337)
 is on `d1d45068a49bc85eb2a1eff077678b3a87a68621`: 150 jobs passed and 11 skipped
@@ -367,162 +381,158 @@ Pinned pnpm 12.15.0 and the frozen lockfile built the clean source with full
 `pnpm build package`; `dist/build-info.json.commit` matches the source SHA above.
 Root and Mattermost were packed sequentially with the maintained packers from a
 clean recipe snapshot. Both prepack/postpack lifecycles restored clean source.
-Native root archive preflight, inventory and dist import-graph checks pass.
+The native root archive checker passes its preflight, inventory and dist import
+graph. Its default mode matches this packer's self-contained `file:vendor`
+workspace layout; the optional `--require-bundled-workspace-deps` mode requires
+a different physical npm bundle layout. Actual installed private AI and patched
+MCP imports resolve inside the installed OpenClaw tree and pass.
 
-All production type lanes, scoped native lint, formatting, channel metadata,
-worker inventory and config baseline checks pass. The selected native scope
-passes 414 tests across worker leases, reload, sharing, authorization, voice,
-Doctor/copy and outbound delivery, plus 47 UI controls. Removing only the new
-ordinary-retirement guard reproduces the exact reported retiring-with-live-actor
-error; all 19 worker controls pass with it restored.
+The runtime resolves official glob 14.0.3 and minimatch 11.0.4. The existing
+systemd escaped-question-mark/wildcard control first failed against minimatch 11:
+its canonical compiled parts are Matchers rather than RegExp instances. The
+native consumer now excludes `GLOBSTAR` and calls the public matcher contract;
+all 14 real-flow controls pass. The exact npm 12.2.1 bundled-glob 13.0.6 policy
+entry is limited to that stock package's existing authenticated bundle owner.
+The existing boundary matrix failed before the entry and all 100 package-lock
+controls plus real prepack pass afterward. This does not exempt registry
+packages or waive physical npm distribution verification.
 
-The retained `server-reload-hot.superseded-tail.test.ts` has eight managed-reloader
-timeouts followed by stalled cleanup. The first case also times out on exact old
-`71ac89f`; it is an inherited validation gap. No assertions or timeouts were
-weakened, and aggregate `pnpm check` success is not claimed. Native build budgets
-also report advisory CSS (312.1 KiB against 302.1 KiB) and chat boot JavaScript
-(1251.1 KiB against 1250 KiB) overages; budgets remain unchanged.
+Production core, UI and extension type lanes, script types, formatting, channel
+metadata, worker inventory and config baseline checks pass. Focused native
+controls pass across unit/relay (15), gateway custody/authorization/outbound
+(66), infrastructure (69, with five platform skips), and the additional
+requester/approval/workspace/file-transfer/secrets/CUA scope (67). Independent
+worker/cron controls pass 31 tests, including 11 worker-lease controls. These
+scopes overlap and are not an aggregate test count. The outbound receipt
+assertion now requires the native delivered receipt; it was red before its
+expectation was updated. No assertion or timeout was weakened.
+
+Full native lint reports 17 max-lines failures; every failing file is
+byte-identical to the selected upstream. Its limits remain unchanged. The prior
+`server-reload-hot.superseded-tail.test.ts` qualification recorded eight
+managed-reloader timeouts and stalled cleanup, including a first-case timeout
+on the old native baseline. That unrelated owner is unchanged and this cut did
+not rerun that suite. It remains an inherited qualification gap, not a current
+exact-head result. Aggregate `pnpm check` success is not claimed. Full-build
+advisory budgets report CSS 312.1 KiB against 302.1 KiB and chat boot JavaScript
+1250.9 KiB against 1250 KiB; budgets remain unchanged.
 
 The actual Linux amd64 `openclaw-full-plugin-installer` target passes CUA driver
 artifact lint, `config.changed` publication, source-matched Parallel and Codex
-installation, registry refresh and all three native-hook imports. An isolated,
-network-disabled installed Gateway accepts two concurrent `agents.create` calls
-and then `secrets.reload` with zero warnings, without model/provider requests.
-All twelve Octogee extension bundles load against this installed SDK. Both raw
-Shared/Builder templates and generated configs from their final roster/pre-boot
-writers pass native validation. Skill Workshop policy now uses its canonical
-plugin config: Shared retains autonomous mode off and Builder retains its native
-capability. The retired `skills.workshop` writer is removed.
+installation, registry refresh and all three native-hook imports. All 24 npm
+raw/public CJS/ESM security controls pass against the packaged distribution and
+both installed npm copies; real workspace discovery also passes through both
+installed npm public entrypoints. The actual CUA skills installer accepts the flattened
+installed SDK/native/plugin 0.38.0 versions. All twelve Octogee extension bundles
+load against this installed SDK. Both raw Shared/Builder templates and generated
+configs from their real roster-ownership, policy and pre-boot writers pass native
+validation. The 545-package physical installed root/companion/runtime inventory
+matches none of the 16 source-workspace advisories: those remaining source paths
+belong to unselected IMAP, Teams, Discord, Copilot and QA workspaces. Bundled npm
+backport versions are retained honestly and verified by behavior and bytes.
+
+An installed Gateway on the isolated PostgreSQL fixture accepts two concurrent
+`agents.create` calls and `secrets.reload` with `warningCount: 0`. Startup
+session-registry maintenance intersects a temporary agent resource close and
+logs one fail-closed admission error. Its existing native scheduler completes
+the next pass 60 seconds later, without a repeated failure. Both agents remain
+listed and a second secret reload reports zero warnings; shutdown is clean.
+The same diagnostic was observed in a SQLite fixture, so this is not described
+as a SQLite-only issue or an unproven historical baseline failure. Resource
+admission and the native maintenance retry owner remain unchanged.
+
+The actual installed official CUA module dynamically loads all 202 exports,
+including `CuaDriver`, on Node 26.13.0/glibc 2.36 with the same Debian X11/Xi/
+xkbcommon libraries supplied by the final gateway-system stage. The disposable
+image reports no pending apt upgrades. This ABI and artifact proof does not
+replace real desktop acceptance after deployment.
 
 The executable SQL catalog was regenerated against this exact source with
-PostgreSQL 16/vector 0.8.7: all 11 routine, 15 trigger and 308 expression
+PostgreSQL 16.15/vector 0.8.7: all 11 routine, 15 trigger and 308 expression
 fingerprints are unchanged; only its source SHA changes. All 48 PostgreSQL
 import/recovery/handoff integration tests pass. Hosted islands and Browser
 resources are regenerated from this build; 196 focused app checks and 39
-runtime/license/pin checks pass.
+runtime/license/pin checks pass. Focused Octogee packing, base-image, template
+and CUA contracts pass 83 tests across eleven files.
 
-The source branch is published to the fork. The root archive is a new write-once
-object; the byte-identical Mattermost companion reuses its existing generation.
-Full SHA256 readback of both exact published generations is verified.
+The source branch is published to the public fork. Both archives are new
+write-once objects. Full SHA256 and byte-equality readback of the exact published
+generations, including the root's build-info source commit, is verified.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-b912698c.tgz#1793643777466672` | 116066361 | `b912698c24e85fcb0a3d0c8e0e99e56bbc0d77b9e7b067d1fa1f2943e96684d1` |
-| mattermost | `openclaw-mattermost-6758b57d.tgz#1793554855718230` | 1266404 | `6758b57de1fbac9d7b29602537306266b024096874c945c5185fa0eab96a53ef` |
+| root | `openclaw-fork-b56aa3b8.tgz#1793657164542718` | 117072057 | `b56aa3b80fb289301a8037c583162982d63732d359d12dcff08bb3d8f5ceb825` |
+| mattermost | `openclaw-mattermost-bc6480eb.tgz#1793657168834514` | 1273634 | `bc6480ebfc8437515b67d288330651bb0f75f2b2825634fc6c4979a36b6c5e6c` |
 
-This qualification covers the installed base runtime and its consumers. Full
-platform images and deployed TEST smoke remain separate Build main/Ship TEST
-steps. No deployment, live restart or fleet desired-state mutation was performed.
+This qualifies the installed base runtime and its consumers. Full platform
+images, deployed TEST/PROD smoke and computer desktop acceptance remain separate
+Build main and deployment steps. This recut does not mutate fleet desired state
+or live Gateway/computer data.
 
 ### Upstream contributions
 
-#189036 and #189418 had successful enforced checks at their reviewed heads and
-remain open for maintainer review. #177823 is closed unmerged after native
-adoption of its original bug fix; the remaining optional guard is retired from
-the runtime. #167431's code checks passed but
-maintainer approval is still required. #186891 (`1d18f8eb784`) and #186893 (`d4fd7a5c5de`) have been
-refreshed and published with current-main conflicts resolved and native ratchets
-passing; their prior live evidence is labeled separately from refreshed-head
-checks. #178755 (`d576caa76fe`) is refreshed and ready for maintainer review for
-the active non-destructive detach consumer; downstream-only held cron tests/docs
-have been removed from its upstream proof. Hosted final-head checks remain
-separate from local readiness. #178973 is closed unmerged
+As checked on November 2, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
+#186891 (`1d18f8eb784`), #186893 (`d4fd7a5c5de`), #167431 (`27193149bc2`)
+and #178755 (`d576caa76fe`) remain open and unmerged. All six currently conflict
+with live upstream main. Their earlier reviewed-head checks and published
+contributions do not establish current-main merge readiness; this downstream
+cut is clean on the separately frozen selected base. No upstream PR was changed
+by this refresh. #177823 is closed unmerged after native adoption of its original
+bug fix, and its optional guard remains retired. #178973 is closed unmerged
 because its mixed-engine consumer was retired, not because native adopted its
-API unchanged. Earlier superseded PostgreSQL PRs remain closed/merged as already
-recorded in repository history. Contribution status never substitutes for runtime
-necessity or image qualification.
+API unchanged. Earlier superseded PostgreSQL contributions remain recorded in
+repository history. Contribution status never substitutes for runtime necessity
+or installed-image qualification.
 
-## Native CUA desktop-discovery preservation
+## Native CUA desktop discovery
 
-`Dockerfile.cua-driver` builds the Linux SDK from the official
-[CUA 0.37.0 tag](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.37.0),
-exact source `2d2f99228d4d2508dc6fcc84c176b296e146714a`, with
-`cua-desktop-discovery.patch`, into the `octogee-cua-driver:inputs-<hash>`
-image keyed by that Dockerfile and patch. `Dockerfile.base` consumes it as the
-`cua-driver-builder` stage through the `CUA_DRIVER_IMAGE` build context, so a
-base rebuild for any other reason reuses the compiled driver. The published modifier fix is already present,
-so the older modifier-only fork is not used. Rust and the other CLI/tool pins
-remain unchanged.
+The official [CUA 0.38.0 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.38.0)
+at `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` includes
+[the desktop-discovery contribution](https://github.com/trycua/cua/pull/5368).
+Its native owner dispatches Wayland/X11 discovery, excludes off-screen windows
+and known dead owners, remembers observed Wayland origins, and emits canonical
+window records. Unknown-owner visible windows remain discoverable without
+inventing process identity. The upstream regression covers these same boundaries.
 
-The sparse checkout also includes `libs/cua/Cargo.toml` and
-`libs/cua/crates/cua-telemetry`, the 0.37.0 driver's only external path dependency.
-The selected revision's Cargo lockfile, dependency features and test gates remain
-unchanged; the recipe does not fetch the rest of the CUA workspace.
+Octogee therefore removes its Rust builder, discovery patch, SDK replacement,
+and artifact-manifest rewriting. OpenClaw installs the official matched JavaScript
+and native packages and owns their exact artifact hashes. The base image still
+runs `openclaw doctor --lint --only cua-computer/driver-artifacts` before either
+Gateway class is assembled. A version match alone does not qualify the library.
+The JavaScript SDK and declarations are byte-identical to 0.37.0; its package
+manifest advances the SDK and all six platform companions together.
 
-The 0.37.0 `GetAccessibilityTreeTool` still discovers only X11 windows: the two
-files the patch changes are byte-identical between 0.36.0 and 0.37.0, whose Linux
-changes are confined to input, pointer shape and X11. The patch applies unchanged. The
-patch keeps discovery on the native Wayland/X11 dispatcher, excludes
-off-screen windows and known dead owners, remembers observed Wayland origins,
-and emits the existing canonical window record (including bounds, app name,
-visibility and optional stacking order). Unknown-owner visible windows remain
-discoverable without inventing process identity. This is discovery metadata,
-not proof that a compositor permits capture or input.
-
-The source patch includes a hermetic visible/live-owner boundary regression in
-the existing Linux window-record test owner. The builder runs that owner and
-the focused Wayland tests before the release SDK build with `portal-input`;
-it does not enable `portal-capture` or experimental Hyprland input-v3. Those
-headless tests are not canonical desktop E2E proof. Qualification of this exact
-new source/library pair must include the Linux crate tests, both required image
-architectures, dynamic loading and the installed driver artifact check; 0.36.0
-build results do not qualify this pair.
-
-The installer requires matching 0.37.0 installed JavaScript bindings, native
-package, plugin dependency and patch metadata, the exact official source/tag,
-and a patch digest. It first validates the original SDK against OpenClaw's
-native artifact manifest, then replaces only that architecture's SDK digest in
-the plugin and its single compiled manifest. It finds that compiled module by the
-same bundled-module labels native's own region reader accepts: the stable
-`//#region` form and the qualified module-ID labels that the tsdown 0.23.2 /
-Rolldown output adopted by native #188576 emits. Other binary/platform pins remain
-unchanged. `octogee-patch.json` records the source, patch and installed library
-digest. The CUA Dockerfile and patch remain immutable base-fingerprint inputs,
-so a driver change still rebuilds the base.
-
-OpenClaw owns the matched dependency/lock/artifact pins; Octogee owns this
-discovery preservation and adapted skills. Remove the builder and installer
-overlay only when the selected published package preserves the same
-Wayland/visible/live/origin/canonical-record boundaries and passes matched
-artifact and desktop qualification. A version bump or modifier fix alone does
-not meet that removal condition.
-
-The upstream discovery contribution [CUA #5286](https://github.com/trycua/cua/pull/5286)
-is closed unmerged. Selected 0.37.0 still lacks the required discovery behavior;
-contribution status does not qualify or replace this pinned package/library pair.
-The actual Linux amd64 installer qualifies the unchanged exact driver/source
-pair for this package set. Complete-image results belong in the runtime PR; a
-new ARM64 or real Wayland-session run is not claimed by this refresh.
+Source adoption and installer fixtures do not prove a working desktop session.
+This cut verifies dynamic loading from the actual installed 0.38.0 package on
+the pinned Debian/Node runtime as recorded above. Real desktop acceptance remains
+a deployment check; prior patched 0.37.0 results do not qualify the new library.
 
 ## Vendored computer-use skills
 
 `infra/gateway/cua-skills/` holds the `cua-driver` skill adapted from CUA's
-0.37.0 skill pack
-([`2d2f9922`](https://github.com/trycua/cua/tree/2d2f99228d4d2508dc6fcc84c176b296e146714a/libs/cua-driver/rust/Skills/cua-driver))
+0.38.0 skill pack
+([`85e2b131`](https://github.com/trycua/cua/tree/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19/libs/cua-driver/rust/Skills/cua-driver))
 and the `cua-omarchy` companion from Omarchy
 [PR #11342](https://github.com/omacom/omarchy/pull/11342) at `94e97055`.
 `provenance.json` records each repository, commit, and the SHA-256 of every
-upstream file the adaptation came from. The runtime image installs them to
-`/opt/octogee/skills/computer` with `install-cua-skills.mjs`, which refuses a
-driver version other than the installed JavaScript/native package and patch,
-a driver-source mismatch, an unpinned skill source, a skill version drift, or
-any file not listed in provenance. No skill source is
-fetched at build or run time; `cua-driver skills install` is never used.
+upstream file used for the adaptation. The runtime image installs them to
+`/opt/octogee/skills/computer` with `install-cua-skills.mjs`, which requires
+matching installed JavaScript, native-package and OpenClaw plugin versions,
+the official release's source identity, pinned skill sources and listed files.
+Native artifact verification remains with OpenClaw; there is no locally invented
+patch receipt. No skill source is fetched at build or run time.
 
 The adaptation keeps the loop, targeting, delivery, verification, and refusal
-guidance and maps it onto the `computer` tool. It drops the standalone CLI and
-MCP transport, the install, self-update, and `skills install --from main`
-instructions, permission profiles and approval-bypass flags, cursor overlay,
-recording, embedding, macOS, Windows, and Omarchy package and plugin
-management. CUA's browser guide is replaced by the `browser` tool. The 0.37.0
-re-adaptation changes only the version: its new macOS install/permission
-guidance, recovery-hint (`hint`/`next_call`) refusal row and `get_guide` MCP tool
-have no counterpart in the managed `computer` tool, and its `LINUX.md` change is
-qualification wording.
+guidance and maps it onto the `computer` tool. It omits standalone CLI/MCP
+transport, installation, self-update, permission profiles, approval-bypass flags,
+cursor overlay, recording, embedding, macOS, Windows, and Omarchy package/plugin
+management. CUA's browser guide is replaced by the `browser` tool. The 0.38.0
+upstream skill differs from 0.37.0 only in its version; `LINUX.md` is unchanged.
+The Hobby X11 skill carries the same driver version.
 
-When the driver version changes, the build fails until the skills are
-re-adapted: diff the upstream files at the new release against the recorded
-digests, carry forward what applies, and update `provenance.json`.
+When the driver version changes, diff its official skills against the recorded
+digests, carry forward the applicable guidance, and update the release/source
+mapping and `provenance.json` together.
 
 ## What the packers do
 
