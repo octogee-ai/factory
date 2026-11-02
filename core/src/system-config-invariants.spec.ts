@@ -431,9 +431,6 @@ describe("system config platform invariants", () => {
       cron: { triggers: { enabled: false } },
       skills: {
         load: { watch: true },
-        workshop: {
-          autonomous: { mode: "off" },
-        },
       },
       plugins: {
         allow: expect.arrayContaining(["customer-plugin", "octogee-chat-tools"]),
@@ -452,9 +449,8 @@ describe("system config platform invariants", () => {
         debug: false,
       },
     });
-    expect(config).not.toHaveProperty("skills.workshop.approvalPolicy");
-    expect(config).not.toHaveProperty("skills.workshop.allowSymlinkTargetWrites");
-    expect(config).not.toHaveProperty("skills.workshop.maxPending");
+    expect(config).not.toHaveProperty("skills.workshop");
+    expect((config.plugins as { entries: Record<string, unknown> }).entries["skill-workshop"]).toEqual({ enabled: true, config: { autonomous: { mode: "off" } } });
     expect((config.tools as { deny: string[] }).deny).not.toEqual(
       expect.arrayContaining(["workspace_commit", "octogee_project_commit"]),
     );

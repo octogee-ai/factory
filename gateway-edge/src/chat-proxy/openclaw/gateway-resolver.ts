@@ -10,6 +10,7 @@ import {
 } from "@octogee/core/gateway-live-release";
 
 export type GatewayResolveErrorCode =
+  | "workspace-moving"
   | "user-not-provisioned"
   | "gateway-not-registered"
   | "gateway-root-invalid"
@@ -60,6 +61,14 @@ function unresolvedGatewayUrl(gatewayId: string, detail: string): never {
   throw new GatewayResolveError(
     "gateway-url-unresolved",
     `gateways/${gatewayId} ${detail}`,
+  );
+}
+
+function assertRunningGateway(gatewayId: string, desiredStatus: string): void {
+  if (desiredStatus === "running") return;
+  throw new GatewayResolveError(
+    desiredStatus === "draining" ? "workspace-moving" : "gateway-url-unresolved",
+    `gateways/${gatewayId} is ${desiredStatus}`,
   );
 }
 
@@ -131,9 +140,7 @@ async function assertResolvableGateway(
       `gateways/${gatewayId} exists but is not a valid durable root`,
     );
   }
-  if (gwData.desiredStatus !== "running") {
-    unresolvedGatewayUrl(gatewayId, "is not running");
-  }
+  assertRunningGateway(gatewayId, gwData.desiredStatus);
   const assignmentSnap = await db.doc(`gateways/${gatewayId}/assignments/${uid}`).get();
   if (!assignmentSnap.exists) {
     if (requireServingAssignment) {

@@ -364,3 +364,11 @@ describe('resolveGatewayAssignment — tenant serving boundary', () => {
     });
   });
 });
+
+it('reports a draining assignment as a workspace move', async () => {
+  const db = mkDb({
+    'users/u1': { provisioning: { openclaw: { gatewayId: 'gw-a' } } },
+    'gateways/gw-a': durableRoot('gw-a', { desiredStatus: 'draining' }),
+  });
+  await expect(resolveGatewayAssignment({ db, uid: 'u1' })).rejects.toMatchObject({ code: 'workspace-moving' });
+});

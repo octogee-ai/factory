@@ -200,6 +200,7 @@ describe("system config sync hardening", () => {
       const plugins = config.plugins as Record<string, unknown>;
       const entries = plugins.entries as Record<string, Record<string, unknown>>;
       entries.codex = { enabled: true };
+      entries["skill-workshop"] = { enabled: true, config: { autonomous: { mode: "auto" } } };
       const hooks = entries["octogee-chat-tools"].hooks as Record<string, unknown>;
       hooks.allowPromptInjection = false;
       (hooks.timeouts as Record<string, unknown>).before_agent_run = 1;
@@ -280,9 +281,8 @@ describe("system config sync hardening", () => {
         "cron.triggers.enabled",
         "skills.load.allowSymlinkTargets",
         "skills.load.extraDirs",
-        "skills.workshop.autonomous",
-        "skills.workshop.approvalPolicy",
-        "skills.workshop.allowSymlinkTargetWrites",
+        "skills.workshop",
+        "plugins.entries.skill-workshop",
         "channels.mattermost.network",
         "channels.mattermost.interactions",
         "channels.mattermost.accounts",

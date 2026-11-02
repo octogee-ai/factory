@@ -75,6 +75,7 @@ import {
 import {
   InvalidSharedGatewayAutoscalingConfigError,
   readSharedGatewayPoolConfig,
+  readSharedGatewayAutoscalingConfig,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
   builderActivateOperationId,
@@ -795,6 +796,7 @@ function selectPlatformPreferredSharedGateway(
   return selectSharedGateway({
     uid: input.uid,
     purpose: input.purpose,
+    buildersPerGateway: context.state.buildersPerGateway,
     config,
     candidates: platformPreferredSharedGatewayCandidates({
       config,
@@ -3423,6 +3425,21 @@ async function assignInitialPlacementFirestore(
     now: input.now(),
     requireDurableGateway: true,
     automatic: true,
+    validateTarget: async ({ txn, gateway }) => {
+      if (gateway.gatewayClass !== "shared") return null;
+      const transaction = txn as unknown as Transaction;
+      const [config, assignments, operations] = await Promise.all([
+        readSharedGatewayAutoscalingConfig(input.db, transaction),
+        transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)),
+        transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"])),
+      ]);
+      if (assignments.docs.some(doc => doc.id === request.uid)) return null;
+      const incoming = operations.docs.filter(doc => {
+        const operation = doc.data();
+        return operation.kind === MIGRATE_CUSTOMER_KIND && operation.input?.toGatewayId === request.gatewayId;
+      }).length;
+      return assignments.size + incoming < config.buildersPerGateway ? null : "gateway-target-not-accepting";
+    },
     mirrorPatch: {
       "provisioning.openclaw.gatewayId": request.gatewayId,
       "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,

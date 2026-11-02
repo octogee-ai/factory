@@ -149,30 +149,26 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 1 latest-main refresh
+## Current overlay: November 2 Shared worker retirement fix
 
-This refresh freezes the latest fetched OpenClaw main at
-`ddd4d963854581a9890c00847e807ccff9e32f10` (#190520), 541 commits after the
-previous `7f345d6` base. The operator selected this tip for independent
-qualification; it is not an older green commit. Subsequent upstream commits do
-not change this build's input.
+This refresh freezes OpenClaw main at
+`adabd2b4b1e9607047925e50b59959b4245415c2`, 495 commits after the previous
+`ddd4d963854581a9890c00847e807ccff9e32f10` base. The operator selected today's
+updated main for independent qualification. Subsequent upstream commits do not
+change this build's input.
 
-The clean built overlay is `71ac89f1a39768dbb2b3fa2fd7333d707ef3454b` on
-`ceckert/openclaw:codex/gateway-refresh-20261101-latest`. Gateway archives and
-committed hosted islands are generated from that same source.
+The clean built overlay is `3d3422eeddc04e1dd5e9cdba64a351b079871379` on
+`ceckert/openclaw:codex/gateway-refresh-20261102-worker`. Gateway archives and
+hosted islands come from that same source.
 
-Its [push CI run](https://github.com/openclaw/openclaw/actions/runs/41327479152)
-completed successfully, but ran only `security-fast`: build artifacts, native
-checks/types/lint/tests, PostgreSQL conformance and UI/platform jobs were skipped.
-The most recent successful scheduled full run remains
-[37419202402](https://github.com/openclaw/openclaw/actions/runs/37419202402)
-on `d8612ec864bb4c872616cfda5340c53803655f5f` (October 6): 154 jobs passed and
-nine skipped (Node 24 compatibility, PR fail-fast, Android/iOS screenshots,
-check-plan, shared-SDK declarations, iOS release e2e, iOS screenshot evidence and
-release-child sealing). The newer scheduled
-[41326266921](https://github.com/openclaw/openclaw/actions/runs/41326266921)
-on `e330464` was still running during selection, with UI e2e shards 1/7 and 3/7
-and compact Node shard 14 failed. Neither run qualifies this selected tip.
+The selected tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41491531110)
+was cancelled before any jobs ran. The latest successful scheduled
+[full CI run](https://github.com/openclaw/openclaw/actions/runs/41377849337)
+is on `d1d45068a49bc85eb2a1eff077678b3a87a68621`: 150 jobs passed and 11 skipped
+(check-plan, Node 24 compatibility, shared SDK declarations, Control UI i18n,
+Android/iOS screenshot and release e2e jobs, iOS screenshot evidence, PR failure
+report and release-child sealing). That run does not qualify this newer tip.
+The checks below are this cut's independent qualification.
 
 ### Native adoption and retained product boundaries
 
@@ -323,6 +319,7 @@ behavior is present in the selected base and the affected consumer controls pass
 | Mattermost channel session scope | Approved `threadSessionScope: channel` keeps one session per channel while preserving reply roots in both directions. Current writers deliberately select this product behavior. | Native supports that option, or the product explicitly adopts thread sessions and adapts membership/consumers. |
 | Channel startup and strict stop | Channel startup must not borrow invoking identity; strict stop joins startup and running work, retains physical cleanup ownership, and retires only removed accounts. | Native proves hung-startup joins, late-stop retry and active-sibling preservation. |
 | Reload admission, supersession and settlement | Scoped reference-counted waiting roots, supersession wakeups and model/service debt prevent dropped work or a falsely settled baseline. New/removal-only account changes avoid unrelated global drain after successful resolution; affected existing accounts and widening fallbacks retain it. Native subscription exclusions, synchronous and post-wait checkpoints remain. The separate session-list provider-reload fix is entirely native. | Native owns equivalent scoped-account, held-root, late-join, superseded-tail and post-commit settlement behavior. |
+| Shared worker retirement | A failed concurrent admission could retire a shared entry while another lease retained it, permanently blocking later opens and secret reload. Ordinary retirement now waits for the final active release while serving existing leases; canonical close invalidates retained leases before joining client closure. The exact retiring-with-live-actor error is reproduced by removing the guard. | Native preserves serving leases through failed concurrent admission and closes or aborts retirement without stranding them. |
 | Lifecycle lease and reclamation deadline | One monotonic worker-visible budget prevents late commits. Native's five-second cap is preserved; the overlay carries one worker-visible monotonic deadline and refuses late authorization. | Native carries the same worker-visible absolute deadline and refuses cancelled, expired and late authorization, or the relevant lifecycle consumer is retired. |
 | Detach, reattach and retained PostgreSQL | Approved configured-agent transfer retains original logical/physical identity under native creation/deletion custody; missing PG anchors must refuse rather than create. Native #188350 owns unconfigured retained-store creation admission; its duplicate overlay is removed. | Native public transfer preserves namespace/history and rollback/recovery custody, or a supported migration owner replaces it. |
 | Outbound delivery custody | Retirement refuses unfinished authoritative delivery state and fences racing enqueue across all affected agent identities; empty caches are insufficient. | Native detach/deletion fences the same queue and retains idempotent receipts. |
@@ -366,71 +363,56 @@ Native Proactive check jobs with empty scratch are preserved as requested.
 
 ### Qualification and publication
 
-Pinned pnpm 12.15.0, Node 26.12.1 and the frozen lockfile built this clean source
-with full `pnpm build package`; `dist/build-info.json.commit` matches the overlay
-SHA above. Root and Mattermost were packed sequentially from that build with the
-maintained packers in a clean isolated Octogee checkout. Prepack/postpack restored
-clean source and removed temporary vendor/pending-install state.
+Pinned pnpm 12.15.0 and the frozen lockfile built the clean source with full
+`pnpm build package`; `dist/build-info.json.commit` matches the source SHA above.
+Root and Mattermost were packed sequentially with the maintained packers from a
+clean recipe snapshot. Both prepack/postpack lifecycles restored clean source.
+Native root archive preflight, inventory and dist import-graph checks pass.
 
-Octogee's executable-SQL trust check excludes only PostgreSQL 18's built-in
-`NOT NULL` catalog type (`contype = n`), which PostgreSQL 16 does not expose in
-`pg_constraint`. Native still owns schema/nullability admission. CHECK constraints
-(including one disguised with a `_not_null` name), functions, triggers, defaults,
-generated expressions and hostile index predicates remain qualified or refused.
-The real PG16.15 and PG18.6 integration/recovery/handoff/trust suites pass 76/76
-each; final installed-image checks are tracked separately in the runtime PR.
-See the [PG18 catalog contract](https://www.postgresql.org/docs/18/catalog-pg-constraint.html).
+All production type lanes, scoped native lint, formatting, channel metadata,
+worker inventory and config baseline checks pass. The selected native scope
+passes 414 tests across worker leases, reload, sharing, authorization, voice,
+Doctor/copy and outbound delivery, plus 47 UI controls. Removing only the new
+ordinary-retirement guard reproduces the exact reported retiring-with-live-actor
+error; all 19 worker controls pass with it restored.
 
-Native tarball integrity passes. An isolated install reports
-`OpenClaw 2026.10.9 (71ac89f)`. The actual Linux amd64
-`openclaw-full-plugin-installer` target passes CUA 0.37 driver-artifact lint,
-`config.changed` publication, Parallel source matching (10 files, only the
-approved bundledDist metadata change), registry refresh, Codex source matching
-(188 runtime files), and all three native-hook imports. Both the independent
-global npm and nested OpenClaw npm match all 15 patched npm 12.2.1 files;
-reverse-patch/refuse-second-forward controls and Undici 6.29.1/ip-address 10.7.4
-checks pass. All 874 installed Mattermost package files match the archive bytes.
-A separate read-only/no-network Linux container repeats the installed byte proof.
+The retained `server-reload-hot.superseded-tail.test.ts` has eight managed-reloader
+timeouts followed by stalled cleanup. The first case also times out on exact old
+`71ac89f`; it is an inherited validation gap. No assertions or timeouts were
+weakened, and aggregate `pnpm check` success is not claimed. Native build budgets
+also report advisory CSS (312.1 KiB against 302.1 KiB) and chat boot JavaScript
+(1251.1 KiB against 1250 KiB) overages; budgets remain unchanged.
 
-The native `pnpm check` run passes preflight and production, scripts and test-root
-types, but is not aggregate-green: lint reports 17 max-lines findings in files
-byte-identical to the frozen base, plus one unused test import introduced by the
-recut. That import was removed; focused native lint, its 17 delivery tests and
-the complete clean build were rerun on the final source. Retained authorization,
-membership, strict-stop/reload/recovery controls pass 218/218; native
-Talk/backup/CLI controls pass 71/71. Removing #177823 also passes 266 reload
-contract tests and 33 routing checks. The PostgreSQL executable-SQL catalog is
-regenerated against this exact source and CI-equivalent PostgreSQL 16/vector
-0.8.7: its 11 routines, 15 triggers and 308 expressions retain the same
-fingerprints; only the recorded source SHA changes. Integrated Mattermost passes 515 tests and
-fails only the slash HTTP capacity case also reproduced on exact unpatched
-`ddd4d96` (native control: 6 pass, 1 same failure). No budget or assertion was
-weakened to hide it. The successful build still emits three advisory UI bundle
-budget overages (CSS gzip/raw and chat boot JS gzip); a complete native UI
-performance or visual comparison is not claimed.
+The actual Linux amd64 `openclaw-full-plugin-installer` target passes CUA driver
+artifact lint, `config.changed` publication, source-matched Parallel and Codex
+installation, registry refresh and all three native-hook imports. An isolated,
+network-disabled installed Gateway accepts two concurrent `agents.create` calls
+and then `secrets.reload` with zero warnings, without model/provider requests.
+All twelve Octogee extension bundles load against this installed SDK. Both raw
+Shared/Builder templates and generated configs from their final roster/pre-boot
+writers pass native validation. Skill Workshop policy now uses its canonical
+plugin config: Shared retains autonomous mode off and Builder retains its native
+capability. The retired `skills.workshop` writer is removed.
 
-Hosted islands and Browser resources are regenerated from this build. Their
-focused app checks pass 98/98 and runtime/license artifact checks pass 24/24;
-pin coherence is checked against the final `current.json`. Full hashes were
-verified again after downloading the exact published object generations:
+The executable SQL catalog was regenerated against this exact source with
+PostgreSQL 16/vector 0.8.7: all 11 routine, 15 trigger and 308 expression
+fingerprints are unchanged; only its source SHA changes. All 48 PostgreSQL
+import/recovery/handoff integration tests pass. Hosted islands and Browser
+resources are regenerated from this build; 196 focused app checks and 39
+runtime/license/pin checks pass.
+
+The source branch is published to the fork. The root archive is a new write-once
+object; the byte-identical Mattermost companion reuses its existing generation.
+Full SHA256 readback of both exact published generations is verified.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-779b49de.tgz#1793556964067060` | 119397643 | `779b49de11a6905bcbea1010c6bd75f5fe14e3951348cf9db70abdc006667b9e` |
+| root | `openclaw-fork-b912698c.tgz#1793643777466672` | 116066361 | `b912698c24e85fcb0a3d0c8e0e99e56bbc0d77b9e7b067d1fa1f2943e96684d1` |
 | mattermost | `openclaw-mattermost-6758b57d.tgz#1793554855718230` | 1266404 | `6758b57de1fbac9d7b29602537306266b024096874c945c5185fa0eab96a53ef` |
 
-The fresh Mattermost pack is byte-identical to the previously published object;
-its original generation is reused after complete-hash readback. Its immutable
-metadata still records the earlier `861f33f` pack, while the fresh sequential-pack
-proof binds those same bytes to the current build. No object or metadata was
-overwritten.
-
-The [runtime PR #4969](https://github.com/octogee-ai/octogee/pull/4969) tracks
-complete-image Shared/Builder strict Doctor, installed workers, published image
-digests and final-head CI against the final Octogee source. At this package-pin
-commit, those image/final-head checks remain pending and still gate merge.
-Package publication alone does not qualify an image. Post-merge Build main
-status is a separate record; it does not deploy or migrate live stores.
+This qualification covers the installed base runtime and its consumers. Full
+platform images and deployed TEST smoke remain separate Build main/Ship TEST
+steps. No deployment, live restart or fleet desired-state mutation was performed.
 
 ### Upstream contributions
 

@@ -113,8 +113,8 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
       "computer",
     ]);
     expect(template.cron).toEqual({ triggers: { enabled: false } });
-    expect(template.skills.workshop).toEqual({
-      autonomous: { mode: "off" },
+    expect(template.plugins.entries["skill-workshop"]).toEqual({
+      enabled: true, config: { autonomous: { mode: "off" } },
     });
     expect(template.tools.exec).toEqual({ mode: "deny" });
     expect(template.tools.fs).toEqual({ workspaceOnly: true });

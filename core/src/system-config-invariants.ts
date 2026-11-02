@@ -20,6 +20,7 @@ const CUSTOMER_AGENT_WORKSPACE = "customer-agent-workspace" as const;
 const CUSTOMER_AGENT_TOOL_POLICY = "customer-agent-tool-policy" as const;
 const PROJECT_AGENT_TOOL_POLICY = "project-agent-tool-policy" as const;
 const FORBIDDEN_ARRAY = "forbidden-array" as const;
+const PLUGIN_ALLOWLIST_PATH = "plugins.allow";
 
 export type GatewayConfigClass = "shared" | "builder";
 
@@ -404,11 +405,10 @@ function customerToolInvariants(): PlatformInvariant[] {
     { kind: "exact", path: "cron.triggers.enabled", value: false },
     { kind: "exact", path: "skills.load.allowSymlinkTargets", value: ABSENT },
     { kind: "exact", path: "skills.load.extraDirs", value: ABSENT },
-    { kind: "exact", path: "skills.workshop.autonomous", value: { mode: "off" } },
-    { kind: "exact", path: "skills.workshop.approvalPolicy", value: ABSENT },
-    { kind: "exact", path: "skills.workshop.maxPending", value: ABSENT },
-    { kind: "exact", path: "skills.workshop.allowSymlinkTargetWrites", value: ABSENT },
-    { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: ["codex"] },
+    { kind: "exact", path: "skills.workshop", value: ABSENT },
+    { kind: REQUIRED_ARRAY, path: PLUGIN_ALLOWLIST_PATH, values: ["skill-workshop"] },
+    { kind: "exact", path: "plugins.entries.skill-workshop", value: { enabled: true, config: { autonomous: { mode: "off" } } } },
+    { kind: FORBIDDEN_ARRAY, path: PLUGIN_ALLOWLIST_PATH, values: ["codex"] },
     {
       kind: "exact",
       path: "plugins.entries.codex",
@@ -437,7 +437,7 @@ function controlIdentityInvariants(
 ): PlatformInvariant[] {
   return [
     { kind: "exact", path: "plugins.entries.octogee-identity-tools.enabled", value: perUser },
-    ...(perUser ? [{ kind: REQUIRED_ARRAY, path: "plugins.allow", values: ["octogee-identity-tools"] }] : []),
+    ...(perUser ? [{ kind: REQUIRED_ARRAY, path: PLUGIN_ALLOWLIST_PATH, values: ["octogee-identity-tools"] }] : []),
     { kind: "exact", path: "gateway.auth.mode", value: perUser ? "trusted-proxy" : "token" },
     {
       kind: "exact",
@@ -523,8 +523,8 @@ export function platformInvariantTable(
       kind: "exact", path: `models.providers.${id}`, value: brokerProviders[id] ?? ABSENT,
     }))),
     { kind: "exact", path: "plugins.enabled", value: true },
-    { kind: REQUIRED_ARRAY, path: "plugins.allow", values: REQUIRED_PLUGINS },
-    { kind: FORBIDDEN_ARRAY, path: "plugins.allow", values: RETIRED_PLUGINS },
+    { kind: REQUIRED_ARRAY, path: PLUGIN_ALLOWLIST_PATH, values: REQUIRED_PLUGINS },
+    { kind: FORBIDDEN_ARRAY, path: PLUGIN_ALLOWLIST_PATH, values: RETIRED_PLUGINS },
     ...RETIRED_PLUGINS.map<PlatformInvariant>((id) => ({
       kind: "exact",
       path: `plugins.entries.${id}`,

@@ -524,6 +524,19 @@ describe("applyConfigPatch — permanent RPC errors throw without retry", () => 
     expect(sleep).toHaveBeenCalledOnce();
   });
 
+  it("retries a user-profile catalog readiness rejection during connect", async () => {
+    const configGet = vi.fn()
+      .mockRejectedValueOnce(new OpenclawWireError("auth-failed", "Error: User profile catalog is not ready"))
+      .mockResolvedValueOnce({ config: {}, hash: "h1" });
+    const sleep = vi.fn(async () => {});
+    const result = await applyConfigPatch(
+      { buildPatch: () => ({}) },
+      { ...baseOpts({ sleep }), rpc: makeFakeRpc({ configGet }) },
+    );
+    expect(result.attempts).toBe(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
   it("throws auth-failed without retry", async () => {
     const configGet = vi.fn(async () => {
       throw new OpenclawWireError("auth-failed", "bad token");

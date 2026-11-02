@@ -20,7 +20,6 @@ import {
   builderSourceOpenClawHeld,
   createBuilderSurgeGateWiring,
   createVerifyAttachPending,
-  desiredEnsureLaneFingerprint,
   permanentConfigPatchRetryReady,
   ensureCustomerCheckoutsOnly,
   NEEDS_FULL_ATTACH_FINGERPRINT,
@@ -498,7 +497,6 @@ describe("customerEnsureRetryReady", () => {
       desiredFingerprint: "new-empty-channel",
       now: 1_001,
       permanentConfigPatchRetry: undefined,
-      desiredEnsureFingerprint: "new-fleet-fingerprint",
     })).toBe(false);
   });
 
@@ -509,7 +507,6 @@ describe("customerEnsureRetryReady", () => {
       desiredFingerprint: "fp1",
       now: 4_999,
       permanentConfigPatchRetry: undefined,
-      desiredEnsureFingerprint: "fleet-fp1",
     })).toBe(false);
   });
 
@@ -520,37 +517,32 @@ describe("customerEnsureRetryReady", () => {
       desiredFingerprint: "fp2",
       now: 1_001,
       permanentConfigPatchRetry: undefined,
-      desiredEnsureFingerprint: "fleet-fp2",
     })).toBe(true);
   });
 
-  it("still holds the ensure lane for an unchanged permanent config-patch failure", () => {
+  it("holds the failing customer until its config-patch retry is due", () => {
     expect(customerEnsureRetryReady({
       ensureAllowed: true,
       cloneRetry: undefined,
       desiredFingerprint: "fp1",
       now: 5_000,
-      permanentConfigPatchRetry: { fingerprint: "fleet-fp1" },
-      desiredEnsureFingerprint: "fleet-fp1",
+      permanentConfigPatchRetry: { fingerprint: "fp1", nextAt: 60_000 },
     })).toBe(false);
   });
 });
 
 describe("permanentConfigPatchRetryReady", () => {
-  it("holds an unchanged invalid patch and immediately re-enables it for a changed desired fingerprint", () => {
-    const unchanged = desiredEnsureLaneFingerprint(
-      new Map([["alice", "fp1"], ["bob", "fp2"]]),
-    );
-    const reordered = desiredEnsureLaneFingerprint(
-      new Map([["bob", "fp2"], ["alice", "fp1"]]),
-    );
-    const changed = desiredEnsureLaneFingerprint(
-      new Map([["alice", "fp3"], ["bob", "fp2"]]),
-    );
+  it("retries an unchanged failure when its bounded backoff expires", () => {
+    const prior = { fingerprint: "same", nextAt: 60_000 };
+    expect(permanentConfigPatchRetryReady(prior, "same", 59_999)).toBe(false);
+    expect(permanentConfigPatchRetryReady(prior, "same", 60_000)).toBe(true);
+  });
 
-    expect(reordered).toBe(unchanged);
-    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged }, unchanged)).toBe(false);
-    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged }, changed)).toBe(true);
+  it("holds an unchanged invalid patch and immediately re-enables it for a changed desired fingerprint", () => {
+    const unchanged = "customer-fp1";
+    const changed = "customer-fp2";
+    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000 }, unchanged, 0)).toBe(false);
+    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000 }, changed, 0)).toBe(true);
   });
 });
 

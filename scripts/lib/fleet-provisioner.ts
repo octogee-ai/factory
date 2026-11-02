@@ -135,18 +135,16 @@ export interface CloneRetryState {
 }
 
 export interface PermanentConfigPatchRetryState {
+  nextAt: number;
   fingerprint: string;
 }
 
 export function permanentConfigPatchRetryReady(
   prior: PermanentConfigPatchRetryState | undefined,
   desiredFingerprint: string | undefined,
+  now: number,
 ): boolean {
-  return !prior || (desiredFingerprint ?? "") !== prior.fingerprint;
-}
-
-export function desiredEnsureLaneFingerprint(fingerprints: ReadonlyMap<string, string>): string {
-  return JSON.stringify([...fingerprints].sort(([a], [b]) => a.localeCompare(b)));
+  return !prior || (desiredFingerprint ?? "") !== prior.fingerprint || now >= prior.nextAt;
 }
 
 export function selectStableContentStale(
@@ -172,10 +170,6 @@ export function selectStableContentStale(
     }
   }
   return stable;
-}
-
-function desiredEnsureLaneRosterFingerprint(slugs: readonly string[]): string {
-  return JSON.stringify([...new Set(slugs)].sort((a, b) => a.localeCompare(b)));
 }
 
 // The mount lane is serial, so a checkout that cannot land must back off instead of
@@ -205,13 +199,13 @@ export interface CustomerEnsureRetryInput {
   desiredFingerprint: string | undefined;
   now: number;
   permanentConfigPatchRetry: PermanentConfigPatchRetryState | undefined;
-  desiredEnsureFingerprint: string | undefined;
 }
 
 export function customerEnsureRetryReady(input: CustomerEnsureRetryInput): boolean {
   return input.ensureAllowed && permanentConfigPatchRetryReady(
     input.permanentConfigPatchRetry,
-    input.desiredEnsureFingerprint,
+    input.desiredFingerprint,
+    input.now,
   ) && cloneRetryReady(input.cloneRetry, input.desiredFingerprint, input.now);
 }
 
@@ -1631,7 +1625,6 @@ function createDesiredRosterReader(input: {
   desiredUids: Map<string, string>;
   desiredLanes: Map<string, MountLane>;
   ensureAllowed: Map<string, boolean>;
-  setEnsureFingerprint: (fingerprint: string) => void;
 }): AssignedSlugReader | null {
   const customerSource = input.customerSource;
   if (customerSource) {
@@ -1647,25 +1640,14 @@ function createDesiredRosterReader(input: {
         input.desiredLanes.set(slug, customer.lane);
         input.ensureAllowed.set(slug, customer.ensureAllowed);
       }
-      input.setEnsureFingerprint(desiredEnsureLaneFingerprint(input.desiredFingerprints));
       return [...next.keys()];
     };
   }
   const readDesiredSlugs = input.opts.readDesiredSlugs;
-  if (readDesiredSlugs) {
-    return async () => {
-      const slugs = await readDesiredSlugs();
-      input.setEnsureFingerprint(desiredEnsureLaneRosterFingerprint(slugs));
-      return slugs;
-    };
-  }
+  if (readDesiredSlugs) return readDesiredSlugs;
   const db = input.opts.db;
   if (!db) return null;
-  return async () => {
-    const slugs = await readAssignedSlugsForGateway(db, input.opts.gatewayId);
-    input.setEnsureFingerprint(desiredEnsureLaneRosterFingerprint(slugs));
-    return slugs;
-  };
+  return () => readAssignedSlugsForGateway(db, input.opts.gatewayId);
 }
 
 async function mountCustomerWithPublication(input: {
@@ -1750,11 +1732,8 @@ function startMaybeReconcileLoop(params: {
       : null;
   const appliedFp = appliedFpFile ? loadAppliedFingerprints(appliedFpFile) : new Map<string, string>();
   const pendingContentFp = new Map<string, string>();
-  // Backoff state for slugs whose project checkout has not landed. Process-local on purpose:
-  // a pod restart is itself a fresh chance for the clone to land.
   const cloneRetry = new Map<string, CloneRetryState>();
-  let permanentConfigPatchRetry: PermanentConfigPatchRetryState | undefined;
-  let desiredEnsureFingerprint = "";
+  const permanentConfigPatchRetry = new Map<string, PermanentConfigPatchRetryState>();
   const persistAppliedFp = (): void => {
     if (!appliedFpFile) return;
     try {
@@ -1777,7 +1756,7 @@ function startMaybeReconcileLoop(params: {
   const onLocalStateRemoved = (slug: string): void => {
     cloneRetry.delete(slug);
     pendingContentFp.delete(slug);
-    permanentConfigPatchRetry = undefined;
+    permanentConfigPatchRetry.delete(slug);
     if (appliedFp.delete(slug)) persistAppliedFp();
   };
   const readDesired = createDesiredRosterReader({
@@ -1787,9 +1766,6 @@ function startMaybeReconcileLoop(params: {
     desiredLanes,
     ensureAllowed,
     desiredFingerprints: desiredFp,
-    setEnsureFingerprint: (fingerprint) => {
-      desiredEnsureFingerprint = fingerprint;
-    },
   });
   if (!provision || !readDesired) return () => undefined;
 
@@ -1827,8 +1803,7 @@ function startMaybeReconcileLoop(params: {
       cloneRetry: cloneRetry.get(slug),
       desiredFingerprint: desiredFp.get(slug),
       now: Date.now(),
-      permanentConfigPatchRetry,
-      desiredEnsureFingerprint,
+      permanentConfigPatchRetry: permanentConfigPatchRetry.get(slug),
     }),
     ...(customerSource && readEnsureAdmission ? {
       canEnsureSlug: async (slug: string) => {
@@ -1837,7 +1812,6 @@ function startMaybeReconcileLoop(params: {
         return readEnsureAdmission(uid);
       },
     } : {}),
-    shouldDeferRemainingMounts: isPermanentConfigPatchFailure,
     onPendingEvictionCancelled: cancelPendingEviction,
     ensureSlug: async (
       slug: string,
@@ -1904,12 +1878,15 @@ function startMaybeReconcileLoop(params: {
     }),
     onEnsureError: (slug, message, error) => {
       if (isPermanentConfigPatchFailure(error)) {
-        permanentConfigPatchRetry = { fingerprint: desiredEnsureFingerprint };
+        permanentConfigPatchRetry.set(slug, {
+          fingerprint: desiredFp.get(slug) ?? "",
+          nextAt: Date.now() + 60_000,
+        });
       }
       recordReconcileError(opts, slug, message);
     },
     onEnsureSuccess: (slug) => {
-      permanentConfigPatchRetry = undefined;
+      permanentConfigPatchRetry.delete(slug);
       clearReconcileError(opts, slug);
     },
     unmountSlug: createReconcileUnmountSlug({

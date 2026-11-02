@@ -51,6 +51,7 @@ const approvedPlugins = [
   "octogee-activity-tools",
   "parallel",
   "openai",
+  "skill-workshop",
 ];
 const brokerPluginConfig = {
   brokerUrl: "${FLEET_BROKER_URL}",
@@ -59,6 +60,18 @@ const brokerPluginConfig = {
 const disabledCodexPlugin = {
   enabled: false,
 };
+
+it("keeps Shared Workshop configuration valid through both final config writers", () => {
+  const template = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.template.json"), "utf8"));
+  const config = runPolicy("shared", template);
+  const workshop = { enabled: true, config: { autonomous: { mode: "off" } } };
+  expect(config).not.toHaveProperty("skills.workshop");
+  expect(config.plugins.allow).toContain("skill-workshop");
+  expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
+  reconcilePlatformInvariants(config, { gatewayClass: "shared" });
+  expect(config).not.toHaveProperty("skills.workshop");
+  expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
+});
 
 it("keeps native Codex available in fresh Builder config without overriding a Builder opt-out", () => {
   const fresh = JSON.parse(readFileSync(path.join(repoRoot, "infra/gateway/openclaw.builder.template.json"), "utf8"));
@@ -498,8 +511,8 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.cron).toEqual({ triggers: { enabled: false }, keep: true });
     expect(out.skills).toEqual({
       load: { watch: true },
-      workshop: { autonomous: { mode: "off" } },
     });
+    expect(out.plugins.entries["skill-workshop"]).toEqual({ enabled: true, config: { autonomous: { mode: "off" } } });
     expect(out.channels.mattermost).toMatchObject({
       network: { dangerouslyAllowPrivateNetwork: true },
       interactions: {

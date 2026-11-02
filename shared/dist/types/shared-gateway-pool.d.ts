@@ -134,6 +134,7 @@ export declare function selectSharedGateway(input: {
     candidates: readonly SharedGatewayPoolCandidate[];
     purpose: SharedGatewayPlacementPurpose;
     currentGatewayId?: string | null;
+    buildersPerGateway: number;
 }): SharedGatewaySelection;
 export declare function planSharedGatewayRebalance(input: {
     config: SharedGatewayPoolConfig;

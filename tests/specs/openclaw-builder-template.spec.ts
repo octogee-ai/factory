@@ -82,8 +82,10 @@ describe("infra/gateway/openclaw.builder.template.json — the Builder seed boot
     expect(builder.plugins.allow).toEqual([...shared.plugins.allow, "codex", "browser"]);
     expect(builder.plugins.entries.browser).toEqual({ enabled: false });
     expect(builder.plugins.entries.codex).toEqual({ enabled: true });
-    const { codex: _sharedCodex, browser: _sharedBrowser, ...sharedEntries } = shared.plugins.entries;
-    const { codex: _builderCodex, browser: _builderBrowser, ...builderEntries } = builder.plugins.entries;
+    expect(shared.plugins.entries["skill-workshop"]).toEqual({ enabled: true, config: { autonomous: { mode: "off" } } });
+    expect(builder.plugins.entries["skill-workshop"]).toEqual({ enabled: true });
+    const { codex: _sharedCodex, browser: _sharedBrowser, "skill-workshop": _sharedWorkshop, ...sharedEntries } = shared.plugins.entries;
+    const { codex: _builderCodex, browser: _builderBrowser, "skill-workshop": _builderWorkshop, ...builderEntries } = builder.plugins.entries;
     expect(builderEntries).toEqual(sharedEntries);
   });
 });

@@ -1,6 +1,7 @@
+import { readSharedGatewayAutoscalingConfig } from "@octogee/core/shared-gateway-pool-read";
 
 
-import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore, type Firestore, type Transaction } from "firebase-admin/firestore";
 import { pathToFileURL } from "node:url";
 import {
   GLM_OPERATIONS_COLLECTION,
@@ -15,6 +16,8 @@ import {
   hasFreshReadyKubernetesObservation,
   isGatewayRuntimeDoc,
   type PlacementFirestore,
+  type PlacementTargetValidationContext,
+  type PlacementRejectReason,
 } from "../../shared/types/gateway-releases.js";
 import {
   deriveSharedGatewayPoolConfig,
@@ -150,7 +153,9 @@ async function selectAssignmentGateway(
     });
     profiles.set(gatewayId, normalizeGatewayProfile(authorization.config.profile));
   }
+  const autoscaling = await readSharedGatewayAutoscalingConfig(db);
   const selection = selectSharedGateway({
+    buildersPerGateway: autoscaling.buildersPerGateway,
     uid,
     purpose: "initial-placement",
     config,
@@ -201,6 +206,24 @@ function modelMetadataPatch(
   return patch;
 }
 
+function sharedCapacityFence(db: Firestore, uid: string) {
+  return async ({ txn, gateway }: PlacementTargetValidationContext): Promise<PlacementRejectReason | null> => {
+    if (gateway.gatewayClass !== "shared") return null;
+    const transaction = txn as unknown as Transaction;
+    const [config, assignments, operations] = await Promise.all([
+      readSharedGatewayAutoscalingConfig(db, transaction),
+      transaction.get(db.collection(`gateways/${gateway.gatewayId}/assignments`)),
+      transaction.get(db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"])),
+    ]);
+    if (assignments.docs.some(doc => doc.id === uid)) return null;
+    const incoming = operations.docs.some(doc => {
+      const operation = doc.data();
+      return operation.kind === "migrate-customer" && operation.input?.toGatewayId === gateway.gatewayId;
+    });
+    return !incoming && assignments.size < config.buildersPerGateway ? null : "gateway-target-not-accepting";
+  };
+}
+
 export async function assignOne(
   db: Firestore,
   uid: string,
@@ -243,6 +266,7 @@ export async function assignOne(
         source: "repair",
         now: Date.now(),
         assignmentWrite: "create-if-missing",
+        validateTarget: sharedCapacityFence(db, uid),
         mirrorPatch: {
           "provisioning.openclaw.gatewayProfile": targetProfile,
           "provisioning.openclaw.controlUiEnabled": false,
@@ -271,6 +295,7 @@ export async function assignOne(
       gatewayId: target,
       source: "onboarding",
       now: Date.now(),
+      validateTarget: sharedCapacityFence(db, uid),
       mirrorPatch: {
         "provisioning.openclaw.gatewayId": target,
         "provisioning.openclaw.gatewayProfile": targetProfile,

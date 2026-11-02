@@ -121,10 +121,10 @@ var Se = S(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/connect-error-details.ts
-var E, sc, ac, Je = S(() => {
+var T, sc, ac, Je = S(() => {
   ne();
   Se();
-  E = {
+  T = {
     AUTH_REQUIRED: "AUTH_REQUIRED",
     AUTH_UNAUTHORIZED: "AUTH_UNAUTHORIZED",
     AUTH_TOKEN_MISSING: "AUTH_TOKEN_MISSING",
@@ -165,28 +165,28 @@ var E, sc, ac, Je = S(() => {
     PAIRING_EXPIRED: "PAIRING_EXPIRED",
     CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH"
   }, sc = /* @__PURE__ */ new Map([
-    ["token_missing", E.AUTH_TOKEN_MISSING],
-    ["token_mismatch", E.AUTH_TOKEN_MISMATCH],
-    ["token_missing_config", E.AUTH_TOKEN_NOT_CONFIGURED],
-    ["password_missing", E.AUTH_PASSWORD_MISSING],
-    ["password_mismatch", E.AUTH_PASSWORD_MISMATCH],
-    ["password_missing_config", E.AUTH_PASSWORD_NOT_CONFIGURED],
-    ["bootstrap_token_invalid", E.AUTH_BOOTSTRAP_TOKEN_INVALID],
-    ["tailscale_user_missing", E.AUTH_TAILSCALE_IDENTITY_MISSING],
-    ["tailscale_proxy_missing", E.AUTH_TAILSCALE_PROXY_MISSING],
-    ["tailscale_whois_failed", E.AUTH_TAILSCALE_WHOIS_FAILED],
-    ["tailscale_user_mismatch", E.AUTH_TAILSCALE_IDENTITY_MISMATCH],
-    ["rate_limited", E.AUTH_RATE_LIMITED],
-    ["device_token_mismatch", E.AUTH_DEVICE_TOKEN_MISMATCH],
-    ["scope_mismatch", E.AUTH_SCOPE_MISMATCH],
-    [void 0, E.AUTH_REQUIRED]
+    ["token_missing", T.AUTH_TOKEN_MISSING],
+    ["token_mismatch", T.AUTH_TOKEN_MISMATCH],
+    ["token_missing_config", T.AUTH_TOKEN_NOT_CONFIGURED],
+    ["password_missing", T.AUTH_PASSWORD_MISSING],
+    ["password_mismatch", T.AUTH_PASSWORD_MISMATCH],
+    ["password_missing_config", T.AUTH_PASSWORD_NOT_CONFIGURED],
+    ["bootstrap_token_invalid", T.AUTH_BOOTSTRAP_TOKEN_INVALID],
+    ["tailscale_user_missing", T.AUTH_TAILSCALE_IDENTITY_MISSING],
+    ["tailscale_proxy_missing", T.AUTH_TAILSCALE_PROXY_MISSING],
+    ["tailscale_whois_failed", T.AUTH_TAILSCALE_WHOIS_FAILED],
+    ["tailscale_user_mismatch", T.AUTH_TAILSCALE_IDENTITY_MISMATCH],
+    ["rate_limited", T.AUTH_RATE_LIMITED],
+    ["device_token_mismatch", T.AUTH_DEVICE_TOKEN_MISMATCH],
+    ["scope_mismatch", T.AUTH_SCOPE_MISMATCH],
+    [void 0, T.AUTH_REQUIRED]
   ]), ac = /* @__PURE__ */ new Map([
-    ["device-id-mismatch", E.DEVICE_AUTH_DEVICE_ID_MISMATCH],
-    ["device-signature-stale", E.DEVICE_AUTH_SIGNATURE_EXPIRED],
-    ["device-nonce-missing", E.DEVICE_AUTH_NONCE_REQUIRED],
-    ["device-nonce-mismatch", E.DEVICE_AUTH_NONCE_MISMATCH],
-    ["device-signature", E.DEVICE_AUTH_SIGNATURE_INVALID],
-    ["device-public-key", E.DEVICE_AUTH_PUBLIC_KEY_INVALID]
+    ["device-id-mismatch", T.DEVICE_AUTH_DEVICE_ID_MISMATCH],
+    ["device-signature-stale", T.DEVICE_AUTH_SIGNATURE_EXPIRED],
+    ["device-nonce-missing", T.DEVICE_AUTH_NONCE_REQUIRED],
+    ["device-nonce-mismatch", T.DEVICE_AUTH_NONCE_MISMATCH],
+    ["device-signature", T.DEVICE_AUTH_SIGNATURE_INVALID],
+    ["device-public-key", T.DEVICE_AUTH_PUBLIC_KEY_INVALID]
   ]);
 });
 
@@ -278,18 +278,18 @@ function wo(e = {}) {
           await t(he(a * 2 ** (w - 1)));
           continue;
         }
-        let C = {
+        let x = {
           attempt: w,
           maxAttempts: y,
           err: R,
           label: f.label
-        }, x = f.retryAfterMs?.(R), _ = typeof x == "number" && Number.isFinite(x), A = typeof f.delayMs == "function" ? f.delayMs(C) : f.delayMs, T = A === void 0 ? void 0 : he(A), v = _ ? Math.max(x, c) : T === void 0 ? c * 2 ** (w - 1) : Math.max(T, c), I = _ ? b : l, P = Math.min(v, I), B = _ && (x ?? 0) <= I, N = g.jitter === "full" && !_ || B;
+        }, C = f.retryAfterMs?.(R), _ = typeof C == "number" && Number.isFinite(C), A = typeof f.delayMs == "function" ? f.delayMs(x) : f.delayMs, E = A === void 0 ? void 0 : he(A), v = _ ? Math.max(C, c) : E === void 0 ? c * 2 ** (w - 1) : Math.max(E, c), I = _ ? b : l, P = Math.min(v, I), B = _ && (C ?? 0) <= I, N = g.jitter === "full" && !_ || B;
         P = yo(
           P,
           g.jitter,
           N ? "positive" : "symmetric",
           p
-        ), P = Math.min(Math.max(P, c), I), await f.onRetry?.({ ...C, delayMs: P }), P > 0 && await m(P);
+        ), P = Math.min(Math.max(P, c), I), await f.onRetry?.({ ...x, delayMs: P }), P > 0 && await m(P);
       }
     throw r(u);
   };
@@ -329,21 +329,25 @@ var Sc, qt = S(() => {
 var Pc, zt = S(() => {
   Je();
   Pc = /* @__PURE__ */ new Set([
-    E.AUTH_TOKEN_MISSING,
-    E.AUTH_BOOTSTRAP_TOKEN_INVALID,
-    E.AUTH_PASSWORD_MISSING,
-    E.AUTH_PASSWORD_MISMATCH,
-    E.AUTH_RATE_LIMITED,
-    E.AUTH_DEVICE_TOKEN_MISMATCH,
-    E.AUTH_SCOPE_MISMATCH,
-    E.AUTH_IDENTITY_HEADER_REQUIRED,
-    E.AUTH_VERIFIED_USER_REQUIRED,
-    E.CONTROL_UI_BUILD_MISMATCH,
-    E.PAIRING_REQUIRED,
-    E.PAIRING_REJECTED,
-    E.PAIRING_EXPIRED,
-    E.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-    E.DEVICE_IDENTITY_REQUIRED
+    T.AUTH_TOKEN_MISSING,
+    T.AUTH_TOKEN_NOT_CONFIGURED,
+    T.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    T.AUTH_PASSWORD_MISSING,
+    T.AUTH_PASSWORD_NOT_CONFIGURED,
+    T.AUTH_PASSWORD_MISMATCH,
+    T.AUTH_RATE_LIMITED,
+    T.AUTH_DEVICE_TOKEN_MISMATCH,
+    T.AUTH_SCOPE_MISMATCH,
+    T.AUTH_IDENTITY_HEADER_REQUIRED,
+    T.AUTH_VERIFIED_USER_REQUIRED,
+    T.OPERATOR_ACCESS_DENIED,
+    T.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+    T.CONTROL_UI_BUILD_MISMATCH,
+    T.PAIRING_REQUIRED,
+    T.PAIRING_REJECTED,
+    T.PAIRING_EXPIRED,
+    T.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+    T.DEVICE_IDENTITY_REQUIRED
   ]);
 });
 
@@ -418,7 +422,7 @@ var en = S(() => {
 });
 
 // openclaw/packages/gateway-protocol/src/client-info.ts
-var Ro, xo, ol, il, tn = S(() => {
+var Ro, Co, ol, il, tn = S(() => {
   H();
   Ro = {
     WEBCHAT_UI: "webchat-ui",
@@ -439,7 +443,7 @@ var Ro, xo, ol, il, tn = S(() => {
     TEST: "test",
     FINGERPRINT: "fingerprint",
     PROBE: "openclaw-probe"
-  }, xo = {
+  }, Co = {
     WEBCHAT: "webchat",
     CLI: "cli",
     UI: "ui",
@@ -451,7 +455,7 @@ var Ro, xo, ol, il, tn = S(() => {
   }, ol = new Map(
     Object.values(Ro).map((e) => [e, e])
   ), il = new Map(
-    Object.values(xo).map((e) => [e, e])
+    Object.values(Co).map((e) => [e, e])
   );
 });
 
@@ -547,7 +551,7 @@ var Xn = Tt((rp, Yn) => {
     }
     return t;
   }
-  var xi = (e) => String.fromCodePoint(...e), Ci = function(e) {
+  var Ci = (e) => String.fromCodePoint(...e), xi = function(e) {
     return e >= 48 && e < 58 ? 26 + (e - 48) : e >= 65 && e < 91 ? e - 65 : e >= 97 && e < 123 ? e - 97 : 36;
   }, zn = function(e, t) {
     return e + 22 + 75 * (e < 26) - ((t != 0) << 5);
@@ -565,7 +569,7 @@ var Xn = Tt((rp, Yn) => {
       let u = r;
       for (let f = 1, g = 36; ; g += 36) {
         a >= n && X("invalid-input");
-        let y = Ci(e.charCodeAt(a++));
+        let y = xi(e.charCodeAt(a++));
         y >= 36 && X("invalid-input"), y > V((2147483647 - r) / f) && X("overflow"), r += y * f;
         let c = g <= i ? 1 : g >= i + 26 ? 26 : g - i;
         if (y < c)
@@ -631,7 +635,7 @@ var Xn = Tt((rp, Yn) => {
      */
     ucs2: {
       decode: $n,
-      encode: xi
+      encode: Ci
     },
     decode: Kn,
     encode: Jn,
@@ -667,10 +671,10 @@ var Ar = Tt((Sr, qe) => {
       for (w = l - b, h = ":"; w--; )
         h += "0:";
       return c = c.replace("::", h), c[0] === ":" && (c = c.slice(1)), c[c.length - 1] === ":" && (c = c.slice(0, -1)), l = (function() {
-        let R = c.split(":"), C = [];
-        for (let x = 0; x < R.length; x++)
-          C.push(R[x].length > 4 ? NaN : parseInt(R[x], 16));
-        return C;
+        let R = c.split(":"), x = [];
+        for (let C = 0; C < R.length; C++)
+          x.push(R[C].length > 4 ? NaN : parseInt(R[C], 16));
+        return x;
       })(), {
         parts: l,
         zoneId: m
@@ -1012,10 +1016,10 @@ var Ar = Tt((Sr, qe) => {
       }, c.prototype.toRFC5952String = function() {
         let l = /((^|:)(0(:|$)){2,})/g, b = "";
         this.zoneId && (b = `%${this.zoneId}`);
-        let p = this.toNormalizedString(), m = p.slice(0, p.length - b.length), h = 0, w = -1, R = -1, C;
-        for (; C = l.exec(m); ) {
-          let x = (C[0].match(/0/g) || []).length;
-          x > R && (R = x, h = C.index, w = C[0].length);
+        let p = this.toNormalizedString(), m = p.slice(0, p.length - b.length), h = 0, w = -1, R = -1, x;
+        for (; x = l.exec(m); ) {
+          let C = (x[0].match(/0/g) || []).length;
+          C > R && (R = C, h = x.index, w = x[0].length);
         }
         return w < 0 ? m + b : `${m.substring(0, h)}::${m.substring(h + w)}${b}`;
       }, c.prototype.toString = function() {
@@ -2754,11 +2758,11 @@ Ke();
 on();
 
 // openclaw/packages/net-policy/src/url-protocol.ts
-function Co(e) {
+function xo(e) {
   return e instanceof URL ? e : URL.parse(e);
 }
 function sn(e) {
-  let t = Co(e);
+  let t = xo(e);
   return t?.protocol === "http:" || t?.protocol === "https:";
 }
 
@@ -2796,8 +2800,9 @@ var Ze = [
   [[119648, 119665]],
   [
     [94176, 94207],
+    [94208, 101647],
     [110576, 110591],
-    [110592, 110959],
+    [110592, 111359],
     [127488, 127743],
     [131072, 195103],
     [196608, 210047]
@@ -3018,8 +3023,8 @@ D();
 
 // openclaw/src/agents/internal-runtime-context.ts
 var Fo = yn, Lo = bn;
-var xn = "This context is runtime-generated, not user-authored. Keep internal details private.";
-var td = ["OpenClaw runtime context (internal):", xn, ""].join(`
+var Cn = "This context is runtime-generated, not user-authored. Keep internal details private.";
+var td = ["OpenClaw runtime context (internal):", Cn, ""].join(`
 `) + `
 `;
 function De(e) {
@@ -3039,7 +3044,7 @@ var Uo = [
     return t.map((n, r) => t.slice(r).join(". "));
   }).map((e) => e.split(/\s+/).map(ue).join("\\s+")).join("|")
 ), jo = new RegExp(
-  xn.split(/\s+/).map(ue).join("\\s+")
+  Cn.split(/\s+/).map(ue).join("\\s+")
 ), sd = new RegExp(
   `^[ \\t]*(?:${Bo.source})\\s+${jo.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm"
@@ -3235,8 +3240,8 @@ Ne.prototype.parse = function(e, t) {
           for (let w = 0, R = m.length; w < R; w++)
             m.charCodeAt(w) > 127 ? h += "x" : h += m[w];
           if (!h.match(In)) {
-            let w = l.slice(0, b), R = l.slice(b + 1), C = m.match(Xo);
-            C && (w.push(C[1]), R.unshift(C[2])), R.length && (i = R.join(".") + i), this.hostname = w.join(".");
+            let w = l.slice(0, b), R = l.slice(b + 1), x = m.match(Xo);
+            x && (w.push(x[1]), R.unshift(x[2])), R.length && (i = R.join(".") + i), this.hostname = w.join(".");
             break;
           }
         }
@@ -3321,13 +3326,13 @@ var W = /* @__PURE__ */ (() => {
 })();
 function Dn(e, t, n, r, o, i) {
   let a = e.length, u = i * 90, d = 0, f = () => {
-    let T = W[e.charCodeAt(d++)];
-    return T < i ? T : T * 91 - u + W[e.charCodeAt(d++)];
+    let E = W[e.charCodeAt(d++)];
+    return E < i ? E : E * 91 - u + W[e.charCodeAt(d++)];
   }, g = n - r, y = n + o, c = new Int32Array(y);
   c.fill(-1, r, i), c.fill(-1, i + g, y);
   let l = new Int32Array(y), b = new Int32Array(y);
-  function p(T, v) {
-    let I = 0, P = v, B = v + T;
+  function p(E, v) {
+    let I = 0, P = v, B = v + E;
     for (; P < B; ) {
       let N = W[e.charCodeAt(d++)];
       if (N < 89)
@@ -3345,8 +3350,8 @@ function Dn(e, t, n, r, o, i) {
   }
   p(r, 0), p(g, i);
   let m = new Int32Array(o * 2), h = 0, w = 0;
-  function R(T, v) {
-    for (let I = 0; I < T; I++) {
+  function R(E, v) {
+    for (let I = 0; I < E; I++) {
       let P = v + I, B = f(), N = f();
       m[w * 2] = B, m[w * 2 + 1] = N, w += 1, l[P] = h;
       let z = (c[B] < 0 ? b[B] : 1) + (c[N] < 0 ? b[N] : 1);
@@ -3354,26 +3359,26 @@ function Dn(e, t, n, r, o, i) {
     }
   }
   R(o - i + r, i + g), R(i - r, r);
-  let C = new Uint16Array(h), x = 0;
-  for (let T = 0; T < w; T++)
+  let x = new Uint16Array(h), C = 0;
+  for (let E = 0; E < w; E++)
     for (let v = 0; v < 2; v++) {
-      let I = m[T * 2 + v], P = c[I];
+      let I = m[E * 2 + v], P = c[I];
       if (P < 0) {
         let B = l[I], N = B + b[I];
         for (; B < N; )
-          C[x++] = C[B++];
+          x[C++] = x[B++];
       } else
-        C[x++] = P;
+        x[C++] = P;
     }
   let _ = new Uint16Array(t), A = 0;
   for (; d < a; ) {
-    let T = W[e.charCodeAt(d++)];
-    T >= i && (T = T * 91 - u + W[e.charCodeAt(d++)]);
-    let v = c[T];
+    let E = W[e.charCodeAt(d++)];
+    E >= i && (E = E * 91 - u + W[e.charCodeAt(d++)]);
+    let v = c[E];
     if (v < 0) {
-      let I = l[T], P = I + b[T];
+      let I = l[E], P = I + b[E];
       for (; I < P; )
-        _[A++] = C[I++];
+        _[A++] = x[I++];
     } else
       _[A++] = v;
   }
@@ -3487,8 +3492,8 @@ function ci(e, t, n) {
       c = 0, l = "";
       let b = y - d, p;
       if (b >>> 0 < f) {
-        let C = r[1 + b];
-        p = C === 0 ? -1 : f + C & 65535;
+        let x = r[1 + b];
+        p = x === 0 ? -1 : f + x & 65535;
       } else
         p = -1;
       let m = 0, h = 0, w = p < 0 ? 0 : r[p], R = g + 1;
@@ -3498,19 +3503,19 @@ function ci(e, t, n) {
           // Value-less, non-run node with a nonzero jump offset.
           (w & (U.VALUE_LENGTH | U.FLAG13)) === 0 && (w & U.JUMP_TABLE) !== 0;
         ) {
-          let A = w & U.JUMP_TABLE, T = (w & U.BRANCH_LENGTH) >> 7;
-          if (T === 0) {
+          let A = w & U.JUMP_TABLE, E = (w & U.BRANCH_LENGTH) >> 7;
+          if (E === 0) {
             if (e.charCodeAt(R) !== A)
               break e;
             p += 1;
           } else {
             let v = e.charCodeAt(R) - A;
-            if (v >>> 0 >= T)
+            if (v >>> 0 >= E)
               break e;
             let I = r[p + 1 + v];
             if (I === 0)
               break e;
-            p = p + T + I & 65535;
+            p = p + E + I & 65535;
           }
           if (w = r[p], R += 1, R >= i)
             break e;
@@ -3520,14 +3525,14 @@ function ci(e, t, n) {
           if (e.charCodeAt(R) !== (w & U.JUMP_TABLE))
             break;
           R += 1;
-          let T = A - 1, v = p + 1, I = 0;
-          for (; I + 1 < T; I += 2) {
+          let E = A - 1, v = p + 1, I = 0;
+          for (; I + 1 < E; I += 2) {
             let P = r[v];
             if (e.charCodeAt(R) !== (P & 255) || (R += 1, e.charCodeAt(R) !== (P >> 8 & 255)))
               break e;
             R += 1, v += 1;
           }
-          if (I < T) {
+          if (I < E) {
             if (e.charCodeAt(R) !== (r[v] & 255))
               break;
             R += 1;
@@ -3535,23 +3540,23 @@ function ci(e, t, n) {
           p += 1 + (A >> 1), w = r[p];
           continue;
         }
-        let C = w >>> 14, x = e.charCodeAt(R);
-        if (C !== 0) {
-          if (x === q.SEMI) {
-            c = R - g + 1, l = C === 1 ? String.fromCharCode(w & U.VALUE_MASK) : Nn(r, p, C);
+        let x = w >>> 14, C = e.charCodeAt(R);
+        if (x !== 0) {
+          if (C === q.SEMI) {
+            c = R - g + 1, l = x === 1 ? String.fromCharCode(w & U.VALUE_MASK) : Nn(r, p, x);
             break;
           }
-          if (!t && (w & U.FLAG13) === 0 && (c = R - g, m = p, h = C), C === 1)
+          if (!t && (w & U.FLAG13) === 0 && (c = R - g, m = p, h = x), x === 1)
             break;
         }
-        let _ = si(r, w, p + (C || 1), x);
+        let _ = si(r, w, p + (x || 1), C);
         if (_ < 0)
           break;
         p = _, w = r[p], R += 1;
       }
       if (l === "") {
-        let C = w >>> 14;
-        C !== 0 && !t && (w & U.FLAG13) === 0 && (c = R - g, m = p, h = C), c > 0 && (l = Nn(r, m, h));
+        let x = w >>> 14;
+        x !== 0 && !t && (w & U.FLAG13) === 0 && (c = R - g, m = p, h = x), c > 0 && (l = Nn(r, m, h));
       }
     } else
       c = 0, l = "";
@@ -4028,7 +4033,7 @@ var Zn = Object.defineProperty, ur = (e, t) => {
   callable: () => dr,
   escapeHtml: () => Z,
   escapeRE: () => Li,
-  fromCodePoint: () => Ce,
+  fromCodePoint: () => xe,
   isMdAsciiPunct: () => Te,
   isPunctChar: () => fr,
   isPunctCharCode: () => _e,
@@ -4052,7 +4057,7 @@ function Ii(e, t, n) {
 function Rt(e) {
   return !(e >= 55296 && e <= 57343 || e >= 64976 && e <= 65007 || (e & 65535) === 65535 || (e & 65535) === 65534 || e >= 0 && e <= 8 || e === 11 || e >= 14 && e <= 31 || e >= 127 && e <= 159 || e > 1114111);
 }
-function Ce(e) {
+function xe(e) {
   if (e > 65535) {
     e -= 65536;
     let t = 55296 + (e >> 10), n = 56320 + (e & 1023);
@@ -4064,7 +4069,7 @@ var pr = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, Si = new RegExp(`${pr.sou
 function vi(e, t) {
   if (t.charCodeAt(0) === 35 && Ai.test(t)) {
     let r = t[1].toLowerCase() === "x" ? parseInt(t.slice(2), 16) : parseInt(t.slice(1), 10);
-    return Rt(r) ? Ce(r) : e;
+    return Rt(r) ? xe(r) : e;
   }
   let n = Le(e);
   return n !== e ? n : e;
@@ -4123,7 +4128,7 @@ function fr(e) {
   return Re.test(e) || st.test(e);
 }
 function _e(e) {
-  return fr(Ce(e));
+  return fr(xe(e));
 }
 function Te(e) {
   switch (e) {
@@ -4805,15 +4810,15 @@ function Qi(e) {
             f[l].schema ? f[l].schema === "mailto:" && !/^mailto:/i.test(m) ? m = e.md.normalizeLinkText(`mailto:${m}`).replace(/^mailto:/, "") : m = e.md.normalizeLinkText(m) : m = e.md.normalizeLinkText(`http://${m}`).replace(/^http:\/\//, "");
             let h = f[l].index;
             if (h > c) {
-              let x = new e.Token("text", "", 0);
-              x.content = d.slice(c, h), x.level = y, g.push(x);
+              let C = new e.Token("text", "", 0);
+              C.content = d.slice(c, h), C.level = y, g.push(C);
             }
             let w = new e.Token("link_open", "a", 1);
             w.attrs = [["href", p]], w.level = y++, w.markup = "linkify", w.info = "auto", g.push(w);
             let R = new e.Token("text", "", 0);
             R.content = m, R.level = y, g.push(R);
-            let C = new e.Token("link_close", "a", -1);
-            C.level = --y, C.markup = "linkify", C.info = "auto", g.push(C), c = f[l].lastIndex;
+            let x = new e.Token("link_close", "a", -1);
+            x.level = --y, x.markup = "linkify", x.info = "auto", g.push(x), c = f[l].lastIndex;
           }
           if (c < d.length) {
             let l = new e.Token("text", "", 0);
@@ -4921,14 +4926,14 @@ function us(e, t) {
           m = e[n].content.charCodeAt(0);
           break;
         }
-      let h = Te(p) || _e(p), w = Te(m) || _e(m), R = ke(p), C = ke(m);
-      if (C ? c = !1 : w && (R || h || (c = !1)), R ? l = !1 : h && (C || w || (l = !1)), m === 34 && y[0] === '"' && p >= 48 && p <= 57 && (l = c = !1), c && l && (c = h, l = w), !c && !l) {
+      let h = Te(p) || _e(p), w = Te(m) || _e(m), R = ke(p), x = ke(m);
+      if (x ? c = !1 : w && (R || h || (c = !1)), R ? l = !1 : h && (x || w || (l = !1)), m === 34 && y[0] === '"' && p >= 48 && p <= 57 && (l = c = !1), c && l && (c = h, l = w), !c && !l) {
         b && Ue(i, s, y.index, tr);
         continue;
       }
       if (l && (n = b ? o.single : o.double, n >= 0 && r[n].level === u)) {
-        let x = r[n], _, A;
-        b ? (_ = t.md.options.quotes[2], A = t.md.options.quotes[3]) : (_ = t.md.options.quotes[0], A = t.md.options.quotes[1]), Ue(i, s, y.index, A), Ue(i, x.tokenIdx, x.contentPos, _), nr(r, o, n);
+        let C = r[n], _, A;
+        b ? (_ = t.md.options.quotes[2], A = t.md.options.quotes[3]) : (_ = t.md.options.quotes[0], A = t.md.options.quotes[1]), Ue(i, s, y.index, A), Ue(i, C.tokenIdx, C.contentPos, _), nr(r, o, n);
         continue e;
       }
       if (c) {
@@ -5087,13 +5092,13 @@ function gs(e, t, n, r) {
   }
   let u = gt(e, t + 1), d = u.split("|"), f = [];
   for (let R = 0; R < d.length; R++) {
-    let C = d[R].trim();
-    if (!C) {
+    let x = d[R].trim();
+    if (!x) {
       if (R === 0 || R === d.length - 1) continue;
       return !1;
     }
-    if (!/^:?-+:?$/.test(C)) return !1;
-    C.charCodeAt(C.length - 1) === 58 ? f.push(C.charCodeAt(0) === 58 ? "center" : "right") : C.charCodeAt(0) === 58 ? f.push("left") : f.push("");
+    if (!/^:?-+:?$/.test(x)) return !1;
+    x.charCodeAt(x.length - 1) === 58 ? f.push(x.charCodeAt(0) === 58 ? "center" : "right") : x.charCodeAt(0) === 58 ? f.push("left") : f.push("");
   }
   if (u = gt(e, t).trim(), u.indexOf("|") === -1 || e.sCount[t] - e.blkIndent >= 4) return !1;
   d = rr(u), d.length && d[0] === "" && d.shift(), d.length && d[d.length - 1] === "" && d.pop();
@@ -5109,31 +5114,31 @@ function gs(e, t, n, r) {
   let m = e.push("tr_open", "tr", 1);
   m.map = [t, t + 1];
   for (let R = 0; R < d.length; R++) {
-    let C = e.push("th_open", "th", 1);
-    f[R] && (C.attrs = [["style", `text-align:${f[R]}`]]);
-    let x = e.push("inline", "", 0);
-    x.content = d[R].trim(), x.children = [], e.push("th_close", "th", -1);
+    let x = e.push("th_open", "th", 1);
+    f[R] && (x.attrs = [["style", `text-align:${f[R]}`]]);
+    let C = e.push("inline", "", 0);
+    C.content = d[R].trim(), C.children = [], e.push("th_close", "th", -1);
   }
   e.push("tr_close", "tr", -1), e.push("thead_close", "thead", -1);
   let h, w = 0;
   for (o = t + 2; o < n && !(e.sCount[o] < e.blkIndent); o++) {
     let R = !1;
-    for (let x = 0, _ = c.length; x < _; x++) if (c[x](e, o, n, !0)) {
+    for (let C = 0, _ = c.length; C < _; C++) if (c[C](e, o, n, !0)) {
       R = !0;
       break;
     }
     if (R || (u = gt(e, o).trim(), !u) || e.sCount[o] - e.blkIndent >= 4 || (d = rr(u), d.length && d[0] === "" && d.shift(), d.length && d[d.length - 1] === "" && d.pop(), w += g - d.length, w > hs)) break;
     if (o === t + 2) {
-      let x = e.push("tbody_open", "tbody", 1);
-      x.map = h = [t + 2, 0];
+      let C = e.push("tbody_open", "tbody", 1);
+      C.map = h = [t + 2, 0];
     }
-    let C = e.push("tr_open", "tr", 1);
-    C.map = [o, o + 1];
-    for (let x = 0; x < g; x++) {
+    let x = e.push("tr_open", "tr", 1);
+    x.map = [o, o + 1];
+    for (let C = 0; C < g; C++) {
       let _ = e.push("td_open", "td", 1);
-      f[x] && (_.attrs = [["style", `text-align:${f[x]}`]]);
+      f[C] && (_.attrs = [["style", `text-align:${f[C]}`]]);
       let A = e.push("inline", "", 0);
-      A.content = d[x] ? d[x].trim() : "", A.children = [], e.push("td_close", "td", -1);
+      A.content = d[C] ? d[C].trim() : "", A.children = [], e.push("td_close", "td", -1);
     }
     e.push("tr_close", "tr", -1);
   }
@@ -5192,22 +5197,22 @@ function bs(e, t, n, r) {
     let w = e.sCount[l] < e.blkIndent;
     if (o = e.bMarks[l] + e.tShift[l], i = e.eMarks[l], o >= i) break;
     if (e.src.charCodeAt(o++) === 62 && !w) {
-      let C = e.sCount[l] + 1, x, _;
-      e.src.charCodeAt(o) === 32 ? (o++, C++, _ = !1, x = !0) : e.src.charCodeAt(o) === 9 ? (x = !0, (e.bsCount[l] + C) % 4 === 3 ? (o++, C++, _ = !1) : _ = !0) : x = !1;
-      let A = C;
+      let x = e.sCount[l] + 1, C, _;
+      e.src.charCodeAt(o) === 32 ? (o++, x++, _ = !1, C = !0) : e.src.charCodeAt(o) === 9 ? (C = !0, (e.bsCount[l] + x) % 4 === 3 ? (o++, x++, _ = !1) : _ = !0) : C = !1;
+      let A = x;
       for (a.push(e.bMarks[l]), e.bMarks[l] = o; o < i; ) {
-        let T = e.src.charCodeAt(o);
-        if (O(T))
-          T === 9 ? A += 4 - (A + e.bsCount[l] + (_ ? 1 : 0)) % 4 : A++;
+        let E = e.src.charCodeAt(o);
+        if (O(E))
+          E === 9 ? A += 4 - (A + e.bsCount[l] + (_ ? 1 : 0)) % 4 : A++;
         else break;
         o++;
       }
-      c = o >= i, u.push(e.bsCount[l]), e.bsCount[l] = e.sCount[l] + 1 + (x ? 1 : 0), d.push(e.sCount[l]), e.sCount[l] = A - C, f.push(e.tShift[l]), e.tShift[l] = o - e.bMarks[l];
+      c = o >= i, u.push(e.bsCount[l]), e.bsCount[l] = e.sCount[l] + 1 + (C ? 1 : 0), d.push(e.sCount[l]), e.sCount[l] = A - x, f.push(e.tShift[l]), e.tShift[l] = o - e.bMarks[l];
       continue;
     }
     if (c) break;
     let R = !1;
-    for (let C = 0, x = g.length; C < x; C++) if (g[C](e, l, n, !0)) {
+    for (let x = 0, C = g.length; x < C; x++) if (g[x](e, l, n, !0)) {
       R = !0;
       break;
     }
@@ -5270,7 +5275,7 @@ function Rs(e, t) {
   let n = e.level + 2;
   for (let r = t + 2, o = e.tokens.length - 2; r < o; r++) e.tokens[r].level === n && e.tokens[r].type === "paragraph_open" && (e.tokens[r + 2].hidden = !0, e.tokens[r].hidden = !0, r += 2);
 }
-function xs(e, t, n, r) {
+function Cs(e, t, n, r) {
   let o, i, s, a, u = t, d = !0;
   if (e.sCount[u] - e.blkIndent >= 4 || e.listIndent >= 0 && e.sCount[u] - e.listIndent >= 4 && e.sCount[u] < e.blkIndent) return !1;
   let f = !1;
@@ -5290,22 +5295,22 @@ function xs(e, t, n, r) {
   let m = !1, h = e.md.block.ruler.getRules("list"), w = e.parentType;
   for (e.parentType = "list"; u < n; ) {
     i = c, o = e.eMarks[u];
-    let R = e.sCount[u] + c - (e.bMarks[u] + e.tShift[u]), C = R;
+    let R = e.sCount[u] + c - (e.bMarks[u] + e.tShift[u]), x = R;
     for (; i < o; ) {
       let z = e.src.charCodeAt(i);
-      if (z === 9) C += 4 - (C + e.bsCount[u]) % 4;
-      else if (z === 32) C++;
+      if (z === 9) x += 4 - (x + e.bsCount[u]) % 4;
+      else if (z === 32) x++;
       else break;
       i++;
     }
-    let x = i, _;
-    x >= o ? _ = 1 : _ = C - R, _ > 4 && (_ = 1);
+    let C = i, _;
+    C >= o ? _ = 1 : _ = x - R, _ > 4 && (_ = 1);
     let A = R + _;
     a = e.push("list_item_open", "li", 1), a.markup = String.fromCharCode(l);
-    let T = [u, 0];
-    a.map = T, g && (a.info = e.src.slice(s, c - 1));
+    let E = [u, 0];
+    a.map = E, g && (a.info = e.src.slice(s, c - 1));
     let v = e.tight, I = e.tShift[u], P = e.sCount[u], B = e.listIndent;
-    if (e.listIndent = e.blkIndent, e.blkIndent = A, e.tight = !0, e.tShift[u] = x - e.bMarks[u], e.sCount[u] = C, x >= o && e.isEmpty(u + 1) ? e.line = Math.min(e.line + 2, n) : e.md.block.tokenize(e, u, n), (!e.tight || m) && (d = !1), m = e.line - u > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = B, e.tShift[u] = I, e.sCount[u] = P, e.tight = v, a = e.push("list_item_close", "li", -1), a.markup = String.fromCharCode(l), u = e.line, T[1] = u, u >= n || e.sCount[u] < e.blkIndent || e.sCount[u] - e.blkIndent >= 4) break;
+    if (e.listIndent = e.blkIndent, e.blkIndent = A, e.tight = !0, e.tShift[u] = C - e.bMarks[u], e.sCount[u] = x, C >= o && e.isEmpty(u + 1) ? e.line = Math.min(e.line + 2, n) : e.md.block.tokenize(e, u, n), (!e.tight || m) && (d = !1), m = e.line - u > 1 && e.isEmpty(e.line - 1), e.blkIndent = e.listIndent, e.listIndent = B, e.tShift[u] = I, e.sCount[u] = P, e.tight = v, a = e.push("list_item_close", "li", -1), a.markup = String.fromCharCode(l), u = e.line, E[1] = u, u >= n || e.sCount[u] < e.blkIndent || e.sCount[u] - e.blkIndent >= 4) break;
     let N = !1;
     for (let z = 0, oo = h.length; z < oo; z++) if (h[z](e, u, n, !0)) {
       N = !0;
@@ -5321,7 +5326,7 @@ function xs(e, t, n, r) {
   return g ? a = e.push("ordered_list_close", "ol", -1) : a = e.push("bullet_list_close", "ul", -1), a.markup = String.fromCharCode(l), p[1] = u, e.line = u, e.parentType = w, d && Rs(e, b), !0;
 }
 var mt = 999;
-function Cs(e) {
+function xs(e) {
   let t = e.length;
   for (let n = 0; n < e.length - 1; n++) {
     let r = e.charCodeAt(n);
@@ -5331,7 +5336,7 @@ function Cs(e) {
   }
   return t;
 }
-function xe(e, t) {
+function Ce(e, t) {
   return Math.min(e.eMarks[t] + 1, e.src.length);
 }
 function Be(e, t) {
@@ -5353,31 +5358,31 @@ function Be(e, t) {
 function ks(e, t, n, r) {
   let o = e.src, i = e.bMarks[t] + e.tShift[t], s = t + 1;
   if (e.sCount[t] - e.blkIndent >= 4 || o.charCodeAt(i) !== 91) return !1;
-  let a = xe(e, t), u = "", d = -1, f = ++i;
+  let a = Ce(e, t), u = "", d = -1, f = ++i;
   for (; i < a; ) {
     if (u.length + i - f > mt * 2) return !1;
-    let x = o.charCodeAt(i);
-    if (x === 91) return !1;
-    if (x === 93) {
+    let C = o.charCodeAt(i);
+    if (C === 91) return !1;
+    if (C === 93) {
       d = i;
       break;
     }
-    if (x === 92 && (x = o.charCodeAt(++i)), x === 10 && i < a) {
+    if (C === 92 && (C = o.charCodeAt(++i)), C === 10 && i < a) {
       let _ = Be(e, s);
       if (_ < 0) return !1;
-      u += o.slice(f, a), i = f = _, a = xe(e, s++);
+      u += o.slice(f, a), i = f = _, a = Ce(e, s++);
       continue;
     }
     i++;
   }
-  if (d < 0 || o.charCodeAt(d + 1) !== 58 || (u += o.slice(f, d), u.length > mt && Cs(u) > mt)) return !1;
+  if (d < 0 || o.charCodeAt(d + 1) !== 58 || (u += o.slice(f, d), u.length > mt && xs(u) > mt)) return !1;
   for (i = d + 2; i < a; ) {
-    let x = o.charCodeAt(i);
-    if (x === 10) {
+    let C = o.charCodeAt(i);
+    if (C === 10) {
       let _ = Be(e, s);
       if (_ < 0) break;
-      i = _, a = xe(e, s++);
-    } else if (O(x)) i++;
+      i = _, a = Ce(e, s++);
+    } else if (O(C)) i++;
     else break;
   }
   let g = e.md.helpers.parseLinkDestination(o, i, a);
@@ -5387,19 +5392,19 @@ function ks(e, t, n, r) {
   i = g.pos;
   let c = i, l = a, b = s;
   for (; i < a; ) {
-    let x = o.charCodeAt(i);
-    if (x === 10) {
+    let C = o.charCodeAt(i);
+    if (C === 10) {
       let _ = Be(e, s);
       if (_ < 0) break;
-      i = _, a = xe(e, s++);
-    } else if (O(x)) i++;
+      i = _, a = Ce(e, s++);
+    } else if (O(C)) i++;
     else break;
   }
   let p = i, m = e.md.helpers.parseLinkTitle(o, i, a);
   for (; m.can_continue; ) {
-    let x = Be(e, s);
-    if (x < 0) break;
-    i = x, a = xe(e, s++), m = e.md.helpers.parseLinkTitle(o, i, a, m);
+    let C = Be(e, s);
+    if (C < 0) break;
+    i = C, a = Ce(e, s++), m = e.md.helpers.parseLinkTitle(o, i, a, m);
   }
   let h;
   for (p !== c && m.ok ? (h = m.str, i = m.pos) : (h = "", i = c, a = l, s = b); i < a && O(o.charCodeAt(i)); )
@@ -5417,8 +5422,8 @@ function ks(e, t, n, r) {
   });
   let R = e.push("reference_definition", "", 0);
   R.map = [t, s], R.hidden = !0;
-  let C = /* @__PURE__ */ Object.create(null);
-  return C.label = w, R.meta = C, e.line = s, !0;
+  let x = /* @__PURE__ */ Object.create(null);
+  return x.label = w, R.meta = x, e.line = s, !0;
 }
 var _s = [
   "address",
@@ -5485,7 +5490,7 @@ var _s = [
   "ul"
 ], wr = `<[A-Za-z][A-Za-z0-9\\-]*(?:\\s+[a-zA-Z_:][a-zA-Z0-9:._-]*(?:\\s*=\\s*(?:[^"'=<>\`\\x00-\\x20]+|'[^']*'|"[^"]*"))?)*\\s*\\/?>`, Rr = "<\\/[A-Za-z][A-Za-z0-9\\-]*\\s*>";
 new RegExp(`^(?:${wr}|${Rr}|<!---?>|<!--(?:[^-]|-[^-]|--[^>])*-->|<[?][\\s\\S]*?[?]>|<![A-Za-z][^>]*>|<!\\[CDATA\\[[\\s\\S]*?\\]\\]>)`);
-var xr = new RegExp(`^(?:${wr}|${Rr})`), oe = [
+var Cr = new RegExp(`^(?:${wr}|${Rr})`), oe = [
   [
     /^<(script|pre|style|textarea)(?=(\s|>|$))/i,
     /<\/(script|pre|style|textarea)>/i,
@@ -5517,7 +5522,7 @@ var xr = new RegExp(`^(?:${wr}|${Rr})`), oe = [
     !0
   ],
   [
-    new RegExp(`${xr.source}\\s*$`),
+    new RegExp(`${Cr.source}\\s*$`),
     /^$/,
     !1
   ]
@@ -5652,7 +5657,7 @@ var je = [
   ],
   [
     "list",
-    xs,
+    Cs,
     [
       "paragraph",
       "reference",
@@ -5680,7 +5685,7 @@ var je = [
   ],
   ["lheading", Is],
   ["paragraph", Ss]
-], Cr = class {
+], xr = class {
   constructor() {
     k(
       this,
@@ -5838,10 +5843,10 @@ function Os(e, t) {
   for (n++; n < o && O(e.src.charCodeAt(n)); ) n++;
   return e.pos = n, !0;
 }
-var xt = [];
-for (let e = 0; e < 256; e++) xt.push(0);
+var Ct = [];
+for (let e = 0; e < 256; e++) Ct.push(0);
 "\\!\"#$%&'()*+,./:;<=>?@[]^_`{|}~-".split("").forEach(function(e) {
-  xt[e.charCodeAt(0)] = 1;
+  Ct[e.charCodeAt(0)] = 1;
 });
 function Ns(e, t) {
   let n = e.pos, r = e.posMax;
@@ -5867,7 +5872,7 @@ function Ns(e, t) {
   let s = "\\" + i;
   if (!t) {
     let a = e.push("text_special", "", 0);
-    o < 256 && xt[o] !== 0 ? a.content = i : a.content = s, a.markup = s, a.info = "escape";
+    o < 256 && Ct[o] !== 0 ? a.content = i : a.content = s, a.markup = s, a.info = "escape";
   }
   return e.pos = n + 1, !0;
 }
@@ -6137,7 +6142,7 @@ function Ys(e, t) {
   let o, i = e.src.charCodeAt(r + 1);
   if (i === 33 || i === 63) o = Js(e, r);
   else if (i === 47 || Er(i)) {
-    let s = e.src.slice(r).match(xr);
+    let s = e.src.slice(r).match(Cr);
     o = s ? r + s[0].length : -1;
   } else return !1;
   if (o < 0) return !1;
@@ -6156,7 +6161,7 @@ function Qs(e, t) {
     if (o) {
       if (!t) {
         let i = o[1][0].toLowerCase() === "x" ? parseInt(o[1].slice(1), 16) : parseInt(o[1], 10), s = e.push("text_special", "", 0);
-        s.content = Rt(i) ? Ce(i) : Ce(65533), s.markup = o[0], s.info = "entity";
+        s.content = Rt(i) ? xe(i) : xe(65533), s.markup = o[0], s.info = "entity";
       }
       return e.pos += o[0].length, !0;
     }
@@ -6470,7 +6475,7 @@ var yt = [
       * and {@link MarkdownIt.enable}.
       */
       "block",
-      new Cr()
+      new xr()
     ), k(
       this,
       /**
@@ -6696,7 +6701,7 @@ k(J, "Ruler", Ie);
 k(J, "Renderer", hr);
 k(J, "ParserCore", yr);
 k(J, "StateCore", gr);
-k(J, "ParserBlock", Cr);
+k(J, "ParserBlock", xr);
 k(J, "StateBlock", br);
 k(J, "ParserInline", Ir);
 k(J, "StateInline", kr);
@@ -6705,7 +6710,7 @@ var ia = dr(J);
 // openclaw/packages/net-policy/src/ip.ts
 H();
 var vr = It(Ar(), 1);
-var xp = [vr.default.IPv4.parse("198.18.0.0"), 15];
+var Cp = [vr.default.IPv4.parse("198.18.0.0"), 15];
 
 // openclaw/src/utils/directive-tags-batch.ts
 H();
@@ -6739,7 +6744,7 @@ D();
 H();
 
 // openclaw/ui/src/lib/chat/message-normalizer.ts
-function Ct(e) {
+function xt(e) {
   return ve(F(e)?.role);
 }
 
@@ -6926,9 +6931,9 @@ var qr = [
   /(^id$|^label$)/u
 ], ca = (e) => la(e), la = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "itemId" in e && "phase" in e && "kind" in e && "title" in e && Object.getOwnPropertyNames(e).every(
   (t, n) => qr[0].test(t) || zr(e[t])
-) && (e.delegation === void 0 || !("delegation" in e) || ua(e.delegation)) && Ra(e.itemId) && xa(e.phase) && Gr(e.kind) && Gr(e.title) && (e.status === void 0 || !("status" in e) || Ta(e.status)) && (e.name === void 0 || !("name" in e) || Q(e.name)) && (e.meta === void 0 || !("meta" in e) || Q(e.meta)) && (e.commandBearing === void 0 || !("commandBearing" in e) || ze(e.commandBearing)) && (e.toolCallId === void 0 || !("toolCallId" in e) || Q(e.toolCallId)) && (e.unpairedCall === void 0 || !("unpairedCall" in e) || ze(e.unpairedCall)) && (e.startedAt === void 0 || !("startedAt" in e) || Hr(e.startedAt)) && (e.endedAt === void 0 || !("endedAt" in e) || Hr(e.endedAt)) && (e.error === void 0 || !("error" in e) || Q(e.error)) && (e.summary === void 0 || !("summary" in e) || Q(e.summary)) && (e.progressText === void 0 || !("progressText" in e) || Q(e.progressText)) && (e.suppressChannelProgress === void 0 || !("suppressChannelProgress" in e) || ze(e.suppressChannelProgress)) && (e.hideFromChannelProgress === void 0 || !("hideFromChannelProgress" in e) || ze(e.hideFromChannelProgress)) && (e.approvalId === void 0 || !("approvalId" in e) || Q(e.approvalId)) && (e.approvalSlug === void 0 || !("approvalSlug" in e) || Q(e.approvalSlug)), zr = (e) => !1, ua = (e) => Array.isArray(e) && e.every((t, n) => da(t)) && e.length <= 32, da = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "runId" in e && "childSessionKey" in e && "status" in e && Object.getOwnPropertyNames(e).every(
+) && (e.delegation === void 0 || !("delegation" in e) || ua(e.delegation)) && Ra(e.itemId) && Ca(e.phase) && Gr(e.kind) && Gr(e.title) && (e.status === void 0 || !("status" in e) || Ta(e.status)) && (e.name === void 0 || !("name" in e) || Q(e.name)) && (e.meta === void 0 || !("meta" in e) || Q(e.meta)) && (e.commandBearing === void 0 || !("commandBearing" in e) || ze(e.commandBearing)) && (e.toolCallId === void 0 || !("toolCallId" in e) || Q(e.toolCallId)) && (e.unpairedCall === void 0 || !("unpairedCall" in e) || ze(e.unpairedCall)) && (e.startedAt === void 0 || !("startedAt" in e) || Hr(e.startedAt)) && (e.endedAt === void 0 || !("endedAt" in e) || Hr(e.endedAt)) && (e.error === void 0 || !("error" in e) || Q(e.error)) && (e.summary === void 0 || !("summary" in e) || Q(e.summary)) && (e.progressText === void 0 || !("progressText" in e) || Q(e.progressText)) && (e.suppressChannelProgress === void 0 || !("suppressChannelProgress" in e) || ze(e.suppressChannelProgress)) && (e.hideFromChannelProgress === void 0 || !("hideFromChannelProgress" in e) || ze(e.hideFromChannelProgress)) && (e.approvalId === void 0 || !("approvalId" in e) || Q(e.approvalId)) && (e.approvalSlug === void 0 || !("approvalSlug" in e) || Q(e.approvalSlug)), zr = (e) => !1, ua = (e) => Array.isArray(e) && e.every((t, n) => da(t)) && e.length <= 32, da = (e) => typeof e == "object" && e !== null && !Array.isArray(e) && "runId" in e && "childSessionKey" in e && "status" in e && Object.getOwnPropertyNames(e).every(
   (t, n) => qr[1].test(t) || zr(e[t])
-) && pa(e.runId) && fa(e.childSessionKey) && (e.label === void 0 || !("label" in e) || jr(e.label)) && (e.groupId === void 0 || !("groupId" in e) || jr(e.groupId)) && (e.runtimeMs === void 0 || !("runtimeMs" in e) || ha(e.runtimeMs)) && ga(e.status), pa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 256 || e.length <= 512 && ae(e) <= 256), fa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 1024 || e.length <= 2048 && ae(e) <= 1024), jr = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 512 || e.length <= 1024 && ae(e) <= 512), ha = (e) => Number.isFinite(e) && e >= 0 && e <= 9007199254740991, ga = (e) => ma(e) || ya(e) || Wr(e) || ba(e) || wa(e), ma = (e) => typeof e == "string" && e === "accepted", ya = (e) => typeof e == "string" && e === "done", Wr = (e) => typeof e == "string" && e === "failed", ba = (e) => typeof e == "string" && e === "killed", wa = (e) => typeof e == "string" && e === "timeout", Ra = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1), xa = (e) => Ca(e) || ka(e) || _a(e), Ca = (e) => typeof e == "string" && e === "start", ka = (e) => typeof e == "string" && e === "update", _a = (e) => typeof e == "string" && e === "end", Gr = (e) => typeof e == "string", Ta = (e) => Ea(e) || Ia(e) || Wr(e) || Sa(e) || Aa(e), Ea = (e) => typeof e == "string" && e === "running", Ia = (e) => typeof e == "string" && e === "completed", Sa = (e) => typeof e == "string" && e === "blocked", Aa = (e) => typeof e == "string" && e === "skipped", Q = (e) => typeof e == "string", ze = (e) => typeof e == "boolean", Hr = (e) => Number.isFinite(e);
+) && pa(e.runId) && fa(e.childSessionKey) && (e.label === void 0 || !("label" in e) || jr(e.label)) && (e.groupId === void 0 || !("groupId" in e) || jr(e.groupId)) && (e.runtimeMs === void 0 || !("runtimeMs" in e) || ha(e.runtimeMs)) && ga(e.status), pa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 256 || e.length <= 512 && ae(e) <= 256), fa = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 1024 || e.length <= 2048 && ae(e) <= 1024), jr = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1) && (e.length <= 512 || e.length <= 1024 && ae(e) <= 512), ha = (e) => Number.isFinite(e) && e >= 0 && e <= 9007199254740991, ga = (e) => ma(e) || ya(e) || Wr(e) || ba(e) || wa(e), ma = (e) => typeof e == "string" && e === "accepted", ya = (e) => typeof e == "string" && e === "done", Wr = (e) => typeof e == "string" && e === "failed", ba = (e) => typeof e == "string" && e === "killed", wa = (e) => typeof e == "string" && e === "timeout", Ra = (e) => typeof e == "string" && (e.length >= 2 || e.length >= 1 && ae(e) >= 1), Ca = (e) => xa(e) || ka(e) || _a(e), xa = (e) => typeof e == "string" && e === "start", ka = (e) => typeof e == "string" && e === "update", _a = (e) => typeof e == "string" && e === "end", Gr = (e) => typeof e == "string", Ta = (e) => Ea(e) || Ia(e) || Wr(e) || Sa(e) || Aa(e), Ea = (e) => typeof e == "string" && e === "running", Ia = (e) => typeof e == "string" && e === "completed", Sa = (e) => typeof e == "string" && e === "blocked", Aa = (e) => typeof e == "string" && e === "skipped", Q = (e) => typeof e == "string", ze = (e) => typeof e == "boolean", Hr = (e) => Number.isFinite(e);
 var $r = (e) => ca(e);
 
 // openclaw/ui/src/lib/chat/tool-call-grouping.ts
@@ -7046,44 +7051,44 @@ function Ba(e) {
   return et(e.type) || typeof e.name == "string" && (e.arguments != null || e.args != null || e.input != null);
 }
 function Xr(e) {
-  let t = e, n = L(t.__openclaw), r = n?.catalogSource === !0, o = typeof t.role == "string" ? t.role.toLowerCase() : "", i = Ct(e) || o === "tool" || o === "function" || typeof t.toolName == "string" || typeof t.tool_name == "string", s = Ma(t.content), a = Me(t), u = t.__openclawToolStreamLive === !0, d = Dr(t.__openclawToolStreamDiffStat), f = [], g = /* @__PURE__ */ new WeakSet(), y = va(t), c = Xe(t)?.runId ?? M(t.runId), l = (m, h, w = !1) => {
-    let R = Pa(m), C = m.details ?? t.details, x = L(m.__openclaw), _ = Me(m) ?? a ?? (r ? !1 : void 0), A = Oa(
+  let t = e, n = L(t.__openclaw), r = n?.catalogSource === !0, o = typeof t.role == "string" ? t.role.toLowerCase() : "", i = xt(e) || o === "tool" || o === "function" || typeof t.toolName == "string" || typeof t.tool_name == "string", s = Ma(t.content), a = Me(t), u = t.__openclawToolStreamLive === !0, d = Dr(t.__openclawToolStreamDiffStat), f = [], g = /* @__PURE__ */ new WeakSet(), y = va(t), c = Xe(t)?.runId ?? M(t.runId), l = (m, h, w = !1) => {
+    let R = Pa(m), x = m.details ?? t.details, C = L(m.__openclaw), _ = Me(m) ?? a ?? (r ? !1 : void 0), A = Oa(
       m,
-      C,
+      x,
       !r && R ? re(R.trim()) : void 0,
       w ? void 0 : t
     );
     return {
       outputText: R,
-      ...r && x?.catalogTruncated === !0 ? { catalogTruncated: !0 } : {},
-      resultMessageId: r ? void 0 : !w && x && Object.hasOwn(x, "id") ? M(x.id) : y,
-      outputTruncated: (x && Object.hasOwn(x, "truncated") ? x : L(t.__openclaw))?.truncated === !0,
+      ...r && C?.catalogTruncated === !0 ? { catalogTruncated: !0 } : {},
+      resultMessageId: r ? void 0 : !w && C && Object.hasOwn(C, "id") ? M(C.id) : y,
+      outputTruncated: (C && Object.hasOwn(C, "truncated") ? C : L(t.__openclaw))?.truncated === !0,
       toolOutput: Kr(m) ?? Kr(t),
-      ...C !== void 0 ? { details: C } : {},
+      ...x !== void 0 ? { details: x } : {},
       ..._ !== void 0 ? { isError: _ } : {},
       ...A !== void 0 ? { exitCode: A } : {},
-      ...r ? {} : Fa(C, R, h)
+      ...r ? {} : Fa(x, R, h)
     };
   };
   for (let m = 0; m < s.length; m++) {
     let h = s[m] ?? {}, w = Ba(h);
     if (!w && !ve(h.type))
       continue;
-    let R = M(h.runId) ?? c, C = M(h.parentToolCallId), x = Yr(h, t), _ = _t(h, t), A = {
-      id: x ?? `${_}:${m}`,
-      ...x ? { callId: x } : {},
+    let R = M(h.runId) ?? c, x = M(h.parentToolCallId), C = Yr(h, t), _ = _t(h, t), A = {
+      id: C ?? `${_}:${m}`,
+      ...C ? { callId: C } : {},
       ...R ? { runId: R } : {},
-      ...C ? { parentToolCallId: C } : {},
+      ...x ? { parentToolCallId: x } : {},
       name: _,
       messageId: y
-    }, T = h.details ?? t.details;
+    }, E = h.details ?? t.details;
     if (w) {
       let N = Da(h.arguments ?? h.args ?? h.input);
       f.push({
         ...A,
         args: N,
         inputText: La(N),
-        ...T !== void 0 ? { details: T } : {},
+        ...E !== void 0 ? { details: E } : {},
         ...u ? {
           live: !0,
           completed: t.__openclawToolStreamResultReceived === !0 || t.__openclawToolStreamItemEnded === !0
@@ -7095,11 +7100,11 @@ function Xr(e) {
     let v = f.find((N) => N.id === A.id) ?? f.find(
       (N) => (
         // Same-name fallback belongs to legacy blocks missing an explicit identity.
-        (!x || !N.callId) && N.name === _ && N.outputText === void 0 && !g.has(N)
+        (!C || !N.callId) && N.name === _ && N.outputText === void 0 && !g.has(N)
       )
     ), I = i ? _t({}, t) : void 0, P = I && I !== "browser" ? I : v?.name ?? I ?? _, B = l(h, P);
     if (v) {
-      g.add(v), v.callId ??= x, v.runId ??= R, v.parentToolCallId ??= C, u || (v.completed = !0), Object.assign(v, B, {
+      g.add(v), v.callId ??= C, v.runId ??= R, v.parentToolCallId ??= x, u || (v.completed = !0), Object.assign(v, B, {
         preview: B.preview,
         browserTab: B.browserTab
       });
@@ -7118,7 +7123,7 @@ function Xr(e) {
       ...h ? { callId: h } : {},
       ...c ? { runId: c } : {},
       name: m,
-      completed: Ct(e) || o === "tool" || o === "function",
+      completed: xt(e) || o === "tool" || o === "function",
       messageId: y,
       ...l(t, m, !0)
     });

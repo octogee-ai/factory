@@ -273,6 +273,7 @@
       "octogee-activity-tools",
       "parallel",
       "openai",
+      "skill-workshop",
       "codex",
       "browser"
     ],
@@ -369,6 +370,9 @@
         }
       },
       "parallel": {
+        "enabled": true
+      },
+      "skill-workshop": {
         "enabled": true
       }
     }

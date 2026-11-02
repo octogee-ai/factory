@@ -250,7 +250,30 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     expect(ensured).toEqual(["b"]);
   });
 
-  it("stops the serial mount lane after a permanent config failure", async () => {
+  it("mounts other customers after a setup failure and retries the failed customer next tick", async () => {
+    let failed = false;
+    const mounted = new Set<string>();
+    const d = mkDeps({
+      maxConcurrent: 1,
+      readDesired: async () => ["cold", "other"],
+      getMountObserved: () => [...mounted],
+      ensureSlug: async (slug) => {
+        d.ensured.push(slug);
+        if (slug === "cold" && !failed) {
+          failed = true;
+          throw new Error("User profile catalog is not ready");
+        }
+        mounted.add(slug);
+        return "mounted";
+      },
+    });
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["cold", "other"]);
+    await reconcileFleet(d);
+    expect(d.ensured).toEqual(["cold", "other", "cold"]);
+  });
+
+  it("continues the serial mount lane after a permanent config failure", async () => {
     const d = mkDeps({
       maxConcurrent: 1,
       readDesired: async () => ["poisoned", "protected"],
@@ -259,15 +282,14 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
         if (slug === "poisoned") throw new Error("invalid patch");
         return "mounted";
       },
-      shouldDeferRemainingMounts: (error) => error instanceof Error && error.message === "invalid patch",
     });
 
     await reconcileFleet(d);
 
-    expect(d.ensured).toEqual(["poisoned"]);
+    expect(d.ensured).toEqual(["poisoned", "protected"]);
   });
 
-  it("mounts concurrently even with the permanent-failure deferral wired", async () => {
+  it("mounts concurrently with a bounded worker pool", async () => {
     let active = 0;
     let peak = 0;
     const gates = new Map<string, ReturnType<typeof deferred>>();
@@ -276,7 +298,6 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     const d = mkDeps({
       maxConcurrent: 3,
       readDesired: async () => slugs,
-      shouldDeferRemainingMounts: (error) => error instanceof Error && error.message === "invalid patch",
       ensureSlug: async (slug) => {
         active++;
         peak = Math.max(peak, active);
@@ -292,7 +313,7 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
     await p;
   });
 
-  it("skips the mounts not yet started after a permanent config failure in a concurrent lane", async () => {
+  it("continues queued mounts after a permanent config failure in a concurrent lane", async () => {
     const started: string[] = [];
     const gate = deferred();
     const d = mkDeps({
@@ -304,14 +325,13 @@ describe("reconcileFleet — bidirectional desired−observed convergence", () =
         await gate.promise;
         return "mounted";
       },
-      shouldDeferRemainingMounts: (error) => error instanceof Error && error.message === "invalid patch",
     });
     const p = reconcileFleet(d);
     await new Promise((r) => setTimeout(r, 10));
     gate.resolve();
     await p;
 
-    expect(started.sort()).toEqual(["in-flight", "poisoned"]);
+    expect(started.sort()).toEqual(["in-flight", "last", "later", "poisoned"]);
   });
 
   it("rechecks queued work against current quiescing admission without evicting its roster member", async () => {

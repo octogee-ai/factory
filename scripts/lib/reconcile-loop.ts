@@ -36,7 +36,6 @@ export interface ReconcileLoopDeps {
   ) => Promise<EnsureOutcome>;
   shouldEnsureSlug?: (slug: string) => boolean;
   canEnsureSlug?: (slug: string) => Promise<boolean>;
-  shouldDeferRemainingMounts?: (error: unknown) => boolean;
   unmountSlug: (slug: string, evictionBatch: readonly string[]) => Promise<UnmountOutcome>;
   onPendingEvictionCancelled?: (slug: string) => void;
   log: (msg: string) => void;
@@ -67,14 +66,10 @@ let evictionWorker: Promise<void> | null = null;
 // One process-wide mount pool: a tick enqueues its mounts and waits for them, and a
 // later tick's mounts join the same bounded workers instead of waiting for the earlier
 // tick to drain. maxConcurrent therefore caps the process, not one tick.
-interface MountBatch {
-  deferred: boolean;
-  plan: ReconcilePlan;
-}
 interface MountJob {
   slug: string;
   deps: ReconcileLoopDeps;
-  batch: MountBatch;
+  plan: ReconcilePlan;
   settle: () => void;
 }
 const mountQueues: Record<MountLane, MountJob[]> = { create: [], move: [] };
@@ -199,15 +194,15 @@ function logReconcilePlan(deps: ReconcileLoopDeps, plan: ReconcilePlan): void {
   );
 }
 
-async function runMountJob({ slug, deps, batch }: MountJob): Promise<void> {
-  if (batch.deferred || !(await reconciliationAllowed(deps))) return;
+async function runMountJob({ slug, deps, plan }: MountJob): Promise<void> {
+  if (!(await reconciliationAllowed(deps))) return;
   try {
     if (deps.canEnsureSlug && !(await deps.canEnsureSlug(slug))) return;
     if (!(deps.shouldEnsureSlug?.(slug) ?? true)) return;
     const outcome = await deps.ensureSlug(
       slug,
-      batch.plan.currentPendingEvictions(),
-      batch.plan.currentPendingEvictions,
+      plan.currentPendingEvictions(),
+      plan.currentPendingEvictions,
     );
     mountClock += 1;
     lastMountCompletedAt.set(slug, mountClock);
@@ -216,10 +211,6 @@ async function runMountJob({ slug, deps, batch }: MountJob): Promise<void> {
   } catch (err) {
     const message = errMessage(err);
     deps.log(`[reconcile] ${deps.gatewayId}: ⚠ ensure failed for ${slug}: ${message}`);
-    if (deps.shouldDeferRemainingMounts?.(err)) {
-      batch.deferred = true;
-      deps.log(`[reconcile] ${deps.gatewayId}: deferring remaining mounts after permanent ensure failure`);
-    }
     fireSafely(deps, () => deps.onEnsureError?.(slug, message, err));
   }
 }
@@ -252,7 +243,6 @@ function spawnMountWorkers(limit: number): void {
 }
 
 async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan): Promise<void> {
-  const batch: MountBatch = { deferred: false, plan };
   const settled: Promise<void>[] = [];
   // The snapshot was read across awaits; a sibling tick may have queued, claimed,
   // or finished a slug since. The pool decides who mounts what.
@@ -262,7 +252,7 @@ async function runReconcileMounts(deps: ReconcileLoopDeps, plan: ReconcilePlan):
     const lane = deps.mountLane?.(slug) ?? "move";
     queuedMounts.add(slug);
     settled.push(new Promise<void>((settle) => {
-      mountQueues[lane].push({ slug, deps, batch, settle });
+      mountQueues[lane].push({ slug, deps, plan, settle });
     }));
   }
   spawnMountWorkers(deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT);

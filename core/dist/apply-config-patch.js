@@ -183,7 +183,7 @@ function isPersistedSupersededError(err) {
         /config\.patch persisted but was not applied to the active Gateway \(superseded\)/.test(err.message));
 }
 function isPermanentConfigPatchError(err) {
-    return ((err.code === "auth-failed" && !/^gateway starting; retry shortly$/i.test(err.message)) ||
+    return ((err.code === "auth-failed" && !/(?:^gateway starting; retry shortly$|User profile catalog is not ready)/i.test(err.message)) ||
         err.code === "invalid-patch" ||
         err.code === "invalid-response" ||
         (err.code === "rpc-error" && /redacted id placeholder with no matching original value/i.test(err.message)));

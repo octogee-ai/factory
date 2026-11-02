@@ -165,6 +165,7 @@ describe("shared gateway selection", () => {
       incomingMigrationCount: 1,
     }))).toBe(3);
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "initial-placement",
       config,
@@ -176,19 +177,22 @@ describe("shared gateway selection", () => {
     const candidates = [candidate("shared-0"), candidate("shared-1")];
     const picks = new Set(
       Array.from({ length: 32 }, (_, index) => selectSharedGateway({
+        buildersPerGateway: 4,
         uid: `uid-${index}`,
+        purpose: "initial-placement",
         config,
         candidates,
       })).map((selection) => selection.kind === "selected" ? selection.gatewayId : null),
     );
     expect(picks).toEqual(new Set(["shared-0", "shared-1"]));
-    expect(selectSharedGateway({ uid: "uid-7", config, candidates })).toEqual(
-      selectSharedGateway({ uid: "uid-7", config, candidates }),
+    expect(selectSharedGateway({ uid: "uid-7", config, candidates, purpose: "initial-placement", buildersPerGateway: 4 })).toEqual(
+      selectSharedGateway({ uid: "uid-7", config, candidates, purpose: "initial-placement", buildersPerGateway: 4 }),
     );
   });
 
   it("keeps a healthy current member until its load is more than one above the minimum", () => {
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "initial-placement",
       config,
@@ -196,6 +200,7 @@ describe("shared gateway selection", () => {
       candidates: [candidate("shared-0", { assignmentCount: 3 }), candidate("shared-1", { assignmentCount: 2 })],
     })).toMatchObject({ gatewayId: "shared-0", retainedCurrent: true });
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "initial-placement",
       config,
@@ -214,6 +219,7 @@ describe("shared gateway selection", () => {
       expect(isAcceptingSharedGateway(config, candidate("shared-0", overrides))).toBe(false);
     }
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "initial-placement",
       config,
@@ -226,12 +232,14 @@ describe("shared gateway selection", () => {
     expect(isAcceptingSharedGateway(config, mounting)).toBe(true);
     expect(isSettledSharedGateway(config, mounting)).toBe(false);
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "initial-placement",
       config,
       candidates: [mounting],
     })).toMatchObject({ kind: "selected", gatewayId: "shared-0", load: 1 });
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "migration",
       config,
@@ -243,6 +251,7 @@ describe("shared gateway selection", () => {
     const mounting = candidate("shared-0", { rosterComplete: false, assignmentCount: 2 });
     const settledPeer = candidate("shared-1", { assignmentCount: 1 });
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "migration",
       config,
@@ -250,6 +259,7 @@ describe("shared gateway selection", () => {
       candidates: [mounting, settledPeer],
     })).toMatchObject({ kind: "selected", gatewayId: "shared-0", retainedCurrent: true });
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "migration",
       config,
@@ -260,6 +270,7 @@ describe("shared gateway selection", () => {
 
   it("still leaves a current gateway that is no longer accepting", () => {
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "migration",
       config,
@@ -270,6 +281,7 @@ describe("shared gateway selection", () => {
 
   it("uses queued migrations as projected load without rejecting their target", () => {
     expect(selectSharedGateway({
+      buildersPerGateway: 4,
       uid: "uid-alice",
       purpose: "initial-placement",
       config,
@@ -296,5 +308,29 @@ describe("shared gateway selection", () => {
         candidate("shared-1", { assignmentCount: 2, rosterComplete: false }),
       ],
     })).toBeNull();
+  });
+});
+
+describe("initial placement capacity", () => {
+  it("queues a signup while the only warm member is full and its peer is starting", () => {
+    expect(selectSharedGateway({
+      buildersPerGateway: 4,
+      uid: "new", config, purpose: "initial-placement",
+      candidates: [candidate("shared-0", { assignmentCount: 4 }), candidate("shared-1", { ready: false })],
+    })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
+  });
+  it("counts incoming migrations against the new-placement budget", () => {
+    expect(selectSharedGateway({
+      buildersPerGateway: 4,
+      uid: "new", config, purpose: "initial-placement",
+      candidates: [candidate("shared-0", { assignmentCount: 3, incomingMigrationCount: 1 })],
+    })).toEqual({ kind: "blocked", reason: "no-accepting-shared-gateway" });
+  });
+  it("retains an existing assignment even when its member is over budget", () => {
+    expect(selectSharedGateway({
+      buildersPerGateway: 4,
+      uid: "existing", config, purpose: "initial-placement",
+      currentGatewayId: "shared-0", candidates: [candidate("shared-0", { assignmentCount: 20 })],
+    })).toMatchObject({ kind: "selected", gatewayId: "shared-0", retainedCurrent: true });
   });
 });

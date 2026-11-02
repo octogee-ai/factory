@@ -161,7 +161,9 @@ function leastLoadedGatewayForUid(uid, candidates) {
 }
 export function selectSharedGateway(input) {
     const accepts = sharedGatewayAcceptsFor(input.purpose);
-    const destinations = input.candidates.filter((candidate) => accepts(input.config, candidate));
+    const destinations = input.candidates.filter((candidate) => accepts(input.config, candidate) &&
+        (input.purpose !== "initial-placement" ||
+            authoritativeSharedGatewayLoad(candidate) < input.buildersPerGateway));
     const current = input.currentGatewayId === undefined || input.currentGatewayId === null
         ? undefined
         : input.candidates.find((candidate) => candidate.gatewayId === input.currentGatewayId && isAcceptingSharedGateway(input.config, candidate));

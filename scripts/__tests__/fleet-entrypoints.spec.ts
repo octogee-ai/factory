@@ -166,7 +166,6 @@ describe("fleet-controller entrypoint config", () => {
         desiredFingerprint: desired.get(slug)?.fingerprint,
         now: 0,
         permanentConfigPatchRetry: undefined,
-        desiredEnsureFingerprint: undefined,
       }),
       ensureSlug: ensured,
       unmountSlug: evicted,

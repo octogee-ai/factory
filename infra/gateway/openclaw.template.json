@@ -207,12 +207,7 @@
     }
   },
   "skills": {
-    "load": {},
-    "workshop": {
-      "autonomous": {
-        "mode": "off"
-      }
-    }
+    "load": {}
   },
   "bindings": [],
   "messages": {
@@ -314,7 +309,8 @@
       "octogee-workspace-tools",
       "octogee-activity-tools",
       "parallel",
-      "openai"
+      "openai",
+      "skill-workshop"
     ],
     "entries": {
       "mattermost": {
@@ -407,6 +403,14 @@
       },
       "parallel": {
         "enabled": true
+      },
+      "skill-workshop": {
+        "enabled": true,
+        "config": {
+          "autonomous": {
+            "mode": "off"
+          }
+        }
       }
     }
   }

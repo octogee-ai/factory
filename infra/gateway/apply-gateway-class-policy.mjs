@@ -139,6 +139,7 @@ export const CUSTOMER_APPROVED_PLUGINS = [
   "octogee-activity-tools",
   "parallel",
   "openai",
+  "skill-workshop",
 ];
 const FLEET_BROKER_URL_TEMPLATE = "${FLEET_BROKER_URL}";
 const API_SA_TOKEN_PATH_TEMPLATE = "${OCTOGEE_API_SA_TOKEN_PATH}";
@@ -216,6 +217,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
     config: { heartbeatMs: 5000 },
   },
   parallel: { enabled: true },
+  "skill-workshop": { enabled: true, config: { autonomous: { mode: "off" } } },
 };
 const CONNECTOR_TOOLS_PLUGIN = "octogee-connector-tools";
 const PROJECT_TOOLS_PLUGIN = "octogee-project-tools";
@@ -519,11 +521,7 @@ function disableCustomerAutomationsAndSkillWrites(config) {
   config.skills.load ??= {};
   delete config.skills.load.allowSymlinkTargets;
   delete config.skills.load.extraDirs;
-  config.skills.workshop ??= {};
-  config.skills.workshop.autonomous = { mode: "off" };
-  delete config.skills.workshop.approvalPolicy;
-  delete config.skills.workshop.maxPending;
-  delete config.skills.workshop.allowSymlinkTargetWrites;
+  delete config.skills.workshop;
 }
 
 function forceCustomerMattermostProjection(config) {
