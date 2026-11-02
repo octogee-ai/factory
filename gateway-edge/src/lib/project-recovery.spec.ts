@@ -14,6 +14,10 @@ import { readProjectRestoreReady, writeProjectRestoreReady, withMaterializedProj
 let root: string;
 afterEach(async()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();if(root)await rm(root,{recursive:true,force:true});});
 function git(cwd: string,...args: string[]){return execFileSync("git",args,{cwd,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim();}
+async function readCustomer(slug: string) {
+  return { uid: `uid-${slug}`, slug, gatewayId: "builder-one", status: "complete" as const, checkpointEpoch: 1,
+    projects: [{ projectSlug: "demo", giteaRepoName: "demo" }] };
+}
 it("restores text and the matching immutable asset after losing the working set, including an older commit",async()=>{
   root=await mkdtemp(path.join(tmpdir(),"project-recovery-"));
   const customers=path.join(root,"customers"),projects=path.join(customers,"alice/projects"),dir=path.join(projects,"demo"),remote=path.join(root,"remote.git");
@@ -30,7 +34,7 @@ it("restores text and the matching immutable asset after losing the working set,
     const sha256=createHash("sha256").update(body).digest("hex");objects.set(sha256,Buffer.from(body));
     return {sha256,size:body.length,gcsPath:`${target.gcsPrefix}/.objects/${sha256}`};
   });
-  const deps={resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,prepare:async()=>{throw new Error("unexpected asset preparation");},
+  const deps={readCustomer,resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,prepare:async()=>{throw new Error("unexpected asset preparation");},
     divert:(cwd:string,target:any)=>divertWorktreeBinaries(cwd,target,{gitStatus,storeWorkspaceBlob:store},{retainLocalFiles:true})};
   const versions=[];
   for(const n of [1,2]){
@@ -145,7 +149,7 @@ it.each(["available", "unavailable", "replacement", "conflict", "deletion"])("ke
   });
   const hydrate=createBrokeredProjectBlobHydrator({workspaceManifestReadUrl:async()=>{throw new Error("local Git manifest is authoritative");},blobMaterializationReadUrl:blobRead},customers);
   vi.stubGlobal("fetch",vi.fn(async(url:string)=>storage === "unavailable" ? new Response(null,{status:503}) : new Response(new Uint8Array(objects.get(new URL(url).pathname.slice(1))!),{headers:{"x-goog-generation":"1"}})));
-  const deps={resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,
+  const deps={readCustomer,resolveProject:resolveProjectDir,commit:commitAndPushWorkspace,githubToken:async()=>undefined,
     prepare:async()=>prepareBuilderProjectAssets({projects:path.dirname(dir),slug:"alice",project:"demo",hydrate,requireRestoredCheckout:true}),
     divert:(cwd:string,scope:any)=>divertWorktreeBinaries(cwd,scope,{gitStatus,storeWorkspaceBlob:async(_target,_name,body)=>{
       const hash=createHash("sha256").update(body).digest("hex");objects.set(hash,Buffer.from(body));

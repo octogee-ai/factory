@@ -2471,7 +2471,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-missing",
       sharedGatewayIds: ["gw-missing"],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
@@ -2648,7 +2648,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "shared-1",
       sharedGatewayIds: ["shared-1", "shared-0", "shared-a"],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
     });
   });
 
@@ -2673,7 +2673,7 @@ describe("onboarding placement (post-cohorts)", () => {
     expect(res.body.config).toEqual({
       defaultGatewayId: "gw-canary",
       sharedGatewayIds: ["gw-canary", "gw-default"],
-      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 4 },
+      sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
     });
     expect(res.body).not.toHaveProperty("overrides");
     expect(res.body.customers[0]).not.toHaveProperty("overrideGatewayId");

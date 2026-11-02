@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, rename, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistBuilderProjects } from "./project-persistence.js";
 import { writeProjectRestoreReady } from "@octogee/core/project-asset-state";
+import type { FleetBrokerProjectRestore } from "@octogee/shared/types/fleet-broker";
 
 vi.mock("./connector-tokens.js", () => ({ readOwnerRuntimeConnectorAccessToken: vi.fn() }));
 
@@ -15,7 +16,9 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.useRealTimers(); await rm(root, { recursive: true, force: true }); });
 function deps() {
-  return { resolveProject: vi.fn(async (_root, slug, project): Promise<string | null> => path.join(root, slug, "projects", project)),
+  return { readCustomer: vi.fn(async (slug: string) => ({ uid: `uid-${slug}`, slug, gatewayId: "builder-one", status: "complete" as const,
+      checkpointEpoch: 1, projects: [{ projectSlug: "demo", giteaRepoName: "demo", provisioningState: "active" }] as FleetBrokerProjectRestore[] })),
+    resolveProject: vi.fn(async (_root, slug, project): Promise<string | null> => path.join(root, slug, "projects", project)),
     githubToken: vi.fn(async () => undefined),
     prepare: vi.fn(async () => undefined),
     divert: vi.fn(async () => ({ failures: [] as string[], failedPaths: [] as string[], diverted: [] })),
@@ -25,6 +28,65 @@ function deps() {
     }) };
 }
 describe("Builder project persistence", () => {
+  it.each(["gitea", "github"])("does not restore, save or commit a disabled %s checkout recreated by Native agent bootstrap", async provider => {
+    const disabled = path.join(root, "builder/projects/octogee");
+    await mkdir(path.join(disabled, ".git"), { recursive: true });
+    await writeFile(path.join(disabled, "AGENTS.md"), "Native bootstrap files are not a checkout\n");
+    const d = deps();
+    const customer = await d.readCustomer("builder");
+    customer.projects.push({ projectSlug: "octogee", giteaRepoName: provider === "gitea" ? "octogee" : null, checkoutEnabled: false,
+      ...(provider === "github" ? { repoSource: { provider: "github", owner: "builder", repo: "octogee" } as const } : {}) });
+    d.readCustomer.mockResolvedValue(customer);
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).resolves.toEqual({ projects: 1 });
+    expect(d.resolveProject.mock.calls.map(call => call[2])).toEqual(["demo"]);
+    expect(d.commit).toHaveBeenCalledTimes(1);
+    expect(d.prepare).not.toHaveBeenCalled();
+  });
+
+  it("ignores orphaned agent workspaces but refuses a missing enabled project", async () => {
+    await rename(path.join(root, "builder/projects/demo"), path.join(root, "builder/projects/orphan"));
+    const d = deps();
+    d.resolveProject.mockResolvedValue(null);
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow(/ENOENT|repository/);
+    expect(d.commit).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to directories when checkout policy is unavailable", async () => {
+    const d = deps();
+    d.readCustomer.mockRejectedValue(new Error("fleet broker unavailable"));
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow(/fleet broker unavailable/);
+    expect(d.resolveProject).not.toHaveBeenCalled();
+    expect(d.commit).not.toHaveBeenCalled();
+  });
+
+  it("requires restoration again after checkout is re-enabled", async () => {
+    const d = deps();
+    const customer = await d.readCustomer("builder");
+    customer.projects[0].checkoutEnabled = false;
+    d.readCustomer.mockImplementation(async () => structuredClone(customer));
+    await rm(path.join(root, "builder/projects/.octogee-state/demo.json"));
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).resolves.toEqual({ projects: 0 });
+    expect(d.commit).not.toHaveBeenCalled();
+    customer.projects[0].checkoutEnabled = true;
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow(/restore/);
+    await writeProjectRestoreReady(path.join(root, "builder/projects/demo"), "builder", "demo");
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).resolves.toEqual({ projects: 1 });
+    expect(d.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks checkout authority before committing when the owner turns it off", async () => {
+    const d = deps();
+    const customer = await d.readCustomer("builder");
+    d.readCustomer.mockImplementation(async () => structuredClone(customer));
+    d.commit.mockImplementation(async (_dir, options) => {
+      customer.projects[0].checkoutEnabled = false;
+      const prepared = await options.beforeCommit();
+      return prepared.ok ? { ok: true, result: { pushed: true } } : prepared;
+    });
+    await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow(/authority changed/);
+    expect(d.divert).not.toHaveBeenCalled();
+  });
+
   it("serializes lifecycle flush behind autosave and performs its own fresh save", async () => {
     const d = deps();
     let release!: () => void;
@@ -43,6 +105,8 @@ describe("Builder project persistence", () => {
     await entered;
     await mkdir(path.join(root, "builder/projects/later"));
     await writeProjectRestoreReady(path.join(root, "builder/projects/later"), "builder", "later");
+    d.readCustomer.mockImplementation(async slug => ({ uid: `uid-${slug}`, slug, gatewayId: "builder-one", status: "complete", checkpointEpoch: 1,
+      projects: ["demo", "later"].map(project => ({ projectSlug: project, giteaRepoName: project, provisioningState: "active" })) }));
     const lifecycle = persistBuilderProjects({ root, slug: "builder" }, d);
     const timer = setTimeout(() => { holding = false; release(); }, 500);
     try { await expect(lifecycle).resolves.toEqual({ projects: 2 }); }
@@ -152,7 +216,8 @@ describe("Builder project persistence", () => {
     const d = deps();
     d.resolveProject.mockResolvedValue(null);
     await expect(persistBuilderProjects({ root, slug: "builder" }, d)).rejects.toThrow(/repository/);
-    await symlink(path.join(root, "builder/projects/demo"), path.join(root, "builder/projects/escape"));
+    await rename(path.join(root, "builder/projects/demo"), path.join(root, "retained-demo"));
+    await symlink(path.join(root, "retained-demo"), path.join(root, "builder/projects/demo"));
     await expect(persistBuilderProjects({ root, slug: "builder" }, deps())).rejects.toThrow(/directory/);
   });
 });

@@ -7,6 +7,7 @@ import request from "supertest";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProjectPersistenceRouter } from "./project-persistence.js";
 import { _setGatewayTokenReviewerForTests, requireGatewayInternalAuth } from "../../middleware/gateway-internal-auth.js";
+import { claimedTestBuilder, installTestBuilderIdentity } from "../../__tests__/helpers/builder-identity.js";
 
 vi.mock("../../lib/connector-tokens.js", () => ({ readOwnerRuntimeConnectorAccessToken: vi.fn() }));
 vi.mock("../../lib/workspace-blob.js", () => ({ storeWorkspaceBlob: vi.fn(async () => { throw new Error("unexpected binary upload in text checkpoint fixture"); }) }));
@@ -215,6 +216,25 @@ it("ignores deferred GitHub workspaces and disabled Gitea checkouts", async () =
   expect((await flush()).status).toBe(200);
   expect(git(path.join(remoteRoot, "demo.git"), "rev-parse", "main")).toBe(before);
   expect(readFileSync(path.join(deferred, "AGENTS.md"), "utf8")).toBe("deferred\n");
+});
+
+it.each(["serving", "quiescing"])("Builder %s flush never commits disabled Native bootstrap files", async state => {
+  vi.stubEnv("GATEWAY_CLASS", "builder");
+  vi.stubEnv("GATEWAY_PROFILE", "builder");
+  vi.stubEnv("GATEWAY_ID", "builder-one");
+  vi.stubEnv("K8S_SERVICE_ACCOUNT_NAME", "octogee-gw-builder-one");
+  reviewed.saName = "octogee-gw-builder-one";
+  snapshot.gatewayId = "builder-one";
+  installTestBuilderIdentity(claimedTestBuilder("alice", "builder-one"));
+  assignment.state = state;
+  snapshot.projects = [{ projectSlug: "demo", giteaRepoName: "demo", checkoutEnabled: false }];
+  writeFileSync(path.join(customer, "projects/demo/AGENTS.md"), "Generated after checkout was turned off\n");
+  const before = git(path.join(remoteRoot, "demo.git"), "rev-parse", "main");
+  const result = await flush();
+  expect(result.status).toBe(200);
+  expect(result.body).toEqual({ projects: 0 });
+  expect(git(path.join(remoteRoot, "demo.git"), "rev-parse", "main")).toBe(before);
+  expect(readFileSync(path.join(customer, "projects/demo/AGENTS.md"), "utf8")).toBe("Generated after checkout was turned off\n");
 });
 
 it.each(["missing", "migrating", "epoch"])("refuses %s canonical assignment custody despite an unchanged user mirror", async mode => {

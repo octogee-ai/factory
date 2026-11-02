@@ -1,7 +1,7 @@
 import { isValidGatewayId, } from "./glm.js";
 export const SHARED_POOL_SLOT_ID_PATTERN = /^shared-[a-z0-9]+$/;
 export const DEFAULT_SHARED_GATEWAY_AUTOSCALING_ENABLED = true;
-export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 4;
+export const DEFAULT_SHARED_GATEWAY_BUILDERS_PER_GATEWAY = 10;
 const SHARED_POOL_MEMBER_STATUSES = new Set(["running", "draining", "paused"]);
 export const SHARED_POOL_REPLACEMENT_STALL_MS = 30 * 60_000;
 function isSharedPoolReplacement(value) {

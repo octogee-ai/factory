@@ -1,4 +1,4 @@
-import { lstat, readdir } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { readProjectRestoreReady, readProjectRestoreState } from "@octogee/core/project-asset-state";
 import { createBrokeredProjectBlobHydrator, prepareBuilderProjectAssets } from "@octogee/core/project-blob-materialization";
@@ -12,8 +12,12 @@ import { gatewayCredentialHeaders, internalFetch } from "@octogee/core/internal-
 import type { FleetBrokerAssignmentRosterEntry, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { WorkspaceBlobTarget } from "./workspace-blob.js";
+import { projectCheckoutEnabled } from "@octogee/shared/types/project";
+
+type PersistenceCustomer = Pick<FleetBrokerUserSnapshot, "uid" | "slug" | "gatewayId" | "status" | "projects"> & { checkpointEpoch: number };
 
 interface ProjectPersistenceDeps {
+  readCustomer: (slug: string) => Promise<PersistenceCustomer>;
   resolveProject: typeof resolveProjectDir;
   commit: typeof commitAndPushWorkspace;
   divert: typeof divertWorktreeBinaries;
@@ -21,6 +25,7 @@ interface ProjectPersistenceDeps {
   prepare: (input: { root: string; slug: string; project: string }) => Promise<void>;
 }
 const defaults: ProjectPersistenceDeps = {
+  readCustomer: readPersistenceCustomer,
   resolveProject: resolveProjectDir,
   prepare: async input => {
     const base = process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL;
@@ -77,10 +82,8 @@ async function serializePersistence(input: { root: string; slug: string }, save:
   }
 }
 
-type SharedCheckpointCustomer = FleetBrokerUserSnapshot & { checkpointEpoch: number };
-
 interface SharedPersistenceDeps {
-  readCustomer: (slug: string) => Promise<SharedCheckpointCustomer>;
+  readCustomer: (slug: string) => Promise<PersistenceCustomer>;
   resolveCustomer: typeof resolveCustomerDir;
   resolveProject: typeof resolveProjectDir;
   commit: typeof commitAndPushWorkspace;
@@ -88,30 +91,30 @@ interface SharedPersistenceDeps {
   trustedGitea: typeof isTrustedGiteaCustomerCheckout;
 }
 
-async function readSharedCustomer(slug: string): Promise<SharedCheckpointCustomer> {
+async function readPersistenceCustomer(slug: string): Promise<PersistenceCustomer> {
   const gatewayId = process.env.GATEWAY_ID;
   const base = (process.env.FLEET_BROKER_URL || process.env.OCTOGEE_API_URL)?.replace(/\/$/u, "");
-  if (!isValidGatewayId(gatewayId) || !base) throw new Error("Shared checkpoint requires its gateway and fleet broker");
+  if (!isValidGatewayId(gatewayId) || !base) throw new Error("Project persistence requires its gateway and fleet broker");
   const post = async (route: string, body: object) => {
     const response = await internalFetch(`${base}/internal/fleet/${route}`, {
       method: "POST", headers: { "content-type": "application/json", ...await gatewayCredentialHeaders() },
       body: JSON.stringify({ gatewayId, ...body }),
     });
-    if (!response.ok) throw new Error(`Shared checkpoint admission failed: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`Project checkpoint admission failed: HTTP ${response.status}`);
     return response.json();
   };
   const { uid } = await post("uid-for-slug", { slug }) as { uid?: unknown };
-  if (typeof uid !== "string" || !uid) throw new Error("Shared checkpoint owner is unavailable");
+  if (typeof uid !== "string" || !uid) throw new Error("Project checkpoint owner is unavailable");
   const { user } = await post("user-snapshot", { uid }) as { user?: FleetBrokerUserSnapshot };
-  assertSharedCustomer(user, { uid, slug, gatewayId });
+  assertPersistenceCustomer(user, { uid, slug, gatewayId });
   const { assignments } = await post("assignment-roster", { revisionId: gatewayId }) as { assignments?: FleetBrokerAssignmentRosterEntry[] };
   return { ...user, checkpointEpoch: checkpointAssignmentEpoch(assignments, uid) };
 }
 
-function assertSharedCustomer(user: FleetBrokerUserSnapshot | undefined, expected: { uid: string; slug: string; gatewayId: string }): asserts user is FleetBrokerUserSnapshot {
+function assertPersistenceCustomer(user: FleetBrokerUserSnapshot | undefined, expected: { uid: string; slug: string; gatewayId: string }): asserts user is FleetBrokerUserSnapshot {
   if (!user || user.uid !== expected.uid || user.slug !== expected.slug || user.gatewayId !== expected.gatewayId ||
       user.status !== "complete" || !Array.isArray(user.projects)) {
-    throw new Error("Shared checkpoint owner is no longer assigned and ready here");
+    throw new Error("Project checkpoint owner is no longer assigned and ready here");
   }
 }
 
@@ -119,18 +122,18 @@ function checkpointAssignmentEpoch(assignments: FleetBrokerAssignmentRosterEntry
   const owned = assignments?.filter(row => row.uid === uid);
   if (!owned || owned.length !== 1 || !["serving", "quiescing"].includes(owned[0].state) ||
       !Number.isSafeInteger(owned[0].epoch) || owned[0].epoch < 0) {
-    throw new Error("Shared checkpoint canonical assignment is unavailable");
+    throw new Error("Project checkpoint canonical assignment is unavailable");
   }
   return owned[0].epoch;
 }
 
 const sharedDefaults: SharedPersistenceDeps = {
-  readCustomer: readSharedCustomer, resolveCustomer: resolveCustomerDir, resolveProject: resolveProjectDir,
+  readCustomer: readPersistenceCustomer, resolveCustomer: resolveCustomerDir, resolveProject: resolveProjectDir,
   commit: commitAndPushWorkspace, trustedGitea: isTrustedGiteaCustomerCheckout,
   divert: (dir, target, options) => divertWorktreeBinaries(dir, target, undefined, { retainLocalFiles: target.projectSlug !== null, ...options }),
 };
 
-function sharedGiteaProjects(customer: FleetBrokerUserSnapshot): Map<string, string> {
+function sharedGiteaProjects(customer: PersistenceCustomer): Map<string, string> {
   const projects = new Map<string, string>();
   for (const project of customer.projects) {
     if (project.checkoutEnabled === false || project.repoSource?.provider === "github" ||
@@ -143,11 +146,11 @@ function sharedGiteaProjects(customer: FleetBrokerUserSnapshot): Map<string, str
   return projects;
 }
 
-async function assertSharedCheckpointDirectory(input: { root: string; slug: string }, project: string | null): Promise<void> {
+async function assertCheckpointDirectory(input: { root: string; slug: string }, project: string | null): Promise<void> {
   const customer = path.join(input.root, input.slug);
   const directories = [input.root, customer, ...(project ? [path.join(customer, "projects"), path.join(customer, "projects", project)] : [])];
   for (const directory of directories) {
-    if (!(await lstat(directory)).isDirectory()) throw new Error("Shared checkpoint directory is not confined");
+    if (!(await lstat(directory)).isDirectory()) throw new Error("Project checkpoint directory is not confined");
   }
 }
 
@@ -157,7 +160,7 @@ export async function persistSharedCustomerFiles(input: { root: string; slug: st
     const projects = sharedGiteaProjects(customer);
     for (const [project, repo] of [[null, "workspace"], ...projects] as Array<[string | null, string]>) {
       const assertCurrent = async () => {
-        await assertSharedCheckpointDirectory(input, project);
+        await assertCheckpointDirectory(input, project);
         const current = await deps.readCustomer(input.slug);
         if (current.uid !== customer.uid || current.gatewayId !== customer.gatewayId || current.checkpointEpoch !== customer.checkpointEpoch ||
             (project !== null && sharedGiteaProjects(current).get(project) !== repo)) {
@@ -188,33 +191,53 @@ export async function persistSharedCustomerFiles(input: { root: string; slug: st
 }
 
 async function persistProjectsOnce(input: { root: string; slug: string }, deps: ProjectPersistenceDeps): Promise<{ projects: number }> {
-  const directory = path.join(input.root, input.slug, "projects");
-  for (const candidate of [input.root, path.join(input.root, input.slug), directory]) {
-    if (!(await lstat(candidate)).isDirectory()) throw new Error("project root is not a directory");
-  }
-  const entries = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.name !== ".octogee-state");
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !isValidProjectId(entry.name)) throw new Error(`project is not a valid directory: ${entry.name}`);
-    const dir = await deps.resolveProject(input.root, input.slug, entry.name);
-    if (!dir) throw new Error(`project repository unavailable: ${entry.name}`);
-    await prepareChangedProjectAssets({ ...input, project: entry.name }, dir, deps);
+  const customer = await deps.readCustomer(input.slug);
+  if (customer.slug !== input.slug) throw new Error("Project persistence owner differs");
+  const projects = builderProjectCheckouts(customer);
+  for (const [project, source] of projects) {
+    const assertCurrent = async () => {
+      await assertCheckpointDirectory(input, project);
+      const current = await deps.readCustomer(input.slug);
+      if (current.uid !== customer.uid || current.slug !== customer.slug || current.gatewayId !== customer.gatewayId ||
+          current.checkpointEpoch !== customer.checkpointEpoch || builderProjectCheckouts(current).get(project) !== source) {
+        throw new Error("Project persistence authority changed");
+      }
+    };
+    await assertCurrent();
+    const dir = await deps.resolveProject(input.root, input.slug, project);
+    if (!dir) throw new Error(`project repository unavailable: ${project}`);
+    await prepareChangedProjectAssets({ ...input, project }, dir, deps);
     const githubToken = await deps.githubToken(dir);
     const saved = await deps.commit(dir, {
       message: "autosave: project changes",
       author: { name: "Octogee autosave", email: `${input.slug}@octogee.com` },
+      assertCurrent,
       ...(githubToken ? { githubToken } : {}),
       beforeCommit: async () => {
-        const result = await deps.divert(dir, { slug: input.slug, projectSlug: entry.name, gcsPrefix: `customers/${input.slug}/projects/${entry.name}` });
+        await assertCurrent();
+        const result = await deps.divert(dir, { slug: input.slug, projectSlug: project, gcsPrefix: `customers/${input.slug}/projects/${project}` });
         return result.failures.length
           ? { ok: false, error: { code: "BLOB_DIVERSION_FAILED", cwd: dir, paths: result.failedPaths } }
           : { ok: true, excludePaths: result.diverted.map(blob => blob.path) };
       },
     });
-    if (!saved.ok) throw new Error(`project ${entry.name}: ${saved.error.code}`);
-    if (!saved.result.pushed) throw new Error(`project ${entry.name}: ${saved.result.pushError || "remote push unconfirmed"}`);
-    await prepareChangedProjectAssets({ ...input, project: entry.name }, dir, deps);
+    if (!saved.ok) throw new Error(`project ${project}: ${saved.error.code}`);
+    if (!saved.result.pushed) throw new Error(`project ${project}: ${saved.result.pushError || "remote push unconfirmed"}`);
+    await assertCurrent();
+    await prepareChangedProjectAssets({ ...input, project }, dir, deps);
   }
-  return { projects: entries.length };
+  return { projects: projects.size };
+}
+
+function builderProjectCheckouts(customer: PersistenceCustomer): Map<string, string> {
+  const projects = new Map<string, string>();
+  for (const project of customer.projects) {
+    if (!projectCheckoutEnabled(project.checkoutEnabled) ||
+        project.provisioningState !== undefined && project.provisioningState !== "active") continue;
+    if (!isValidProjectId(project.projectSlug) || projects.has(project.projectSlug)) throw new Error("Builder project checkout source is invalid");
+    projects.set(project.projectSlug, JSON.stringify([project.giteaRepoName, project.repoSource?.provider, project.repoSource?.owner, project.repoSource?.repo]));
+  }
+  return projects;
 }
 
 async function prepareChangedProjectAssets(input: { root: string; slug: string; project: string }, dir: string, deps: ProjectPersistenceDeps): Promise<void> {
