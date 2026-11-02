@@ -28,6 +28,8 @@ spec:
         locationPolicy: ANY
   activeMigration:
     optimizeRulePriority: true
+  nodePoolConfig:
+    ipType: private
   nodePoolAutoCreation:
     enabled: true
   whenUnsatisfiable: DoNotScaleUp

@@ -21,6 +21,7 @@ spec:
         app: mattermost
     spec:
       nodeSelector:
+        cloud.google.com/private-node: "true"
         kubernetes.io/arch: amd64
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: false

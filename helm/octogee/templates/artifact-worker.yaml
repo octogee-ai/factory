@@ -33,6 +33,7 @@ spec:
       serviceAccountName: {{ .Values.artifactWorker.serviceAccountName }}
       terminationGracePeriodSeconds: 30
       nodeSelector:
+        cloud.google.com/private-node: "true"
         kubernetes.io/arch: amd64
       securityContext:
         runAsNonRoot: true

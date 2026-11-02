@@ -29,6 +29,8 @@ spec:
       labels:
         app: octogee-ops-agent
     spec:
+      nodeSelector:
+        cloud.google.com/private-node: "true"
       serviceAccountName: {{ .Values.opsAgent.serviceAccountName }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30

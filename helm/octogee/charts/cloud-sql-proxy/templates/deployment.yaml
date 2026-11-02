@@ -20,6 +20,8 @@ spec:
       labels:
         app: cloud-sql-proxy
     spec:
+      nodeSelector:
+        cloud.google.com/private-node: "true"
       serviceAccountName: {{ .Values.serviceAccountName }}
       automountServiceAccountToken: true
       securityContext:

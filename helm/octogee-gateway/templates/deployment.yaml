@@ -67,10 +67,12 @@ spec:
         gateway-image: {{ $gatewayImageLabel | quote }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.preStopFlush.terminationGracePeriodSeconds | default 30 }}
-      {{- if ne $gatewayClass "shared" }}
       nodeSelector:
+        {{- if eq $gatewayClass "shared" }}
+        cloud.google.com/private-node: "true"
+        {{- else }}
         cloud.google.com/compute-class: {{ $computeClass | quote }}
-      {{- end }}
+        {{- end }}
       {{- if eq $gatewayClass "shared" }}
       topologySpreadConstraints:
         - maxSkew: 1

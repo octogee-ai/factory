@@ -31,6 +31,8 @@ spec:
       labels:
         app: octogee-npm-cache-proxy
     spec:
+      nodeSelector:
+        cloud.google.com/private-node: "true"
       serviceAccountName: {{ .Values.npmCacheProxy.serviceAccountName }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 10

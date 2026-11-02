@@ -23,6 +23,8 @@ spec:
       labels:
         app: glm-controller
     spec:
+      nodeSelector:
+        cloud.google.com/private-node: "true"
       serviceAccountName: glm-controller
       automountServiceAccountToken: true
       securityContext:

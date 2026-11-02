@@ -33,6 +33,7 @@ grafana:
   replicas: 1
   nodeSelector:
     kubernetes.io/os: linux
+    cloud.google.com/private-node: "true"
   deploymentStrategy:
     type: Recreate
   extraLabels:

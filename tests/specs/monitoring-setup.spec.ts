@@ -367,9 +367,10 @@ describe("monitoring setup", () => {
     expect(pod.volumes).toContainEqual({ name: "storage", persistentVolumeClaim: { claimName: "grafana" } });
   });
 
-  it("places every monitoring workload without selecting a compute class", () => {
+  it("places every monitoring workload on private nodes without selecting a compute class", () => {
     const expectedSelector = {
       "kubernetes.io/os": "linux",
+      "cloud.google.com/private-node": "true",
     };
 
     for (const name of ["grafana", "gmp-frontend", "gmp-kube-state-metrics"]) {

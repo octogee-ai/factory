@@ -26,6 +26,8 @@ spec:
       labels:
         app: mattermost-callback-router
     spec:
+      nodeSelector:
+        cloud.google.com/private-node: "true"
       serviceAccountName: mattermost-callback-router
       automountServiceAccountToken: false
       securityContext:

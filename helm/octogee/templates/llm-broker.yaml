@@ -35,6 +35,8 @@ spec:
       labels:
         app: llm-broker
     spec:
+      nodeSelector:
+        cloud.google.com/private-node: "true"
       terminationGracePeriodSeconds: 30
       serviceAccountName: {{ .Values.llmBroker.serviceAccountName }}
       automountServiceAccountToken: false

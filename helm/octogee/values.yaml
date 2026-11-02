@@ -146,6 +146,8 @@ gitea:
     enabled: false
   networkPolicy:
     enabled: true
+  nodeSelector:
+    cloud.google.com/private-node: "true"
   podSecurityContext:
     fsGroup: 1000
     runAsNonRoot: true

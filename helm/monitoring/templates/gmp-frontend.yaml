@@ -26,6 +26,7 @@ spec:
       automountServiceAccountToken: true
       nodeSelector:
         kubernetes.io/os: linux
+        cloud.google.com/private-node: "true"
       containers:
         - name: frontend
           image: {{ .Values.gmp.frontend.image | quote }}
