@@ -272,6 +272,11 @@ export interface GatewayAgentsCreateResult {
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
 const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
 const AGENT_DELETION_PENDING_MESSAGE = /^agent "([^"]*)" deletion cleanup is still pending$/;
+const GATEWAY_RESTART_REQUIRED_MESSAGE = /recovery restart is required|\(applied-restart-required\)/;
+const RECOVERY_RESTART_REASON = "octogee.recovery-restart-required";
+const RECOVERY_RESTART_INTERVAL_MS = 10 * 60_000;
+const recoveryRestartRequestedAt = new Map<string, number>();
+const recoveryRestartInFlight = new Map<string, Promise<void>>();
 
 /**
  * openclaw refuses `agents.create` for an id already in the roster with
@@ -317,6 +322,15 @@ export function isAgentNotFoundRpcError(err: unknown): boolean {
     err instanceof OpenclawWireError &&
     err.code === "rpc-error" &&
     AGENT_NOT_FOUND_MESSAGE.test(err.message)
+  );
+}
+
+export function isGatewayRestartRequiredRpcError(err: unknown): boolean {
+  return (
+    err instanceof OpenclawWireError &&
+    err.code === "rpc-error" &&
+    (err.details as { serverCode?: unknown } | undefined)?.serverCode === "UNAVAILABLE" &&
+    GATEWAY_RESTART_REQUIRED_MESSAGE.test(err.message)
   );
 }
 
@@ -821,6 +835,44 @@ type GatewayCall = (
   requestTimeoutMs?: number,
 ) => Promise<unknown>;
 
+function createRecoveryRestart(
+  url: string,
+  call: GatewayCall,
+): <T>(method: string, work: () => Promise<T>) => Promise<T> {
+  async function requestRecoveryRestart(method: string): Promise<void> {
+    const inFlight = recoveryRestartInFlight.get(url);
+    if (inFlight) return inFlight;
+    const last = recoveryRestartRequestedAt.get(url);
+    if (last !== undefined && Date.now() - last < RECOVERY_RESTART_INTERVAL_MS) return;
+    const request = (async () => {
+      try {
+        const result = await requestGatewayRestart(call, { reason: RECOVERY_RESTART_REASON });
+        recoveryRestartRequestedAt.set(url, Date.now());
+        defaultLog(`[gateway-rpc] ${method} needs a Gateway recovery restart — restart ${result.status}`);
+      } catch (err) {
+        defaultLog(`⚠ [gateway-rpc] ${method} needs a Gateway recovery restart — restart request failed: ${(err as Error).message}`);
+      }
+    })();
+    recoveryRestartInFlight.set(url, request);
+    try {
+      await request;
+    } finally {
+      recoveryRestartInFlight.delete(url);
+    }
+  }
+
+  return async (method, work) => {
+    try {
+      return await work();
+    } catch (err) {
+      if (method !== "gateway.restart.request" && isGatewayRestartRequiredRpcError(err)) {
+        await requestRecoveryRestart(method);
+      }
+      throw err;
+    }
+  };
+}
+
 async function abortSession(
   call: GatewayCall,
   params: Parameters<GatewayRpcClient["sessionsAbort"]>[0],
@@ -951,6 +1003,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs);
 
   const resolveIdentity = createIdentityResolver(opts.identity);
+  const withRecoveryRestart = createRecoveryRestart(url, (method, params) => call(method, params));
 
   async function call(
     method: string,
@@ -966,13 +1019,13 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
       onConnectTrace,
     });
     try {
-      return await sendWsRequest({
+      return await withRecoveryRestart(method, () => sendWsRequest({
         ws,
         id: randomUUID(),
         method,
         params,
         timeoutMs: requestTimeoutMs,
-      });
+      }));
     } finally {
       try {
         ws.close();
@@ -999,7 +1052,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
     },
 
     async configPatchAndWaitForChange(patch, baseHash, opts) {
-      return await patchConfigAndWaitForChange(
+      return await withRecoveryRestart("config.patch", () => patchConfigAndWaitForChange(
         {
           url,
           auth,
@@ -1012,7 +1065,7 @@ export function createGatewayRpc(opts: GatewayRpcClientOptions = {}): GatewayRpc
         patch,
         baseHash,
         opts?.replacePaths,
-      );
+      ));
     },
 
     channelsStatus: statusConnection.call,

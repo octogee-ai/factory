@@ -212,6 +212,7 @@ export declare function isAgentDeletionPendingRpcError(err: unknown, agentId: st
  * deletion journal, a transport failure — must still fail the eviction.
  */
 export declare function isAgentNotFoundRpcError(err: unknown): boolean;
+export declare function isGatewayRestartRequiredRpcError(err: unknown): boolean;
 export interface GatewayRpcClient {
     configGet(): Promise<ConfigGetResult>;
     configApply(config: object, baseHash: string): Promise<ConfigPatchResult>;

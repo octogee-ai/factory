@@ -46,6 +46,11 @@ function parseBrokerProfileMaterializationPayload(payload) {
 const AGENT_NOT_FOUND_MESSAGE = /^agent "[^"]*" not found$/;
 const AGENT_ALREADY_EXISTS_MESSAGE = /^agent "[^"]*" already exists$/;
 const AGENT_DELETION_PENDING_MESSAGE = /^agent "([^"]*)" deletion cleanup is still pending$/;
+const GATEWAY_RESTART_REQUIRED_MESSAGE = /recovery restart is required|\(applied-restart-required\)/;
+const RECOVERY_RESTART_REASON = "octogee.recovery-restart-required";
+const RECOVERY_RESTART_INTERVAL_MS = 10 * 60_000;
+const recoveryRestartRequestedAt = new Map();
+const recoveryRestartInFlight = new Map();
 /**
  * openclaw refuses `agents.create` for an id already in the roster with
  * `errorShape(INVALID_REQUEST, 'agent "<id>" already exists')`. An ensure that
@@ -83,6 +88,12 @@ export function isAgentNotFoundRpcError(err) {
     return (err instanceof OpenclawWireError &&
         err.code === "rpc-error" &&
         AGENT_NOT_FOUND_MESSAGE.test(err.message));
+}
+export function isGatewayRestartRequiredRpcError(err) {
+    return (err instanceof OpenclawWireError &&
+        err.code === "rpc-error" &&
+        err.details?.serverCode === "UNAVAILABLE" &&
+        GATEWAY_RESTART_REQUIRED_MESSAGE.test(err.message));
 }
 const SCHEDULE_TRANSFER_CRON_METHODS = ["cron.list", "cron.add", "cron.remove", "cron.scratch.get", "cron.scratch.set", "cron.update"];
 function configChangedHash(data) {
@@ -428,6 +439,44 @@ function resolveRpcTraceSettings() {
         failureSampleMs: Number.parseInt(process.env.OCTOGEE_RPC_TRACE_FAILURE_SAMPLE_MS ?? "30000", 10),
     };
 }
+function createRecoveryRestart(url, call) {
+    async function requestRecoveryRestart(method) {
+        const inFlight = recoveryRestartInFlight.get(url);
+        if (inFlight)
+            return inFlight;
+        const last = recoveryRestartRequestedAt.get(url);
+        if (last !== undefined && Date.now() - last < RECOVERY_RESTART_INTERVAL_MS)
+            return;
+        const request = (async () => {
+            try {
+                const result = await requestGatewayRestart(call, { reason: RECOVERY_RESTART_REASON });
+                recoveryRestartRequestedAt.set(url, Date.now());
+                defaultLog(`[gateway-rpc] ${method} needs a Gateway recovery restart — restart ${result.status}`);
+            }
+            catch (err) {
+                defaultLog(`⚠ [gateway-rpc] ${method} needs a Gateway recovery restart — restart request failed: ${err.message}`);
+            }
+        })();
+        recoveryRestartInFlight.set(url, request);
+        try {
+            await request;
+        }
+        finally {
+            recoveryRestartInFlight.delete(url);
+        }
+    }
+    return async (method, work) => {
+        try {
+            return await work();
+        }
+        catch (err) {
+            if (method !== "gateway.restart.request" && isGatewayRestartRequiredRpcError(err)) {
+                await requestRecoveryRestart(method);
+            }
+            throw err;
+        }
+    };
+}
 async function abortSession(call, params) {
     const payload = await call("sessions.abort", params);
     const value = payload;
@@ -509,6 +558,7 @@ export function createGatewayRpc(opts = {}) {
     const onConnectTrace = opts.onConnectTrace ??
         createDefaultConnectTraceHandler(traceVerbose, slowTraceMs, failureSampleMs);
     const resolveIdentity = createIdentityResolver(opts.identity);
+    const withRecoveryRestart = createRecoveryRestart(url, (method, params) => call(method, params));
     async function call(method, params, requestTimeoutMs = callTimeoutMs) {
         const ws = await openAndConnect({
             url,
@@ -519,13 +569,13 @@ export function createGatewayRpc(opts = {}) {
             onConnectTrace,
         });
         try {
-            return await sendWsRequest({
+            return await withRecoveryRestart(method, () => sendWsRequest({
                 ws,
                 id: randomUUID(),
                 method,
                 params,
                 timeoutMs: requestTimeoutMs,
-            });
+            }));
         }
         finally {
             try {
@@ -549,7 +599,7 @@ export function createGatewayRpc(opts = {}) {
             return await writeConfig(call, "config.patch", patch, baseHash, opts?.replacePaths);
         },
         async configPatchAndWaitForChange(patch, baseHash, opts) {
-            return await patchConfigAndWaitForChange({
+            return await withRecoveryRestart("config.patch", () => patchConfigAndWaitForChange({
                 url,
                 auth,
                 connectTimeoutMs,
@@ -557,7 +607,7 @@ export function createGatewayRpc(opts = {}) {
                 identity: resolveIdentity(),
                 scopes,
                 onConnectTrace,
-            }, patch, baseHash, opts?.replacePaths);
+            }, patch, baseHash, opts?.replacePaths));
         },
         channelsStatus: statusConnection.call,
         channelsStatusConnectionGeneration: statusConnection.connectionGeneration,

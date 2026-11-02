@@ -32,10 +32,11 @@ function makeTestIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
+type RpcResponse = { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } };
 type RpcHandler = (
   params: unknown,
   ws: WebSocket,
-) => { ok: true; payload: unknown } | { ok: false; error: { code: string; message: string } };
+) => RpcResponse | Promise<RpcResponse>;
 
 interface MockServerHandle {
   port: number;
@@ -68,7 +69,7 @@ async function startMockGateway(): Promise<MockServerHandle> {
 
 const nonce = crypto.randomBytes(12).toString("hex");
     ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce } }));
-    ws.on("message", (raw) => {
+    ws.on("message", async (raw) => {
       let frame: any;
       try {
         frame = JSON.parse(raw.toString());
@@ -126,7 +127,7 @@ const nonce = crypto.randomBytes(12).toString("hex");
         );
         return;
       }
-      const out = handler(frame.params, ws);
+      const out = await handler(frame.params, ws);
       ws.send(
         JSON.stringify(
           out.ok
@@ -1396,6 +1397,106 @@ describe("gateway-rpc", () => {
           new OpenclawWireError("connect-failed", `agent "x" not found`),
         ),
       ).toBe(false);
+    });
+  });
+
+  describe("recovery restart", () => {
+    const CONFIG_RESTART_REQUIRED =
+      "config.patch persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision";
+    const AGENT_RESTART_REQUIRED =
+      "Agent configuration was saved but its application to the active Gateway was not confirmed (applied-restart-required); run config.get, then apply the saved config or restart the Gateway.";
+    const scheduled = {
+      ok: true as const,
+      payload: { ok: true, status: "scheduled", restart: { ok: true, pid: 123, signal: "SIGUSR2", coalesced: false } },
+    };
+    const unavailable = (message: string) => () => ({ ok: false as const, error: { code: "UNAVAILABLE", message } });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("requests a Gateway restart when a config write needs a recovery restart and still fails the write", async () => {
+      let captured: unknown;
+      server.setHandler("config.patch", unavailable(CONFIG_RESTART_REQUIRED));
+      server.setHandler("gateway.restart.request", (params) => {
+        captured = params;
+        return scheduled;
+      });
+
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toMatchObject({
+        code: "rpc-error",
+        message: CONFIG_RESTART_REQUIRED,
+      });
+      expect(captured).toEqual({ reason: "octogee.recovery-restart-required" });
+    });
+
+    it("requests a Gateway restart when an agent write reports applied-restart-required", async () => {
+      server.setHandler("agents.delete", unavailable(AGENT_RESTART_REQUIRED));
+      server.setHandler("gateway.restart.request", () => scheduled);
+
+      await expect(client.agentsDelete({ agentId: "octogee-alice-coach" })).rejects.toMatchObject({
+        message: AGENT_RESTART_REQUIRED,
+      });
+      expect(server.callCount("gateway.restart.request")).toBe(1);
+    });
+
+    it("asks a Gateway for at most one recovery restart every ten minutes", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-02T00:00:00Z"));
+      server.setHandler("config.patch", unavailable(CONFIG_RESTART_REQUIRED));
+      server.setHandler("gateway.restart.request", () => scheduled);
+
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toThrow();
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toThrow();
+      expect(server.callCount("gateway.restart.request")).toBe(1);
+
+      vi.setSystemTime(new Date("2026-11-02T00:10:00Z"));
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toThrow();
+      expect(server.callCount("gateway.restart.request")).toBe(2);
+    });
+
+    it.each([true, false])("coalesces concurrent failures while restart success=%s is pending", async success => {
+      let finish!: (response: RpcResponse) => void;
+      const pending = new Promise<RpcResponse>(resolve => { finish = resolve; });
+      server.setHandler("config.patch", unavailable(CONFIG_RESTART_REQUIRED));
+      server.setHandler("gateway.restart.request", () => pending);
+      const writes = Promise.allSettled([
+        client.configPatch({ a: 1 }, "hash-1"),
+        client.configPatch({ b: 2 }, "hash-1"),
+      ]);
+      await vi.waitFor(() => expect(server.callCount("config.patch")).toBe(2));
+      await vi.waitFor(() => expect(server.callCount("gateway.restart.request")).toBeGreaterThan(0));
+      finish(success ? scheduled : unavailable("restart admission closed")());
+      const results = await writes;
+      expect(results).toEqual([
+        expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ message: CONFIG_RESTART_REQUIRED }) }),
+        expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ message: CONFIG_RESTART_REQUIRED }) }),
+      ]);
+      expect(server.callCount("gateway.restart.request")).toBe(1);
+      server.setHandler("gateway.restart.request", () => scheduled);
+      await expect(client.configPatch({ c: 3 }, "hash-1")).rejects.toThrow(CONFIG_RESTART_REQUIRED);
+      expect(server.callCount("gateway.restart.request")).toBe(success ? 1 : 2);
+    });
+
+    it("asks again on the next failure when the restart request itself failed", async () => {
+      server.setHandler("config.patch", unavailable(CONFIG_RESTART_REQUIRED));
+      server.setHandler("gateway.restart.request", unavailable("restart admission closed"));
+
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toMatchObject({ message: CONFIG_RESTART_REQUIRED });
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toMatchObject({ message: CONFIG_RESTART_REQUIRED });
+      expect(server.callCount("gateway.restart.request")).toBe(2);
+    });
+
+    it.each([
+      ["a starting Gateway", { code: "UNAVAILABLE", message: "gateway starting; retry shortly" }],
+      ["a superseded reload", { code: "UNAVAILABLE", message: "config.patch persisted but was not applied to the active Gateway (superseded)" }],
+      ["an invalid request naming the restart", { code: "INVALID_REQUEST", message: CONFIG_RESTART_REQUIRED }],
+    ])("leaves %s alone", async (_label, error) => {
+      server.setHandler("config.patch", () => ({ ok: false, error }));
+      server.setHandler("gateway.restart.request", () => scheduled);
+
+      await expect(client.configPatch({ a: 1 }, "hash-1")).rejects.toMatchObject({ message: error.message });
+      expect(server.callCount("gateway.restart.request")).toBe(0);
     });
   });
 
