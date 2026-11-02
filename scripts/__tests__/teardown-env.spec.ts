@@ -794,6 +794,16 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.stdout).not.toContain("firebase deploy --project");
   });
 
+  it("prints a Helm install that waits for Mattermost and Gitea, not for glm-controller's Gitea token", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const install = result.stdout.slice(result.stdout.indexOf("helm upgrade --install octogee"), result.stdout.indexOf("# 3. Bootstrap Mattermost"));
+    expect(install).not.toContain("--wait");
+    expect(install).toContain("kubectl rollout status deployment/mattermost");
+    expect(install).toContain("kubectl rollout status deployment/octogee-gitea");
+  });
+
   it("allows an already-empty target Storage bucket to complete the reset", () => {
     const result = runPrivateCentralTeardown({ storageEmpty: true });
 
