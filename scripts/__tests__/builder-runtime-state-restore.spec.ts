@@ -62,6 +62,17 @@ it("refuses existing SQLite state without changing or restoring it", async () =>
   try { expect(preserved.prepare("SELECT name FROM sqlite_master WHERE name = 'local_state'").get()).toBeDefined(); } finally { preserved.close(); }
 });
 
+it("preserves retained SQLite when explicitly deferring migration to the held supervisor", async () => {
+  const f = await fixture();
+  await mkdir(join(f.root, "state"));
+  const file = builderRuntimeStatePath(f.root);
+  const db = new DatabaseSync(file); db.exec("CREATE TABLE retained(value TEXT)"); db.close();
+  const before = await readFile(file);
+  await runBuilderRuntimeStateRestore(f.env, { ...f.dependencies, deferMigration: true });
+  expect(await readFile(file)).toEqual(before);
+  expect(f.broker.readAgentAnchors).not.toHaveBeenCalled();
+});
+
 const runEntrypoint = (env: NodeJS.ProcessEnv) => promisify(execFile)(process.execPath, [
   "--import", "tsx", fileURLToPath(new URL("../entrypoints/builder-runtime-state-restore.ts", import.meta.url)),
 ], { env: { ...process.env, ...env }, timeout: 15_000 });

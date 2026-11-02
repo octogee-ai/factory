@@ -1,6 +1,7 @@
 import { watchFleetAssignments } from "./fleet-assignment-watch.js";
 import type {
   FleetBrokerAgentAnchor,
+  FleetBrokerAuxiliaryAnchor,
   FleetBrokerAgentAnchorMigration,
   FleetBrokerAgentAnchors,
   FleetBrokerGatewayStateAnchor,
@@ -183,7 +184,7 @@ export interface FleetBrokerClient {
   builderRuntimeStatePrune(input: {
     slug: string;
   }): Promise<FleetBrokerBuilderRuntimeStatePruneResult>;
-  reportAgentAnchors(input: { slug: string; uid?: string; migration?: FleetBrokerAgentAnchorMigration; assignmentEpoch?: number; assignmentState?: "serving" | "quiescing"; anchors: FleetBrokerAgentAnchor[]; configuredAgentIds: string[]; state?: FleetBrokerGatewayStateAnchor }): Promise<void>;
+  reportAgentAnchors(input: { slug: string; uid?: string; migration?: FleetBrokerAgentAnchorMigration; assignmentEpoch?: number; assignmentState?: "serving" | "quiescing"; anchors: FleetBrokerAgentAnchor[]; configuredAgentIds: string[]; state?: FleetBrokerGatewayStateAnchor; auxiliary?: FleetBrokerAuxiliaryAnchor[] }): Promise<void>;
   readAgentAnchors(input: { slug: string; uid?: string; migrationId?: string }): Promise<FleetBrokerAgentAnchors>;
   claimOpenClawBoot(input: { releaseKey: string; openclawBuild?: string }): Promise<FleetBrokerOpenClawBootClaim>;
   completeOpenClawBoot(input: { releaseKey: string; openclawBuild?: string }): Promise<void>;

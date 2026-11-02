@@ -1,3 +1,4 @@
+import { landAuxiliaryAnchors, type AuxiliaryAnchorVerifier } from "../lib/builder-auxiliary-anchors.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("agent-anchor-restore");
 import { pathToFileURL } from "node:url";
@@ -33,17 +34,20 @@ export async function runAgentAnchorRestore(input: {
   verify?: AgentAnchorVerifier;
   initializeHost?: (stateDir: string) => Promise<void>;
   verifyState?: GatewayStateAnchorVerifier;
+  verifyAuxiliary?: AuxiliaryAnchorVerifier;
   log: (message: string) => void;
 }): Promise<AgentAnchorRestoreResult> {
   const env = input.env ?? process.env;
   const slug = nonBlank(env.GATEWAY_CLASS) === "shared" ? null : builderClaimSlug(env);
   if (!slug) return { landed: [], preserved: [], skipped: true };
   const configured = new Set(agentIdsFromConfig((input.readConfig ?? readOpenClawConfig)()));
-  const { anchors, state } = await input.broker.readAgentAnchors({ slug });
+  const { anchors, state, auxiliary = [] } = await input.broker.readAgentAnchors({ slug });
   const stateRoot = openclawStateRoot(env);
   const landedState = state && clusterBuilderGateway(env)
     ? await landGatewayStateAnchor(stateRoot, state, input.verifyState)
     : undefined;
+  await landAuxiliaryAnchors(stateRoot, auxiliary, input.verifyAuxiliary);
+  if (auxiliary.length) input.log(`[agent-anchors] restored and verified ${auxiliary.length} auxiliary anchor(s) for ${slug}`);
   await (input.initializeHost ?? ((root) => initializeBuilderNativeState(root, undefined, env)))(stateRoot);
   const result = await landAgentAnchors(
     stateRoot,

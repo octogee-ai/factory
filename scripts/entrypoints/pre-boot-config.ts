@@ -766,6 +766,12 @@ const BUILDER_STATE_STORE_LOG: Record<LocalStateStoreKind, string> = {
   sqlite: "Retained SQLite state requires the native PostgreSQL port before startup",
 };
 
+export class GatewayStoreMigrationRequiredError extends Error {
+  constructor(readonly family: string) {
+    super(`Retained SQLite-configured Gateway stores cannot start under the PostgreSQL-only policy. Keep the Gateway stopped, preserve its current config and stores, run native openclaw doctor --fix --non-interactive, then openclaw database port --family ${family} --to postgres. Port every other SQLite-configured family individually before restarting; do not change engine selectors by hand.`);
+  }
+}
+
 export function applyAgentStoreDatabasePatch(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -783,7 +789,7 @@ export function applyAgentStoreDatabasePatch(
     });
   }
   if (sqliteFamily) {
-    throw new Error(`Retained SQLite-configured Gateway stores cannot start under the PostgreSQL-only policy. Keep the Gateway stopped, preserve its current config and stores, run native openclaw doctor --fix --non-interactive, then openclaw database port --family ${sqliteFamily} --to postgres. Port every other SQLite-configured family individually before restarting; do not change engine selectors by hand.`);
+    throw new GatewayStoreMigrationRequiredError(sqliteFamily);
   }
   const { families: _families, ...database } = current;
   const postgres = isPlainObject(current.postgres) ? current.postgres : {};
@@ -955,7 +961,18 @@ async function main(): Promise<void> {
   const stateStore = localStateStoreKind(localStateStorePath(openclawStateRoot(process.env)));
   if (clusterBuilderGateway(process.env)) log(BUILDER_STATE_STORE_LOG[stateStore]);
 
-  if (applyPreBootPatches(config, process.env, log, { stateStore })) {
+  let changed: boolean;
+  try {
+    changed = applyPreBootPatches(config, process.env, log, { stateStore });
+  } catch (error) {
+    if (process.argv.includes("--defer-builder-store-migration") && process.env.GATEWAY_CLASS === "builder" &&
+        error instanceof GatewayStoreMigrationRequiredError) {
+      log("Builder stores require migration; preserving config for the held supervisor (startup remains blocked)");
+      return;
+    }
+    throw error;
+  }
+  if (changed) {
     writeConfigAtomically(CONFIG_PATH, config);
     log("openclaw.json patched (env / stale-key cleanup)");
   } else {

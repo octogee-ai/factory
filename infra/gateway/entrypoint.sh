@@ -249,7 +249,7 @@ elif [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   done
   log "Pre-boot: restoring Builder OpenClaw runtime state for ${BUILDER_SLUG}..."
   while true; do
-    if "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-restore.ts; then
+    if "$TSX" /octogee/scripts/entrypoints/builder-runtime-state-restore.ts --defer-builder-store-migration; then
       break
     else
       restore_status=$?
@@ -420,7 +420,7 @@ fi
 # ── Apply Octogee-owned runtime config once ─────────────────────────────────
 if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then
   log "Pre-boot: applying env/runtime config patches..."
-  GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts
+  GATEWAY_CLASS="$GATEWAY_CLASS_EFFECTIVE" "$TSX" /octogee/scripts/entrypoints/pre-boot-config.ts --defer-builder-store-migration
   if [ -f "$CLASS_POLICY" ]; then
     node "$CLASS_POLICY"
   fi

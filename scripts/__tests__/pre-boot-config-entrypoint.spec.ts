@@ -69,3 +69,17 @@ describe("pre-boot config entrypoint", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.defaults.typingMode).toBe("instant");
   });
 });
+
+
+it.each(["builder", "shared"])("defers only a Builder's full migration to the held supervisor: %s", gatewayClass => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-selector-boot-")); temporaryDirectories.push(root);
+  const configPath = path.join(root, "openclaw.json");
+  const raw = JSON.stringify({ database: { engine: "sqlite" } });
+  fs.writeFileSync(configPath, raw);
+  const result = spawnSync(tsx, [entrypoint, "--defer-builder-store-migration"], { encoding: "utf8", env: {
+    ...process.env, HOME: root, OPENCLAW_DIR: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath, GATEWAY_CLASS: gatewayClass,
+  } });
+  expect(result.status).toBe(gatewayClass === "builder" ? 0 : 1);
+  expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+  if (gatewayClass === "builder") expect(result.stdout).toContain("supervisor");
+});

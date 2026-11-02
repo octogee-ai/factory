@@ -1,5 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("surge-openclaw-supervisor");
+import { assertBuilderStoreMigrationComplete, assertBuilderPostgresSelection, migrateBuilderStores } from "../lib/builder-store-migration.js";
 import { beginWorkspaceIdentityBoot } from "@octogee/core/openclaw-workspace-bootstrap";
 import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -54,6 +55,7 @@ export interface StartSurgeOpenClawSupervisorOptions {
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
   prepareDatabases?: () => Promise<void>;
+  migrateBuilderStores?: (assertHeld: () => Promise<void>) => Promise<void>;
   probeHealthz?: () => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
   createServer?: typeof http.createServer;
@@ -87,6 +89,7 @@ function parseRequest(value: unknown): SurgeOpenClawProcessSupervisorRequest {
   if (!isSurgeOpenClawProcessSupervisorAction(action)) {
     throw new Error("invalid surge OpenClaw process supervisor action");
   }
+  if (action === "migrate-builder-stores") return { action, expectedPodUid: requireString(candidate.expectedPodUid, "expectedPodUid") };
   if (!surgeOpenClawProcessActionNamesMigration(action)) return { action };
   return {
     action,
@@ -530,6 +533,7 @@ function createTargetSupervisorOperations(
 }
 
 async function defaultPrepareDatabases(opts: StartSurgeOpenClawSupervisorOptions): Promise<void> {
+  await assertBuilderPostgresSelection(process.env);
   const result = prepareOpenClawSqliteJournals({
     stateDir: process.env.OPENCLAW_STATE_DIR || opts.openclawDir,
     configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -613,6 +617,38 @@ async function initializeBootGate(input: {
   return initial;
 }
 
+async function migrateHeldBuilderStores(input: {
+  expectedPodUid: string | undefined;
+  opts: StartSurgeOpenClawSupervisorOptions;
+  current: () => Promise<SurgeOpenClawProcessGateState>;
+  hold: () => Promise<SurgeOpenClawProcessGateState>;
+  reap: () => Promise<void>;
+  hasChild: () => boolean;
+  readinessReleased: () => Promise<boolean>;
+  signal: AbortSignal;
+}): Promise<SurgeOpenClawProcessGateState> {
+  const { opts, current } = input;
+  if (opts.standbyBoot) throw new Error("Builder store migration refuses a standby boot; a normal claimed retained source is required");
+  if (input.expectedPodUid !== opts.podUid) throw new Error("Builder store migration addresses another allocation");
+  if ((await current()).role !== "normal") throw new Error("Builder store migration requires a normal allocation without an active handoff");
+  if (!await input.readinessReleased()) throw new Error("Builder store migration requires a previously serving retained source allocation");
+  await input.hold();
+  await input.reap();
+  const assertHeld = async () => {
+    input.signal.throwIfAborted();
+    const state = await current();
+    if (input.hasChild() || state.role !== "normal" || state.mode !== "held" || state.phase !== "held") {
+      throw new Error("Builder store migration lost its stopped-writer hold");
+    }
+  };
+  await assertHeld();
+  await (opts.migrateBuilderStores ?? (async check => {
+    await migrateBuilderStores({ assertHeld: check, log: opts.log, signal: input.signal });
+  }))(assertHeld);
+  await assertHeld();
+  return current();
+}
+
 export async function startSurgeOpenClawSupervisor(
   opts: StartSurgeOpenClawSupervisorOptions,
 ): Promise<StartedSurgeOpenClawSupervisor> {
@@ -622,11 +658,8 @@ export async function startSurgeOpenClawSupervisor(
   const probeHealthz = opts.probeHealthz ?? defaultProbeHealthz;
   const sleep = opts.sleep ?? defaultSleep;
   const spawnOpenClaw = opts.spawnOpenClaw ?? defaultSpawnOpenClaw;
-  const prepareTarget = opts.prepareTarget ?? prepareConfiguredBuilderTarget;
-  const prepareDatabases = opts.prepareDatabases ?? (() => defaultPrepareDatabases(opts));
   const timeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const stopGraceMs = opts.stopGraceMs ?? DEFAULT_STOP_GRACE_MS;
-  const bootWatcher = opts.bootWatcher ?? defaultBootWatcher();
   const pidPath = path.join(opts.openclawDir, SURGE_OPENCLAW_PID_FILE);
   let child: SpawnedOpenClaw | null = null;
   let stopping = false;
@@ -690,6 +723,7 @@ export async function startSurgeOpenClawSupervisor(
         throw new Error("surge OpenClaw process is held");
       }
       if (child) return before;
+      await assertBuilderStoreMigrationComplete(opts.openclawDir);
       await gate.markStarting({ podUid: opts.podUid, migrationId: before.migrationId });
       return startPermittedOpenClawChild({
         signal: shutdown.signal,
@@ -705,8 +739,8 @@ export async function startSurgeOpenClawSupervisor(
         onUnexpectedChildExit: opts.onUnexpectedChildExit,
         podUid: opts.podUid,
         prepare,
-        prepareTarget,
-        prepareDatabases,
+        prepareTarget: opts.prepareTarget ?? prepareConfiguredBuilderTarget,
+        prepareDatabases: opts.prepareDatabases ?? (() => defaultPrepareDatabases(opts)),
         probeHealthz,
         reapOrphanedOpenClaw,
         recordChildPid,
@@ -714,8 +748,7 @@ export async function startSurgeOpenClawSupervisor(
         spawnOpenClaw,
         timeoutMs,
         gate,
-        bootWatcher,
-      });
+        bootWatcher: opts.bootWatcher ?? defaultBootWatcher(),      });
     })();
     starting = work;
     try {
@@ -766,9 +799,6 @@ export async function startSurgeOpenClawSupervisor(
     return gate.markHeld({ podUid: opts.podUid });
   };
 
-  // A resumed source is a completed rollback: the response only reports running
-  // after the child is healthy, and settling releases the migration identity so
-  // the next handoff may hold this pod again.
   const resume = async (input: SurgeOpenClawProcessRequest): Promise<SurgeOpenClawProcessGateState> => {
     await gate.resumeSource({ ...input, podUid: opts.podUid });
     await startChild();
@@ -793,6 +823,10 @@ export async function startSurgeOpenClawSupervisor(
   ): Promise<SurgeOpenClawProcessGateState> => {
     if (request.action === "status") return current();
     if (request.action === "hold-normal") return holdNormal();
+    if (request.action === "migrate-builder-stores") return migrateHeldBuilderStores({
+      expectedPodUid: request.expectedPodUid, opts, current, hold: holdNormal, reap: reapOrphanedOpenClaw,
+      hasChild: () => child !== null, readinessReleased, signal: shutdown.signal,
+    });
     if (request.action === "permit-normal") return permitNormal();
     if (request.action === "settle") return settle();
     const input = requestIdentity(request);

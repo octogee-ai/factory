@@ -13,6 +13,7 @@ export async function runBuilderRuntimeStateRestore(
   dependencies: {
     broker?: Pick<FleetBrokerClient, "readAgentAnchors">;
     verifyState?: GatewayStateAnchorVerifier;
+    deferMigration?: boolean;
   } = {},
 ): Promise<void> {
   if (env.GATEWAY_CLASS !== "builder") return;
@@ -31,6 +32,10 @@ export async function runBuilderRuntimeStateRestore(
     );
   }
   if (kind === "sqlite") {
+    if (dependencies.deferMigration) {
+      runtimeLogger.info("restore preserved SQLite state for held native migration; gateway startup remains blocked");
+      return;
+    }
     throw new BuilderStatePolicyError("Retained SQLite Builder state requires an offline native database port --family state --to postgres; refusing checkpoint restore or engine-selector changes");
   }
   if (kind === "anchor") {
@@ -48,7 +53,7 @@ export async function runBuilderRuntimeStateRestore(
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runBuilderRuntimeStateRestore().catch((error: unknown) => {
+  runBuilderRuntimeStateRestore(process.env, { deferMigration: process.argv.includes("--defer-builder-store-migration") }).catch((error: unknown) => {
     runtimeLogger.error(`[runtime-state] restore failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = error instanceof BuilderStatePolicyError ? 2 : 1;
   });

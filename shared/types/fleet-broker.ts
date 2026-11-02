@@ -181,6 +181,12 @@ export interface FleetBrokerGatewayStateAnchor {
   schema: string;
 }
 
+export type BuilderAuxiliaryFamily = "workboard" | "logbook" | "team-reports";
+
+export interface FleetBrokerAuxiliaryAnchor extends FleetBrokerGatewayStateAnchor {
+  family: BuilderAuxiliaryFamily;
+}
+
 export interface FleetBrokerAgentAnchorMigration {
   migrationId: string;
   claimStartedAt: number;
@@ -192,6 +198,7 @@ export interface FleetBrokerAgentAnchors {
   migration?: FleetBrokerAgentAnchorMigration;
   anchors: FleetBrokerAgentAnchor[];
   state?: FleetBrokerGatewayStateAnchor;
+  auxiliary?: FleetBrokerAuxiliaryAnchor[];
   assignment?: FleetBrokerAssignmentRosterEntry;
 }
 

@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { publishAnchor } from "./postgres-anchor-file.js";
+import { readLocalAuxiliaryAnchors } from "./builder-auxiliary-anchors.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { queryAgentStore, readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
-import type { FleetBrokerAgentAnchor, FleetBrokerGatewayStateAnchor } from "../../shared/types/fleet-broker.js";
+import type { FleetBrokerAgentAnchor, FleetBrokerGatewayStateAnchor, FleetBrokerAuxiliaryAnchor } from "../../shared/types/fleet-broker.js";
 import { localStateStorePath } from "./openclaw-state-store.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
 
@@ -204,28 +204,6 @@ export async function landGatewayStateAnchor(
   return await publishAnchor(file, anchor) ? "landed" : "preserved";
 }
 
-async function publishAnchor(file: string, anchor: { storeId: string; schema: string }): Promise<boolean> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const staged = `${file}.anchor-${randomUUID()}.tmp`;
-  try {
-    const db = new DatabaseSync(staged);
-    try {
-      db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)");
-      db.prepare("INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)").run(anchor.storeId, anchor.schema);
-    } finally {
-      db.close();
-    }
-    await fs.chmod(staged, 0o600);
-    await fs.link(staged, file);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw error;
-  } finally {
-    await fs.rm(staged, { force: true });
-  }
-}
-
 function anchorFingerprint(anchors: readonly FleetBrokerAgentAnchor[]): string {
   return JSON.stringify(anchors.map((anchor) => [anchor.agentId, anchor.storeId, anchor.schema]));
 }
@@ -248,10 +226,12 @@ export function createAgentAnchorReporter(input: {
     let anchors: FleetBrokerAgentAnchor[];
     let configuredAgentIds: string[];
     let state: FleetBrokerGatewayStateAnchor | null;
+    let auxiliary: FleetBrokerAuxiliaryAnchor[];
     try {
       configuredAgentIds = [...new Set(input.readAgentIds())].sort();
       anchors = await readLocalAgentAnchors(input.stateDir, configuredAgentIds);
       state = readLocalGatewayStateAnchor(input.stateDir);
+      auxiliary = await readLocalAuxiliaryAnchors(input.stateDir);
     } catch (error) {
       fail(`reading local agent anchors for ${input.slug} failed: ${String(error)}`);
       return;
@@ -260,16 +240,16 @@ export function createAgentAnchorReporter(input: {
       fail(`no configured agent of ${input.slug} has a local PostgreSQL anchor; nothing recorded`);
       return;
     }
-    const fingerprint = JSON.stringify([anchorFingerprint(anchors), configuredAgentIds, state]);
+    const fingerprint = JSON.stringify([anchorFingerprint(anchors), configuredAgentIds, state, auxiliary]);
     if (fingerprint === recorded) return;
     try {
-      await input.broker.reportAgentAnchors({ slug: input.slug, anchors, configuredAgentIds, ...(state ? { state } : {}) });
+      await input.broker.reportAgentAnchors({ slug: input.slug, anchors, configuredAgentIds, ...(state ? { state } : {}), ...(auxiliary.length ? { auxiliary } : {}) });
     } catch (error) {
       fail(`recording ${anchors.length} agent anchor(s) for ${input.slug} failed: ${String(error)}`);
       return;
     }
     recorded = fingerprint;
     lastFailure = null;
-    input.log(`[agent-anchors] recorded ${anchors.length} agent anchor(s)${state ? " and the gateway state anchor" : ""} for ${input.slug}`);
+    input.log(`[agent-anchors] recorded ${anchors.length} agent anchor(s)${state ? " and the gateway state anchor" : ""} and ${auxiliary.length} auxiliary anchor(s) for ${input.slug}`);
   };
 }

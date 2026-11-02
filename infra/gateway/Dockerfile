@@ -44,6 +44,7 @@ COPY --chown=node:node scripts/tsconfig.json /octogee/scripts/
 COPY --chown=node:node scripts/lib/ /octogee/scripts/lib/
 COPY --chown=node:node .github/actions/release-digest-manifest/desktop-image.mjs .github/actions/release-digest-manifest/desktop-image.d.mts /octogee/.github/actions/release-digest-manifest/
 COPY --chown=node:node scripts/ops/verify-native-modules.mjs /octogee/scripts/ops/
+COPY --chown=node:node scripts/ops/migrate-builder-stores.ts /octogee/scripts/ops/
 RUN /octogee/scripts/node_modules/.bin/esbuild /octogee/scripts/secret-resolver.mjs \
       --bundle --platform=node --format=esm \
       --outfile=/tmp/octogee-secret-resolver.mjs \

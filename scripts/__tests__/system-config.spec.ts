@@ -37,6 +37,7 @@ import {
 } from "../lib/system-config-invariants.js";
 import { CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, readSystemConfigCommitBlob } from "../lib/system-config-durable-files.js";
 import { withBuilderClaim } from "./helpers/builder-claim.js";
+import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js";
 
 vi.mock("../lib/git.js", () => ({
   createGiteaUser: vi.fn(async () => {}),
@@ -308,6 +309,46 @@ describe("system_config restore", () => {
     expect(seeded.channels.mattermost.baseUrl).toBe("${MM_URL}");
     expect(seeded.gateway.controlUi.basePath).toBe("/g/robert-xs-bd6a8f5a/openclaw");
   });
+
+  it("persists PostgreSQL selectors before fresh Builder bootstrap creates its state anchor", async () => {
+    vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
+      argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
+    );
+    const env = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
+    await restoreSystemConfigForSlug("acme", {
+      openclawDir,
+      templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+      env,
+      log: () => {},
+    });
+    const config = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(() => applyAgentStoreDatabasePatch(config, env, "anchor")).not.toThrow();
+    expect(config.database).toEqual({
+      engine: "postgres",
+      postgres: {
+        connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" },
+        schemaPrefix: "octogee",
+      },
+    });
+    expect(applyAgentStoreDatabasePatch(config, env, "anchor")).toBe(false);
+  });
+
+  it.each([undefined, { engine: "sqlite", families: { state: { engine: "postgres" } } }])(
+    "preserves retained database selection %j when restoring with the PostgreSQL Builder template",
+    async database => {
+      writeJson(path.join(repoDir, "openclaw.json"), database ? { database } : {});
+      const env = withBuilderClaim({ GATEWAY_CLASS: "builder", GATEWAY_ID: "acme-builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme");
+      await restoreSystemConfigForSlug("acme", {
+        openclawDir,
+        templatePath: path.resolve(__dirname, "../../infra/gateway/openclaw.builder.template.json"),
+        env,
+        log: () => {},
+      });
+      const config = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+      expect(config.database).toEqual(database);
+      expect(() => applyAgentStoreDatabasePatch(config, env, "anchor")).toThrow("database port --family");
+    },
+  );
 
   it("seeds a Builder roster that leads with the configured coach and keeps the anchor last", async () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>

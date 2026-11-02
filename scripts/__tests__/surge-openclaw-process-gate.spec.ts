@@ -1078,3 +1078,118 @@ it("preserves a held source fence during a returning lease restart", async () =>
     expect(spawnOpenClaw).not.toHaveBeenCalled();
   } finally { await supervisor.stop(); }
 });
+
+
+describe("held Builder store migration", () => {
+  it("stops the source and serializes repair ahead of a concurrent permit", async () => {
+    const openclawDir = await temporaryOpenClawDir(), children: FakeChild[] = [];
+    let release!: () => void, entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const migrateBuilderStores = vi.fn(async (assertHeld: () => Promise<void>) => {
+      await assertHeld(); expect(children[0]!.alive).toBe(false); entered(); await blocked; await assertHeld();
+    });
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "source-pod", socketPath,
+      log: () => {}, readinessReleased: async () => true, prepareTarget: async () => {}, prepareDatabases: async () => {},
+      migrateBuilderStores, spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+      probeHealthz: healthzOf(children),
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    try {
+      await vi.waitFor(() => expect(children).toHaveLength(1));
+      const repair = client.migrateBuilderStores("source-pod");
+      await started;
+      const permit = client.permitNormal();
+      await expect(client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+      expect(children).toHaveLength(1);
+      release(); await repair; await permit;
+      expect(children).toHaveLength(2);
+    } finally { release(); await supervisor.stop(); }
+  });
+
+  it("rejects another allocation or a migration-owned target before running repair", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const migrateBuilderStores = vi.fn(async () => {});
+    const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "target-pod", socketPath,
+      log: () => {}, readinessReleased: async () => false, migrateBuilderStores, probeHealthz: async () => false,
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    try {
+      await expect(client.migrateBuilderStores("other-pod")).rejects.toThrow("allocation");
+      await expect(client.migrateBuilderStores("target-pod")).rejects.toThrow("retained source");
+      await client.hold({ migrationId: "migration", slug: "alice", targetPodUid: "target-pod" });
+      await expect(client.migrateBuilderStores("target-pod")).rejects.toThrow("normal");
+      expect(migrateBuilderStores).not.toHaveBeenCalled();
+    } finally { await supervisor.stop(); }
+  });
+
+  it("rejects a standby boot even though it self-released its readiness marker", async () => {
+    const openclawDir = await temporaryOpenClawDir(), children: FakeChild[] = [];
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const migrateBuilderStores = vi.fn(async () => {});
+    const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "standby-pod", socketPath,
+      log: () => {}, standbyBoot: true, prelaunchBoot: false, migrateBuilderStores,
+      prepareTarget: async () => {}, prepareDatabases: async () => {},
+      spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; }, probeHealthz: healthzOf(children),
+    });
+    try {
+      const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+      await expect(client.migrateBuilderStores("standby-pod")).rejects.toThrow("standby");
+      expect(migrateBuilderStores).not.toHaveBeenCalled();
+    } finally { await supervisor.stop(); }
+  });
+
+  it("keeps the source held after repair failure", async () => {
+    const openclawDir = await temporaryOpenClawDir();
+    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+    const gate = createSurgeOpenClawProcessGate(openclawDir);
+    await gate.ensure({ podUid: "source-pod", readinessReleased: true });
+    await gate.holdNormal({ podUid: "source-pod" });
+    await gate.markHeld({ podUid: "source-pod" });
+    const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "source-pod", socketPath,
+      log: () => {}, readinessReleased: async () => true, probeHealthz: async () => false,
+      migrateBuilderStores: async () => { throw new Error("retained workboard"); },
+    });
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    try {
+      await expect(client.migrateBuilderStores("source-pod")).rejects.toThrow("retained workboard");
+      await expect(client.status()).resolves.toMatchObject({ role: "normal", mode: "held", phase: "held" });
+    } finally { await supervisor.stop(); }
+  });
+});
+
+
+it("keeps initial Builder startup held when store migration was deferred", async () => {
+  const openclawDir = await temporaryOpenClawDir();
+  const configPath = path.join(openclawDir, "openclaw.json");
+  await fs.writeFile(configPath, JSON.stringify({ database: { engine: "sqlite", families: { state: { engine: "postgres" }, agent: { engine: "postgres" } } } }));
+  vi.stubEnv("GATEWAY_CLASS", "builder"); vi.stubEnv("OPENCLAW_STATE_DIR", openclawDir); vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  const log = vi.fn(), spawnOpenClaw = vi.fn(() => new FakeChild());
+  const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+  const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "source-pod", socketPath,
+    log, readinessReleased: async () => true, prepareTarget: async () => {}, spawnOpenClaw, probeHealthz: async () => false,
+  });
+  try {
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("before startup")));
+    await expect(supervisor.state()).resolves.toMatchObject({ mode: "held", phase: "held" });
+    expect(spawnOpenClaw).not.toHaveBeenCalled();
+  } finally { await supervisor.stop(); vi.unstubAllEnvs(); }
+});
+
+it("does not permit startup while a failed durable repair is pending", async () => {
+  const openclawDir = await temporaryOpenClawDir();
+  await fs.writeFile(path.join(openclawDir, ".builder-store-migration.json"), JSON.stringify({ gatewayId: "source", slug: "alice" }));
+  const spawnOpenClaw = vi.fn(() => new FakeChild());
+  const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
+  const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "source-pod", socketPath,
+    log: () => {}, readinessReleased: async () => false, prepareTarget: async () => {}, prepareDatabases: async () => {}, spawnOpenClaw, probeHealthz: async () => false,
+  });
+  try {
+    const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
+    await expect(client.permitNormal()).rejects.toThrow("migration is incomplete");
+    expect(spawnOpenClaw).not.toHaveBeenCalled();
+    await expect(client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+  } finally { await supervisor.stop(); }
+});

@@ -258,6 +258,57 @@ isolated refresh. Build main publishes images; it does not deploy or migrate a
 running Gateway. Any operational cutover still needs its stopped-source port and
 post-port data/Memory/Skills verification.
 
+### Migrating retained Builder stores
+
+The Builder supervisor exposes an operator-only local-socket migration for all
+five database families: state, agent, Workboard, Logbook, and Team Reports. On the
+retained source allocation that has served traffic, with no active handoff, run:
+
+```bash
+/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/ops/migrate-builder-stores.ts \
+  --expected-pod-uid=<retained-source-pod-uid> --apply
+```
+
+The supervisor refuses standby boots, verifies the source pod UID and released
+readiness marker, stops OpenClaw, and serializes migration against start/resume. It runs native
+`openclaw doctor --fix --non-interactive` with recovery backups, inventories every
+SQLite family, and invokes `openclaw database port --family <family> --to postgres`
+for each populated family. Native ports own schema upgrades, data verification,
+local credential companions, and recovery manifests. Only a native inventory
+proving zero stores permits an expected-value config write for an absent family;
+file size is never evidence of absence. Unsupported/custom store paths fail
+before any port because Octogee cannot durably restore their anchors.
+
+Before startup is unblocked, the command verifies each PostgreSQL store identity,
+records and reads back state, agent, and auxiliary anchors through the fleet
+broker, applies pre-boot config patches, and checkpoints system_config to Gitea.
+The matching API must be deployed first: a broker that drops auxiliary anchors
+fails read-back verification. A durable-record or config-checkpoint failure leaves
+a local pending marker and the source held; rerunning retries the unfinished
+work without re-porting completed PostgreSQL families. An active native recovery
+manifest requires explicit native `database port --resume <manifest>` or
+`--rollback <manifest>` while still held, followed by rerunning this command.
+Success leaves the Builder held. Add `--resume` to explicitly permit startup only
+after all steps succeed.
+
+The provisioner also records newly created auxiliary anchors. Replacement pods
+in the same Builder allocation restore those identities at native paths, verify
+the PostgreSQL family/store ID, and refuse conflicting local stores or missing
+namespaces. Records are bound to the Builder owner, gateway, and allocation
+generation; Shared gateways cannot report or attach these global stores. This
+does not move auxiliary stores between Builder and Shared placements. Logbook
+frame images and other non-database files remain outside the anchor protocol.
+
+Builder boot can preserve SQLite state/config and defer migration to the held
+supervisor, but ordinary startup still requires PostgreSQL for every family.
+No Doctor or port runs automatically at boot. Retain the source pod and its native
+recovery artifacts until verification and durable checkpointing succeed; deleting
+it mid-migration can lose the unpublished anchors and local recovery material.
+An empty replacement pod cannot establish whether its predecessor had data. This
+command requires an image containing the supervisor action and cannot retrofit
+older running images. It does not change desired/live releases or reconcile a
+failed rollout.
+
 ### Retained boundaries and removal conditions
 
 Retention decisions distinguish reproduced bugs from approved optional product
