@@ -9,7 +9,6 @@ export function resolveGatewayRuntime(value) {
     return isGatewayRuntime(value) ? value : "cluster";
 }
 export const GATEWAY_VM_PROVISIONING_MODELS = ["SPOT", "STANDARD"];
-export const GATEWAY_VM_ORIGINS = ["warm-pool", "cold"];
 export const GATEWAY_VM_STOP_REASONS = ["idle", "preempted", "operator"];
 export function isGatewayVmStopReason(value) {
     return typeof value === "string" && GATEWAY_VM_STOP_REASONS.includes(value);

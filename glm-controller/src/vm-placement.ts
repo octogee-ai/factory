@@ -1,7 +1,5 @@
 import type { GatewayVmClient } from "./lib/compute-vm.js";
 
-const RETIRING_POOL_MEMBER = { label: "octogee-pool", value: "retiring" } as const;
-
 export function spreadZones(zones: readonly string[], occupied: readonly string[], avoid: ReadonlySet<string> = new Set()): string[] {
   const load = new Map(zones.map((zone) => [zone, 0]));
   for (const zone of occupied) {
@@ -17,7 +15,5 @@ export function spreadZones(zones: readonly string[], occupied: readonly string[
 
 export async function occupiedComputerZones(vm: Pick<GatewayVmClient, "list">, environment: string): Promise<string[]> {
   const computers = await vm.list({ labels: { "octogee-environment": environment, purpose: "octogee-computer" } });
-  return computers
-    .filter((computer) => computer.labels[RETIRING_POOL_MEMBER.label] !== RETIRING_POOL_MEMBER.value)
-    .map((computer) => computer.zone);
+  return computers.map((computer) => computer.zone);
 }

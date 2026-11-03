@@ -12,6 +12,7 @@ export interface GatewayVmClientDeps {
   wait: (ms: number) => Promise<void>;
   now: () => number;
   journalMachineType?: (input: { instanceName: string; zone: string; machineType: string }, action: () => Promise<void>) => Promise<void>;
+  journalProvisioningModel?: (input: { instanceName: string; zone: string; provisioningModel: GatewayVmProvisioningModel }, action: () => Promise<void>) => Promise<void>;
   journalHomeResize?: (input: { home: RetainedBuilderHome; ownerUid: string; sizeGb: number }, action: () => Promise<void>) => Promise<void>;
   operationTimeoutMs?: number;
   pollIntervalMs?: number;
@@ -44,10 +45,7 @@ export interface GatewayVmDescription {
   provisioningModel: GatewayVmProvisioningModel | null;
   gatewayId: string | null;
   labels: Record<string, string>;
-  labelFingerprint: string | null;
   metadata: Record<string, string>;
-  metadataFingerprint: string | null;
-  creationTimestamp: string | null;
   lastStartedAt: number | null;
   serviceAccounts: Array<{ email: string; scopes: string[] }>;
 }
@@ -55,8 +53,6 @@ export interface GatewayVmDescription {
 export interface ListGatewayVmsInput {
   labels: Record<string, string>;
 }
-
-export type GuardedWriteOutcome = "applied" | "conflict";
 
 export interface StartGatewayVmResult {
   fellBackToStandard: boolean;
@@ -94,8 +90,7 @@ export interface GatewayVmClient {
   bind(instanceName: string, zone: string, input: BindGatewayVmInput): Promise<void>;
   setServiceAccount(instanceName: string, zone: string, email: string): Promise<void>;
   setMachineType(instanceName: string, zone: string, machineType: string): Promise<void>;
-  setMetadata(instanceName: string, zone: string, input: { fingerprint: string; items: Record<string, string> }): Promise<GuardedWriteOutcome>;
-  setLabels(instanceName: string, zone: string, input: { fingerprint: string; labels: Record<string, string> }): Promise<GuardedWriteOutcome>;
+  setProvisioningModel(instanceName: string, zone: string, provisioningModel: GatewayVmProvisioningModel): Promise<void>;
   stop(instanceName: string, zone: string): Promise<void>;
   start(instanceName: string, zone: string): Promise<StartGatewayVmResult>;
   suspend(instanceName: string, zone: string): Promise<void>;
@@ -121,7 +116,6 @@ const ZONE_EXHAUSTED_CODES = new Set([
   "ZONE_RESOURCE_POOL_EXHAUSTED",
   "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
 ]);
-const FINGERPRINT_MISMATCH_CODES = new Set(["CONDITION_NOT_MET"]);
 export const GATEWAY_VM_NETWORK_TAG = "octogee-computer";
 const GATEWAY_ID_METADATA_KEY = "gateway-id";
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
@@ -146,7 +140,6 @@ interface ComputeInstance {
   name?: string;
   zone?: string;
   status?: string;
-  creationTimestamp?: string;
   lastStartTimestamp?: string;
   networkInterfaces?: Array<{ networkIP?: string }>;
   scheduling?: { provisioningModel?: string };
@@ -262,10 +255,7 @@ function describeInstance(instance: ComputeInstance, instanceName: string, zone:
     provisioningModel: isProvisioningModel(model) ? model : null,
     gatewayId: nonEmpty(metadata[GATEWAY_ID_METADATA_KEY]),
     labels: { ...(instance.labels ?? {}) },
-    labelFingerprint: nonEmpty(instance.labelFingerprint),
     metadata,
-    metadataFingerprint: nonEmpty(instance.metadata?.fingerprint),
-    creationTimestamp: nonEmpty(instance.creationTimestamp),
     lastStartedAt: timestampOf(instance.lastStartTimestamp),
     serviceAccounts: (instance.serviceAccounts ?? []).map((account) => ({
       email: account.email ?? "", scopes: account.scopes ?? [],
@@ -329,6 +319,8 @@ export function instanceInsertBody(
   provisioningModel: GatewayVmProvisioningModel,
   image: ComputeImageRef,
 ): Record<string, unknown> {
+  const ownerUid = input.labels["octogee-owner-uid"];
+  if (!ownerUid) throw new Error(`${input.instanceName}: a computer needs its octogee-owner-uid label`);
   return {
     name: input.instanceName,
     machineType: `zones/${zone}/machineTypes/${input.machineType}`,
@@ -347,16 +339,13 @@ export function instanceInsertBody(
         source: input.retainedHome.source, mode: "READ_WRITE",
       } : {
         boot: false,
-        autoDelete: !input.labels["octogee-owner-uid"],
+        autoDelete: false,
         deviceName: COMPUTER_HOME_DISK_DEVICE_NAME,
         initializeParams: {
           diskName: `${input.instanceName}-home`,
           diskSizeGb: String(input.homeDiskSizeGb),
           diskType: `zones/${zone}/diskTypes/pd-balanced`,
-          ...(input.labels["octogee-owner-uid"] ? { labels: {
-            "octogee-owner-uid": input.labels["octogee-owner-uid"],
-            "octogee-storage": "customer-home",
-          } } : {}),
+          labels: { "octogee-owner-uid": ownerUid, "octogee-storage": "customer-home" },
         },
       },
     ],
@@ -495,24 +484,6 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     return instances.map((instance) => describeInstance(instance, instance.name ?? "unknown", zoneOf(instance, "")));
   }
 
-  async function guardedWrite(instanceName: string, zone: string, verb: "setMetadata" | "setLabels", body: Record<string, unknown>): Promise<GuardedWriteOutcome> {
-    let res: { status: number; data?: unknown };
-    try {
-      res = await deps.request({ url: `${base}/zones/${zone}/instances/${instanceName}/${verb}`, method: "POST", body });
-    } catch (err) {
-      if (statusOf(err) === 412) return "conflict";
-      throw err;
-    }
-    if (res.status === 412) return "conflict";
-    try {
-      await waitForOperation(zone, (res.data ?? {}) as ComputeOperation, `${verb} ${instanceName}`);
-    } catch (err) {
-      if (err instanceof ComputeOperationError && err.codes.some((code) => FINGERPRINT_MISMATCH_CODES.has(code))) return "conflict";
-      throw err;
-    }
-    return "applied";
-  }
-
   async function bind(instanceName: string, zone: string, input: BindGatewayVmInput): Promise<void> {
     const instance = await readInstance(instanceName, zone);
     if (!instance) throw new Error(`bind ${instanceName}: instance is absent`);
@@ -594,6 +565,12 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     else await action();
   }
 
+  async function setProvisioningModel(instanceName: string, zone: string, provisioningModel: GatewayVmProvisioningModel): Promise<void> {
+    const action = () => instanceAction("setScheduling", instanceName, zone, schedulingFor(provisioningModel));
+    if (deps.journalProvisioningModel) await deps.journalProvisioningModel({ instanceName, zone, provisioningModel }, action);
+    else await action();
+  }
+
   async function start(instanceName: string, zone: string): Promise<StartGatewayVmResult> {
     try {
       await lifecycle("start", instanceName, zone);
@@ -646,8 +623,7 @@ export function createGatewayVmClient(deps: GatewayVmClientDeps): GatewayVmClien
     bind,
     setServiceAccount,
     setMachineType,
-    setMetadata: (name, zone, input) => guardedWrite(name, zone, "setMetadata", { fingerprint: input.fingerprint, items: metadataItems(input.items) }),
-    setLabels: (name, zone, input) => guardedWrite(name, zone, "setLabels", { labelFingerprint: input.fingerprint, labels: input.labels }),
+    setProvisioningModel,
     stop: (instanceName, zone) => lifecycle("stop", instanceName, zone),
     start,
     suspend: (instanceName, zone) => lifecycle("suspend", instanceName, zone),

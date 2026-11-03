@@ -16,7 +16,6 @@ import {
   vmRoutesFromDocs,
 } from "../vm-gateway-runtime";
 import { builderComputerInstanceInput } from "../vm-computer-lifecycle";
-import { reconcileVmWarmPool } from "../vm-warm-pool";
 
 const renderedYaml = "kind: Deployment\n";
 const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", import.meta.url), "utf8");
@@ -87,39 +86,17 @@ function fakeDb(docs: Docs, beforeWrite?: (path: string, data: Record<string, un
 
 const COMPUTER = "octogee-computer-test-uida";
 const OWNER_LABELS = { "octogee-owner-uid": "uida", "octogee-environment": "test", purpose: "octogee-computer" };
-const POOL_LABELS = { "octogee-pool": "warm", "octogee-environment": "test" };
 const running: GatewayVmDescription = {
   machineType: "n2-standard-4",
   serviceAccounts: [{ email: spec.serviceAccountEmail, scopes: [...GATEWAY_VM_ACCESS_SCOPES] }],
   name: COMPUTER, zone: "us-west1-b", status: "RUNNING", instanceId: "4242", internalIp: "172.20.0.9", provisioningModel: "SPOT", gatewayId: "b-x",
-  labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" }, labelFingerprint: "lf-gw", metadata: { "gateway-id": "b-x", "gateway-image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123", "octogee-api-url": "http://172.20.7.7:3001" }, metadataFingerprint: "mf-gw", creationTimestamp: null, lastStartedAt: 100,
+  labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" }, metadata: { "gateway-id": "b-x", "gateway-image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123", "octogee-api-url": "http://172.20.7.7:3001" }, lastStartedAt: 100,
 };
 const stopped: GatewayVmDescription = { ...running, status: "TERMINATED", internalIp: null };
 const suspended: GatewayVmDescription = { ...running, status: "SUSPENDED", internalIp: null };
 const CURRENT_IMAGE = { name: "octogee-computer-20260927", id: "2027" };
 const OLD_IMAGE = { name: "octogee-computer-20260914", id: "1914" };
 const recorded = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", internalIp: "172.20.0.9", status: "RUNNING", provisioningModel: "SPOT", stopReason: null, updatedAt: 1 };
-
-function warmMember(name: string, overrides: Partial<GatewayVmDescription> = {}): GatewayVmDescription {
-  return {
-    machineType: spec.machineType,
-    serviceAccounts: running.serviceAccounts,
-    name, zone: "us-west1-b", status: "RUNNING", instanceId: `id-${name}`, internalIp: `10.9.0.${name.length}`, provisioningModel: "SPOT", gatewayId: null,
-    labels: { ...POOL_LABELS, purpose: "octogee-computer" }, labelFingerprint: `lf-${name}`,
-    metadata: { "octogee-environment": "test" }, metadataFingerprint: `mf-${name}`, creationTimestamp: "2026-09-05T10:00:00Z",
-    ...overrides,
-  };
-}
-
-function boundMember(member: GatewayVmDescription, gatewayId: string, image = "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123"): GatewayVmDescription {
-  const { "octogee-pool": _pool, ...labels } = member.labels;
-  return {
-    ...member,
-    gatewayId,
-    labels: { ...labels, ...OWNER_LABELS, "octogee-gateway-id": gatewayId },
-    metadata: { ...member.metadata, "gateway-id": gatewayId, "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": image, "octogee-api-url": "http://172.20.7.7:3001" },
-  };
-}
 
 function harness(
   docs: Docs,
@@ -146,8 +123,7 @@ function harness(
     deleteRetainingHome: vi.fn(async () => {}),
     setServiceAccount: vi.fn(async () => {}),
     setMachineType: vi.fn(async () => {}),
-    setMetadata: vi.fn(async () => "applied" as const),
-    setLabels: vi.fn(async () => "applied" as const),
+    setProvisioningModel: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     start: vi.fn(async () => ({ fellBackToStandard: false })),
     suspend: vi.fn(async () => {}),
@@ -215,7 +191,7 @@ describe("builderComputerInstanceInput", () => {
     expect(builderComputerInstanceInput({ ...source, spec: { ...spec, imageProject: "octogee-images" } }).imageProject).toBe("octogee-images");
   });
 
-  it("sets every metadata attribute the octo-gateway-agent unit reads at boot, on a cold create, a warm-pool claim, and a rebind", async () => {
+  it("sets every metadata attribute the octo-gateway-agent unit reads at boot, on a create and a rebind", async () => {
     const unit = readFileSync(new URL("../../../infra/desktop/image/rootfs/usr/local/bin/octo-gateway-agent", import.meta.url), "utf8");
     const readByAgent = [...new Set([...unit.matchAll(/\$\(attr ([a-z-]+)\)/g)].map((m) => m[1]))];
     expect(readByAgent).toEqual(["gateway-id", "gateway-image", "octogee-api-url"]);
@@ -223,12 +199,6 @@ describe("builderComputerInstanceInput", () => {
 
     const created = harness({ ...gatewayDoc });
     await created.runtime.upsertInstance(upsertOpts);
-    const member = warmMember("octogee-pool-aa11bb22");
-    const claimed = harness({ ...gatewayDoc }, {
-      list: vi.fn(async () => [member]),
-      describe: vi.fn(async (name: string) => (name === member.name ? boundMember(member, "b-x") : null)),
-    });
-    await claimed.runtime.upsertInstance(upsertOpts);
     const parkedElsewhere = { ...stopped, gatewayId: "b-old" };
     const rebound = harness({ ...gatewayDoc }, {
       findByLabels: vi.fn(async () => parkedElsewhere),
@@ -238,10 +208,8 @@ describe("builderComputerInstanceInput", () => {
 
     const paths = {
       create: created.vm.create.mock.calls[0][0].metadata,
-      claim: claimed.vm.setMetadata.mock.calls[0][2].items,
       bind: rebound.vm.bind.mock.calls[0][2].metadata,
     };
-    expect(claimed.vm.create).not.toHaveBeenCalled();
     expect(rebound.vm.create).not.toHaveBeenCalled();
     for (const [path, metadata] of Object.entries(paths)) {
       for (const key of readByAgent) expect(metadata[key], `${path} ${key}`).toMatch(/\S/);
@@ -262,6 +230,49 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.setMachineType).toHaveBeenCalledWith(COMPUTER, "us-west1-b", "n2-standard-2");
     expect(h.vm.setMachineType.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.vm.delete).not.toHaveBeenCalled();
+  });
+
+  it("moves a parked Spot computer to the recorded on-demand capacity before starting it", async () => {
+    let computer = { ...stopped };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } }, {
+      describe: vi.fn(async () => computer),
+      setProvisioningModel: vi.fn(async (_name, _zone, provisioningModel) => { computer = { ...computer, provisioningModel }; }),
+      start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.setProvisioningModel).toHaveBeenCalledExactlyOnceWith(COMPUTER, "us-west1-b", "STANDARD");
+    expect(h.vm.setProvisioningModel.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ provisioningModel: "STANDARD", status: "RUNNING" });
+  });
+
+  it("stops a suspended Spot computer before moving it to on-demand capacity", async () => {
+    let computer = { ...suspended };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } }, {
+      describe: vi.fn(async () => computer),
+      stop: vi.fn(async () => { computer = { ...computer, status: "TERMINATED" }; }),
+      setProvisioningModel: vi.fn(async (_name, _zone, provisioningModel) => { computer = { ...computer, provisioningModel }; }),
+      start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.setProvisioningModel.mock.invocationCallOrder[0]);
+    expect(h.vm.setProvisioningModel.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
+    expect(h.vm.resume).not.toHaveBeenCalled();
+  });
+
+  it("refuses to start a parked computer whose provisioning model did not converge", async () => {
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } }, {
+      describe: vi.fn(async () => stopped),
+    });
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/provisioning model did not converge to STANDARD/);
+    expect(h.vm.start).not.toHaveBeenCalled();
+  });
+
+  it("leaves a running Spot computer's capacity for its next park", async () => {
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, provisioningModel: "STANDARD" }, vm: recorded } });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.setProvisioningModel).not.toHaveBeenCalled();
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: tier capacity will apply on the next resume/));
   });
 
   it("applies the cheaper machine after parking while retaining a larger home", async () => {
@@ -398,13 +409,12 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(JSON.stringify(glm.vmInstance)).not.toContain("undefined");
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
     expect(h.vm.find).not.toHaveBeenCalled();
-    expect(h.vm.list).toHaveBeenCalledWith({ labels: POOL_LABELS });
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({
       instanceName: COMPUTER, zones: ["us-west1-b"], provisioningModel: "SPOT",
       labels: expect.objectContaining({ "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" }),
       metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001" },
     }));
-    expect(glm.vm).toEqual({ ...recorded, origin: "cold", updatedAt: 1_000 });
+    expect(glm.vm).toEqual({ ...recorded, updatedAt: 1_000 });
     const apply = h.kubectlCalls.find((c) => c.args[0] === "apply");
     expect(JSON.parse(apply!.stdin!)).toMatchObject({ kind: "ConfigMap", metadata: { name: "octogee-vm-routes" }, data: { "routes.json": JSON.stringify({ "b-x": "172.20.0.9" }) } });
   });
@@ -416,7 +426,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const neighbour = { ...running, name: "octogee-computer-test-uidb", zone: "us-central1-b", labels: { ...OWNER_LABELS, "octogee-owner-uid": "uidb" } };
     const h = harness(
       { "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vmSpec: recordedSpec } },
-      { list: vi.fn(async (input: { labels: Record<string, string> }) => (input.labels["octogee-pool"] ? [] : [neighbour])) },
+      { list: vi.fn(async () => [neighbour]) },
       "172.20.7.7", {}, { vmSpec: { ...spec, zones } },
     );
 
@@ -470,11 +480,11 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     await h.runtime.upsertInstance(upsertOpts);
     expect(create).toHaveBeenCalledTimes(2);
     expect(h.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x", deploymentIntentFingerprint: "dif" });
-    expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, origin: "cold", updatedAt: 1_000 });
+    expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
 
     const routesFail = harness({ "glmGateways/b-x": { ...gatewayDoc } }, {}, "172.20.7.7", {}, { applyFails: true });
     await expect(routesFail.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/configmaps is forbidden/);
-    expect(routesFail.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, origin: "cold", updatedAt: 1_000 });
+    expect(routesFail.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
     expect(routesFail.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
   });
 
@@ -560,149 +570,6 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     await expect(h.runtime.upsertInstance({ ...upsertOpts, replicas: 0 })).rejects.toThrow(/identity changed/);
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.docs["glmGateways/b-x"].vm).toEqual(recorded);
-  });
-
-  it("claims a warm-pool member as the Builder's first computer: metadata under its fingerprint, then the Builder's labels, no reboot", async () => {
-    const member = warmMember("octogee-pool-aa11bb22");
-    const bound = boundMember(member, "b-x");
-    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      list: vi.fn(async () => [member]),
-      describe: vi.fn(async (name: string) => (name === member.name ? bound : null)),
-    });
-
-    await h.runtime.upsertInstance(upsertOpts);
-
-    expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
-    expect(h.vm.create).not.toHaveBeenCalled();
-    expect(h.vm.setMetadata).toHaveBeenCalledWith(member.name, "us-west1-b", {
-      fingerprint: "mf-octogee-pool-aa11bb22",
-      items: { "octogee-environment": "test", "gateway-id": "b-x", "octogee-owner-uid": "UidA", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001" },
-    });
-    expect(h.vm.setLabels).toHaveBeenCalledWith(member.name, "us-west1-b", {
-      fingerprint: "lf-octogee-pool-aa11bb22",
-      labels: { "octogee-environment": "test", purpose: "octogee-computer", "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" },
-    });
-    expect(h.vm.setMetadata.mock.invocationCallOrder[0]).toBeLessThan(h.vm.setLabels.mock.invocationCallOrder[0]);
-    expect(h.vm.bind).not.toHaveBeenCalled();
-    expect(h.vm.stop).not.toHaveBeenCalled();
-    expect(h.vm.start).not.toHaveBeenCalled();
-    expect(h.docs["glmGateways/b-x"].vm).toEqual({
-      ...recorded, instanceName: member.name, instanceId: "id-octogee-pool-aa11bb22", internalIp: member.internalIp, origin: "warm-pool", updatedAt: 1_000,
-    });
-    expect(h.routesPublished().at(-1)).toEqual({ "b-x": member.internalIp });
-    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/b-x: claimed warm-pool member octogee-pool-aa11bb22 as UidA's computer/));
-  });
-
-  it("skips members that lost the metadata race or are not running, then falls back to a cold create named for the Builder", async () => {
-    const lost = warmMember("octogee-pool-lost");
-    const parked = warmMember("octogee-pool-stopped", { status: "TERMINATED" });
-    const second = warmMember("octogee-pool-second");
-    const raced = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      list: vi.fn(async () => [parked, lost, second]),
-      setMetadata: vi.fn(async (name: string) => (name === lost.name ? "conflict" as const : "applied" as const)),
-      describe: vi.fn(async (name: string) => (name === second.name ? boundMember(second, "b-x") : null)),
-    });
-    await raced.runtime.upsertInstance(upsertOpts);
-    expect(raced.vm.setMetadata).toHaveBeenCalledTimes(2);
-    expect(raced.vm.setMetadata).not.toHaveBeenCalledWith(parked.name, expect.anything(), expect.anything());
-    expect(raced.vm.setLabels).toHaveBeenCalledTimes(1);
-    expect(raced.vm.create).not.toHaveBeenCalled();
-    expect(raced.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: second.name, origin: "warm-pool", stopReason: null });
-
-    const exhausted = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      list: vi.fn(async () => [lost]),
-      setMetadata: vi.fn(async () => "conflict" as const),
-    });
-    await exhausted.runtime.upsertInstance(upsertOpts);
-    expect(exhausted.vm.setLabels).not.toHaveBeenCalled();
-    expect(exhausted.vm.create).toHaveBeenCalledWith(expect.objectContaining({ instanceName: COMPUTER, labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" } }));
-    expect(exhausted.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, origin: "cold", updatedAt: 1_000 });
-  });
-
-  it("finishes an interrupted claim and refuses one whose relabel loses its fingerprint race", async () => {
-    const mine = warmMember("octogee-pool-mine", { gatewayId: "b-x", metadata: { "octogee-environment": "test", "gateway-id": "b-x", "gateway-image": "old", "octogee-api-url": "http://172.20.7.7:3001" } });
-    const other = warmMember("octogee-pool-other");
-    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      list: vi.fn(async () => [other, mine]),
-      describe: vi.fn(async (name: string) => (name === mine.name ? boundMember(mine, "b-x", "old") : null)),
-    });
-    await h.runtime.upsertInstance(upsertOpts);
-    expect(h.vm.setMetadata).not.toHaveBeenCalled();
-    expect(h.vm.setLabels).toHaveBeenCalledWith(mine.name, "us-west1-b", expect.objectContaining({ labels: expect.objectContaining({ "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" }) }));
-    expect(h.vm.create).not.toHaveBeenCalled();
-    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: mine.name, origin: "warm-pool" });
-
-    const halfClaimed = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      list: vi.fn(async () => [warmMember("octogee-pool-aa11bb22")]),
-      setLabels: vi.fn(async () => "conflict" as const),
-    });
-    await expect(halfClaimed.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/relabel.*octogee-pool-aa11bb22/);
-    expect(halfClaimed.docs["glmGateways/b-x"].vm).toBeUndefined();
-  });
-
-  it("adopts a member whose claim was interrupted before its relabel: one pool tick finishes the labels, the Builder's next gateway finds it by owner label and rebinds it, no second VM", async () => {
-    const interrupted = warmMember("octogee-pool-half", {
-      gatewayId: "b-old",
-      metadata: { "octogee-environment": "test", "gateway-id": "b-old", "octogee-owner-uid": "UidA", "gateway-image": "old", "octogee-api-url": "http://172.20.7.7:3001" },
-    });
-    let current = interrupted;
-    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      list: vi.fn(async (input: { labels: Record<string, string> }) => (current.labels["octogee-pool"] === input.labels["octogee-pool"] ? [current] : [])),
-      setLabels: vi.fn(async (_name: string, _zone: string, input: { labels: Record<string, string> }) => { current = { ...current, labels: input.labels }; return "applied" as const; }),
-      findByLabels: vi.fn(async (labels: Record<string, string>) => (Object.entries(labels).every(([k, v]) => current.labels[k] === v) ? current : null)),
-      describe: vi.fn(async (name: string) => (name === current.name ? current : null)),
-      stop: vi.fn(async () => { current = { ...current, status: "TERMINATED", internalIp: null }; }),
-      bind: vi.fn(async (_name: string, _zone: string, input: { labels: Record<string, string>; metadata: Record<string, string> }) => {
-        current = { ...current, gatewayId: input.metadata["gateway-id"], labels: input.labels, metadata: { ...current.metadata, ...input.metadata } };
-      }),
-      start: vi.fn(async () => { current = { ...current, status: "RUNNING", internalIp: "10.9.0.77" }; return { fellBackToStandard: false }; }),
-    });
-    const poolLog = vi.fn();
-
-    await reconcileVmWarmPool({ vm: h.vm, vmSpec: spec, environment: "test", config: { size: 0, maxAgeMs: 6 * 60 * 60_000 }, now: () => 1_000, log: poolLog });
-
-    expect(h.vm.setLabels).toHaveBeenCalledWith("octogee-pool-half", "us-west1-b", {
-      fingerprint: "lf-octogee-pool-half",
-      labels: { "octogee-environment": "test", purpose: "octogee-computer", "octogee-owner-uid": "uida", "octogee-gateway-id": "b-old" },
-    });
-    expect(h.vm.delete).not.toHaveBeenCalled();
-    expect(poolLog).toHaveBeenCalledWith(expect.stringMatching(/octogee-pool-half: finished UidA's interrupted claim/));
-
-    await h.runtime.upsertInstance(upsertOpts);
-
-    expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
-    expect(h.vm.create).not.toHaveBeenCalled();
-    expect(h.vm.setMetadata).not.toHaveBeenCalled();
-    expect(h.vm.setLabels).toHaveBeenCalledTimes(1);
-    expect(h.vm.stop).toHaveBeenCalledWith("octogee-pool-half", "us-west1-b");
-    expect(h.vm.bind).toHaveBeenCalledWith("octogee-pool-half", "us-west1-b", {
-      labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" },
-      metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001" },
-    });
-    expect(h.vm.start).toHaveBeenCalledWith("octogee-pool-half", "us-west1-b");
-    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: "octogee-pool-half", instanceId: "id-octogee-pool-half", status: "RUNNING", internalIp: "10.9.0.77", stopReason: null });
-    expect(h.routesPublished().at(-1)).toEqual({ "b-x": "10.9.0.77" });
-  });
-
-  it("finds a Builder's idle-stopped pooled computer by its owner label on the next activation and rebinds it instead of claiming again", async () => {
-    const parkedPooled = boundMember(warmMember("octogee-pool-aa11bb22", { status: "TERMINATED", internalIp: null }), "b-old", "old");
-    const rebound = boundMember(warmMember("octogee-pool-aa11bb22", { status: "TERMINATED", internalIp: null }), "b-x");
-    const backRunning = boundMember(warmMember("octogee-pool-aa11bb22"), "b-x");
-    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
-      findByLabels: vi.fn(async () => parkedPooled),
-      describe: vi.fn(async () => backRunning).mockResolvedValueOnce(rebound),
-    });
-
-    await h.runtime.upsertInstance(upsertOpts);
-
-    expect(h.vm.list).not.toHaveBeenCalled();
-    expect(h.vm.setMetadata).not.toHaveBeenCalled();
-    expect(h.vm.create).not.toHaveBeenCalled();
-    expect(h.vm.bind).toHaveBeenCalledWith("octogee-pool-aa11bb22", "us-west1-b", expect.objectContaining({ labels: { ...OWNER_LABELS, "octogee-gateway-id": "b-x" } }));
-    expect(h.vm.start).toHaveBeenCalledWith("octogee-pool-aa11bb22", "us-west1-b");
-    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: "octogee-pool-aa11bb22", instanceId: "id-octogee-pool-aa11bb22", status: "RUNNING", stopReason: null });
-    expect(h.docs["glmGateways/b-x"].vm).not.toHaveProperty("origin");
-    expect(h.routesPublished().at(-1)).toEqual({ "b-x": backRunning.internalIp });
   });
 
   it("binds the Builder's parked computer to the new lease's gateway and starts it", async () => {
@@ -1096,7 +963,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
   });
 
   it("re-drives against an already stopped computer and leaves one that another gateway has since bound", async () => {
-    const already = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded, origin: "warm-pool" } } }, {
+    const already = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } } }, {
       describe: vi.fn(async () => stopped),
     });
     await already.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
@@ -1104,7 +971,7 @@ describe("createVmGatewayRuntime.removeInstance + reads", () => {
     expect(already.waits).toEqual([]);
     expect(readPath(already.docs["glmGateways/b-x"], "vmHome")).toBeUndefined();
     expect(already.docs["glmGateways/b-x"].vm).toEqual({
-      ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle", origin: "warm-pool", updatedAt: 1_000,
+      ...recorded, status: "TERMINATED", internalIp: null, stopReason: "idle", updatedAt: 1_000,
       parkedCheckpoint: { outcome: "stale", requestedAt: null, completedAt: null },
     });
 
@@ -1471,10 +1338,10 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
 
 describe("createVmGatewayRuntime.deleteComputer", () => {
   it("deletes the owner's computer wherever it is and reports absence", async () => {
-    const h = harness({}, { findByLabels: vi.fn(async () => ({ ...stopped, name: "octogee-pool-aa11bb22", zone: "us-central1-a" })) });
+    const h = harness({}, { findByLabels: vi.fn(async () => ({ ...stopped, name: "octogee-computer-test-uida-2", zone: "us-central1-a" })) });
     expect(await h.runtime.deleteComputer("UidA")).toBe(true);
     expect(h.vm.findByLabels).toHaveBeenCalledWith(OWNER_LABELS);
-    expect(h.vm.delete).toHaveBeenCalledWith("octogee-pool-aa11bb22", "us-central1-a");
+    expect(h.vm.delete).toHaveBeenCalledWith("octogee-computer-test-uida-2", "us-central1-a");
 
     const none = harness({});
     expect(await none.runtime.deleteComputer("UidA")).toBe(false);
@@ -1497,7 +1364,7 @@ describe("runtime policy and stamping", () => {
   it("resolves tier policy and validates VM configuration", () => {
     expect(resolveBuilderComputerPolicy("s").runtime).toBe("cluster");
     expect(resolveBuilderComputerPolicy("m").runtime).toBe("gce-vm");
-    expect(resolveBuilderComputerPolicy("l").machineType).toBe("n2-standard-4");
+    expect(resolveBuilderComputerPolicy("l").machineType).toBe("e2-standard-4");
     expect(parseGatewayVmSpec(JSON.stringify(spec))).toEqual(spec);
     expect(() => parseGatewayVmSpec(undefined)).toThrow(/required/);
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, diskSizeGb: "40" }))).toThrow(/diskSizeGb/);
@@ -1516,11 +1383,11 @@ describe("runtime policy and stamping", () => {
   });
 
   it.each([
-    ["s", "cluster", null, 10], ["m", "gce-vm", "n2-standard-2", 50], ["l", "gce-vm", "n2-standard-4", 100],
-  ] as const)("stamps new %s Builders with their tier's substrate, machine and home", async (sizingTier, runtime, machineType, homeDiskSizeGb) => {
+    ["s", "cluster", null, 10], ["m", "gce-vm", "e2-standard-2", 50], ["l", "gce-vm", "e2-standard-4", 100],
+  ] as const)("stamps new %s Builders with their tier's substrate, machine, on-demand capacity and home", async (sizingTier, runtime, machineType, homeDiskSizeGb) => {
     const { db, docs } = fakeDb({});
     expect(await stampGatewayRuntime({ db, gatewayId: "b-new", gatewayClass: "builder", sizingTier, vmSpec: spec, log: vi.fn() })).toBe(runtime);
-    expect(docs["glmGateways/b-new"]).toEqual(runtime === "cluster" ? { runtime } : { runtime, vmSpec: { ...spec, machineType, homeDiskSizeGb } });
+    expect(docs["glmGateways/b-new"]).toEqual(runtime === "cluster" ? { runtime } : { runtime, vmSpec: { ...spec, machineType, homeDiskSizeGb, provisioningModel: "STANDARD" } });
   });
 
   it.each([
@@ -1538,11 +1405,18 @@ describe("runtime policy and stamping", () => {
   });
 
   it("updates desired VM capacity from persisted Pro to Team and back without changing runtime", async () => {
-    const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2" } } });
+    const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: { ...spec, machineType: "e2-standard-2" } } });
     await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log: vi.fn() });
-    expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "n2-standard-4", homeDiskSizeGb: 100 });
+    expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "e2-standard-4", homeDiskSizeGb: 100 });
     await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "m", vmSpec: spec, log: vi.fn() });
-    expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "n2-standard-2", homeDiskSizeGb: 50 });
+    expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "e2-standard-2", homeDiskSizeGb: 50 });
+  });
+
+  it("moves a persisted Spot computer spec to its tier's on-demand capacity", async () => {
+    const persisted = { ...spec, machineType: "e2-standard-2", homeDiskSizeGb: 50, provisioningModel: "SPOT" as const };
+    const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
+    await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "m", vmSpec: spec, log: vi.fn() });
+    expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, provisioningModel: "STANDARD" });
   });
 
   const deployedCluster = {
@@ -1597,7 +1471,7 @@ describe("runtime policy and stamping", () => {
     const { db, docs, writes } = fakeDb({});
     const log = vi.fn();
     expect(await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log })).toBe("gce-vm");
-    expect(docs["glmGateways/b-x"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, homeDiskSizeGb: 100 } });
+    expect(docs["glmGateways/b-x"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, machineType: "e2-standard-4", homeDiskSizeGb: 100, provisioningModel: "STANDARD" } });
     expect(await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "s", vmSpec: null, log })).toBe("gce-vm");
     expect(writes).toHaveLength(1);
     expect(await stampGatewayRuntime({ db, gatewayId: "shared-1", gatewayClass: "shared", sizingTier: "l", vmSpec: spec, log })).toBe("cluster");
@@ -1934,11 +1808,12 @@ describe("idle computer storage coverage", () => {
     expect(h.vm.create).not.toHaveBeenCalled();
   });
 
-  it.each([["m", "l", "n2-standard-2", "n2-standard-4"], ["l", "m", "n2-standard-4", "n2-standard-2"]] as const)("applies persisted %s to %s changes before starting while preserving disks", async (_from, target, oldType, newType) => {
+  it.each([["m", "l", "e2-standard-2", "e2-standard-4"], ["l", "m", "e2-standard-4", "e2-standard-2"]] as const)("applies persisted %s to %s changes before starting while preserving disks", async (_from, target, oldType, newType) => {
     let computer = { ...stopped, machineType: oldType as string };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vm: recorded, vmSpec: { ...spec, machineType: oldType } } }, {
       describe: vi.fn(async () => computer),
       setMachineType: vi.fn(async (_name, _zone, machineType) => { computer = { ...computer, machineType }; }),
+      setProvisioningModel: vi.fn(async (_name, _zone, provisioningModel) => { computer = { ...computer, provisioningModel }; }),
       start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
     });
     await stampGatewayRuntime({ db: h.db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: target, vmSpec: spec, log: h.log });
@@ -2122,7 +1997,7 @@ describe("stopped retained-home boot replacement", () => {
     await expect(h.runtime.replaceStoppedComputer("b-x", "op-projects", async () => {})).rejects.toThrow(/project work/);
     expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
   });
-  it("recreates a lost boot with the same larger detached home and an admitted pinned image, bypassing the warm pool", async () => {
+  it("recreates a lost boot with the same larger detached home and an admitted pinned image", async () => {
     const h = harness({ "glmGateways/b-x": { runtime: "gce-vm" }, "users/UidA": { provisioning: { homeDisk: home } } }, {
       describe: vi.fn(async () => null), readFamilyImage: vi.fn(async () => accepted), readImage: vi.fn(async () => accepted),
     });

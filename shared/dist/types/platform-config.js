@@ -2,7 +2,7 @@ import { SIMPLE_MODEL_TIERS, catalogEntryForModelRef } from "./agent-models.js";
 import { BUILDER_TIERS, TIERS, } from "./billing-tiers.js";
 import { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, modelBrokerSignupOfferBudgetDocId, SIGNUP_OFFER_LEDGER_RETENTION_MS, } from "./signup-offer.js";
 export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, parseSignupOfferBudgetPolicy, };
-export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 90 * 60_000;
+export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 15 * 60_000;
 // Operator dials for platform-wide model policy, stored at platformConfig/models
 // (server-only collection; admin reads/writes go through the API). Absent or
 // invalid doc → the compiled default below, so the free tier always has a

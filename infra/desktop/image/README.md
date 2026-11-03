@@ -179,7 +179,7 @@ and Chromium actually showing the Desk.
 | `octo-desktop.service` | as `octo`, on the user manager's session bus `/run/user/1000/bus` with AT-SPI running: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium with its accessibility tree exposed; everything bound to 127.0.0.1 |
 | `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
 | `octo-metadata-ssh-keys.service` | installs `octo:` keys from GCE metadata before sshd |
-| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set (a warm-pool member boots without them and is assigned later through `setMetadata`), then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket |
+| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set, then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket |
 | `docker.service` | hosts the gateway and gateway-edge containers the agent manages |
 
 Power: `HandlePowerKey=poweroff`, so a GCE stop completes on the ACPI signal
@@ -255,10 +255,10 @@ Missing resize support fails acceptance. The Python acceptance fixtures and
 candidate-family behavior run in the scripts CI suite.
 
 After acceptance, publication assigns that exact image to the environment's
-`octogee-computer` family. Record publication and any pool refresh in the
-operations journal. Existing boot disks do not change when a family advances.
-Retire only unassigned old warm-pool members through Cowboy's retirement path;
-replace assigned computers individually with `fleet --env=test gw replace-computer <gateway-id> --apply` when requested. This checkpoints and restores home.
+`octogee-computer` family. Record publication in the
+operations journal. Existing boot disks do not change when a family advances;
+Cowboy moves a parked computer to the current image on its next boot. Replace
+a computer immediately with `fleet --env=test gw replace-computer <gateway-id> --apply` when requested. This checkpoints and restores home.
 Check `fleet --help` before running an operator command.
 
 ## CI/CD
@@ -279,7 +279,7 @@ candidate with matching inputs without rebuilding it.
 
 **Deploy platform build** (`release-environment.yml`) publishes the selected
 SHA's desktop image after its platform deploy succeeds; a release whose image
-is already the family image, with no stale warm spare, changes nothing. Publish
+is already the family image changes nothing. Publish
 the family alone (rollback or retry) with the Fleet CLI:
 
 ```bash
@@ -288,12 +288,9 @@ npm run --prefix scripts fleet -- --env=test desktop-image publish --sha=<full-m
 ```
 
 The first command previews the artifact and the planned change. The second
-journals publication, advances the TEST family, and marks stale unassigned
-warm-pool members for Cowboy to replace using their observed label
-fingerprints. Assignment labels and metadata are checked again before
-mutation. Assigned computers retain their current disks. Use the existing
-per-gateway `gw replace-computer` command for an explicitly selected assigned
-computer.
+journals publication and advances the TEST family. Computers retain their
+current disks until Cowboy's next boot upgrade. Use the existing per-gateway
+`gw replace-computer` command for an explicitly selected computer.
 
 For PROD, select `--env=prod`: Fleet copies the tested image from TEST into the
 PROD image project, verifies the copy's source image ID, then publishes it.
@@ -304,8 +301,7 @@ platform release of such a SHA fails at its desktop-image job.
 CI uses the existing GitHub WIF authentication. The TEST Terraform environment
 owns its temporary-compute permissions, dedicated builder service account, and
 image-bucket access. Release publication additionally needs image-family
-update and PROD image-copy permissions, plus warm-pool instance list/get/label
-and boot-disk read in the CENTRAL `octogee` project that hosts computers.
+update and PROD image-copy permissions.
 The builder has a 60-minute deadline and acceptance a 15-minute deadline.
 CI VMs also have a two-hour GCE automatic deletion limit, independent of the
 runner. An always-running cleanup step deletes this run's temporary VMs; the next
@@ -317,5 +313,4 @@ geometry, and reboot persistence. It does not start a paired OpenClaw coach;
 gateway container and node wiring remain covered by their existing tests.
 
 The accepted image `octogee-computer-4-0-2-20260907-1302` was published to TEST
-on 2026-09-07. Fresh-VM acceptance passed before and after stop/start, and
-Cowboy's replacement warm spare was verified to use that image.
+on 2026-09-07. Fresh-VM acceptance passed before and after stop/start.

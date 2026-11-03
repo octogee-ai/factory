@@ -20,7 +20,7 @@ const input: CreateGatewayVmInput = {
   provisioningModel: "SPOT",
   serviceAccountEmail: "octogee-gw-b-mama-3-abc-hobby@octogee-test.iam.gserviceaccount.com",
   subnetwork: "regions/us-west1/subnetworks/octogee-gateways",
-  labels: { "octogee-gateway-id": "b-mama-3-abc-hobby", purpose: "octogee-computer" },
+  labels: { "octogee-gateway-id": "b-mama-3-abc-hobby", "octogee-owner-uid": "owner-a", purpose: "octogee-computer" },
   metadata: { "gateway-id": "b-mama-3-abc-hobby", "octogee-environment": "test" },
 };
 
@@ -71,18 +71,16 @@ const instance = (overrides: Record<string, unknown> = {}) => ({
 
 describe("instanceInsertBody", () => {
   it("retains an owned home disk independently of the disposable boot disk", () => {
-    const body = instanceInsertBody("octogee-test", { ...input, homeDiskSizeGb: 10,
-      labels: { ...input.labels, "octogee-owner-uid": "owner-a" } }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
+    const body = instanceInsertBody("octogee-test", { ...input, homeDiskSizeGb: 10 }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
     expect(body.disks[0].autoDelete).toBe(true);
     expect(body.disks[1]).toMatchObject({ autoDelete: false,
       initializeParams: { diskSizeGb: "10", diskType: "zones/us-west1-b/diskTypes/pd-balanced",
         labels: { "octogee-owner-uid": "owner-a", "octogee-storage": "customer-home" } } });
   });
 
-  it("leaves an unowned warm-pool home disposable", () => {
-    const body = instanceInsertBody("octogee-test", { ...input,
-      labels: { purpose: "octogee-warm-pool" } }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>;
-    expect(body.disks[1].autoDelete).toBe(true);
+  it("refuses a computer without an owner", () => {
+    const { "octogee-owner-uid": _owner, ...unowned } = input.labels;
+    expect(() => instanceInsertBody("octogee-test", { ...input, labels: unowned }, "us-west1-b", "SPOT", IMAGE)).toThrow(/owner-uid/);
   });
 
   it("renders a Spot VM from a selected named image with no external IP and the gateway identity", () => {
@@ -94,12 +92,13 @@ describe("instanceInsertBody", () => {
     expect(body.disks[0].autoDelete).toBe(true);
     expect(body.disks[1]).toEqual({
       boot: false,
-      autoDelete: true,
+      autoDelete: false,
       deviceName: "octogee-home",
       initializeParams: {
         diskName: `${input.instanceName}-home`,
         diskSizeGb: "20",
         diskType: "zones/us-west1-b/diskTypes/pd-balanced",
+        labels: { "octogee-owner-uid": "owner-a", "octogee-storage": "customer-home" },
       },
     });
     expect(body.networkInterfaces).toEqual([{ subnetwork: input.subnetwork }]);
@@ -164,10 +163,7 @@ describe("createGatewayVmClient.create", () => {
       provisioningModel: "SPOT",
       gatewayId: null,
       labels: {},
-      labelFingerprint: null,
       metadata: {},
-      metadataFingerprint: null,
-      creationTimestamp: null,
       lastStartedAt: null,
       serviceAccounts: [],
     });
@@ -458,28 +454,26 @@ describe("createGatewayVmClient lifecycle", () => {
     await expect(client.describe("x", "us-west1-b")).rejects.toThrow(/http 403/);
     await expect(client.delete("x", "us-west1-b")).rejects.toThrow(/http 403/);
     await expect(client.stop("x", "us-west1-b")).rejects.toThrow(/http 403/);
-    await expect(client.list({ zones: ["us-west1-b"], labels: { "octogee-pool": "warm" } })).rejects.toThrow(/http 403/);
+    await expect(client.list({ zones: ["us-west1-b"], labels: { purpose: "octogee-computer" } })).rejects.toThrow(/http 403/);
     await expect(client.findByLabels({ "octogee-owner-uid": "uida" })).rejects.toThrow(/http 403/);
-    await expect(client.setMetadata("x", "us-west1-b", { fingerprint: "f", items: {} })).rejects.toThrow(/http 403/);
-    await expect(client.setLabels("x", "us-west1-b", { fingerprint: "f", labels: {} })).rejects.toThrow(/http 403/);
   });
 });
 
-describe("createGatewayVmClient pool primitives", () => {
+describe("createGatewayVmClient listing", () => {
   const pooled = {
     id: "777",
-    name: "octogee-pool-ab12cd34",
+    name: "octogee-computer-test-ab12cd34",
     status: "RUNNING",
     creationTimestamp: "2026-09-05T10:00:00.000-07:00",
     lastStartTimestamp: "2026-09-05T10:01:00.000-07:00",
     networkInterfaces: [{ networkIP: "10.138.0.20" }],
     scheduling: { provisioningModel: "SPOT" },
-    labels: { "octogee-pool": "warm", "octogee-environment": "test" },
+    labels: { purpose: "octogee-computer", "octogee-environment": "test" },
     labelFingerprint: "lf-1",
     metadata: { fingerprint: "mf-1", items: [{ key: "octogee-environment", value: "test" }] },
   };
 
-  it("describe surfaces labels, metadata, both fingerprints, and the creation and last start times", async () => {
+  it("describe surfaces labels, metadata, and the last start time", async () => {
     const { request } = fakeCompute(() => ({ status: 200, data: pooled }));
     const { client } = clientWith(request);
 
@@ -491,30 +485,27 @@ describe("createGatewayVmClient pool primitives", () => {
       internalIp: "10.138.0.20",
       provisioningModel: "SPOT",
       gatewayId: null,
-      labels: { "octogee-pool": "warm", "octogee-environment": "test" },
-      labelFingerprint: "lf-1",
+      labels: { purpose: "octogee-computer", "octogee-environment": "test" },
       metadata: { "octogee-environment": "test" },
-      metadataFingerprint: "mf-1",
-      creationTimestamp: "2026-09-05T10:00:00.000-07:00",
       lastStartedAt: Date.parse("2026-09-05T17:01:00.000Z"),
       serviceAccounts: [],
     });
   });
 
-  it("list finds members in every zone of the aggregated listing and follows pagination", async () => {
+  it("list finds computers in every zone of the aggregated listing and follows pagination", async () => {
     const inZone = (zone: string, name: string) => ({ ...pooled, name, zone: `https://www.googleapis.com/compute/v1/projects/octogee-test/zones/${zone}` });
     const { request, calls } = fakeCompute((call) => {
       if (call.method !== "GET" || !call.url.startsWith(`${BASE}/aggregated/instances?`)) return new Error(`unexpected ${call.method} ${call.url}`);
       const url = new URL(call.url);
       if (url.searchParams.get("pageToken") === "p2") {
-        return { status: 200, data: { items: { "zones/us-central1-f": { instances: [inZone("us-central1-f", "octogee-pool-second")] } } } };
+        return { status: 200, data: { items: { "zones/us-central1-f": { instances: [inZone("us-central1-f", "octogee-computer-test-second")] } } } };
       }
       return {
         status: 200,
         data: {
           items: {
-            "zones/us-central1-a": { instances: [inZone("us-central1-a", "octogee-pool-legacy")] },
-            "zones/us-central1-b": { instances: [inZone("us-central1-b", "octogee-pool-ab12cd34")] },
+            "zones/us-central1-a": { instances: [inZone("us-central1-a", "octogee-computer-test-legacy")] },
+            "zones/us-central1-b": { instances: [inZone("us-central1-b", "octogee-computer-test-ab12cd34")] },
             "zones/us-east1-b": { warning: { code: "NO_RESULTS_ON_PAGE" } },
           },
           nextPageToken: "p2",
@@ -523,15 +514,14 @@ describe("createGatewayVmClient pool primitives", () => {
     });
     const { client } = clientWith(request);
 
-    const members = await client.list({ labels: { "octogee-pool": "warm", "octogee-environment": "test" } });
+    const members = await client.list({ labels: { purpose: "octogee-computer", "octogee-environment": "test" } });
 
     expect(members.map((m) => [m.name, m.zone])).toEqual([
-      ["octogee-pool-legacy", "us-central1-a"],
-      ["octogee-pool-ab12cd34", "us-central1-b"],
-      ["octogee-pool-second", "us-central1-f"],
+      ["octogee-computer-test-legacy", "us-central1-a"],
+      ["octogee-computer-test-ab12cd34", "us-central1-b"],
+      ["octogee-computer-test-second", "us-central1-f"],
     ]);
-    expect(new URL(calls[0].url).searchParams.get("filter")).toBe("(labels.octogee-pool = \"warm\") AND (labels.octogee-environment = \"test\")");
-    expect(members[1]).toMatchObject({ metadataFingerprint: "mf-1", labelFingerprint: "lf-1" });
+    expect(new URL(calls[0].url).searchParams.get("filter")).toBe("(labels.purpose = \"octogee-computer\") AND (labels.octogee-environment = \"test\")");
   });
 
   it("findByLabels locates the one instance carrying every label across zones and refuses an ambiguous answer", async () => {
@@ -541,9 +531,9 @@ describe("createGatewayVmClient pool primitives", () => {
     });
     const aggregated = (instances: unknown[]) => ({ status: 200, data: { items: { "zones/us-west1-b": { instances }, "zones/us-east1-b": { warning: { code: "NO_RESULTS_ON_PAGE" } } } } });
 
-    const one = fakeCompute((call) => (call.method === "GET" && call.url.includes("/aggregated/instances?") ? aggregated([inZone("us-west1-b", "octogee-pool-claimed", { "octogee-gateway-id": "b-x" })]) : new Error(`unexpected ${call.url}`)));
+    const one = fakeCompute((call) => (call.method === "GET" && call.url.includes("/aggregated/instances?") ? aggregated([inZone("us-west1-b", "octogee-computer-test-claimed", { "octogee-gateway-id": "b-x" })]) : new Error(`unexpected ${call.url}`)));
     const found = await clientWith(one.request).client.findByLabels(labels);
-    expect(found).toMatchObject({ name: "octogee-pool-claimed", zone: "us-west1-b", labels: { ...labels, "octogee-gateway-id": "b-x" } });
+    expect(found).toMatchObject({ name: "octogee-computer-test-claimed", zone: "us-west1-b", labels: { ...labels, "octogee-gateway-id": "b-x" } });
     expect(new URL(one.calls[0].url).searchParams.get("filter")).toBe(
       "(labels.octogee-owner-uid = \"uida\") AND (labels.octogee-environment = \"test\") AND (labels.purpose = \"octogee-computer\")",
     );
@@ -551,67 +541,20 @@ describe("createGatewayVmClient pool primitives", () => {
     const none = fakeCompute(() => aggregated([{ ...inZone("us-west1-b", "octogee-computer-test-uidb"), labels: { ...labels, "octogee-owner-uid": "uidb" } }]));
     expect(await clientWith(none.request).client.findByLabels(labels)).toBeNull();
 
-    const two = fakeCompute(() => aggregated([inZone("us-west1-b", "octogee-computer-test-uida"), inZone("us-central1-a", "octogee-pool-claimed")]));
-    await expect(clientWith(two.request).client.findByLabels(labels)).rejects.toThrow(/2 instances match \(octogee-computer-test-uida in us-west1-b, octogee-pool-claimed in us-central1-a\)/);
+    const two = fakeCompute(() => aggregated([inZone("us-west1-b", "octogee-computer-test-uida"), inZone("us-central1-a", "octogee-computer-test-claimed")]));
+    await expect(clientWith(two.request).client.findByLabels(labels)).rejects.toThrow(/2 instances match \(octogee-computer-test-uida in us-west1-b, octogee-computer-test-claimed in us-central1-a\)/);
   });
 
   it("list returns nothing when no zone has matching instances", async () => {
     const { request } = fakeCompute(() => ({ status: 200, data: {} }));
     const { client } = clientWith(request);
-    expect(await client.list({ labels: { "octogee-pool": "warm" } })).toEqual([]);
-  });
-
-  it("setMetadata posts the fingerprint-guarded items and waits for the operation", async () => {
-    const { request, calls } = fakeCompute((call) => {
-      if (call.method === "POST") return { status: 200, data: { name: "op-meta", status: "DONE" } };
-      return new Error(`unexpected ${call.method} ${call.url}`);
-    });
-    const { client } = clientWith(request);
-
-    const outcome = await client.setMetadata(pooled.name, "us-west1-b", { fingerprint: "mf-1", items: { "gateway-id": "b-x", "gateway-image": "img" } });
-
-    expect(outcome).toBe("applied");
-    expect(calls[0]).toMatchObject({
-      method: "POST",
-      url: `${BASE}/zones/us-west1-b/instances/${pooled.name}/setMetadata`,
-      body: { fingerprint: "mf-1", items: [{ key: "gateway-id", value: "b-x" }, { key: "gateway-image", value: "img" }] },
-    });
-  });
-
-  it("setMetadata and setLabels report a lost race as conflict instead of throwing", async () => {
-    const precondition = fakeCompute(() => http(412));
-    const { client } = clientWith(precondition.request);
-    expect(await client.setMetadata(pooled.name, "us-west1-b", { fingerprint: "stale", items: {} })).toBe("conflict");
-    expect(await client.setLabels(pooled.name, "us-west1-b", { fingerprint: "stale", labels: {} })).toBe("conflict");
-
-    const failedOperation = fakeCompute((call) => {
-      if (call.method === "POST") {
-        return { status: 200, data: { name: "op-l", status: "DONE", error: { errors: [{ code: "CONDITION_NOT_MET", message: "fingerprint mismatch" }] } } };
-      }
-      return new Error(`unexpected ${call.method} ${call.url}`);
-    });
-    expect(await clientWith(failedOperation.request).client.setLabels(pooled.name, "us-west1-b", { fingerprint: "stale", labels: {} })).toBe("conflict");
-  });
-
-  it("setLabels replaces the label set under the label fingerprint", async () => {
-    const { request, calls } = fakeCompute((call) => {
-      if (call.method === "POST") return { status: 200, data: { name: "op-labels", status: "DONE" } };
-      return new Error(`unexpected ${call.method} ${call.url}`);
-    });
-    const { client } = clientWith(request);
-
-    expect(await client.setLabels(pooled.name, "us-west1-b", { fingerprint: "lf-1", labels: { "octogee-gateway-id": "b-x" } })).toBe("applied");
-    expect(calls[0]).toMatchObject({
-      method: "POST",
-      url: `${BASE}/zones/us-west1-b/instances/${pooled.name}/setLabels`,
-      body: { labelFingerprint: "lf-1", labels: { "octogee-gateway-id": "b-x" } },
-    });
+    expect(await client.list({ labels: { purpose: "octogee-computer" } })).toEqual([]);
   });
 });
 
 describe("createGatewayVmClient — zone walk", () => {
   const input = {
-    instanceName: "octogee-pool-abc",
+    instanceName: "octogee-computer-test-abc",
     zones: ["us-central1-b", "us-central1-c", "us-central1-f"],
     machineType: "n2-standard-4",
     imageFamily: "octogee-computer",
@@ -619,7 +562,7 @@ describe("createGatewayVmClient — zone walk", () => {
     provisioningModel: "SPOT" as const,
     serviceAccountEmail: "computer@octogee.iam.gserviceaccount.com",
     subnetwork: "regions/us-central1/subnetworks/default",
-    labels: {},
+    labels: { "octogee-owner-uid": "uida" },
     metadata: {},
   };
 
@@ -659,7 +602,7 @@ describe("createGatewayVmClient — zone walk", () => {
     const result = await client.create(input);
 
     expect(posts).toEqual([{ zone: "us-central1-b", model: "SPOT" }]);
-    expect(gets).toEqual([`${BASE}/zones/us-central1-b/instances/octogee-pool-abc`]);
+    expect(gets).toEqual([`${BASE}/zones/us-central1-b/instances/octogee-computer-test-abc`]);
     expect(result.description.zone).toBe("us-central1-b");
   });
 
@@ -734,7 +677,7 @@ describe("createGatewayVmClient — zone walk", () => {
 
   it("refuses to place a computer with no zones", async () => {
     const { request, posts } = exhaustedIn([]);
-    await expect(clientWith(request).client.create({ ...input, zones: [] })).rejects.toThrow(/octogee-pool-abc: no zones to place it in/);
+    await expect(clientWith(request).client.create({ ...input, zones: [] })).rejects.toThrow(/octogee-computer-test-abc: no zones to place it in/);
     expect(posts).toEqual([]);
   });
 });
@@ -752,14 +695,14 @@ describe("createGatewayVmClient.lastPreemptedAt", () => {
       if (call.method !== "GET" || !call.url.startsWith(`${BASE}/zones/us-central1-a/operations?`)) return new Error(`unexpected ${call.method} ${call.url}`);
       const url = new URL(call.url);
       if (url.searchParams.get("pageToken") === "p2") {
-        return { status: 200, data: { items: [preempted("octogee-pool-44847785", "2026-09-25T21:19:43.000-00:00")] } };
+        return { status: 200, data: { items: [preempted("octogee-computer-test-44847785", "2026-09-25T21:19:43.000-00:00")] } };
       }
       return {
         status: 200,
         data: {
           items: [
-            preempted("octogee-pool-44847785", "2026-09-24T08:00:00.000-00:00"),
-            preempted("octogee-pool-other", "2026-09-25T22:00:00.000-00:00"),
+            preempted("octogee-computer-test-44847785", "2026-09-24T08:00:00.000-00:00"),
+            preempted("octogee-computer-test-other", "2026-09-25T22:00:00.000-00:00"),
           ],
           nextPageToken: "p2",
         },
@@ -767,22 +710,22 @@ describe("createGatewayVmClient.lastPreemptedAt", () => {
     });
     const { client } = clientWith(request);
 
-    const at = await client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a");
+    const at = await client.lastPreemptedAt("octogee-computer-test-44847785", "us-central1-a");
 
     expect(at).toBe(Date.parse("2026-09-25T21:19:43.000Z"));
     expect(new URL(calls[0].url).searchParams.get("filter")).toBe("operationType = \"compute.instances.preempted\"");
   });
 
   it("answers null when Compute has no preemption on record for the instance", async () => {
-    const { request } = fakeCompute(() => ({ status: 200, data: { items: [preempted("octogee-pool-other", "2026-09-25T22:00:00.000Z")] } }));
+    const { request } = fakeCompute(() => ({ status: 200, data: { items: [preempted("octogee-computer-test-other", "2026-09-25T22:00:00.000Z")] } }));
 
-    expect(await clientWith(request).client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a")).toBeNull();
+    expect(await clientWith(request).client.lastPreemptedAt("octogee-computer-test-44847785", "us-central1-a")).toBeNull();
   });
 
   it("propagates a failed operations read instead of reporting no preemption", async () => {
     const { request } = fakeCompute(() => http(403));
 
-    await expect(clientWith(request).client.lastPreemptedAt("octogee-pool-44847785", "us-central1-a")).rejects.toThrow(/http 403/);
+    await expect(clientWith(request).client.lastPreemptedAt("octogee-computer-test-44847785", "us-central1-a")).rejects.toThrow(/http 403/);
   });
 });
 
@@ -835,6 +778,17 @@ describe("createGatewayVmClient boot image currency", () => {
    expect((await client.describe(input.instanceName, "us-west1-b"))?.machineType).toBe("n2-standard-4");
    await client.setMachineType(input.instanceName, "us-west1-b", "n2-standard-2");
    expect(calls.at(-1)).toEqual({ url: `${BASE}/zones/us-west1-b/instances/${input.instanceName}/setMachineType`, method: "POST", body: { machineType: "zones/us-west1-b/machineTypes/n2-standard-2" } });
+ });
+
+ it("journals a provisioning-model change, then sets the stopped VM's scheduling", async () => {
+   const request = vi.fn(async () => ({ status: 200, data: { name: "schedule", status: "DONE" } }));
+   const journalProvisioningModel = vi.fn(async (_input, action) => action());
+   const client = createGatewayVmClient({ request, projectId: "octogee-test", log: vi.fn(), wait: async () => {}, now: () => 0, journalProvisioningModel });
+   await client.setProvisioningModel("computer", "us-central1-a", "STANDARD");
+   expect(journalProvisioningModel).toHaveBeenCalledWith({ instanceName: "computer", zone: "us-central1-a", provisioningModel: "STANDARD" }, expect.any(Function));
+   expect(journalProvisioningModel.mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0]);
+   expect(request).toHaveBeenCalledWith({ url: `${BASE}/zones/us-central1-a/instances/computer/setScheduling`, method: "POST",
+     body: { provisioningModel: "STANDARD", automaticRestart: true, onHostMaintenance: "MIGRATE" } });
  });
 
  it("journals a capacity change before issuing the Compute mutation", async () => {

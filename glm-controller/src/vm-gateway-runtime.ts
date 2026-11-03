@@ -97,6 +97,14 @@ export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
   return spec as GatewayVmSpec;
 }
 
+type BuilderComputerPolicy = ReturnType<typeof resolveBuilderComputerPolicy>;
+type TierVmShape = Pick<GatewayVmSpec, "machineType" | "homeDiskSizeGb" | "provisioningModel">;
+
+function tierVmShape(computer: BuilderComputerPolicy): TierVmShape {
+  if (!computer.machineType || !computer.provisioningModel) throw new Error("a gce-vm Builder tier needs a machine type and provisioning model");
+  return { machineType: computer.machineType, homeDiskSizeGb: computer.homeSizeGiB, provisioningModel: computer.provisioningModel };
+}
+
 function runtimeRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -141,9 +149,10 @@ async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Rec
   const computer = resolveBuilderComputerPolicy(input.sizingTier);
   if (computer.runtime !== "gce-vm") return;
   const prior = runtimeRecord(data.vmSpec);
-  if (prior.machineType === computer.machineType && prior.homeDiskSizeGb === computer.homeSizeGiB) return;
+  const shape = tierVmShape(computer);
+  if (prior.machineType === shape.machineType && prior.homeDiskSizeGb === shape.homeDiskSizeGb && prior.provisioningModel === shape.provisioningModel) return;
   await input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId).set({
-    vmSpec: { ...input.vmSpec, ...prior, machineType: computer.machineType, homeDiskSizeGb: computer.homeSizeGiB },
+    vmSpec: { ...input.vmSpec, ...prior, ...shape },
   }, { merge: true });
 }
 
@@ -162,7 +171,7 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
   const runtime: GatewayRuntime = computer?.runtime ?? "cluster";
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
   await input.assertStorage?.(runtime);
-  await ref.set({ runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec, machineType: computer?.machineType, homeDiskSizeGb: computer?.homeSizeGiB } } : {}) }, { merge: true });
+  await ref.set({ runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec, ...tierVmShape(computer!) } } : {}) }, { merge: true });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;
 }

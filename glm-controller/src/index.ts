@@ -376,7 +376,6 @@ import {
   writePlatformReleaseRecord,
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
-import { parseVmWarmPoolConfig, startVmWarmPoolReconciler } from "./vm-warm-pool.js";
 import { parseBuilderStandbyPoolConfig, startBuilderStandbyPool } from "./builder-standby-pool.js";
 import { FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
@@ -410,11 +409,9 @@ const RECONCILE_SAFETY_REFRESH_MS_DEFAULT = 10 * 60_000;
 
 const GATEWAY_CHART = process.env.GATEWAY_CHART ?? "/charts/octogee-gateway";
 const BUILDER_VM_SPEC = process.env.GATEWAY_VM_SPEC_JSON ? parseGatewayVmSpec(process.env.GATEWAY_VM_SPEC_JSON) : null;
-const BUILDER_VM_WARM_POOL = parseVmWarmPoolConfig(process.env);
 const BUILDER_STANDBY_POOL = parseBuilderStandbyPoolConfig(process.env);
 const BUILDER_STANDBY_POOL_RECONCILE_MS = 30_000;
 const builderStandbyPoolWake: { current: () => void } = { current: () => undefined };
-const VM_WARM_POOL_RECONCILE_MS = 60_000;
 const GATEWAY_VM_HOST_ALIASES = ["octogee-api", "mattermost", "octogee-gitea-http", "octogee-gitea-ssh", "llm-broker", "octogee-npm-cache-proxy"] as const;
 const vmGatewayRuntimeRef: { current?: VmGatewayRuntime } = {};
 const NAMESPACE = (function () {
@@ -572,6 +569,9 @@ function createGatewayComputeClient(logFn: (msg: string) => void) {
     }),
     journalMachineType: (input, action) => runNormalFleetMutation(getFirestore() as unknown as NormalFleetMutationDb, {
       actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the Builder tier capacity before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
+    }),
+    journalProvisioningModel: (input, action) => runNormalFleetMutation(getFirestore() as unknown as NormalFleetMutationDb, {
+      actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the Builder tier provisioning model before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
     }),
     log: logFn,
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -3000,21 +3000,6 @@ async function main(): Promise<void> {
   }, BUILDER_STANDBY_POOL_RECONCILE_MS);
   builderStandbyPoolWake.current = builderStandbyPool.wake;
   stoppers.push(builderStandbyPool.stop);
-  if (BUILDER_VM_SPEC) {
-    const builderImage = platformArtifact.profileImages?.builder;
-    if (!builderImage) throw new Error("warm Builder computers require the platform's pinned Builder image");
-    stoppers.push(
-      startVmWarmPoolReconciler({
-        vm: createGatewayComputeClient(log),
-        vmSpec: BUILDER_VM_SPEC,
-        environment: COMPUTER_ENVIRONMENT,
-        config: BUILDER_VM_WARM_POOL,
-        gatewayImage: `${builderImage.imageRepository}:${builderImage.imageTag}`,
-        now: () => Date.now(),
-        log,
-      }, VM_WARM_POOL_RECONCILE_MS),
-    );
-  }
   const shutdown = createControllerShutdown(stoppers, log);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

@@ -130,7 +130,7 @@ TigerVNC, Openbox, a tint2 dock, and the Desk, under Cowboy's cluster runtime.
 The production session lives in `infra/gateway/hobby-session.sh` with its
 desktop configuration in `infra/gateway/hobby-desktop/`; this benchmark image
 is the bare X11 floor it was measured on. Pro and Team use the
-Omarchy image family on GCE with `n2-standard-2` and `n2-standard-4` respectively.
+Omarchy image family on GCE with on-demand `e2-standard-2` and `e2-standard-4` respectively.
 Browser, computer, CLI, and the OpenClaw Dashboard are available on every tier.
 The coach attaches to the same visible Chromium profile as the Builder.
 
@@ -142,8 +142,8 @@ PVC only to measure persistence; it is not the production layout.
 
 Existing runtime stamps retain their substrate; this change does not migrate
 an existing Hobby VM's home into GKE. VM manifest rendering explicitly selects
-Omarchy, including for existing Hobby VMs. Warm-pool assignment matches machine
-capacity; stopped owner computers can be resized without replacing their disks.
+Omarchy, including for existing Hobby VMs. Stopped owner computers can be
+resized without replacing their disks.
 The X11 controller creates virtual RandR modes for arbitrary pane dimensions;
 local TigerVNC checks covered repeated resizing from 321x241 to 3840x2160.
 

@@ -103,9 +103,6 @@ export interface RetainedBuilderHome {
   source: string;
 }
 
-export const GATEWAY_VM_ORIGINS = ["warm-pool", "cold"] as const;
-export type GatewayVmOrigin = (typeof GATEWAY_VM_ORIGINS)[number];
-
 export const GATEWAY_VM_STOP_REASONS = ["idle", "preempted", "operator"] as const;
 export type GatewayVmStopReason = (typeof GATEWAY_VM_STOP_REASONS)[number];
 
@@ -120,7 +117,6 @@ export interface GatewayVmState {
   internalIp: string | null;
   status: string | null;
   provisioningModel: GatewayVmProvisioningModel | null;
-  origin?: GatewayVmOrigin;
   stopReason: GatewayVmStopReason | null;
   parkedCheckpoint?: GatewayVmParkedCheckpoint;
   updatedAt: number;

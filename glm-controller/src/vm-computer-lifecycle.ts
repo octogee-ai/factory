@@ -12,7 +12,6 @@ import {
   type RetainedBuilderHome,
   isGatewayVmPreemptionNotice,
   type GatewayVmHomeState,
-  type GatewayVmOrigin,
   type GatewayVmParkedCheckpoint,
   type GatewayVmSpec,
   type GatewayVmState,
@@ -30,7 +29,6 @@ import {
 } from "./lib/home-checkpoint.js";
 import { readRetainedBuilderHome, recordRetainedBuilderHome, readHomeRecovery, readParkedComputer, releaseParkedComputer, writeParkedComputer } from "./lib/parked-computer.js";
 import { selectRetainedBootImage, type RetainedBootImage } from "./lib/retained-boot-image.js";
-import { claimWarmPoolMember } from "./vm-warm-pool.js";
 import { occupiedComputerZones, spreadZones } from "./vm-placement.js";
 
 export const STOPPED_STATUSES: ReadonlySet<string> = new Set(["TERMINATED", "STOPPED"]);
@@ -101,7 +99,6 @@ function stateFrom(
   description: GatewayVmDescription,
   now: number,
   stopReason: GatewayVmStopReason | null,
-  origin: GatewayVmOrigin | undefined,
 ): GatewayVmState {
   return {
     instanceName: description.name,
@@ -110,7 +107,6 @@ function stateFrom(
     internalIp: description.internalIp,
     status: description.status,
     provisioningModel: description.provisioningModel,
-    ...(origin ? { origin } : {}),
     stopReason,
     updatedAt: now,
   };
@@ -488,7 +484,7 @@ async function parkComputerInstance(
   deps.log(`[vm-gateway-runtime] ${gatewayId}: ${what}; boot and home disks retained${note}`);
   const sameStoppedGeneration = !parkedHere && PARKED_STATUSES.has(recorded.status ?? "")
     && recorded.instanceId === description.instanceId && (description.lastStartedAt === null || description.lastStartedAt <= recorded.updatedAt);
-  return stateFrom(description, sameStoppedGeneration ? recorded.updatedAt : deps.now(), reason, recorded.origin);
+  return stateFrom(description, sameStoppedGeneration ? recorded.updatedAt : deps.now(), reason);
 }
 
 async function assertComputerUnbound(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription): Promise<void> {
@@ -685,21 +681,27 @@ async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: st
 }
 
 
-  async function reconcileComputerCapacity(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, machineType: string, origin: GatewayVmState["origin"]): Promise<GatewayVmDescription> {
-    if (description.machineType === machineType) return description;
-    if (!PARKED_STATUSES.has(description.status)) throw new Error(`computer ${description.name}: expected ${machineType}, observed ${description.machineType}; pause and resume to apply the tier capacity`);
-    description = await stopSuspendedComputer(deps, gatewayId, description, "change its machine type");
-    await deps.vm.setMachineType(description.name, description.zone, machineType);
+  function capacityDiffers(description: GatewayVmDescription, spec: GatewayVmSpec): boolean {
+    return description.machineType !== spec.machineType || description.provisioningModel !== spec.provisioningModel;
+  }
+
+  async function reconcileComputerCapacity(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, spec: GatewayVmSpec): Promise<GatewayVmDescription> {
+    if (!capacityDiffers(description, spec)) return description;
+    if (!PARKED_STATUSES.has(description.status)) throw new Error(`computer ${description.name}: expected ${spec.machineType} ${spec.provisioningModel}, observed ${description.machineType} ${description.provisioningModel}; pause and resume to apply the tier capacity`);
+    description = await stopSuspendedComputer(deps, gatewayId, description, description.machineType !== spec.machineType ? "change its machine type" : "change its provisioning model");
+    if (description.machineType !== spec.machineType) await deps.vm.setMachineType(description.name, description.zone, spec.machineType);
+    if (description.provisioningModel !== spec.provisioningModel) await deps.vm.setProvisioningModel(description.name, description.zone, spec.provisioningModel);
     const resized = await deps.vm.describe(description.name, description.zone);
-    if (!resized || resized.machineType !== machineType) throw new Error(`computer ${description.name}: machine type did not converge to ${machineType}`);
-    await recordVmObservation(deps, gatewayId, { vm: stateFrom(resized, deps.now(), null, origin) }, "resize");
+    if (!resized || resized.machineType !== spec.machineType) throw new Error(`computer ${description.name}: machine type did not converge to ${spec.machineType}`);
+    if (resized.provisioningModel !== spec.provisioningModel) throw new Error(`computer ${description.name}: provisioning model did not converge to ${spec.provisioningModel}`);
+    await recordVmObservation(deps, gatewayId, { vm: stateFrom(resized, deps.now(), null) }, "resize");
     return resized;
   }
 
-  async function reconcileHomeCapacity(deps: ComputerLifecycleDeps, input: { gatewayId: string; ownerUid: string; description: GatewayVmDescription; home: RetainedBuilderHome; spec: GatewayVmSpec; origin: GatewayVmState["origin"] }): Promise<GatewayVmDescription> {
-    const { gatewayId, ownerUid, spec, origin } = input;
+  async function reconcileHomeCapacity(deps: ComputerLifecycleDeps, input: { gatewayId: string; ownerUid: string; description: GatewayVmDescription; home: RetainedBuilderHome; spec: GatewayVmSpec }): Promise<GatewayVmDescription> {
+    const { gatewayId, ownerUid, spec } = input;
     let { home, description } = input;
-    const applyOnResume = (home.sizeGb < spec.homeDiskSizeGb || description.machineType !== spec.machineType) && !PARKED_STATUSES.has(description.status);
+    const applyOnResume = (home.sizeGb < spec.homeDiskSizeGb || capacityDiffers(description, spec)) && !PARKED_STATUSES.has(description.status);
     if (applyOnResume) deps.log(`[vm-gateway-runtime] ${gatewayId}: tier capacity will apply on the next resume; preserving running computer ${description.name}`);
     if (!applyOnResume && home.sizeGb < spec.homeDiskSizeGb) {
       description = await stopSuspendedComputer(deps, gatewayId, description, "grow its home");
@@ -714,7 +716,7 @@ async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: st
       status,
       diskId: home.id, applyOnResume,
     } } }, { merge: true });
-    return applyOnResume ? description : reconcileComputerCapacity(deps, gatewayId, description, spec.machineType, origin);
+    return applyOnResume ? description : reconcileComputerCapacity(deps, gatewayId, description, spec);
   }
 
 async function resumeComputer(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription): Promise<GatewayVmDescription> {
@@ -768,10 +770,10 @@ async function confirmRetainedHome(deps: ComputerLifecycleDeps, gatewayId: strin
 }
 
 async function prepareParkedUpgrade(deps: ComputerLifecycleDeps, input: {
-  gatewayId: string; ownerUid: string; description: GatewayVmDescription; spec: GatewayVmSpec; origin: GatewayVmOrigin | undefined;
+  gatewayId: string; ownerUid: string; description: GatewayVmDescription; spec: GatewayVmSpec;
   bind: (description: GatewayVmDescription) => Promise<GatewayVmDescription>;
 }): Promise<GatewayVmDescription | null> {
-  const { gatewayId, ownerUid, spec, origin } = input;
+  const { gatewayId, ownerUid, spec } = input;
   let { description } = input;
   if (!PARKED_STATUSES.has(description.status)) return description;
   if (description.gatewayId !== gatewayId) {
@@ -780,7 +782,7 @@ async function prepareParkedUpgrade(deps: ComputerLifecycleDeps, input: {
       && parked.instanceName === description.name && parked.zone === description.zone) {
       await assertComputerUnbound(deps, gatewayId, description);
       const recorded = await recordVmObservation(deps, gatewayId, {
-        vm: stateFrom(description, parked.parkedAt, "idle", origin), vmBootRecovery: parked.bootRecovery,
+        vm: stateFrom(description, parked.parkedAt, "idle"), vmBootRecovery: parked.bootRecovery,
       }, "parked computer adoption");
       if (recorded) description = await input.bind(description);
     }
@@ -854,27 +856,17 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     return description.status === "SUSPENDED" ? resumeComputer(deps, gatewayId, description) : startComputer(gatewayId, description, "started");
   }
 
-  async function acquireComputer(
-    gatewayId: string,
-    ownerUid: string,
-    input: CreateGatewayVmInput,
-  ): Promise<{ description: GatewayVmDescription; origin: GatewayVmOrigin }> {
+  async function acquireComputer(gatewayId: string, ownerUid: string, input: CreateGatewayVmInput): Promise<GatewayVmDescription> {
     if (input.retainedHome) {
       await deps.vm.verifyDetachedHome(input.retainedHome, ownerUid);
-      const created = await deps.vm.create(input);
-      return { description: created.description, origin: "cold" };
-    }
-    const spec: GatewayVmSpec = input;
-    const claimed = await claimWarmPoolMember({ vm: deps.vm, vmSpec: spec, environment: deps.environment, gatewayId, binding: bindingOf(input), log: deps.log });
-    if (claimed) {
-      deps.log(`[vm-gateway-runtime] ${gatewayId}: claimed warm-pool member ${claimed.name} as ${ownerUid}'s computer (${claimed.provisioningModel ?? "unknown"})`);
-      return { description: claimed, origin: "warm-pool" };
+      return (await deps.vm.create(input)).description;
     }
     const zones = spreadZones(input.zones, await occupiedComputerZones(deps.vm, deps.environment));
     const created = await deps.vm.create({ ...input, zones });
-    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${created.alreadyExisted ? "adopted" : "created"} cold ${input.instanceName} in ${created.description.zone} (${created.provisioningModel})`);
-    return { description: created.description, origin: "cold" };
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${created.alreadyExisted ? "adopted" : "created"} ${input.instanceName} in ${created.description.zone} (${created.provisioningModel})`);
+    return created.description;
   }
+
 
   async function reconcileComputerBinding(gatewayId: string, ownerUid: string, input: CreateGatewayVmInput, description: GatewayVmDescription): Promise<GatewayVmDescription> {
     const stampedOwner = description.metadata["octogee-owner-uid"];
@@ -919,11 +911,10 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     const { data, vm: existing } = await readVmRecord(deps.db, gatewayId);
     const spec = recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec);
     let input = builderComputerInstanceInput({ gatewayId, ownerUid, spec, environment: deps.environment, image, bridgeIp: bridge });
-    let origin = existing?.origin;
     let description = existing ? await deps.vm.describe(existing.instanceName, existing.zone) : null;
     if (!description) description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
     const recovery = await requireHomeRecovery(deps, { gatewayId, ownerUid, data, description });
-    if (description) description = await prepareParkedUpgrade(deps, { gatewayId, ownerUid, description, spec, origin,
+    if (description) description = await prepareParkedUpgrade(deps, { gatewayId, ownerUid, description, spec,
       bind: (parked) => reconcileComputerBinding(gatewayId, ownerUid, input, parked) });
     const retainedHome = await readRetainedBuilderHome(deps.db, ownerUid);
     if (!description && retainedHome) {
@@ -932,19 +923,19 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       const selected = await selectRetainedBootImage({ db: deps.db, vm: deps.vm, ownerUid, home: retainedHome, spec });
       input = { ...input, zones: [retainedHome.zone], retainedHome, image: selected, imageProject: selected.project };
     }
-    if (!description) ({ description, origin } = await acquireComputer(gatewayId, ownerUid, input));
+    description ??= await acquireComputer(gatewayId, ownerUid, input);
     await confirmRetainedHome(deps, gatewayId, description, recovery);
     if (TRANSITIONAL_STATUSES.has(description.status)) {
       throw new Error(`computer ${description.name} is still ${description.status.toLowerCase()}; retrying on the next converge`);
     }
     description = await reconcileComputerBinding(gatewayId, ownerUid, input, description);
     const home = await recordComputerHome(deps, { gatewayId, ownerUid, description, retainedHome, recovery });
-    description = await reconcileHomeCapacity(deps, { gatewayId, ownerUid, description, home, spec, origin });
+    description = await reconcileHomeCapacity(deps, { gatewayId, ownerUid, description, home, spec });
     if (PARKED_STATUSES.has(description.status)) {
       await releaseParkedComputer(deps.db, ownerUid);
       description = await wakeComputer(gatewayId, description);
     }
-    const state = stateFrom(description, deps.now(), null, origin);
+    const state = stateFrom(description, deps.now(), null);
     await recordAwakeComputer(deps, gatewayId, { runtime: "gce-vm", vmSpec: spec, vm: state });
     return state;
   }
@@ -1006,12 +997,12 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       return;
     }
     if (STOPPED_STATUSES.has(description.status)) {
-      await restartPreempted(gatewayId, description, vm.origin);
+      await restartPreempted(gatewayId, description);
       return;
     }
     if (description.status === "STOPPING") {
       if (sameObservation(vm, description, "preempted")) return;
-      await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", vm.origin), "preempted");
+      await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted"), "preempted");
       deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} is being stopped by Compute; restarting once it is TERMINATED`);
       return;
     }
@@ -1022,20 +1013,20 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     await recordRunningAgain(gatewayId, vm, description);
   }
 
-  async function restartPreempted(gatewayId: string, description: GatewayVmDescription, origin: GatewayVmOrigin | undefined): Promise<void> {
+  async function restartPreempted(gatewayId: string, description: GatewayVmDescription): Promise<void> {
     const upgraded = await upgradePreemptedBoot(deps, gatewayId, description, ensureVm);
     if (!upgraded) return;
     description = upgraded;
-    if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted", origin), "preempted"))) return;
+    if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), "preempted"), "preempted"))) return;
     deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} was preempted (${description.status}); restarting`);
     const after = await startComputer(gatewayId, description, "restarted");
-    await recordVm(gatewayId, stateFrom(after, deps.now(), null, origin), "restart");
+    await recordVm(gatewayId, stateFrom(after, deps.now(), null), "restart");
     await deps.reconcileRoutes();
   }
 
   async function recordRunningAgain(gatewayId: string, vm: GatewayVmState, description: GatewayVmDescription): Promise<void> {
     if (sameObservation(vm, description, null)) return;
-    if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), null, vm.origin), "running"))) return;
+    if (!(await recordVm(gatewayId, stateFrom(description, deps.now(), null), "running"))) return;
     await deps.reconcileRoutes();
     deps.log(`[vm-gateway-runtime] ${gatewayId}: ${description.name} is ${description.status} again at ${description.internalIp ?? "no-ip"}`);
   }

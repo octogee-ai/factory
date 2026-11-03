@@ -99,12 +99,6 @@ spec:
               value: "octogee-vm-bridge"
             - name: GATEWAY_VM_ROUTES_CONFIGMAP
               value: "octogee-vm-routes"
-            - name: GATEWAY_VM_WARM_POOL_SIZE
-              value: {{ $computer.warmPoolSize | default 0 | quote }}
-            {{- with $computer.warmPoolStandardMaxAgeMs }}
-            - name: GATEWAY_VM_WARM_POOL_STANDARD_MAX_AGE_MS
-              value: {{ . | quote }}
-            {{- end }}
             {{- end }}
             - name: FLEET_CONTROLLER_PRIVATE_KEY
               valueFrom:
@@ -158,7 +152,7 @@ spec:
             - name: HTTP_PORT
               value: {{ .Values.http.port | quote }}
             - name: DISPOSABLE_GATEWAY_IDLE_MS
-              value: {{ (.Values.disposableGateway).idleMs | default "1800000" | quote }}
+              value: {{ (.Values.disposableGateway).idleMs | default "900000" | quote }}
             - name: DISPOSABLE_GATEWAY_IDLE_WARNING_MS
               value: {{ (.Values.disposableGateway).idleWarningMs | default "300000" | quote }}
             # Single source of truth: parent `.Values.global.fleetControllerPort`.

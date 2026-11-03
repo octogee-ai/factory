@@ -72,8 +72,6 @@ export interface RetainedBuilderHome {
     diskType: "pd-balanced" | "pd-ssd";
     source: string;
 }
-export declare const GATEWAY_VM_ORIGINS: readonly ["warm-pool", "cold"];
-export type GatewayVmOrigin = (typeof GATEWAY_VM_ORIGINS)[number];
 export declare const GATEWAY_VM_STOP_REASONS: readonly ["idle", "preempted", "operator"];
 export type GatewayVmStopReason = (typeof GATEWAY_VM_STOP_REASONS)[number];
 export declare function isGatewayVmStopReason(value: unknown): value is GatewayVmStopReason;
@@ -84,7 +82,6 @@ export interface GatewayVmState {
     internalIp: string | null;
     status: string | null;
     provisioningModel: GatewayVmProvisioningModel | null;
-    origin?: GatewayVmOrigin;
     stopReason: GatewayVmStopReason | null;
     parkedCheckpoint?: GatewayVmParkedCheckpoint;
     updatedAt: number;

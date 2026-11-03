@@ -204,7 +204,7 @@ const VERBS: readonly VerbHelp[] = [
     verb: "desktop-image publish",
     summary: "Publish the tested desktop image from an immutable build manifest.",
     args: "--sha=<full-main-sha> [--apply]",
-    description: "Deploy platform build runs this for its SHA; use it directly for a desktop-only rollback or retry. Dry-run by default. A no-op when the family already serves that image and no unassigned warm spare is stale; otherwise copies the tested image when needed, journals publication, and asks Cowboy to retire stale unassigned warm-pool computers. Assigned computers are preserved.",
+    description: "Deploy platform build runs this for its SHA; use it directly for a desktop-only rollback or retry. Dry-run by default. A no-op when the family already serves that image; otherwise copies the tested image when needed and journals publication. Computers pick up the new image on their next boot.",
     examples: ["fleet --env=test desktop-image publish --sha=0123456789abcdef0123456789abcdef01234567 --apply"],
     writes: true,
   },

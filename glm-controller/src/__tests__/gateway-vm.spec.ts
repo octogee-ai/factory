@@ -14,10 +14,7 @@ const description: GatewayVmDescription = {
   provisioningModel: "SPOT",
   gatewayId: "b-mama-3-abc-hobby",
   labels: {},
-  labelFingerprint: null,
   metadata: { "gateway-id": "b-mama-3-abc-hobby" },
-  metadataFingerprint: null,
-  creationTimestamp: null,
 };
 
 const vmState: GatewayVmState = {
@@ -52,8 +49,6 @@ function harness(
     deleteRetainedHome: vi.fn(async () => {}),
     setServiceAccount: vi.fn(async () => {}),
     setMachineType: vi.fn(async () => {}),
-    setMetadata: vi.fn(async () => "applied" as const),
-    setLabels: vi.fn(async () => "applied" as const),
     stop: vi.fn(async () => {}),
     start: vi.fn(async () => ({ fellBackToStandard: false })),
     delete: vi.fn(async () => true),

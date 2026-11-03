@@ -59,7 +59,7 @@ it('plans an accepted desktop companion even when main was published without a d
     .mockResolvedValueOnce({ data: { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha } } })
     .mockResolvedValueOnce({ data: { name: artifact.name } });
   client.mockResolvedValue({ request } as unknown as Awaited<ReturnType<GoogleAuth['getClient']>>);
-  await runDesktopImagePublication({ ...input, skipMissing: true, controllerPool: true });
+  await runDesktopImagePublication({ ...input, skipMissing: true });
   expect(request).toHaveBeenCalledTimes(2);
   expect(log).toHaveBeenCalledWith(expect.stringContaining(`"desktopManifestDigest": "sha256:${'c'.repeat(64)}"`));
   expect(runWithOperationAuditIntent).not.toHaveBeenCalled();
@@ -86,11 +86,10 @@ it('still inspects and plans publication when the optional desktop artifact is p
   const { input, client, log } = publication(artifact);
   const request = vi.fn()
     .mockResolvedValueOnce({ data: { name: artifact.name, id: artifact.id, status: 'READY', labels: { source: artifact.sourceSha } } })
-    .mockResolvedValueOnce({ data: { name: artifact.name } })
-    .mockResolvedValueOnce({ data: {} });
+    .mockResolvedValueOnce({ data: { name: artifact.name } });
   client.mockResolvedValue({ request } as unknown as Awaited<ReturnType<GoogleAuth['getClient']>>);
   await runDesktopImagePublication({ ...input, skipMissing: true });
-  expect(request).toHaveBeenCalledTimes(3);
-  expect(log).toHaveBeenCalledWith(expect.stringContaining('no warm spare is stale'));
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('family already serves'));
   expect(runWithOperationAuditIntent).not.toHaveBeenCalled();
 });

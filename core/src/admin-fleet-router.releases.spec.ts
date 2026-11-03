@@ -1464,12 +1464,12 @@ describe("P1-5 endpoint gaps", () => {
 
 describe("platform runtime configuration", () => {
   it.each([{}, { "config/orchestrator": { sharedGatewayIds: ["shared-a"] } }])(
-    "defaults an absent idle override to 90 minutes",
+    "defaults an absent idle override to 15 minutes",
     async (seed) => {
       const { app } = mkApp(seed);
       const response = await request(app).get("/platform-runtime-config");
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ disposableGatewayIdleMs: 5_400_000 });
+      expect(response.body).toEqual({ disposableGatewayIdleMs: 900_000 });
     },
   );
 

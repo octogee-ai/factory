@@ -20,7 +20,6 @@ await runDesktopImagePublication({
   sourceSha: requiredEnv("SOURCE_SHA"),
   apply: true,
   skipMissing: true,
-  controllerPool: true,
   actor: requiredEnv("RELEASE_ACTOR"),
   why: requiredEnv("RELEASE_REASON"),
   db: getFirestore(),

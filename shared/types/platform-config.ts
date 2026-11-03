@@ -22,7 +22,7 @@ export {
 };
 export type { SignupOfferBudgetPolicy };
 
-export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 90 * 60_000;
+export const DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS = 15 * 60_000;
 
 export interface PlatformRuntimeConfig {
   disposableGatewayIdleMs: number;

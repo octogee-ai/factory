@@ -7,8 +7,8 @@ const ZONES = ["us-central1-b", "us-central1-c", "us-central1-f"];
 function computer(name: string, zone: string, labels: Record<string, string> = {}): GatewayVmDescription {
   return {
     name, zone, machineType: "n2-standard-2", status: "RUNNING", instanceId: `id-${name}`, internalIp: null, provisioningModel: "SPOT", gatewayId: null,
-    labels: { "octogee-environment": "prod", purpose: "octogee-computer", ...labels }, labelFingerprint: "lf",
-    metadata: {}, metadataFingerprint: "mf", creationTimestamp: null, serviceAccounts: [],
+    labels: { "octogee-environment": "prod", purpose: "octogee-computer", ...labels },
+    metadata: {}, lastStartedAt: null, serviceAccounts: [],
   };
 }
 
@@ -33,11 +33,10 @@ describe("spreadZones", () => {
 });
 
 describe("occupiedComputerZones", () => {
-  it("counts every live computer of the environment, bound or warm, but not retiring pool members", async () => {
+  it("counts every computer of the environment", async () => {
     const list = vi.fn(async () => [
       computer("octogee-computer-prod-uida", "us-central1-b", { "octogee-owner-uid": "uida" }),
-      computer("octogee-pool-warm", "us-central1-c", { "octogee-pool": "warm" }),
-      computer("octogee-pool-going", "us-central1-f", { "octogee-pool": "retiring" }),
+      computer("octogee-computer-prod-uidb", "us-central1-c", { "octogee-owner-uid": "uidb" }),
     ]);
 
     expect(await occupiedComputerZones({ list }, "prod")).toEqual(["us-central1-b", "us-central1-c"]);
