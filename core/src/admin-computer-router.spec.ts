@@ -21,6 +21,8 @@ const parked = { ...vm, gatewayId: GATEWAY, parkedAt: 100, checkpoint: { outcome
 function harness(overrides: Record<string, Record<string, unknown> | null> = {}, role = "admin", computerReplacementEnabled: boolean | undefined = true) {
   const store = new Map<string, Record<string, unknown>>(Object.entries({
     [`gateways/${GATEWAY}`]: gateway,
+    "gateways/shared-a": { gatewayClass: "shared" },
+    [`gateways/shared-a/assignments/${OWNER}`]: { uid: OWNER, gatewayId: "shared-a", state: "serving", epoch: 1 },
     [`glmGateways/${GATEWAY}`]: { gatewayId: GATEWAY, runtime: "gce-vm", vm },
     [`users/${OWNER}`]: { username: "fixture", provisioning: { openclaw: { gatewayId: GATEWAY } } },
   }));
@@ -50,7 +52,15 @@ function harness(overrides: Record<string, Record<string, unknown> | null> = {},
             if (store.has(ref.path)) { throw new Error("already exists"); }
             store.set(ref.path, value);
           }),
-          update: (ref: { path: string }, value: Record<string, unknown>) => writes.push(() => store.set(ref.path, { ...store.get(ref.path), ...value })),
+          update: (ref: { path: string }, value: Record<string, unknown>) => writes.push(() => {
+            const target = store.get(ref.path)!;
+            for (const [path, field] of Object.entries(value)) {
+              const parts = path.split(".");
+              let cursor = target;
+              for (const part of parts.slice(0, -1)) cursor = cursor[part] as Record<string, unknown>;
+              cursor[parts.at(-1)!] = field;
+            }
+          }),
         });
         for (const write of writes) write();
         return result;
@@ -138,6 +148,80 @@ describe("admin computer replacement", () => {
     const h = harness({ [`glmGateways/${GATEWAY}`]: { runtime: "gce-vm", vm: null }, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: parked } } });
     await request(h.app).post(parkedPath).send({}).expect(202);
     expect(h.operations()).toEqual([expect.objectContaining({ inputUid: OWNER, input: { ownerUid: OWNER, uid: OWNER, action: "replace" } })]);
+  });
+  it("journals explicit force recovery for an owner with a stale checkpoint", async () => {
+    const stale = { ...parked, checkpoint: { ...parked.checkpoint, outcome: "stale" } };
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: { runtime: "gce-vm", vm: null }, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: stale } } });
+    const res = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    expect(h.operations()).toEqual([expect.objectContaining({ input: { ownerUid: OWNER, uid: OWNER, action: "replace", force: true, expectedGatewayId: GATEWAY, expectedInstanceId: "123" } })]);
+    expect(h.audits()).toEqual([expect.objectContaining({ forced: true, mutation: expect.objectContaining({ kind: "replace-computer", force: true }) })]);
+    expect(h.store.get(`users/${OWNER}`)).toHaveProperty("provisioning.computerRecovery.operationId", res.body.operationId);
+  });
+  it.each(["requested", "provisioning", "activating", "active", "returning"])("refuses force recovery while activation is %s", async status => {
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a", activationLease: { status } }, computer: parked } } });
+    await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(409);
+    expect(h.operations()).toHaveLength(0);
+  });
+  it("does not fence an owner when the parked computer has no instance ID", async () => {
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: { ...parked, instanceId: null } } } });
+    await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(409);
+    expect(h.store.get(`users/${OWNER}`)).not.toHaveProperty("provisioning.computerRecovery");
+    expect(h.operations()).toHaveLength(0);
+  });
+  it("does not fence an owner when the old gateway is running or belongs to another tenant", async () => {
+    for (const root of [gateway, { ...gateway, desiredStatus: "paused", ownerUid: "other" }]) {
+      const h = harness({ [`gateways/${GATEWAY}`]: root, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: parked } } });
+      await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(409);
+      expect(h.store.get(`users/${OWNER}`)).not.toHaveProperty("provisioning.computerRecovery");
+    }
+  });
+  it.each([["anonymous", 401], ["member", 403]])("refuses %s force recovery", async (role, status) => {
+    const h = harness({}, role as string);
+    await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(status as number);
+    expect(h.operations()).toHaveLength(0);
+  });
+  it("retries the same fenced operation after failure even if the parked record was already cleared", async () => {
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: parked } } });
+    const first = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    const operation = h.store.get(`glmOperations/${first.body.operationId}`)!;
+    operation.status = "failed";
+    h.store.set("glmOperations/pending-migration", { status: "pending", kind: "migrate-customer", inputUid: OWNER, input: { uid: OWNER } });
+    const owner = h.store.get(`users/${OWNER}`)!;
+    delete (owner.provisioning as Record<string, unknown>).computer;
+    const retried = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    expect(retried.body.operationId).toBe(first.body.operationId);
+    expect(operation.status).toBe("pending");
+    expect(h.operations()).toHaveLength(1);
+  });
+  it("does not rearm a changed operation behind a recovery fence", async () => {
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: parked } } });
+    const first = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    const operation = h.store.get(`glmOperations/${first.body.operationId}`)!;
+    operation.status = "failed";
+    (operation.input as Record<string, unknown>).expectedInstanceId = "other";
+    await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(409);
+    expect(operation.status).toBe("failed");
+  });
+  it("recreates an expired failed operation with the pinned identity", async () => {
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: parked } } });
+    const first = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    h.store.delete(`glmOperations/${first.body.operationId}`);
+    const retry = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    expect(retry.body.operationId).toBe(first.body.operationId);
+    expect(h.operations()).toEqual([expect.objectContaining({ status: "pending", input: expect.objectContaining({ ownerUid: OWNER, expectedGatewayId: GATEWAY, expectedInstanceId: "123" }) })]);
+  });
+  it("refreshes a failed recovery's serving Shared epoch before retry", async () => {
+    const h = harness({ [`gateways/${GATEWAY}`]: null, [`glmGateways/${GATEWAY}`]: null, [`users/${OWNER}`]: { provisioning: { openclaw: { gatewayId: "shared-a" }, computer: parked } } });
+    const first = await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    h.store.get(`glmOperations/${first.body.operationId}`)!.status = "failed";
+    h.store.get(`gateways/shared-a/assignments/${OWNER}`)!.epoch = 2;
+    await request(h.app).post(parkedPath).send({ force: true, acceptBootDataLoss: true }).expect(202);
+    expect(h.store.get(`users/${OWNER}`)).toHaveProperty("provisioning.computerRecovery.assignmentEpoch", 2);
+  });
+  it.each([{ force: true }, { acceptBootDataLoss: true }, { force: false, acceptBootDataLoss: true }])("requires both force and explicit boot data loss acknowledgement: %j", async body => {
+    const h = harness();
+    await request(h.app).post(parkedPath).send(body).expect(400);
+    expect(h.operations()).toHaveLength(0);
   });
   it.each([
     { provisioning: {} },

@@ -373,6 +373,12 @@ export async function requestBuilderActivationLease(
         },
       };
     }
+    if (record(userData.provisioning)?.computerRecovery != null) {
+      return {
+        statusCode: 409,
+        body: { code: "builder-computer-recovery-in-progress", error: "computer recovery is in progress" },
+      };
+    }
     const eligibility = activationDemandEligibility(
       userData,
       input.now ?? Date.now(),

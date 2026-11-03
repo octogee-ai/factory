@@ -127,6 +127,13 @@ if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then
     else
       identity_status=$?
     fi
+    if [ "$identity_status" -eq 72 ]; then
+      log "FATAL: Builder identity for ${GATEWAY_ID} belongs to a rebound computer"
+      if [ "${GATEWAY_RUNTIME_KIND:-}" = gce-vm ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" != x11 ]; then
+        exit 0
+      fi
+      exit 72
+    fi
     if [ "$identity_status" -eq 2 ]; then
       log "FATAL: Builder identity for ${GATEWAY_ID} is unavailable or conflicts with this pod's claim"
       exit 2

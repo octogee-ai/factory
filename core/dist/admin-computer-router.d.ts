@@ -1,5 +1,5 @@
 import type { Request, Router } from "express";
-import type { Firestore } from "firebase-admin/firestore";
+import { type Firestore } from "firebase-admin/firestore";
 interface ComputerReplacementMutation {
     req: Request;
     what: string;
@@ -7,6 +7,7 @@ interface ComputerReplacementMutation {
     target: Record<string, unknown>;
     preActionStatus: Record<string, unknown>;
     mutation: Record<string, unknown>;
+    forced?: boolean;
     action: () => Promise<string>;
 }
 interface ComputerRouterDeps {

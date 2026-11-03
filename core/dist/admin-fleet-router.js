@@ -3006,7 +3006,7 @@ export function addAdminFleetRoutes(router, deps) {
         const headerKey = input.req.get("Idempotency-Key")?.trim();
         return runNormalFleetMutation(db, {
             actor: actor.uid ?? "unknown",
-            forced: false,
+            forced: input.forced === true,
             what: input.what,
             why: input.why,
             target: input.target,

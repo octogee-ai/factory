@@ -31,7 +31,7 @@ export interface VmGatewayRuntime extends HelmRunner {
   readDeploymentPrerequisiteError(gatewayId: string): Promise<string | null>;
   recoverUnreachable(gatewayId: string): Promise<void>;
   deleteComputer(ownerUid: string): Promise<boolean>;
-  replaceStoppedComputer(gatewayId: string, operationId: string, assertAuthority: () => Promise<void>): Promise<Record<string, unknown>>;
+  replaceStoppedComputer(gatewayId: string, operationId: string, assertAuthority: () => Promise<void>, options?: { forceOwnerUid: string; expectedInstanceId: string }): Promise<Record<string, unknown>>;
   detectPreemption(gatewayId: string, sinceMs: number): Promise<string | null>;
 }
 

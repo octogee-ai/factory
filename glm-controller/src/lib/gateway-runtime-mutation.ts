@@ -13,9 +13,10 @@ export async function withGatewayRuntimeMutation<T>(
   db: Firestore,
   gatewayId: string,
   mutation: (transaction: Transaction) => Promise<T>,
+  allowedComputerRecoveryOperationId?: string,
 ): Promise<T> {
   return db.runTransaction(async transaction => {
-    await assertGatewayRuntimeMutationUnfenced(db,transaction,gatewayId);
+    await assertGatewayRuntimeMutationUnfenced(db,transaction,gatewayId,allowedComputerRecoveryOperationId);
     return mutation(transaction);
   });
 }

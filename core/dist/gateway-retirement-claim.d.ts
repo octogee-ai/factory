@@ -43,7 +43,7 @@ export type GatewayRetirementVerification = {
     ok: false;
     error: string;
 };
-export declare function assertGatewayRuntimeMutationUnfenced(db: Firestore, transaction: Transaction, gatewayId: string): Promise<void>;
+export declare function assertGatewayRuntimeMutationUnfenced(db: Firestore, transaction: Transaction, gatewayId: string, allowedComputerRecoveryOperationId?: string): Promise<void>;
 export declare function claimGatewayRetirementAtomic(input: ClaimGatewayRetirementInput): Promise<{
     version: number;
 }>;

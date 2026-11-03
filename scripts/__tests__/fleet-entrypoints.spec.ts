@@ -1517,11 +1517,23 @@ describe("fleet CLI args", () => {
       body: {},
       idempotencyKey: "k1",
     });
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "replace-computer", "--owner-uid=owner-1", "--idempotency-key=k2", "--apply",
+    ]))).toEqual({ method: "POST", path: "/api/admin/customers/owner-1/computer/replace", body: {}, idempotencyKey: "k2" });
+    expect(resolveFleetGatewayMutation(parseFleetArgs([
+      "--env=test", "gw", "replace-computer", "--owner-uid=owner-1", "--force", "--accept-boot-data-loss", "--apply",
+    ]))).toEqual({ method: "POST", path: "/api/admin/customers/owner-1/computer/replace", body: { force: true, acceptBootDataLoss: true } });
     for (const argv of [
       ["--env=test", "gw", "replace-computer", "canary", "false"],
       ["--env=test", "gw", "replace-computer", "canary", "--apply=true"],
       ["--env=test", "gw", "replace-computer", "canary", "--idempotency-key"],
       ["--env=test", "gw", "replace-computer", "canary", "--force"],
+      ["--env=test", "gw", "replace-computer", "canary", "--owner-uid=owner-1"],
+      ["--env=test", "gw", "replace-computer", "--owner-uid=bad/owner"],
+      ["--env=test", "gw", "replace-computer", "--owner-uid=.."],
+      ["--env=test", "gw", "replace-computer", "--owner-uid=owner-1", "--force"],
+      ["--env=test", "gw", "replace-computer", "--owner-uid=owner-1", "--accept-boot-data-loss"],
+      ["--env=test", "gw", "replace-computer", "--owner-uid"],
       ["--env=test", "gw", "replace-computer"],
     ]) {
       expect(() => resolveFleetGatewayMutation(parseFleetArgs(argv))).toThrow();

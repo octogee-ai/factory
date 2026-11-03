@@ -172,6 +172,24 @@ describe("gateway-vm handler", () => {
     expect(h.writeVmState).not.toHaveBeenCalled();
     expect(h.requestHomeCheckpoint).not.toHaveBeenCalled();
   });
+  it("allows force only for a journaled operator owner request", async () => {
+    const replacement = vi.fn(async () => ({ bootDeleted: true }));
+    const h = harness(null, {}, { parked: parkedFresh, replacement });
+    expect(await h.run({ ownerUid: "UidA", uid: "UidA", action: "replace", force: true })).toMatchObject({ success: false, error: /journaled operator/ });
+    expect(replacement).not.toHaveBeenCalled();
+    const handler = createGatewayVmHandler({
+      ...({} as GatewayVmDeps), readParkedComputer: async () => parkedFresh, replaceStoppedComputer: replacement,
+      now: () => 1,
+    });
+    const input = { ownerUid: "UidA", uid: "UidA", action: "replace", force: true, expectedGatewayId: "b-old", expectedInstanceId: "42" };
+    const operation = { ...op(input), origin: "operator" as const, createdBy: "admin" };
+    expect(await handler(operation, { reportStep: () => {} })).toMatchObject({ success: true });
+    expect(replacement).toHaveBeenCalledWith("b-old", "op-1", expect.any(Function), { forceOwnerUid: "UidA", expectedInstanceId: "42" });
+    replacement.mockClear();
+    const changed = { ...operation, input: { ...input, expectedInstanceId: "old-id" } };
+    expect(await handler(changed, { reportStep: () => {} })).toMatchObject({ success: false, error: /parked computer changed/ });
+    expect(replacement).not.toHaveBeenCalled();
+  });
   it("keeps source disks when the replacement operation is cancelled", async () => {
     const deletion = vi.fn();
     const h = harness({ runtime: "gce-vm", vm: vmState }, {}, { cancelled: () => true, replacement: async (_gatewayId, _operationId, authority) => { await authority(); deletion(); return {}; } });

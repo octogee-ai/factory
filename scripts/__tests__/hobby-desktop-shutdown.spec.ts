@@ -1,12 +1,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 
 const desktop = fs.readFileSync(path.resolve(import.meta.dirname, "../../infra/gateway/hobby-desktop.sh"), "utf8");
 const lifecycle = desktop.slice(desktop.includes("session_runtime=") ? desktop.indexOf("session_runtime=") : desktop.lastIndexOf("exec dbus-run-session"));
+
+it.each([[72, 0], [2, 1], [1, 1]])("stops the desktop for gateway exit %s with container exit %s", (gatewayStatus, expected) => {
+  const session = fs.readFileSync(path.resolve(import.meta.dirname, "../../infra/gateway/hobby-session.sh"), "utf8");
+  const loop = session.slice(session.lastIndexOf("while true; do\n  exited=")).replace("[[ ! -v exited ]]", "[[ ${exited+x} != x ]]");
+  const script = `gateway_pid=11; children=(11); browser_pid=22; panel_pid=33; reopen_pid=''; reopen_desk=0; restart_browser=0
+wait() { exited=11; return ${gatewayStatus}; }
+${loop}`;
+  expect(spawnSync("/bin/bash", ["-c", script], { encoding: "utf8" }).status).toBe(expected);
+});
 const owned: Array<{ dir: string; root: ChildProcess; exit: Promise<number | null>; foreign?: ChildProcess; foreignExit?: Promise<unknown> }> = [];
 async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3000;

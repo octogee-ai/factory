@@ -14,6 +14,7 @@ import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation, type NormalFleetMutationDb } from "@octogee/core/normal-fleet-mutation";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
+import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
 import { runGatewayRuntimeExclusive, withGatewayRuntimeMutation } from './lib/gateway-runtime-mutation.js';
 import { createRetainedSourceTransfer, type RetainedSourceContext } from './lib/retained-source-transfer.js';
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
@@ -1813,6 +1814,7 @@ async function attemptClaimOrQueueOperation(
       const data = fresh.data() as unknown;
       if (!data || isOperationAuditRow(data)) return { outcome: "skipped" as const };
       const freshOperation = data as Operation;
+      await assertOwnerOperationUnfenced(deps.db, txn, op.id, freshOperation.input);
       if (freshOperation.kind === 'migrate-customer') await assertMigrationRestartUnfenced(deps.db,txn,freshOperation.input);
       let runningOpsSameKind: OperationRef[] = [];
       let pendingOpsSameKind: PendingOperationRef[] = [];
@@ -3741,17 +3743,17 @@ async function buildHandlers(
   });
 
   const gatewayVm = createGatewayVmHandler({
-    replaceStoppedComputer: async (gatewayId, operationId, assertAuthority) => {
+    replaceStoppedComputer: async (gatewayId, operationId, assertAuthority, options) => {
       const runtime = vmGatewayRuntimeRef.current;
       if (!runtime) throw new Error("retained-home boot replacement requires configured GCE runtime");
       const assertCurrent = async () => {
         await assertAuthority();
-        await withGatewayRuntimeMutation(db, gatewayId, async () => undefined);
+        await withGatewayRuntimeMutation(db, gatewayId, async () => undefined, options?.forceOwnerUid ? operationId : undefined);
       };
       return runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
-        actor: "cowboy", forced: false, what: "replace-builder-platform-boot", why: "Replace a stopped platform image while retaining the exact Builder home and pinned recovery images",
-        target: { gatewayId, operationId }, preActionStatus: {}, mutation: { retainedHome: true },
-        action: () => runtime.replaceStoppedComputer(gatewayId, operationId, assertCurrent),
+        actor: "cowboy", forced: !!options?.forceOwnerUid, what: "replace-builder-platform-boot", why: options?.forceOwnerUid ? "Operator accepted possible boot data loss for retained computer recovery" : "Replace a stopped platform image while retaining the exact Builder home and pinned recovery images",
+        target: { gatewayId, operationId }, preActionStatus: {}, mutation: { retainedHome: true, ...(options?.forceOwnerUid ? { forceOwnerUid: options.forceOwnerUid } : {}) },
+        action: () => runtime.replaceStoppedComputer(gatewayId, operationId, assertCurrent, options),
       });
     },
     vm: createGatewayComputeClient(logFn),

@@ -184,19 +184,24 @@ function claimableGatewayRetirementRoot(gatewayId, value) {
         root,
     };
 }
-export async function assertGatewayRuntimeMutationUnfenced(db, transaction, gatewayId) {
+export async function assertGatewayRuntimeMutationUnfenced(db, transaction, gatewayId, allowedComputerRecoveryOperationId) {
     const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
     if (root.data()?.runtimeRestartFence !== undefined) {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
     }
-    const [retainedTransfers, transferTargets, mirroredUsers] = await Promise.all([
+    const [retainedTransfers, transferTargets, mirroredUsers, computerRecoveries] = await Promise.all([
         transaction.get(db.collection("users")
             .where("provisioning.openclaw.sourceTransferFence.sourceGatewayId", "==", gatewayId)),
         transaction.get(db.collection("users")
             .where("provisioning.openclaw.sourceTransferFence.targetGatewayId", "==", gatewayId)),
         transaction.get(db.collection("users")
             .where("provisioning.openclaw.gatewayId", "==", gatewayId)),
+        transaction.get(db.collection("users")
+            .where("provisioning.computerRecovery.gatewayId", "==", gatewayId)),
     ]);
+    if (computerRecoveries.docs.some(doc => !allowedComputerRecoveryOperationId || doc.data()?.provisioning?.computerRecovery?.operationId !== allowedComputerRecoveryOperationId)) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} computer recovery is in progress`);
+    }
     if (retainedTransfers.size > 0 || transferTargets.size > 0 || mirroredUsers.docs.some(doc => customerRuntimeMutationFenced(doc.data()))) {
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
     }

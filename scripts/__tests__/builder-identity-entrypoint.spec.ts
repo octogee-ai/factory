@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readBuilderClaim, writeBuilderClaim, builderClaimFromIdentity } from "@octogee/shared/server/builder-claim";
 import type { BuilderIdentity } from "../../shared/types/builder-identity.js";
+import { FleetBrokerHttpError } from "../lib/fleet-broker-client.js";
 import {
   BUILDER_IDENTITY_FATAL_EXIT,
   resolveBuilderIdentityBoot,
@@ -93,6 +94,24 @@ describe("Builder identity pre-boot", () => {
     await expect(result).resolves.toEqual({ exitCode: 1 });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("503"));
     expect(readBuilderClaim(dir, "gw-alice")).toBeNull();
+  });
+
+  it("fails closed when the broker identifies a different bound gateway", async () => {
+    const dir = openclawDir();
+    const { result, log } = boot(dir, async () => {
+      throw new FleetBrokerHttpError("tenant binding rejected", 403, "request names a gatewayId other than the bound gateway");
+    });
+    await expect(result).resolves.toEqual({ exitCode: 72 });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("FATAL"));
+    expect(readBuilderClaim(dir, "gw-alice")).toBeNull();
+  });
+
+  it("retries an unbound tenant during binding propagation", async () => {
+    const dir = openclawDir();
+    const { result } = boot(dir, async () => {
+      throw new FleetBrokerHttpError("binding unavailable", 403, "request carries no gateway tenant binding");
+    });
+    await expect(result).resolves.toEqual({ exitCode: 1 });
   });
 });
 

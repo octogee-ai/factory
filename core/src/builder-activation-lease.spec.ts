@@ -111,6 +111,19 @@ function request(
 }
 
 describe("requestBuilderActivationLease", () => {
+  it("rejects new demand while a retained computer recovery owns the Builder", async () => {
+    const user = activeTrial();
+    (user.provisioning as Data).computerRecovery = { operationId: "op-recover" };
+    const { db, docs } = state(user);
+    await expect(request(db)).resolves.toMatchObject({ statusCode: 409, body: { code: "builder-computer-recovery-in-progress" } });
+    expect(((docs["users/uid-alice"].provisioning as Data).openclaw as Data).activationLease).toBeUndefined();
+  });
+  it("checks assignment authority before revealing a computer recovery fence", async () => {
+    const user = activeTrial();
+    (user.provisioning as Data).computerRecovery = { operationId: "op-recover" };
+    const { db } = state(user, { epoch: 5 });
+    await expect(request(db)).resolves.toMatchObject({ statusCode: 409, body: { code: "builder-runtime-assignment-stale" } });
+  });
   it("records one targetless, explicitly sized demand against the serving assignment", async () => {
     const { db, docs } = state();
 

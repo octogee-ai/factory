@@ -257,12 +257,14 @@ const VERBS: readonly VerbHelp[] = [
   {
     verb: "gw replace-computer",
     summary: "Replace a VM gateway's computer with a fresh one from the current image family.",
-    args: "<gw-id> [--idempotency-key=<key>] [--apply]",
+    args: "<gw-id> | --owner-uid=<uid> [--force --accept-boot-data-loss] [--idempotency-key=<key>] [--apply]",
     description:
-      "Uses POST /api/admin/gateways/:id/computer/replace. Requires a paused gateway and verified stopped computer. Cowboy retains the exact home disk, pins an admitted platform image and deletes only boot storage. Resume attaches that home; native recovery/migration and current SSH authority run before customer admission. Boot/system customizations are outside this home contract. Dry-run by default; pass --apply to send the request.",
+      "Uses the gateway or parked-owner computer replacement API. The owner form normally requires a fresh checkpoint and recovery proof. Break-glass --force --accept-boot-data-loss may delete unpublished project work and other boot-disk data; the exact home is retained. Stopped-computer and ownership checks still apply. Dry-run by default; pass --apply to send the request.",
     examples: [
       "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e",
       "fleet --env=test gw replace-computer ceckert-test-s-19a28b9e --apply",
+      "fleet --env=test gw replace-computer --owner-uid=USER_UID --apply",
+      "fleet --env=test gw replace-computer --owner-uid=USER_UID --force --accept-boot-data-loss --apply",
     ],
     writes: true,
   },
@@ -685,6 +687,18 @@ export function resolveFleetGatewayMutation(args: ParsedFleetArgs): AdminFleetRe
       return withIdempotency({ method: "DELETE", path: `/api/admin/gateways/${gatewayId}` });
     }
     case "replace-computer": {
+      if (args.flags["owner-uid"] !== undefined) {
+        const uid = args.flags["owner-uid"];
+        const force = args.flags.force === true && args.flags["accept-boot-data-loss"] === true;
+        if (args.positional.length !== 2 || typeof uid !== "string" || !uid || uid.length > 256 || uid.includes("/") || uid === "." || uid === ".." ||
+          Object.keys(args.flags).some(flag => !["owner-uid", "idempotency-key", "apply", "force", "accept-boot-data-loss"].includes(flag)) ||
+          ((args.flags.force !== undefined || args.flags["accept-boot-data-loss"] !== undefined) && !force) ||
+          (args.flags.apply !== undefined && args.flags.apply !== true) ||
+          (args.flags["idempotency-key"] !== undefined && !idempotencyKey)) {
+          throw new Error("gw replace-computer requires exactly --owner-uid=<uid> and optional --idempotency-key and --apply");
+        }
+        return withIdempotency({ method: "POST", path: `/api/admin/customers/${encodeURIComponent(uid)}/computer/replace`, body: force ? { force: true, acceptBootDataLoss: true } : {} });
+      }
       const target = resolveFleetGatewayTarget(args, "gw replace-computer");
       return {
         method: "POST",
@@ -1551,6 +1565,7 @@ async function runFleetGatewayMutation(apply: boolean): Promise<void> {
   const request = resolveFleetGatewayMutation(args);
   console.log(bold(`GW ${args.positional[1]?.toUpperCase() ?? ""}`));
   console.log(dim(`  ${request.method} ${request.path}`));
+  if (request.body?.force === true) console.log("  BREAK GLASS: boot disk data, including unpublished project work, may be lost; the verified home disk is retained.");
   if (!apply) {
     console.log(dim("--- DRY RUN (re-run with --apply to send the Admin API request) ---"));
     return;

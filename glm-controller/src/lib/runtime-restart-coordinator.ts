@@ -9,8 +9,13 @@ import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
 export async function assertMigrationRestartUnfenced(db:Firestore,transaction:Transaction,input:Record<string,unknown>):Promise<void> {
   const ids=[input.fromGatewayId,input.toGatewayId].filter((id):id is string=>typeof id==='string');
-  const roots=await Promise.all(ids.map(id=>transaction.get(db.collection("gateways").doc(id))));
+  const uid = typeof input.uid === 'string' && input.uid && !input.uid.includes('/') ? input.uid : null;
+  const [roots, owner] = await Promise.all([
+    Promise.all(ids.map(id=>transaction.get(db.collection("gateways").doc(id)))),
+    uid ? transaction.get(db.collection('users').doc(uid)) : null,
+  ]);
   if(roots.some(root=>root.data()?.runtimeRestartFence!==undefined))throw new Error('gateway runtime restart outcome is unresolved');
+  if (owner?.data()?.provisioning?.computerRecovery != null) throw new Error('Builder computer recovery is in progress');
 }
 export async function acquireRuntimeRestart(db:Firestore,fence:RuntimeRestartFence):Promise<void> {
   await db.runTransaction(async transaction=>{

@@ -6,13 +6,15 @@ import {
   writeBuilderClaim,
 } from "@octogee/shared/server/builder-claim";
 import type { BuilderIdentity } from "../../shared/types/builder-identity.js";
-import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
+import { GATEWAY_BINDING_MISMATCH_REASON } from "../../shared/types/fleet-broker.js";
+import { createFleetBrokerClient, FleetBrokerHttpError } from "../lib/fleet-broker-client.js";
 
 export const BUILDER_IDENTITY_FATAL_EXIT = 2;
+export const BUILDER_IDENTITY_REBOUND_EXIT = 72;
 
 export type BuilderIdentityBootResult =
   | { exitCode: 0; builderSlug: string }
-  | { exitCode: 1 | typeof BUILDER_IDENTITY_FATAL_EXIT };
+  | { exitCode: 1 | typeof BUILDER_IDENTITY_FATAL_EXIT | typeof BUILDER_IDENTITY_REBOUND_EXIT };
 
 export async function resolveBuilderIdentityBoot(input: {
   env: NodeJS.ProcessEnv;
@@ -29,6 +31,11 @@ export async function resolveBuilderIdentityBoot(input: {
   try {
     identity = await input.fetchIdentity();
   } catch (error) {
+    if (error instanceof FleetBrokerHttpError && error.status === 403 &&
+      error.denialReason === GATEWAY_BINDING_MISMATCH_REASON) {
+      input.log(`[builder-identity] FATAL: gateway ${gatewayId} does not match the bound gateway`);
+      return { exitCode: BUILDER_IDENTITY_REBOUND_EXIT };
+    }
     input.log(`[builder-identity] broker read failed: ${error instanceof Error ? error.message : String(error)}`);
     return { exitCode: 1 };
   }

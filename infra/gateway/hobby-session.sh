@@ -84,7 +84,8 @@ children+=("$!")
 /usr/local/bin/octo-desktop-control &
 children+=("$!")
 HOME=/home/node setsid /usr/local/bin/entrypoint.sh &
-children+=("$!")
+gateway_pid=$!
+children+=("$gateway_pid")
 OPENCLAW_STATE_DIR="$HOME/.openclaw-desktop" OPENCLAW_CONFIG_PATH="$HOME/.openclaw-desktop/openclaw.json" \
   OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}" \
   /usr/local/bin/octogee-desktop-node &
@@ -119,6 +120,9 @@ while true; do
       sleep 2
     fi
     launch_browser
+  elif [[ "$exited" == "$gateway_pid" && "$status" == 72 ]]; then
+    echo "hobby-desktop: gateway belongs to a rebound computer; stopping for replacement" >&2
+    exit 0
   else
     echo "hobby-desktop: required process $exited exited (status=$status)" >&2
     exit 1

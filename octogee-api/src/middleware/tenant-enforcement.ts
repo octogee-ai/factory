@@ -7,7 +7,7 @@ import {
 import {
   configuredBuilderBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
-import { RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
+import { GATEWAY_BINDING_MISMATCH_REASON, RETIRED_COMPUTER_BINDING_DENIAL_REASON } from "@octogee/shared/types/fleet-broker";
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 import { logger, redactRequestPath } from "../../../gateway-edge/src/middleware/logging.js";
@@ -371,7 +371,7 @@ async function gatewayDenialReason(
   const gatewayIds = requestedGatewayIds(req);
   const requestTargetsDifferentGateway = gatewayIds.some((gatewayId) => gatewayId !== bound.gatewayId);
   if (gatewayIds.length > 0 && requestTargetsDifferentGateway) {
-    return "request names a gatewayId other than the bound gateway";
+    return GATEWAY_BINDING_MISMATCH_REASON;
   }
   if (routeIsPlatformWideNotificationProducer(req)) {
     return "route is platform-only";
@@ -418,7 +418,7 @@ async function targetedDenialReason(
 }
 
 const PLACEMENT_DENIAL_REASONS: ReadonlySet<string> = new Set([
-  "request names a gatewayId other than the bound gateway",
+  GATEWAY_BINDING_MISMATCH_REASON,
   "request names a user not assigned to the bound gateway",
   "request names a workspace slug not assigned to the bound gateway",
   RETIRED_COMPUTER_BINDING_DENIAL_REASON,

@@ -4391,6 +4391,7 @@ export function addAdminFleetRoutes(
     target: Record<string, unknown>;
     preActionStatus: Record<string, unknown>;
     mutation: Record<string, unknown>;
+    forced?: boolean;
     action: () => Promise<T>;
     classifyResult?: (result: T) => NormalFleetMutationResult;
     idempotencyScope?: string;
@@ -4400,7 +4401,7 @@ export function addAdminFleetRoutes(
     const headerKey = input.req.get("Idempotency-Key")?.trim();
     return runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
       actor: actor.uid ?? "unknown",
-      forced: false,
+      forced: input.forced === true,
       what: input.what,
       why: input.why,
       target: input.target,
