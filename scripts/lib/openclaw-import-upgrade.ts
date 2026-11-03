@@ -46,6 +46,17 @@ export async function upgradeImportedAgentStores(input: {
   signal?: AbortSignal;
   query?: typeof queryAgentStore;
 }): Promise<void> {
+  const phase = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
+    const started = Date.now();
+    try {
+      const result = await action();
+      input.log(`[import-upgrade] phase=${name} status=done durationMs=${Date.now() - started}`);
+      return result;
+    } catch (error) {
+      input.log(`[import-upgrade] phase=${name} status=failed durationMs=${Date.now() - started}`);
+      throw error;
+    }
+  };
   const env = input.env ?? process.env;
   if (!env.OPENCLAW_AGENT_STORE_DSN?.trim()) throw new Error("import upgrade requires a PostgreSQL DSN");
   assertValidRoster(input.stores);
@@ -79,7 +90,7 @@ export async function upgradeImportedAgentStores(input: {
   try {
     const configPath = path.join(root, "openclaw.json");
     const run = input.run ?? runOpenClaw;
-    const expectedSchemaVersion = await cachedSchemaVersion(root, captured[0]!.agentId, run, env, assertCurrent);
+    const expectedSchemaVersion = await phase("descriptor", () => cachedSchemaVersion(root, captured[0]!.agentId, run, env, assertCurrent));
     const verifyMetadata = async (exact: boolean) => {
       let needsUpgrade = false;
       for (const store of captured) {
@@ -97,7 +108,11 @@ export async function upgradeImportedAgentStores(input: {
       }
       return needsUpgrade;
     };
-    if (!await verifyMetadata(false)) return;
+    if (!await phase("pre-metadata", () => verifyMetadata(false))) {
+      input.log("[import-upgrade] upgrade=skipped schemas=current");
+      return;
+    }
+    input.log("[import-upgrade] upgrade=required schemas=older");
     const options = { env: { PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", HOME: root,
       OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_AGENT_STORE_DSN: env.OPENCLAW_AGENT_STORE_DSN },
       signal: input.signal, timeoutMs: MIGRATION_IMPORT_DOCTOR_PHASE_TIMEOUT_MS };
@@ -111,7 +126,7 @@ export async function upgradeImportedAgentStores(input: {
       finally { await assertCurrent(); }
       if (result.code !== 0) throw new Error(`import ${phase} failed (exit ${result.code})`);
     };
-    await runPrivate(["setup", "--baseline", "--skip-bootstrap", "--json"], "bootstrap setup");
+    await phase("bootstrap", () => runPrivate(["setup", "--baseline", "--skip-bootstrap", "--json"], "bootstrap setup"));
     const initialized = JSON.parse(await fs.readFile(configPath, "utf8"));
     await fs.rm(path.join(root, "agents"), { recursive: true, force: true });
     const entries: Record<string, { workspace: string }> = {};
@@ -126,20 +141,20 @@ export async function upgradeImportedAgentStores(input: {
         postgres: { connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" }, schemaPrefix: "octogee" } } }), { mode: 0o600 });
     await assertCurrent();
     let fast;
-    try { fast = await run(["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"], options); }
+    try { fast = await phase("doctor", () => run(["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"], options)); }
     finally { await assertCurrent(); }
     if (fast.code !== 0) {
       input.log(`[import-upgrade] fast Doctor failed (exit ${fast.code}); retrying full Doctor`);
       try {
-        await runPrivate(["doctor", "--fix", "--non-interactive"], "full PostgreSQL repair");
-        await verifyMetadata(true);
+        await phase("full-doctor", () => runPrivate(["doctor", "--fix", "--non-interactive"], "full PostgreSQL repair"));
+        await phase("post-metadata", () => verifyMetadata(true));
       } catch (error) {
         input.log(`[import-upgrade] full Doctor repair failed: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
       input.log("[import-upgrade] full Doctor repair completed and metadata verified");
     } else {
-      await verifyMetadata(true);
+      await phase("post-metadata", () => verifyMetadata(true));
     }
   } finally {
     await fs.rm(root, { recursive: true, force: true });

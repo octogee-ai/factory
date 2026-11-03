@@ -46,6 +46,11 @@ it("runs Native Doctor against only the carried PostgreSQL agent in private stat
     ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"],
   ]);
   expect(f.assertCurrent.mock.calls.length).toBeGreaterThanOrEqual(4);
+  expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/phase=descriptor .*durationMs=/));
+  expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/phase=pre-metadata .*durationMs=/));
+  expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/phase=bootstrap .*durationMs=/));
+  expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/phase=doctor .*durationMs=/));
+  expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/phase=post-metadata .*durationMs=/));
   expect(await fs.readFile(f.stores[0]!.anchorPath)).toEqual(before);
   for (const [, options] of f.run.mock.calls) await expect(fs.stat(options.env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
 });
@@ -132,6 +137,7 @@ it("skips Doctor when all authorized PostgreSQL agents already match the install
   });
   await upgradeImportedAgentStores({ ...f, query: query as unknown as typeof import("@octogee/core/agent-postgres").queryAgentStore });
   expect(f.run).toHaveBeenCalledTimes(1);
+  expect(f.log).toHaveBeenCalledWith(expect.stringContaining("upgrade=skipped"));
 });
 
 it.each(["newer", "wrong-owner", "partial-upgrade"] as const)("refuses agent adoption when PostgreSQL metadata is %s", async problem => {
