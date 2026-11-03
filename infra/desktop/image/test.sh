@@ -120,6 +120,8 @@ read -r -a unit_states <<< "$units"
 [[ "${unit_states[*]}" == 'active active active active active' ]] || { echo "required units are not active: $units" >&2; exit 1; }
 home_disk="$(vssh 'systemctl show octo-home-disk.service --property=Result --value; findmnt -no SOURCE /srv/octogee; findmnt -no SOURCE /home/octo')"
 [[ "$home_disk" == success*"/dev/"*"[/desktop-home]"* ]] || { echo "octo-home-disk did not mount the home disk: $home_disk" >&2; vssh 'journalctl -u octo-home-disk --no-pager | tail -20' >&2 || true; exit 1; }
+zram="$(vssh 'swapon --noheadings --show=NAME; cat /sys/block/zram0/comp_algorithm 2>/dev/null || true; sysctl -n vm.swappiness')"
+[[ "$zram" == *"/dev/zram0"* && "$zram" == *"[zstd]"* && "${zram##*$'\n'}" == 180 ]] || { echo "zram swap is not configured as zstd with swappiness 180: ${zram//$'\n'/ }" >&2; exit 1; }
 grow_root="$(vssh 'systemctl show octo-grow-root.service --property=Result --value')"
 [[ "$grow_root" == success ]] || { echo "octo-grow-root did not succeed: $grow_root" >&2; vssh 'journalctl -u octo-grow-root --no-pager | tail -20' >&2 || true; exit 1; }
 wait_desktop
@@ -170,6 +172,7 @@ cat <<RESULT
 | vkms + vgem loaded | ${modules}/2 |
 | Units (seatd, desktop, docker, lifecycle, gateway agent) | ${units} |
 | Root filesystem growth (octo-grow-root) | ${grow_root} |
+| zram swap | /dev/zram0, zstd, swappiness 180 |
 | Desktop service restarts needed | 0 |
 | Chromium window (the Desk app window) | "${chromium_title}" |
 | Accessibility bus | ${accessibility} |

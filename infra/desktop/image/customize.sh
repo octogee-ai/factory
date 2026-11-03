@@ -16,7 +16,7 @@ log "packages"
 OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu --noconfirm --needed \
   at-spi2-core wayvnc x11vnc grim wtype wl-clipboard slurp jq python python-pip python-websocket-client bc \
   meson ninja wayland wayland-protocols libxkbcommon git \
-  chromium xorg-xwayland noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono >/tmp/pacman.log 2>&1 \
+  chromium xorg-xwayland noto-fonts noto-fonts-cjk noto-fonts-emoji ttf-jetbrains-mono zram-generator >/tmp/pacman.log 2>&1 \
   || { tail -20 /tmp/pacman.log; exit 1; }
 
 log "Omarchy migrations"
