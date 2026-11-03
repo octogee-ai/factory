@@ -1906,6 +1906,20 @@ describe("stopped retained-home boot replacement", () => {
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({ retainedHome: expect.objectContaining(home), image: expect.objectContaining(accepted) }));
     expect(h.vm.start).not.toHaveBeenCalled();
   });
+  it("resumes a suspended computer on an outdated boot instead of stopping and replacing it", async () => {
+    const h = harness(vmDoc(), {
+      describe: vi.fn(async () => ({ ...ownedStopped, status: "SUSPENDED" })),
+      readBootImage: vi.fn(async () => CURRENT_IMAGE),
+      readFamilyImage: vi.fn(async () => accepted),
+      readImage: vi.fn(async () => accepted),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.resume).toHaveBeenCalledWith(COMPUTER, ownedStopped.zone);
+    expect(h.vm.stop).not.toHaveBeenCalled();
+    expect(h.vm.deleteRetainingHome).not.toHaveBeenCalled();
+    expect(h.vm.create).not.toHaveBeenCalled();
+    expect(h.vm.readFamilyImage).not.toHaveBeenCalled();
+  });
   it("updates a parked computer when a new Builder gateway claims it from Shared", async () => {
     let deleted = false;
     let source = { ...ownedStopped, gatewayId: "b-old", labels: { ...ownedStopped.labels, "octogee-gateway-id": "b-old" }, metadata: { ...ownedStopped.metadata, "gateway-id": "b-old" } };

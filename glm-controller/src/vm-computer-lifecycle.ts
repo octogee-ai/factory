@@ -740,7 +740,7 @@ async function bindParkedComputer(deps: ComputerLifecycleDeps, gatewayId: string
 }
 
 async function upgradeStoppedBoot(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, spec: GatewayVmSpec): Promise<GatewayVmDescription | null> {
-  if (!PARKED_STATUSES.has(description.status) || !description.instanceId) return description;
+  if (!STOPPED_STATUSES.has(description.status) || !description.instanceId) return description;
   try {
     const [current, latest] = await Promise.all([
       deps.vm.readBootImage(description.name, description.zone),
