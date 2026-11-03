@@ -39,7 +39,6 @@ import {
   BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
   CONFIG_PATCH_DEADLINE_MS,
   MIGRATING_IN_PIN_TTL_MS,
-  VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
 import {
   MIGRATION_QUIESCE_GRACE_MS,
@@ -2062,20 +2061,6 @@ async function settleActivatedImport(
       );
     }
     await removeActivationManifest(OPENCLAW_DIR, slug);
-    ctx.log(
-      `[import:${slug}] verify: waiting for coach MM account to report running+connected (timeoutMs=${VERIFY_ACCOUNT_TIMEOUT_MS})`,
-    );
-    const healthy = await waitForAccountHealthy(ctx, {
-      slug,
-      timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS,
-    });
-    if (!healthy) {
-      return reportPendingVerification(
-        ctx,
-        slug,
-        `channel did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`,
-      );
-    }
     await logActivatedCoachModel(ctx, slug);
     ctx.log(`[import:${slug}] activation complete`);
     return undefined;

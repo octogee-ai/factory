@@ -65,6 +65,7 @@ import {
   MIGRATION_VERIFY_TIMEOUT_MS,
   MIGRATION_RSYNC_PORT_DEFAULT,
   SIGNATURE_HEADER,
+  VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
 import type { FleetBrokerAgentAnchor } from "../../shared/types/fleet-broker.js";
 import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
@@ -2231,6 +2232,9 @@ async function activateBuilderCoach(
   signal.throwIfAborted();
   if (verificationPending) {
     throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
+  }
+  if (!await deps.adapter.waitForAccountHealthy({ slug, timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS })) {
+    throw new Error(`Builder Coach activation verification failed: ${slug}-coach did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`);
   }
 }
 

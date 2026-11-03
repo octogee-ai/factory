@@ -1412,9 +1412,23 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     expect(rpc.secretsReload.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.removeActivationManifest.mock.invocationCallOrder[0]!,
     );
-    expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(client.uidForSlug).not.toHaveBeenCalled();
   });
+
+  it("commits activation without waiting for the coach account to connect, leaving that check to verify-target", async () => {
+    const rpc = {
+      channelsStatus: vi.fn(async () => ({
+        channelAccounts: { mattermost: [{ accountId: "tester10-coach", running: false, connected: false }] },
+      })),
+      configGet: vi.fn(async () => configSnapshot({ agents: { list: [] } })),
+      agentsCreate: rosterRpc().agentsCreate,
+      secretsReload: vi.fn(async () => ({ ok: true, warningCount: 0 })),
+    } as unknown as GatewayRpcClient;
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+
+    await expect(adapter.activateImportedCustomer("tester10")).resolves.toEqual({ appliedFingerprint: "fp-tester10" });
+    expect(rpc.channelsStatus).not.toHaveBeenCalled();
+  }, 5_000);
 
   describe("import secrets.reload gate", () => {
     const importedConfig = {
@@ -2077,7 +2091,6 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       "[import:tester10] secrets.reload complete with 4 warnings",
     );
     expect(rpc.secretsReload).toHaveBeenCalledOnce();
-    expect(rpc.channelsStatus).toHaveBeenCalled();
     expect(events.indexOf("[import:tester10] secrets.reload complete with 4 warnings")).toBeLessThan(
       events.indexOf("tester10-coach"),
     );

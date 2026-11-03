@@ -41,6 +41,7 @@ import { liveImportAdmissionPath } from "../lib/migration-staging.js";
 import {
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
   SIGNATURE_HEADER,
+  VERIFY_ACCOUNT_TIMEOUT_MS,
   type QuiesceRequestBody,
   type UnmountRequestBody,
   type ExportPathsRequestBody,
@@ -4588,6 +4589,27 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       }
     },
   );
+
+  it("fails a live Builder activation whose coach account does not connect, since no verify-target follows", async () => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
+    const target = liveBuilderTargetImport();
+    const migrationId = "mig-live-builder-coach-offline";
+    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+      adapter: { ...target.adapter, waitForAccountHealthy: vi.fn(async () => false) },
+      deps: { ...target.deps, procRoot } });
+    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId);
+
+    expect(deps.adapter.waitForAccountHealthy).toHaveBeenCalledExactlyOnceWith({ slug: "chris", timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS });
+    expect(result.getStatus()).toBe(500);
+    expect(result.getBody()).toMatchObject({
+      message: `Builder Coach activation verification failed: chris-coach did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`,
+    });
+    expect(deps.adapter.onMounted).not.toHaveBeenCalled();
+  });
 
   it("resumes a live release that left native cleanup pending before swapping the agent database", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
