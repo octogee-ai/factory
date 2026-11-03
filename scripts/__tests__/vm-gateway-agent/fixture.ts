@@ -7,6 +7,7 @@ export function bundleFixture(overrides: Partial<GatewayVmRuntimeBundle> = {}): 
     namespace: "octogee-test",
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
     imageTag: "main.abc",
+    desktop: "omarchy",
     init: {
       name: "fix-perms",
       image: "us-central1-docker.pkg.dev/octogee/octogee/gateway:main.abc",

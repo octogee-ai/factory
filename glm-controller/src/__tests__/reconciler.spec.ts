@@ -860,12 +860,12 @@ describe("gateway convergence pass outcomes", () => {
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
 
-  it("converges a cluster Builder despite retained GCE computer state", async () => {
+  it("converges an existing cluster Builder despite retained GCE computer state", async () => {
     const roots = {
       hobby: durableRoot({ gatewayId: "hobby", gatewayClass: "builder", profile: null, imageProfile: "builder", sizingTier: "s", ownerUid: "u", builderSlug: "alice", liveRelease: null }),
       healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
     };
-    const runtimes: Record<string, Record<string, unknown>> = {};
+    const runtimes: Record<string, Record<string, unknown>> = { hobby: servingRuntime({ gatewayId: "hobby", runtime: "cluster" }) };
     const db = makeDb({ roots, runtimes, callbacks: {},
       users: { u: { provisioning: { computer: { id: "retained-computer" } } } },
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])),

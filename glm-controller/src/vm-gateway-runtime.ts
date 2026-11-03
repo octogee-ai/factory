@@ -5,15 +5,18 @@ import {
   GLM_GATEWAYS_COLLECTION,
   gatewayVmRuntimeDocPath,
   isGatewayRuntime,
+  isGatewayVmBootDiskType,
+  isGatewayVmDesktop,
   resolveGatewayRuntime,
   type GatewayRuntime,
+  type GatewayVmDesktop,
   type GatewayVmSpec,
   type GatewayVmState,
   type HelmInstancesMap,
   type RuntimeBuilderIdentity,
 } from "@octogee/shared/types/glm";
 import type { GatewayVmClient } from "./lib/compute-vm.js";
-import { createComputerLifecycle, recordVmObservation } from "./vm-computer-lifecycle.js";
+import { createComputerLifecycle, recordVmObservation, vmSpecDesktop } from "./vm-computer-lifecycle.js";
 import type { KubectlSubprocess } from "./fleet-ingress.js";
 import {
   helmTemplateArgsFromUpgradeArgs,
@@ -90,19 +93,28 @@ export function parseGatewayVmSpec(raw: string | undefined): GatewayVmSpec {
   }
   if (typeof spec.diskSizeGb !== "number" || spec.diskSizeGb <= 0) throw new Error("GATEWAY_VM_SPEC_JSON.diskSizeGb must be a positive number");
   if (typeof spec.homeDiskSizeGb !== "number" || spec.homeDiskSizeGb <= 0) throw new Error("GATEWAY_VM_SPEC_JSON.homeDiskSizeGb must be a positive number");
-  if (spec.provisioningModel !== "SPOT" && spec.provisioningModel !== "STANDARD") {
-    throw new Error("GATEWAY_VM_SPEC_JSON.provisioningModel must be SPOT or STANDARD");
-  }
+  assertSpecChoices(spec);
   assertZones(spec.zones);
   return spec as GatewayVmSpec;
 }
 
+function assertSpecChoices(spec: Partial<GatewayVmSpec>): void {
+  if (spec.provisioningModel !== "SPOT" && spec.provisioningModel !== "STANDARD") {
+    throw new Error("GATEWAY_VM_SPEC_JSON.provisioningModel must be SPOT or STANDARD");
+  }
+  if (!isGatewayVmDesktop(spec.desktop)) throw new Error("GATEWAY_VM_SPEC_JSON.desktop must be omarchy or x11");
+  if (!isGatewayVmBootDiskType(spec.bootDiskType)) throw new Error("GATEWAY_VM_SPEC_JSON.bootDiskType must be pd-ssd or pd-balanced");
+}
+
 type BuilderComputerPolicy = ReturnType<typeof resolveBuilderComputerPolicy>;
-type TierVmShape = Pick<GatewayVmSpec, "machineType" | "homeDiskSizeGb" | "provisioningModel">;
+type TierVmShape = Pick<GatewayVmSpec, "machineType" | "diskSizeGb" | "bootDiskType" | "homeDiskSizeGb" | "provisioningModel" | "desktop">;
 
 function tierVmShape(computer: BuilderComputerPolicy): TierVmShape {
-  if (!computer.machineType || !computer.provisioningModel) throw new Error("a gce-vm Builder tier needs a machine type and provisioning model");
-  return { machineType: computer.machineType, homeDiskSizeGb: computer.homeSizeGiB, provisioningModel: computer.provisioningModel };
+  if (!computer.machineType || !computer.provisioningModel || !computer.bootDisk) throw new Error("a gce-vm Builder tier needs a machine type, provisioning model and boot disk");
+  return {
+    machineType: computer.machineType, diskSizeGb: computer.bootDisk.sizeGb, bootDiskType: computer.bootDisk.type,
+    homeDiskSizeGb: computer.homeSizeGiB, provisioningModel: computer.provisioningModel, desktop: computer.desktop,
+  };
 }
 
 function runtimeRecord(value: unknown): Record<string, unknown> {
@@ -150,7 +162,7 @@ async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Rec
   if (computer.runtime !== "gce-vm") return;
   const prior = runtimeRecord(data.vmSpec);
   const shape = tierVmShape(computer);
-  if (prior.machineType === shape.machineType && prior.homeDiskSizeGb === shape.homeDiskSizeGb && prior.provisioningModel === shape.provisioningModel) return;
+  if ((Object.keys(shape) as Array<keyof TierVmShape>).every((key) => prior[key] === shape[key])) return;
   await input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId).set({
     vmSpec: { ...input.vmSpec, ...prior, ...shape },
   }, { merge: true });
@@ -220,9 +232,9 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     return ip;
   }
 
-  async function renderManifests(opts: Parameters<HelmRunner["upsertInstance"]>[0]): Promise<unknown[]> {
+  async function renderManifests(opts: Parameters<HelmRunner["upsertInstance"]>[0], desktop: GatewayVmDesktop): Promise<unknown[]> {
     const release = `octogee-gw-${opts.revisionId ?? opts.gatewayId}`;
-    const args = [...helmTemplateArgsFromUpgradeArgs(buildUpgradeArgs({ ...opts, release, upgradeTimeout })), "--set", "computerDesktop=omarchy", "--set", "runtimeKind=gce-vm"];
+    const args = [...helmTemplateArgsFromUpgradeArgs(buildUpgradeArgs({ ...opts, release, upgradeTimeout })), "--set", `computerDesktop=${desktop}`, "--set", "runtimeKind=gce-vm"];
     const rendered = await deps.runHelm(args);
     if (rendered.code !== 0) {
       throw new Error(`helm template ${release} failed (code=${rendered.code}): ${rendered.stderr.trim() || rendered.stdout.trim()}`);
@@ -290,7 +302,8 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     async upsertInstance(opts) {
       const { gatewayId } = opts;
       if (deps.ensureAuthSecret) await deps.ensureAuthSecret({ namespace: deps.namespace, gatewayId });
-      const [manifests, bridge] = await Promise.all([renderManifests(opts), bridgeIp()]);
+      const desktop = vmSpecDesktop(runtimeRecord((await glm(gatewayId).get()).data()).vmSpec as Partial<GatewayVmSpec> | undefined, deps.vmSpec);
+      const [manifests, bridge] = await Promise.all([renderManifests(opts, desktop), bridgeIp()]);
       const ownerUid = opts.builderIdentity?.ownerUid;
       const homeStorageId = ownerUid ? (await deps.db.collection("users").doc(ownerUid).get()).data()?.provisioning?.homeStorage?.disk?.id : undefined;
       const bundle = await renderVmRuntimeBundle({
@@ -300,6 +313,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         namespace: deps.namespace,
         imageRepository: opts.imageRepository,
         imageTag: opts.imageTag,
+        desktop,
         computer: { serviceAccountEmail: deps.vmSpec.serviceAccountEmail, projectId: deps.computeProjectId },
         manifests,
         readSecret,

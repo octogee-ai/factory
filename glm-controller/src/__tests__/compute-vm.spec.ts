@@ -16,8 +16,9 @@ const input: CreateGatewayVmInput = {
   zones: ["us-west1-b"],
   machineType: "n2-standard-4",
   imageFamily: "octogee-computer",
-  diskSizeGb: 40, homeDiskSizeGb: 20,
+  diskSizeGb: 40, bootDiskType: "pd-ssd", homeDiskSizeGb: 20,
   provisioningModel: "SPOT",
+  desktop: "omarchy",
   serviceAccountEmail: "octogee-gw-b-mama-3-abc-hobby@octogee-test.iam.gserviceaccount.com",
   subnetwork: "regions/us-west1/subnetworks/octogee-gateways",
   labels: { "octogee-gateway-id": "b-mama-3-abc-hobby", "octogee-owner-uid": "owner-a", purpose: "octogee-computer" },
@@ -76,6 +77,13 @@ describe("instanceInsertBody", () => {
     expect(body.disks[1]).toMatchObject({ autoDelete: false,
       initializeParams: { diskSizeGb: "10", diskType: "zones/us-west1-b/diskTypes/pd-balanced",
         labels: { "octogee-owner-uid": "owner-a", "octogee-storage": "customer-home" } } });
+  });
+
+  it("creates the boot disk with the tier's disk type", () => {
+    expect((instanceInsertBody("octogee-test", input, "us-west1-b", "SPOT", IMAGE) as Record<string, any>).disks[0].initializeParams.diskType)
+      .toBe("zones/us-west1-b/diskTypes/pd-ssd");
+    expect((instanceInsertBody("octogee-test", { ...input, bootDiskType: "pd-balanced" }, "us-west1-b", "SPOT", IMAGE) as Record<string, any>).disks[0].initializeParams.diskType)
+      .toBe("zones/us-west1-b/diskTypes/pd-balanced");
   });
 
   it("refuses a computer without an owner", () => {

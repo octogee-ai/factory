@@ -96,7 +96,7 @@ const signedUpload = { url: "https://storage.example/customers/bob/computer-home
 describe("homeScope", () => {
   it("derives the home volume and builder slug from the bundle and is absent when either is missing", () => {
     const scope = homeScope("/srv/octogee", bundleFixture({ builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }));
-    expect(scope).toEqual({ slug: "bob", dataDir: "/srv/octogee/volumes/data", marker: "/srv/octogee/home-checkpoint.marker", desktopDir: "/srv/octogee/desktop-home", restorePending: "/srv/octogee/home-restore.pending" });
+    expect(scope).toEqual({ slug: "bob", dataDir: "/srv/octogee/volumes/data", marker: "/srv/octogee/home-checkpoint.marker", desktopDir: "/srv/octogee/desktop-home", restorePending: "/srv/octogee/home-restore.pending", hostToolInventory: true });
     expect(homeScope("/srv/octogee", bundleFixture())).toBeNull();
     expect(homeScope("/srv/octogee", bundleFixture({ volumes: [{ name: "data", kind: "identityToken", audience: "x" }] }))).toBeNull();
   });
@@ -237,6 +237,20 @@ it("keeps checkpointing and preserves tool storage if optional inventory is unre
   expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("retaining tool storage"));
 });
 
+it("archives the X11 gateway's tool storage instead of trusting the host home's inventory", async () => {
+  const h = fakeHome({}, {
+    "/internal/fleet/computer-home/checkpoint-url": () => ({ status: 200, body: { name: NAME, upload: { url: "https://storage.example/upload", method: "PUT", requiredHeaders: {} } } }),
+    "/internal/fleet/computer-home/commit": () => ({ status: 200, body: { name: NAME } }),
+  });
+  const scope = homeScope("/srv/octogee", bundleFixture({ desktop: "x11", builderIdentity: { ownerUid: "uid-bob", builderSlug: "bob" } }))!;
+  expect(scope.hostToolInventory).toBe(false);
+  expect(await checkpointHome(h.deps, scope, { force: true })).toMatchObject({ status: "uploaded" });
+  expect(h.deps.desktop.tools).not.toHaveBeenCalled();
+  const tar = h.shell.find(value => value.startsWith("tar --create"));
+  expect(tar).not.toContain("--exclude=desktop-home/.local/share/mise");
+  expect(tar).toContain("--exclude=desktop-home/.cache/mise");
+});
+
 describe("restoreHome", () => {
   const record = { name: NAME, size: 2048, sha256: SHA, completedAt: 5, download: { url: "https://storage.example/download", method: "GET", gcsPath: "p", expiresAt: "e" } };
 
@@ -345,7 +359,7 @@ describe.runIf(process.platform === "linux").each([".octogee-source-doctor-diagn
       await fs.mkdir(path.dirname(file!), { recursive: true });await fs.writeFile(file!, contents!);
     }
     const scope: HomeScope = { slug: "alice", dataDir: data, desktopDir: desktop,
-      marker: path.join(root, "marker"), restorePending: path.join(root, "restore-pending") };
+      marker: path.join(root, "marker"), restorePending: path.join(root, "restore-pending"), hostToolInventory: true };
     return { root, data, scope, privateFile, persona, userFile };
   }
 

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +30,7 @@ if command == 'mountpoint':
     sys.exit(0 if args[-1] in layout.get('mounted', []) else 1)
 `;
 
-async function fixture(layout: { probe: number; fstype?: string; attached?: boolean; mounted?: string[]; stateMount?: string; desktopMount?: string }) {
+async function fixture(layout: { probe: number; fstype?: string; attached?: boolean; mounted?: string[]; stateMount?: string; desktopMount?: string; desktopWanted?: number }) {
   const root = await mkdtemp(`${tmpdir()}/octogee-home-disk-`);
   roots.push(root);
   const paths = { device: `${root}/dev/scsi-0Google_PersistentDisk_octogee-home`, stateRoot: `${root}/srv/octogee`, userHome: `${root}/home/octo` };
@@ -41,6 +42,7 @@ async function fixture(layout: { probe: number; fstype?: string; attached?: bool
   const mounted = (layout.mounted ?? []).map((name) => paths[name as keyof typeof paths]);
   await writeFile(`${root}/layout.json`, JSON.stringify({ ...layout, mounted }));
   for (const name of ["blkid", "mkfs.btrfs", "mountpoint", "mount", "btrfs", "findmnt"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+  await writeFile(`${root}/desktop-wanted`, `#!/bin/sh\nexit ${layout.desktopWanted ?? 0}\n`, { mode: 0o755 });
   const env = {
     ...process.env,
     PATH: `${root}/bin:${process.env.PATH}`,
@@ -49,12 +51,36 @@ async function fixture(layout: { probe: number; fstype?: string; attached?: bool
     OCTO_VM_STATE_ROOT: paths.stateRoot,
     OCTO_USER_HOME: paths.userHome,
     OCTO_HOME_DEVICE_WAIT_SECONDS: "1",
+    OCTO_DESKTOP_WANTED: `${root}/desktop-wanted`,
   };
   const calls = async () => (await readFile(`${root}/calls`, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);
   return { env, calls, paths };
 }
 
 describe("octo-home-disk", () => {
+  it("asks the desktop selector the image ships, at the path it is installed to", async () => {
+    const source = await readFile(script, "utf8");
+    const selector = /OCTO_DESKTOP_WANTED:-(\/usr\/local\/bin\/[a-z-]+)\}/.exec(source)?.[1];
+    expect(selector).toBe("/usr/local/bin/octo-desktop-wanted");
+    await expect(access(resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs", `.${selector}`), constants.X_OK)).resolves.toBeUndefined();
+  });
+  it("keeps an X11 computer's login home on the boot disk and leaves the desktop home to its gateway", async () => {
+    const h = await fixture({ probe: 0, fstype: "btrfs", desktopWanted: 1 });
+    const { stdout } = await run("bash", [script], { env: h.env });
+    expect(await readFile(`${h.paths.stateRoot}/desktop-home/.bashrc`, "utf8")).toBe("image default\n");
+    expect((await h.calls()).filter(([command, ...args]) => command === "mount" && args.includes("--bind"))).toEqual([]);
+    expect(stdout).toContain(`${h.paths.userHome} stays the boot-disk login home`);
+  });
+  it("refuses an X11 computer whose login home is already bound to the home disk", async () => {
+    const h = await fixture({ probe: 0, fstype: "btrfs", desktopWanted: 1, mounted: ["stateRoot", "userHome"] });
+    await mkdir(`${h.paths.stateRoot}/desktop-home`, { recursive: true });
+    await expect(run("bash", [script], { env: h.env })).rejects.toThrow(/X11 computer's .* is bound to the home disk/);
+  });
+  it("refuses to bind the home when it cannot tell which desktop the computer runs", async () => {
+    const h = await fixture({ probe: 0, fstype: "btrfs", desktopWanted: 255 });
+    await expect(run("bash", [script], { env: h.env })).rejects.toThrow(/cannot tell which desktop this computer runs/);
+    expect((await h.calls()).filter(([command, ...args]) => command === "mount" && args.includes("--bind"))).toEqual([]);
+  });
   it("adds native desktop defaults to a migrated Hobby home without overwriting user files", async () => {
     const h = await fixture({ probe: 0, fstype: "btrfs" });
     await mkdir(`${h.paths.stateRoot}/desktop-home`, { recursive: true });

@@ -9,6 +9,7 @@ const SCOPE: HomeScope = {
   marker: "/srv/octogee/home-checkpoint.marker",
   desktopDir: "/srv/octogee/desktop-home",
   restorePending: "/srv/octogee/home-restore.pending",
+  hostToolInventory: true,
 };
 const DESK_JSON = "/srv/octogee/desktop-home/.config/octogee/desk.json";
 const DESK_SVG = "/srv/octogee/desktop-home/.config/octogee/desk.svg";

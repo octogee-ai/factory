@@ -50,6 +50,12 @@ export declare const GATEWAY_RUNTIMES: readonly ["cluster", "gce-vm"];
 export type GatewayRuntime = (typeof GATEWAY_RUNTIMES)[number];
 export declare function isGatewayRuntime(value: unknown): value is GatewayRuntime;
 export declare function resolveGatewayRuntime(value: unknown): GatewayRuntime;
+export declare const GATEWAY_VM_BOOT_DISK_TYPES: readonly ["pd-ssd", "pd-balanced"];
+export type GatewayVmBootDiskType = (typeof GATEWAY_VM_BOOT_DISK_TYPES)[number];
+export declare function isGatewayVmBootDiskType(value: unknown): value is GatewayVmBootDiskType;
+export declare const GATEWAY_VM_DESKTOPS: readonly ["omarchy", "x11"];
+export type GatewayVmDesktop = (typeof GATEWAY_VM_DESKTOPS)[number];
+export declare function isGatewayVmDesktop(value: unknown): value is GatewayVmDesktop;
 export declare const GATEWAY_VM_PROVISIONING_MODELS: readonly ["SPOT", "STANDARD"];
 export type GatewayVmProvisioningModel = (typeof GATEWAY_VM_PROVISIONING_MODELS)[number];
 export interface GatewayVmSpec {
@@ -58,8 +64,10 @@ export interface GatewayVmSpec {
     imageFamily: string;
     imageProject?: string;
     diskSizeGb: number;
+    bootDiskType: GatewayVmBootDiskType;
     homeDiskSizeGb: number;
     provisioningModel: GatewayVmProvisioningModel;
+    desktop: GatewayVmDesktop;
     serviceAccountEmail: string;
     subnetwork: string;
 }
@@ -162,6 +170,8 @@ export interface GatewayVmRuntimeBundle {
     namespace?: string;
     imageRepository: string;
     imageTag: string;
+    /** Absent on bundles rendered before computers named their desktop; those computers run Omarchy. */
+    desktop?: GatewayVmDesktop;
     init: GatewayVmRuntimeContainer | null;
     containers: GatewayVmRuntimeContainer[];
     volumes: GatewayVmRuntimeVolume[];

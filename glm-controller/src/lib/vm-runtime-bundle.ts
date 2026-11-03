@@ -7,6 +7,7 @@ import {
   GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
   GATEWAY_DESKTOP_NODE_STATE_VOLUME,
   GATEWAY_DESKTOP_RUNTIME_DIR,
+  type GatewayVmDesktop,
   type GatewayVmRuntimeBundle,
   type GatewayVmRuntimeContainer,
   type GatewayVmRuntimeMount,
@@ -124,6 +125,7 @@ export interface RenderVmRuntimeBundleInput {
   namespace: string;
   imageRepository: string;
   imageTag: string;
+  desktop: GatewayVmDesktop;
   computer: GatewayComputerIdentity;
   manifests: unknown[];
   readSecret: (name: string, key: string) => Promise<string>;
@@ -219,14 +221,15 @@ async function renderContainer(
       ...env,
       ...GATEWAY_COMPUTER_ENV,
       GATEWAY_RUNTIME_KIND: "gce-vm",
-      GATEWAY_COMPUTER_DESKTOP: "omarchy",
+      GATEWAY_COMPUTER_DESKTOP: input.desktop,
       OCTOGEE_DESKTOP_NODE_IDENTITY_PATH: GATEWAY_DESKTOP_NODE_IDENTITY_PATH,
       GATEWAY_COMPUTER_SERVICE_ACCOUNT_EMAIL: input.computer.serviceAccountEmail,
       GATEWAY_COMPUTER_PROJECT_ID: input.computer.projectId,
       GATEWAY_COMPUTER_INSTANCE_ID: VM_INSTANCE_ID_PLACEHOLDER,
     };
   }
-  else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_DESKTOP: "omarchy" };
+  else if (container.name === GATEWAY_CONTAINER_NAME) env = { ...env, GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_DESKTOP: input.desktop };
+  const hostDesktopNode = input.desktop === "omarchy" && container.name === GATEWAY_EDGE_CONTAINER_NAME;
   return {
     name: container.name,
     image: container.image,
@@ -235,7 +238,7 @@ async function renderContainer(
     args: container.args ?? null,
     mounts: [
       ...renderMounts(container.volumeMounts, volumes),
-      ...(container.name === GATEWAY_EDGE_CONTAINER_NAME ? [{ volume: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, mountPath: GATEWAY_DESKTOP_NODE_IDENTITY_DIR, readOnly: true, subPath: null }] : []),
+      ...(hostDesktopNode ? [{ volume: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, mountPath: GATEWAY_DESKTOP_NODE_IDENTITY_DIR, readOnly: true, subPath: null }] : []),
     ],
   };
 }
@@ -279,16 +282,19 @@ export async function renderVmRuntimeBundle(input: RenderVmRuntimeBundleInput): 
   for (const container of podSpec.containers) containers.push(await renderContainer(container, input, volumeNames));
   const gateway = containers.find((container) => container.name === GATEWAY_CONTAINER_NAME);
   if (!gateway) throw new Error("rendered Deployment has no gateway container");
-  containers.push(renderDesktopNode(gateway));
+  if (input.desktop === "omarchy") {
+    containers.push(renderDesktopNode(gateway));
+    volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" }, { name: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, kind: "emptyDir" });
+  }
   configureHomeIdentity(input.homeStorageId, init, containers);
   const builderIdentity = bindBuilderIdentity(input.builderIdentity, containers);
-  volumes.push({ name: GATEWAY_DESKTOP_NODE_STATE_VOLUME, kind: "emptyDir" }, { name: GATEWAY_DESKTOP_NODE_IDENTITY_VOLUME, kind: "emptyDir" });
   const unversioned = {
     gatewayId: input.gatewayId,
     ...builderIdentity,
     namespace: input.namespace,
     imageRepository: input.imageRepository,
     imageTag: input.imageTag,
+    desktop: input.desktop,
     init,
     containers,
     volumes,

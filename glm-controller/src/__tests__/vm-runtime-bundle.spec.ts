@@ -25,6 +25,7 @@ function render(overrides: Partial<Parameters<typeof renderVmRuntimeBundle>[0]> 
     namespace: "octogee-test",
     imageRepository: "us-docker.pkg.dev/octogee/octogee/gateway",
     imageTag: "main.abc123",
+    desktop: "omarchy",
     computer: { serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com", projectId: "octogee" },
     manifests,
     readSecret: async (name, key) => {
@@ -180,6 +181,20 @@ describe("renderVmRuntimeBundle", () => {
     expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_CONTROL_URL");
     expect(gateway.env).not.toHaveProperty("GATEWAY_COMPUTER_VNC_URL");
     expect(bundle.init?.env).not.toHaveProperty("GATEWAY_RUNTIME_KIND");
+  });
+
+  it("runs an X11 computer's desktop in its gateway container with no host desktop node", async () => {
+    const omarchy = await render();
+    const bundle = await render({ desktop: "x11" });
+    expect(omarchy.desktop).toBe("omarchy");
+    expect(bundle.desktop).toBe("x11");
+    expect(isGatewayVmRuntimeBundle(bundle)).toBe(true);
+    expect(bundle.containers.map((container) => container.name)).toEqual(["gateway", "gateway-edge"]);
+    const [gateway, edge] = bundle.containers;
+    expect(gateway.env).toMatchObject({ GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_DESKTOP: "x11" });
+    expect(edge.env).toMatchObject({ GATEWAY_RUNTIME_KIND: "gce-vm", GATEWAY_COMPUTER_DESKTOP: "x11", GATEWAY_COMPUTER_CONTROL_URL: "http://127.0.0.1:7777" });
+    expect(edge.mounts).toEqual(omarchy.containers[1].mounts.filter((mount) => mount.volume !== "desktop-node-identity"));
+    expect(bundle.volumes.map((volume) => volume.name)).not.toContain("desktop-node-state");
   });
 
   it("runs the desktop node from the gateway image with the gateway's own credential", async () => {

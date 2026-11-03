@@ -21,8 +21,8 @@ const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", i
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
 
 const spec: GatewayVmSpec = {
-  zones: ["us-west1-b"], machineType: "n2-standard-4", imageFamily: "octogee-computer", diskSizeGb: 40, homeDiskSizeGb: 20,
-  provisioningModel: "SPOT", serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com",
+  zones: ["us-west1-b"], machineType: "n2-standard-4", imageFamily: "octogee-computer", diskSizeGb: 40, bootDiskType: "pd-ssd", homeDiskSizeGb: 20,
+  provisioningModel: "SPOT", desktop: "omarchy", serviceAccountEmail: "octogee-computer-test@octogee.iam.gserviceaccount.com",
   subnetwork: "regions/us-west1/subnetworks/octogee-west-gke",
 };
 
@@ -186,9 +186,11 @@ describe("builderComputerInstanceInput", () => {
         "octogee-environment": "test",
         "gateway-image": "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123",
         "octogee-api-url": "http://172.20.7.7:3001",
+        "octogee-computer-desktop": "omarchy",
       },
     });
     expect(builderComputerInstanceInput({ ...source, spec: { ...spec, imageProject: "octogee-images" } }).imageProject).toBe("octogee-images");
+    expect(builderComputerInstanceInput({ ...source, spec: { ...spec, desktop: "x11" } }).metadata["octogee-computer-desktop"]).toBe("x11");
   });
 
   it("sets every metadata attribute the octo-gateway-agent unit reads at boot, on a create and a rebind", async () => {
@@ -279,6 +281,75 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.setMachineType).toHaveBeenCalledWith(COMPUTER, "us-west1-b", "n2-standard-2");
     expect(h.vm.setMachineType.mock.invocationCallOrder[0]).toBeLessThan(h.vm.start.mock.invocationCallOrder[0]);
     expect(h.vm.delete).not.toHaveBeenCalled();
+  });
+
+  it("renders an X11 computer's runtime with the X11 desktop in its gateway and no host desktop node", async () => {
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" }, vm: recorded } }, {
+      describe: vi.fn(async () => ({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA", "octogee-computer-desktop": "x11" } })),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.helmCalls.at(-1)).toEqual(expect.arrayContaining(["computerDesktop=x11", "runtimeKind=gce-vm"]));
+    const bundle = h.docs["glmGateways/b-x/vm/runtime"];
+    expect(bundle).toMatchObject({ desktop: "x11" });
+    expect((bundle.containers as Array<{ name: string }>).map((container) => container.name)).toEqual(["gateway", "gateway-edge"]);
+  });
+
+  it("reads a recorded spec from before desktops and boot disk types as the Omarchy pd-ssd computer it describes", async () => {
+    const { desktop: _desktop, bootDiskType: _bootDiskType, ...omarchyEra } = spec;
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: omarchyEra, vm: recorded } }, {
+      describe: vi.fn(async () => ({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA" } })),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.helmCalls.at(-1)).toEqual(expect.arrayContaining(["computerDesktop=omarchy"]));
+    expect(h.docs["glmGateways/b-x/vm/runtime"]).toMatchObject({ desktop: "omarchy" });
+  });
+
+  it("refuses a recorded spec with an unknown desktop or boot disk type", async () => {
+    for (const vmSpec of [{ ...spec, desktop: "kde" }, { ...spec, bootDiskType: "pd-standard" }]) {
+      const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec, vm: recorded } });
+      await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/unknown (desktop|boot disk type)/);
+      expect(h.vm.start).not.toHaveBeenCalled();
+    }
+  });
+
+  it("stops a suspended computer before giving it another desktop, so it boots into that desktop", async () => {
+    let computer: GatewayVmDescription = { ...suspended, metadata: { ...suspended.metadata, "octogee-owner-uid": "UidA" } };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" }, vm: recorded } }, {
+      describe: vi.fn(async () => computer),
+      stop: vi.fn(async () => { computer = { ...computer, status: "TERMINATED" }; }),
+      bind: vi.fn(async (_name, _zone, input) => { computer = { ...computer, metadata: { ...computer.metadata, ...input.metadata } }; }),
+      start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "octogee-computer-desktop": "x11" }) }));
+    expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
+    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.resume).not.toHaveBeenCalled();
+  });
+
+  it("stops a suspended computer bound to an earlier gateway before rebinding it to another desktop", async () => {
+    let computer: GatewayVmDescription = { ...suspended, gatewayId: "b-old", metadata: { ...suspended.metadata, "gateway-id": "b-old", "octogee-owner-uid": "UidA" } };
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" } } }, {
+      findByLabels: vi.fn(async () => computer),
+      describe: vi.fn(async () => computer),
+      stop: vi.fn(async () => { computer = { ...computer, status: "TERMINATED" }; }),
+      bind: vi.fn(async (_name, _zone, input) => { computer = { ...computer, gatewayId: input.metadata["gateway-id"], labels: input.labels, metadata: { ...computer.metadata, ...input.metadata } }; }),
+      start: vi.fn(async () => { computer = { ...computer, status: "RUNNING" }; return { fellBackToStandard: false }; }),
+    });
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(h.vm.stop.mock.invocationCallOrder[0]).toBeLessThan(h.vm.bind.mock.invocationCallOrder[0]);
+    expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", expect.objectContaining({ metadata: expect.objectContaining({ "gateway-id": "b-x", "octogee-computer-desktop": "x11" }) }));
+    expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.vm.resume).not.toHaveBeenCalled();
+  });
+
+  it("leaves a running computer's desktop for its next park", async () => {
+    const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, desktop: "x11" }, vm: recorded } }, {
+      describe: vi.fn(async () => ({ ...running, metadata: { ...running.metadata, "octogee-owner-uid": "UidA" } })),
+    });
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/desktop omarchy.*x11.*pause and resume/);
+    expect(h.vm.bind).not.toHaveBeenCalled();
+    expect(h.vm.stop).not.toHaveBeenCalled();
   });
 
   it("moves a parked Spot computer to the recorded on-demand capacity before starting it", async () => {
@@ -461,7 +532,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.create).toHaveBeenCalledWith(expect.objectContaining({
       instanceName: COMPUTER, zones: ["us-west1-b"], provisioningModel: "SPOT",
       labels: expect.objectContaining({ "octogee-gateway-id": "b-x", "octogee-owner-uid": "uida" }),
-      metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001" },
+      metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001", "octogee-computer-desktop": "omarchy" },
     }));
     expect(glm.vm).toEqual({ ...recorded, updatedAt: 1_000 });
     const apply = h.kubectlCalls.find((c) => c.args[0] === "apply");
@@ -636,7 +707,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     expect(h.vm.stop).not.toHaveBeenCalled();
     expect(h.vm.bind).toHaveBeenCalledWith(COMPUTER, "us-west1-b", {
       labels: { "octogee-gateway-id": "b-x", "octogee-environment": "test", purpose: "octogee-computer", "octogee-owner-uid": "uida" },
-      metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001" },
+      metadata: { "gateway-id": "b-x", "octogee-owner-uid": "UidA", "octogee-environment": "test", "gateway-image": `${upsertOpts.imageRepository}:main.abc123`, "octogee-api-url": "http://172.20.7.7:3001", "octogee-computer-desktop": "omarchy" },
     });
     expect(h.vm.start).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
     expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
@@ -1411,7 +1482,7 @@ describe("vmRoutesFromDocs", () => {
 
 describe("runtime policy and stamping", () => {
   it("resolves tier policy and validates VM configuration", () => {
-    expect(resolveBuilderComputerPolicy("s").runtime).toBe("cluster");
+    expect(resolveBuilderComputerPolicy("s").runtime).toBe("gce-vm");
     expect(resolveBuilderComputerPolicy("m").runtime).toBe("gce-vm");
     expect(resolveBuilderComputerPolicy("l").machineType).toBe("e2-standard-4");
     expect(parseGatewayVmSpec(JSON.stringify(spec))).toEqual(spec);
@@ -1419,6 +1490,8 @@ describe("runtime policy and stamping", () => {
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, diskSizeGb: "40" }))).toThrow(/diskSizeGb/);
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, homeDiskSizeGb: undefined }))).toThrow("GATEWAY_VM_SPEC_JSON.homeDiskSizeGb must be a positive number");
     expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, provisioningModel: "PREEMPTIBLE" }))).toThrow(/provisioningModel/);
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, desktop: "kde" }))).toThrow("GATEWAY_VM_SPEC_JSON.desktop must be omarchy or x11");
+    expect(() => parseGatewayVmSpec(JSON.stringify({ ...spec, bootDiskType: "pd-standard" }))).toThrow("GATEWAY_VM_SPEC_JSON.bootDiskType must be pd-ssd or pd-balanced");
   });
 
   it("requires a non-empty list of distinct placement zones and rejects the single-zone shape", () => {
@@ -1432,15 +1505,15 @@ describe("runtime policy and stamping", () => {
   });
 
   it.each([
-    ["s", "cluster", null, 10], ["m", "gce-vm", "e2-standard-2", 50], ["l", "gce-vm", "e2-standard-4", 100],
-  ] as const)("stamps new %s Builders with their tier's substrate, machine, on-demand capacity and home", async (sizingTier, runtime, machineType, homeDiskSizeGb) => {
+    ["s", "e2-medium", 40, "pd-balanced", 10, "x11"], ["m", "e2-standard-2", 50, "pd-ssd", 50, "omarchy"], ["l", "e2-standard-4", 50, "pd-ssd", 100, "omarchy"],
+  ] as const)("stamps new %s Builders as on-demand computers with their tier's machine, boot disk, desktop and home", async (sizingTier, machineType, diskSizeGb, bootDiskType, homeDiskSizeGb, desktop) => {
     const { db, docs } = fakeDb({});
-    expect(await stampGatewayRuntime({ db, gatewayId: "b-new", gatewayClass: "builder", sizingTier, vmSpec: spec, log: vi.fn() })).toBe(runtime);
-    expect(docs["glmGateways/b-new"]).toEqual(runtime === "cluster" ? { runtime } : { runtime, vmSpec: { ...spec, machineType, homeDiskSizeGb, provisioningModel: "STANDARD" } });
+    expect(await stampGatewayRuntime({ db, gatewayId: "b-new", gatewayClass: "builder", sizingTier, vmSpec: spec, log: vi.fn() })).toBe("gce-vm");
+    expect(docs["glmGateways/b-new"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, machineType, diskSizeGb, bootDiskType, homeDiskSizeGb, provisioningModel: "STANDARD", desktop } });
   });
 
   it.each([
-    { existing: undefined, sizingTier: "s", expectedRuntime: "cluster" },
+    { existing: undefined, sizingTier: "s", expectedRuntime: "gce-vm" },
     { existing: undefined, sizingTier: "m", expectedRuntime: "gce-vm" },
     { existing: { runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2", homeDiskSizeGb: 50 } }, sizingTier: "l", expectedRuntime: "gce-vm" },
   ] as const)("rejects storage preflight before stamping or resizing $expectedRuntime", async ({ existing, sizingTier, expectedRuntime }) => {
@@ -1461,8 +1534,15 @@ describe("runtime policy and stamping", () => {
     expect(docs["glmGateways/b-x"].vmSpec).toMatchObject({ machineType: "e2-standard-2", homeDiskSizeGb: 50 });
   });
 
+  it("moves a persisted computer spec to its tier's desktop", async () => {
+    const persisted = { ...spec, machineType: "e2-medium", diskSizeGb: 40, bootDiskType: "pd-balanced" as const, homeDiskSizeGb: 10, provisioningModel: "STANDARD" as const, desktop: "omarchy" as const };
+    const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
+    await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "s", vmSpec: spec, log: vi.fn() });
+    expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, desktop: "x11" });
+  });
+
   it("moves a persisted Spot computer spec to its tier's on-demand capacity", async () => {
-    const persisted = { ...spec, machineType: "e2-standard-2", homeDiskSizeGb: 50, provisioningModel: "SPOT" as const };
+    const persisted = { ...spec, machineType: "e2-standard-2", diskSizeGb: 50, homeDiskSizeGb: 50, provisioningModel: "SPOT" as const };
     const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
     await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "m", vmSpec: spec, log: vi.fn() });
     expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, provisioningModel: "STANDARD" });
@@ -1520,7 +1600,7 @@ describe("runtime policy and stamping", () => {
     const { db, docs, writes } = fakeDb({});
     const log = vi.fn();
     expect(await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log })).toBe("gce-vm");
-    expect(docs["glmGateways/b-x"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, machineType: "e2-standard-4", homeDiskSizeGb: 100, provisioningModel: "STANDARD" } });
+    expect(docs["glmGateways/b-x"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, machineType: "e2-standard-4", diskSizeGb: 50, homeDiskSizeGb: 100, provisioningModel: "STANDARD" } });
     expect(await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "s", vmSpec: null, log })).toBe("gce-vm");
     expect(writes).toHaveLength(1);
     expect(await stampGatewayRuntime({ db, gatewayId: "shared-1", gatewayClass: "shared", sizingTier: "l", vmSpec: spec, log })).toBe("cluster");

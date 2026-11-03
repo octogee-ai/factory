@@ -1,5 +1,5 @@
 import { createComputerHomeClient } from "./compute-home.js";
-import type { GatewayVmProvisioningModel, RetainedBuilderHome } from "@octogee/shared/types/glm";
+import type { GatewayVmBootDiskType, GatewayVmDesktop, GatewayVmProvisioningModel, RetainedBuilderHome } from "@octogee/shared/types/glm";
 
 export interface ComputeRequest {
   (opts: { url: string; method: string; body?: unknown }): Promise<{ status: number; data?: unknown }>;
@@ -25,10 +25,12 @@ export interface CreateGatewayVmInput {
   imageFamily: string;
   imageProject?: string;
   diskSizeGb: number;
+  bootDiskType: GatewayVmBootDiskType;
   homeDiskSizeGb: number;
   retainedHome?: RetainedBuilderHome;
   image?: ComputeImageRef;
   provisioningModel: GatewayVmProvisioningModel;
+  desktop: GatewayVmDesktop;
   serviceAccountEmail: string;
   subnetwork: string;
   labels: Record<string, string>;
@@ -331,7 +333,7 @@ export function instanceInsertBody(
         initializeParams: {
           sourceImage: `projects/${input.imageProject ?? projectId}/global/images/${image.name}`,
           diskSizeGb: String(input.diskSizeGb),
-          diskType: `zones/${zone}/diskTypes/pd-ssd`,
+          diskType: `zones/${zone}/diskTypes/${input.bootDiskType}`,
         },
       },
       input.retainedHome ? {

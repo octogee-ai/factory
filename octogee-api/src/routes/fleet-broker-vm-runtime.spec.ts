@@ -6,7 +6,7 @@ import type { BoundTenant } from "../lib/sa-to-tenant.js";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const bundle = {
-  version: "v1", gatewayId: "b-x", namespace: "octogee-test", imageRepository: "r", imageTag: "t", init: null,
+  version: "v1", gatewayId: "b-x", namespace: "octogee-test", imageRepository: "r", imageTag: "t", desktop: "omarchy", init: null,
   containers: [{ name: "gateway", image: "r:t", env: { A: "1" }, command: null, args: null, mounts: [] }],
   volumes: [], hostAliases: {}, kubernetes: { apiHost: "10.128.0.2", apiPort: "443", caCert: "c" },
   renderedAt: 1,
@@ -57,6 +57,17 @@ describe("POST /internal/fleet/vm-runtime", () => {
       "glmGateways/b-x": { gatewayId: "b-x", vmHome: { checkpointRequestedAt: 50, lastCheckpoint: { name: "20260905T101500Z.tar.gz", size: 1, sha256: "a".repeat(64), instanceId: "1", completedAt: 40 } } },
     }, { kind: "gateway", gatewayId: "b-x" })).post("/internal/fleet/vm-runtime").send({});
     expect(requested.body.homeCheckpoint).toEqual({ requestedAt: 50, completedAt: null });
+  });
+
+  it("keeps serving a bundle rendered before bundles named their desktop, and refuses an unknown desktop", async () => {
+    const { desktop: _desktop, ...omarchyEra } = bundle;
+    const served = await request(appWith({ "glmGateways/b-x/vm/runtime": omarchyEra }, { kind: "gateway", gatewayId: "b-x" }))
+      .post("/internal/fleet/vm-runtime").send({});
+    expect(served.status).toBe(200);
+    expect(served.body.bundle).toEqual(omarchyEra);
+    const unknown = await request(appWith({ "glmGateways/b-x/vm/runtime": { ...bundle, desktop: "kde" } }, { kind: "gateway", gatewayId: "b-x" }))
+      .post("/internal/fleet/vm-runtime").send({});
+    expect(unknown.status).toBe(404);
   });
 
   it("404s when nothing is rendered or the bundle names another gateway, and 403s without a gateway binding", async () => {

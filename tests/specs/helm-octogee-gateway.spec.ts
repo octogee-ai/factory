@@ -1465,6 +1465,22 @@ describe("helm/octogee-gateway/ — per-instance persistence + security knobs", 
     expect(pod.volumes.map((entry: any) => entry.name)).not.toContain("desktop-runtime");
   });
 
+  it("renders an X11 VM Builder with its desktop in the gateway and the VM home layout", () => {
+    const out = helmTemplate("octogee-gw-x11", { gatewayId: "x11", gatewayClass: "builder", sizingTier: "s", computerDesktop: "x11", runtimeKind: "gce-vm" });
+    const pod = parseDocument(findDoc(out, "Deployment", "octogee-gateway-x11")!).toJSON().spec.template.spec;
+    expect(pod.initContainers.map((entry: any) => entry.name)).toEqual(["fix-perms"]);
+    expect(pod.volumes.map((entry: any) => entry.name)).toEqual(expect.arrayContaining(["project-materializations", "desktop-node-identity", "desktop-runtime", "desktop-shm"]));
+    for (const name of ["gateway", "gateway-edge"]) {
+      const container = pod.containers.find((entry: any) => entry.name === name);
+      expect(container.env).toEqual(expect.arrayContaining([
+        { name: "GATEWAY_RUNTIME_KIND", value: "gce-vm" }, { name: "GATEWAY_COMPUTER_DESKTOP", value: "x11" },
+        { name: "OCTOGEE_PROJECTS_MOUNT", value: "/work/materialized" },
+      ]));
+      expect(container.volumeMounts.filter((mount: any) => mount.subPath === "volumes/data" || mount.subPath === "desktop-home")).toEqual([]);
+      expect(container.volumeMounts).toContainEqual(expect.objectContaining({ name: "desktop-node-identity", mountPath: "/run/octogee/desktop-node-identity" }));
+    }
+  });
+
   it("shared gateways use emptyDir with no PVC and a locked-down securityContext", () => {
     const out = helmTemplate();
     const dep = findDoc(out, "Deployment", "octogee-gateway-default") ?? "";

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-if [ "${GATEWAY_CLASS:-shared}" = builder ] && [ "${GATEWAY_RUNTIME_KIND:-}" = cluster ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" = x11 ] && [ "${OCTOGEE_X11_SESSION:-0}" != 1 ]; then
+if [ "${GATEWAY_CLASS:-shared}" = builder ] && [ "${GATEWAY_COMPUTER_DESKTOP:-}" = x11 ] && [ "${OCTOGEE_X11_SESSION:-0}" != 1 ]; then
   exec /usr/local/bin/octogee-hobby-desktop
 fi
 

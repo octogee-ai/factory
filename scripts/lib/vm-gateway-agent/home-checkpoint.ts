@@ -76,6 +76,7 @@ export interface HomeScope {
   desktopDir: string;
   restorePending: string;
   restoreCheckpoint?: GatewayVmHomeCheckpoint;
+  hostToolInventory: boolean;
   desktopToolsRebuildable?: boolean;
 }
 
@@ -95,6 +96,7 @@ export function homeScope(stateRoot: string, bundle: GatewayVmRuntimeBundle): Ho
   return {
     slug, dataDir: volumeHostPath(stateRoot, volume), marker: `${stateRoot}/${HOME_CHECKPOINT_MARKER}`,
     desktopDir: `${stateRoot}/desktop-home`, restorePending: `${stateRoot}/${HOME_RESTORE_PENDING}`,
+    hostToolInventory: bundle.desktop !== "x11",
     ...(bundle.homeRestoreCheckpoint ? { restoreCheckpoint: bundle.homeRestoreCheckpoint } : {}),
   };
 }
@@ -174,7 +176,7 @@ async function createAndUploadCheckpoint(
   await deps.discardSnapshot();
   let desktopToolsRebuildable = scope.desktopToolsRebuildable;
   await deps.snapshot(async () => {
-    desktopToolsRebuildable = await recordDesktopTools(deps);
+    desktopToolsRebuildable = await recordDesktopTools(deps, scope);
     await deps.captureSnapshot();
   });
   const snapshotRoot = `${deps.stateRoot}/.home-checkpoint/snapshot`;
@@ -212,7 +214,8 @@ async function createAndUploadCheckpoint(
   return { status: "uploaded", name: committed.name, size, pruned };
 }
 
-async function recordDesktopTools(deps: HomeCheckpointDeps): Promise<boolean> {
+async function recordDesktopTools(deps: HomeCheckpointDeps, scope: HomeScope): Promise<boolean> {
+  if (!scope.hostToolInventory) return false;
   try { return (await deps.desktop.tools?.())?.rebuildable ?? false; }
   catch (error) {
     deps.log(`optional native tool inventory unavailable (${error instanceof Error ? error.name : typeof error}); retaining tool storage`);
@@ -221,7 +224,7 @@ async function recordDesktopTools(deps: HomeCheckpointDeps): Promise<boolean> {
 }
 
 export async function checkpointHome(deps: HomeCheckpointDeps, scope: HomeScope, opts: { force: boolean; requestedAt?: number | null }): Promise<HomeCheckpointResult> {
-  scope.desktopToolsRebuildable = await recordDesktopTools(deps);
+  scope.desktopToolsRebuildable = await recordDesktopTools(deps, scope);
   if (!opts.force && !(await homeIsDirty(deps, scope))) return { status: "clean" };
   const startedAt = deps.now();
   const tempDir = await deps.fs.mkdtemp("octogee-home-checkpoint-");

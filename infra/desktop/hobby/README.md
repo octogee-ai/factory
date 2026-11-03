@@ -120,30 +120,28 @@ the temporary PVC's disk is deleted by the StorageClass reclaim policy.
 
 ## Selected production tiers
 
-Hobby retains the established 1-vCPU / 4-GiB sizing and $20 monthly price;
-Pro remains 2 vCPU / 8 GiB at $100 and Team 4 vCPU / 16 GiB at $200.
-The benchmark supports Hobby's core-computer floor; the full platform still
-needs qualification at that limit before fleet release.
+Hobby is an on-demand `e2-medium` GCE computer (2 shared vCPU, 4 GB) at $20;
+Pro is `e2-standard-2` (2 vCPU / 8 GiB) at $100 and Team `e2-standard-4`
+(4 vCPU / 16 GiB) at $200. The benchmark supports Hobby's core-computer floor;
+the full platform still needs qualification at 4 GB before fleet release.
 
-New Hobby gateways use the existing immutable Builder image, now including
-TigerVNC, Openbox, a tint2 dock, and the Desk, under Cowboy's cluster runtime.
-The production session lives in `infra/gateway/hobby-session.sh` with its
-desktop configuration in `infra/gateway/hobby-desktop/`; this benchmark image
-is the bare X11 floor it was measured on. Pro and Team use the
-Omarchy image family on GCE with on-demand `e2-standard-2` and `e2-standard-4` respectively.
-Browser, computer, CLI, and the OpenClaw Dashboard are available on every tier.
-The coach attaches to the same visible Chromium profile as the Builder.
+Every tier boots the Omarchy image family. A Hobby computer carries
+`octogee-computer-desktop=x11`, so the image keeps the host Omarchy session off
+and the gateway container runs the X11 session from the immutable Builder image:
+TigerVNC, Openbox, a tint2 dock, and the Desk. The production session lives in
+`infra/gateway/hobby-session.sh` with its desktop configuration in
+`infra/gateway/hobby-desktop/`; this benchmark image is the bare X11 floor it was
+measured on. Browser, computer, CLI, and the OpenClaw Dashboard are available on
+every tier. The coach attaches to the same visible Chromium profile as the
+Builder.
 
-Hobby's home is ephemeral (`emptyDir`); production Hobby Builders have no
-persistent volume. Workspace and project text come back from Gitea, conversation
-from Mattermost, and agent state from the migration's agent-state transfer.
-Recreate rolls keep one desktop session per Builder. The benchmark above used a
-PVC only to measure persistence; it is not the production layout.
+A Hobby computer keeps a retained 10 GiB home disk like Pro and Team. The
+gateway container's `/home/octo` is the home disk's `desktop-home`; the host
+login home stays on the boot disk, out of the gateway's reach. Hobby gateways stamped before
+the move keep their cluster runtime and its ephemeral `emptyDir` home until the
+cluster path is removed. A tier change reshapes the owner's one computer at its
+next park: machine type, provisioning model, desktop, and home size.
 
-Existing runtime stamps retain their substrate; this change does not migrate
-an existing Hobby VM's home into GKE. VM manifest rendering explicitly selects
-Omarchy, including for existing Hobby VMs. Stopped owner computers can be
-resized without replacing their disks.
 The X11 controller creates virtual RandR modes for arbitrary pane dimensions;
 local TigerVNC checks covered repeated resizing from 321x241 to 3840x2160.
 

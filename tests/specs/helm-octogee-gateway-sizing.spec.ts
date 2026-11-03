@@ -4,7 +4,6 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { parseAllDocuments } from "yaml";
 import { TIER_PRESETS, SIZING_TIERS } from "../../shared/types/sizing.js";
-import { BUILDER_TIERS } from "../../shared/types/billing-tiers.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const CHART_PATH = path.join(REPO_ROOT, "helm/octogee-gateway");
@@ -217,12 +216,7 @@ describe("Builder ephemeral storage admission", () => {
 });
 
 describe("Builder working-set partition", () => {
-  const hobbyHomeGiB = BUILDER_TIERS.hobby.computer!.homeSizeGiB;
-
-  it("defaults the chart's Builder home size to the Hobby tier constant", () => {
-    const values = parseAllDocuments(fs.readFileSync(path.join(CHART_PATH, "values.yaml"), "utf-8"))[0].toJS();
-    expect(values.builderHomeSizeGiB).toBe(hobbyHomeGiB);
-  });
+  const hobbyHomeGiB = parseAllDocuments(fs.readFileSync(path.join(CHART_PATH, "values.yaml"), "utf-8"))[0].toJS().builderHomeSizeGiB as number;
 
   it.each(["x11", "omarchy"])("bounds every disk-backed %s emptyDir and spends exactly the gateway's ephemeral limit", (computerDesktop) => {
     const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop, builderHomeSizeGiB: String(hobbyHomeGiB) }))

@@ -145,6 +145,21 @@ export function containerSpecVersion(config: Record<string, unknown>): string {
   return createHash("sha256").update(JSON.stringify({ ...spec, ...(builderSlug ? { builderSlug } : {}), ...(homeRestore ? { homeRestore } : {}) })).digest("hex").slice(0, 16);
 }
 
+const X11_SHM_BYTES = 256 * 1024 * 1024;
+const SHM_MOUNT_PATH = "/dev/shm";
+
+function gatewayHomeBind(x11Gateway: boolean, stateRoot: string): string {
+  return x11Gateway ? `${stateRoot}/desktop-home:/home/octo` : "/home/octo/Documents:/home/octo/Documents";
+}
+
+function x11GatewayHostConfig(x11Gateway: boolean): Record<string, unknown> {
+  return x11Gateway ? { ShmSize: X11_SHM_BYTES, SecurityOpt: ["seccomp=unconfined"] } : {};
+}
+
+function withoutShmMount(container: GatewayVmRuntimeContainer): GatewayVmRuntimeContainer {
+  return { ...container, mounts: container.mounts.filter((mount) => mount.mountPath !== SHM_MOUNT_PATH) };
+}
+
 export function planContainer(
   bundle: GatewayVmRuntimeBundle,
   container: GatewayVmRuntimeContainer,
@@ -152,8 +167,11 @@ export function planContainer(
   role: "init" | "service",
 ): DockerContainerSpec {
   const desktopService = role === "service" && container.name === GATEWAY_DESKTOP_NODE_CONTAINER;
-  const mounts = volumeSubpathMounts(bundle, container, ctx);
-  if (role === "service" && container.name === "gateway" && ctx.desktopAuth) {
+  const gatewayService = role === "service" && container.name === "gateway";
+  const x11Gateway = gatewayService && bundle.desktop === "x11";
+  const bound = x11Gateway ? withoutShmMount(container) : container;
+  const mounts = volumeSubpathMounts(bundle, bound, ctx);
+  if (gatewayService && ctx.desktopAuth && !x11Gateway) {
     mounts.push({ Type: "bind", Source: `${GATEWAY_DESKTOP_RUNTIME_DIR}/octogee-openclaw-vnc`, Target: GATEWAY_HOST_DESKTOP_AUTH_DIR, ReadOnly: true });
   }
   const config: Record<string, unknown> = {
@@ -166,14 +184,15 @@ export function planContainer(
       NetworkMode: "host",
       ...(desktopService ? { PidMode: "host" } : {}),
       Binds: [
-        ...bindsFor(bundle, container, ctx),
-        ...(role === "service" && container.name === "gateway" ? ["/home/octo/Documents:/home/octo/Documents"] : []),
+        ...bindsFor(bundle, bound, ctx),
+        ...(gatewayService ? [gatewayHomeBind(x11Gateway, ctx.stateRoot)] : []),
         ...(desktopService
           // eslint-disable-next-line sonarjs/publicly-writable-directories -- XWayland requires its standard socket directory; the mount is read-only.
           ? [`${GATEWAY_DESKTOP_RUNTIME_DIR}:${GATEWAY_DESKTOP_RUNTIME_DIR}`, "/tmp/.X11-unix:/tmp/.X11-unix:ro"]
           : []),
       ],
       ...(mounts.length ? { Mounts: mounts } : {}),
+      ...x11GatewayHostConfig(x11Gateway),
       ExtraHosts: Object.entries(bundle.hostAliases).map(([host, ip]) => `${host}:${ip}`),
       RestartPolicy: { Name: role === "service" ? SERVICE_RESTART_POLICY : "no" },
       LogConfig: { Type: "gcplogs", Config: { labels: loggedLabelsFor(bundle).join(",") } },

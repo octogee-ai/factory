@@ -10,7 +10,11 @@ import {
   sameHomeCheckpoint,
   type GatewayVmHomeCheckpoint,
   type RetainedBuilderHome,
+  isGatewayVmBootDiskType,
+  isGatewayVmDesktop,
   isGatewayVmPreemptionNotice,
+  type GatewayVmBootDiskType,
+  type GatewayVmDesktop,
   type GatewayVmHomeState,
   type GatewayVmParkedCheckpoint,
   type GatewayVmSpec,
@@ -270,6 +274,28 @@ export interface ComputerInstanceSource {
   bridgeIp: string;
 }
 
+export const COMPUTER_DESKTOP_METADATA_KEY = "octogee-computer-desktop";
+
+export function vmSpecDesktop(recorded: Partial<GatewayVmSpec> | undefined, configured: GatewayVmSpec): GatewayVmDesktop {
+  if (!recorded) return configured.desktop;
+  if (recorded.desktop === undefined) return "omarchy";
+  if (!isGatewayVmDesktop(recorded.desktop)) throw new Error(`gateway vmSpec names an unknown desktop ${String(recorded.desktop)}`);
+  return recorded.desktop;
+}
+
+function recordedBootDiskType(recorded: Partial<GatewayVmSpec>): GatewayVmBootDiskType {
+  if (recorded.bootDiskType === undefined) return "pd-ssd";
+  if (!isGatewayVmBootDiskType(recorded.bootDiskType)) throw new Error(`gateway vmSpec names an unknown boot disk type ${String(recorded.bootDiskType)}`);
+  return recorded.bootDiskType;
+}
+
+function bootedDesktop(description: GatewayVmDescription): GatewayVmDesktop {
+  const desktop = description.metadata[COMPUTER_DESKTOP_METADATA_KEY];
+  if (desktop === undefined) return "omarchy";
+  if (!isGatewayVmDesktop(desktop)) throw new Error(`computer ${description.name}: unknown ${COMPUTER_DESKTOP_METADATA_KEY} ${desktop}`);
+  return desktop;
+}
+
 export function builderComputerInstanceInput(source: ComputerInstanceSource): CreateGatewayVmInput {
   return {
     instanceName: builderComputerInstanceName(source.environment, source.ownerUid),
@@ -284,6 +310,7 @@ export function builderComputerInstanceInput(source: ComputerInstanceSource): Cr
       "octogee-environment": source.environment,
       "gateway-image": source.image,
       "octogee-api-url": `http://${source.bridgeIp}:3001`,
+      [COMPUTER_DESKTOP_METADATA_KEY]: source.spec.desktop,
     },
   };
 }
@@ -291,9 +318,11 @@ export function builderComputerInstanceInput(source: ComputerInstanceSource): Cr
 function recordedSpecInConfiguredZones(recorded: GatewayVmSpec | undefined, configured: GatewayVmSpec): GatewayVmSpec {
   if (!recorded) return configured;
   const { machineType, imageFamily, imageProject, diskSizeGb, homeDiskSizeGb, provisioningModel, serviceAccountEmail, subnetwork } = recorded;
+  const bootDiskType = recordedBootDiskType(recorded);
   return {
     zones: configured.zones,
-    machineType, imageFamily, ...(imageProject ? { imageProject } : {}), diskSizeGb, homeDiskSizeGb, provisioningModel, serviceAccountEmail, subnetwork,
+    machineType, imageFamily, ...(imageProject ? { imageProject } : {}), diskSizeGb, bootDiskType, homeDiskSizeGb, provisioningModel,
+    desktop: vmSpecDesktop(recorded, configured), serviceAccountEmail, subnetwork,
   };
 }
 
@@ -888,12 +917,22 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       description = (await deps.vm.describe(description.name, description.zone)) ?? description;
     } else {
       description = await reconcileComputerIdentity(gatewayId, description, input.serviceAccountEmail);
-      if (["gateway-image", "octogee-api-url", "octogee-owner-uid"].some((key) => description.metadata[key] !== input.metadata[key])) {
+      description = await prepareDesktopChange(gatewayId, description, input.desktop);
+      if (["gateway-image", "octogee-api-url", "octogee-owner-uid", COMPUTER_DESKTOP_METADATA_KEY].some((key) => description.metadata[key] !== input.metadata[key])) {
         description = await bindParkedComputer(deps, gatewayId, description, input);
         deps.log(`[vm-gateway-runtime] ${gatewayId}: refreshed bootstrap metadata for ${description.name}`);
       }
     }
     return description;
+  }
+
+  async function prepareDesktopChange(gatewayId: string, description: GatewayVmDescription, desktop: GatewayVmDesktop): Promise<GatewayVmDescription> {
+    const booted = bootedDesktop(description);
+    if (booted === desktop) return description;
+    if (!PARKED_STATUSES.has(description.status)) {
+      throw new Error(`computer ${description.name}: runs desktop ${booted}, its tier now wants ${desktop}; pause and resume to apply the tier capacity`);
+    }
+    return stopSuspendedComputer(deps, gatewayId, description, `boot it into the ${desktop} desktop`);
   }
 
   async function reconcileComputerIdentity(gatewayId: string, description: GatewayVmDescription, email: string): Promise<GatewayVmDescription> {

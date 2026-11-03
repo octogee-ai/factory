@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from "vitest";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   buildUpgradeArgs,
   createHelmSubprocessRunner,
@@ -2030,7 +2029,7 @@ describe("createHelmSubprocessRunner — recoverRelease", () => {
    await runner.upsertInstance({ namespace: "octogee", gatewayId: "b-hobby", gatewayClass: "builder", sizingTier: "s", imageRepository: REPO, imageTag: "abc", chartPath: "/charts/octogee-gateway" });
    expect(runKubectl.mock.calls.flat(2)).not.toContain("pvc");
    const upgrade = runHelm.mock.calls.map(([args]) => args).find(args => args.includes("upgrade"))!;
-   expect(upgrade.filter(arg => arg.startsWith("builderHome"))).toEqual([`builderHomeSizeGiB=${BUILDER_TIERS.hobby.computer!.homeSizeGiB}`]);
+   expect(upgrade.filter(arg => arg.startsWith("builderHome"))).toEqual([]);
  });
  it("leaves the Builder home size to the chart for shared gateways", async () => {
    const args = buildUpgradeArgs({ release: "octogee-gw-shared-0", chartPath: "/c", namespace: "octogee", gatewayId: "shared-0", gatewayClass: "shared", imageRepository: REPO, imageTag: "abc", upgradeTimeout: "10m" });

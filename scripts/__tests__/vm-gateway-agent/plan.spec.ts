@@ -206,6 +206,36 @@ describe("planBundle", () => {
     expect(desktopBinds(planContainer(bundle, bundle.containers[0], ctx, "init").config)).toEqual([]);
   });
 
+  it("gives an X11 computer's gateway its own desktop home rather than the host login home, a memory /dev/shm, and room for Chromium's sandbox", () => {
+    const withShm = (desktop: "omarchy" | "x11") => {
+      const bundle = bundleFixture({ desktop });
+      bundle.volumes.push({ name: "desktop-shm", kind: "emptyDir" });
+      bundle.containers[0].mounts.push({ volume: "desktop-shm", mountPath: "/dev/shm", readOnly: false, subPath: null });
+      return planBundle(bundle, ctx);
+    };
+    type Host = { Binds: string[]; ShmSize?: number; SecurityOpt?: string[]; Mounts?: unknown[] };
+    const x11 = withShm("x11");
+    const gateway = x11.services[0].config.HostConfig as Host;
+    expect(gateway.Binds).toContain("/srv/octogee/desktop-home:/home/octo");
+    expect(gateway.Binds).not.toContain("/home/octo:/home/octo");
+    expect(gateway.Binds).not.toContain("/home/octo/Documents:/home/octo/Documents");
+    expect(gateway.Binds.filter((bind) => bind.endsWith(":/dev/shm"))).toEqual([]);
+    expect(gateway.ShmSize).toBe(256 * 1024 * 1024);
+    expect(gateway.SecurityOpt).toEqual(["seccomp=unconfined"]);
+    expect(gateway).not.toHaveProperty("Mounts");
+    const edge = x11.services[1].config.HostConfig as Host;
+    expect(edge.Binds.filter((bind) => bind.includes("/home/octo"))).toEqual([]);
+    expect(edge).not.toHaveProperty("ShmSize");
+    expect(edge).not.toHaveProperty("SecurityOpt");
+    const { desktop: _desktop, ...omarchyEra } = bundleFixture();
+    expect((planBundle(omarchyEra, ctx).services[0].config.HostConfig as Host).Binds).toContain("/home/octo/Documents:/home/octo/Documents");
+    const omarchy = withShm("omarchy").services[0].config.HostConfig as Host;
+    expect(omarchy.Binds).toContain("/home/octo/Documents:/home/octo/Documents");
+    expect(omarchy.Binds).toContain("/srv/octogee/volumes/desktop-shm:/dev/shm");
+    expect(omarchy).not.toHaveProperty("ShmSize");
+    expect(omarchy).not.toHaveProperty("SecurityOpt");
+  });
+
   it("gives only the desktop node the desktop's Wayland and XWayland sockets and the host PID namespace", () => {
     const bundle = bundleFixture();
     bundle.containers.push({

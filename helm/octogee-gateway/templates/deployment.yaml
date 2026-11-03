@@ -6,8 +6,10 @@
 {{- $computeClass := required "computeClass is required for owner-bound gateways" .Values.computeClass -}}
 {{- $imageProfile := include "octogee-gateway.imageProfile" . -}}
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
-{{- $hobbyComputer := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
-{{- if and (eq $gatewayClass "builder") (not $hobbyComputer) (ne (.Values.runtimeKind | default "cluster") "gce-vm") -}}
+{{- $x11Desktop := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
+{{- $vmRuntime := eq (.Values.runtimeKind | default "cluster") "gce-vm" -}}
+{{- $clusterHobby := and $x11Desktop (not $vmRuntime) -}}
+{{- if and (eq $gatewayClass "builder") (not $x11Desktop) (not $vmRuntime) -}}
 {{- fail (printf "octogee-gateway: Kubernetes Builder gateways run the Hobby X11 computer; a %s Builder renders only as a GCE VM bundle (runtimeKind=gce-vm)" $computerDesktop) -}}
 {{- end -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
@@ -111,7 +113,7 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        {{- if $hobbyComputer }}
+        {{- if $clusterHobby }}
         - name: prepare-home
           image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           command: ["/octogee/scripts/node_modules/.bin/tsx", "/octogee/scripts/entrypoints/prepare-home-storage.ts"]
@@ -135,7 +137,7 @@ spec:
               set -eu
               chown 1000:1000 /home/node
               chmod 0755 /home/node
-              {{- if $hobbyComputer }}
+              {{- if $x11Desktop }}
               chown 1000:1000 /run/user/1000
               chmod 0700 /run/user/1000
               {{- end }}
@@ -143,13 +145,13 @@ spec:
                 set -eu
                 cp -rn /etc/skel/. /home/node/
                 mkdir -p /home/node/.npm-cache
-                {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
+                {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
                 /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prepare-project-storage.ts
                 {{- end }}
                 install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
               '
           env:
-            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
+            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
             {{- end }}
@@ -180,18 +182,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-              {{- if $hobbyComputer }}
+              {{- if $clusterHobby }}
               subPath: volumes/data
               {{- end }}
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
+            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
             - name: project-materializations
               mountPath: /work/materialized
             {{- end }}
-            {{- if $hobbyComputer }}
+            {{- if $x11Desktop }}
             - name: desktop-runtime
               mountPath: /run/user/1000
             {{- end }}
@@ -251,7 +253,7 @@ spec:
             - name: OCTOGEE_BUILDER_TOOLCHAIN_ROOT
               value: "/work/cache/toolchains"
             - name: OCTOGEE_PROJECTS_MOUNT
-              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $hobbyComputer | quote }}
+              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $clusterHobby | quote }}
             {{- end }}
             - name: CUSTOMERS_DIR
               value: "/home/node/.openclaw/customers"
@@ -289,9 +291,9 @@ spec:
             {{- end }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
-            {{- if $hobbyComputer }}
+            {{- if $x11Desktop }}
             - name: GATEWAY_RUNTIME_KIND
-              value: cluster
+              value: {{ ternary "gce-vm" "cluster" $vmRuntime }}
             - name: GATEWAY_COMPUTER_DESKTOP
               value: x11
             - name: OCTOGEE_DESKTOP_NODE_NAME
@@ -410,22 +412,24 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-              {{- if $hobbyComputer }}
+              {{- if $clusterHobby }}
               subPath: volumes/data
               {{- end }}
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
+            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
             - name: project-materializations
               mountPath: /work/materialized
               subPath: projects
             {{- end }}
-            {{- if $hobbyComputer }}
+            {{- if $clusterHobby }}
             - name: data
               mountPath: /home/octo
               subPath: desktop-home
+            {{- end }}
+            {{- if $x11Desktop }}
             - name: desktop-node-identity
               mountPath: /run/octogee/desktop-node-identity
             - name: desktop-runtime
@@ -521,7 +525,7 @@ spec:
               value: "{{ .Values.gatewayEdge.port }}"
             {{- if eq $gatewayClass "builder" }}
             - name: OCTOGEE_PROJECTS_MOUNT
-              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $hobbyComputer | quote }}
+              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $clusterHobby | quote }}
             {{- end }}
             - name: K8S_NAMESPACE
               valueFrom:
@@ -557,9 +561,9 @@ spec:
               value: {{ $revision | quote }}
             - name: GATEWAY_PROFILE
               value: {{ $imageProfile | quote }}
-            {{- if $hobbyComputer }}
+            {{- if $x11Desktop }}
             - name: GATEWAY_RUNTIME_KIND
-              value: cluster
+              value: {{ ternary "gce-vm" "cluster" $vmRuntime }}
             - name: GATEWAY_COMPUTER_DESKTOP
               value: x11
             - name: OCTOGEE_DESKTOP_NODE_NAME
@@ -653,19 +657,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-              {{- if $hobbyComputer }}
+              {{- if $clusterHobby }}
               subPath: volumes/data
               {{- end }}
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if and (eq $gatewayClass "builder") (not $hobbyComputer) }}
+            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
             - name: project-materializations
               mountPath: /work/materialized
               subPath: projects
             {{- end }}
-            {{- if $hobbyComputer }}
+            {{- if $x11Desktop }}
             - name: desktop-node-identity
               mountPath: /run/octogee/desktop-node-identity
               readOnly: true
@@ -713,7 +717,7 @@ spec:
         - name: builder-cache
           emptyDir:
             sizeLimit: 2Gi
-        {{- if $hobbyComputer }}
+        {{- if $clusterHobby }}
         - name: data
           emptyDir:
             sizeLimit: {{ printf "%dGi" (add $builderHomeSizeGiB 2) }}
@@ -729,7 +733,7 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
-        {{- if $hobbyComputer }}
+        {{- if $x11Desktop }}
         - name: desktop-node-identity
           emptyDir:
             medium: Memory

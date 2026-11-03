@@ -8,7 +8,6 @@ import type {
 } from "@octogee/shared/types/glm";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import { SIZING_TIERS } from "@octogee/shared/types/sizing";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import {
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
@@ -414,13 +413,6 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 const HELM_SET = "--set";
-const BUILDER_HOME_SIZE_GIB = requiredHobbyHomeSizeGiB();
-
-function requiredHobbyHomeSizeGiB(): number {
-  const computer = BUILDER_TIERS.hobby.computer;
-  if (!computer) throw new Error("Hobby tier has no computer policy for the Builder home");
-  return computer.homeSizeGiB;
-}
 const HELM_SET_STRING = "--set-string";
 const HELM_SET_JSON = "--set-json";
 
@@ -562,7 +554,6 @@ function appendOptionalJsonArgs(args: string[], opts: BuildUpgradeArgsOpts): voi
 
 function appendOptionalNumberArgs(args: string[], opts: BuildUpgradeArgsOpts): void {
   if (opts.replicas !== undefined) args.push(HELM_SET, `replicas=${opts.replicas}`);
-  if (opts.gatewayClass === "builder") args.push(HELM_SET, `builderHomeSizeGiB=${BUILDER_HOME_SIZE_GIB}`);
 }
 
 function appendOptionalFileArgs(args: string[], opts: BuildUpgradeArgsOpts): void {

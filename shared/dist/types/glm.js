@@ -8,6 +8,14 @@ export function isGatewayRuntime(value) {
 export function resolveGatewayRuntime(value) {
     return isGatewayRuntime(value) ? value : "cluster";
 }
+export const GATEWAY_VM_BOOT_DISK_TYPES = ["pd-ssd", "pd-balanced"];
+export function isGatewayVmBootDiskType(value) {
+    return typeof value === "string" && GATEWAY_VM_BOOT_DISK_TYPES.includes(value);
+}
+export const GATEWAY_VM_DESKTOPS = ["omarchy", "x11"];
+export function isGatewayVmDesktop(value) {
+    return typeof value === "string" && GATEWAY_VM_DESKTOPS.includes(value);
+}
 export const GATEWAY_VM_PROVISIONING_MODELS = ["SPOT", "STANDARD"];
 export const GATEWAY_VM_STOP_REASONS = ["idle", "preempted", "operator"];
 export function isGatewayVmStopReason(value) {
@@ -67,6 +75,10 @@ export function isRuntimeBuilderIdentity(value) {
         typeof identity.ownerUid === "string" && identity.ownerUid.length > 0 &&
         typeof identity.builderSlug === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(identity.builderSlug);
 }
+function runtimeBundleImageValid(b) {
+    return typeof b.imageRepository === "string" && typeof b.imageTag === "string"
+        && (b.desktop === undefined || isGatewayVmDesktop(b.desktop));
+}
 function runtimeBundleHostsValid(b) {
     return !!b.hostAliases && typeof b.hostAliases === "object" && !!b.kubernetes && typeof b.kubernetes.apiHost === "string";
 }
@@ -75,8 +87,7 @@ export function isGatewayVmRuntimeBundle(value) {
     return !!b
         && typeof b.version === "string" && b.version.length > 0
         && typeof b.gatewayId === "string" && b.gatewayId.length > 0
-        && typeof b.imageRepository === "string"
-        && typeof b.imageTag === "string"
+        && runtimeBundleImageValid(b)
         && Array.isArray(b.containers) && b.containers.length > 0
         && Array.isArray(b.volumes)
         && runtimeBundleHostsValid(b)

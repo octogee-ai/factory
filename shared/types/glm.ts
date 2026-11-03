@@ -78,6 +78,20 @@ export function resolveGatewayRuntime(value: unknown): GatewayRuntime {
   return isGatewayRuntime(value) ? value : "cluster";
 }
 
+export const GATEWAY_VM_BOOT_DISK_TYPES = ["pd-ssd", "pd-balanced"] as const;
+export type GatewayVmBootDiskType = (typeof GATEWAY_VM_BOOT_DISK_TYPES)[number];
+
+export function isGatewayVmBootDiskType(value: unknown): value is GatewayVmBootDiskType {
+  return typeof value === "string" && (GATEWAY_VM_BOOT_DISK_TYPES as readonly string[]).includes(value);
+}
+
+export const GATEWAY_VM_DESKTOPS = ["omarchy", "x11"] as const;
+export type GatewayVmDesktop = (typeof GATEWAY_VM_DESKTOPS)[number];
+
+export function isGatewayVmDesktop(value: unknown): value is GatewayVmDesktop {
+  return typeof value === "string" && (GATEWAY_VM_DESKTOPS as readonly string[]).includes(value);
+}
+
 export const GATEWAY_VM_PROVISIONING_MODELS = ["SPOT", "STANDARD"] as const;
 export type GatewayVmProvisioningModel = (typeof GATEWAY_VM_PROVISIONING_MODELS)[number];
 
@@ -87,8 +101,10 @@ export interface GatewayVmSpec {
   imageFamily: string;
   imageProject?: string;
   diskSizeGb: number;
+  bootDiskType: GatewayVmBootDiskType;
   homeDiskSizeGb: number;
   provisioningModel: GatewayVmProvisioningModel;
+  desktop: GatewayVmDesktop;
   serviceAccountEmail: string;
   subnetwork: string;
 }
@@ -247,6 +263,8 @@ export interface GatewayVmRuntimeBundle {
   namespace?: string;
   imageRepository: string;
   imageTag: string;
+  /** Absent on bundles rendered before computers named their desktop; those computers run Omarchy. */
+  desktop?: GatewayVmDesktop;
   init: GatewayVmRuntimeContainer | null;
   containers: GatewayVmRuntimeContainer[];
   volumes: GatewayVmRuntimeVolume[];
@@ -254,6 +272,11 @@ export interface GatewayVmRuntimeBundle {
   kubernetes: { apiHost: string; apiPort: string; caCert: string };
   renderedAt: number;
   homeRestoreCheckpoint?: GatewayVmHomeCheckpoint;
+}
+
+function runtimeBundleImageValid(b: Partial<GatewayVmRuntimeBundle>): boolean {
+  return typeof b.imageRepository === "string" && typeof b.imageTag === "string"
+    && (b.desktop === undefined || isGatewayVmDesktop(b.desktop));
 }
 
 function runtimeBundleHostsValid(b: Partial<GatewayVmRuntimeBundle>): boolean {
@@ -265,8 +288,7 @@ export function isGatewayVmRuntimeBundle(value: unknown): value is GatewayVmRunt
   return !!b
     && typeof b.version === "string" && b.version.length > 0
     && typeof b.gatewayId === "string" && b.gatewayId.length > 0
-    && typeof b.imageRepository === "string"
-    && typeof b.imageTag === "string"
+    && runtimeBundleImageValid(b)
     && Array.isArray(b.containers) && b.containers.length > 0
     && Array.isArray(b.volumes)
     && runtimeBundleHostsValid(b)

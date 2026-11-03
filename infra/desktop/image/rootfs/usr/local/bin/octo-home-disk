@@ -5,6 +5,7 @@ DEVICE="${OCTO_HOME_DEVICE:-/dev/disk/by-id/scsi-0Google_PersistentDisk_octogee-
 STATE_ROOT="${OCTO_VM_STATE_ROOT:-/srv/octogee}"
 USER_HOME="${OCTO_USER_HOME:-/home/octo}"
 WAIT_SECONDS="${OCTO_HOME_DEVICE_WAIT_SECONDS:-60}"
+DESKTOP_WANTED="${OCTO_DESKTOP_WANTED:-/usr/local/bin/octo-desktop-wanted}"
 
 for _ in $(seq 1 "$WAIT_SECONDS"); do
   [ -e "$DEVICE" ] && break
@@ -68,6 +69,25 @@ if [[ -f "$STATE_ROOT/.octogee-home-layout.json" && ! -f "$STATE_ROOT/.octogee-n
   cp -an "$USER_HOME/." "$STATE_ROOT/desktop-home/"
   printf '1\n' > "$STATE_ROOT/.octogee-native-seeded"
 fi
+set +e
+"$DESKTOP_WANTED" >/dev/null
+desktop_wanted=$?
+set -e
+case "$desktop_wanted" in
+  0) ;;
+  1)
+    if mountpoint -q "$USER_HOME"; then
+      echo "octo-home-disk: this X11 computer's $USER_HOME is bound to the home disk; its gateway must be the only user of $STATE_ROOT/desktop-home" >&2
+      exit 1
+    fi
+    echo "octo-home-disk: $DEVICE mounted at $STATE_ROOT; the X11 gateway owns $STATE_ROOT/desktop-home and $USER_HOME stays the boot-disk login home"
+    exit 0
+    ;;
+  *)
+    echo "octo-home-disk: cannot tell which desktop this computer runs (octo-desktop-wanted exited $desktop_wanted)" >&2
+    exit 1
+    ;;
+esac
 mountpoint -q "$USER_HOME" || mount --bind "$STATE_ROOT/desktop-home" "$USER_HOME"
 verify_mount "$USER_HOME" /desktop-home
 echo "octo-home-disk: $DEVICE mounted at $STATE_ROOT; $USER_HOME bound to $STATE_ROOT/desktop-home"
