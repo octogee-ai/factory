@@ -7,7 +7,7 @@ import type {
   QueryDocumentSnapshot,
   Transaction,
 } from "firebase-admin/firestore";
-import { isReapedOperationError } from "./stuck-op-reaper.js";
+import { isReapedOperationError, rearmedRetireOperationPatch } from "./stuck-op-reaper.js";
 import { sourceRecoveryForwardRetryable } from "./legacy-migration-recovery.js";
 import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
@@ -116,6 +116,7 @@ import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-po
 import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
 import {
   classifyOperationFailure,
+  isAgentStoreRetirementSessionDrain,
   isGatewayStartupUnavailable,
   OPERATION_JOURNAL_RETENTION_MS,
 } from "./operation-retry.js";
@@ -822,6 +823,29 @@ function selectAcceptingSharedGateway(
     ...(currentGatewayId === undefined ? {} : { currentGatewayId }),
   });
   return selection.kind === "selected" ? selection.gatewayId : null;
+}
+
+function selectReturnSharedGateway(
+  context: PlacementPolicyReconcileContext,
+  uid: string,
+): { gatewayId: string } | { blockedReason: string } {
+  const replacedSlots = new Set(
+    context.state.sharedPoolReplacements.map((replacement) => replacement.sourceGatewayId),
+  );
+  const selection = selectPlatformPreferredSharedGateway(context, {
+    uid,
+    purpose: "migration",
+    candidates: sharedGatewayCandidates(context).filter((candidate) => !replacedSlots.has(candidate.gatewayId)),
+  });
+  if (selection.kind === "selected") return { gatewayId: selection.gatewayId };
+  const pendingReplacements = context.state.sharedPoolReplacements
+    .filter((replacement) => context.state.sharedGatewayIds.includes(replacement.sourceGatewayId))
+    .map((replacement) => `${replacement.sourceGatewayId} is being replaced by ${replacement.targetGatewayId}`);
+  return {
+    blockedReason: pendingReplacements.length === 0
+      ? "no configured shared gateway can receive the returning Builder"
+      : `no configured shared gateway can receive the returning Builder while ${pendingReplacements.join(", ")}`,
+  };
 }
 
 function sharedAuthorityGatewayId(
@@ -1808,16 +1832,17 @@ async function queueLeaseReturn(
     });
     return;
   }
-  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration");
-  if (!sharedGatewayId) {
+  const returnTarget = selectReturnSharedGateway(context, user.uid);
+  if ("blockedReason" in returnTarget) {
     blockPlacement(context, {
       uid: user.uid,
       lease,
       code: NO_ACCEPTING_SHARED_GATEWAY,
-      reason: "no configured shared gateway can receive the returning Builder",
+      reason: returnTarget.blockedReason,
     });
     return;
   }
+  const sharedGatewayId = returnTarget.gatewayId;
   const operationId = await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
@@ -1980,16 +2005,17 @@ async function reconcileReturnMigrationOnTarget(
     }
     return true;
   }
-  const sharedGatewayId = selectAcceptingSharedGateway(context, user.uid, "migration");
-  if (!sharedGatewayId) {
+  const returnTarget = selectReturnSharedGateway(context, user.uid);
+  if ("blockedReason" in returnTarget) {
     blockPlacement(context, {
       uid: user.uid,
       lease,
       code: NO_ACCEPTING_SHARED_GATEWAY,
-      reason: "no configured shared gateway can receive the returning Builder",
+      reason: returnTarget.blockedReason,
     });
     return true;
   }
+  const sharedGatewayId = returnTarget.gatewayId;
   await context.deps.enqueueMigration({
     uid: user.uid,
     builderSlug,
@@ -4472,19 +4498,12 @@ function retiredDisposableGatewayVerdict(input: {
   if (operation?.status === "succeeded") {
     return input.unreleasedHandoffOperationId === null ? "delete" : "handoff-pending";
   }
-  if (operation?.status === "failed" && isReapedOperationError(operation.error)) return "rearmed";
+  if (operation?.status === "failed" && isRetryableBuilderRetirementFailure(operation.error, request.gatewayId)) return "rearmed";
   return "skip";
 }
 
-function rearmedRetireOperationPatch(): Record<string, unknown> {
-  return {
-    status: "pending",
-    startedAt: null,
-    completedAt: null,
-    steps: [],
-    error: FieldValue.delete(),
-    lastProgressAt: FieldValue.delete(),
-  };
+function isRetryableBuilderRetirementFailure(error: unknown, gatewayId: string): boolean {
+  return isReapedOperationError(error) || isAgentStoreRetirementSessionDrain(error, gatewayId);
 }
 
 async function deleteRetiredDisposableGatewayFirestore(
@@ -4538,7 +4557,7 @@ async function deleteRetiredDisposableGatewayFirestore(
   });
   if (verdict === "rearmed") {
     input.log(
-      `[placement-policy] re-armed reaped retirement ${operationId} for ${request.gatewayId}; the op runner re-drives it`,
+      `[placement-policy] re-armed retirement ${operationId} for ${request.gatewayId}: it failed retryably (reaped after a controller restart or draining PostgreSQL sessions); the op runner re-drives it`,
     );
     return false;
   }

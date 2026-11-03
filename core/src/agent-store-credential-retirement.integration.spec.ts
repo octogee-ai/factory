@@ -31,7 +31,7 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
     }
   }, 5000);
 
-  it("disables only the stopped Gateway login, preserves ownership, rejects active sessions and stale issuance", async () => {
+  it("disables only the stopped Gateway login, preserves ownership, terminates its lingering sessions and rejects stale issuance", async () => {
     const gatewayId = `retirement-${randomUUID()}`;
     const builder = { uid: gatewayId, slug: gatewayId };
     const scope = decodeURIComponent(new URL(dsn!).pathname.slice(1));
@@ -43,19 +43,30 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
     const revoke = createAgentStoreCredentialRevoker(dsn!);
     const verify = createAgentStoreCredentialRetirementVerifier(dsn!);
     const identity = { gatewayId, gatewayClass: "builder" as const, builder, token: "synthetic-retirement" };
+    const neighbourGatewayId = `retirement-neighbour-${randomUUID()}`;
+    const neighbourLogin = roleFor("gateway", `${scope}:${neighbourGatewayId}`);
     let active: pg.Client | undefined;
+    let neighbour: pg.Client | undefined;
     await admin.connect();
     try {
       const url = await provision(identity, async () => {});
       active = new pg.Client({ connectionString: url });
+      active.on("error", () => {});
       await active.connect();
       await active.query(`CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      neighbour = new pg.Client({ connectionString: await provision({ ...identity, gatewayId: neighbourGatewayId }, async () => {}) });
+      await neighbour.connect();
       const before = await admin.query("SELECT oid, nspowner FROM pg_namespace WHERE nspname = $1", [schema]);
+      const membershipsBefore = await admin.query("SELECT roleid, member, grantor, admin_option, inherit_option, set_option FROM pg_auth_members WHERE roleid = (SELECT oid FROM pg_roles WHERE rolname = $1) ORDER BY grantor", [login]);
       expect(await verify(gatewayId, async () => {})).toBe(false);
-      await expect(revoke(gatewayId, async () => {})).rejects.toThrow("still has database sessions");
-      await admin.query(`ALTER ROLE ${pg.escapeIdentifier(login)} NOLOGIN`);
-      expect(await verify(gatewayId, async () => {})).toBe(false);
-      await active.end(); active = undefined;
+      const disconnected = new Promise<void>(resolve => active!.once("end", resolve));
+      await revoke(gatewayId, async () => {});
+      await disconnected;
+      active = undefined;
+      expect((await admin.query("SELECT rolcanlogin FROM pg_roles WHERE rolname = $1", [login])).rows[0].rolcanlogin).toBe(false);
+      expect((await admin.query("SELECT 1 FROM pg_stat_activity WHERE usename = $1", [login])).rowCount).toBe(0);
+      expect((await neighbour.query("SELECT 1 AS alive")).rows[0].alive).toBe(1);
+      expect((await admin.query("SELECT roleid, member, grantor, admin_option, inherit_option, set_option FROM pg_auth_members WHERE roleid = (SELECT oid FROM pg_roles WHERE rolname = $1) ORDER BY grantor", [login])).rows).toEqual(membershipsBefore.rows);
       expect(await verify(gatewayId, async () => {})).toBe(true);
       await admin.query(`ALTER ROLE ${pg.escapeIdentifier(login)} LOGIN`);
       expect(await verify(gatewayId, async () => {})).toBe(false);
@@ -105,6 +116,8 @@ describe.skipIf(!dsn)("retired Gateway PostgreSQL login", () => {
       await revoke(`absent-${gatewayId}`, async () => {});
     } finally {
       await active?.end();
+      await neighbour?.end();
+      await admin.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(neighbourLogin)}`);
       await admin.query(`DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
       const remaining = await admin.query("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [[login, owner]]);
       if (remaining.rowCount) await admin.query(`DROP OWNED BY ${remaining.rows.map(row => pg.escapeIdentifier(row.rolname)).join(", ")}`);

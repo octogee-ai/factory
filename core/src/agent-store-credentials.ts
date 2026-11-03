@@ -215,8 +215,7 @@ export function createAgentStoreCredentialRevoker(adminDsn: string) {
       await assertCurrent();
       const role = await client.query("SELECT oid FROM pg_roles WHERE rolname = $1", [login]);
       if (role.rowCount) {
-        const sessions = await client.query("SELECT 1 FROM pg_stat_activity WHERE usesysid = $1 LIMIT 1", [role.rows[0].oid]);
-        if (sessions.rowCount) throw new Error(`Agent-store Gateway ${gatewayId} still has database sessions`);
+        await terminateGatewaySessions(client, gatewayId, login, role.rows[0].oid);
         await client.query(`ALTER ROLE ${identifier(login)} NOLOGIN`);
       }
       await assertCurrent();
@@ -226,6 +225,29 @@ export function createAgentStoreCredentialRevoker(adminDsn: string) {
       throw error;
     } finally { client.release(); }
   };
+}
+
+const GATEWAY_SESSION_DRAIN_TIMEOUT_MS = 5_000;
+const OTHER_SESSIONS_OF_ROLE = "FROM pg_stat_activity WHERE usesysid = $1 AND pid <> pg_backend_pid()";
+
+async function roleHasOtherSessions(client: PoolClient, roleOid: number): Promise<boolean> {
+  await client.query("SELECT pg_stat_clear_snapshot()");
+  return (await client.query(`SELECT 1 ${OTHER_SESSIONS_OF_ROLE} LIMIT 1`, [roleOid])).rowCount === 1;
+}
+
+async function terminateGatewaySessions(client: PoolClient, gatewayId: string, login: string, roleOid: number): Promise<void> {
+  if (await roleHasOtherSessions(client, roleOid)) {
+    await client.query(`GRANT ${identifier(login)} TO CURRENT_USER WITH SET TRUE`);
+    await client.query(`SET LOCAL ROLE ${identifier(login)}`);
+    await client.query(`SELECT pg_terminate_backend(pid) ${OTHER_SESSIONS_OF_ROLE}`, [roleOid]);
+    await client.query("RESET ROLE");
+    await client.query(`REVOKE ${identifier(login)} FROM CURRENT_USER`);
+  }
+  const deadline = Date.now() + GATEWAY_SESSION_DRAIN_TIMEOUT_MS;
+  while (await roleHasOtherSessions(client, roleOid)) {
+    if (Date.now() >= deadline) throw new Error(`Agent-store Gateway ${gatewayId} still has database sessions`);
+    await client.query("SELECT pg_sleep(0.1)");
+  }
 }
 
 export function createAgentStoreCredentialRetirementVerifier(adminDsn: string) {
