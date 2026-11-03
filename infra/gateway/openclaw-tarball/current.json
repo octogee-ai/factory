@@ -1,6 +1,6 @@
 {
   "upstreamRef": "main",
-  "sourceSha": "8b83bda7300f820ff8c22ea4ebf720fc125298a7",
-  "openclawObject": "openclaw-fork-8af98932.tgz",
-  "mattermostObject": "openclaw-mattermost-bc6480eb.tgz"
+  "sourceSha": "05e4976b4cff904c77fdafeef3d5004576eeeb4b",
+  "openclawObject": "openclaw-fork-4d051aef.tgz",
+  "mattermostObject": "openclaw-mattermost-20595026.tgz"
 }

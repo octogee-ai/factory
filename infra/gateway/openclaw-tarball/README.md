@@ -163,32 +163,34 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 2 weekly runtime refresh
+## Current overlay: November 3 daily runtime refresh
 
-This refresh freezes OpenClaw main at
-`c1b0fc1415a09138c48e3f81055aca0f8e4f12aa`, 42 commits after the previous
-`adabd2b4b1e9607047925e50b59959b4245415c2` base. The operator selected today's
-updated main for independent qualification. Subsequent upstream commits do not
-change this build's input.
+This refresh freezes the fetched OpenClaw main tip at
+`2b0a8fe8afc442843353e82158ff291e0099c0e6`, 212 commits after the previous
+`c1b0fc1415a09138c48e3f81055aca0f8e4f12aa` base. The operator selected this
+exact tip for independent qualification; later commits are not build inputs.
+The clean built overlay is `05e4976b4cff904c77fdafeef3d5004576eeeb4b` on
+`ceckert/openclaw:codex/gateway-refresh-20261103`. The archives and hosted
+islands come from that source.
 
-The clean built overlay is `8b83bda7300f820ff8c22ea4ebf720fc125298a7` on
-`ceckert/openclaw:codex/octogee-detach-latency-current`. Gateway archives and
-hosted islands come from that same source.
-
-This recut retains maintenance base `1f9f1e4687adbf30e3cf5e53ca15e2bc931ca89b`
-and adds only the two reviewed commits from
-[OpenClaw #191463](https://github.com/openclaw/openclaw/pull/191463). The base already
-contains the canonical outbound receipt expectation, so no fixture correction is
-carried in this overlay.
-
-The selected tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41518259691)
-was cancelled before any jobs ran. The latest successful scheduled
+The tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41602367652)
+failed its only executed job, `security-fast`: the test-line budget exceeded
+its ceiling by five lines. Build, core tests, PostgreSQL conformance, lint,
+UI and platform jobs were skipped. The latest successful scheduled
 [full CI run](https://github.com/openclaw/openclaw/actions/runs/41377849337)
-is on `d1d45068a49bc85eb2a1eff077678b3a87a68621`: 150 jobs passed and 11 skipped
-(check-plan, Node 24 compatibility, shared SDK declarations, Control UI i18n,
-Android/iOS screenshot and release e2e jobs, iOS screenshot evidence, PR failure
-report and release-child sealing). That run does not qualify this newer tip.
-The checks below are this cut's independent qualification.
+is on `d1d45068a49bc85eb2a1eff077678b3a87a68621`; its 11 skipped jobs are
+check-plan, Node 24 compatibility, shared SDK declarations, Control UI i18n,
+Android/iOS screenshots and release e2e, iOS screenshot evidence, PR failure
+report and release-child sealing. That older run does not qualify this tip.
+
+The prior overlay was rebased onto this tip. Native Doctor credential custody
+and orphan recovery are preserved with retained cron normalization inside the
+source transaction; native Codex input rewrites and the retained execution
+admission check both remain. An independent review sampled requester authority,
+channel membership, strict stop, Mattermost action gates and these conflict
+resolutions; it found no actionable issue, but did not review every overlay
+change. The boundaries and removal conditions below remain the assessment for
+the retained behavior, not a claim that every family was newly proven.
 
 ### Native adoption and retained product boundaries
 
@@ -437,110 +439,49 @@ Process custody and watcher ownership are local fixtures, not a deployed fleet
 trial. Both native config-writer/Doctor cases and 76 current-catalog PostgreSQL
 permission, handoff and recovery controls pass.
 
-### Maintenance-base qualification and publication
+### Qualification and publication
 
-The following broader checks qualify the retained maintenance base. The targeted
-detach recut checks are listed above; their scope does not imply a new aggregate
-upstream test-suite pass.
+The clean checkout built with pinned pnpm 12.15.0 and the frozen lockfile using
+`pnpm build package`. Its build-info commit is the overlay SHA above. The build
+reported the advisory chat boot JavaScript gzip budget overage (1251.3 KiB
+versus 1250.7 KiB). Production core, UI and extension typechecks, channel
+metadata and generated Gateway validators passed. Focused native authorization,
+membership, stop, recovery, reload and Mattermost controls passed 173 tests;
+the package checker passed the root archive inventory and dist import graph.
+The root and Mattermost packers ran sequentially and left source clean. The
+isolated installed pair has the matching build-info and source-matched companion
+archives. All 24 npm distribution controls passed for the vendored and installed
+copies.
 
-Pinned pnpm 12.15.0 and the frozen lockfile built the clean source with full
-`pnpm build package`; `dist/build-info.json.commit` matches the source SHA above.
-Root and Mattermost were packed sequentially with the maintained packers from a
-clean recipe snapshot. Both prepack/postpack lifecycles restored clean source.
-The native root archive checker passes its preflight, inventory and dist import
-graph. Its default mode matches this packer's self-contained `file:vendor`
-workspace layout; the optional `--require-bundled-workspace-deps` mode requires
-a different physical npm bundle layout. Actual installed private AI and patched
-MCP imports resolve inside the installed OpenClaw tree and pass.
+The actual Linux amd64 `openclaw-full-plugin-installer` target passed native
+CUA artifact lint, registry refresh, source matching and native-hook imports.
+The PostgreSQL catalog was regenerated against PostgreSQL 16 and pgvector 0.8.7;
+it includes new upstream schema entries. All 48 agent-store PostgreSQL import,
+recovery and handoff tests passed against the disposable fixture.
 
-The runtime resolves official glob 14.0.3 and minimatch 11.0.4. The existing
-systemd escaped-question-mark/wildcard control first failed against minimatch 11:
-its canonical compiled parts are Matchers rather than RegExp instances. The
-native consumer now excludes `GLOBSTAR` and calls the public matcher contract;
-all 14 real-flow controls pass. The exact npm 12.2.1 bundled-glob 13.0.6 policy
-entry is limited to that stock package's existing authenticated bundle owner.
-The existing boundary matrix failed before the entry and all 100 package-lock
-controls plus real prepack pass afterward. This does not exempt registry
-packages or waive physical npm distribution verification.
+Aggregate `pnpm check` failed lint on 18 max-lines violations in files
+byte-identical to the frozen upstream tip. Its preflight and typecheck ran;
+this is not an aggregate check pass. Focused Octogee artifact, template and
+hosted-island checks passed 106 tests.
 
-Production core, UI and extension type lanes, script types, formatting, channel
-metadata, worker inventory and config baseline checks pass. Focused native
-controls pass across unit/relay (15), gateway custody/authorization/outbound
-(66), infrastructure (69, with five platform skips), and the additional
-requester/approval/workspace/file-transfer/secrets/CUA scope (67). Independent
-worker/cron controls pass 31 tests, including 11 worker-lease controls. These
-scopes overlap and are not an aggregate test count. The outbound receipt
-assertion now requires the native delivered receipt; it was red before its
-expectation was updated. No assertion or timeout was weakened.
-
-Full native lint reports 17 max-lines failures; every failing file is
-byte-identical to the selected upstream. Its limits remain unchanged. The prior
-`server-reload-hot.superseded-tail.test.ts` qualification recorded eight
-managed-reloader timeouts and stalled cleanup, including a first-case timeout
-on the old native baseline. That unrelated owner is unchanged and this cut did
-not rerun that suite. It remains an inherited qualification gap, not a current
-exact-head result. Aggregate `pnpm check` success is not claimed. Full-build
-advisory budgets report CSS 312.1 KiB against 302.1 KiB and chat boot JavaScript
-1250.9 KiB against 1250 KiB; budgets remain unchanged.
-
-The actual Linux amd64 `openclaw-full-plugin-installer` target passes CUA driver
-artifact lint, `config.changed` publication, source-matched Parallel and Codex
-installation, registry refresh and all three native-hook imports. All 24 npm
-raw/public CJS/ESM security controls pass against the packaged distribution and
-both installed npm copies; real workspace discovery also passes through both
-installed npm public entrypoints. The actual CUA skills installer accepts the flattened
-installed SDK/native/plugin 0.38.0 versions. All twelve Octogee extension bundles
-load against this installed SDK. Both raw Shared/Builder templates and generated
-configs from their real roster-ownership, policy and pre-boot writers pass native
-validation. The 545-package physical installed root/companion/runtime inventory
-matches none of the 16 source-workspace advisories: those remaining source paths
-belong to unselected IMAP, Teams, Discord, Copilot and QA workspaces. Bundled npm
-backport versions are retained honestly and verified by behavior and bytes.
-
-An installed Gateway on the isolated PostgreSQL fixture accepts two concurrent
-`agents.create` calls and `secrets.reload` with `warningCount: 0`. Startup
-session-registry maintenance intersects a temporary agent resource close and
-logs one fail-closed admission error. Its existing native scheduler completes
-the next pass 60 seconds later, without a repeated failure. Both agents remain
-listed and a second secret reload reports zero warnings; shutdown is clean.
-The same diagnostic was observed in a SQLite fixture, so this is not described
-as a SQLite-only issue or an unproven historical baseline failure. Resource
-admission and the native maintenance retry owner remain unchanged.
-
-The actual installed official CUA module dynamically loads all 202 exports,
-including `CuaDriver`, on Node 26.13.0/glibc 2.36 with the same Debian X11/Xi/
-xkbcommon libraries supplied by the final gateway-system stage. The disposable
-image reports no pending apt upgrades. This ABI and artifact proof does not
-replace real desktop acceptance after deployment.
-
-The executable SQL catalog was regenerated against this exact source with
-PostgreSQL 16.15/vector 0.8.7: all 11 routine, 15 trigger and 308 expression
-fingerprints are unchanged; only its source SHA changes. All 48 PostgreSQL
-import/recovery/handoff integration tests pass. Hosted islands and Browser
-resources are regenerated from this build; 196 focused app checks and 39
-runtime/license/pin checks pass. Focused Octogee packing, base-image, template
-and CUA contracts pass 83 tests across eleven files.
-
-The source branch is published to the public fork. Both archives are new
-write-once objects. Full SHA256 and byte-equality readback of the exact published
-generations, including the root's build-info source commit, is verified.
+Both objects were created with generation-match zero. Readback of each exact
+published generation matched its full SHA-256:
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-8af98932.tgz#1793668904035227` | 117068051 | `8af9893262abee6df15b3c2792f45b913a31e4f87876427c3e0b3bc0b4cc64c8` |
-| mattermost | `openclaw-mattermost-bc6480eb.tgz#1793657168834514` | 1273634 | `bc6480ebfc8437515b67d288330651bb0f75f2b2825634fc6c4979a36b6c5e6c` |
+| root | `openclaw-fork-4d051aef.tgz#1793695691305573` | 117086789 | `4d051aefd0ba115071229fef57cafa7e957058555ba1b9f14b5ea046e74870ee` |
+| mattermost | `openclaw-mattermost-20595026.tgz#1793695694418997` | 1266403 | `20595026cdd428c0e1c6cf8778f694d693303cdc34f96c2fe51ee823ca1f7baf` |
 
-This qualifies the installed base runtime and its consumers. Full platform
-images, deployed TEST/PROD smoke and computer desktop acceptance remain separate
-Build main and deployment steps. This recut does not mutate fleet desired state
-or live Gateway/computer data.
+Strict isolated Doctor comparisons, installed Memory/Skills workers and
+final-head CI require their own results before merge. No deployment or live
+migration is implied by this refresh.
 
 ### Upstream contributions
 
-As checked on November 2, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
+As checked on November 3, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
 #186891 (`1d18f8eb784`), #186893 (`d4fd7a5c5de`), #167431 (`27193149bc2`)
-and #178755 (`d576caa76fe`) remain open and unmerged. All six currently conflict
-with live upstream main. Their earlier reviewed-head checks and published
+and #178755 (`d576caa76fe`) remain open and unmerged. Their prior conflict
+status against live upstream main has not been reassessed. Earlier reviewed-head checks and published
 contributions do not establish current-main merge readiness; this downstream
 cut is clean on the separately frozen selected base. No upstream PR was changed
 by this refresh. #177823 is closed unmerged after native adoption of its original

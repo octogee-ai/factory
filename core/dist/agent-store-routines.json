@@ -1,5 +1,5 @@
 {
-    "sourceSha": "8b83bda7300f820ff8c22ea4ebf720fc125298a7",
+    "sourceSha": "05e4976b4cff904c77fdafeef3d5004576eeeb4b",
     "routines": {
         "memory_index_chunks_search_sync": [
             "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd"
@@ -276,6 +276,9 @@
         ],
         "constraint:session_conversations:session_conversations_session_id_fkey": [
             "6116e929af67b89115a3ec28adaa6875d6feebe3796d679763b3ba624860a8f0"
+        ],
+        "constraint:session_creation_operations:session_creation_operations_pkey": [
+            "87db2acf91c542beaef9c0f22d6dd5297802e9a55d90a3a996c0474188e0edff"
         ],
         "constraint:session_entry_snapshots:session_entry_snapshots_field_check": [
             "bffdd09f3611d2620e510a1610cae8f5ce691b4f309ec48e6b037ba3cbdd12ed"
@@ -709,6 +712,9 @@
             "2054d7d3a776387bb4a23a9aae31d97bfcebdef9494ea66c34903e09dcf3491f",
             "d5da67e56debd69d8d1404dfe5d553154452e4b1d374efcd9b352f7b63b1a9cd"
         ],
+        "index:conversation_deliveries:idx_agent_conversation_deliveries_source_session": [
+            "36ea368b9674884bd249fc0f2b4135d5f41a61e901bb72c079a4b2b0f5bb5006"
+        ],
         "index:conversation_deliveries:idx_agent_conversation_deliveries_updated": [
             "14296ebbe87701ea0bc88094ea279e2a149dd25f51c287e5ca89f08cda26e17f",
             "ba1f73476236d8ead7c54c63b8fac4c4f72b1da50cad0e2166dec5ca29290eef"
@@ -831,6 +837,12 @@
         "index:session_conversations:session_conversations_pkey": [
             "d8d6a5eedc2bcecd6499aee11145f543158716dc8e8f7e9339a75f37f75a7c71"
         ],
+        "index:session_creation_operations:idx_agent_session_creation_operations_expiry": [
+            "c6b2062e544e8e8900030fe04f2c0b406311648047320b2a836e707a9930ff1c"
+        ],
+        "index:session_creation_operations:session_creation_operations_pkey": [
+            "fc0ff0848b346864ba62b69bc877a5c10e16efec68f549e3aee52b11a0c18f89"
+        ],
         "index:session_entry_snapshots:session_entry_snapshots_pkey": [
             "fa21f34b11e3448551d33112c2528b4ff46b8b1d7289996b1c9f866836695fca"
         ],
@@ -840,6 +852,9 @@
         ],
         "index:session_goal_operations:session_goal_operations_pkey": [
             "fd968fbb2a969356feff9e5bd604cb3954d40edb72f23f7f296d8a5de2c14198"
+        ],
+        "index:session_input_completions:idx_agent_session_input_completions_session_key": [
+            "869ebef1b24c1601073f9227c972205961376628c58a38c050a273ae7f3cbfae"
         ],
         "index:session_input_completions:session_input_completions_pkey": [
             "928024daa4beeb30010abd7cb43b005aa8aad029bde20a4f684cda0fbcf07130"
