@@ -1,11 +1,6 @@
-import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
-import {
-  DEFAULT_OPENCLAW_DIR,
-  builderClaimOverlaySlug,
-  markBuilderClaimOverlayApplied,
-} from "@octogee/shared/server/builder-claim";
+import { DEFAULT_OPENCLAW_DIR, markBuilderClaimOverlayApplied } from "@octogee/shared/server/builder-claim";
 
 const runtimeLogger = createServiceLogger("builder-claim");
 
@@ -24,43 +19,14 @@ export function markOwnedBootOverlayApplied(env: NodeJS.ProcessEnv, now: () => n
   return claim.builderSlug;
 }
 
-export async function awaitBuilderOverlay(input: {
-  env: NodeJS.ProcessEnv;
-  sleep?: (ms: number) => Promise<void>;
-  intervalMs?: number;
-}): Promise<string> {
-  const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  for (;;) {
-    const slug = builderClaimOverlaySlug(input.env);
-    if (slug) return slug;
-    await sleep(input.intervalMs ?? 1_000);
-  }
-}
-
-function execAfterOverlay(command: string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command[0]!, command.slice(1), { stdio: "inherit" });
-    const forward = (signal: NodeJS.Signals) => child.kill(signal);
-    process.on("SIGTERM", forward);
-    process.on("SIGINT", forward);
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
-  });
-}
-
 async function main(argv: string[]): Promise<number> {
-  const [mode, ...command] = argv;
+  const [mode] = argv;
   if (mode === "mark-overlay-applied") {
     const slug = markOwnedBootOverlayApplied(process.env);
     runtimeLogger.info(`[builder-claim] overlay applied for ${slug} before OpenClaw starts`);
     return 0;
   }
-  if (mode === "await-overlay" && command.length > 0) {
-    const slug = await awaitBuilderOverlay({ env: process.env });
-    runtimeLogger.info(`[builder-claim] overlay applied for ${slug}; starting ${command.join(" ")}`);
-    return execAfterOverlay(command);
-  }
-  throw new Error("usage: builder-claim.ts mark-overlay-applied | await-overlay <command...>");
+  throw new Error("usage: builder-claim.ts mark-overlay-applied");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

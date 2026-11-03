@@ -3,10 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import * as fs from "fs";
 import * as path from "path";
 
-import {
-  acquireSystemConfigMutationLease,
-  acquireSystemConfigSyncLeaseSync,
-} from "@octogee/core/system-config-mutation-lease";
+import { acquireSystemConfigSyncLeaseSync } from "@octogee/core/system-config-mutation-lease";
 
 import { isValidUsername, parseAgentId, workspaceCoachAgentId } from "../../shared/types/identity.js";
 import { DEFAULT_BUILDER_AGENT_MODEL_REF } from "../../shared/types/platform-config.js";
@@ -841,31 +838,6 @@ export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: s
   return before !== after || defaultsChanged;
 }
 
-export function writeStandbySystemConfig(opts: {
-  openclawDir?: string;
-  env?: NodeJS.ProcessEnv;
-  templatePath?: string;
-} = {}): string {
-  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
-  const env = opts.env ?? process.env;
-  const repoDir = systemConfigDir(openclawDir);
-  if (fs.existsSync(path.join(repoDir, ".git"))) {
-    throw new Error(`[system_config] standby Builder ${repoDir} already holds a durable checkout`);
-  }
-  const config = JSON.parse(seedConfigContents(opts.templatePath ?? defaultSystemConfigTemplatePath(env), env)) as UnknownRecord;
-  const agents = asRecord(config.agents) ?? {};
-  config.agents = agents;
-  const { id: _anchorId, ...anchorSeed } = buildSafeDefaultAgent();
-  writeRosterEntries(agents, readRosterEntries(agents).form, [{ id: SAFE_DEFAULT_AGENT_ID, entry: anchorSeed }]);
-  agents.ownership = "explicit";
-  const defaults = asRecord(agents.defaults) ?? {};
-  agents.defaults = { ...defaults, authInheritance: { agentId: SAFE_DEFAULT_AGENT_ID } };
-  fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
-  const configPath = systemConfigPath(openclawDir);
-  atomicWrite(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  return configPath;
-}
-
 function ensureBuilderRosterAtPath(configPath: string, slug: string, log: (msg: string) => void): void {
   const contents = fs.readFileSync(configPath, "utf8");
   const value = readTrackedConfigObject(contents);
@@ -1152,102 +1124,6 @@ async function restoreSystemConfigCheckout(
   if (env.GATEWAY_CLASS === "builder") ensureBuilderRosterAtPath(configPath, slug, log);
   reconcilePlatformInvariantsAtPath(configPath, env);
   return { seeded, restored: true, configPath };
-}
-
-export interface SystemConfigClaimAdoption extends SystemConfigRestoreOptions {
-  generation: number;
-  compose(configPath: string): Promise<void>;
-  acquireLease?: typeof acquireSystemConfigMutationLease;
-}
-
-const PLUGIN_RUNTIME_ROOTS = ["npm", "extensions"] as const;
-const CLAIM_LEASE_RETRY_DELAYS_MS = [250, 750, 1_500, 2_500, 3_000] as const;
-
-export function systemConfigClaimDir(openclawDir: string, generation: number): string {
-  return path.join(openclawDir, `system_config.claim-${generation}`);
-}
-
-export function discardInterruptedClaimAdoption(openclawDir: string, generation: number | null): void {
-  fs.rmSync(systemConfigDir(openclawDir), { recursive: true, force: true });
-  if (generation !== null) fs.rmSync(systemConfigClaimDir(openclawDir, generation), { recursive: true, force: true });
-}
-
-function assertNoTrackedPluginRuntimeRoots(slug: string, checkoutDir: string): void {
-  const tracked = gitExec(checkoutDir, ["ls-files", "--", ...PLUGIN_RUNTIME_ROOTS.flatMap((root) => [root, `${root}/**`])]);
-  if (tracked === null) throw new Error(`[system_config] cannot list ${slug}'s tracked system_config paths`);
-  if (tracked.trim() !== "") {
-    throw new Error(`[system_config] tracked system_config path conflicts with OpenClaw runtime root: ${tracked.trim().split("\n")[0]}`);
-  }
-}
-
-async function acquireClaimLease(
-  openclawDir: string,
-  acquireLease: typeof acquireSystemConfigMutationLease,
-): Promise<{ release(): Promise<void> }> {
-  let acquired = await acquireLease({ openclawDir });
-  for (const delayMs of CLAIM_LEASE_RETRY_DELAYS_MS) {
-    if (acquired.ok || acquired.code !== "writer-lock-busy") break;
-    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-    acquired = await acquireLease({ openclawDir });
-  }
-  if (!acquired.ok) throw new Error(`[system_config] claim adoption cannot take the config mutation lease: ${acquired.code}`);
-  return acquired.lease;
-}
-
-function moveCheckoutIntoActiveDir(checkoutDir: string, repoDir: string): string {
-  for (const entry of fs.readdirSync(checkoutDir)) {
-    if (entry === ".git" || entry === OPENCLAW_CONFIG_FILENAME) continue;
-    const target = path.join(repoDir, entry);
-    if (fs.lstatSync(target, { throwIfNoEntry: false })) {
-      throw new Error(`[system_config] claim checkout entry ${entry} collides with ${target}`);
-    }
-    fs.renameSync(path.join(checkoutDir, entry), target);
-  }
-  fs.renameSync(path.join(checkoutDir, ".git"), path.join(repoDir, ".git"));
-  const exclude = path.join(repoDir, ".git", "info", "exclude");
-  fs.mkdirSync(path.dirname(exclude), { recursive: true });
-  const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-  const lines = new Set(existing.split("\n"));
-  const missing = PLUGIN_RUNTIME_ROOTS.map((root) => `/${root}`).filter((line) => !lines.has(line));
-  if (missing.length > 0) {
-    fs.writeFileSync(exclude, `${existing}${existing === "" || existing.endsWith("\n") ? "" : "\n"}${missing.join("\n")}\n`);
-  }
-  const configPath = path.join(repoDir, OPENCLAW_CONFIG_FILENAME);
-  fs.chmodSync(path.join(checkoutDir, OPENCLAW_CONFIG_FILENAME), 0o600);
-  fs.renameSync(path.join(checkoutDir, OPENCLAW_CONFIG_FILENAME), configPath);
-  fs.rmdirSync(checkoutDir);
-  return configPath;
-}
-
-export async function adoptSystemConfigCheckout(
-  slug: string,
-  opts: SystemConfigClaimAdoption,
-): Promise<{ configPath: string }> {
-  const log = opts.log ?? defaultLog;
-  if (!isValidUsername(slug)) throw new Error(`[system_config] invalid Builder slug ${slug}`);
-  const openclawDir = opts.openclawDir ?? OPENCLAW_DIR;
-  const repoDir = systemConfigDir(openclawDir);
-  if (fs.existsSync(path.join(repoDir, ".git"))) {
-    throw new Error(`[system_config] ${repoDir} already holds a durable checkout; a claim adopts only a standby`);
-  }
-  const checkoutDir = systemConfigClaimDir(openclawDir, opts.generation);
-  if (fs.existsSync(checkoutDir)) {
-    throw new Error(`[system_config] claim checkout ${checkoutDir} already exists from an earlier attempt`);
-  }
-  const restored = await restoreSystemConfigCheckout(slug, checkoutDir, openclawDir, opts, log);
-  if (!restored.restored || !restored.configPath) {
-    throw new Error(`[system_config] ${slug}'s durable system_config is unavailable: ${restored.skipped ?? "not restored"}`);
-  }
-  await opts.compose(restored.configPath);
-  assertNoTrackedPluginRuntimeRoots(slug, checkoutDir);
-  const lease = await acquireClaimLease(openclawDir, opts.acquireLease ?? acquireSystemConfigMutationLease);
-  try {
-    const configPath = moveCheckoutIntoActiveDir(checkoutDir, repoDir);
-    log(`[system_config] claim adopted ${slug}/${systemConfigRepoName()} as the active openclaw.json in one write`);
-    return { configPath };
-  } finally {
-    await lease.release();
-  }
 }
 
 export function acquireSystemConfigSyncLock(openclawDir: string): (() => void) | null {

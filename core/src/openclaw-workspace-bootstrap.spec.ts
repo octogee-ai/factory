@@ -132,35 +132,13 @@ describe("native workspace identity initialization", () => {
     expect(() => assertWorkspaceIdentityReady(env)).toThrow("not initialized");
   });
 
-  it("initializes only the service identities on an unclaimed standby boot", async () => {
-    const { env, profiles, args } = fixture();
+  it("refuses to initialize identities for a Builder with no claim", async () => {
+    const { env, profiles, args, createProfile } = fixture();
     fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
-    const standbyEnv = { ...env, OCTOGEE_BUILDER_STANDBY_BOOT: "1" };
-    await bootstrapWorkspaceIdentities({ ...args, env: standbyEnv });
-    expect(profiles.map(profile => profile.role)).toEqual(["service", "service"]);
-    expect(fs.existsSync(path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"))).toBe(false);
-    expect(workspaceIdentityReady(standbyEnv)).toBe(true);
-  });
-
-  it("waits for the owner on an unclaimed standby and admits the owner once the claim lands", async () => {
-    const { env, profiles, args } = fixture();
-    fs.rmSync(path.join(env.OPENCLAW_DIR, "builder-claim.json"));
-    const standbyEnv = { ...env, OCTOGEE_BUILDER_STANDBY_BOOT: "1" };
-
-    await expect(bootstrapWorkspaceIdentities({ ...args, env: standbyEnv })).resolves.toBe("awaiting-owner");
-    expect(workspaceOwnerIdentityReady(standbyEnv, "alice")).toBe(false);
-
-    writeClaim(env.OPENCLAW_DIR, "alice");
-    await expect(bootstrapWorkspaceIdentities({ ...args, env: standbyEnv })).resolves.toBe("complete");
-
-    expect(profiles.map(profile => [profile.emails[0], profile.role])).toEqual([
-      ["svc:gateway-edge", "service"], ["svc:octogee-provisioner", "service"], ["alice", "admin"],
-    ]);
-    expect(JSON.parse(fs.readFileSync(path.join(env.OPENCLAW_DIR, "workspace-identity-bootstrap.json"), "utf8")))
-      .toEqual({ ownerUid: "alice" });
-    expect(workspaceOwnerIdentityReady(standbyEnv, "alice")).toBe(true);
-    expect(workspaceOwnerIdentityReady(standbyEnv, "bob")).toBe(false);
-    expect(workspaceIdentityReady(standbyEnv)).toBe(true);
+    await expect(bootstrapWorkspaceIdentities(args)).rejects.toThrow("claimed owner");
+    expect(createProfile).not.toHaveBeenCalled();
+    expect(profiles).toEqual([]);
+    expect(workspaceIdentityReady(env)).toBe(false);
   });
 
   it("marks the owner identity ready only after the owner is admin", async () => {

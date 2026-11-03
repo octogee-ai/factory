@@ -377,26 +377,7 @@ describe("surge OpenClaw process supervisor", () => {
     } finally { await supervisor.stop(); }
   });
 
-  it("self-releases readiness on a standby boot and starts OpenClaw permitted", async () => {
-    const openclawDir = await temporaryOpenClawDir();
-    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
-    const children: FakeChild[] = [];
-    const log = vi.fn();
-    const supervisor = await startSurgeOpenClawSupervisor({
-      openclawDir, podUid: "standby-pod", log, socketPath, standbyBoot: true,
-      prepareTarget: async () => undefined, prepareDatabases: async () => undefined,
-      spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
-      probeHealthz: healthzOf(children), healthTimeoutMs: 100,
-    });
-    try {
-      await vi.waitFor(() => expect(children).toHaveLength(1));
-      await expect(createSurgeReadinessGate(openclawDir, "standby-pod").released()).resolves.toBe(true);
-      await vi.waitFor(() => expect(supervisor.state()).resolves.toMatchObject({ role: "normal", mode: "permitted", phase: "running" }));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("standby"));
-    } finally { await supervisor.stop(); }
-  });
-
-  it("keeps a non-standby Builder boot held until a migration releases it", async () => {
+  it("keeps a Builder boot held until a migration releases it", async () => {
     const openclawDir = await temporaryOpenClawDir();
     const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const spawnOpenClaw = vi.fn(() => new FakeChild());
@@ -1121,22 +1102,6 @@ describe("held Builder store migration", () => {
       await expect(client.migrateBuilderStores("target-pod")).rejects.toThrow("retained source");
       await client.hold({ migrationId: "migration", slug: "alice", targetPodUid: "target-pod" });
       await expect(client.migrateBuilderStores("target-pod")).rejects.toThrow("normal");
-      expect(migrateBuilderStores).not.toHaveBeenCalled();
-    } finally { await supervisor.stop(); }
-  });
-
-  it("rejects a standby boot even though it self-released its readiness marker", async () => {
-    const openclawDir = await temporaryOpenClawDir(), children: FakeChild[] = [];
-    const socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
-    const migrateBuilderStores = vi.fn(async () => {});
-    const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid: "standby-pod", socketPath,
-      log: () => {}, standbyBoot: true, prelaunchBoot: false, migrateBuilderStores,
-      prepareTarget: async () => {}, prepareDatabases: async () => {},
-      spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; }, probeHealthz: healthzOf(children),
-    });
-    try {
-      const client = createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath });
-      await expect(client.migrateBuilderStores("standby-pod")).rejects.toThrow("standby");
       expect(migrateBuilderStores).not.toHaveBeenCalled();
     } finally { await supervisor.stop(); }
   });

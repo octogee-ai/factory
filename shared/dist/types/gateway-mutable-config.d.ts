@@ -17,12 +17,6 @@ export interface GatewayMutableConfig {
     modelBrokerLimits: GatewayModelBrokerLimits | null;
     preemption?: null;
     allocation?: DisposableBuilderGatewayAllocation | null;
-    standby?: BuilderStandby | null;
-}
-export interface BuilderStandby {
-    kind: "hobby";
-    schemaVersion: 1;
-    mintedAt: number;
 }
 export interface DisposableBuilderGatewayAllocation {
     kind: "disposable-builder";
@@ -32,7 +26,6 @@ export interface DisposableBuilderGatewayAllocation {
     claimedByUid: string;
 }
 export declare function isDisposableBuilderGatewayAllocation(value: unknown): value is DisposableBuilderGatewayAllocation;
-export declare function isBuilderStandby(value: unknown): value is BuilderStandby;
 export declare function isBareGatewayId(value: unknown): value is string;
 export declare function isGatewayMutableConfig(value: unknown): value is GatewayMutableConfig;
 export declare function isGatewayMutableConfigForGateway(value: unknown, gatewayId: string): value is GatewayMutableConfig;

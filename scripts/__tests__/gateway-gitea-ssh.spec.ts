@@ -8,11 +8,11 @@ const entrypoint = readFileSync(path.resolve(import.meta.dirname, "../../infra/g
 const sshSetup = entrypoint.slice(entrypoint.indexOf('GIT_SSH_HOST="'), entrypoint.indexOf("# ── OpenClaw environment inputs"));
 const homes: string[] = [];
 
-function configure(gatewayClass: string, slug = "sep091", claimed = gatewayClass === "builder"): string {
+function configure(gatewayClass: string, slug = "sep091"): string {
   const home = mkdtempSync(path.join(tmpdir(), "octogee-gitea-ssh-"));
   homes.push(home);
   execFileSync("sh", ["-ec", `log() { :; }\n${sshSetup}`], {
-    env: { ...process.env, HOME: home, OPENCLAW_DIR: "/home/node/.openclaw", GIT_SSH_HOST: "gitea.test.internal", GATEWAY_CLASS_EFFECTIVE: gatewayClass, BUILDER_SLUG: slug, BUILDER_CLAIMED: claimed ? "1" : "0" },
+    env: { ...process.env, HOME: home, OPENCLAW_DIR: "/home/node/.openclaw", GIT_SSH_HOST: "gitea.test.internal", GATEWAY_CLASS_EFFECTIVE: gatewayClass, BUILDER_SLUG: slug },
     stdio: "pipe",
   });
   return path.join(home, ".ssh/config");
@@ -41,10 +41,6 @@ describe("gateway Gitea SSH identity", () => {
 
   it("keeps shared gateways without a default customer identity even when a slug is present", () => {
     expect(readFileSync(configure("shared"), "utf8")).not.toContain("IdentityFile");
-  });
-
-  it("gives an unclaimed standby Builder no customer identity and no slug to validate", () => {
-    expect(readFileSync(configure("builder", "", false), "utf8")).not.toContain("IdentityFile");
   });
 
   it.each(["", "../another-builder", "sep091\nHost *"])("rejects an invalid Builder slug: %j", (slug) => {

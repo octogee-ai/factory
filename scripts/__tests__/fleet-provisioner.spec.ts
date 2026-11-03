@@ -1949,15 +1949,15 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it("admits a claimed standby live only once its claim overlay is stamped", async () => {
-    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-claimed-standby-"));
+  it("admits a claimed Builder live only once its claim overlay is stamped", async () => {
+    const openclawDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-claimed-builder-"));
     tmpDirs.push(openclawDir);
     vi.stubEnv("OPENCLAW_DIR", openclawDir);
-    vi.stubEnv("GATEWAY_ID", "standby-s-0a1b2c3d");
+    vi.stubEnv("GATEWAY_ID", "b-chris");
     vi.stubEnv("GATEWAY_CLASS", "builder");
     try {
       writeBuilderClaim(openclawDir, builderClaimFromIdentity({
-        gatewayId: "standby-s-0a1b2c3d", state: "claimed", ownerUid: "uid-chris", builderSlug: "chris",
+        gatewayId: "b-chris", state: "claimed", ownerUid: "uid-chris", builderSlug: "chris",
         leaseId: "lease-1", generation: 2,
       }, 1));
       const brokered = buildBrokeredLifecycleAdapter({
@@ -1968,11 +1968,11 @@ describe("configured Builder surge release", () => {
         listLocalCustomerSlugs: () => [],
         customerMountMarked: () => false,
       } as CustomerLifecycleAdapter;
-      const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "standby-pod" };
+      const request = { migrationId: "activation-1", slug: "chris", targetPodUid: "builder-pod" };
       const wiring = createBuilderSurgeGateWiring({
         adapter,
         processGate: {
-          status: vi.fn(async () => ({ version: 1, podUid: "standby-pod", role: "normal", mode: "permitted", phase: "running" })),
+          status: vi.fn(async () => ({ version: 1, podUid: "builder-pod", role: "normal", mode: "permitted", phase: "running" })),
         } as unknown as SurgeOpenClawProcessSupervisorClient,
         surgeReadiness: { released: vi.fn(async () => true) } as unknown as SurgeReadinessGate,
         waitForGatewayHealthy: async () => undefined,
@@ -1984,7 +1984,7 @@ describe("configured Builder surge release", () => {
       await expect(wiring.surgeTargetLive(request)).resolves.toBe(true);
       await expect(wiring.admitLiveSurgeTarget(request)).rejects.toThrow("requires its retained overlay");
 
-      markBuilderClaimOverlayApplied(openclawDir, "standby-s-0a1b2c3d", 2);
+      markBuilderClaimOverlayApplied(openclawDir, "b-chris", 2);
       await expect(wiring.admitLiveSurgeTarget(request)).resolves.toBeUndefined();
       expect(brokered.configuredBuilderOverlayPresent?.("bob")).toBe(false);
     } finally {
@@ -2696,20 +2696,20 @@ describe("in-pod gateway heartbeat", () => {
     ).toMatchObject({ openclawVersion: "2026.7.1", podUid: "pod-uid-1", customers: ["alice"] });
   });
 
-  it("reports a standby Builder through the signed fleet state, never the unauthenticated probe", () => {
+  it("reports the configured Builder through the signed fleet state, never the unauthenticated probe", () => {
     const state = buildFleetStateResponse({
       status: "ready",
-      gatewayId: "standby-s-0a1b2c3d",
+      gatewayId: "b-chris",
       podUid: "pod-uid-1",
       version: "sha-1",
       openclawVersion: "2026.7.1",
       startedAt: 42,
       customers: [],
       migratingIn: [],
-      configuredBuilder: { state: "standby" },
+      configuredBuilder: { state: "claimed", generation: 2 },
     });
 
-    expect(state).toMatchObject({ status: "ready", customers: [], configuredBuilder: { state: "standby" } });
+    expect(state).toMatchObject({ status: "ready", customers: [], configuredBuilder: { state: "claimed", generation: 2 } });
     expect(buildFleetHealthResponse({ status: "ready", podUid: "pod-uid-1", startedAt: 42 }))
       .not.toHaveProperty("configuredBuilder");
   });

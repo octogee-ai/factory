@@ -140,29 +140,24 @@ describe("infra/gateway/entrypoint.sh — gateway token Secret Manager publish b
 });
 
 
-const AWAIT_OVERLAY_GATE = "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-claim.ts await-overlay";
-
 function runnerBlockSource(): string {
   const src = fs.readFileSync(ENTRYPOINT, "utf8");
-  const gateStart = src.indexOf('BUILDER_OVERLAY_GATE=""');
-  const gateEnd = src.indexOf("\nfi\n", gateStart);
   const start = src.indexOf("# ── In-pod runners:");
   const end = src.indexOf("# ── Runner metrics exporter", start);
-  if (gateStart < 0 || gateEnd < 0 || start < 0 || end < 0) {
-    throw new Error("could not locate overlay gate or runner startup block in entrypoint.sh");
+  if (start < 0 || end < 0) {
+    throw new Error("could not locate the runner startup block in entrypoint.sh");
   }
   return [
     "supervise_runner() {",
     "  echo \"$*\" >> \"$RUNNER_MARKER\"",
     "}",
-    src.slice(gateStart, gateEnd + "\nfi\n".length),
     src.slice(start, end),
   ].join("\n");
 }
 
 function runRunnerBlock(
   profile: string,
-  opts: { gatewayClass?: string; standby?: boolean } = {},
+  opts: { gatewayClass?: string } = {},
 ): {
   status: number | null;
   stderr: string;
@@ -173,14 +168,11 @@ function runRunnerBlock(
   try {
     const marker = path.join(tmp, "runners");
     const gatewayClass = opts.gatewayClass ?? (profile === "builder" ? "builder" : "shared");
-    const claimed = gatewayClass === "builder" && !opts.standby;
     const script = `
       set -e
       log() { echo "$*" >&2; }
       export GATEWAY_PROFILE="${profile}"
       export GATEWAY_CLASS_EFFECTIVE="${gatewayClass}"
-      BUILDER_CLAIMED=${claimed ? 1 : 0}
-      ${opts.standby ? "export OCTOGEE_BUILDER_STANDBY_BOOT=1" : ""}
       export RUNNER_MARKER="${marker}"
       TSX=/octogee/scripts/node_modules/.bin/tsx
       ${runnerBlockSource()}
@@ -217,7 +209,7 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
     expect(result.stderr).toMatch(/site-build-api disabled/);
   });
 
-  it("starts claimed Builder customer runners immediately, without the overlay gate", () => {
+  it("starts Builder customer runners immediately", () => {
     const result = runRunnerBlock("builder");
     expect(result.status).toBe(0);
     expect(result.commands.get("system-config-watch")).toBe(
@@ -225,23 +217,6 @@ describe("infra/gateway/entrypoint.sh — in-pod runner boundary", () => {
     );
     expect(result.commands.get("builder-toolchain-hydrator")).toBe(
       "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts",
-    );
-  });
-
-  it("starts customer runners on an unclaimed standby Builder behind the await-overlay gate", () => {
-    const result = runRunnerBlock("builder", { standby: true });
-    expect(result.status).toBe(0);
-    expect(result.commands.get("system-config-watch")).toBe(
-      `${AWAIT_OVERLAY_GATE} /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/system-config-watch.ts`,
-    );
-    expect(result.commands.get("builder-toolchain-hydrator")).toBe(
-      `${AWAIT_OVERLAY_GATE} /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/builder-toolchain-hydrator.ts`,
-    );
-    expect(result.commands.get("fleet-controller")).toBe(
-      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/fleet-controller.ts",
-    );
-    expect(result.commands.get("byosub-syncback")).toBe(
-      "/octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/byosub-syncback-runner.ts",
     );
   });
 

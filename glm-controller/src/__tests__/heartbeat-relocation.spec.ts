@@ -51,8 +51,8 @@ describe("revisionHeartbeatMerge — writer targets glmGateways/{id}.heartbeat",
 
   it("writes the configured Builder report, including an explicit null, only when the poll carried one", () => {
     expect(revisionHeartbeatMerge(
-      { status: "ready", mountedCustomers: [], configuredBuilder: { state: "standby" } }, 1000,
-    ).heartbeat.configuredBuilder).toEqual({ state: "standby" });
+      { status: "ready", mountedCustomers: [], configuredBuilder: { state: "claimed", generation: 2 } }, 1000,
+    ).heartbeat.configuredBuilder).toEqual({ state: "claimed", generation: 2 });
     expect(revisionHeartbeatMerge(
       { status: "ready", mountedCustomers: [], configuredBuilder: null }, 1000,
     ).heartbeat).toHaveProperty("configuredBuilder", null);

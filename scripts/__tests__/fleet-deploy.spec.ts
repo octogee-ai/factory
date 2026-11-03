@@ -22,7 +22,7 @@ function gateway(id: string, patch: Partial<FleetGateway> = {}): FleetGateway {
   const shared = id.startsWith("shared-");
   const image = shared ? payload : payload.profileImages!.builder;
   return {
-    gatewayId: id, gatewayClass: shared ? "shared" : "builder", imageProfile: shared ? "standard" : "builder", standby: false,
+    gatewayId: id, gatewayClass: shared ? "shared" : "builder", imageProfile: shared ? "standard" : "builder",
     desiredStatus: "running", latestRelease: 2, desiredRelease: 2, liveRelease: 2,
     latestPayload: payload, desiredPayload: payload, assignments: [], operations: [],
     runtime: { release: 2, lifecycle: "serving", status: "ready", heartbeatAt: 100, mountedCustomers: [], migratingIn: [] },
@@ -70,15 +70,6 @@ describe("complete TEST fleet deployment", () => {
     expect(report.targets.find((target) => target.gatewayId === "b-paused")?.status).toBe("paused-desired-only");
     expect(report.targets.find((target) => target.gatewayId === "b-retired")?.status).toBe("retired-skipped");
     expect(h.readSnapshot).toHaveBeenCalledTimes(3);
-  });
-
-  it("never deploys to a standby Builder and reports it skipped while the pool re-mints it", async () => {
-    const stale = gateway("standby-s-0a1b2c3d", { standby: true, latestRelease: 1, desiredRelease: 1, latestPayload: old, desiredPayload: old, live: null, runtime: null });
-    const h = harness([snapshot(gateway("shared-0"), stale), snapshot(gateway("shared-0"))]);
-    const report = await h.run();
-    expect(h.deploy).not.toHaveBeenCalled();
-    expect(report.outcome).toBe("converged");
-    expect(report.targets.find((target) => target.gatewayId === "standby-s-0a1b2c3d")).toMatchObject({ status: "standby-skipped", reasons: [] });
   });
 
   it("rescans and deploys Builders created while the ship is converging", async () => {

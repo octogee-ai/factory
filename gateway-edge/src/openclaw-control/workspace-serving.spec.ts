@@ -32,7 +32,6 @@ describe("workspace serving resolver", () => {
 
   it.each<[string, BuilderIdentity | null]>([
     ["not yet read", null],
-    ["a standby", { gatewayId: "b-owner", state: "standby" }],
     ["retired", { gatewayId: "b-owner", state: "unavailable", reason: "retired" }],
   ])("refuses a Builder whose identity is %s", (_label, identity) => {
     expect(builder(identity, store(true, "serving"))()).toBe("not-serving");

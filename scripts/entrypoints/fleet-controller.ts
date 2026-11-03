@@ -51,14 +51,8 @@ import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mu
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
-import { BUILDER_STANDBY_BOOT_ENV } from "../../shared/types/builder-identity.js";
-import {
-  applyBuilderClaim,
-  createApplyBuilderClaimDeps,
-  createBuilderClaimRuntime,
-} from "../lib/builder-claim.js";
+import { configuredBuilderReport } from "../lib/builder-claim.js";
 
-const BUILDER_CLAIM_SAFETY_POLL_MS = 15_000;
 
 export interface FleetControllerEntrypointConfig {
   builderSlug: string;
@@ -219,12 +213,6 @@ export function createFleetControllerRequestedFlush(input: FleetControllerReques
   };
 }
 
-export function createClaimAwareRequestedFlush(
-  input: Omit<FleetControllerRequestedFlushDeps, "builderSlug"> & { builderSlug: () => string },
-): ReturnType<typeof createFleetControllerRequestedFlush> {
-  return (request) => createFleetControllerRequestedFlush({ ...input, builderSlug: input.builderSlug() })(request);
-}
-
 export function createAssignedCustomerReader(
   brokerClient: Pick<FleetBrokerClient, "assignedUsers" | "assignmentRoster">,
   seedSnapshot: Parameters<typeof desiredCustomers>[2],
@@ -322,9 +310,9 @@ async function main(): Promise<void> {
   if (builder) persistProjects = persistBuilderProjects;
   else if (GATEWAY_CLASS === "shared") persistProjects = persistSharedCustomerFiles;
   const brokerClient = createFleetBrokerClient(entrypointConfig.gatewayId);
-  let builderSlug = entrypointConfig.builderSlug;
-  let stopClaimedBuilderServices: (() => void) | undefined;
-  const startClaimedBuilderServices = (slug: string): void => {
+  const builderSlug = entrypointConfig.builderSlug;
+  let stopBuilderServices: (() => void) | undefined;
+  const startBuilderServices = (slug: string): void => {
     const runtimeHealthPublisher = createSystemConfigStatusPublisher({
       openclawDir: OPENCLAW_DIR,
       refreshRuntimeHealth: () => refreshSystemConfigRuntimeHealth({
@@ -339,7 +327,7 @@ async function main(): Promise<void> {
     const stopProjectAutosave = builder
       ? startProjectAutosave({ save: () => persistBuilderProjects(slug), log })
       : undefined;
-    stopClaimedBuilderServices = () => {
+    stopBuilderServices = () => {
       stopProjectAutosave?.();
       runtimeHealthPublisher.close();
     };
@@ -350,25 +338,6 @@ async function main(): Promise<void> {
     log,
     isBuilderGateway,
     projectCheckoutScope: (slug) => projectCheckoutScopeForRuntime(slug),
-  });
-  const claimRuntime = createBuilderClaimRuntime({
-    env: process.env,
-    openclawDir: OPENCLAW_DIR,
-    gatewayId: entrypointConfig.gatewayId,
-    standbyBoot: builder && process.env[BUILDER_STANDBY_BOOT_ENV] === "1",
-    readIdentity: () => brokerClient.builderIdentity(),
-    apply: (identity) => applyBuilderClaim(identity, createApplyBuilderClaimDeps({
-      env: process.env,
-      openclawDir: OPENCLAW_DIR,
-      gatewayId: entrypointConfig.gatewayId,
-      rpc,
-      log,
-    })),
-    onApplied: (claim) => {
-      builderSlug = claim.builderSlug;
-      startClaimedBuilderServices(claim.builderSlug);
-    },
-    log,
   });
   const fleetHandle = await startFleetController({
     rpc,
@@ -383,11 +352,8 @@ async function main(): Promise<void> {
     projectBlobHydrator: builder ? createBrokeredProjectBlobHydrator(brokerClient) : undefined,
     platformState: !builder,
     localReconcile: true,
-    subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(() => {
-      claimRuntime.poke();
-      wake();
-    }, log),
-    configuredBuilderReport: () => claimRuntime.report(),
+    subscribeDesiredChanges: (wake) => brokerClient.watchAssignments(wake, log),
+    configuredBuilderReport: () => configuredBuilderReport(process.env),
     readDesiredCustomers: createAssignedCustomerReader(
       brokerClient,
       adapter.seedUserSnapshotForMigration,
@@ -399,10 +365,10 @@ async function main(): Promise<void> {
       brokerClient.acknowledgeRuntimeReset(uid, operationId, generation),
     recordReconcileError: (slug, message) => brokerClient.recordReconcileError(slug, message),
     clearReconcileError: (slug) => brokerClient.clearReconcileError(slug),
-    flushLocalState: createClaimAwareRequestedFlush({
+    flushLocalState: createFleetControllerRequestedFlush({
       gatewayId: entrypointConfig.gatewayId,
       gatewayClass: GATEWAY_CLASS,
-      builderSlug: () => builderSlug,
+      builderSlug,
       builder,
       flushFiles: (slug) => flushCustomerFiles(slug, { persistProjects }),
       syncBlobs: builder
@@ -423,7 +389,7 @@ async function main(): Promise<void> {
   // Durable-config runtime health: refresh + broker publish, replacing the
   // retired status server (the probes moved to :3003/health and OpenClaw's own
   // :18789; GATEWAY-SIMPLE-ROLL-SPEC).
-  if (builderSlug) startClaimedBuilderServices(builderSlug);
+  if (builderSlug) startBuilderServices(builderSlug);
   const stopSharedAutosave = GATEWAY_CLASS === "shared" ? startProjectAutosave({
     save: () => persistAssignedSharedCustomers({
       readCustomers: () => brokerClient.assignedUsers({ completeOnly: true }),
@@ -431,8 +397,6 @@ async function main(): Promise<void> {
       log,
     }), log,
   }) : undefined;
-  claimRuntime.poke();
-  const claimPollTimer = setInterval(() => claimRuntime.poke(), BUILDER_CLAIM_SAFETY_POLL_MS);
 
   const blobSyncTimer = startBlobSyncLoop({
     syncBlobs: () => blobSyncAllWithOptions({
@@ -456,9 +420,8 @@ async function main(): Promise<void> {
       });
   log(`Local fleet controller running (profile=${GATEWAY_PROFILE}). Press Ctrl+C to stop.`);
   const cleanup = async () => {
-    stopClaimedBuilderServices?.();
+    stopBuilderServices?.();
     stopSharedAutosave?.();
-    clearInterval(claimPollTimer);
     clearInterval(blobSyncTimer);
     if (usageTimer) clearInterval(usageTimer);
     try { await fleetHandle.stop(); } catch {}

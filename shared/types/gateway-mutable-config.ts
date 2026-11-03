@@ -46,13 +46,6 @@ export interface GatewayMutableConfig {
   modelBrokerLimits: GatewayModelBrokerLimits | null;
   preemption?: null;
   allocation?: DisposableBuilderGatewayAllocation | null;
-  standby?: BuilderStandby | null;
-}
-
-export interface BuilderStandby {
-  kind: "hobby";
-  schemaVersion: 1;
-  mintedAt: number;
 }
 
 export interface DisposableBuilderGatewayAllocation {
@@ -177,20 +170,6 @@ function isOptionalDisposableBuilderGatewayAllocation(
   return value === undefined || value === null || isDisposableBuilderGatewayAllocation(value);
 }
 
-export function isBuilderStandby(value: unknown): value is BuilderStandby {
-  if (!isRecord(value)) return false;
-  const fields = new Set(["kind", "schemaVersion", "mintedAt"]);
-  return Object.keys(value).every((field) => fields.has(field)) &&
-    value.kind === "hobby" &&
-    value.schemaVersion === 1 &&
-    Number.isSafeInteger(value.mintedAt) &&
-    (value.mintedAt as number) > 0;
-}
-
-function isOptionalBuilderStandby(value: unknown): value is BuilderStandby | null | undefined {
-  return value === undefined || value === null || isBuilderStandby(value);
-}
-
 function isOwnedGateway(value: Record<string, unknown>): boolean {
   return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
     typeof value.builderSlug === "string" && value.builderSlug.length > 0;
@@ -208,11 +187,9 @@ function isUnallocated(value: Record<string, unknown>): boolean {
 }
 
 function hasLegalOwnershipAndAllocation(value: Record<string, unknown>): boolean {
-  const standby = value.standby !== undefined && value.standby !== null;
   if (value.gatewayClass === "shared") {
-    return value.ownerUid === null && value.builderSlug === null && isUnallocated(value) && !standby;
+    return value.ownerUid === null && value.builderSlug === null && isUnallocated(value);
   }
-  if (standby) return value.ownerUid === null && value.builderSlug === null && isUnallocated(value);
   return isOwnedGateway(value) && hasLegalOwnedAllocation(value);
 }
 
@@ -234,7 +211,8 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
   if (!isRecord(value) || value.configSchemaVersion !== GATEWAY_CONFIG_SCHEMA_VERSION) return false;
   if (
     Object.prototype.hasOwnProperty.call(value, "byosub") ||
-    Object.prototype.hasOwnProperty.call(value, "coOwnerUids")
+    Object.prototype.hasOwnProperty.call(value, "coOwnerUids") ||
+    Object.prototype.hasOwnProperty.call(value, "standby")
   ) return false;
   return (
     (value.profile === null || isGatewayProfile(value.profile)) &&
@@ -251,7 +229,6 @@ export function isGatewayMutableConfig(value: unknown): value is GatewayMutableC
     isNullableModelBrokerLimits(value.modelBrokerLimits) &&
     (value.preemption === undefined || value.preemption === null) &&
     isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
-    isOptionalBuilderStandby(value.standby) &&
     hasLegalClassProfiles(value) &&
     hasLegalOwnershipAndAllocation(value)
   );

@@ -74,7 +74,7 @@ for (const id of agents) {
 }
 await fs.rm(path.join(state, "extensions"), { recursive: true, force: true });
 await fs.symlink(path.resolve(values.extensions), path.join(state, "extensions"));
-await fs.writeFile(path.join(state, "builder-claim.json"), JSON.stringify({ schemaVersion: 1, gatewayId, ownerUid: "synthetic-owner", builderSlug: slug, leaseId: null, generation: null, claimedAt: 1, adoptionPending: false, overlayAppliedAt: 1 }));
+await fs.writeFile(path.join(state, "builder-claim.json"), JSON.stringify({ schemaVersion: 1, gatewayId, ownerUid: "synthetic-owner", builderSlug: slug, leaseId: null, generation: null, claimedAt: 1, overlayAppliedAt: 1 }));
 const held = { version: 1, podUid, role: "target", mode: "held", phase: "held", migrationId, slug, targetPodUid: podUid } as const;
 const supervisor = http.createServer((request, response) => {
   let body = "";

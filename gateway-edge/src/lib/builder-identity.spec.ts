@@ -12,7 +12,7 @@ import {
 const CLAIMED: BuilderIdentity = {
   gatewayId: "b-alice", state: "claimed", ownerUid: "uid-alice", builderSlug: "alice", leaseId: "lease", generation: 1,
 };
-const STANDBY: BuilderIdentity = { gatewayId: "b-alice", state: "standby" };
+const UNSETTLED: BuilderIdentity = { gatewayId: "b-alice", state: "unavailable", reason: "retiring" };
 
 function harness(replies: Array<BuilderIdentity | Error>) {
   const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
@@ -39,7 +39,7 @@ function harness(replies: Array<BuilderIdentity | Error>) {
   return { store, read, log, scheduled, tick, runNext };
 }
 
-afterEach(() => installBuilderIdentityStore(createBuilderIdentityStore({ read: async () => STANDBY, log: () => undefined })));
+afterEach(() => installBuilderIdentityStore(createBuilderIdentityStore({ read: async () => UNSETTLED, log: () => undefined })));
 
 describe("gateway-edge Builder identity", () => {
   it("reports no identity until the broker has answered", () => {
@@ -49,14 +49,14 @@ describe("gateway-edge Builder identity", () => {
     expect(claimedBuilderIdentity()).toBeNull();
   });
 
-  it("keeps polling an unclaimed gateway and stops once the broker reports the claim", async () => {
-    const h = harness([STANDBY, CLAIMED]);
+  it("keeps polling an unsettled identity and stops once the broker reports the claim", async () => {
+    const h = harness([UNSETTLED, CLAIMED]);
     installBuilderIdentityStore(h.store);
     h.store.start();
     await h.tick();
     await vi.waitFor(() => expect(h.scheduled).toHaveLength(1));
     expect(h.scheduled[0].delayMs).toBe(BUILDER_IDENTITY_POLL_MS);
-    expect(builderIdentity()).toEqual(STANDBY);
+    expect(builderIdentity()).toEqual(UNSETTLED);
     expect(claimedBuilderIdentity()).toBeNull();
 
     await h.runNext();

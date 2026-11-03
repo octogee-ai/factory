@@ -81,12 +81,6 @@ describe("TEST fleet operator release mutation", () => {
     await expect(deployFleetBuilder(db, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("non-retired Builder");
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
-  it("refuses a standby Builder before writing an audit or release", async () => {
-    const { db, root } = database();
-    Object.assign(root, { standby: { kind: "hobby", schemaVersion: 1, mintedAt: 1 } });
-    await expect(deployFleetBuilder(db, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("standby Builder");
-    expect(mocks.mutate).not.toHaveBeenCalled();
-  });
   it("rechecks platform supersession immediately before a Builder mutation", async () => {
     const { db } = database("builder", "e".repeat(64));
     await expect(deployFleetBuilder(db, { gatewayId: "b-paused" }, manifest, payload, "test")).rejects.toThrow("superseded");

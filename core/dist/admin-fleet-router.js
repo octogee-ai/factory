@@ -17,8 +17,7 @@ import { parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shar
 import { readSharedGatewayAutoscalingConfig, readSharedGatewayPoolConfig, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
-import { GATEWAY_HEARTBEAT_INTERVAL_MS, GATEWAY_UNREACHABLE_AFTER_MS, parseConfiguredBuilderReport, } from "@octogee/shared/types/fleet-controller";
-import { isBuilderStandby } from "@octogee/shared/types/gateway-mutable-config";
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
 import { builderReturnOperationId, placementRetireOperationId, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
@@ -118,7 +117,6 @@ export function resolveFleetNamespace(env = process.env) {
 }
 const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
 export const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
-export const ERR_STANDBY_RIDES_PLATFORM_RELEASE = "standby Builders ride the platform release; Cowboy retires and re-mints them";
 async function readOnboardingRuntimeConfig(deps) {
     const [pool, sharedGatewayAutoscaling] = await Promise.all([
         readSharedGatewayPoolConfig(deps.db),
@@ -825,22 +823,6 @@ function projectDisposableRuntime(glmDoc) {
         generation: allocation.generation,
     };
 }
-function standbyHeartbeatFresh(lastHeartbeatAt, now) {
-    const ageMs = ageMsOrNull(toMillis(lastHeartbeatAt), now);
-    return ageMs !== null && ageMs >= -GATEWAY_HEARTBEAT_INTERVAL_MS && ageMs <= GATEWAY_UNREACHABLE_AFTER_MS;
-}
-function projectStandby(data, glmDoc, now) {
-    if (!isBuilderStandby(glmDoc?.standby) || glmDoc?.ownerUid != null)
-        return null;
-    const mintedAt = glmDoc.standby.mintedAt;
-    return {
-        mintedAt,
-        ageMs: Math.max(0, now - mintedAt),
-        ready: data.status === "ready" &&
-            parseConfiguredBuilderReport(data.configuredBuilder)?.state === "standby" &&
-            standbyHeartbeatFresh(data.lastHeartbeatAt, now),
-    };
-}
 // The stored window is a list of replacement timestamps, so the rolling counts
 // are derived against the request clock rather than read back from a number that
 // was accurate only when Cowboy last wrote the document.
@@ -875,7 +857,6 @@ export function projectGatewaySummary(doc, glmDoc, now) {
         gatewayClass: normalizeGatewayClass(glmDoc),
         imageProfile: normalizeGatewayImageProfile(glmDoc),
         disposableRuntime: projectDisposableRuntime(glmDoc),
-        standby: projectStandby(data, glmDoc, now),
         podReplacements: projectGatewayPodReplacements(glmDoc, now),
     };
 }
@@ -1138,7 +1119,6 @@ export function projectDisposableFleetCapacity(gateways, builderRuntimes = [], p
         failedBuilders: byLifecycle.failed,
         staleActivations: builderRuntimes.filter((runtime) => runtime.stale).length,
         oldestActivationAgeMs: activationAges.length === 0 ? null : Math.max(...activationAges),
-        standbyInstances: gateways.filter((gateway) => gateway.standby !== null && gateway.desiredStatus !== "retired").length,
     };
 }
 function rollupFleetStats(gateways) {
@@ -2171,14 +2151,6 @@ async function resolveRollbackRelease(args) {
             error: {
                 status: 409,
                 body: { error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: args.gatewayId },
-            },
-        };
-    }
-    if (gateway.standby != null) {
-        return {
-            error: {
-                status: 409,
-                body: { error: ERR_STANDBY_RIDES_PLATFORM_RELEASE, gatewayId: args.gatewayId },
             },
         };
     }
@@ -4420,10 +4392,6 @@ export function addAdminFleetRoutes(router, deps) {
             }
             if (gateway.gatewayClass === "shared") {
                 res.status(409).json({ error: ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE, gatewayId: id });
-                return;
-            }
-            if (gateway.standby != null) {
-                res.status(409).json({ error: ERR_STANDBY_RIDES_PLATFORM_RELEASE, gatewayId: id });
                 return;
             }
             if (!deps.releaseEnvironment || !deps.releaseAuthority) {

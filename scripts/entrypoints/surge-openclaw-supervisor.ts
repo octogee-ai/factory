@@ -18,7 +18,6 @@ import {
   type SurgeOpenClawProcessSupervisorRequest,
 } from "../lib/surge-openclaw-process-gate.js";
 import { createSurgeReadinessGate } from "../lib/surge-readiness.js";
-import { isStandbyBuilderBoot } from "../lib/builder-standby-boot.js";
 import { prepareOpenClawSqliteJournals } from "../lib/openclaw-sqlite-journal-preflight.js";
 import { prepareGatewayStateStore } from "../lib/gateway-state-store-preparation.js";
 import { createFleetBrokerClient, type FleetBrokerClient } from "../lib/fleet-broker-client.js";
@@ -49,7 +48,6 @@ export interface StartSurgeOpenClawSupervisorOptions {
   healthTimeoutMs?: number;
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
-  standbyBoot?: boolean;
   prelaunchBoot?: boolean;
   activationMigrationId?: string;
   spawnOpenClaw?: () => SpawnedOpenClaw;
@@ -548,14 +546,6 @@ function defaultBootWatcher(): OpenClawBootWatcher {
   return { beforeStart: async () => {}, healthy: async () => {} };
 }
 
-async function selfReleaseStandbyReadiness(
-  readiness: Pick<ReturnType<typeof createSurgeReadinessGate>, "release">,
-  opts: Pick<StartSurgeOpenClawSupervisorOptions, "podUid" | "log">,
-): Promise<void> {
-  await readiness.release({ targetPodUid: opts.podUid });
-  opts.log("[surge-openclaw] standby Builder boot: no migration owns this pod, so readiness is self-released");
-}
-
 async function readOwnedSurgeGate(gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>, "read">, podUid: string): Promise<SurgeOpenClawProcessGateState> {
   const state = await gate.read();
   if (!state || state.podUid !== podUid) throw new Error("surge OpenClaw process gate disappeared or belongs to another pod");
@@ -628,7 +618,6 @@ async function migrateHeldBuilderStores(input: {
   signal: AbortSignal;
 }): Promise<SurgeOpenClawProcessGateState> {
   const { opts, current } = input;
-  if (opts.standbyBoot) throw new Error("Builder store migration refuses a standby boot; a normal claimed retained source is required");
   if (input.expectedPodUid !== opts.podUid) throw new Error("Builder store migration addresses another allocation");
   if ((await current()).role !== "normal") throw new Error("Builder store migration requires a normal allocation without an active handoff");
   if (!await input.readinessReleased()) throw new Error("Builder store migration requires a previously serving retained source allocation");
@@ -811,7 +800,6 @@ export async function startSurgeOpenClawSupervisor(
   const settle = (): Promise<SurgeOpenClawProcessGateState> =>
     gate.settle({ podUid: opts.podUid });
 
-  if (opts.standbyBoot) await selfReleaseStandbyReadiness(readiness, opts);
   const readinessReleased = opts.readinessReleased ?? (() => readiness.released());
   const initial = await initializeBootGate({ opts, gate, readiness, readinessReleased, reapOrphanedOpenClaw });
 
@@ -890,7 +878,7 @@ export function createSurgeOpenClawBootWatcher(input: {
 async function nativeBootMode(gatewayId: string, revisionId: string): Promise<{ prelaunchBoot: boolean; activationMigrationId?: string }> {
   let prelaunchBoot = false;
   let activationMigrationId: string | undefined;
-  if (process.env.GATEWAY_RUNTIME_KIND === "gce-vm" && !isStandbyBuilderBoot()) {
+  if (process.env.GATEWAY_RUNTIME_KIND === "gce-vm") {
     const identity = await createFleetBrokerClient(gatewayId, revisionId).builderIdentity({ nativeBoot: true });
     if (identity.state !== "claimed" || !identity.bootMode) throw new Error("Native Builder boot mode is unavailable");
     prelaunchBoot = identity.bootMode === "prelaunch";
@@ -924,7 +912,6 @@ async function main(): Promise<void> {
     podUid,
     log,
     bootWatcher,
-    standbyBoot: isStandbyBuilderBoot(),
     ...boot,
     onUnexpectedChildExit: () => {
       runtimeLogger.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");

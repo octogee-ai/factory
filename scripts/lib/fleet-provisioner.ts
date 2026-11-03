@@ -225,7 +225,7 @@ export interface ConvergenceHooks {
 export { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 import { pendingCloneAppliedFingerprint, pendingCloneOnlyStale } from "./pending-clone-fingerprint.js";
 import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
-import { configuredBuilderReport } from "./builder-standby-boot.js";
+import { configuredBuilderReport } from "./builder-claim.js";
 
 export interface SettleConvergenceInput {
   now: number;

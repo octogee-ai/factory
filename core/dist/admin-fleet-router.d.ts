@@ -100,7 +100,6 @@ interface FirestoreDocLike {
     data(): GlmDoc;
 }
 export declare const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
-export declare const ERR_STANDBY_RIDES_PLATFORM_RELEASE = "standby Builders ride the platform release; Cowboy retires and re-mints them";
 type AdminGatewayDesiredStatus = "running" | "paused" | "draining" | "retired";
 declare function projectLastError(raw: unknown): {
     slug?: string;
@@ -125,11 +124,6 @@ declare function projectDisposableRuntime(glmDoc: GlmDoc | undefined): {
     leaseId: string;
     generation: number;
 } | null;
-declare function projectStandby(data: Record<string, unknown>, glmDoc: GlmDoc | undefined, now: number): {
-    mintedAt: number;
-    ageMs: number;
-    ready: boolean;
-} | null;
 export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: GlmDoc | undefined, now: number): {
     gatewayId: string;
     gateway: string;
@@ -151,7 +145,6 @@ export declare function projectGatewaySummary(doc: FirestoreDocLike, glmDoc: Glm
     gatewayClass: GatewayClass;
     imageProfile: GatewayImageProfile;
     disposableRuntime: ReturnType<typeof projectDisposableRuntime>;
-    standby: ReturnType<typeof projectStandby>;
     podReplacements: GatewayPodReplacementSummary | null;
 };
 export type AdminBuilderRuntimeLifecycle = "requested" | "provisioning" | "activating" | "active" | "returning" | "retiring" | "failed";
@@ -199,7 +192,6 @@ export declare function projectDisposableFleetCapacity(gateways: ReadonlyArray<R
     failedBuilders: number;
     staleActivations: number;
     oldestActivationAgeMs: number | null;
-    standbyInstances: number;
 };
 export interface AdminGatewayControlProjection {
     desiredStatus: string;

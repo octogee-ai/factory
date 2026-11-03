@@ -1982,7 +1982,6 @@ export function builderIdentityForRoot(value: unknown, gatewayId: string): Build
   if (root.retireAfter != null || root.retirementClaim != null) {
     return { gatewayId, state: "unavailable", reason: "retiring" };
   }
-  if (root.standby != null) return { gatewayId, state: "standby" };
   if (!root.ownerUid || !root.builderSlug) return null;
   return {
     gatewayId,

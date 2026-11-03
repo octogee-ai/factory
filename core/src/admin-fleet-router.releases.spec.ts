@@ -7,7 +7,6 @@ import request from "supertest";
 import {
   addAdminFleetRoutes,
   ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE,
-  ERR_STANDBY_RIDES_PLATFORM_RELEASE,
 } from "./admin-fleet-router.js";
 import type {
   CentralReleaseAuthority,
@@ -569,31 +568,6 @@ describe("POST /gateways/:id/deploy", () => {
     expect(authority.resolveManifest).not.toHaveBeenCalled();
   });
 
-  it("rejects deploying to a standby Builder because standbys ride the platform release", async () => {
-    const manifest = immutableBuild();
-    const authority = buildAuthority(manifest);
-    const { app, store } = mkApp(seedNewSchemaGateway("standby-s-0a1b2c3d", sharedPayload(), {
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      profile: null,
-      sizingTier: "s",
-      ownerUid: null,
-      builderSlug: null,
-      allocation: null,
-      standby: { kind: "hobby", schemaVersion: 1, mintedAt: 1_700_000_000_000 },
-    }), { releaseAuthority: authority });
-
-    const res = await request(app)
-      .post("/gateways/standby-s-0a1b2c3d/deploy")
-      .send({ sourceSha: manifest.sourceSha })
-      .expect(409);
-
-    expect(res.body.error).toContain("standby Builders ride the platform release");
-    expect(store.get("gateways/standby-s-0a1b2c3d")).toMatchObject({ latestRelease: 1 });
-    expect(opsIn(store, "rollout")).toHaveLength(0);
-    expect(authority.resolveManifest).not.toHaveBeenCalled();
-  });
-
   it("deploys an existing paired build to exactly the operator-selected gateway", async () => {
     const manifest = immutableBuild();
     const authority = buildAuthority(manifest);
@@ -961,39 +935,6 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     ).toBe("abc1234");
     expect(store.get("gateways/gamma")).toMatchObject({ latestRelease: 3, desiredRelease: 2 });
     expect(opsIn(store, "rollout")).toMatchObject([{ origin: "operator", input: { gatewayId: "gamma" } }]);
-  });
-
-  it("rejects rolling back a standby Builder because standbys ride the platform release", async () => {
-    const seed = seedNewSchemaGateway("standby-s-0a1b2c3d", sharedPayload({ imageTag: "deadbee" }), {
-      gatewayClass: "builder",
-      imageProfile: "builder",
-      profile: null,
-      sizingTier: "s",
-      ownerUid: null,
-      builderSlug: null,
-      allocation: null,
-      standby: { kind: "hobby", schemaVersion: 1, mintedAt: 1_700_000_000_000 },
-    });
-    seed["gateways/standby-s-0a1b2c3d"].latestRelease = 2;
-    seed["gateways/standby-s-0a1b2c3d"].desiredRelease = 2;
-    seed[`gateways/standby-s-0a1b2c3d/${GATEWAY_RELEASES_SUBCOLLECTION}/2`] = {
-      gatewayId: "standby-s-0a1b2c3d", release: 2, sourceRelease: null, note: null,
-      payloadHash: releasePayloadHash(sharedPayload({ imageTag: "deadbee" })),
-      payload: sharedPayload({ imageTag: "deadbee" }),
-    };
-    seed[`gateways/standby-s-0a1b2c3d/${GATEWAY_RELEASES_SUBCOLLECTION}/1`] = {
-      gatewayId: "standby-s-0a1b2c3d", release: 1, sourceRelease: null, note: null,
-      payloadHash: releasePayloadHash(sharedPayload({ imageTag: "abc1234" })),
-      payload: sharedPayload({ imageTag: "abc1234" }),
-    };
-    const { app, store } = mkApp(seed);
-
-    const res = await request(app).post("/gateways/standby-s-0a1b2c3d/releases/1/rollback").send({}).expect(409);
-
-    expect(res.body).toEqual({ error: ERR_STANDBY_RIDES_PLATFORM_RELEASE, gatewayId: "standby-s-0a1b2c3d" });
-    expect(store.get("gateways/standby-s-0a1b2c3d")).toMatchObject({ latestRelease: 2, desiredRelease: 2 });
-    expect(store.has(`gateways/standby-s-0a1b2c3d/${GATEWAY_RELEASES_SUBCOLLECTION}/3`)).toBe(false);
-    expect(opsIn(store, "rollout")).toHaveLength(0);
   });
 
   it("rejects rolling back a shared-pool slot because shared slots ride the platform release", async () => {

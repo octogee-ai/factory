@@ -110,19 +110,6 @@ export function isDisposableBuilderGatewayAllocation(value) {
 function isOptionalDisposableBuilderGatewayAllocation(value) {
     return value === undefined || value === null || isDisposableBuilderGatewayAllocation(value);
 }
-export function isBuilderStandby(value) {
-    if (!isRecord(value))
-        return false;
-    const fields = new Set(["kind", "schemaVersion", "mintedAt"]);
-    return Object.keys(value).every((field) => fields.has(field)) &&
-        value.kind === "hobby" &&
-        value.schemaVersion === 1 &&
-        Number.isSafeInteger(value.mintedAt) &&
-        value.mintedAt > 0;
-}
-function isOptionalBuilderStandby(value) {
-    return value === undefined || value === null || isBuilderStandby(value);
-}
 function isOwnedGateway(value) {
     return typeof value.ownerUid === "string" && value.ownerUid.length > 0 &&
         typeof value.builderSlug === "string" && value.builderSlug.length > 0;
@@ -138,12 +125,9 @@ function isUnallocated(value) {
     return value.allocation === undefined || value.allocation === null;
 }
 function hasLegalOwnershipAndAllocation(value) {
-    const standby = value.standby !== undefined && value.standby !== null;
     if (value.gatewayClass === "shared") {
-        return value.ownerUid === null && value.builderSlug === null && isUnallocated(value) && !standby;
-    }
-    if (standby)
         return value.ownerUid === null && value.builderSlug === null && isUnallocated(value);
+    }
     return isOwnedGateway(value) && hasLegalOwnedAllocation(value);
 }
 function hasLegalClassProfiles(value) {
@@ -162,7 +146,8 @@ export function isGatewayMutableConfig(value) {
     if (!isRecord(value) || value.configSchemaVersion !== GATEWAY_CONFIG_SCHEMA_VERSION)
         return false;
     if (Object.prototype.hasOwnProperty.call(value, "byosub") ||
-        Object.prototype.hasOwnProperty.call(value, "coOwnerUids"))
+        Object.prototype.hasOwnProperty.call(value, "coOwnerUids") ||
+        Object.prototype.hasOwnProperty.call(value, "standby"))
         return false;
     return ((value.profile === null || isGatewayProfile(value.profile)) &&
         isGatewayClass(value.gatewayClass) &&
@@ -178,7 +163,6 @@ export function isGatewayMutableConfig(value) {
         isNullableModelBrokerLimits(value.modelBrokerLimits) &&
         (value.preemption === undefined || value.preemption === null) &&
         isOptionalDisposableBuilderGatewayAllocation(value.allocation) &&
-        isOptionalBuilderStandby(value.standby) &&
         hasLegalClassProfiles(value) &&
         hasLegalOwnershipAndAllocation(value));
 }

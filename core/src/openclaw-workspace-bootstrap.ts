@@ -7,7 +7,6 @@ import { OPENCLAW_PROTOCOL_VERSION } from "@octogee/shared/types/openclaw-wire";
 import { sendWsRequest, startConnectChallengeTracker, waitForWsOpen } from "@octogee/shared/types/openclaw-wire-core";
 import { OPENCLAW_EDGE_SERVICE_IDENTITY, OPENCLAW_PROVISIONER_SERVICE_IDENTITY, openClawProxyIdentityHeaders, openClawProxyOrigin } from "@octogee/shared/types/openclaw-proxy-identity";
 import { builderClaimOwnerUid } from "@octogee/shared/server/builder-claim";
-import { BUILDER_STANDBY_BOOT_ENV } from "@octogee/shared/types/builder-identity";
 
 interface BootstrapIdentity { uid: string; role: "admin" | "service" }
 interface BootstrapJournal { ownerUid: string }
@@ -46,10 +45,6 @@ export function workspaceIdentityReady(env: NodeJS.ProcessEnv = process.env): bo
   const state = files(env);
   return fs.existsSync(state.boot) && fs.existsSync(state.ready)
     && fs.readFileSync(state.boot, "utf8") === fs.readFileSync(state.ready, "utf8");
-}
-
-export function workspaceOwnerClaimed(env: NodeJS.ProcessEnv = process.env): boolean {
-  return builderClaimOwnerUid(env) !== null;
 }
 
 export function workspaceOwnerIdentityReady(env: NodeJS.ProcessEnv, ownerUid: string): boolean {
@@ -95,23 +90,21 @@ function recordOwnerJournal(journalPath: string, ownerUid: string): void {
 export async function bootstrapWorkspaceIdentities(args: {
   request: NativeRequest; env?: NodeJS.ProcessEnv;
   createProfile?: (uid: string, env: NodeJS.ProcessEnv) => Promise<void>;
-}): Promise<"complete" | "awaiting-owner"> {
+}): Promise<void> {
   const env = args.env ?? process.env;
-  if (!enabled(env)) return "complete";
+  if (!enabled(env)) return;
   const state = files(env);
   const ownerUid = builderClaimOwnerUid(env);
-  if (!ownerUid && env[BUILDER_STANDBY_BOOT_ENV] !== "1") {
-    throw new Error("Workspace identity initialization requires this Builder's claimed owner");
-  }
+  if (!ownerUid) throw new Error("Workspace identity initialization requires this Builder's claimed owner");
   const boot = fs.readFileSync(state.boot, "utf8");
-  const services: BootstrapIdentity[] = [
+  const identities: BootstrapIdentity[] = [
     { uid: OPENCLAW_EDGE_SERVICE_IDENTITY, role: "service" },
     { uid: OPENCLAW_PROVISIONER_SERVICE_IDENTITY, role: "service" },
+    { uid: ownerUid, role: "admin" },
   ];
-  const identities: BootstrapIdentity[] = ownerUid ? [...services, { uid: ownerUid, role: "admin" }] : services;
   const list = async () => (await args.request<{ profiles: NativeProfile[] }>("users.list", {}, { scopes: ["operator.admin"] })).profiles;
   const find = (profiles: NativeProfile[], uid: string) => profiles.find(profile => profile.emails.includes(uid.toLowerCase()));
-  if (ownerUid) recordOwnerJournal(state.journal, ownerUid);
+  recordOwnerJournal(state.journal, ownerUid);
   for (const identity of identities) {
     let profile = find(await list(), identity.uid);
     if (!profile) {
@@ -125,7 +118,5 @@ export async function bootstrapWorkspaceIdentities(args: {
   }
   if (fs.readFileSync(state.boot, "utf8") !== boot) throw new Error("Workspace identity boot changed during initialization");
   atomicWrite(state.ready, boot);
-  if (!ownerUid) return "awaiting-owner";
   atomicWrite(state.owner, ownerUid);
-  return "complete";
 }

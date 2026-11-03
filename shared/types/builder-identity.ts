@@ -2,7 +2,6 @@ import { isValidGatewayId } from "./glm.js";
 import { isValidUsername } from "./identity.js";
 
 export const BUILDER_IDENTITY_ROUTE = "/internal/fleet/builder-identity";
-export const BUILDER_STANDBY_BOOT_ENV = "OCTOGEE_BUILDER_STANDBY_BOOT";
 
 export type BuilderIdentityUnavailableReason = "retired" | "retiring" | "not-builder";
 
@@ -18,7 +17,6 @@ export interface ClaimedBuilderIdentity {
 }
 
 export type BuilderIdentity =
-  | { gatewayId: string; state: "standby" }
   | ClaimedBuilderIdentity
   | { gatewayId: string; state: "unavailable"; reason: BuilderIdentityUnavailableReason };
 
@@ -66,7 +64,6 @@ function parseClaimedIdentity(value: Record<string, unknown>): ClaimedBuilderIde
 
 export function parseBuilderIdentity(value: unknown, expectedGatewayId: string): BuilderIdentity | null {
   if (!isRecord(value) || value.gatewayId !== expectedGatewayId || !isValidGatewayId(value.gatewayId)) return null;
-  if (value.state === "standby") return { gatewayId: value.gatewayId, state: "standby" };
   if (value.state === "unavailable" && typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)) {
     return { gatewayId: value.gatewayId, state: "unavailable", reason: value.reason as BuilderIdentityUnavailableReason };
   }
@@ -83,7 +80,6 @@ export interface BuilderClaimRecord {
   leaseId: string | null;
   generation: number | null;
   claimedAt: number;
-  adoptionPending: boolean;
   overlayAppliedAt: number | null;
 }
 
@@ -95,7 +91,6 @@ export function parseBuilderClaimRecord(value: unknown): BuilderClaimRecord | nu
   if (!isRecord(value) || value.schemaVersion !== 1 || !isValidGatewayId(value.gatewayId)) return null;
   if (!claimedIdentityFields(value) || !isTimestamp(value.claimedAt)) return null;
   if (value.overlayAppliedAt !== null && !isTimestamp(value.overlayAppliedAt)) return null;
-  if (value.adoptionPending !== undefined && typeof value.adoptionPending !== "boolean") return null;
   return {
     schemaVersion: 1,
     gatewayId: value.gatewayId,
@@ -104,7 +99,6 @@ export function parseBuilderClaimRecord(value: unknown): BuilderClaimRecord | nu
     leaseId: value.leaseId as string | null,
     generation: value.generation as number | null,
     claimedAt: value.claimedAt,
-    adoptionPending: value.adoptionPending === true,
     overlayAppliedAt: value.overlayAppliedAt as number | null,
   };
 }
@@ -118,13 +112,8 @@ export function builderClaimFromIdentity(identity: ClaimedBuilderIdentity, claim
     leaseId: identity.leaseId,
     generation: identity.generation,
     claimedAt,
-    adoptionPending: false,
     overlayAppliedAt: null,
   };
-}
-
-export function standbyClaimFromIdentity(identity: ClaimedBuilderIdentity, claimedAt: number): BuilderClaimRecord {
-  return { ...builderClaimFromIdentity(identity, claimedAt), adoptionPending: true };
 }
 
 export function sameBuilderOwner(

@@ -91,8 +91,8 @@ describe("parseFleetStateResponse", () => {
   });
 
   it("carries the configured Builder report, nulling a malformed one and omitting an absent one", () => {
-    expect(parseFleetStateResponse({ status: "ready", customers: [], configuredBuilder: { state: "standby" } }))
-      .toEqual({ status: "ready", customers: [], configuredBuilder: { state: "standby" } });
+    expect(parseFleetStateResponse({ status: "ready", customers: [], configuredBuilder: { state: "claimed", generation: null } }))
+      .toEqual({ status: "ready", customers: [], configuredBuilder: { state: "claimed", generation: null } });
     expect(parseFleetStateResponse({ status: "ready", customers: [], configuredBuilder: { state: "claimed", generation: 2 } }))
       .toEqual({ status: "ready", customers: [], configuredBuilder: { state: "claimed", generation: 2 } });
     expect(parseFleetStateResponse({ status: "ready", customers: [], configuredBuilder: null }))
@@ -160,15 +160,15 @@ describe("pollGatewayHeartbeatsOnce", () => {
     });
   });
 
-  it("persists the configured Builder report a standby publishes", async () => {
+  it("persists the configured Builder report a Builder publishes", async () => {
     const deps = makeDeps({
-      fetchFleetState: vi.fn(async () => ({ status: "ready", customers: [], configuredBuilder: { state: "standby" as const } })),
+      fetchFleetState: vi.fn(async () => ({ status: "ready", customers: [], configuredBuilder: { state: "claimed" as const, generation: 2 } })),
     });
     await pollGatewayHeartbeatsOnce(deps);
     expect(deps.writeHeartbeat).toHaveBeenCalledWith("bender", {
       status: "ready",
       mountedCustomers: [],
-      configuredBuilder: { state: "standby" },
+      configuredBuilder: { state: "claimed", generation: 2 },
     });
   });
 

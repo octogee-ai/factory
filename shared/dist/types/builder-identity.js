@@ -1,7 +1,6 @@
 import { isValidGatewayId } from "./glm.js";
 import { isValidUsername } from "./identity.js";
 export const BUILDER_IDENTITY_ROUTE = "/internal/fleet/builder-identity";
-export const BUILDER_STANDBY_BOOT_ENV = "OCTOGEE_BUILDER_STANDBY_BOOT";
 const UNAVAILABLE_REASONS = new Set(["retired", "retiring", "not-builder"]);
 const OWNER_UID_MAX_LENGTH = 128;
 function isRecord(value) {
@@ -42,8 +41,6 @@ function parseClaimedIdentity(value) {
 export function parseBuilderIdentity(value, expectedGatewayId) {
     if (!isRecord(value) || value.gatewayId !== expectedGatewayId || !isValidGatewayId(value.gatewayId))
         return null;
-    if (value.state === "standby")
-        return { gatewayId: value.gatewayId, state: "standby" };
     if (value.state === "unavailable" && typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)) {
         return { gatewayId: value.gatewayId, state: "unavailable", reason: value.reason };
     }
@@ -60,8 +57,6 @@ export function parseBuilderClaimRecord(value) {
         return null;
     if (value.overlayAppliedAt !== null && !isTimestamp(value.overlayAppliedAt))
         return null;
-    if (value.adoptionPending !== undefined && typeof value.adoptionPending !== "boolean")
-        return null;
     return {
         schemaVersion: 1,
         gatewayId: value.gatewayId,
@@ -70,7 +65,6 @@ export function parseBuilderClaimRecord(value) {
         leaseId: value.leaseId,
         generation: value.generation,
         claimedAt: value.claimedAt,
-        adoptionPending: value.adoptionPending === true,
         overlayAppliedAt: value.overlayAppliedAt,
     };
 }
@@ -83,12 +77,8 @@ export function builderClaimFromIdentity(identity, claimedAt) {
         leaseId: identity.leaseId,
         generation: identity.generation,
         claimedAt,
-        adoptionPending: false,
         overlayAppliedAt: null,
     };
-}
-export function standbyClaimFromIdentity(identity, claimedAt) {
-    return { ...builderClaimFromIdentity(identity, claimedAt), adoptionPending: true };
 }
 export function sameBuilderOwner(left, right) {
     return left.gatewayId === right.gatewayId && left.ownerUid === right.ownerUid &&

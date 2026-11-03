@@ -3,28 +3,16 @@ import {
   BuilderClaimError,
   DEFAULT_OPENCLAW_DIR,
   builderClaimFromIdentity,
-  readBuilderClaim,
   writeBuilderClaim,
 } from "@octogee/shared/server/builder-claim";
 import type { BuilderIdentity } from "../../shared/types/builder-identity.js";
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
 
 export const BUILDER_IDENTITY_FATAL_EXIT = 2;
-export const BUILDER_IDENTITY_STANDBY_EXIT = 3;
 
 export type BuilderIdentityBootResult =
   | { exitCode: 0; builderSlug: string }
-  | { exitCode: 1 | typeof BUILDER_IDENTITY_FATAL_EXIT | typeof BUILDER_IDENTITY_STANDBY_EXIT };
-
-function standbyBoot(openclawDir: string, gatewayId: string, log: (message: string) => void): BuilderIdentityBootResult {
-  const existing = readBuilderClaim(openclawDir, gatewayId);
-  if (existing) {
-    log(`[builder-identity] FATAL: gateway ${gatewayId} is a standby but this pod already claimed it for ${existing.builderSlug}`);
-    return { exitCode: BUILDER_IDENTITY_FATAL_EXIT };
-  }
-  log(`[builder-identity] gateway ${gatewayId} is an unclaimed standby; booting without a customer`);
-  return { exitCode: BUILDER_IDENTITY_STANDBY_EXIT };
-}
+  | { exitCode: 1 | typeof BUILDER_IDENTITY_FATAL_EXIT };
 
 export async function resolveBuilderIdentityBoot(input: {
   env: NodeJS.ProcessEnv;
@@ -50,7 +38,6 @@ export async function resolveBuilderIdentityBoot(input: {
     return { exitCode: BUILDER_IDENTITY_FATAL_EXIT };
   }
   try {
-    if (identity.state === "standby") return standbyBoot(openclawDir, gatewayId, input.log);
     const claim = writeBuilderClaim(openclawDir, builderClaimFromIdentity(identity, input.now()));
     return { exitCode: 0, builderSlug: claim.builderSlug };
   } catch (error) {

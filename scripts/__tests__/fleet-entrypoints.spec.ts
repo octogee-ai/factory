@@ -12,7 +12,6 @@ import {
   createAssignedCustomerReader,
   readCustomerEnsureAdmission,
   createFleetFlushSystemConfigSync,
-  createClaimAwareRequestedFlush,
   createFleetControllerRequestedFlush,
   createFleetSystemConfigVerifyFlush,
   createFleetSystemConfigFlush,
@@ -505,20 +504,6 @@ describe("fleet-controller entrypoint config", () => {
     });
     await expect(flush({ slug: "alice", reason: "native-return" })).rejects.toThrow(/configured Builder/);
     expect(flushFiles).not.toHaveBeenCalled();
-  });
-
-  it("re-reads the configured Builder slug once a standby's claim applies", async () => {
-    const flushFiles = vi.fn(async () => {});
-    let builderSlug = "";
-    const flush = createClaimAwareRequestedFlush({
-      gatewayId: "standby-s-0a1b2c3d", gatewayClass: "builder", builderSlug: () => builderSlug, builder: true,
-      flushFiles, syncBlobs: vi.fn(async () => {}), log: () => {},
-    });
-
-    await expect(flush({ slug: "alice", reason: "native-return" })).rejects.toThrow(/configured Builder/);
-    builderSlug = "alice";
-    await expect(flush({ slug: "alice", reason: "native-return" })).resolves.toMatchObject({ ok: true });
-    expect(flushFiles).toHaveBeenCalledOnce();
   });
 
   it("rejects an unpinned migration convergence request before it can sync", async () => {

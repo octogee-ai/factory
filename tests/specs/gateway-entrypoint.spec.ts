@@ -71,9 +71,10 @@ describe("Builder plugin-root preparation", () => {
 function preparePluginRoots(root: string) {
   const start = entrypoint.indexOf('if [ "$GATEWAY_CLASS_EFFECTIVE" != "shared" ]; then', entrypoint.indexOf("# ── Prepare canonical plugin roots"));
   const end = entrypoint.indexOf('\nchmod 600 "$OPENCLAW_CONFIG_PATH"', start);
+  spawnSync("git", ["init", "-q", path.join(root, "system_config")], { stdio: "ignore" });
   return spawnSync("sh", ["-c", `set -e\nlog() { printf '%s\\n' "$*"; }\n${entrypoint.slice(start, end)}`], {
     encoding: "utf8",
-    env: { ...process.env, GATEWAY_CLASS_EFFECTIVE: "builder", BUILDER_CLAIMED: "0", OPENCLAW_DIR: root, OPENCLAW_CONFIG_PATH: path.join(root, "system_config", "openclaw.json") },
+    env: { ...process.env, GATEWAY_CLASS_EFFECTIVE: "builder", OPENCLAW_DIR: root, OPENCLAW_CONFIG_PATH: path.join(root, "system_config", "openclaw.json") },
   });
 }
 
@@ -212,40 +213,28 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     expect(entrypoint).not.toMatch(/rm -rf "\$OPENCLAW_CONFIG_DIR\//);
   });
 
-  it("keeps one supervised config watcher for Builder gateways, held until the claim overlay applies", () => {
-    expect(entrypoint).toMatch(/supervise_runner\s+system-config-watch\s+5000\s+\$BUILDER_OVERLAY_GATE\s+"\$TSX"/);
+  it("keeps one supervised config watcher for Builder gateways", () => {
+    expect(entrypoint).toMatch(/supervise_runner\s+system-config-watch\s+5000\s+"\$TSX"/);
     expect(entrypoint.match(/supervise_runner\s+system-config-watch/g)).toHaveLength(1);
     const watcherIdx = entrypoint.indexOf("supervise_runner system-config-watch");
     const guard = entrypoint.slice(entrypoint.lastIndexOf("if [", watcherIdx), watcherIdx);
     expect(guard).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" = "builder"/);
   });
 
-  it("boots an unclaimed standby with the standby config and no customer pre-boot or runners", () => {
+  it("claims the Builder identity before any owner-scoped pre-boot step and never boots unclaimed", () => {
     const identityBlock = entrypoint.slice(entrypoint.indexOf("# ── Builder identity"), entrypoint.indexOf('GIT_SSH_HOST="'));
-    expect(identityBlock).toMatch(/unset OCTOGEE_BUILDER_STANDBY_BOOT/);
-    expect(identityBlock).toMatch(/identity_status" -eq 3 \]; then\s+export OCTOGEE_BUILDER_STANDBY_BOOT=1\s+break/);
-    expect(identityBlock).toMatch(/BUILDER_CLAIMED=1/);
-    const standbyIdx = entrypoint.indexOf("standby-builder-config.ts");
+    expect(identityBlock).toMatch(/identity_status" -eq 2 \]; then\s+log "FATAL/);
+    expect(identityBlock).not.toMatch(/-eq 3/);
+    expect(entrypoint).not.toMatch(/STANDBY|OVERLAY_GATE|await-overlay/);
     const restoreIdx = entrypoint.indexOf("system-config-restore.ts");
-    expect(standbyIdx).toBeGreaterThan(-1);
-    expect(standbyIdx).toBeLessThan(restoreIdx);
-    expect(entrypoint.slice(standbyIdx, restoreIdx)).toMatch(/elif \[ "\$GATEWAY_CLASS_EFFECTIVE" != "shared" \]/);
-    expect(entrypoint.slice(entrypoint.lastIndexOf("if [", standbyIdx), standbyIdx))
-      .toMatch(/OCTOGEE_BUILDER_STANDBY_BOOT:-0\}" = 1/);
-    for (const claimedOnly of ["clean-builder-project-placeholders.ts", "IdentityFile", "mark-overlay-applied"]) {
-      const idx = entrypoint.indexOf(claimedOnly);
-      expect(entrypoint.slice(entrypoint.lastIndexOf("if [", idx), idx), claimedOnly).toMatch(/"\$BUILDER_CLAIMED" = 1/);
+    expect(entrypoint.slice(entrypoint.lastIndexOf("if [", restoreIdx), restoreIdx)).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" != "shared"/);
+    for (const builderOnly of ["clean-builder-project-placeholders.ts", "IdentityFile", "mark-overlay-applied"]) {
+      const idx = entrypoint.indexOf(builderOnly);
+      expect(entrypoint.slice(entrypoint.lastIndexOf("if [", idx), idx), builderOnly).toMatch(/"\$GATEWAY_CLASS_EFFECTIVE" = "builder"/);
     }
-    const gateIdx = entrypoint.indexOf('BUILDER_OVERLAY_GATE="$TSX /octogee/scripts/entrypoints/builder-claim.ts await-overlay"');
-    expect(gateIdx).toBeGreaterThan(-1);
-    expect(entrypoint.slice(entrypoint.lastIndexOf("if [", gateIdx), gateIdx)).toMatch(/OCTOGEE_BUILDER_STANDBY_BOOT:-0\}" = 1/);
-    for (const overlayRunner of [
-      "github-cli-auth-hydrate.ts",
-      "builder-toolchain-hydrator.ts",
-      "system-config-watch.ts",
-    ]) {
-      const idx = entrypoint.indexOf(`/octogee/scripts/entrypoints/${overlayRunner}`);
-      expect(entrypoint.slice(entrypoint.lastIndexOf("\n", idx), idx), overlayRunner).toMatch(/\$BUILDER_OVERLAY_GATE "\$TSX" $/);
+    for (const runner of ["github-cli-auth-hydrate.ts", "builder-toolchain-hydrator.ts", "system-config-watch.ts"]) {
+      const idx = entrypoint.indexOf(`/octogee/scripts/entrypoints/${runner}`);
+      expect(entrypoint.slice(entrypoint.lastIndexOf("\n", idx), idx), runner).toMatch(/supervise_runner \S+ \d+ "\$TSX" $/);
     }
   });
 
@@ -272,7 +261,7 @@ describe("infra/gateway/entrypoint.sh — identity-pure boot (GATEWAY-SIMPLE-ROL
     const branchIdx = entrypoint.lastIndexOf('if [ "$GATEWAY_CLASS_EFFECTIVE" = "builder" ]; then', supervisorIdx);
     expect(branchIdx).toBeGreaterThan(-1);
     const nearestGuard = entrypoint.lastIndexOf("if [", supervisorIdx);
-    expect(nearestGuard, "standbys start the supervisor too").toBe(branchIdx);
+    expect(nearestGuard, "every Builder boot starts the supervisor").toBe(branchIdx);
     expect(supervisorIdx).toBeLessThan(directStartIdx);
     const builderBranch = entrypoint.slice(supervisorIdx, directStartIdx);
     expect(builderBranch).not.toMatch(/until curl/);
