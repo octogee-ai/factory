@@ -16,6 +16,9 @@ function expectJobs(paths: string[], expected: JobKey[]) {
 }
 
 describe("resolveScope — ownership", () => {
+  it("checks the consuming chart contracts for the maintained VM bridge image", () => {
+    expectJobs(["infra/vm-bridge/Dockerfile"], ["tests"]);
+  });
   it("runs broker adapter behavioral coverage for installed extension changes", () => {
     expect(resolveScope(["infra/gateway/extensions/octogee-broker-tools/catalog.ts"]).jobs).toContain("octogee-broker-tools");
     expect(UNIT_PACKAGES.find(pkg => pkg.name === "octogee-broker-tools")?.dir).toBe("infra/gateway/extensions/octogee-broker-tools");

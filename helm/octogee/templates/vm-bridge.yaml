@@ -67,7 +67,7 @@ spec:
             value: "0"
       containers:
         - name: nginx
-          image: {{ printf "%s:%s" (required "global.computer.bridge.image.repository is required" $computer.bridge.image.repository) (required "global.computer.bridge.image.tag is required" ($computer.bridge.image.tag | toString)) | quote }}
+          image: {{ printf "%s:%s@%s" (required "global.computer.bridge.image.repository is required" $computer.bridge.image.repository) (required "global.computer.bridge.image.tag is required" ($computer.bridge.image.tag | toString)) (required "global.computer.bridge.image.digest is required" $computer.bridge.image.digest) | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

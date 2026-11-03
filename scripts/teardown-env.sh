@@ -396,7 +396,7 @@ spec:
           emptyDir: {}
       initContainers:
         - name: cloud-sql-proxy
-          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.3@sha256:bbed57264fe9215e3a20d5d9110cad46ed96f8926ff938c5517f4bc629dd2179
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.27.0@sha256:7d156a5c466e31596afd6c8ed134f19c207a297418392fdad2686524ca4e7a3c
           restartPolicy: Always
           args:
             - --private-ip

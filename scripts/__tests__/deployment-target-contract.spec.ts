@@ -10,14 +10,22 @@ function source(path: string): string {
 }
 
 function deploymentSettings(path: string): string {
-  const values = parse(source(path)) as { mattermost?: { image?: { repository?: string; digest?: string } } };
-  const image = values.mattermost?.image;
-  if (image?.repository) {
+  type RuntimeImage = { repository?: string; digest?: string };
+  const values = parse(source(path)) as {
+    mattermost?: { image?: RuntimeImage };
+    global?: { computer?: { bridge?: { image?: RuntimeImage } } };
+  };
+  const images = [
+    { name: "mattermost", image: values.mattermost?.image },
+    { name: "vm-bridge", image: values.global?.computer?.bridge?.image },
+  ];
+  for (const { name, image } of images) {
+    if (!image?.repository) continue;
     const targets = JSON.parse(source("core/src/deployment-targets.json")) as {
       targets: Record<string, { artifactRegistry: { location: string; projectId: string; repository: string } }>;
     };
     const registry = targets.targets["test-central"].artifactRegistry;
-    expect(image.repository).toBe(`${registry.location}-docker.pkg.dev/${registry.projectId}/${registry.repository}/mattermost`);
+    expect(image.repository).toBe(`${registry.location}-docker.pkg.dev/${registry.projectId}/${registry.repository}/${name}`);
     expect(image.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     delete image.repository;
   }

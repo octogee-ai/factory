@@ -15,8 +15,9 @@ global:
     kubernetesApiHost: ""
     bridge:
       image:
-        repository: nginxinc/nginx-unprivileged
-        tag: 1.27-alpine
+        repository: us-central1-docker.pkg.dev/octogee/octogee/vm-bridge
+        tag: "1.30.6-octogee-20261102"
+        digest: "sha256:67207f6068a43c821a3733ad093624110040843cb1013e570740acdf2925105c"
     vmSpec: {}
     warmPoolSize: 0
   projectRunnerImage:
@@ -47,8 +48,8 @@ global:
   migrationRsyncPort: "30873"
   utilityImage:
     repository: curlimages/curl
-    tag: "8.21.0"
-    digest: "sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13"
+    tag: "8.23.0"
+    digest: "sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93"
 
 # Single shared GKE Ingress for the public app hosts. When disabled, the
 # legacy per-host Ingresses render exactly as before. When enabled, this
@@ -69,8 +70,8 @@ edgeIngress:
 cloud-sql-proxy:
   image:
     repository: gcr.io/cloud-sql-connectors/cloud-sql-proxy
-    tag: "2.25.3"
-    digest: "sha256:bbed57264fe9215e3a20d5d9110cad46ed96f8926ff938c5517f4bc629dd2179"
+    tag: "2.27.0"
+    digest: "sha256:7d156a5c466e31596afd6c8ed134f19c207a297418392fdad2686524ca4e7a3c"
   connectionName: ""
   usePrivateIp: true
   serviceAccountName: octogee-api

@@ -236,6 +236,7 @@ export const OWNERSHIP: readonly Ownership[] = [
   { dir: "artifact-worker/", jobs: [JOBS.artifactWorker] },
   { dir: "infra/gateway/", jobs: [JOBS.scripts, JOBS.tests, JOBS.octogeeApi, JOBS.gatewayEdge, JOBS.core, JOBS.acceptance] },
   { dir: "infra/desktop/", jobs: [JOBS.scripts, JOBS.tests, JOBS.glmController] },
+  { dir: "infra/vm-bridge/", jobs: [JOBS.tests] },
   { dir: "infra/mattermost/", jobs: [] },
   { dir: "infra/cloud-sql/", jobs: [] },
   { dir: "helm/", jobs: [JOBS.scripts, JOBS.tests] },
