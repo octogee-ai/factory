@@ -192,6 +192,11 @@ describe("shared pool sampler", () => {
     };
     return { kubectl, calls };
   };
+  const longReadyGvisorPod = (gatewayId: string) => {
+    const ready = pod(gatewayId, { runtimeClassName: "gvisor" }) as ReturnType<typeof pod> & { status: { conditions?: unknown[] } };
+    ready.status = { ...ready.status, conditions: [{ type: "Ready", status: "True", lastTransitionTime: "2026-11-02T16:50:00Z" }] };
+    return ready;
+  };
 
   it("samples every Ready shared-N slot, lists starting slots without exec, and ignores builder gateways", async () => {
     const { kubectl, calls } = fakeKubectl({ pods: [pod("shared-0"), pod("shared-1", { ready: false }), pod("builder-7")], oom: {} });
@@ -275,11 +280,6 @@ describe("shared pool sampler", () => {
     expect((await sampler()).violations).toEqual(["shared-0:container-restart"]);
   });
 
-  it("fails closed when the metrics API has no gateway usage for a gVisor slot", async () => {
-    const { kubectl } = fakeKubectl({ pods: [pod("shared-0", { runtimeClassName: "gvisor" })], oom: {}, podUsage: {} });
-    await expect(createSharedPoolSampler(kubectl)()).rejects.toThrow("gateway usage");
-  });
-
   it("waits for metrics on a slot that only just became Ready instead of failing the run", async () => {
     const now = Date.parse("2026-11-02T17:00:00Z");
     const fresh = { ...pod("shared-1", { runtimeClassName: "gvisor" }) } as ReturnType<typeof pod> & { status: { conditions?: unknown[] } };
@@ -292,12 +292,30 @@ describe("shared pool sampler", () => {
     expect(slotObservation(sample).serving).toEqual(["shared-0", "shared-1"]);
   });
 
-  it("still fails closed when a long-Ready slot has no metrics", async () => {
-    const now = Date.parse("2026-11-02T17:00:00Z");
-    const stale = { ...pod("shared-1", { runtimeClassName: "gvisor" }) } as ReturnType<typeof pod> & { status: { conditions?: unknown[] } };
-    stale.status = { ...stale.status, conditions: [{ type: "Ready", status: "True", lastTransitionTime: "2026-11-02T16:50:00Z" }] };
-    const { kubectl } = fakeKubectl({ pods: [stale], oom: {}, podUsage: {} });
-    await expect(createSharedPoolSampler(kubectl, () => now)()).rejects.toThrow("gateway usage");
+  it("rides out a brief metrics gap on a long-Ready slot", async () => {
+    let now = Date.parse("2026-11-02T17:00:00Z");
+    const usage = [{ name: "gateway", usage: { cpu: "1", memory: "1Gi" } }];
+    const state = { pods: [longReadyGvisorPod("shared-1")], oom: {}, podUsage: {} as Record<string, typeof usage> };
+    const { kubectl } = fakeKubectl(state);
+    const sampler = createSharedPoolSampler(kubectl, () => now);
+    expect((await sampler()).metricsPending).toEqual([{ slot: "shared-1", pod: "shared-1-pod" }]);
+    now += 2 * 60_000;
+    expect((await sampler()).metricsPending).toEqual([{ slot: "shared-1", pod: "shared-1-pod" }]);
+    state.podUsage["shared-1-pod"] = usage;
+    now += 30_000;
+    expect((await sampler()).slots.map((s) => s.slot)).toEqual(["shared-1"]);
+    delete state.podUsage["shared-1-pod"];
+    now += 2 * 60_000;
+    expect((await sampler()).metricsPending).toEqual([{ slot: "shared-1", pod: "shared-1-pod" }]);
+  });
+
+  it("fails closed once a long-Ready slot has had no metrics for three minutes", async () => {
+    let now = Date.parse("2026-11-02T17:00:00Z");
+    const { kubectl } = fakeKubectl({ pods: [longReadyGvisorPod("shared-1")], oom: {}, podUsage: {} });
+    const sampler = createSharedPoolSampler(kubectl, () => now);
+    expect((await sampler()).metricsPending).toHaveLength(1);
+    now += 3 * 60_000;
+    await expect(sampler()).rejects.toThrow("gateway usage");
   });
 
   it("keeps reading cgroups on the standard runtime", async () => {

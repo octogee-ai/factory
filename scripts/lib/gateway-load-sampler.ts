@@ -12,8 +12,10 @@ type Pod = {
   };
 };
 
-// metrics-server publishes a pod's or node's usage only after its first scrape window.
+// metrics-server publishes a pod's or node's usage only after its first scrape window,
+// and drops scrapes while the cluster is adding nodes under load.
 const METRICS_WARMUP_MS = 3 * 60_000;
+const METRICS_GAP_MS = 3 * 60_000;
 
 export class MetricsNotYetPublishedError extends Error {}
 
@@ -129,7 +131,7 @@ function oomKilledContainers(pod: Pod): number {
 
 type CpuPrior = { at: number; cpu: Record<string, number> };
 
-interface PodSampleState { baseline?: SampleBaseline; prior?: CpuPrior }
+interface PodSampleState { baseline?: SampleBaseline; prior?: CpuPrior; metricsMissingSince?: number }
 
 interface GatewayTelemetry {
   source: "cgroup" | "metrics-api";
@@ -244,10 +246,16 @@ export function createSharedPoolSampler(kubectl: Kubectl = testKubectl(), now: (
       let state = states.get(slot);
       if (!state) { state = {}; states.set(slot, state); }
       try {
-        return { sample: { slot, ...(await samplePod(kubectl, pod, state, nodeMetrics)) } };
+        const sample = { slot, ...(await samplePod(kubectl, pod, state, nodeMetrics)) };
+        delete state.metricsMissingSince;
+        return { sample };
       } catch (error) {
-        if (error instanceof MetricsNotYetPublishedError && readyForMs(pod, now()) < METRICS_WARMUP_MS) {
-          return { pending: { slot, pod: pod.metadata.name } };
+        if (error instanceof MetricsNotYetPublishedError) {
+          const at = now();
+          state.metricsMissingSince ??= at;
+          if (readyForMs(pod, at) < METRICS_WARMUP_MS || at - state.metricsMissingSince < METRICS_GAP_MS) {
+            return { pending: { slot, pod: pod.metadata.name } };
+          }
         }
         throw error;
       }
