@@ -2233,7 +2233,9 @@ async function activateBuilderCoach(
   if (verificationPending) {
     throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
   }
-  if (!await deps.adapter.waitForAccountHealthy({ slug, timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS })) {
+  const coachConnected = await deps.adapter.waitForAccountHealthy({ slug, timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS });
+  signal.throwIfAborted();
+  if (!coachConnected) {
     throw new Error(`Builder Coach activation verification failed: ${slug}-coach did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`);
   }
 }

@@ -4590,26 +4590,44 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     },
   );
 
-  it("fails a live Builder activation whose coach account does not connect, since no verify-target follows", async () => {
-    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
-    await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
-    const target = liveBuilderTargetImport();
-    const migrationId = "mig-live-builder-coach-offline";
-    const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
-      adapter: { ...target.adapter, waitForAccountHealthy: vi.fn(async () => false) },
-      deps: { ...target.deps, procRoot } });
-    await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
-    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+  it.each(["offline", "disconnected"] as const)(
+    "never mounts a live Builder whose coach account check ends %s, since no verify-target follows",
+    async (outcome) => {
+      const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+      await writeStore(importDir, CARRIED_STORE, db => db.exec("INSERT INTO transcript_events VALUES ('native')"));
+      const target = liveBuilderTargetImport();
+      const migrationId = `mig-live-builder-coach-${outcome}`;
+      const response = mkResponse();
+      const { deps, stageDir } = await prepareImport({ migrationId, importDir, daemon: mkFakeChild(),
+        adapter: {
+          ...target.adapter,
+          waitForAccountHealthy: vi.fn(async () => {
+            if (outcome === "offline") return false;
+            response.res.emit("close");
+            return true;
+          }),
+        },
+        deps: { ...target.deps, procRoot } });
+      await stageSnapshot(stageDir, db => db.exec("INSERT INTO transcript_events VALUES ('carried'), ('carried')"));
+      spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+      const body: FinishRsyncImportRequestBody = { migrationId, slug: "chris", rpcPhase: "finish-rsync-import", mode: "final" };
 
-    const result = await finishImport(deps, migrationId);
+      await createFinishRsyncImportHandler(deps)(
+        mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
 
-    expect(deps.adapter.waitForAccountHealthy).toHaveBeenCalledExactlyOnceWith({ slug: "chris", timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS });
-    expect(result.getStatus()).toBe(500);
-    expect(result.getBody()).toMatchObject({
-      message: `Builder Coach activation verification failed: chris-coach did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`,
-    });
-    expect(deps.adapter.onMounted).not.toHaveBeenCalled();
-  });
+      expect(deps.adapter.waitForAccountHealthy).toHaveBeenCalledExactlyOnceWith({ slug: "chris", timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS });
+      expect(deps.adapter.writeMountMarker).not.toHaveBeenCalled();
+      expect(deps.adapter.onMounted).not.toHaveBeenCalled();
+      if (outcome === "offline") {
+        expect(response.getStatus()).toBe(500);
+        expect(response.getBody()).toMatchObject({
+          message: `Builder Coach activation verification failed: chris-coach did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`,
+        });
+      } else {
+        expect(response.getStatus()).toBe(499);
+      }
+    },
+  );
 
   it("resumes a live release that left native cleanup pending before swapping the agent database", async () => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
