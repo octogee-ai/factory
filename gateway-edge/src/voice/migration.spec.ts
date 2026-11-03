@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createVoiceMigrationRegistry, createVoiceMigrationHandler } from './migration.js';
 
 function request(body: unknown, token = 'secret', address = '127.0.0.1') {
@@ -13,6 +13,24 @@ function request(body: unknown, token = 'secret', address = '127.0.0.1') {
 }
 
 describe('voice migration registry', () => {
+  it('ends a call after a bounded migration grace period and cancels the timer on resume', () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createVoiceMigrationRegistry();
+      const end = vi.fn();
+      registry.begin('alice', end);
+      registry.hold('alice', 'move-1');
+      vi.advanceTimersByTime(19_999);
+      expect(end).not.toHaveBeenCalled();
+      registry.resume('alice', 'move-1');
+      vi.advanceTimersByTime(1);
+      expect(end).not.toHaveBeenCalled();
+      registry.hold('alice', 'move-2');
+      vi.advanceTimersByTime(20_000);
+      expect(end).toHaveBeenCalledOnce();
+      expect(registry.hold('alice', 'move-2')).toBe(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('does not let an old close callback erase a later call', () => {
     const registry = createVoiceMigrationRegistry();
     const closeOld = registry.begin('alice')!;

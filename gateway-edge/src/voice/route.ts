@@ -143,14 +143,14 @@ async function reserveVoiceAdmission(
   redeemed: RedeemedVoiceTicket,
   socket: Duplex,
   handshakes: Counter<'outcome'>,
-  log: NonNullable<VoiceWsRouteDeps['log']>,
+  end: () => void,
 ): Promise<(() => void) | null> {
   if (!deps.migrationRegistry) return () => undefined;
-  const release = deps.migrationRegistry.begin(redeemed.voiceConversation.workspaceSlug);
+  const release = deps.migrationRegistry.begin(redeemed.voiceConversation.workspaceSlug, end);
   if (release) return release;
   handshakes.inc({ outcome: 'fail:migration' });
   refuse(socket, '503 Service Unavailable');
-  await grantRevoker(deps, redeemed, log)();
+  await grantRevoker(deps, redeemed, deps.log ?? (() => undefined))();
   return null;
 }
 
@@ -248,7 +248,8 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
   return async (req: http.IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
     const redeemed = await admit(req, socket);
     if (!redeemed) return;
-    const releaseAdmission = await reserveVoiceAdmission(deps, redeemed, socket, handshakes, log);
+    const migration = { end: () => socket.destroy() };
+    const releaseAdmission = await reserveVoiceAdmission(deps, redeemed, socket, handshakes, () => migration.end());
     if (!releaseAdmission) return;
     const revokeGrant = grantRevoker(deps, redeemed, log);
     let attached = false;
@@ -289,7 +290,7 @@ export function createVoiceWsUpgradeHandler(deps: VoiceWsRouteDeps) {
       wss.handleUpgrade(req, socket, head, (client) => {
         clearTimeout(deadline);
         handshakes.inc({ outcome: "ok" });
-        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, useOpenAiVoice, legacyAvailable: status.configured, openAiConfigured: status.nativeOpenAi === true, vad, active, log, revokeGrant, releaseAdmission });
+        attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled: useNativeVoice, useOpenAiVoice, legacyAvailable: status.configured, openAiConfigured: status.nativeOpenAi === true, vad, active, log, revokeGrant, releaseAdmission, migration });
         attached = true;
       });
     } finally {
@@ -313,6 +314,7 @@ interface VoiceClientContext {
   log: NonNullable<VoiceWsRouteDeps['log']>;
   revokeGrant: () => Promise<void>;
   releaseAdmission?: () => void;
+  migration: { end: () => void };
 }
 
 async function settleVoiceArchive(
@@ -346,7 +348,12 @@ function closeVoiceSession(session: VoiceClientSession): void {
   else session?.close();
 }
 
-function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant, releaseAdmission }: VoiceClientContext): void {
+function endVoiceForMigration(send: (event: TalkServerEvent) => void, teardown: (reason: string) => void): void {
+  send({ type: 'error', code: 'internal', message: 'Your workspace is moving. Reconnect voice when the move finishes.', recoverable: false });
+  teardown('workspace-moving');
+}
+
+function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nativeVoiceEnabled, useOpenAiVoice, legacyAvailable, openAiConfigured, vad, active, log, revokeGrant, releaseAdmission, migration }: VoiceClientContext): void {
   active.inc();
   const events = deps.eventSourceForAgent(redeemed.expectedAgentId);
   const relay = deps.createRelayClient?.(redeemed.gatewayId)
@@ -418,16 +425,16 @@ function attachVoiceClient({ deps, client, redeemed, engines, capabilities, nati
     if (conversationTimer) clearInterval(conversationTimer);
     clearTimeout(expiryTimer);
     active.dec();
-    releaseAdmission?.();
     closeVoiceSession(session);
     try {
       client.close(1000, reason);
     } catch {
       /* already closed */
     }
-    void settleVoiceArchive(session, { deps, redeemed, revokeGrant }, sessionLog);
+    void settleVoiceArchive(session, { deps, redeemed, revokeGrant }, sessionLog).finally(() => releaseAdmission?.());
     log("voice ws session closed", { uid: redeemed.uid, sessionId: session?.sessionId, reason });
   };
+  migration.end = () => endVoiceForMigration(send, teardown);
   const expiryTimer = setTimeout(() => {
     send({ type: "error", code: "internal", message: "This voice session expired. Start voice again.", recoverable: false });
     teardown("grant-expired");

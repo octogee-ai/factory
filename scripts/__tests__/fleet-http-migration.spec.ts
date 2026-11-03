@@ -314,6 +314,7 @@ function mkDeps(overrides: Partial<MigrationHandlerDeps> = {}): MigrationHandler
     gatewayId: GATEWAY_ID,
     adapter: mkAdapter(),
     voiceMigration: vi.fn(async () => ({ activeCalls: 0 })),
+    voiceDrainWaitMs: 0,
     log: vi.fn(),
     reserveLoopbackPort: async () => RSYNC_DAEMON_LOOPBACK_PORT,
     openMigrationTlsEndpoint: vi.fn(async () => ({
@@ -448,6 +449,18 @@ describe("createQuiesceHandler", () => {
     expect(response.getStatus()).toBe(200);
     expect(response.getBody()).toMatchObject({ drained: false, runningCount: 1 });
     expect(adapter.quiesceCustomer).not.toHaveBeenCalled();
+  });
+
+  it("waits for voice finalization before quiescing the coach", async () => {
+    const adapter = mkAdapter();
+    const voiceMigration = vi.fn().mockResolvedValueOnce({ activeCalls: 1 }).mockResolvedValue({ activeCalls: 0 });
+    const voiceDrainSleep = vi.fn(async () => undefined);
+    const response = mkResponse();
+    await createQuiesceHandler(mkDeps({ adapter, voiceMigration, voiceDrainWaitMs: 2_000, voiceDrainSleep }))(
+      mkRequest(SAMPLE_QUIESCE, { signature: signForPod(SAMPLE_QUIESCE.migrationId, JSON.stringify(SAMPLE_QUIESCE)) }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(voiceDrainSleep).toHaveBeenCalledWith(1_000);
+    expect(adapter.quiesceCustomer).toHaveBeenCalled();
   });
 
   it("passes the whole-process rollout's ingress ownership through", async () => {
@@ -1355,6 +1368,27 @@ describe("createRestoreHandler", () => {
 });
 
 describe("createUnmountHandler", () => {
+  it("releases the source voice hold after successful unmount", async () => {
+    const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
+    const adapter = mkAdapter({ removeImportedCustomerBySlug: vi.fn(async () => ({ wasMounted: true, steps: [] })) });
+    const response = mkResponse();
+    await createUnmountHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_UNMOUNT, {
+      signature: signForPod(SAMPLE_UNMOUNT.migrationId, JSON.stringify(SAMPLE_UNMOUNT)),
+    }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(200);
+    expect(voiceMigration).toHaveBeenCalledWith({ slug: 'chris', operationId: SAMPLE_UNMOUNT.migrationId, phase: 'resume' });
+  });
+
+  it("does not release voice when unmount fails", async () => {
+    const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
+    const adapter = mkAdapter({ removeImportedCustomerBySlug: vi.fn(async () => { throw new Error('unmount failed'); }) });
+    const response = mkResponse();
+    await createUnmountHandler(mkDeps({ adapter, voiceMigration }))(mkRequest(SAMPLE_UNMOUNT, {
+      signature: signForPod(SAMPLE_UNMOUNT.migrationId, JSON.stringify(SAMPLE_UNMOUNT)),
+    }), response.res, vi.fn());
+    expect(response.getStatus()).toBe(500);
+    expect(voiceMigration).not.toHaveBeenCalled();
+  });
   it.each([false, true])("cancels a Builder activation before rollback unmount; cancellation fails: %s", async (fails) => {
     vi.stubEnv("POD_UID", "builder-pod");
     const events: string[] = [];
@@ -1430,11 +1464,13 @@ describe("createUnmountHandler", () => {
       } };
       const remove = vi.fn(async () => ({ wasMounted: false, steps: [],
         ...(mode === "early-noop" ? {} : { releasedAgentIds: agentIds }) }));
-      const handler = createUnmountHandler(mkDeps({ gatewayId, adapter: mkAdapter({ removeImportedCustomerBySlug: remove }) }));
+      const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
+      const handler = createUnmountHandler(mkDeps({ gatewayId, voiceMigration, adapter: mkAdapter({ removeImportedCustomerBySlug: remove }) }));
       const response = mkResponse();
       await handler(mkRequest(body, { pathGatewayId: gatewayId,
         signature: signForPod(body.migrationId, JSON.stringify(body), gatewayId) }), response.res, vi.fn());
       expect(response.getStatus()).toBe(mode === "complete" ? 200 : mode === "early-noop" ? 500 : 400);
+      expect(voiceMigration).not.toHaveBeenCalled();
       if (mode === "complete") {
         expect(response.getBody()).toMatchObject({ unmounted: false, agentStoreErasure: body.agentStoreErasure });
         expect(remove).toHaveBeenCalledWith("chris", undefined, undefined, undefined, agentIds);

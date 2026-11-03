@@ -162,6 +162,19 @@ function captureVoiceExpiry() {
 }
 
 describe("voice ws route", () => {
+  it('ends an active voice connection after the migration grace period', async () => {
+    const migrationRegistry = createVoiceMigrationRegistry({ graceMs: 50 });
+    const { base } = await serverWith({ migrationRegistry });
+    const ws = new WebSocket(`${base}/api/voice/ws/${TICKET}`);
+    await once(ws, 'open');
+    expect(migrationRegistry.hold('mom', 'move-1')).toBe(1);
+    const [data] = await once(ws, 'message');
+    expect(JSON.parse(String(data))).toMatchObject({ type: 'error', message: 'Your workspace is moving. Reconnect voice when the move finishes.' });
+    await once(ws, 'close');
+    await waitFor(() => migrationRegistry.hold('mom', 'move-1') === 0);
+    migrationRegistry.resume('mom', 'move-1');
+    expect(migrationRegistry.begin('mom')).toBeTypeOf('function');
+  });
   it('protects handshakes and idle calls through a migration longer than the takeover lease', async () => {
     let now = 0;
     const migrationRegistry = createVoiceMigrationRegistry({ now: () => now });

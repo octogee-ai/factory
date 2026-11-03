@@ -4,30 +4,36 @@ import { isValidUsername } from '@octogee/shared/types/identity';
 
 export const VOICE_MIGRATION_PATH = '/internal/openclaw/voice/v1/migration';
 const HOLD_TAKEOVER_AFTER_MS = 120_000;
+const VOICE_DRAIN_GRACE_MS = 20_000;
 
-export function createVoiceMigrationRegistry({ now = Date.now }: { now?: () => number } = {}) {
-  const calls = new Map<string, Set<symbol>>();
-  const holds = new Map<string, { operationId: string; takeoverAfter: number }>();
+export function createVoiceMigrationRegistry({ now = Date.now, graceMs = VOICE_DRAIN_GRACE_MS }: { now?: () => number; graceMs?: number } = {}) {
+  const calls = new Map<string, Set<() => void>>();
+  const holds = new Map<string, { operationId: string; takeoverAfter: number; timer: ReturnType<typeof setTimeout> }>();
   return {
-    begin(slug: string): (() => void) | null {
+    begin(slug: string, end: () => void = () => undefined): (() => void) | null {
       if (holds.has(slug)) return null;
-      const id = Symbol(slug);
-      const active = calls.get(slug) ?? new Set<symbol>();
-      calls.set(slug, active); active.add(id);
+      const active = calls.get(slug) ?? new Set<() => void>();
+      const call = () => end();
+      calls.set(slug, active); active.add(call);
       return () => {
-        if (!active.delete(id)) return;
+        if (!active.delete(call)) return;
         if (active.size === 0) calls.delete(slug);
       };
     },
     hold(slug: string, operationId: string): number {
       const current = holds.get(slug);
       if (current && current.operationId !== operationId && current.takeoverAfter > now()) throw new Error('voice admission held by another migration');
-      holds.set(slug, { operationId, takeoverAfter: now() + HOLD_TAKEOVER_AFTER_MS });
+      const timer = current?.timer ?? setTimeout(() => {
+        for (const end of calls.get(slug) ?? []) end();
+      }, graceMs);
+      timer.unref?.();
+      holds.set(slug, { operationId, takeoverAfter: now() + HOLD_TAKEOVER_AFTER_MS, timer });
       return calls.get(slug)?.size ?? 0;
     },
     resume(slug: string, operationId: string): number {
       const current = holds.get(slug);
       if (current && current.operationId !== operationId) throw new Error('voice admission held by another migration');
+      if (current) clearTimeout(current.timer);
       holds.delete(slug);
       return calls.get(slug)?.size ?? 0;
     },

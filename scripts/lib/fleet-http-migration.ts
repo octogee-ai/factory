@@ -154,6 +154,8 @@ const ACTIVATION_MANIFEST_TRANSFER = "activation-manifest" as const;
 
 export interface MigrationHandlerDeps {
   voiceMigration?: (input: VoiceMigrationInput) => Promise<{ activeCalls: number }>;
+  voiceDrainWaitMs?: number;
+  voiceDrainSleep?: (ms: number) => Promise<void>;
   publicKey: string;
   gatewayId: string;
   adapter: CustomerLifecycleAdapter;
@@ -658,6 +660,26 @@ export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler 
   });
 }
 
+async function waitForVoiceDrain(deps: MigrationHandlerDeps, slug: string, operationId: string): Promise<{ activeCalls: number }> {
+  const hold = () => (deps.voiceMigration ?? updateVoiceMigration)({ slug, operationId, phase: 'hold' });
+  let voice = await hold();
+  const waitMs = deps.voiceDrainWaitMs ?? 25_000;
+  const sleep = deps.voiceDrainSleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const started = Date.now();
+  for (let waited = 0; voice.activeCalls > 0 && waited < waitMs;) {
+    const interval = Math.min(1_000, waitMs - waited);
+    await sleep(interval);
+    waited = Math.max(waited + interval, Date.now() - started);
+    voice = await hold();
+    waited = Math.max(waited, Date.now() - started);
+  }
+  return voice;
+}
+
+function releaseVoiceHold(deps: MigrationHandlerDeps, slug: string, operationId: string): Promise<{ activeCalls: number }> {
+  return (deps.voiceMigration ?? updateVoiceMigration)({ slug, operationId, phase: 'resume' });
+}
+
 export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
@@ -665,7 +687,7 @@ export function createQuiesceHandler(deps: MigrationHandlerDeps): RequestHandler
     if (!body) return;
 
     try {
-      const voice = await (deps.voiceMigration ?? updateVoiceMigration)({ slug: body.slug, operationId: body.migrationId, phase: "hold" });
+      const voice = await waitForVoiceDrain(deps, body.slug, body.migrationId);
       if (voice.activeCalls > 0) {
         log(`[migration-http] deferring quiesce slug=${body.slug}: ${voice.activeCalls} active voice call(s)`);
         res.status(200).json({ migrationId: body.migrationId, slug: body.slug, drained: false, runningCount: voice.activeCalls });
@@ -3120,6 +3142,7 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
       if (deps.adapter.removeImportedCustomerBySlug) {
         const result = await removeUnmountedBuilderImport(deps, body.slug, activation);
         if (result.wasMounted) deps.adapter.onUnmounted?.(body.slug);
+        await releaseVoiceHold(deps, body.slug, body.migrationId);
         const response: UnmountResponse = {
           migrationId: body.migrationId,
           slug: body.slug,
@@ -3135,6 +3158,7 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
       const uid = await deps.adapter.uidForSlug(body.slug);
       if (!uid) {
         await pauseSystemConfigWatchForBuilder(deps, body.slug);
+        await releaseVoiceHold(deps, body.slug, body.migrationId);
         const response: UnmountResponse = {
           migrationId: body.migrationId,
           slug: body.slug,
@@ -3151,6 +3175,7 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
         slug: body.slug,
         remove: () => removeCustomerFromGateway(deps.adapter, uid),
       });
+      await releaseVoiceHold(deps, body.slug, body.migrationId);
       const response: UnmountResponse = {
         migrationId: body.migrationId,
         slug: body.slug,

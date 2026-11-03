@@ -78,12 +78,14 @@ describe("customer removal exclusion", () => {
     });
     await vi.waitFor(() => expect(removeImportedCustomerBySlug).toHaveBeenCalledTimes(1));
 
+    const voiceMigration = vi.fn(async () => ({ activeCalls: 0 }));
     const handler = createUnmountHandler({
       publicKey: FLEET_KEY_PAIR.publicKey,
       gatewayId: GATEWAY_ID,
       adapter,
       log: vi.fn(),
       pauseSystemConfigWatch: vi.fn(async () => undefined),
+      voiceMigration,
     });
     const response = recordingResponse();
     const unmount = handler(signedUnmountRequest("chris"), response.res, vi.fn());
@@ -95,6 +97,7 @@ describe("customer removal exclusion", () => {
     await unmount;
     expect(maxActive).toBe(1);
     expect(response.status()).toBe(200);
+    expect(voiceMigration).toHaveBeenCalledWith({ slug: "chris", operationId: "mig-1", phase: "resume" });
     expect(response.body()).toEqual({ migrationId: "mig-1", slug: "chris", unmounted: false });
   });
 });
