@@ -55,11 +55,16 @@ export function createCachedApiServerEgressResolver(
   now: () => number = () => Date.now(),
 ): () => Promise<string[]> {
   let cache: { value: string[]; expires: number } | null = null;
+  let inFlight: Promise<string[]> | null = null;
   return async () => {
     const t = now();
     if (cache && cache.expires > t) return cache.value;
-    const value = await resolveApiServerEgressCidrs(kubectl, log);
-    if (value.length > 0) cache = { value, expires: t + ttlMs };
-    return value;
+    if (!inFlight) {
+      inFlight = resolveApiServerEgressCidrs(kubectl, log).then(value => {
+        if (value.length > 0) cache = { value, expires: t + ttlMs };
+        return value;
+      }).finally(() => { inFlight = null; });
+    }
+    return inFlight;
   };
 }

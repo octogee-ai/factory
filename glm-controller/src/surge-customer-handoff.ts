@@ -86,6 +86,7 @@ class SurgeTargetCleanupError extends Error {}
 // gateway on its own image forever.
 export class SurgeOpenClawProcessEndpointMissingError extends Error {}
 export class SurgeGatewayScopedSignatureCapabilityMissingError extends Error {}
+export class SurgeAssignmentBusyError extends Error {}
 
 const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const CONFIGURED_BUILDER_TARGET_RELEASE_RETRY_DELAY_MS = 7_000;
@@ -342,10 +343,12 @@ function assertAssignmentsAvailable(
     item.state !== "serving" &&
     !(item.state === "quiescing" && item.updatedByOperationId === ownedBy));
   if (foreign) {
-    throw new Error(
-      `foreign assignment gate for ${foreign.uid}/${foreign.slug}: ` +
-      `state=${foreign.state} owner=${foreign.updatedByOperationId ?? "none"}`,
-    );
+    const message = `foreign assignment gate for ${foreign.uid}/${foreign.slug}: ` +
+      `state=${foreign.state} owner=${foreign.updatedByOperationId ?? "none"}`;
+    if (foreign.state === "quiescing" && foreign.updatedByOperationId) {
+      throw new SurgeAssignmentBusyError(message);
+    }
+    throw new Error(message);
   }
 }
 

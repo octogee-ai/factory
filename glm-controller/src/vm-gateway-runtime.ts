@@ -198,6 +198,7 @@ export function vmRoutesFromDocs(docs: Array<{ id: string; data: () => Record<st
 export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRuntime {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
   const glm = (gatewayId: string) => deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
+  let routesTail: Promise<void> = Promise.resolve();
 
   async function kubectl(args: string[], stdin?: string): Promise<string> {
     const result = await deps.runKubectl(args, stdin === undefined ? undefined : { stdin });
@@ -229,7 +230,13 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     return parseConcatenatedJson(await kubectl(["create", "--dry-run=client", "-o", "json", "-f", "-"], rendered.stdout));
   }
 
-  async function reconcileRoutes(): Promise<void> {
+  function reconcileRoutes(): Promise<void> {
+    const pending = routesTail.then(publishRoutes);
+    routesTail = pending.catch(() => undefined);
+    return pending;
+  }
+
+  async function publishRoutes(): Promise<void> {
     const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).where("runtime", "==", "gce-vm").get();
     const routes = vmRoutesFromDocs(snap.docs);
     const manifest = JSON.stringify({

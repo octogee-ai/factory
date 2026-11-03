@@ -59,6 +59,32 @@ describe("resolveApiServerEgressCidrs", () => {
 });
 
 describe("createCachedApiServerEgressResolver", () => {
+  it.each(["cold", "expired"])("coalesces concurrent lookups when the cache is %s", async state => {
+    const kubectl = runner({ endpoints: { stdout: "10.128.0.2" }, service: { stdout: "34.118.224.1" } });
+    let t = 1000;
+    const resolve = createCachedApiServerEgressResolver(kubectl, vi.fn(), 5000, () => t);
+    if (state === "expired") {
+      await resolve();
+      t += 5001;
+      vi.mocked(kubectl).mockClear();
+    }
+
+    const results = await Promise.all(Array.from({ length: 4 }, () => resolve()));
+
+    expect(results).toEqual(Array.from({ length: 4 }, () => ["10.128.0.2/32", "34.118.224.1/32"]));
+    expect(kubectl).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces a failed lookup and allows the next call to retry", async () => {
+    const kubectl = runner({ endpoints: { code: 1 }, service: { code: 1 } });
+    const resolve = createCachedApiServerEgressResolver(kubectl, vi.fn());
+
+    expect(await Promise.all([resolve(), resolve()])).toEqual([[], []]);
+    expect(kubectl).toHaveBeenCalledTimes(2);
+    expect(await resolve()).toEqual([]);
+    expect(kubectl).toHaveBeenCalledTimes(4);
+  });
+
   it("caches a successful resolve within the TTL, then refreshes after it", async () => {
     const kubectl = runner({ endpoints: { stdout: "10.128.0.2" }, service: { stdout: "34.118.224.1" } });
     let t = 1000;

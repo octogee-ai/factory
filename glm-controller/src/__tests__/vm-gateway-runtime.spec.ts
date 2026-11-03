@@ -17,7 +17,6 @@ import {
 } from "../vm-gateway-runtime";
 import { builderComputerInstanceInput } from "../vm-computer-lifecycle";
 
-const renderedYaml = "kind: Deployment\n";
 const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", import.meta.url), "utf8");
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
 
@@ -103,7 +102,7 @@ function harness(
   vmOverrides: Partial<GatewayVmClient> = {},
   bridge = "172.20.7.7",
   desiredStatus: Record<string, string> = {},
-  extra: { beforeWrite?: (path: string, data: Record<string, unknown>) => void; disposableParking?: boolean; clock?: { now: number }; onWait?: (ms: number, waits: number) => void; homeCheckpointTimeoutMs?: number; applyFails?: boolean; vmSpec?: GatewayVmSpec } = {},
+  extra: { beforeWrite?: (path: string, data: Record<string, unknown>) => void; disposableParking?: boolean; clock?: { now: number }; onWait?: (ms: number, waits: number) => void; homeCheckpointTimeoutMs?: number; applyFails?: boolean; onApply?: (routes: Record<string, string>) => Promise<void>; vmSpec?: GatewayVmSpec } = {},
 ) {
   docs["users/UidA"] ??= { provisioning: { openclaw: { gatewayId: "b-x" } } };
   const { db, writes, deletes } = fakeDb(docs, extra.beforeWrite);
@@ -140,13 +139,14 @@ function harness(
   const kubectlCalls: Array<{ args: string[]; stdin?: string }> = [];
   const runtime = createVmGatewayRuntime({
     db, namespace: "octogee-test", environment: "test",
-    runHelm: async (args) => { helmCalls.push(args); return { stdout: renderedYaml, stderr: "", code: 0 }; },
+    runHelm: async (args) => { helmCalls.push(args); return { stdout: concatenated.replaceAll("b-x", args[1].slice("octogee-gw-".length)), stderr: "", code: 0 }; },
     runKubectl: async (args, opts) => {
       kubectlCalls.push({ args, stdin: opts?.stdin });
-      if (args[0] === "create") return { stdout: concatenated, stderr: "", code: 0 };
+      if (args[0] === "create") return { stdout: opts!.stdin!, stderr: "", code: 0 };
       if (args[0] === "get" && args[1] === "svc") return { stdout: bridge, stderr: "", code: 0 };
       if (args[0] === "get" && args[1] === "secret") return { stdout: Buffer.from(`${args[2]}-value`).toString("base64"), stderr: "", code: 0 };
       if (args[0] === "apply" && extra.applyFails) return { stdout: "", stderr: "configmaps is forbidden", code: 1 };
+      if (args[0] === "apply") await extra.onApply?.(JSON.parse(JSON.parse(opts!.stdin!).data["routes.json"]));
       return { stdout: "", stderr: "", code: 0 };
     },
     vm, vmSpec: extra.vmSpec ?? spec, computeProjectId: "octogee", bridgeServiceName: "octogee-vm-bridge",
@@ -219,6 +219,55 @@ describe("builderComputerInstanceInput", () => {
 });
 
 describe("createVmGatewayRuntime.upsertInstance", () => {
+  it("serializes route reads and publication so a slow snapshot cannot remove a concurrently started VM", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const firstApply = new Promise<void>(resolve => { entered = resolve; });
+    const applied: Record<string, string>[] = [];
+    let calls = 0;
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } },
+      "glmGateways/b-y": { docKind: "runtime", gatewayId: "b-y", runtime: "gce-vm" },
+      "users/UidB": { provisioning: { openclaw: { gatewayId: "b-y" } } },
+    }, {
+      create: vi.fn(async input => ({
+        description: { ...running, name: input.instanceName, gatewayId: "b-y", internalIp: "172.20.0.10", labels: input.labels, metadata: input.metadata },
+        provisioningModel: "SPOT" as const, fellBackToStandard: false, alreadyExisted: false,
+      })),
+    }, "172.20.7.7", {}, {
+      onApply: async routes => {
+        if (calls++ === 0) { entered(); await held; }
+        applied.push(routes);
+      },
+    });
+    const first = h.runtime.upsertInstance(upsertOpts);
+    await firstApply;
+    const second = h.runtime.upsertInstance({ ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "bob" } });
+    try {
+      await vi.waitFor(() => expect(h.docs["glmGateways/b-y/vm/runtime"]).toBeDefined());
+      expect(h.routesPublished()).toHaveLength(1);
+    } finally {
+      release();
+      await Promise.all([first, second]);
+    }
+    expect(applied[0]).toEqual({ "b-x": "172.20.0.9" });
+    expect(applied.at(-1)).toEqual({ "b-x": "172.20.0.9", "b-y": "172.20.0.10" });
+  });
+
+  it("reports a route publication failure while allowing the next queued publication to succeed", async () => {
+    let calls = 0;
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } } },
+      {}, "172.20.7.7", {}, { onApply: async () => { if (calls++ === 0) throw new Error("route publication failed"); } });
+
+    const results = await Promise.allSettled([h.runtime.upsertInstance(upsertOpts), h.runtime.upsertInstance(upsertOpts)]);
+
+    expect(results[0]).toMatchObject({ status: "rejected", reason: new Error("route publication failed") });
+    expect(results[1]).toMatchObject({ status: "fulfilled" });
+    expect(h.routesPublished()).toHaveLength(2);
+    expect(h.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x" });
+  });
+
   it("resizes a parked Team computer to the recorded Pro shape before starting it", async () => {
     let computer = { ...stopped };
     const h = harness({ "glmGateways/b-x": { gatewayId: "b-x", runtime: "gce-vm", vmSpec: { ...spec, machineType: "n2-standard-2" }, vm: recorded } }, {

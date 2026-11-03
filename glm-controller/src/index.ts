@@ -120,6 +120,7 @@ import { disposableBuilderPrelaunchReserved, readDisposableBuilderPrelaunchRefre
 import {
   assertSurgeAssignmentCoverage,
   reconcileSurgeCustomerHandoff,
+  SurgeAssignmentBusyError,
   type SurgeCustomerHandoffDeps,
   type SurgeCustomerHandoffResult,
 } from "./surge-customer-handoff.js";
@@ -1105,6 +1106,8 @@ export async function refineGatewayConvergenceAction(input: {
   });
 }
 
+const GATEWAY_CONVERGENCE_CONCURRENCY = 4;
+
 export async function runGatewayConvergencePass(
   passDeps: GatewayConvergencePassDeps,
   gatewayIds?: readonly string[],
@@ -1125,16 +1128,30 @@ export async function runGatewayConvergencePass(
     NAMESPACE,
     selected ? gateways.map((gateway) => gateway.gatewayId) : undefined,
   );
-  for (const gateway of gateways) {
-    try {
-      await convergeOneGateway(passDeps, gateway, instances, runtimeById);
-    } catch (err) {
-      if (err instanceof FinalHomeCheckpointPendingError) continue;
-      const message = err instanceof Error ? err.message : String(err);
-      failures.push(`${gateway.gatewayId}: ${message}`);
-      log(`[converge-gateway] ⚠ ${gateway.gatewayId}: ${message}`);
+  const priority = (gateway: DurableGateway): number => {
+    const runtime = runtimeById.get(gateway.gatewayId);
+    if (gatewayNeedsLiveVerification(gateway, runtime) &&
+      (gateway.liveRelease !== gateway.desiredRelease || runtime?.lifecycle !== "serving") &&
+      runtime?.heartbeat?.status === "ready") return 0;
+    return instances[gateway.gatewayId] ? 2 : 1;
+  };
+  const pending = [...gateways].sort((a, b) => priority(a) - priority(b))[Symbol.iterator]();
+  await Promise.all(Array.from({ length: Math.min(GATEWAY_CONVERGENCE_CONCURRENCY, gateways.length) }, async () => {
+    for (const gateway of pending) {
+      try {
+        await convergeOneGateway(passDeps, gateway, instances, runtimeById);
+      } catch (err) {
+        if (err instanceof FinalHomeCheckpointPendingError) continue;
+        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof SurgeAssignmentBusyError) {
+          log(`[converge-gateway] ${gateway.gatewayId} deferred: ${message}`);
+          continue;
+        }
+        failures.push(`${gateway.gatewayId}: ${message}`);
+        log(`[converge-gateway] ⚠ ${gateway.gatewayId}: ${message}`);
+      }
     }
-  }
+  }));
   if (failures.length > 0) {
     throw new Error(`(source=converge-gateway) ${failures.join("; ")}`);
   }

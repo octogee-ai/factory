@@ -13,6 +13,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
 import { FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
 import { runGatewayRuntimeExclusive } from "../lib/gateway-runtime-mutation";
+import { reconcileSurgeCustomerHandoff } from "../surge-customer-handoff";
+import { assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff";
 
 function durableRoot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -113,6 +115,7 @@ function makeDb(input: {
       const writes: Array<() => Promise<void>> = [];
       const result = await body({
         get: (ref: any) => ref.get(),
+        set: (ref: any, data: Record<string, unknown>, options?: { merge: boolean }) => writes.push(() => ref.set(data, options)),
         update: (ref: any, data: Record<string, unknown>) => writes.push(() => ref.update(data)),
       });
       for (const write of writes) await write();
@@ -680,6 +683,156 @@ describe("targeted durable state reads", () => {
 });
 
 describe("gateway convergence pass outcomes", () => {
+  function convergenceFleet(ids: string[]) {
+    const roots = Object.fromEntries(ids.map(gatewayId => [gatewayId, durableRoot({ gatewayId, liveRelease: null })]));
+    const runtimes: Record<string, Record<string, unknown>> = {};
+    const instances: Record<string, any> = {};
+    const helm = {
+      readDeployedInstances: vi.fn(async () => instances),
+      upsertInstance: vi.fn(async (opts: any) => {
+        instances[opts.gatewayId] = {
+          gatewayId: opts.gatewayId, enabled: true, replicas: 1,
+          image: { repository: opts.imageRepository, tag: opts.imageTag },
+          chartFingerprint: opts.chartFingerprint,
+          deploymentIntentFingerprint: opts.deploymentIntentFingerprint,
+        };
+      }),
+    };
+    const deps = {
+      db: makeDb({ roots, runtimes, callbacks: {}, releases: Object.fromEntries(ids.map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) }),
+      helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+      prepareGatewayConfig: vi.fn(async (config: any) => config),
+      reconcileSurgeHandoff: vi.fn(async (_input: { gatewayId: string; desiredImageTag: string }) => ({ ready: true })),
+      log: vi.fn(),
+    };
+    return { roots, runtimes, instances, helm, deps };
+  }
+
+  it("installs a minted slot while a foreign activation holds another Shared slot without failing the pass", async () => {
+    const h = convergenceFleet(["default", "minted"]);
+    await runGatewayConvergencePass(h.deps);
+    delete h.instances.minted;
+    h.helm.upsertInstance.mockClear();
+    const busy = assignment("u1", "alice", { state: "quiescing", updatedByOperationId: "builder-activate-alice" });
+    const handoff = createSurgeHandoffHarness(vi.fn, { assignments: [busy], targetVersion: "abc1234" });
+    h.deps.reconcileSurgeHandoff.mockImplementation(input => reconcileSurgeCustomerHandoff(handoff.deps, {
+      ...input, requiresCustomerMigration: true,
+    }));
+
+    await expect(runGatewayConvergencePass(h.deps)).resolves.toBeUndefined();
+
+    expect(h.helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "minted" }));
+    expect(handoff.assignments()).toEqual([busy]);
+    expect(handoff.events).toEqual([]);
+    expect(h.roots.default.liveRelease).toBeNull();
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/default.*deferred.*foreign assignment gate/));
+    expect(h.deps.log.mock.calls.flat().filter(line => line.includes("⚠"))).toEqual([]);
+  });
+
+  it("installs new gateways when another runtime has not reported a heartbeat", async () => {
+    const h = convergenceFleet(["default", "minted"]);
+    h.runtimes.default = servingRuntime({ lifecycle: "provisioning" });
+
+    await expect(runGatewayConvergencePass(h.deps)).resolves.toBeUndefined();
+
+    expect(h.helm.upsertInstance.mock.calls.map(([opts]) => opts.gatewayId).sort()).toEqual(["default", "minted"]);
+  });
+
+  it.each(["provisioning", "serving"])("marks a released Ready slot live ahead of blocked Helm installs with lifecycle=%s", async lifecycle => {
+    const minted = Array.from({ length: 8 }, (_, i) => `minted-${i}`);
+    const h = convergenceFleet([...minted, "released"]);
+    await runGatewayConvergencePass(h.deps);
+    for (const id of minted) delete h.instances[id];
+    h.runtimes.released.lifecycle = lifecycle;
+    h.runtimes.released.heartbeat = { status: "ready", version: "abc1234" };
+    h.helm.upsertInstance.mockClear();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    h.helm.upsertInstance.mockImplementation(async () => { await held; });
+
+    const applying = runGatewayConvergencePass(h.deps);
+    try {
+      await vi.waitFor(() => expect(h.roots.released.liveRelease).toBe(2));
+      expect(h.runtimes.released.lifecycle).toBe("serving");
+      expect(h.helm.upsertInstance).toHaveBeenCalled();
+    } finally {
+      release();
+      await applying;
+    }
+  });
+
+  it("upserts a burst of minted slots in one pass with at most four active gateways", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `minted-${i}`);
+    const h = convergenceFleet(ids);
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    h.helm.upsertInstance.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await held;
+      active -= 1;
+    });
+
+    const applying = runGatewayConvergencePass(h.deps);
+    try {
+      await vi.waitFor(() => expect(h.helm.upsertInstance).toHaveBeenCalledTimes(4));
+      expect(active).toBe(4);
+    } finally {
+      release();
+      await applying;
+    }
+    expect(peak).toBe(4);
+    expect(h.helm.upsertInstance.mock.calls.map(([opts]) => opts.gatewayId).sort()).toEqual(ids.sort());
+  });
+
+  it.each([
+    { state: "quiescing" as const, updatedByOperationId: null },
+    { state: "migrating" as const, updatedByOperationId: "builder-activate-alice" },
+  ])("fails the pass for an assignment gate with state=$state owner=$updatedByOperationId", async gate => {
+    const h = convergenceFleet(["default", "minted"]);
+    await runGatewayConvergencePass(h.deps);
+    delete h.instances.minted;
+    h.helm.upsertInstance.mockClear();
+    const blocked = assignment("u1", "alice", gate);
+    const handoff = createSurgeHandoffHarness(vi.fn, { assignments: [blocked], targetVersion: "abc1234" });
+    h.deps.reconcileSurgeHandoff.mockImplementation(input => reconcileSurgeCustomerHandoff(handoff.deps, {
+      ...input, requiresCustomerMigration: true,
+    }));
+
+    await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow("(source=converge-gateway) default: foreign assignment gate");
+    expect(h.helm.upsertInstance).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ gatewayId: "minted" }));
+    expect(handoff.assignments()).toEqual([blocked]);
+    expect(handoff.events).toEqual([]);
+  });
+
+  it("retains runtime exclusivity until every worker finishes after another worker fails", async () => {
+    const h = convergenceFleet(["broken", "slow", "minted"]);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const events: string[] = [];
+    h.helm.upsertInstance.mockImplementation(async ({ gatewayId }) => {
+      if (gatewayId === "broken") throw new Error("Helm unavailable");
+      if (gatewayId === "slow") await held;
+      events.push(gatewayId);
+    });
+    const converge = serializeGatewayConvergence(() => runGatewayConvergencePass(h.deps));
+    const applying = converge().catch(error => error);
+    const recovery = converge.runExclusive(async () => { events.push("recovery"); });
+    try {
+      await vi.waitFor(() => expect(h.helm.upsertInstance).toHaveBeenCalledTimes(3));
+      expect(events).toEqual(["minted"]);
+    } finally {
+      release();
+      const failure = await applying;
+      await recovery;
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.message).toContain("broken: Helm unavailable");
+    }
+    expect(events).toEqual(["minted", "slow", "recovery"]);
+  });
+
   function retainedGateway(input: { desiredStatus?: string; gatewayClass?: string } = {}) {
     const gatewayId = "shared-1";
     const roots = { [gatewayId]: durableRoot({ gatewayId, ...input }) };
