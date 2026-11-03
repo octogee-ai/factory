@@ -5,6 +5,7 @@ Before=octo-desktop.service
 
 [Service]
 Environment=SEATD_VTBOUND=0
+ExecCondition=+/usr/local/bin/octo-desktop-wanted
 ExecStart=/usr/bin/seatd -u octo -l info
 Restart=always
 RestartSec=2
