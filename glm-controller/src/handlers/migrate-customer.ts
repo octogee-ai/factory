@@ -1636,6 +1636,14 @@ function previousSchedulerNeedsRecovery(op: Operation, previous: SchedulerHandof
     previous.migrationId !== claimSchedulerMigrationId(migrationId, op);
 }
 
+function builderActivationDeferredForIdle(op: Operation, previous: SchedulerHandoffState): boolean {
+  const lastStep = op.steps?.at(-1);
+  return op.input.recoverSourceOnly !== true && builderActivationSourceRecoveryPending(op) &&
+    previous.toGatewayId === op.input.toGatewayId &&
+    lastStep?.status === "skipped" &&
+    (lastStep.name === "wait-for-active-work" || lastStep.name === "quiesce-source");
+}
+
 async function resumePreviousSchedulerAttempt(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1648,6 +1656,7 @@ async function resumePreviousSchedulerAttempt(
   if (previous.fromGatewayId !== user.currentGatewayId || previous.uid !== uid || previous.slug !== user.slug) {
     throw new Error("scheduler rollback scope changed");
   }
+  if (builderActivationDeferredForIdle(op, previous)) return false;
   const scope = previousAttemptScope(op, previous);
   const recovery = scope.recoveryRequired ? await sharedRecoveryAuthority(deps, op, user, uid) : undefined;
   const assertNativeReturnCurrent = await previousNativeReturnCleanupAuthority(deps, op, ctx, previous);

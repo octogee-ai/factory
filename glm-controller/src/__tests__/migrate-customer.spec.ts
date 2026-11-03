@@ -2755,6 +2755,48 @@ describe("retained source cancellation", () => {
 });
 
 describe("waiting for active Builder work", () => {
+  it.each(["wait-for-active-work", "quiesce-source"])("keeps the Builder target held when reclaiming an activation deferred at %s", async step => {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    const target = "alice-s-12345678";
+    const first = mkOp({
+      id: `builder-activate-${target}-g1`,
+      input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: target, source: "builder-activation-lease" },
+    });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 4, assignmentMode: "assigned", gatewayClass: "shared" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    const quiesce = vi.mocked(h.client.quiesce);
+    if (step === "quiesce-source") {
+      quiesce.mockImplementationOnce(quiesce.getMockImplementation()!);
+    }
+    quiesce.mockRejectedValueOnce(new MigrationDrainPendingError("coach still active"));
+    const released = new Set<string>();
+    const unmount = h.client.unmount;
+    h.client.unmount = vi.fn(async request => {
+      if (request.gatewayId === target) released.add(request.migrationId);
+      return unmount(request);
+    });
+    const transfer = h.client.transferState;
+    h.client.transferState = vi.fn(async request => {
+      if (request.mode === "pre" && released.has(request.migrationId)) {
+        throw new Error("surge OpenClaw process gate target migration already released");
+      }
+      return transfer(request);
+    });
+
+    const handler = createMigrateCustomerHandler(h.deps);
+    const waiting = await handler(first, h.ctx);
+    expect(waiting).toMatchObject({ waitingForBuilderIdle: true });
+    expect(h.steps.at(-1)).toMatchObject({ name: step, status: "skipped" });
+    const update = buildOperationCompletionUpdate({ op: first, result: waiting, steps: [...h.steps], now: 5_000 });
+    const previous = vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.at(-1)![0];
+    const next = { ...first, ...update, status: "running", startedAt: 6_000,
+      schedulerHandoff: previous, schedulerHandoffReleased: false } as Operation;
+
+    expect(await handler(next, h.ctx)).toMatchObject({ success: true });
+    expect(released.size).toBe(0);
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+  });
+
   it("completes on the next claim after an idle deferral without consuming a failure attempt or snapshotting early", async () => {
     const h = mkDeps();
     vi.mocked(h.client.quiesce)
