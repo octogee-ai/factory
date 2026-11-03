@@ -794,6 +794,15 @@ describe("full teardown for private-only Cloud SQL", { timeout: 180_000 }, () =>
     expect(result.stdout).not.toContain("firebase deploy --project");
   });
 
+  it("prints a TEST rebuild that recreates the live-test fixture before verify-env", () => {
+    const result = runPrivateCentralTeardown();
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const fixture = result.stdout.indexOf("scripts/ops/ensure-live-fixture-account.ts");
+    expect(fixture).toBeGreaterThan(result.stdout.indexOf("npm run ci:deploy"));
+    expect(fixture).toBeLessThan(result.stdout.indexOf("./scripts/verify-env.sh"));
+  });
+
   it("prints a Helm install that waits for Mattermost and Gitea, not for glm-controller's Gitea token", () => {
     const result = runPrivateCentralTeardown();
 
