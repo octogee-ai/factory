@@ -16,8 +16,8 @@ global:
     bridge:
       image:
         repository: us-central1-docker.pkg.dev/octogee/octogee/vm-bridge
-        tag: "1.30.6-octogee-20261102"
-        digest: "sha256:67207f6068a43c821a3733ad093624110040843cb1013e570740acdf2925105c"
+        tag: "1.31.7-octogee-20261102"
+        digest: "sha256:a788f3e2965d5ef6e5bd2d36b09b705ba9aecd6c62e4e8d5ea634951152a1b9c"
     vmSpec: {}
     warmPoolSize: 0
   projectRunnerImage:
