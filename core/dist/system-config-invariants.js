@@ -400,7 +400,7 @@ export function platformInvariantTable(context) {
             },
         },
         { kind: "exact", path: "channels.mattermost.enabled", value: true },
-        { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT },
+        { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT, project: isolated },
         { kind: "exact", path: "channels.mattermost.network.dangerouslyAllowPrivateNetwork", value: true },
         {
             kind: "exact",
@@ -743,7 +743,7 @@ const PLATFORM_PROJECTION_KINDS = new Set([
 export function reconcilePlatformProjections(config, context) {
     const changedPaths = [];
     for (const invariant of platformInvariantTable(context)) {
-        if (!PLATFORM_PROJECTION_KINDS.has(invariant.kind))
+        if (invariant.kind === "exact" ? !invariant.project : !PLATFORM_PROJECTION_KINDS.has(invariant.kind))
             continue;
         if (invariantSatisfied(config, invariant))
             continue;

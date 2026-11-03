@@ -94,6 +94,37 @@ describe("system config sync hardening", () => {
       line.includes("reconciled platform-owned projections before checkpoint (channels.mattermost.accounts)"))).toBe(true);
   });
 
+  it("accepts a Builder migration checkpoint after Doctor moves the Mattermost URL into the default account", () => {
+    const h = fixture((config) => {
+      const channels = config.channels as Record<string, Record<string, unknown>>;
+      const mattermost = channels.mattermost;
+      mattermost.accounts = { default: { baseUrl: mattermost.baseUrl } };
+      delete mattermost.baseUrl;
+    }, builderEnv);
+    const configPath = path.join(h.repoDir, "openclaw.json");
+    const acceptedBytes = fs.readFileSync(path.join(fixture(undefined, builderEnv).repoDir, "openclaw.json"), "utf8");
+    const committed: string[] = [];
+
+    const result = syncSystemConfigForSlug("ceckert", {
+      openclawDir: h.openclawDir,
+      env: builderEnv,
+      durablePolicy: true,
+      source: "migration-checkpoint",
+      gitExec: acceptedGit(h.repoDir, acceptedBytes, committed),
+      setRepoSshCommand: vi.fn(),
+      customerSshKeyPath: () => "/tmp/key",
+      validateConfig: vi.fn(),
+      readCommitBlob: () => Buffer.from(acceptedBytes),
+    });
+
+    expect(result).toMatchObject({ pushed: true, acceptedCommit: "a".repeat(40) });
+    expect(committed).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8")).channels.mattermost).toMatchObject({
+      baseUrl: "${MM_URL}",
+      accounts: { default: { baseUrl: "${MM_URL}" } },
+    });
+  });
+
   it("leaves a config edit that races the projection reconcile for the ordinary candidate path", () => {
     const h = fixture(driftedPlatformAccount, builderEnv);
     const configPath = path.join(h.repoDir, "openclaw.json");
@@ -104,7 +135,6 @@ describe("system config sync hardening", () => {
 
     reconcilePlatformProjectionsAtPath(
       { repoConfigPath: configPath, env: builderEnv, slug: "ceckert", log: (message) => logs.push(message) },
-      new Set(["openclaw.json"]),
       (file) => {
         reads.push(file);
         if (reads.length === 2) fs.writeFileSync(file, racedEdit);

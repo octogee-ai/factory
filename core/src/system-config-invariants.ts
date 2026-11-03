@@ -64,6 +64,7 @@ type ExactInvariant = {
   kind: "exact";
   path: string;
   value: unknown | typeof ABSENT;
+  project?: boolean;
 };
 
 type RequiredArrayInvariant = {
@@ -505,7 +506,7 @@ export function platformInvariantTable(
       },
     },
     { kind: "exact", path: "channels.mattermost.enabled", value: true },
-    { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT },
+    { kind: "exact", path: "channels.mattermost.baseUrl", value: isolated ? "${MM_URL}" : ABSENT, project: isolated },
     { kind: "exact", path: "channels.mattermost.network.dangerouslyAllowPrivateNetwork", value: true },
     {
       kind: "exact",
@@ -884,7 +885,7 @@ export function reconcilePlatformProjections(
 ): { changedPaths: string[] } {
   const changedPaths: string[] = [];
   for (const invariant of platformInvariantTable(context)) {
-    if (!PLATFORM_PROJECTION_KINDS.has(invariant.kind)) continue;
+    if (invariant.kind === "exact" ? !invariant.project : !PLATFORM_PROJECTION_KINDS.has(invariant.kind)) continue;
     if (invariantSatisfied(config, invariant)) continue;
     applyInvariant(config, invariant);
     if (!changedPaths.includes(invariant.path)) changedPaths.push(invariant.path);

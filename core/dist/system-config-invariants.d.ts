@@ -28,6 +28,7 @@ type ExactInvariant = {
     kind: "exact";
     path: string;
     value: unknown | typeof ABSENT;
+    project?: boolean;
 };
 type RequiredArrayInvariant = {
     kind: typeof REQUIRED_ARRAY;

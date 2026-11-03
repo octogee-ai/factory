@@ -861,10 +861,8 @@ function platformDrivenCheckpoint(context: Pick<SystemConfigSyncContext, "opts">
 
 export function reconcilePlatformProjectionsAtPath(
   context: Pick<SystemConfigSyncContext, "repoConfigPath" | "env" | "slug" | "log">,
-  dirtyPaths: ReadonlySet<string>,
   readConfig: (configPath: string) => string = (configPath) => fs.readFileSync(configPath, "utf8"),
 ): void {
-  if (!dirtyPaths.has(OPENCLAW_CONFIG_FILENAME)) return;
   let contents: string;
   let value: unknown;
   try {
@@ -1523,7 +1521,6 @@ function validateCandidate(
   context: SystemConfigSyncContext,
   dirtyPaths: ReadonlySet<string>,
 ): CandidateValidationResult {
-  if (platformDrivenCheckpoint(context)) reconcilePlatformProjectionsAtPath(context, dirtyPaths);
   const candidateContents = fs.readFileSync(context.repoConfigPath);
   const candidateFingerprint = fingerprintContents(candidateContents);
   const candidateDurableFingerprint = durableFilesFingerprint(context.repoDir);
@@ -1710,6 +1707,7 @@ function syncPreparedSystemConfig(context: SystemConfigSyncContext): SystemConfi
   if (!fs.existsSync(repoConfigPath)) {
     return rejectedDeletionResult(context);
   }
+  if (platformDrivenCheckpoint(context)) reconcilePlatformProjectionsAtPath(context);
   const dirty = execGit(repoDir, ["status", "--porcelain", "--", ...SYSTEM_CONFIG_PATHSPEC_ARGS], keyPath);
   if (dirty === null) return syncStatusFailure(context);
   if (dirty.length === 0) return syncCleanSystemConfig(context);
