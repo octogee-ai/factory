@@ -5,7 +5,7 @@ const vmDoc = { runtime: "gce-vm", vm: { instanceName: "octogee-gw-b-x", interna
 
 describe("gatewayVmAddress", () => {
   it("returns the VM address only for a gce-vm gateway with a recorded internal IP", () => {
-    expect(gatewayVmAddress(vmDoc)).toEqual({ instanceName: "octogee-gw-b-x", internalIp: "172.20.0.9" });
+    expect(gatewayVmAddress(vmDoc)).toEqual({ instanceName: "octogee-gw-b-x", internalIp: "172.20.0.9", instanceId: "1" });
     expect(gatewayVmAddress({ ...vmDoc, runtime: "cluster" })).toBeNull();
     expect(gatewayVmAddress({ runtime: "gce-vm", vm: null })).toBeNull();
     expect(gatewayVmAddress({ runtime: "gce-vm", vm: { instanceName: "n", internalIp: "" } })).toBeNull();

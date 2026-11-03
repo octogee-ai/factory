@@ -1994,7 +1994,8 @@ function assertForwardRecovery(op: Operation, targets: MigrationTargets, slug: s
   }
 }
 
-function releasedTargetImportFailure(error: string | undefined, targetGatewayId: string): boolean {
+function releasedTargetImportFailure(error: string | undefined, targetGatewayId: string, migrationId: string): boolean {
+  if (error === `target import already released for migration ${migrationId} on ${targetGatewayId}`) return true;
   const prefix = `/prepare-rsync-import/${targetGatewayId}: 500 `;
   if (!error?.startsWith(prefix)) return false;
   try {
@@ -2065,7 +2066,7 @@ async function executeMigration(
       if (step.name === "rollback:unmount-target" && step.status === "done") targetUnmountConfirmed = true;
       if (["keys-sync-state", "pre-sync-state", "wait-for-active-work"].includes(step.name) && step.status === "failed") preparationFailed = true;
       if (["final-sync-state", "verify-target"].includes(step.name) && step.status === "failed") postQuiesceFailed = true;
-      if (step.name === "final-sync-state" && step.status === "failed") targetReleased = releasedTargetImportFailure(step.error, prepared.toGatewayId);
+      if (step.name === "final-sync-state" && step.status === "failed") targetReleased = releasedTargetImportFailure(step.error, prepared.toGatewayId, prepared.migrationId);
       await progress.report(step.name, step.status);
     },
   };

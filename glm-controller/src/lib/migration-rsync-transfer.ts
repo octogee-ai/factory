@@ -2,8 +2,9 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { GatewayVmAddress } from "./gateway-address.js";
+import { gatewayVmPodName } from "@octogee/shared/types/glm";
 import type { Firestore } from "firebase-admin/firestore";
-import { assertTransferClaim, claimTransferTask, controllerPodIdentity, finishTransferTask, type ControllerPodIdentity } from "./migration-transfer-lease.js";
+import { assertTransferClaim, claimTransferTask, controllerPodIdentity, finishTransferTask, type ControllerPodIdentity, type TransferClaim } from "./migration-transfer-lease.js";
 import {
   type FinishRsyncImportRequestBody,
   type ImportResponse,
@@ -233,7 +234,7 @@ async function postSignedJson<Resp>(
 
 interface PodList {
   items?: Array<{
-    metadata?: { name?: string; deletionTimestamp?: string };
+    metadata?: { name?: string; uid?: string; deletionTimestamp?: string };
     status?: {
       phase?: string;
       podIP?: string;
@@ -249,12 +250,32 @@ async function assertTargetTransferFencing(fetchImpl: typeof globalThis.fetch, b
   }
 }
 
+async function assertFinalImportNotReleased(fetchImpl: typeof globalThis.fetch, baseUrl: string, input: { migrationId: string; slug: string; toGatewayId: string }, targetUid?: string): Promise<void> {
+  const response = await fetchImpl(`${baseUrl}/surge-ready`, { signal: AbortSignal.timeout(5_000) });
+  if (response.status !== 200 && response.status !== 503) throw new Error(`migration target readiness inspection failed: status ${response.status}`);
+  const state = await response.json() as { terminalTarget?: unknown };
+  if (state.terminalTarget === undefined) return;
+  const terminal = state.terminalTarget as Record<string, unknown> | null;
+  if (!terminal || typeof terminal !== "object" || !targetUid || terminal.targetPodUid !== targetUid ||
+      terminal.migrationId !== input.migrationId || terminal.slug !== input.slug) {
+    throw new Error("migration target terminal identity does not match the reclaimed transfer");
+  }
+  throw new Error(`target import already released for migration ${input.migrationId} on ${input.toGatewayId}`);
+}
+
+async function inspectReclaimedFinalImport(fetchImpl: typeof globalThis.fetch, baseUrl: string, input: { migrationId: string; slug: string; toGatewayId: string; mode: MigrationSyncMode }, claim: TransferClaim, targetUid?: string): Promise<void> {
+  await assertTransferClaim(claim);
+  if (input.mode !== "final" || claim.attempt <= 1) return;
+  await assertFinalImportNotReleased(fetchImpl, baseUrl, input, targetUid);
+  await assertTransferClaim(claim);
+}
+
 async function resolveRunningGatewayPod(params: {
   namespace: string;
   transportId: string;
   runCommand: CommandRunner;
   requireReady: boolean;
-}): Promise<{ name: string; podIP: string }> {
+}): Promise<{ name: string; podIP: string; uid?: string }> {
   const selector = `app=octogee-gateway,gateway-instance=${params.transportId}`;
   const result = await params.runCommand("kubectl", [
     "-n",
@@ -292,13 +313,14 @@ async function resolveRunningGatewayPod(params: {
     );
   }
   const item = candidates[0];
-  return { name: item.metadata!.name!, podIP: item.status!.podIP! };
+  return { name: item.metadata!.name!, podIP: item.status!.podIP!, uid: item.metadata!.uid };
 }
 
 interface GatewayEndpoint {
   name: string;
   podIP: string;
   vm: boolean;
+  uid?: string;
 }
 
 async function resolveGatewayEndpoint(params: {
@@ -309,7 +331,8 @@ async function resolveGatewayEndpoint(params: {
   resolveGatewayVm?: (transportId: string) => Promise<GatewayVmAddress | null>;
 }): Promise<GatewayEndpoint> {
   const vm = params.resolveGatewayVm ? await params.resolveGatewayVm(params.transportId) : null;
-  if (vm) return { name: vm.instanceName, podIP: vm.internalIp, vm: true };
+  if (vm) return { name: vm.instanceName, podIP: vm.internalIp, vm: true,
+    ...(vm.instanceId ? { uid: gatewayVmPodName(params.transportId, vm.instanceId) } : {}) };
   const pod = await resolveRunningGatewayPod(params);
   return { ...pod, vm: false };
 }
@@ -454,7 +477,7 @@ export function createRsyncMigrationTransfer(
       ]);
       targetPod = resolvedTargetPod;
       const targetBaseUrl = podBaseUrl(targetPod.podIP, deps.fleetControllerPort);
-      await assertTransferClaim(claimed);
+      await inspectReclaimedFinalImport(fetchImpl, targetBaseUrl, { ...input, mode }, claimed, targetPod.uid);
       const prepareBody: PrepareRsyncImportRequestBody = {
         transferAttempt: claimed.attempt,
         transferAttemptId: claimed.attemptId,

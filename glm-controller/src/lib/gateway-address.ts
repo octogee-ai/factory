@@ -3,6 +3,7 @@ import { resolveGatewayRuntime, type GatewayVmState } from "@octogee/shared/type
 export interface GatewayVmAddress {
   instanceName: string;
   internalIp: string;
+  instanceId?: string;
 }
 
 export function gatewayVmAddress(runtimeDoc: unknown): GatewayVmAddress | null {
@@ -12,7 +13,7 @@ export function gatewayVmAddress(runtimeDoc: unknown): GatewayVmAddress | null {
   if (!vm || typeof vm.instanceName !== "string" || typeof vm.internalIp !== "string" || vm.internalIp.length === 0) {
     return null;
   }
-  return { instanceName: vm.instanceName, internalIp: vm.internalIp };
+  return { instanceName: vm.instanceName, internalIp: vm.internalIp, ...(typeof vm.instanceId === "string" ? { instanceId: vm.instanceId } : {}) };
 }
 
 export function gatewayFleetBaseUrl(input: {

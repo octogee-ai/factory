@@ -102,7 +102,7 @@ function runningPod(name: string, ready = true, podIP?: string): Response {
   return jsonResponse({
     items: [
       {
-        metadata: { name },
+        metadata: { name, uid: name === "gw-to-pod" ? "target-uid" : "source-uid" },
         status: {
           phase: "Running",
           podIP: podIP ?? (name === "gw-from-pod" ? SOURCE_POD_IP : TARGET_POD_IP),
@@ -126,6 +126,7 @@ function makeFetch(
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/health")) return jsonResponse({ status: "ready", rsyncAttemptFencing: true });
+    if (url.endsWith("/surge-ready")) return jsonResponse({ ready: false }, 503);
     calls.push(url);
     const body = JSON.parse(String(init?.body ?? "{}")) as { migrationId: string; slug: string };
     if (url.includes("/prepare-rsync-import/")) {
@@ -200,6 +201,7 @@ describe("createRsyncMigrationTransfer", () => {
     const fallback = makeCommandRunner([]);
     const runCommand: CommandRunner = async (command, args, options) => {
       if (args.includes("old-controller")) return observe();
+      if (args.includes("new-controller")) return { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 };
       return fallback(command, args, options);
     };
     const transfer = createRsyncMigrationTransfer({
@@ -220,11 +222,106 @@ describe("createRsyncMigrationTransfer", () => {
     expect(h.calls.some(url => url.includes("/finish-rsync-import/"))).toBe(true);
   });
 
+  it("does not prepare a reclaimed final import after the target released the same migration", async () => {
+    const store: Store = { evicted__final: evictedTask() };
+    const calls: string[] = [];
+    const fetch = (async (url, init) => {
+      if (String(url).endsWith("/surge-ready")) return jsonResponse({ terminalTarget: { migrationId: "evicted", slug: "alice", targetPodUid: "target-uid", completionStarted: true } });
+      return makeFetch(calls)(url, init);
+    }) as typeof globalThis.fetch;
+    const fallback = makeCommandRunner([]);
+    const runCommand: CommandRunner = async (command, args, options) => args.includes("old-controller")
+      ? { stdout: "", stderr: "", code: 0 } : args.includes("new-controller")
+        ? { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
+        : fallback(command, args, options);
+    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand, now: () => 10_000,
+      controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
+    await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" }))
+      .rejects.toThrow("target import already released for migration evicted on gw-to");
+    expect(calls.some(url => url.includes("/prepare-rsync-import/"))).toBe(false);
+    expect(calls.some(url => url.includes("/abort-rsync-import/"))).toBe(false);
+  });
+
+  it.each([
+    { terminalTarget: { migrationId: "other", slug: "alice", targetPodUid: "target-uid" } },
+    { terminalTarget: { migrationId: "evicted", slug: "other", targetPodUid: "target-uid" } },
+    { terminalTarget: { migrationId: "evicted", slug: "alice", targetPodUid: "" } },
+    { terminalTarget: { migrationId: "evicted", slug: "alice", targetPodUid: "old-target-uid" } },
+  ])("fences a reclaimed transfer when terminal target identity differs: %j", async state => {
+    const calls: string[] = [];
+    const store: Store = { evicted__final: evictedTask() };
+    const fallback = makeCommandRunner([]);
+    const runCommand: CommandRunner = async (command, args, options) => args.includes("old-controller")
+      ? { stdout: "", stderr: "", code: 0 } : args.includes("new-controller")
+        ? { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
+        : fallback(command, args, options);
+    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
+      fetch: (async (url, init) => String(url).endsWith("/surge-ready") ? jsonResponse(state, 503) : makeFetch(calls)(url, init)) as typeof globalThis.fetch,
+      runCommand, now: () => 10_000, controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
+    await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" }))
+      .rejects.toThrow("terminal identity does not match");
+    expect(calls).toEqual([]);
+  });
+
+  it.each(["octogee-gateway-gw-to-vm-123", "octogee-gateway-gw-to-vm-999"])("checks the released VM allocation identity %s", async targetPodUid => {
+    const store: Store = { evicted__final: evictedTask() };
+    const calls: string[] = [];
+    const fallback = makeCommandRunner([]);
+    const runCommand: CommandRunner = async (command, args, options) => args.includes("old-controller")
+      ? { stdout: "", stderr: "", code: 0 } : args.includes("new-controller")
+        ? { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
+        : fallback(command, args, options);
+    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
+      resolveGatewayVm: async id => id === "gw-to" ? { instanceName: "vm", internalIp: "172.20.0.9", instanceId: "123" } : null,
+      fetch: (async (url, init) => String(url).endsWith("/surge-ready")
+        ? jsonResponse({ terminalTarget: { migrationId: "evicted", slug: "alice", targetPodUid } }, 503) : makeFetch(calls)(url, init)) as typeof globalThis.fetch,
+      runCommand, now: () => 10_000, controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
+    await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" }))
+      .rejects.toThrow(targetPodUid === "octogee-gateway-gw-to-vm-123" ? "target import already released" : "terminal identity does not match");
+    expect(calls).toEqual([]);
+  });
+
   it.each([{}, { deletionTimestamp: "2026-11-02T03:05:34Z" }])("preserves a transfer whose owner pod still exists, including termination (%j)", async metadata => {
     const h = evictionFixture(async () => ({ stdout: JSON.stringify({ metadata: { name: "old-controller", uid: "old-pod-uid", ...metadata } }), stderr: "", code: 0 }));
     await expect(h.run()).rejects.toThrow("already running");
     expect(h.store.evicted__final).toEqual(evictedTask());
     expect(h.calls).toEqual([]);
+  });
+
+  it("does not reclaim an expired transfer while its controller pod still exists", async () => {
+    const h = evictionFixture(async () => ({ stdout: JSON.stringify({ metadata: { name: "old-controller", uid: "old-pod-uid" } }), stderr: "", code: 0 }));
+    h.store.evicted__final.leaseExpiresAt = 1;
+    await expect(h.run()).rejects.toThrow("already running");
+    expect(h.store.evicted__final.attempt).toBe(1);
+    expect(h.calls).toEqual([]);
+  });
+
+  it.each([0, 1])("only reclaims a same-pod transfer after its controller container restarts (restart count %i)", async restartCount => {
+    const h = evictionFixture(async () => ({ stdout: JSON.stringify({ metadata: { name: "old-controller", uid: "old-pod-uid" },
+      status: { containerStatuses: [{ name: "glm-controller", restartCount }] } }), stderr: "", code: 0 }));
+    h.store.evicted__final.leaseRestartCount = 0;
+    if (restartCount === 0) await expect(h.run()).rejects.toThrow("already running");
+    else await expect(h.run()).resolves.toMatchObject({ imported: true });
+  });
+
+  it("fences expired running transfers with no owner identity", async () => {
+    const h = evictionFixture(async () => ({ stdout: "", stderr: "", code: 0 }));
+    delete h.store.evicted__final.leasePod;
+    h.store.evicted__final.leaseExpiresAt = 1;
+    await expect(h.run()).rejects.toThrow("owner identity unavailable");
+    await expect(readTransferAttemptForCleanup({ db: makeDb(h.store), now: () => 10_000, namespace: "test", runCommand: makeCommandRunner([]) },
+      { migrationId: "evicted", slug: "alice", gatewayId: "gw-to", mode: "final" })).rejects.toThrow("owner may still be running");
+    expect(h.calls).toEqual([]);
+  });
+
+  it("refuses cleanup of an expired transfer while its controller pod still exists", async () => {
+    const store: Store = { evicted__final: { ...evictedTask(), leaseExpiresAt: 1 } };
+    const runCommand = vi.fn(async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ metadata: evictedTask().leasePod }) }));
+    await expect(readTransferAttemptForCleanup({ db: makeDb(store), now: () => 10_000, namespace: "test", runCommand },
+      { migrationId: "evicted", slug: "alice", gatewayId: "gw-to", mode: "final" })).rejects.toThrow("owner may still be running");
   });
 
   it.each([{ stdout: "", stderr: "API unavailable", code: 1 }, { stdout: "{}", stderr: "", code: 0 }])("fails closed when controller absence cannot be established (%j)", async result => {
@@ -300,7 +397,9 @@ describe("createRsyncMigrationTransfer", () => {
       return baseFetch(url, init);
     }) as typeof globalThis.fetch;
     const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
-      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]),
+      fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: async (command, args, options) =>
+        args.includes("current-controller") ? { stdout: JSON.stringify({ metadata: { name: "current-controller", uid: "current-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
+          : makeCommandRunner([])(command, args, options),
       controllerPod: { name: "current-controller", uid: "current-uid" } });
     const result = transfer({ migrationId: "binding", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
     if (failed) await expect(result).rejects.toThrow("target failed");

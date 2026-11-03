@@ -2813,7 +2813,7 @@ it("migrates without reading version metadata or a release artifact for a fixed 
 });
 
 describe("legacy migration forward recovery", () => {
-  it.each(["released", "first-attempt", "held", "committed", "source-moved", "other-target", "other-rpc"] as const)("settles a forward-only Builder activation only after its target released before cutover: %s", async scenario => {
+  it.each(["released", "observed-release", "first-attempt", "held", "committed", "source-moved", "other-target", "other-rpc"] as const)("settles a forward-only Builder activation only after its target released before cutover: %s", async scenario => {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     const target = "alice-s-12345678", id = `builder-activate-${target}-g1`;
     const op = mkOp({ id, attempts: 1,
@@ -2832,6 +2832,7 @@ describe("legacy migration forward recovery", () => {
       if (request.mode !== "final") return transfer(request);
       if (scenario === "committed") op.cutoverCommittedAt = 4_500;
       if (scenario === "source-moved") vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "shared-other" });
+      if (scenario === "observed-release") throw new Error(`target import already released for migration mig-${id} on ${target}`);
       const path = scenario === "other-rpc" ? "finish-rsync-import" : "prepare-rsync-import";
       const body = { error: "prepare-rsync-import failed", message: scenario === "held"
         ? "surge OpenClaw process gate is held for migration other" : "surge OpenClaw process gate target migration already released" };
@@ -2842,7 +2843,7 @@ describe("legacy migration forward recovery", () => {
     expect(result).toMatchObject({ success: false, rolledBack: false });
     expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
-    const released = scenario === "released" || scenario === "first-attempt";
+    const released = scenario === "released" || scenario === "observed-release" || scenario === "first-attempt";
     expect(classifyOperationFailure(result.error)).toBe(released ? "terminal" : "transient");
     if (!released) return;
     expect(buildOperationCompletionUpdate({ op, result, steps: h.steps, now: 5_000 })).toMatchObject({ status: "failed" });
