@@ -171,9 +171,15 @@ This refresh freezes OpenClaw main at
 updated main for independent qualification. Subsequent upstream commits do not
 change this build's input.
 
-The clean built overlay is `1f9f1e4687adbf30e3cf5e53ca15e2bc931ca89b` on
-`ceckert/openclaw:codex/gateway-maintenance-20261102`. Gateway archives and
+The clean built overlay is `8b83bda7300f820ff8c22ea4ebf720fc125298a7` on
+`ceckert/openclaw:codex/octogee-detach-latency-current`. Gateway archives and
 hosted islands come from that same source.
+
+This recut retains maintenance base `1f9f1e4687adbf30e3cf5e53ca15e2bc931ca89b`
+and adds only the two reviewed commits from
+[OpenClaw #191463](https://github.com/openclaw/openclaw/pull/191463). The base already
+contains the canonical outbound receipt expectation, so no fixture correction is
+carried in this overlay.
 
 The selected tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41518259691)
 was cancelled before any jobs ran. The latest successful scheduled
@@ -375,7 +381,67 @@ request while reusing the authenticated token. This removes suite-long stale
 routing; it does not eliminate a move between a lookup and its HTTP request.
 Native Proactive check jobs with empty scratch are preserved as requested.
 
-### Qualification and publication
+### Detach and activation-abort integration
+
+Read-only deletion authority checks avoid write transactions while preserving live
+lease admission, journal/template ownership, the final host journal fence and all
+mutation transactions. The current-source native scope passes 47 authority/cleanup
+tests and 12 gateway detach, offline CLI and outbound-custody controls. The optional
+standalone PostgreSQL case was skipped; the installed PostgreSQL offline CLI is
+exercised by the abort replay below. Production core types, changed-file
+lint, a full clean package build, archive integrity and the actual Linux full-plugin
+installer target pass. Independent review with the complete lease/admission owners
+reports no actionable P0–P2 findings.
+
+At this pin, Skill Workshop is a bundled plugin. Native ignores unmarked
+`plugins.entries.skill-workshop` policy as stale built-in-era configuration and
+refuses offline-detach writes against it. Both templates and final config writers
+now declare `meta.migrations.skillWorkshopPlugin: true`. Shared retains autonomous
+mode off; Builder choices survive. The retired `skills.workshop` key remains absent.
+The image gate rejects the ignored-policy warning even when Native reports
+`valid: true`.
+
+The native regression `tests/specs/openclaw-workshop-native.spec.ts` checks the
+pinned CLI version, validates both classes through their actual writers, reproduces
+the unmarked write refusal and verifies Workshop survives Doctor plus reconciliation.
+It uses `OCTOGEE_TEST_OPENCLAW_BIN`, `OCTOGEE_TEST_OPENCLAW_NPM`,
+`OCTOGEE_TEST_OPENCLAW_EXTENSIONS` and a disposable `OCTOGEE_TEST_POSTGRES_DSN`.
+The installed-runtime comparison and active-chat abort replay use
+`scripts/ops/prove-agent-detach.ts` and `scripts/ops/prove-activation-abort.ts`.
+The committed [raw results and aggregates](../../../docs/operations/evidence/detach-fork-integration/summary.json)
+record two alternating baseline/candidate pairs against Mattermost 12.0.1 and
+PostgreSQL 17, with 5 ms database delay in each direction during detach only.
+Ten warm calls per variant give median 4086.65 → 3454.11 ms (15.48% lower), and
+median observed fixture SQL calls 433.5 → 330. Cold calls are reported separately.
+All samples are retained. A 22607.56 ms candidate sample makes nearest-rank p95
+worse than baseline's 4890.20 ms: the published tail acceptance criterion is not
+met. Native maintenance overlaps the delay, but its cause remains unproven. This
+cut does not claim to fix the production slow tail.
+
+The comparison's timed calls precede its transfer phase. Following review, the
+proof uses the production snapshot export, manifest validation, anchor landing and
+installation owners rather than carrying an agent directory. A separate six-agent
+[verified-import smoke](../../../docs/operations/evidence/detach-fork-integration/verified-anchor-smoke.json)
+checks that revised path, original UUID/schema/session identity, exact canonical
+transcript bytes, source write refusal and real Mattermost replies. Its zero-delay
+observations are excluded from the performance comparison. New proof output also
+persists labeled cold/warm median, nearest-rank p95 and spread beside raw samples.
+
+The [active-user abort replay](../../../docs/operations/evidence/detach-fork-integration/activation-abort.json)
+keeps the same coach agent active on Shared while its distinct pre-copy target
+store is held. The actual signed abort handler, lifecycle adapter and installed
+offline CLI reproduce HTTP 500 with unmarked policy, then return 200 after six
+preserved-store detaches with corrected policy. Target history/anchors and the
+source anchor survive; the source's held model response finishes afterward.
+Process custody and watcher ownership are local fixtures, not a deployed fleet
+trial. Both native config-writer/Doctor cases and 76 current-catalog PostgreSQL
+permission, handoff and recovery controls pass.
+
+### Maintenance-base qualification and publication
+
+The following broader checks qualify the retained maintenance base. The targeted
+detach recut checks are listed above; their scope does not imply a new aggregate
+upstream test-suite pass.
 
 Pinned pnpm 12.15.0 and the frozen lockfile built the clean source with full
 `pnpm build package`; `dist/build-info.json.commit` matches the source SHA above.
@@ -461,7 +527,7 @@ generations, including the root's build-info source commit, is verified.
 
 | Package | Write-once object and generation | Bytes | SHA256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-b56aa3b8.tgz#1793657164542718` | 117072057 | `b56aa3b80fb289301a8037c583162982d63732d359d12dcff08bb3d8f5ceb825` |
+| root | `openclaw-fork-8af98932.tgz#1793668904035227` | 117068051 | `8af9893262abee6df15b3c2792f45b913a31e4f87876427c3e0b3bc0b4cc64c8` |
 | mattermost | `openclaw-mattermost-bc6480eb.tgz#1793657168834514` | 1273634 | `bc6480ebfc8437515b67d288330651bb0f75f2b2825634fc6c4979a36b6c5e6c` |
 
 This qualifies the installed base runtime and its consumers. Full platform

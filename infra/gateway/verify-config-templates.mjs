@@ -36,6 +36,9 @@ try {
     try { report = JSON.parse(result.stdout); }
     catch { throw new Error(`${template}: Native config validation returned invalid JSON\n${result.stdout}${result.stderr}`); }
     if (report?.valid !== true) throw new Error(`${template}: Native rejected the shipped config\n${result.stdout}${result.stderr}`);
+    if (report.warnings?.some(warning => warning.message?.includes("skill-workshop plugin policy"))) {
+      throw new Error(`${template}: Native ignores the shipped Workshop policy\n${result.stdout}${result.stderr}`);
+    }
     console.log(`[config-templates] PASS ${template}`);
   }
 } finally {

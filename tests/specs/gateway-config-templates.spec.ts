@@ -18,7 +18,7 @@ const fs=require('fs');const path=require('path');const config=JSON.parse(fs.rea
 fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),config,configPath:process.env.OPENCLAW_CONFIG_PATH,gatewayClass:process.env.GATEWAY_CLASS,databaseDsn:process.env.OPENCLAW_AGENT_STORE_DSN,
  projected:fs.realpathSync(path.join(process.env.OPENCLAW_STATE_DIR,'extensions')),npm:fs.realpathSync(path.join(process.env.OPENCLAW_STATE_DIR,'npm'))})+'\\n');
 if(config.reject){process.stderr.write('unsupported config key');process.exit(2);}
-process.stdout.write(JSON.stringify({valid:config.invalidReport!==true}));
+process.stdout.write(JSON.stringify({valid:config.invalidReport!==true,warnings:config.warnings??[]}));
 `);
   chmodSync(cli, 0o755);
   const run = () => spawnSync(process.execPath, [helper, join(root, "templates"), join(root, "extensions"), join(root, "npm"), cli], {
@@ -55,7 +55,7 @@ describe("Native config template image gate", () => {
       expect(existsSync(call.configPath)).toBe(false);
     }
   });
-  it.each([{ reject: true }, { invalidReport: true }])("fails the image when the Builder template is rejected: %o", rejection => {
+  it.each([{ reject: true }, { invalidReport: true }, { warnings: [{ path: "plugins", message: "skill-workshop plugin policy written while Skill Workshop was built in is ignored." }] }])("fails the image when the Builder template is rejected: %o", rejection => {
     const f = fixture(rejection), result = f.run();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("openclaw.builder.template.json");

@@ -1,6 +1,7 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.4.14"
+    "lastTouchedVersion": "2026.4.14",
+    "migrations": { "skillWorkshopPlugin": true }
   },
   "database": {
     "engine": "postgres",

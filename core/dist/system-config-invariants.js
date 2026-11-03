@@ -365,6 +365,7 @@ export function platformInvariantTable(context) {
     const perUser = isolated && context.controlIdentity === "per-user";
     const brokerProviders = platformBrokerProviderDeclarations(context.brokerProviderEnv ?? {});
     const base = [
+        { kind: "exact", path: "meta.migrations.skillWorkshopPlugin", value: true },
         { kind: "exact", path: "discovery.mdns.mode", value: "off" },
         { kind: "exact", path: "gateway.port", value: 18789 },
         { kind: "exact", path: "gateway.mode", value: "local" },

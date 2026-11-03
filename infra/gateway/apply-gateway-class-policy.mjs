@@ -404,6 +404,9 @@ function addBuilderToolCapabilities(config, capabilities) {
 }
 
 function convergePlatformCapabilities(config, builder) {
+  config.meta ??= {};
+  config.meta.migrations ??= {};
+  config.meta.migrations.skillWorkshopPlugin = true;
   config.tools ??= {};
   if (builder) {
     addBuilderToolCapabilities(config, OCTOGEE_WORKFLOW_TOOLS);

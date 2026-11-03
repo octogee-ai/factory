@@ -68,8 +68,19 @@ it("keeps Shared Workshop configuration valid through both final config writers"
   expect(config).not.toHaveProperty("skills.workshop");
   expect(config.plugins.allow).toContain("skill-workshop");
   expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
+  expect(config.meta.migrations.skillWorkshopPlugin).toBe(true);
   reconcilePlatformInvariants(config, { gatewayClass: "shared" });
   expect(config).not.toHaveProperty("skills.workshop");
+  expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
+});
+
+it("marks retained Builder Workshop choices as current without replacing them", () => {
+  const workshop = { enabled: false, config: { autonomous: { mode: "propose" } } };
+  const config = runPolicy("builder", {
+    meta: { migrations: { unrelated: true } },
+    plugins: { entries: { "skill-workshop": workshop } },
+  });
+  expect(config.meta.migrations).toEqual({ unrelated: true, skillWorkshopPlugin: true });
   expect(config.plugins.entries["skill-workshop"]).toEqual(workshop);
 });
 

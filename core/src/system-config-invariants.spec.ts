@@ -21,6 +21,13 @@ const builder = {
 const barn = { gatewayClass: "shared" as const };
 
 describe("system config platform invariants", () => {
+  it.each([barn, builder])("marks platform-authored Workshop policy as current for $gatewayClass", (context) => {
+    const config = { meta: { migrations: { unrelated: true } } };
+    reconcilePlatformInvariants(config, context);
+    expect(config.meta.migrations).toEqual({ unrelated: true, skillWorkshopPlugin: true });
+    expect(reconcilePlatformInvariants(config, context).changedPaths).toEqual([]);
+  });
+
   it("pins authless broker declarations while retaining unrelated providers and endpoint-unaware callers", () => {
     const context = { ...barn, brokerProviderEnv: { OPENROUTER_BASE_URL: "https://broker.example/openrouter" } };
     const config: { models: { providers: Record<string, unknown> } } = { models: { providers: {
