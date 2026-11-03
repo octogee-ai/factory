@@ -61,7 +61,10 @@ elif name == 'ssh':
             sys.exit(1)
     elif 'systemd-analyze' in command: print('Startup finished in 1s')
     elif 'lsmod' in command: print(1 if case == 'missing-module' else 2)
-    elif 'zram0' in command: print('' if case == 'zram-missing' else '/dev/zram0', '[lzo-rle]' if case == 'zram-missing' else 'lzo-rle lz4 [zstd]', 60 if case == 'zram-missing' else 180, sep='\n')
+    elif 'zram0' in command:
+        if case == 'zram-missing': print('', '[lzo-rle]', 60, sep='\n')
+        elif case == 'zram-untuned': print('/dev/zram0', 'lzo-rle lz4 [zstd]', 60, sep='\n')
+        else: print('/swap/swapfile', '/dev/zram0', 'lzo-rle lzo lz4 lz4hc [zstd] deflate 842', 150, sep='\n')
     elif 'systemctl is-active' in command:
         states = ['active', 'failed' if case == 'inactive-unit' else 'active', 'active', 'active']
         if 'octo-gateway-agent.service' in command:
@@ -103,7 +106,7 @@ class ImageAcceptanceTests(unittest.TestCase):
         result = self.run_acceptance('success')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Home survives stop/start | yes', result.stdout)
-        self.assertIn('| zram swap | /dev/zram0, zstd, swappiness 180 |', result.stdout)
+        self.assertIn('| zram swap | /dev/zram0, zstd, swappiness 150 |', result.stdout)
         self.assertIn('| Accessibility bus | accessibility bus unix:path=/run/user/1000/at-spi/bus_0 serves: Chromium |', result.stdout)
 
     def test_builder_power_is_reported_and_its_failure_fails_acceptance(self):
@@ -166,6 +169,11 @@ class ImageAcceptanceTests(unittest.TestCase):
 
     def test_missing_zram_swap_fails_acceptance(self):
         result = self.run_acceptance('zram-missing')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('zram swap is not configured', result.stderr)
+
+    def test_zram_without_zram_tuned_reclaim_fails_acceptance(self):
+        result = self.run_acceptance('zram-untuned')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('zram swap is not configured', result.stderr)
 
