@@ -1797,18 +1797,26 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
 
   it("waits through a cold Builder control handshake before changing its roster", async () => {
     stubBuilderClaim("tester10");
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
       const rpc = mkGatewayRpc({
         channelsStatus: vi.fn(async () => ({ channelAccounts: {
           mattermost: [{ accountId: "tester10-coach", running: true, connected: true }],
         } })),
         configGet: vi.fn()
-        .mockRejectedValueOnce(new OpenclawWireError("connect-failed", "socket closed before connect response"))
+        .mockImplementationOnce(async () => {
+          now += 30_000;
+          throw new OpenclawWireError("connect-failed", "socket closed before connect response");
+        })
         .mockResolvedValue(configSnapshot({ agents: { list: [] } })) });
-      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn() });
+      const log = vi.fn();
+      const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log });
       await expect(adapter.activateImportedCustomer("tester10")).resolves.toMatchObject({ appliedFingerprint: expect.any(String) });
       expect(vi.mocked(rpc.configGet).mock.invocationCallOrder[1]).toBeLessThan(vi.mocked(rpc.agentsCreate).mock.invocationCallOrder[0]);
+      expect(log).toHaveBeenCalledWith("[import:tester10] Builder control runtime is ready for roster activation in 30000ms");
     } finally {
+      clock.mockRestore();
       clearBuilderClaim();
     }
   });

@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
+import type { LogContext } from "@octogee/shared/server/service-logger";
 import { parseAgentId } from "../../shared/types/identity.js";
 import type { PreparedAgentStore } from "./agent-store-snapshot.js";
 import { runOpenClaw, type OpenClawCommand, type OpenClawCommandResult } from "./openclaw-cli.js";
@@ -71,7 +72,7 @@ export async function reattachBuilderAgents(input: {
   run?: OpenClawCommand;
   resolveCarriedProjectWorkspace?: ProjectWorkspaceResolver;
   diagnosticIdentity?: CarriedAgentDiagnosticIdentity;
-  log: (message: string) => void;
+  log: (message: string, fields?: LogContext) => void;
 }): Promise<void> {
   if (input.stores.length === 0) return;
   const assertCurrent = async () => {
@@ -121,10 +122,12 @@ export async function reattachBuilderAgents(input: {
     await assertProjectAuthority(registration, input.resolveCarriedProjectWorkspace);
     await assertCurrent();
     assertAnchors(stores);
+    const addStartedAt = Date.now();
     const result = await run([
       "agents", "add", store.agentId, "--workspace", registration.workspace,
       "--agent-dir", registration.agentDir, "--non-interactive", "--json",
     ], { env: input.env, signal: input.signal });
+    const durationMs = Date.now() - addStartedAt;
     await assertProjectAuthority(registration, input.resolveCarriedProjectWorkspace);
     await assertCurrent();
     assertAnchors([store]);
@@ -134,7 +137,7 @@ export async function reattachBuilderAgents(input: {
     }
     input.log(outcome === "restored"
       ? `[migration-rsync] Native restored carried Builder agent ${store.agentId}`
-      : `[migration-rsync] Native reports ${store.agentId} already configured; startup admission remains required`);
+      : `[migration-rsync] Native reports ${store.agentId} already configured; startup admission remains required`, { durationMs });
   }
   assertAnchors(stores);
 }

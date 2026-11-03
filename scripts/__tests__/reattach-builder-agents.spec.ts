@@ -7,7 +7,10 @@ import { reattachBuilderAgents } from "../lib/reattach-builder-agents.js";
 import { captureCarriedAgentRosterFailure, CARRIED_AGENT_DIAGNOSTICS_DIRECTORY } from "../lib/carried-agent-diagnostics.js";
 
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  vi.useRealTimers();
+  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+});
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "reattach-builder-"));
@@ -54,7 +57,7 @@ it.each(["already-configured", "refused", "wrong-receipt", "wrong-roster", "anch
 
     if (mode === "already-configured") {
       await expect(result).resolves.toBeUndefined();
-      expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("startup admission remains required"));
+      expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("startup admission remains required"), { durationMs: expect.any(Number) });
     } else {
       await expect(result).rejects.toThrow(mode === "gate-lost" ? "no longer held" : /Native/);
       expect(log).not.toHaveBeenCalled();
@@ -118,12 +121,24 @@ it("restores a carried project absent from the fresh Builder roster through Nati
   database.close();
   const before = await fs.readFile(project.destinationPath);
   const resolveCarriedProjectWorkspace = vi.fn(async (id: string) => id === agentId ? project.workspace : null);
-  const run = vi.fn(async (args: string[]) => args[1] === "list"
-    ? { code: 0, stdout: JSON.stringify([{ id: coach.agentId, workspace: coach.workspace, agentDir: coach.agentDir }]) }
-    : { code: 0, stdout: JSON.stringify({ agentId: args[2], workspace: args[args.indexOf("--workspace") + 1], agentDir: args[args.indexOf("--agent-dir") + 1] }) });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const run = vi.fn(async (args: string[]) => {
+    if (args[1] === "list") {
+      vi.setSystemTime(Date.now() + 19_000);
+      return { code: 0, stdout: JSON.stringify([{ id: coach.agentId, workspace: coach.workspace, agentDir: coach.agentDir }]) };
+    }
+    vi.setSystemTime(Date.now() + (args[2] === agentId ? 27_000 : 23_000));
+    return { code: 0, stdout: JSON.stringify({ agentId: args[2], workspace: args[args.indexOf("--workspace") + 1], agentDir: args[args.indexOf("--agent-dir") + 1] }) };
+  });
+  const log = vi.fn();
 
-  await expect(reattachBuilderAgents({ stores: [coach, project], env: { OPENCLAW_STATE_DIR: coach.root }, run, log: vi.fn(),
+  await expect(reattachBuilderAgents({ stores: [coach, project], env: { OPENCLAW_STATE_DIR: coach.root }, run, log,
     assertHeld: async () => {}, resolveCarriedProjectWorkspace })).resolves.toBeUndefined();
+
+  expect(log.mock.calls).toEqual([
+    [expect.stringContaining(`restored carried Builder agent ${coach.agentId}`), { durationMs: 23_000 }],
+    [expect.stringContaining(`restored carried Builder agent ${agentId}`), { durationMs: 27_000 }],
+  ]);
 
   expect(resolveCarriedProjectWorkspace).toHaveBeenCalledTimes(3);
   expect(resolveCarriedProjectWorkspace.mock.calls.every(([id]) => id === agentId)).toBe(true);

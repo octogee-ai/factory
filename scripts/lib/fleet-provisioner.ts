@@ -2074,12 +2074,16 @@ async function verifyConfiguredBuilderAfterOpenClaw(input: {
   adapter: CustomerLifecycleAdapter;
   waitForGatewayReady: () => Promise<void>;
   log: (message: string) => void;
+  permittedAt?: number;
 }): Promise<string> {
   const slug = configuredBuilderSlug(input.adapter);
   if (!slug || !configuredBuilderMountProven(input.adapter)) {
     throw new Error("configured Builder is not durably mounted after OpenClaw start");
   }
   await input.waitForGatewayReady();
+  if (input.permittedAt !== undefined) {
+    input.log(`[surge-handoff] configured Builder OpenClaw ready ${Date.now() - input.permittedAt}ms after permit: ${slug}`);
+  }
   if (input.adapter.customerCoachWiredInOpenclawConfig?.(slug)) {
     const healthy = await input.adapter.waitForAccountHealthy({
       slug,
@@ -2576,9 +2580,10 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
   const releasePermittedTarget = async (
     request: { migrationId: string; slug: string; targetPodUid: string },
     release: ActiveBuilderSurgeRelease,
+    permittedAt?: number,
   ): Promise<void> => {
     throwIfBuilderSurgeReleaseCancelled(release);
-    await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log });
+    await verifyConfiguredBuilderAfterOpenClaw({ adapter, waitForGatewayReady, log, permittedAt });
     throwIfBuilderSurgeReleaseCancelled(release);
     await processGate!.releaseTarget(request);
   };
@@ -2616,8 +2621,9 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       await waitForActiveProvisioningDrain();
       try {
         await attachClaimedTargetWithProvisioning(request, release);
+        const permittedAt = Date.now();
         await processGate.permit(request);
-        await releasePermittedTarget(request, release);
+        await releasePermittedTarget(request, release, permittedAt);
       } catch (error) {
         await returnToHoldAfterFailure(
           error,

@@ -4220,6 +4220,12 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     ]);
     expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(refused ? 0 : 1);
     expect(rowCount(destination)).toBe(2);
+    if (!refused) {
+      for (const step of ["final-import agent-reattach", "final-import file-copy", "builder-release"]) {
+        expect(deps.log).toHaveBeenCalledWith(expect.stringContaining(`[migration-rsync] ${step} migrationId=${migrationId} slug=chris`),
+          { durationMs: expect.any(Number) });
+      }
+    }
   });
 
   it.each(["active", "disabled", "missing-token", "owner-changed", "hold-lost"] as const)("checks current ownership before admitting a carried project absent from a fresh Builder roster: %s", async mode => {

@@ -866,6 +866,7 @@ describe("configured Builder surge release", () => {
   it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
+    vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const events: string[] = [];
       let mounted = false;
@@ -907,6 +908,7 @@ describe("configured Builder surge release", () => {
         }),
         permit: vi.fn(async () => {
           events.push("permit");
+          vi.setSystemTime(Date.now() + 1_000);
           return {
             version: 1 as const,
             podUid: "target-pod",
@@ -937,10 +939,12 @@ describe("configured Builder surge release", () => {
       } as unknown as SurgeReadinessGate;
       const attachConfiguredBuilderBeforeOpenClaw = vi.fn(async () => {
         events.push("attach");
+        vi.setSystemTime(Date.now() + 5_000);
         mounted = true;
         return "ceckert-test";
       });
       const configuredBuilderAssigned = vi.fn(async () => false);
+      const log = vi.fn();
       const wiring = createBuilderSurgeGateWiring({
         adapter,
         processGate,
@@ -948,8 +952,9 @@ describe("configured Builder surge release", () => {
         waitForGatewayHealthy: async () => undefined,
         waitForGatewayReady: async () => {
           events.push("ready");
+          vi.setSystemTime(Date.now() + 41_000);
         },
-        log: () => undefined,
+        log,
         provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         configuredBuilderAssigned,
         attachConfiguredBuilderBeforeOpenClaw,
@@ -982,7 +987,9 @@ describe("configured Builder surge release", () => {
       });
       expect(configuredBuilderAssigned).not.toHaveBeenCalled();
       expect(vi.mocked(surgeReadiness.release)).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith("[surge-handoff] configured Builder OpenClaw ready 42000ms after permit: ceckert-test");
     } finally {
+      vi.useRealTimers();
       vi.unstubAllEnvs();
     }
   });

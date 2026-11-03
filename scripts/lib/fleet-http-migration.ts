@@ -2257,11 +2257,16 @@ async function activateConfiguredBuilderImport(
   signal.addEventListener("abort", cancel, { once: true });
   try {
     signal.throwIfAborted();
+    const releaseStartedAt = Date.now();
     await deps.releaseSurgeReadiness!({
       migrationId: request.migrationId,
       targetPodUid: request.targetPodUid,
       importSlug: request.slug,
     });
+    (deps.log ?? provisionerLog)(
+      `[migration-rsync] builder-release migrationId=${request.migrationId} slug=${request.slug}`,
+      { durationMs: Date.now() - releaseStartedAt },
+    );
     signal.throwIfAborted();
     await activateBuilderCoach(deps, request.slug, signal, loadStrategy);
   } catch (error) {
@@ -2484,6 +2489,27 @@ async function upgradeCarriedAgents(input: StagedImportInput, prepared: Prepared
     log: message => input.log(message), run: input.deps.runOpenClaw });
 }
 
+async function reattachOfflineBuilderAgents(input: StagedImportInput, prepared: PreparedAgentStores, offlineTarget: BuilderImportTarget): Promise<void> {
+  if (input.heldTarget || prepared.stores.length === 0) return;
+  const { deps, session, log } = input;
+  const startedAt = Date.now();
+  await reattachBuilderAgents({
+    stores: prepared.stores,
+    diagnosticIdentity: offlineTarget,
+    env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
+    run: deps.runOpenClaw,
+    resolveCarriedProjectWorkspace: agentId => carriedProjectWorkspace(input, agentId),
+    signal: input.signal,
+    log,
+    assertHeld: async () => {
+      if (await deps.surgeTargetOpenClawHeld?.(offlineTarget) !== true) {
+        throw new Error("Native Builder restoration requires the migration target to remain held");
+      }
+    },
+  });
+  log(`[migration-rsync] final-import agent-reattach migrationId=${session.migrationId} slug=${input.slug} agents=${prepared.stores.length}`, { durationMs: Date.now() - startedAt });
+}
+
 async function deliverStagedImport(input: StagedImportInput): Promise<void> {
   const { deps, session, log } = input;
   const deferAgentState = input.mode === "pre" && (!input.activation || input.activation.live);
@@ -2504,13 +2530,14 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
   log(`[migration-rsync] final-import agent-snapshots migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - snapshotStartedAt });
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
   const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
+  const copyFinalFiles = async () => {
+    const copyStartedAt = Date.now();
+    await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+    log(`[migration-rsync] final-import file-copy migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - copyStartedAt });
+  };
   try {
     const offlineTarget = await heldBuilderImport(input);
-    if (!offlineTarget) {
-      const copyStartedAt = Date.now();
-      await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
-      log(`[migration-rsync] final-import file-copy migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - copyStartedAt });
-    }
+    if (!offlineTarget) await copyFinalFiles();
     const installStartedAt = Date.now();
     await installPreparedAgentStores({
       prepared,
@@ -2528,21 +2555,8 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
       }
     }
     if (offlineTarget) {
-      if (!input.heldTarget) await reattachBuilderAgents({
-        stores: prepared.stores,
-        diagnosticIdentity: offlineTarget,
-        env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
-        run: deps.runOpenClaw,
-        resolveCarriedProjectWorkspace: agentId => carriedProjectWorkspace(input, agentId),
-        signal: input.signal,
-        log,
-        assertHeld: async () => {
-          if (await deps.surgeTargetOpenClawHeld?.(offlineTarget) !== true) {
-            throw new Error("Native Builder restoration requires the migration target to remain held");
-          }
-        },
-      });
-      await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
+      await reattachOfflineBuilderAgents(input, prepared, offlineTarget);
+      await copyFinalFiles();
     }
     await installCodexStoreSnapshots({ prepared: codex, importDir: session.importDir, procRoot: deps.procRoot ?? PROC_ROOT, log, signal: input.signal });
   } finally {

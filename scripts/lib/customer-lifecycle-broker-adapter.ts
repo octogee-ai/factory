@@ -1907,12 +1907,13 @@ async function activateImportedCustomer(
     : undefined;
   if (configuredBuilder) {
     ctx.log(`[import:${slug}] waiting for the Builder control runtime before roster activation`);
+    const controlRuntimeWaitStartedAt = Date.now();
     await waitForAppliedConfigRevision(ctx.rpc, slug, {
       timeoutMs: BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
       signal: opts.signal,
       acceptSupersedingRevision: true,
     });
-    ctx.log(`[import:${slug}] Builder control runtime is ready for roster activation`);
+    ctx.log(`[import:${slug}] Builder control runtime is ready for roster activation in ${Date.now() - controlRuntimeWaitStartedAt}ms`);
   }
   const secretMaterial = ctx.pendingRuntimeSecrets.get(slug) ?? createSecretMaterialLedger();
   ctx.pendingRuntimeSecrets.set(slug, secretMaterial);
