@@ -47,7 +47,7 @@ function helmTemplate(
   if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "imageProfile")) {
     merged.imageProfile = "builder";
   }
-  if (setValues.computerDesktop === "omarchy") merged.runtimeKind = "gce-vm";
+  if (dedicated && !Object.prototype.hasOwnProperty.call(setValues, "runtimeKind")) merged.runtimeKind = "gce-vm";
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);
   }
@@ -726,15 +726,6 @@ const out = helmTemplate();
       expect(container.securityContext?.capabilities).toEqual({ drop: ["ALL"] });
     }
     expect(pod?.initContainers?.map(({ name, securityContext }) => ({ name, securityContext }))).toEqual([
-      {
-        name: "prepare-home",
-        securityContext: {
-          runAsUser: 0,
-          runAsNonRoot: false,
-          allowPrivilegeEscalation: false,
-          capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"] },
-        },
-      },
       {
         name: "fix-perms",
         securityContext: {
@@ -1434,30 +1425,12 @@ describe("helm/octogee-gateway/ — per-instance Service annotations", () => {
 });
 
 describe("helm/octogee-gateway/ — per-instance persistence + security knobs", () => {
-  it.each(["s", "m", "l"])("renders all X11 surfaces on ephemeral home and project storage at tier %s", (sizingTier) => {
-    const out = helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", sizingTier, rollStrategy: "surge", "builderAccess.controlUiEnabled": "true", "builderAccess.controlIdentity": "per-user" });
-    const dep = parseDocument(findDoc(out, "Deployment", "octogee-gateway-hobby")!).toJSON();
-    const pod = dep.spec.template.spec;
-    expect(dep.spec.strategy).toEqual({ type: "RollingUpdate", rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } });
-    expect(pod.runtimeClassName).toBe("gvisor");
-    expect(pod.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "6Gi" } });
-    expect(pod.volumes.map((entry: any) => entry.name)).not.toContain("project-materializations");
-    expect(pod.volumes.filter((entry: any) => entry.persistentVolumeClaim)).toEqual([]);
-    expect(pod.nodeSelector).toEqual({ "cloud.google.com/compute-class": "octogee-gateway" });
-    for (const name of ["gateway", "gateway-edge"]) {
-      const container = pod.containers.find((entry: any) => entry.name === name);
-      expect(container.env).toEqual(expect.arrayContaining([
-        { name: "GATEWAY_RUNTIME_KIND", value: "cluster" }, { name: "GATEWAY_COMPUTER_DESKTOP", value: "x11" },
-        { name: "GATEWAY_COMPUTER_CONTROL_URL", value: "http://127.0.0.1:7777" },
-        { name: "OCTOGEE_DESKTOP_NODE_IDENTITY_PATH", value: "/run/octogee/desktop-node-identity/identity.json" },
-        { name: "OPENCLAW_CONTROL_IDENTITY", value: "per-user" },
-      ]));
-      expect(container.volumeMounts).toContainEqual(expect.objectContaining({ name: "desktop-node-identity" }));
-    }
-    expect(pod.containers.find((entry: any) => entry.name === "gateway").env).toContainEqual({ name: "OPENCLAW_DASHBOARD_BRIDGE_REQUIRED", value: "true" });
+  it.each(["x11", "omarchy"])("refuses to render a %s Builder as a Kubernetes Deployment", (computerDesktop) => {
+    expect(() => helmTemplate("octogee-gw-hobby", { gatewayId: "hobby", gatewayClass: "builder", sizingTier: "s", computerDesktop, runtimeKind: "cluster" }))
+      .toThrow(/renders only as a GCE VM bundle/);
   });
 
-  it("renders the Omarchy VM runtime without Hobby pods or disks, including existing Hobby VMs", () => {
+  it("renders the Omarchy VM runtime without disks or a desktop in the pod", () => {
     const out = helmTemplate("octogee-gw-omarchy", { gatewayId: "omarchy", gatewayClass: "builder", sizingTier: "s", computerDesktop: "omarchy" });
     const pod = parseDocument(findDoc(out, "Deployment", "octogee-gateway-omarchy")!).toJSON().spec.template.spec;
     expect(findDoc(out, "PersistentVolumeClaim", "octogee-gateway-omarchy-data")).toBeNull();

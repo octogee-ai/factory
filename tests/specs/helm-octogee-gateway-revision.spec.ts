@@ -33,6 +33,7 @@ function helmTemplate(setValues: Record<string, string> = {}): string {
   if (setValues.profile === "builder") {
     merged.gatewayClass = "builder";
     merged.imageProfile = "builder";
+    merged.runtimeKind = "gce-vm";
   }
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);

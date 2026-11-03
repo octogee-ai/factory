@@ -217,7 +217,6 @@ class HomeMigration {
     return true;
   }
   async reconcile(): Promise<boolean> {
-    if (BUILDER_TIERS[this.request.entitlementTier].computer?.runtime === "cluster") return true;
     const owner = await this.readOwner();
     await this.removeExpiredHome(owner.provisioning?.homeStorage);
     const source = await this.deps.inventory(this.request.uid, owner);

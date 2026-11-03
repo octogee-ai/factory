@@ -20,11 +20,6 @@
       "maxLength": 64,
       "description": "Disposable revision instance id ({gatewayId}-r{n}). Every per-instance resource NAME (Deployment, Services, PDB, NetworkPolicies) and the gateway-instance selector derive from it. Empty defaults to gatewayId (legacy single-revision render)."
     },
-    "builderHomeSizeGiB": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Builder home emptyDir sizeLimit in GiB, carved from the gateway container's ephemeral-storage limit."
-    },
     "imageTag": {
       "type": "string",
       "minLength": 1

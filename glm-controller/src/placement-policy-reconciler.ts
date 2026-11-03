@@ -110,7 +110,6 @@ import {
   completeActivationLeaseFirestore,
   failActivationLeaseFirestore,
   readBuilderActivityFirestore,
-  type BuilderStandbyClaimPolicy,
 } from "./disposable-gateway-lifecycle.js";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
 import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-pool-replacements.js";
@@ -241,7 +240,6 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   rollActive?: boolean;
   recoveryGraceUntil?: number;
   mountedCustomers?: readonly string[];
-  standby?: boolean;
   configuredBuilder?: ConfiguredBuilderReport | null;
 }
 
@@ -344,7 +342,6 @@ export interface FailActivationLeaseInput {
   targetGatewayId: string;
   operationId: string;
   message: string;
-  code?: "standby-claim-failed";
 }
 
 export interface RecoverUnreachableDisposableGatewayInput {
@@ -1542,40 +1539,7 @@ async function supersedeDrainMoveForActivation(
   return true;
 }
 
-export function standbyClaimFailedOperationId(gatewayId: string, generation: number): string {
-  return `standby-claim-failed-${gatewayId}-g${generation}`;
-}
-
-async function cleanupFailedStandbyClaim(input: ActivationTargetContext): Promise<boolean> {
-  const { context, user, lease, target } = input;
-  const report = target.configuredBuilder;
-  if (report?.state !== "claim-failed" || report.generation !== lease.generation) return false;
-  context.deps.log(
-    `[placement-policy] ${target.gatewayId} could not apply ${user.uid}'s claim generation=${lease.generation}: ${report.error}`,
-  );
-  if (!await retireProvisioningTarget(input, {
-    code: "standby-claim-cleanup-pending",
-    reason: `target ${target.gatewayId} is awaiting safe cleanup after its claim failed`,
-  })) return true;
-  await context.deps.failActivationLease({
-    uid: user.uid,
-    leaseId: lease.leaseId,
-    generation: lease.generation,
-    targetGatewayId: target.gatewayId,
-    operationId: standbyClaimFailedOperationId(target.gatewayId, lease.generation),
-    message: `standby claim failed: ${report.error}`,
-    code: "standby-claim-failed",
-  });
-  return true;
-}
-
-function heldClusterTargetWithoutReport(target: PlacementPolicyGateway): boolean {
-  return !target.configuredBuilder && !target.ready && target.runtime !== "gce-vm" &&
-    target.kubernetesStatus === "not-ready";
-}
-
 function targetClaimedForLease(target: PlacementPolicyGateway, lease: BuilderActivationLease): boolean {
-  if (heldClusterTargetWithoutReport(target)) return true;
   const report = target.configuredBuilder;
   if (report?.state !== "claimed") return false;
   return report.generation === lease.generation || (target.runtime === "gce-vm" && report.generation === null);
@@ -1686,7 +1650,6 @@ async function reconcileProvisioningActivation(
   }
   const targetInput = { context, user, builderSlug, current, lease, target };
   if (await cleanupUnauthorizedProvisioningTarget(targetInput)) return;
-  if (await cleanupFailedStandbyClaim(targetInput)) return;
   if (
     await cleanupUnreachableProvisioningTarget({
       context,
@@ -2792,7 +2755,6 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
-  builderStandbyPool: BuilderStandbyClaimPolicy;
   prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
@@ -3239,7 +3201,6 @@ function placementGatewayFromDocument(input: {
     sizingTier: root.sizingTier,
     desiredStatus: root.desiredStatus,
     disposable: root.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
-    standby: root.standby != null,
     configuredBuilder: runtimeConfiguredBuilder(runtime),
     allocation: root.allocation ?? null,
     ready: runtimeReady,

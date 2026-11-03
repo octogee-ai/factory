@@ -8,9 +8,8 @@
 {{- $computerDesktop := include "octogee-gateway.computerDesktop" . -}}
 {{- $x11Desktop := and (eq $gatewayClass "builder") (eq $computerDesktop "x11") -}}
 {{- $vmRuntime := eq (.Values.runtimeKind | default "cluster") "gce-vm" -}}
-{{- $clusterHobby := and $x11Desktop (not $vmRuntime) -}}
-{{- if and (eq $gatewayClass "builder") (not $x11Desktop) (not $vmRuntime) -}}
-{{- fail (printf "octogee-gateway: Kubernetes Builder gateways run the Hobby X11 computer; a %s Builder renders only as a GCE VM bundle (runtimeKind=gce-vm)" $computerDesktop) -}}
+{{- if and (eq $gatewayClass "builder") (not $vmRuntime) -}}
+{{- fail (printf "octogee-gateway: a %s Builder renders only as a GCE VM bundle (runtimeKind=gce-vm); Builder gateways never run as Kubernetes Deployments" $computerDesktop) -}}
 {{- end -}}
 {{- $gatewayImageLabel := include "octogee-gateway.imageLabel" . -}}
 {{- $gatewayImageTag := .Values.image.tag | default .Values.imageTag -}}
@@ -113,21 +112,6 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        {{- if $clusterHobby }}
-        - name: prepare-home
-          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
-          command: ["/octogee/scripts/node_modules/.bin/tsx", "/octogee/scripts/entrypoints/prepare-home-storage.ts"]
-          securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-              add: [CHOWN, FOWNER, DAC_OVERRIDE]
-          volumeMounts:
-            - name: data
-              mountPath: /home/storage
-        {{- end }}
         - name: fix-perms
           image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Values.imageTag }}"
           command:
@@ -145,13 +129,13 @@ spec:
                 set -eu
                 cp -rn /etc/skel/. /home/node/
                 mkdir -p /home/node/.npm-cache
-                {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
+                {{- if eq $gatewayClass "builder" }}
                 /octogee/scripts/node_modules/.bin/tsx /octogee/scripts/entrypoints/prepare-project-storage.ts
                 {{- end }}
                 install -m 0500 /octogee/scripts/secret-resolver.mjs /octogee-secret-resolver/secret-resolver.mjs
               '
           env:
-            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
+            {{- if eq $gatewayClass "builder" }}
             - name: GATEWAY_ID
               value: {{ .Values.gatewayId | quote }}
             {{- end }}
@@ -182,14 +166,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-              {{- if $clusterHobby }}
-              subPath: volumes/data
-              {{- end }}
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
+            {{- if eq $gatewayClass "builder" }}
             - name: project-materializations
               mountPath: /work/materialized
             {{- end }}
@@ -253,7 +234,7 @@ spec:
             - name: OCTOGEE_BUILDER_TOOLCHAIN_ROOT
               value: "/work/cache/toolchains"
             - name: OCTOGEE_PROJECTS_MOUNT
-              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $clusterHobby | quote }}
+              value: "/work/materialized"
             {{- end }}
             - name: CUSTOMERS_DIR
               value: "/home/node/.openclaw/customers"
@@ -412,22 +393,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-              {{- if $clusterHobby }}
-              subPath: volumes/data
-              {{- end }}
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
+            {{- if eq $gatewayClass "builder" }}
             - name: project-materializations
               mountPath: /work/materialized
               subPath: projects
-            {{- end }}
-            {{- if $clusterHobby }}
-            - name: data
-              mountPath: /home/octo
-              subPath: desktop-home
             {{- end }}
             {{- if $x11Desktop }}
             - name: desktop-node-identity
@@ -525,7 +498,7 @@ spec:
               value: "{{ .Values.gatewayEdge.port }}"
             {{- if eq $gatewayClass "builder" }}
             - name: OCTOGEE_PROJECTS_MOUNT
-              value: {{ ternary "/home/node/.openclaw/customers" "/work/materialized" $clusterHobby | quote }}
+              value: "/work/materialized"
             {{- end }}
             - name: K8S_NAMESPACE
               valueFrom:
@@ -657,14 +630,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node
-              {{- if $clusterHobby }}
-              subPath: volumes/data
-              {{- end }}
             {{- if eq $gatewayClass "builder" }}
             - name: builder-cache
               mountPath: /work/cache
             {{- end }}
-            {{- if and (eq $gatewayClass "builder") (not $clusterHobby) }}
+            {{- if eq $gatewayClass "builder" }}
             - name: project-materializations
               mountPath: /work/materialized
               subPath: projects
@@ -713,22 +683,15 @@ spec:
         {{- end }}
       volumes:
         {{- if eq $gatewayClass "builder" }}
-        {{- $builderHomeSizeGiB := int (required "builderHomeSizeGiB is required for Builder gateways" .Values.builderHomeSizeGiB) }}
         - name: builder-cache
           emptyDir:
             sizeLimit: 2Gi
-        {{- if $clusterHobby }}
-        - name: data
-          emptyDir:
-            sizeLimit: {{ printf "%dGi" (add $builderHomeSizeGiB 2) }}
-        {{- else }}
         - name: project-materializations
           emptyDir:
             sizeLimit: 2Gi
         - name: data
           emptyDir:
-            sizeLimit: {{ printf "%dGi" $builderHomeSizeGiB }}
-        {{- end }}
+            sizeLimit: 4Gi
         {{- else }}
         - name: data
           emptyDir: {}

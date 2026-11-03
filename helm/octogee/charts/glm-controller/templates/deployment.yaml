@@ -204,16 +204,6 @@ spec:
               value: {{ required "glm-controller.sharedPool.minReplicas is required" (.Values.sharedPool).minReplicas | quote }}
             - name: SHARED_POOL_MAX_REPLICAS
               value: {{ required "glm-controller.sharedPool.maxReplicas is required" (.Values.sharedPool).maxReplicas | quote }}
-            {{- $standbyPool := .Values.builderStandbyPool | default dict }}
-            {{- range $key := list "size" "maxAgeHours" }}
-            {{- if or (not (hasKey $standbyPool $key)) (kindIs "invalid" (get $standbyPool $key)) }}
-            {{- fail (printf "glm-controller.builderStandbyPool.%s is required" $key) }}
-            {{- end }}
-            {{- end }}
-            - name: BUILDER_STANDBY_POOL_SIZE
-              value: {{ $standbyPool.size | int | quote }}
-            - name: BUILDER_STANDBY_MAX_AGE_MS
-              value: {{ mul ($standbyPool.maxAgeHours | int) 3600000 | quote }}
             - name: PLATFORM_GATEWAY_IMAGE_REPOSITORY
               value: {{ required "glm-controller.platformRelease.gatewayImageRepository is required" (.Values.platformRelease).gatewayImageRepository | quote }}
             - name: BUILD_SHA

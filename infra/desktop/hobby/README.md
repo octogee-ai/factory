@@ -137,10 +137,9 @@ Builder.
 
 A Hobby computer keeps a retained 10 GiB home disk like Pro and Team. The
 gateway container's `/home/octo` is the home disk's `desktop-home`; the host
-login home stays on the boot disk, out of the gateway's reach. Hobby gateways stamped before
-the move keep their cluster runtime and its ephemeral `emptyDir` home until the
-cluster path is removed. A tier change reshapes the owner's one computer at its
-next park: machine type, provisioning model, desktop, and home size.
+login home stays on the boot disk, out of the gateway's reach. A tier change
+reshapes the owner's one computer at its next park: machine type, provisioning
+model, desktop, and home size.
 
 The X11 controller creates virtual RandR modes for arbitrary pane dimensions;
 local TigerVNC checks covered repeated resizing from 321x241 to 3840x2160.

@@ -25,9 +25,6 @@ revisionId: ""
 # Cowboy renders a Builder VM's runtime bundle from this chart.
 runtimeKind: cluster
 
-# Builder home emptyDir size; Cowboy sets it from BUILDER_TIERS.hobby.computer.homeSizeGiB.
-builderHomeSizeGiB: 4
-
 # Bundle SHA. All three sidecars (gateway, gateway-edge, chat-proxy)
 # default to this tag for atomic rolls. Per-image overrides below take
 # precedence when set, but the operator workflow is single-SHA.

@@ -19,12 +19,12 @@ const BUILDER_VALUES: Record<string, string> = {
   imageProfile: "builder",
   profile: "builder",
   sizingTier: "s",
-  builderHomeSizeGiB: "4",
+  runtimeKind: "gce-vm",
   "builderAccess.controlUiEnabled": "true",
   "builderAccess.controlIdentity": "per-user",
 };
 
-const VM_VALUES: Record<string, string> = { ...BUILDER_VALUES, computerDesktop: "omarchy", runtimeKind: "gce-vm" };
+const VM_VALUES: Record<string, string> = { ...BUILDER_VALUES, computerDesktop: "omarchy" };
 
 interface Container {
   name: string;
@@ -61,7 +61,7 @@ function allContainers(pod: Pod): Container[] {
 
 describe("helm/octogee-gateway/ — Builder identity is never rendered", () => {
   it.each([
-    ["Hobby", BUILDER_VALUES],
+    ["X11 VM", BUILDER_VALUES],
     ["Omarchy VM", { ...VM_VALUES, sizingTier: "m" }],
   ])("renders a %s Builder pod with no owner or slug env, annotation, label, or path", (_label, values) => {
     const { pod, rendered } = renderPod("b-alice", values);
@@ -87,28 +87,12 @@ describe("helm/octogee-gateway/ — Builder identity is never rendered", () => {
   });
 
   it("renders a Builder without an owner", () => {
-    expect(() => renderPod("standby-s-0a1b2c3d", BUILDER_VALUES)).not.toThrow();
+    expect(() => renderPod("b-unowned", BUILDER_VALUES)).not.toThrow();
   });
 
-  it("keeps Hobby projects inside one data emptyDir sized for the home plus projects", () => {
-    const { pod } = renderPod("b-alice", BUILDER_VALUES);
-
-    expect(pod.spec.volumes).toContainEqual({ name: "data", emptyDir: { sizeLimit: "6Gi" } });
-    expect(pod.spec.volumes.map((volume) => volume.name)).not.toContain("project-materializations");
-    for (const container of allContainers(pod)) {
-      expect((container.volumeMounts ?? []).map((mount) => mount.mountPath), container.name).not.toContain("/work/materialized");
-    }
-    for (const name of ["gateway", "gateway-edge"]) {
-      const container = pod.spec.containers.find((entry) => entry.name === name)!;
-      expect(container.env).toContainEqual({ name: "OCTOGEE_PROJECTS_MOUNT", value: "/home/node/.openclaw/customers" });
-    }
-  });
-
-  it.each(["omarchy", "none"])("refuses a %s Builder on Kubernetes, where no customer project path can be mounted", (computerDesktop) => {
-    expect(() => renderPod("b-alice", { ...BUILDER_VALUES, computerDesktop, sizingTier: "m" }))
-      .toThrow(/Kubernetes Builder gateways run the Hobby X11 computer/);
+  it.each(["x11", "omarchy", "none"])("refuses to render a %s Builder as a Kubernetes Deployment", (computerDesktop) => {
     expect(() => renderPod("b-alice", { ...BUILDER_VALUES, computerDesktop, sizingTier: "m", runtimeKind: "cluster" }))
-      .toThrow(/Kubernetes Builder gateways run the Hobby X11 computer/);
+      .toThrow(/renders only as a GCE VM bundle/);
   });
 
   it("keeps the Omarchy VM's own project materialization volume for its runtime to bind", () => {

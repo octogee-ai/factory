@@ -35,7 +35,7 @@ function helmTemplate(setValues: Record<string, string> = {}): string {
     merged.gatewayClass = "builder";
     merged.imageProfile = "builder";
   }
-  if (setValues.computerDesktop === "omarchy") merged.runtimeKind = "gce-vm";
+  if (setValues.profile === "builder" && !setValues.runtimeKind) merged.runtimeKind = "gce-vm";
   for (const [k, v] of Object.entries(merged)) {
     args.push("--set", `${k}=${v}`);
   }
@@ -216,18 +216,15 @@ describe("Builder ephemeral storage admission", () => {
 });
 
 describe("Builder working-set partition", () => {
-  const hobbyHomeGiB = parseAllDocuments(fs.readFileSync(path.join(CHART_PATH, "values.yaml"), "utf-8"))[0].toJS().builderHomeSizeGiB as number;
-
   it.each(["x11", "omarchy"])("bounds every disk-backed %s emptyDir and spends exactly the gateway's ephemeral limit", (computerDesktop) => {
-    const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop, builderHomeSizeGiB: String(hobbyHomeGiB) }))
+    const deployment = parseAllDocuments(helmTemplate({ profile: "builder", computerDesktop }))
       .map((document) => document.toJS())
       .find((document) => document?.kind === "Deployment");
     const pod = deployment.spec.template.spec;
     const diskBacked = pod.volumes.filter((volume: any) => volume.emptyDir && volume.emptyDir.medium !== "Memory");
     expect(pod.volumes.filter((volume: any) => volume.emptyDir?.medium === "Memory" && !volume.emptyDir.sizeLimit)).toEqual([]);
     expect(diskBacked.filter((volume: any) => !volume.emptyDir.sizeLimit).map((volume: any) => volume.name)).toEqual([]);
-    const dataGiB = computerDesktop === "x11" ? hobbyHomeGiB + 2 : hobbyHomeGiB;
-    expect(pod.volumes.find((volume: any) => volume.name === "data").emptyDir).toEqual({ sizeLimit: `${dataGiB}Gi` });
+    expect(pod.volumes.find((volume: any) => volume.name === "data").emptyDir).toEqual({ sizeLimit: "4Gi" });
     const gateway = pod.containers.find((container: any) => container.name === "gateway");
     const boundedGiB = diskBacked.reduce((total: number, volume: any) => total + Number(volume.emptyDir.sizeLimit.replace("Gi", "")), 0);
     expect(`${boundedGiB}Gi`).toBe(gateway.resources.limits["ephemeral-storage"]);
