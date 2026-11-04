@@ -45,15 +45,12 @@ function unmaterializedProjectAccountOwner(owner: DegradedSecretOwner, accountId
     accountIds?.has(owner.ownerId.slice(PROJECT_ACCOUNT_OWNER_PREFIX.length)) === true;
 }
 
-export function stagedSecretWarningsOnly(input: {
-  warningCount: number;
+export function stagedSecretOwnersOnly(input: {
   owners: DegradedSecretOwner[];
   excluded: Set<string>;
   agentsDir: string;
   unmaterializedProjectAccountIds?: ReadonlySet<string>;
 }): boolean {
-  if (!Number.isSafeInteger(input.warningCount) || input.warningCount <= 0 ||
-      input.owners.length !== input.warningCount) return false;
   const identities = new Set<string>();
   for (const owner of input.owners) {
     const identity = JSON.stringify([owner.ownerKind, owner.ownerId]);

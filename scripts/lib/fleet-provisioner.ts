@@ -1,5 +1,5 @@
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
-import { unassignedConfiguredAgents, stagedSecretWarningsOnly, unmaterializedProjectAccountIds } from "./shared-broker-profile-readiness.js";
+import { unassignedConfiguredAgents, stagedSecretOwnersOnly, unmaterializedProjectAccountIds } from "./shared-broker-profile-readiness.js";
 import { createAgentAnchorReporter } from "./agent-anchor-record.js";
 import { createFleetBrokerClient } from "./fleet-broker-client.js";
 import { builderToolchainRoot } from "./builder-storage.js";
@@ -853,22 +853,22 @@ async function readBrokerProfileScope(agentIds: string[], deps: {
   };
 }
 
-async function verifyStagedSecretWarnings(input: {
+async function verifyNonBlockingSecretWarnings(input: {
   warningCount: number;
   scope?: BrokerProfileReloadScope;
   rpc: Pick<GatewayRpcClient, "secretsReload" | "degradedSecretsStatus">;
 }): Promise<boolean> {
   const { scope, rpc, warningCount } = input;
   if (!scope || !rpc.degradedSecretsStatus || warningCount <= 0) return false;
-  if (!stagedSecretWarningsOnly({ warningCount, owners: await rpc.degradedSecretsStatus(), ...scope })) return false;
+  if (!stagedSecretOwnersOnly({ owners: await rpc.degradedSecretsStatus(), ...scope })) return false;
   const current = (await scope.readAssignedSlugs()).sort();
   return JSON.stringify(current) === JSON.stringify([...scope.assignedSlugs].sort());
 }
 
-function logIsolatedSecretWarnings(log: (msg: string) => void, warningCount: number, scope?: BrokerProfileReloadScope): void {
+function logNonBlockingSecretWarnings(log: (msg: string) => void, warningCount: number, scope?: BrokerProfileReloadScope): void {
   const projectAccounts = [...(scope?.unmaterializedProjectAccountIds ?? [])].sort();
   const awaitingReconciler = projectAccounts.length > 0 ? ` — project accounts awaiting the reconciler: ${projectAccounts.join(", ")}` : "";
-  log(`[agent-model-token] ${warningCount} staged unassigned secret owner(s) remain isolated${awaitingReconciler}`);
+  log(`[agent-model-token] ${warningCount} secret warning(s) have no blocking owners${awaitingReconciler}`);
 }
 
 async function reloadBrokerProfileSnapshot(
@@ -881,12 +881,12 @@ async function reloadBrokerProfileSnapshot(
   try {
     const result = await secretsReload.secretsReload();
     const warningCount = result.warningCount ?? 0;
-    const stagedOnly = result.ok === true && await verifyStagedSecretWarnings({ warningCount, scope, rpc: secretsReload });
-    if (result.ok !== true || (warningCount > 0 && !stagedOnly)) {
+    const warningsNonBlocking = result.ok === true && await verifyNonBlockingSecretWarnings({ warningCount, scope, rpc: secretsReload });
+    if (result.ok !== true || (warningCount > 0 && !warningsNonBlocking)) {
       throw new Error(`secrets.reload returned ok=${String(result.ok)} warnings=${warningCount}`);
     }
     if (scope) settledBrokerProfileScope = scope.signature;
-    if (stagedOnly) logIsolatedSecretWarnings(log, warningCount, scope);
+    if (warningsNonBlocking) logNonBlockingSecretWarnings(log, warningCount, scope);
     brokerProfileSnapshotReloadPending = false;
     lastBrokerProfileSnapshotReloadError = null;
     log("[agent-model-token] active secret snapshot reloaded after broker profile materialization");
