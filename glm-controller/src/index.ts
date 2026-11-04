@@ -1460,19 +1460,24 @@ async function runReconcilePhase<T>(
   deps: ControllerDeps,
   phase: string,
   work: () => Promise<T>,
+  scope?: string,
 ): Promise<T> {
+  const label = scope ? `phase=${phase} ${scope}` : `phase=${phase}`;
   const startedAt = Date.now();
-  deps.log(`[glm-controller] reconcile phase=${phase} started`);
+  deps.log(`[glm-controller] reconcile ${label} started`);
   try {
     return await work();
   } finally {
     deps.log(
-      `[glm-controller] reconcile phase=${phase} completed durationMs=${Math.max(0, Date.now() - startedAt)}`,
+      `[glm-controller] reconcile ${label} completed durationMs=${Math.max(0, Date.now() - startedAt)}`,
     );
   }
 }
 
-async function reconcileOnce(deps: ControllerDeps): Promise<void> {
+async function reconcileOnce(
+  deps: ControllerDeps,
+  dependenciesSyncedGatewayIds: ReadonlySet<string>,
+): Promise<void> {
   const runtime = await runReconcilePhase(deps, "durable-state", async () => {
     const state = await readDurableRuntimeGateways(deps.db);
     assertDurableRuntimeState(state);
@@ -1481,7 +1486,7 @@ async function reconcileOnce(deps: ControllerDeps): Promise<void> {
   await runReconcilePhase(deps, "runtime-dependencies", () =>
     syncDurableRuntimeDependencies(
       deps,
-      runtime.gateways,
+      runtime.gateways.filter((gateway) => !dependenciesSyncedGatewayIds.has(gateway.gatewayId)),
     )
   );
   await runReconcilePhase(deps, "convergence", () => convergeGatewaysIfConfigured(deps));
@@ -1492,9 +1497,16 @@ async function reconcileGatewayChanges(
   deps: ControllerDeps,
   gatewayIds: readonly string[],
 ): Promise<void> {
+  const scope = `gateways=${gatewayIds.length}`;
+  const runtime = await runReconcilePhase(deps, "durable-state", async () => {
+    const state = await readTargetedDurableRuntimeGateways(deps.db, gatewayIds);
+    assertDurableRuntimeState(state);
+    return state;
+  }, scope);
+  await runReconcilePhase(deps, "runtime-dependencies", () =>
+    syncDurableRuntimeDependencies(deps, runtime.gateways), scope);
   await runReconcilePhase(deps, "convergence", () =>
-    convergeGatewaysIfConfigured(deps, gatewayIds)
-  );
+    convergeGatewaysIfConfigured(deps, gatewayIds), scope);
 }
 
 function clearTimer(timer: NodeJS.Timeout | null): null {
@@ -1584,7 +1596,14 @@ export function snapshotHasReconcileRelevantRootChange(
   changes: ReadonlyArray<ReconcileSnapshotDocChange>,
   fingerprints: Map<string, string>,
 ): boolean {
-  return changedGatewayIds(changes, fingerprints, rootReconcileRelevantFingerprint).length > 0;
+  return snapshotReconcileRelevantRootGatewayIds(changes, fingerprints).length > 0;
+}
+
+function snapshotReconcileRelevantRootGatewayIds(
+  changes: ReadonlyArray<ReconcileSnapshotDocChange>,
+  fingerprints: Map<string, string>,
+): string[] {
+  return changedGatewayIds(changes, fingerprints, rootReconcileRelevantFingerprint);
 }
 
 export function snapshotReconcileRelevantGatewayIds(
@@ -1633,23 +1652,23 @@ export function startReconciler(deps: ControllerDeps): () => void {
     debounceTimer = setTimeout(() => void tick(), RECONCILE_DEBOUNCE_MS);
   };
   const scheduleDebouncedTick = (gatewayId?: string) => {
-    if (gatewayId) {
-      if (!pendingFullReconcile) pendingGatewayIds.add(gatewayId);
-    } else {
-      pendingFullReconcile = true;
-      pendingGatewayIds.clear();
-    }
+    if (gatewayId) pendingGatewayIds.add(gatewayId);
+    else pendingFullReconcile = true;
     armDebouncedTick();
   };
   requestReconcileTickRef.fire = scheduleDebouncedTick;
 
-  const requeueReconcile = (fullReconcile: boolean, gatewayIds: readonly string[]) => {
-    if (fullReconcile) {
-      pendingFullReconcile = true;
-      pendingGatewayIds.clear();
+  const scheduleChangedGateways = (gatewayIds: readonly string[], firstDelivery: boolean) => {
+    if (gatewayIds.length === 0) return;
+    if (firstDelivery) {
+      scheduleDebouncedTick();
       return;
     }
-    if (pendingFullReconcile) return;
+    for (const gatewayId of gatewayIds) scheduleDebouncedTick(gatewayId);
+  };
+
+  const requeueReconcile = (fullReconcile: boolean, gatewayIds: readonly string[]) => {
+    if (fullReconcile) pendingFullReconcile = true;
     for (const gatewayId of gatewayIds) pendingGatewayIds.add(gatewayId);
   };
 
@@ -1661,17 +1680,14 @@ export function startReconciler(deps: ControllerDeps): () => void {
     debounceTimer = clearTimer(debounceTimer);
     retryTimer = clearTimer(retryTimer);
     const fullReconcile = pendingFullReconcile;
-    const gatewayIds = fullReconcile ? [] : [...pendingGatewayIds].sort(compareFingerprintKeys);
+    const gatewayIds = [...pendingGatewayIds].sort(compareFingerprintKeys);
     if (!fullReconcile && gatewayIds.length === 0) return;
     pendingFullReconcile = false;
     pendingGatewayIds.clear();
     inFlight = true;
     try {
-      if (fullReconcile) {
-        await reconcileOnce(deps);
-      } else {
-        await reconcileGatewayChanges(deps, gatewayIds);
-      }
+      if (gatewayIds.length > 0) await reconcileGatewayChanges(deps, gatewayIds);
+      if (fullReconcile) await reconcileOnce(deps, new Set(gatewayIds));
       recordReconcile("ok");
     } catch (err) {
       requeueReconcile(fullReconcile, gatewayIds);
@@ -1712,13 +1728,12 @@ export function startReconciler(deps: ControllerDeps): () => void {
       }
       informer?.ingestGlmGateways(changes, { reset: !glmMirrorPrimed });
       recordVmDiskUsage(applyVmDiskChanges(vmDiskSamples, changes, { reset: !glmMirrorPrimed }));
+      const firstDelivery = !glmMirrorPrimed;
       glmMirrorPrimed = true;
-      for (const gatewayId of snapshotReconcileRelevantGatewayIds(
-        changes,
-        reconcileFingerprints,
-      )) {
-        scheduleDebouncedTick(gatewayId);
-      }
+      scheduleChangedGateways(
+        snapshotReconcileRelevantGatewayIds(changes, reconcileFingerprints),
+        firstDelivery,
+      );
     },
     (err) => {
       informer?.markGlmGatewaysStale(String(err));
@@ -1738,10 +1753,11 @@ export function startReconciler(deps: ControllerDeps): () => void {
         return;
       }
       informer?.ingestGateways(changes, { reset: !rootMirrorPrimed });
+      const firstDelivery = !rootMirrorPrimed;
       rootMirrorPrimed = true;
-      if (snapshotHasReconcileRelevantRootChange(changes, rootFingerprints)) {
-        scheduleDebouncedTick();
-      }
+      const changedGatewayIds = snapshotReconcileRelevantRootGatewayIds(changes, rootFingerprints);
+      scheduleChangedGateways(changedGatewayIds, firstDelivery);
+      if (changedGatewayIds.length > 0) scheduleDebouncedTick();
     },
     (err) => {
       informer?.markGatewaysStale(String(err));

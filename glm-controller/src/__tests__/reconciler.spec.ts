@@ -106,11 +106,13 @@ function makeDb(input: {
       }
     },
     get: async () => ({
+      id,
       exists: Object.prototype.hasOwnProperty.call(store, id),
       data: () => store[id],
     }),
   });
   return {
+    getAll: async (...refs: Array<{ get(): Promise<unknown> }>) => Promise.all(refs.map((ref) => ref.get())),
     runTransaction: async (body: (transaction: any) => Promise<unknown>) => {
       const writes: Array<() => Promise<void>> = [];
       const result = await body({
@@ -1525,5 +1527,135 @@ describe("startReconciler — durable root authority (GATEWAY-SIMPLE-ROLL-SPEC)"
     expect(events).toEqual(['recover']);
     release(); await observed; await next;
     expect(events).toEqual(['recover', 'converge']);
+  });
+});
+
+describe("startReconciler — targeted gateways ahead of a queued full reconcile", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function builderRoot(gatewayId: string): Record<string, unknown> {
+    return durableRoot({
+      gatewayId,
+      profile: "builder",
+      gatewayClass: "builder",
+      imageProfile: "builder",
+      ownerUid: `uid-${gatewayId}`,
+      builderSlug: gatewayId,
+      liveRelease: null,
+    });
+  }
+
+  function startRecordingReconciler(options: { reconcileSafetyRefreshMs?: number } = {}) {
+    const callbacks: SnapshotCallbacks = {};
+    const events: string[] = [];
+    const roots: Record<string, Record<string, unknown>> = { default: durableRoot() };
+    const stop = startReconciler({
+      db: makeDb({ roots, runtimes: { default: servingRuntime() }, callbacks }),
+      helm: {} as never,
+      handlers: {} as never,
+      modelKeySourceIssuer: {
+        syncGatewayModelKeySource: async ({ gatewayId }: { gatewayId: string }) => {
+          events.push(`source:${gatewayId}`);
+          return { gatewayId, changed: false, action: "unchanged" };
+        },
+      } as never,
+      modelKeySecretEnsurer: {
+        syncGatewayModelKeySecret: async ({ gatewayId }: { gatewayId: string }) => {
+          events.push(`secret:${gatewayId}`);
+          return { changed: false };
+        },
+      } as never,
+      convergeGateways: async (gatewayIds?: readonly string[]) => {
+        events.push(`converge:${gatewayIds?.join(",") ?? "fleet"}`);
+      },
+      ...options,
+      log: vi.fn(),
+    });
+    return { callbacks, events, roots, stop };
+  }
+
+  async function primeListeners(callbacks: SnapshotCallbacks): Promise<void> {
+    callbacks.roots?.({
+      docChanges: () => [{ type: "added", doc: { id: "default", data: () => durableRoot() } }],
+    });
+    callbacks.glm?.({
+      docChanges: () => [{ type: "added", doc: { id: "default", data: () => servingRuntime() } }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+  }
+
+  async function openBuilderLease(): Promise<string[]> {
+    const { callbacks, events, roots, stop } = startRecordingReconciler();
+    await primeListeners(callbacks);
+    events.length = 0;
+
+    roots.fresh = builderRoot("fresh");
+    callbacks.roots?.({
+      docChanges: () => [{ type: "added", doc: { id: "fresh", data: () => roots.fresh } }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    stop();
+    return events;
+  }
+
+  it("converges a newly allocated Builder before the fleet's runtime dependencies sync", async () => {
+    const events = await openBuilderLease();
+
+    expect(events).toContain("converge:fresh");
+    expect(events.indexOf("converge:fresh")).toBeLessThan(events.indexOf("source:default"));
+    expect(events.at(-1)).toBe("converge:fleet");
+  });
+
+  it("syncs a targeted gateway's model-key source and secret before converging it", async () => {
+    const events = await openBuilderLease();
+
+    expect(events.slice(0, events.indexOf("converge:fresh"))).toEqual([
+      "source:fresh",
+      "secret:fresh",
+    ]);
+  });
+
+  it("does not resync the targeted gateways' dependencies in the same tick's full pass", async () => {
+    const events = await openBuilderLease();
+
+    expect(events.filter((event) => event.endsWith(":fresh"))).toEqual([
+      "source:fresh",
+      "secret:fresh",
+      "converge:fresh",
+    ]);
+  });
+
+  it("keeps a runtime change queued behind a pending full reconcile and converges it first", async () => {
+    const { callbacks, events, stop } = startRecordingReconciler({ reconcileSafetyRefreshMs: 5_000 });
+    await primeListeners(callbacks);
+    await vi.advanceTimersByTimeAsync(4_500);
+    events.length = 0;
+
+    callbacks.glm?.({
+      docChanges: () => [{
+        type: "modified",
+        doc: { id: "default", data: () => servingRuntime({ release: 3 }) },
+      }],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    stop();
+
+    expect(events.filter((event) => event.startsWith("converge:"))).toEqual([
+      "converge:default",
+      "converge:fleet",
+    ]);
+  });
+
+  it("reconciles the whole fleet once from the listeners' first deliveries", async () => {
+    const { callbacks, events, stop } = startRecordingReconciler();
+    await primeListeners(callbacks);
+    stop();
+
+    expect(events.filter((event) => event.startsWith("converge:"))).toEqual(["converge:fleet"]);
   });
 });
