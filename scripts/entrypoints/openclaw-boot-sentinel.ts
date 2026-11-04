@@ -31,7 +31,7 @@ export async function runOpenClawBootPhase(phase: string | undefined, input: Boo
     releaseKey,
     log: input.log ?? ((message) => process.stderr.write(`${message}\n`)),
     run: input.run,
-    upgradeDoctor: { openclawBinary: input.openclawBinary ?? PLATFORM_OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild },
+    openclaw: { binary: input.openclawBinary ?? PLATFORM_OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild },
   });
   if (phase === "before-start") await watcher.beforeStart();
   else await watcher.healthy();

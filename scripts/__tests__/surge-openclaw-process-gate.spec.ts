@@ -411,7 +411,7 @@ describe("surge OpenClaw process supervisor", () => {
       await expect(client.status()).resolves.toMatchObject({ phase: "held" });
     } finally { await supervisor.stop(); }
   });
-  it("validates configured Builder anchors and runs the upgrade Doctor before Native runtime admission", async () => {
+  it("validates configured Builder anchors and tries normal startup on a new build", async () => {
     const openclawDir = await temporaryOpenClawDir(), socketPath = path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`);
     const order: string[] = [], children: FakeChild[] = [];
     const inspection = vi.spyOn(builderStores, "inspectConfiguredBuilderAgentStores")
@@ -430,7 +430,7 @@ describe("surge OpenClaw process supervisor", () => {
     });
     try {
       await createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath }).permitNormal();
-      expect(order).toEqual(["inspect", "doctor", "spawn"]);
+      expect(order).toEqual(["inspect", "spawn"]);
       expect(inspection).toHaveBeenCalledWith({ stateDir: openclawDir, configPath: path.join(openclawDir, "system_config/openclaw.json") });
     } finally { await supervisor.stop(); inspection.mockRestore(); }
   });
@@ -997,7 +997,7 @@ describe("surge OpenClaw process supervisor", () => {
 });
 
 describe("Native prelaunch boot mode", () => {
-  it("holds a same-instance released marker during verified prelaunch", async () => {
+  it("boots an unassigned safe runtime during verified prelaunch", async () => {
     const openclawDir = await temporaryOpenClawDir(), podUid = "native-pod";
     const readiness = createSurgeReadinessGate(openclawDir, podUid);
     await readiness.release({ targetPodUid: podUid });
@@ -1005,11 +1005,11 @@ describe("Native prelaunch boot mode", () => {
     await gate.ensure({ podUid, readinessReleased: true });
     const spawnOpenClaw = vi.fn(() => new FakeChild());
     const supervisor = await startSurgeOpenClawSupervisor({ openclawDir, podUid, log: () => {},
-      socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), prelaunchBoot: true, spawnOpenClaw, probeHealthz: async () => false });
+      socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), prelaunchBoot: true, preparePrelaunch: async () => {}, prepareDatabases: async () => {}, spawnOpenClaw, probeHealthz: async () => spawnOpenClaw.mock.results.at(-1)?.value.alive === true });
     try {
-      await expect(supervisor.state()).resolves.toMatchObject({ role: "normal", mode: "held" });
-      expect(spawnOpenClaw).not.toHaveBeenCalled();
-      await expect(readiness.released()).resolves.toBe(false);
+      await vi.waitFor(async () => expect((await supervisor.state()).phase).toBe("running"));
+      expect(spawnOpenClaw).toHaveBeenCalledOnce();
+      await expect(readiness.released()).resolves.toBe(true);
     } finally { await supervisor.stop(); }
   });
 });
@@ -1156,5 +1156,24 @@ it("does not permit startup while a failed durable repair is pending", async () 
     await expect(client.permitNormal()).rejects.toThrow("migration is incomplete");
     expect(spawnOpenClaw).not.toHaveBeenCalled();
     await expect(client.status()).resolves.toMatchObject({ mode: "held", phase: "held" });
+  } finally { await supervisor.stop(); }
+});
+
+
+it("stops a timed-out normal boot before spending its one repair attempt", async () => {
+  const openclawDir = await temporaryOpenClawDir(), children: FakeChild[] = [];
+  const beforeStart = vi.fn(async () => { expect(children.every(child => !child.alive)).toBe(true); });
+  const supervisor = await startSurgeOpenClawSupervisor({
+    openclawDir, podUid: "timeout-target", socketPath: path.join(os.tmpdir(), `oc-gate-${randomUUID()}.sock`), log: () => {},
+    readinessReleased: async () => false, prepareTarget: async () => {}, prepareDatabases: async () => {}, healthTimeoutMs: 5,
+    bootWatcher: { beforeStart, healthy: vi.fn() },
+    spawnOpenClaw: () => { const child = new FakeChild(); children.push(child); return child; },
+    probeHealthz: async () => children.length === 2 && children[1]!.alive,
+  });
+  try {
+    await createSurgeOpenClawProcessSupervisorClient(openclawDir, { socketPath: supervisor.socketPath }).permitNormal();
+    expect(beforeStart).toHaveBeenCalledTimes(2);
+    expect(children[0]!.alive).toBe(false);
+    expect(children[1]!.alive).toBe(true);
   } finally { await supervisor.stop(); }
 });

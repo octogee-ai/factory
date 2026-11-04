@@ -41,6 +41,7 @@ export interface MigrationClient {
         gatewayId: string;
         transportId?: string;
         slug: string;
+        role?: "target";
     }): Promise<void>;
     quiesce(opts: {
         stopMattermost?: boolean;
@@ -79,6 +80,7 @@ export interface MigrationClient {
         slug: string;
         mode?: MigrationSyncMode;
         includeActivationManifest?: boolean;
+        preserveSource?: true;
         projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     }): Promise<ImportResponse>;
     verifyTarget(opts: {

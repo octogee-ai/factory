@@ -69,7 +69,7 @@ export interface MigrationClient {
   schedules(opts: ScheduleRestoreRequestBody & GatewayAddress): Promise<ScheduleRestoreResult>;
   schedules(opts: ScheduleRemoveRequestBody & GatewayAddress): Promise<ScheduleRemoveResult>;
   schedules(opts: ScheduleTransferRequestBody & GatewayAddress): Promise<ScheduleTransferResult>;
-  resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string }): Promise<void>;
+  resume(opts: { migrationId: string; gatewayId: string; transportId?: string; slug: string; role?: "target" }): Promise<void>;
   quiesce(opts: {
     stopMattermost?: boolean;
     schedulerHandoff?: boolean;
@@ -110,6 +110,7 @@ export interface MigrationClient {
     slug: string;
     mode?: MigrationSyncMode;
     includeActivationManifest?: boolean;
+    preserveSource?: true;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   }): Promise<ImportResponse>;
 
@@ -325,11 +326,11 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
       return res;
     },
 
-    async resume({ migrationId, gatewayId, transportId, slug }) {
+    async resume({ migrationId, gatewayId, transportId, slug, role }) {
       await deps.prepareAgentStores?.(gatewayId, slug);
       const response = await postSignedJson<{ resumed: boolean }>({
         transportId: transportId ?? gatewayId, path: `/resume/${gatewayId}`,
-        gatewayId, migrationId, body: { migrationId, slug }, timeoutMs: quiesceMs,
+        gatewayId, migrationId, body: { migrationId, slug, ...(role ? { role } : {}) }, timeoutMs: quiesceMs,
       });
       if (response.resumed !== true) throw new Error(`source ingress did not resume for ${slug}`);
     },

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetBrokerClient } from "../lib/fleet-broker-client.js";
 import {
@@ -43,6 +44,7 @@ import { createRestoreHandler } from "../lib/fleet-http-migration.js";
 import { gatewayScopedJobId, signFleetRequest } from "../lib/fleet-signature.js";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import type { Request, Response } from "express";
+import { disableSystemConfigWatch, isSystemConfigWatchDisabled } from "../lib/system-config-watch-state.js";
 
 describe("migration manifest export runtime wait", () => {
   afterEach(() => vi.useRealTimers());
@@ -466,6 +468,50 @@ function configuredBuilderClient(): FleetBrokerClient {
     userSnapshot: vi.fn(async () => aliceSnapshot({ uid: "uid-tester10", slug: "tester10" })),
   });
 }
+
+describe("Builder target runtime enablement", () => {
+  it.each([true, false])("enables the imported runtime only after its serving assignment commits (assigned=%s)", async assigned => {
+    const previousGatewayId = process.env.GATEWAY_ID;
+    process.env.GATEWAY_ID = "alice-builder";
+    withBuilderClaim({ OPENCLAW_DIR: testRuntime.dir, GATEWAY_ID: "alice-builder" }, "alice");
+    const repo = path.join(testRuntime.dir, "system_config");
+    const desired = { cron: { enabled: true }, channels: { mattermost: { enabled: true, accounts: { "alice-coach": {} } } } };
+    await fs.mkdir(repo, { recursive: true });
+    await fs.writeFile(path.join(repo, "openclaw.json"), JSON.stringify(desired));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], { cwd: repo });
+    await disableSystemConfigWatch(testRuntime.dir, "alice", { runtimeProjection: true });
+    patchMocks.applyConfigPatch.mockClear();
+    const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot(desired)) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({
+      uidForSlug: vi.fn(async () => "uid-alice"),
+      userSnapshot: vi.fn(async () => aliceSnapshot({ gatewayId: assigned ? "alice-builder" : "shared-blue" })),
+      assignmentRoster: vi.fn(async () => assigned ? [{ uid: "uid-alice", state: "serving", epoch: 4 }] : []),
+    }), rpc, log: vi.fn(), isBuilderGateway: () => true });
+    try {
+      const resumed = adapter.resumeCustomer("alice", { migrationId: "migration", role: "target" });
+      if (assigned) {
+        await resumed;
+        const patch = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0];
+        expect(patch.buildPatch({})).toMatchObject({ cron: { enabled: true }, channels: { mattermost: { enabled: true } } });
+        expect(rpc.channelsStart).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });
+        expect(isSystemConfigWatchDisabled(testRuntime.dir, "alice")).toBe(false);
+      } else {
+        await expect(resumed).rejects.toThrow("requires its current serving assignment");
+        expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+        expect(rpc.channelsStart).not.toHaveBeenCalled();
+        expect(isSystemConfigWatchDisabled(testRuntime.dir, "alice")).toBe(true);
+      }
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
+      await fs.rm(path.join(testRuntime.dir, "system_config.watch.disabled"), { force: true });
+      clearBuilderClaim();
+      if (previousGatewayId === undefined) delete process.env.GATEWAY_ID;
+      else process.env.GATEWAY_ID = previousGatewayId;
+    }
+  });
+});
 
 describe("buildBrokeredLifecycleAdapter migration import activation", () => {
   const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;

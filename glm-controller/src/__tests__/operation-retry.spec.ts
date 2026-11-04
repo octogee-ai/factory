@@ -1082,3 +1082,24 @@ describe('fenced source management health availability', () => {
    });
    expect(update).toMatchObject({ status: "pending", attempts: MAX_OPERATION_ATTEMPTS + 1 });
  });
+
+
+it.each([false, true])("keeps recovery on an assigned target pending beyond the activation attempt limit (recorded=%s)", recorded => {
+  const update = buildOperationCompletionUpdate({
+    op: { kind: "migrate-customer", attempts: 20, ...(recorded ? { cutoverCommittedAt: 1 } : {}) },
+    result: { steps: [], success: false, rolledBack: false, error: recorded ? "status 503: owner lookup unavailable" : "migration cutover committed; destination recovery pending: status 503: runtime not ready" },
+    steps: [], now: 1000,
+  });
+  expect(update).toMatchObject({ status: "pending", attempts: 21 });
+});
+
+it("resumes a durable handoff after a lost cutover acknowledgment without a recorded commit", () => {
+  const op = { kind: "migrate-customer", attempts: 20,
+    schedulerHandoff: { migrationId: "stable", uid: "alice", slug: "alice", fromGatewayId: "shared-blue",
+      toGatewayId: "alice-builder", stageAfterCutover: true as const } };
+  expect(operationNeedsDurableRestartResume(op)).toBe(true);
+  expect(buildOperationCompletionUpdate({ op,
+    result: { steps: [], success: false, error: "migration ownership lookup pending: status 503: unavailable" },
+    steps: [], now: 1000,
+  })).toMatchObject({ status: "pending", attempts: 21 });
+});

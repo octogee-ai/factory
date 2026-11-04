@@ -17,6 +17,9 @@ import {
 } from "../lib/gitea-admin-broker-client.js";
 import {
   auditSystemConfigForSlug,
+  prepareBuilderPrelaunchConfig,
+  checkpointDurableSystemConfigForSlug,
+  readAcceptedBuilderConfig,
   extractLegacyMattermostAccountSecrets,
   pushDirtySystemConfigForSlug,
   readDurableSystemConfigHeadForSlug,
@@ -30,6 +33,7 @@ import {
   defaultSystemConfigTemplatePath,
 } from "../lib/system-config.js";
 import { systemConfigFingerprint } from "../lib/system-config-watcher.js";
+import { disableSystemConfigWatch } from "../lib/system-config-watch-state.js";
 import { buildProjectAgents } from "../lib/openclaw-config-builders.js";
 import {
   assertPlatformInvariants,
@@ -2032,5 +2036,41 @@ describe("system_config restore", () => {
     );
     expect(fs.readFileSync(rejected, "utf-8")).toBe(candidate);
     expect(git).not.toHaveBeenCalledWith(repoDir, ["show", "HEAD:openclaw.json"], "/tmp/key");
+  });
+});
+
+
+describe("Builder prelaunch config", () => {
+  it("boots only the gateway-local agent while keeping the accepted customer config intact", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-prelaunch-config-"));
+    const repo = path.join(root, "system_config");
+    fs.mkdirSync(repo);
+    const env = withBuilderClaim({ OPENCLAW_DIR: root, GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api-test.octogee.com" }, "alice");
+    const config = { agents: { entries: { "octogee-alice-coach": { workspace: path.join(root, "customers/alice"), model: "custom/model" } } },
+      channels: { mattermost: { enabled: true, baseUrl: "${MM_URL}", accounts: { "alice-coach": {} } } },
+      bindings: [{ agentId: "octogee-alice-coach" }], cron: { enabled: true } };
+    writeJson(path.join(repo, "openclaw.json"), config);
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], { cwd: repo });
+    try {
+      await prepareBuilderPrelaunchConfig(root, "alice", env);
+      const live = JSON.parse(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8"));
+      expect(Object.keys(live.agents.entries)).toEqual(["octogee-unmatched-route"]);
+      expect(live.channels.mattermost.enabled).toBe(false);
+      expect(live.bindings).toEqual([]);
+      expect(live.cron.enabled).toBe(false);
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+      const sync = vi.fn();
+      await disableSystemConfigWatch(root, "alice");
+      expect(checkpointDurableSystemConfigForSlug("alice", { openclawDir: root, gitExec: () => `${head}\trefs/heads/main` }, sync)).toMatchObject({ acceptedCommit: head, committed: false });
+      expect(sync).not.toHaveBeenCalled();
+      const accepted = readAcceptedBuilderConfig(root, env);
+      expect(accepted.agents).toMatchObject({ entries: config.agents.entries });
+      expect(accepted.cron).toEqual({ enabled: true });
+      expect(accepted.channels).toMatchObject({ mattermost: { enabled: true } });
+      await prepareBuilderPrelaunchConfig(root, "alice", env);
+      expect(readAcceptedBuilderConfig(root, env).agents).toMatchObject({ entries: config.agents.entries });
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

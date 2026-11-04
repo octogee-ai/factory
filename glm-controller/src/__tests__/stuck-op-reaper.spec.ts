@@ -882,7 +882,7 @@ describe("recoverControllerOrphanedOperations", () => {
     }).outcome).toBe("claim");
   });
 
-  it("fails a post-cutover orphan for handoff completion without reopening the source it already left", async () => {
+  it("leaves a post-cutover orphan to durable restart recovery without reopening its source", async () => {
     const orphan = orphanedPlacement({
       cutoverCommittedAt: BOOTED_AT - 90_000,
       steps: [
@@ -903,12 +903,13 @@ describe("recoverControllerOrphanedOperations", () => {
 
     const result = await recover(db);
 
-    expect(result).toEqual({ scanned: 1, recovered: 1 });
+    expect(result).toEqual({ scanned: 1, recovered: 0 });
     expect(orphan.data).toMatchObject({
-      status: "failed",
+      status: "running",
       cutoverCommittedAt: BOOTED_AT - 90_000,
       schedulerHandoffReleased: false,
     });
+    expect(orphan.updated).toBeUndefined();
     expect(assignment.state).toBe("quiescing");
   });
 

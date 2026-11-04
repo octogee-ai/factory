@@ -10,6 +10,8 @@ import {
   OPERATION_QUEUE_DRAIN_MS_DEFAULT,
 } from "../index";
 import type { OperationHandler, OperationHandlers } from "../operation-router";
+import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
+import { operationNeedsDurableRestartResume } from "../operation-retry.js";
 
 type FakeQuery = {
   where: (field: string, op: "==", value: unknown) => FakeQuery;
@@ -928,6 +930,29 @@ describe("queue drain — composite-index-free FIFO", () => {
 });
 
 describe("completion bookkeeping reads the fresh doc, not the caller's snapshot", () => {
+  it("re-adopts a committed migration and completes its persisted handoff through the boot sweep", async () => {
+    const schedulerHandoff = { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-builder",
+      migrationId: "migration:scheduler:1:claim:100", stageAfterCutover: true as const };
+    const original = baseOp({ id: "committed-migration", kind: "migrate-customer", status: "running", startedAt: 100,
+      input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "alice-builder" }, schedulerHandoff,
+      cutoverCommittedAt: 200 });
+    const { db, store } = createFakeGlmOperationsDb({ "committed-migration": original });
+    const handler: OperationHandler = vi.fn(async op => {
+      expect(op.schedulerHandoff).toEqual(schedulerHandoff);
+      expect(op.cutoverCommittedAt).toBe(200);
+      expect(op.resumeCount).toBe(1);
+      expect(op.startedAt).toBeGreaterThan(100);
+      return { steps: [], success: true };
+    });
+    const deps = buildDeps(db, { "migrate-customer": handler });
+    expect(await resumeOrphanedRunningOps({ db: db as never, log: vi.fn(),
+      resumableKinds: new Set(["migrate-customer"]), resumableOperation: operationNeedsDurableRestartResume,
+      redrive: (op, ref) => reAdoptAndRunOperation(op, ref, deps),
+    })).toEqual({ scanned: 1, resumed: 1 });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(store.get("committed-migration")).toMatchObject({ status: "succeeded", schedulerHandoff, cutoverCommittedAt: 200 });
+  });
+
   it("preserves an explicit first start when claiming a pre-started pending operation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_100_000);
     const { db, store } = createFakeGlmOperationsDb({

@@ -41,7 +41,7 @@ describe("OpenClaw boot watcher", () => {
     await watcher.beforeStart();
 
     expect(run).toHaveBeenCalledOnce();
-    expect(run).toHaveBeenCalledWith("openclaw", ["doctor", "--fix", "--non-interactive"]);
+    expect(run).toHaveBeenCalledWith("openclaw", ["doctor", "--fix", "--yes", "--non-interactive"]);
   });
 
   it("propagates a failed one-shot Doctor attempt", async () => {
@@ -235,10 +235,9 @@ describe("operator-requested source Doctor", () => {
 
 });
 
-describe("OpenClaw upgrade Doctor", () => {
+describe("OpenClaw build reporting during platform rollout", () => {
   const installed = "b".repeat(40);
   const upgradeClaim = { action: "doctor" as const, openclawUpgrade: { replacesBuild: "a".repeat(40) } };
-  const sourceDoctor = { requestId: "source-repair", agentIds: ["octogee-alice-coach"], postgresAgentStores: [{ agentId: "octogee-alice-coach", storeId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", schema: "owned_agent" }] };
 
   function upgradeFixture(
     claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>,
@@ -254,28 +253,27 @@ describe("OpenClaw upgrade Doctor", () => {
       releaseKey: "release@sha256:abc",
       log: () => undefined,
       run,
-      ...(configured ? { upgradeDoctor: { openclawBinary: "/opt/fixture/openclaw", installedBuild: async () => installed } } : {}),
+      ...(configured ? { openclaw: { binary: "/opt/fixture/openclaw", installedBuild: async () => installed } } : {}),
     });
     return { client, run, watcher };
   }
 
-  it("runs Doctor without its own recovery backups when the platform asks for the upgrade Doctor", async () => {
+  it("tries normal startup when an older platform requests proactive upgrade Doctor", async () => {
     const f = upgradeFixture(upgradeClaim);
 
     await f.watcher.beforeStart();
 
     expect(f.client.claimOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc", openclawBuild: installed });
-    expect(f.run).toHaveBeenCalledOnce();
-    expect(f.run).toHaveBeenCalledWith("/opt/fixture/openclaw", ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
+    expect(f.run).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
 
-  it("runs the upgrade Doctor when the gateway has no healthy OpenClaw build on record", async () => {
+  it("tries normal startup when the platform has no healthy build on record", async () => {
     const f = upgradeFixture({ action: "doctor", openclawUpgrade: {} });
 
     await f.watcher.beforeStart();
 
-    expect(f.run).toHaveBeenCalledWith("/opt/fixture/openclaw", ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
+    expect(f.run).not.toHaveBeenCalled();
   });
 
   it("starts without Doctor whenever the platform says start, so a failed upgrade is not retried on every boot", async () => {
@@ -284,27 +282,6 @@ describe("OpenClaw upgrade Doctor", () => {
     await f.watcher.beforeStart();
 
     expect(f.client.claimOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc", openclawBuild: installed });
-    expect(f.run).not.toHaveBeenCalled();
-  });
-
-  it("propagates a failed upgrade Doctor so OpenClaw does not start", async () => {
-    const failure = new Error("doctor failed");
-    const f = upgradeFixture(upgradeClaim, { run: vi.fn(async () => { throw failure; }) });
-
-    await expect(f.watcher.beforeStart()).rejects.toBe(failure);
-  });
-
-  it("refuses an upgrade Doctor request from a platform it sent no OpenClaw build to", async () => {
-    const f = upgradeFixture(upgradeClaim, { configured: false });
-
-    await expect(f.watcher.beforeStart()).rejects.toThrow("upgrade Doctor requested without a reported OpenClaw build");
-    expect(f.run).not.toHaveBeenCalled();
-  });
-
-  it("refuses an upgrade Doctor request combined with a source Doctor request", async () => {
-    const f = upgradeFixture({ ...upgradeClaim, sourceDoctor });
-
-    await expect(f.watcher.beforeStart()).rejects.toThrow("invalid OpenClaw upgrade Doctor request");
     expect(f.run).not.toHaveBeenCalled();
   });
 

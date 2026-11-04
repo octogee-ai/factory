@@ -38,6 +38,8 @@ export interface MigrationRunnerDeps {
   client: MigrationClient;
 
   commitCutover: (commit: CutoverCommit) => Promise<void>;
+  readCurrentGateway?: () => Promise<string | null>;
+  prepareRollbackTarget?: (gatewayId: string, slug: string) => Promise<void>;
 
   // Roster-state gate: written to "quiescing" on the SOURCE assignment before
   // the quiesce RPC — blocking the source edge from serving this customer
@@ -96,6 +98,7 @@ export interface MigrationRunnerInput {
   gateAssignment?: boolean;
   projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
   includeActivationManifest?: boolean;
+  preserveSource?: true;
   convergeTargetSystemConfig?: TargetSystemConfigConvergence;
 }
 
@@ -267,28 +270,47 @@ async function convergeTargetAfterFinalCopy(input: {
   });
 }
 
-async function executeStep(params: {
+interface MigrationStepExecution {
   step: MigrationStep;
   deps: MigrationRunnerDeps;
   migrationId: string;
   slug: string;
   projectCheckoutScope: FleetBrokerProjectCheckoutScope | undefined;
   includeActivationManifest: boolean | undefined;
+  preserveSource?: true;
   crossGateway: boolean;
   targetGatewayId: string;
   schedules: ScheduleTransferState;
   systemConfig: SystemConfigConvergence;
-}): Promise<StepTimings | undefined> {
+}
+
+async function transferMigrationState(params: MigrationStepExecution, step: Extract<MigrationStep, { action: "sync-state" }>): Promise<StepTimings> {
+  const { deps, migrationId, projectCheckoutScope, includeActivationManifest } = params;
+  const clock = deps.now ?? Date.now;
+  const transferStartedAt = clock();
+  await deps.client.transferState({
+    migrationId,
+    fromGatewayId: step.from,
+    toGatewayId: step.to,
+    slug: step.slug,
+    mode: step.mode,
+    includeActivationManifest: step.mode !== "keys" && includeActivationManifest,
+    projectCheckoutScope,
+    ...(step.mode !== "keys" && params.preserveSource ? { preserveSource: true as const } : {}),
+  });
+  const transferMs = clock() - transferStartedAt;
+  if (!params.preserveSource) await convergeTargetAfterFinalCopy({ deps, migrationId, step, systemConfig: params.systemConfig });
+  return { transferMs };
+}
+
+async function executeStep(params: MigrationStepExecution): Promise<StepTimings | undefined> {
   const {
     step,
     deps,
     migrationId,
     slug,
-    projectCheckoutScope,
-    includeActivationManifest,
     crossGateway,
   } = params;
-  const clock = deps.now ?? Date.now;
   switch (step.action) {
     case QUIESCE_SOURCE:
       await deps.client.quiesce({ migrationId, gatewayId: step.gateway, slug: step.slug });
@@ -308,21 +330,8 @@ async function executeStep(params: {
       params.systemConfig.sourceCommit = flush.systemConfigCommit;
       return;
     }
-    case "sync-state": {
-      const transferStartedAt = clock();
-      await deps.client.transferState({
-        migrationId,
-        fromGatewayId: step.from,
-        toGatewayId: step.to,
-        slug: step.slug,
-        mode: step.mode,
-        includeActivationManifest: step.mode !== "keys" && includeActivationManifest,
-        projectCheckoutScope,
-      });
-      const transferMs = clock() - transferStartedAt;
-      await convergeTargetAfterFinalCopy({ deps, migrationId, step, systemConfig: params.systemConfig });
-      return { transferMs };
-    }
+    case "sync-state":
+      return transferMigrationState(params, step);
     case "verify-target":
       await deps.client.verifyTarget({
         migrationId,
@@ -341,6 +350,10 @@ async function executeStep(params: {
         fromGatewayId: step.from,
         flipMirror: crossGateway,
       });
+      if (params.preserveSource) {
+        await deps.client.resume({ migrationId, gatewayId: params.targetGatewayId, slug, role: "target" });
+        await convergeTargetSystemConfig({ deps, migrationId, slug, targetGatewayId: params.targetGatewayId, systemConfig: params.systemConfig });
+      }
       return;
     case "unmount-gateway":
       if (crossGateway && step.role === "source") {
@@ -483,6 +496,7 @@ function executeForwardStep(execution: MigrationExecution, step: MigrationStep):
     slug: input.slug,
     projectCheckoutScope: input.projectCheckoutScope,
     includeActivationManifest: input.includeActivationManifest,
+    preserveSource: input.preserveSource,
     crossGateway: execution.crossGateway,
     targetGatewayId: input.toGatewayId,
     schedules: execution.schedules,
@@ -507,6 +521,11 @@ async function runNextMigrationStep(
 ): Promise<MigrationRunnerResult | null> {
   const step = nextMigrationStep(execution.state);
   if (step.action === "complete") return migrationComplete(execution);
+  if (step.action === "verify-target" && execution.input.preserveSource) {
+    await report(execution.deps, { name: "verify-target", status: "skipped" });
+    execution.state = { ...execution.state, phase: advancePhase(execution.state.phase) };
+    return null;
+  }
   const phaseAtStart = execution.state.phase;
   const name = reportName(step);
   if (step.action === QUIESCE_SOURCE) {
@@ -579,6 +598,19 @@ interface StepFailureInput {
   error: unknown;
 }
 
+async function readRecoveryOwner(execution: MigrationExecution, phase: MigrationPhase): Promise<
+  { owner: string | null | undefined } | { pending: MigrationRunnerResult }
+> {
+  try {
+    return { owner: await execution.deps.readCurrentGateway?.() };
+  } catch (error) {
+    const message = `migration ownership lookup pending: status 503: ${errorText(error)}`;
+    execution.deps.log(`[migration-runner] ${message}`);
+    return { pending: { success: false, finalPhase: execution.state.phase, rolledBack: false,
+      errorAt: { phase, error: message } } };
+  }
+}
+
 async function handleStepFailure(
   execution: MigrationExecution,
   failure: StepFailureInput,
@@ -600,6 +632,16 @@ async function handleStepFailure(
     );
     execution.state = { ...execution.state, phase: advancePhase(execution.state.phase) };
     return null;
+  }
+  const ownership = await readRecoveryOwner(execution, phaseAtStart);
+  if ("pending" in ownership) return ownership.pending;
+  const { owner } = ownership;
+  if (owner !== undefined && owner !== input.fromGatewayId) {
+    await report(deps, { name, status: "failed", error: message });
+    return { success: false, finalPhase: execution.state.phase, rolledBack: false,
+      errorAt: { phase: phaseAtStart, error: owner === input.toGatewayId
+        ? `migration cutover committed; destination recovery pending: status 503: ${message}`
+        : "migration owner changed; recovery left to the current assignment" } };
   }
   if (execution.forwardOnly) {
     await report(deps, { name, status: "failed", error: message });
@@ -724,6 +766,10 @@ async function tryRollback(
     const rbName = `rollback:${reportName(step)}`;
     await report(deps, { name: rbName, status: "running" });
     try {
+      if (step.action === "unmount-gateway" && step.role === "target" &&
+          ["source-flushed", "final-synced", "target-verified"].includes(state.phase)) {
+        await deps.prepareRollbackTarget?.(step.gateway, step.slug);
+      }
       await executeStep({
         step,
         deps,
@@ -753,10 +799,7 @@ async function tryRollback(
     if (unreleased) return { rolledBack: false, error: unreleased };
   }
   await restoreSourceServing(deps, transports.restoreServing);
-  return {
-    rolledBack: failures.length === 0 || !state.fromGatewayId.startsWith("shared-"),
-    ...(failures.length > 0 ? { error: failures.join("; ") } : {}),
-  };
+  return { rolledBack: true };
 }
 
 // Revert the pre-quiesce "quiescing" roster mark so the customer keeps serving

@@ -7,6 +7,7 @@ export declare function disposableBuilderPrelaunchReserved(input: {
     gateway: DurableGateway;
     transaction?: Transaction;
     expectedGateway?: DurableGateway;
+    activationBoot?: true;
 }): Promise<boolean>;
 export declare function disposableBuilderBootMode(input: {
     db: Firestore;

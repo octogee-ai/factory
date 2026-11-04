@@ -1,3 +1,5 @@
+import { enableSystemConfigWatch } from "./system-config-watch-state.js";
+import { readAcceptedBuilderConfig } from "./system-config.js";
 import { parseAgentId, projectAgentId } from "@octogee/shared/types/identity";
 import { cloneMissingProjects, prepareCustomerRuntimePublication } from "./customer-lifecycle.js";
 import { prepareSharedCustomerAgentAnchors } from "./agent-anchor-record.js";
@@ -1889,10 +1891,41 @@ function importedRosterNeedsAcknowledgement(manifest: MigrationActivationManifes
   return !sourceIdentity || manifest.sourceWorkspaceIdentities !== undefined || manifest.targetWorkspaceIdentities !== undefined;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+async function restoreDormantBuilderConfig(ctx: BrokerCtx): Promise<void> {
+  const current = await ctx.rpc.configGet();
+  const desired = readAcceptedBuilderConfig(OPENCLAW_DIR);
+  desired.cron = { ...asRecord(desired.cron), enabled: false };
+  for (const channel of Object.values(asRecord(desired.channels) ?? {})) {
+    const entry = asRecord(channel);
+    if (entry) entry.enabled = false;
+  }
+  await ctx.rpc.configApply(desired, current.hash);
+  invalidateConfigCache(ctx);
+}
+
+async function prepareImportControlRuntime(ctx: BrokerCtx, slug: string, signal?: AbortSignal) {
+  const configuredBuilder = isConfiguredGatewayBuilder(slug);
+  if (!configuredBuilder) return { configuredBuilder, ownerMmUserId: undefined };
+  const ownerMmUserId = validOwnerMmUserId(slug, (await snapshotForSlug(ctx, slug))?.customerMmUserId);
+  ctx.log(`[import:${slug}] waiting for the Builder control runtime before roster activation`);
+  const controlRuntimeWaitStartedAt = Date.now();
+  await waitForAppliedConfigRevision(ctx.rpc, slug, {
+    timeoutMs: BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
+    signal,
+    acceptSupersedingRevision: true,
+  });
+  ctx.log(`[import:${slug}] Builder control runtime is ready for roster activation in ${Date.now() - controlRuntimeWaitStartedAt}ms`);
+  return { configuredBuilder, ownerMmUserId };
+}
+
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
-  opts: { signal?: AbortSignal; resumeExistingSharedCustody?: boolean; migrationId?: string; beforeRuntimePublish?: () => Promise<void> } | undefined,
+  opts: { signal?: AbortSignal; resumeExistingSharedCustody?: boolean; migrationId?: string; beforeRuntimePublish?: () => Promise<void>; deferRuntimeVerification?: true } | undefined,
 ): Promise<{ appliedFingerprint: string; verificationPending?: string }> {
   opts ??= {};
   if (sharedImportWithoutIdentityWitness(ctx, opts)) {
@@ -1900,20 +1933,7 @@ async function activateImportedCustomer(
   }
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const sourceIdentity = await sourceIdentityForResume(ctx, manifest, opts);
-  const configuredBuilder = isConfiguredGatewayBuilder(slug);
-  const ownerMmUserId = configuredBuilder
-    ? validOwnerMmUserId(slug, (await snapshotForSlug(ctx, slug))?.customerMmUserId)
-    : undefined;
-  if (configuredBuilder) {
-    ctx.log(`[import:${slug}] waiting for the Builder control runtime before roster activation`);
-    const controlRuntimeWaitStartedAt = Date.now();
-    await waitForAppliedConfigRevision(ctx.rpc, slug, {
-      timeoutMs: BUILDER_IMPORT_STARTUP_TIMEOUT_MS,
-      signal: opts.signal,
-      acceptSupersedingRevision: true,
-    });
-    ctx.log(`[import:${slug}] Builder control runtime is ready for roster activation in ${Date.now() - controlRuntimeWaitStartedAt}ms`);
-  }
+  const { configuredBuilder, ownerMmUserId } = await prepareImportControlRuntime(ctx, slug, opts.signal);
   const secretMaterial = ctx.pendingRuntimeSecrets.get(slug) ?? createSecretMaterialLedger();
   ctx.pendingRuntimeSecrets.set(slug, secretMaterial);
   const { manifest: safeManifest, secretsChanged } = await materializeActivationManifestSecret(
@@ -1943,6 +1963,7 @@ async function activateImportedCustomer(
       waitForAppliedRevision: ctx.isBuilderGateway(),
     });
   }
+  if (configuredBuilder && opts.deferRuntimeVerification) await restoreDormantBuilderConfig(ctx);
   await restoreSourceIdentityAfterRoster(ctx, manifest, safeManifest, sourceIdentity);
   await reportSharedAnchors?.();
   await materializeCustomerBrokerProfiles(
@@ -1994,6 +2015,10 @@ async function activateImportedCustomer(
   });
   ctx.log(`[import:${slug}] activation config patch in ${patch.elapsedMs}ms`);
   secretMaterial.noteIf(patch.configNoop !== true, "activation config patch changed the config");
+  if (opts.deferRuntimeVerification) {
+    await waitForAppliedConfigRevision(ctx.rpc, slug, { signal: opts.signal });
+    return { appliedFingerprint: manifest.appliedFingerprint };
+  }
   const verificationPending = await settleActivatedImport(ctx, {
     slug,
     patch,
@@ -2260,6 +2285,28 @@ async function assertSharedErasureRosterRemoved(ctx: BrokerCtx, slug: string, ag
   }
 }
 
+async function resumeAssignedBuilderRuntime(ctx: BrokerCtx, slug: string): Promise<void> {
+  if (!ctx.isBuilderGateway() || !isConfiguredGatewayBuilder(slug)) throw new Error("Target runtime activation requires its configured Builder");
+  const uid = await ctx.client.uidForSlug(slug);
+  const [snapshot, assignments] = await Promise.all([uid ? ctx.client.userSnapshot(uid) : null, ctx.client.assignmentRoster()]);
+  if (!uid || !snapshot || snapshot.gatewayId !== process.env.GATEWAY_ID || snapshot.slug !== slug ||
+      snapshot.runtimeMutationFenced !== false ||
+      !assignments.some(assignment => assignment.uid === uid && assignment.state === "serving")) {
+    throw new Error("Target runtime activation requires its current serving assignment");
+  }
+  const desired = readAcceptedBuilderConfig(OPENCLAW_DIR);
+  const secrets = ctx.pendingRuntimeSecrets.get(slug);
+  if (secrets) {
+    await reloadRuntimeSecretsIfChanged(ctx, `[resume:${slug}]`, secrets);
+    ctx.pendingRuntimeSecrets.delete(slug);
+  }
+  await applyConfigPatch({ buildPatch: () => ({ cron: desired.cron ?? { enabled: true },
+    channels: Object.fromEntries(Object.entries(asRecord(desired.channels) ?? {}).map(([id, channel]) =>
+      [id, { enabled: asRecord(channel)?.enabled ?? true }])) }) }, { rpc: ctx.rpc, cache: ctx.configCache, log: ctx.log });
+  await setCustomerChannelsRunning(ctx.rpc, slug, true);
+  await enableSystemConfigWatch(OPENCLAW_DIR, slug);
+}
+
 export function buildBrokeredLifecycleAdapter(
   opts: BuildBrokeredLifecycleAdapterOptions,
 ): CustomerLifecycleAdapter {
@@ -2426,6 +2473,7 @@ export function buildBrokeredLifecycleAdapter(
       return current.anchors.filter(anchor => anchor.agentId !== SAFE_DEFAULT_AGENT_ID);
     },
     resumeCustomer: (slug, resumeOptions) => openClawRuntimeUpdateGuard.run(async () => {
+      if (resumeOptions?.role === "target") return resumeAssignedBuilderRuntime(ctx, slug);
       const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
         throw error;

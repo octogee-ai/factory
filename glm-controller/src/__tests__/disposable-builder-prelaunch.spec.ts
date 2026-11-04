@@ -243,14 +243,25 @@ describe("prelaunch release commit fencing", () => {
 
 
 describe("broker boot mode uses the same prelaunch authority", () => {
+  it("boots the current target owner normally while its activation lease is still activating", async () => {
+    const h = fixture();
+    h.lease.status = "activating";
+    Object.assign(h.lease, { activationOperationId: "builder-activate-jefe-run-g67" });
+    h.user.provisioning.openclaw.gatewayId = h.gateway.gatewayId;
+    h.documents.set("gateways/jefe-run/assignments/uid-jefe", { uid: "uid-jefe", slug: "jefe", state: "serving", epoch: 4 });
+    await expect(h.db.runTransaction(tx => disposableBuilderBootMode({ db: h.db, gateway: h.gateway, transaction: tx }))).resolves.toEqual({ mode: "normal" });
+  });
+
   it("returns prelaunch only for the exact source assignment and empty target", async () => {
     const h = fixture();
     await expect(h.db.runTransaction(tx => disposableBuilderBootMode({ db: h.db, gateway: h.gateway, transaction: tx }))).resolves.toEqual({ mode: "prelaunch" });
     h.lease.sourceAssignmentEpoch++;
     await expect(h.db.runTransaction(tx => disposableBuilderBootMode({ db: h.db, gateway: h.gateway, transaction: tx }))).rejects.toThrow("prelaunch authority is inconsistent");
   });
-  it("identifies the current activation operation", async () => {
+  it("boots safely while the source serves and retains the current activation after its final pause", async () => {
     const h = fixture(); h.lease.status = "activating"; Object.assign(h.lease, { activationOperationId: "builder-activate-jefe-run-g67" });
+    await expect(h.db.runTransaction(tx => disposableBuilderBootMode({ db: h.db, gateway: h.gateway, transaction: tx }))).resolves.toEqual({ mode: "prelaunch" });
+    Object.assign(h.documents.get(`gateways/${h.lease.sourceGatewayId}/assignments/uid-jefe`)!, { state: "quiescing" });
     await expect(h.db.runTransaction(tx => disposableBuilderBootMode({ db: h.db, gateway: h.gateway, transaction: tx }))).resolves.toEqual({ mode: "activating", migrationId: "mig-builder-activate-jefe-run-g67" });
   });
   it.each(["active", "returning"])("retains normal boot when %s", async status => {

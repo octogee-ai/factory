@@ -865,3 +865,66 @@ it("does not dispatch final transfer or release the source when critical checkpo
   expect(h.client.resume).not.toHaveBeenCalled();
   expect(h.client.unmount).not.toHaveBeenCalled();
 });
+
+
+it("leaves the destination authoritative when cutover committed but its acknowledgement was lost", async () => {
+  const h = harness({ gateAssignment: true });
+  let owner = h.input.fromGatewayId;
+  h.deps.readCurrentGateway = async () => owner;
+  vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
+    owner = h.input.toGatewayId;
+    throw new Error("commit response lost");
+  });
+  const result = await runMigration(h.input, h.deps);
+  expect(result).toMatchObject({ success: false, rolledBack: false, errorAt: { error: expect.stringContaining("destination recovery pending") } });
+  expect(h.client.unmount).not.toHaveBeenCalled();
+  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.assignmentWrites.some(write => write.state === "serving")).toBe(false);
+});
+
+it("retains both copies when ownership cannot be read after an ambiguous cutover", async () => {
+  const h = harness({ gateAssignment: true });
+  h.deps.readCurrentGateway = vi.fn(async () => { throw new Error("Firestore unavailable"); });
+  vi.mocked(h.deps.commitCutover).mockRejectedValue(new Error("commit outcome unknown"));
+
+  expect(await runMigration(h.input, h.deps)).toMatchObject({
+    success: false,
+    rolledBack: false,
+    errorAt: { error: "migration ownership lookup pending: status 503: Firestore unavailable" },
+  });
+  expect(h.client.unmount).not.toHaveBeenCalled();
+  expect(h.client.resume).not.toHaveBeenCalled();
+  expect(h.assignmentWrites.some(write => write.state === "serving")).toBe(false);
+});
+
+
+it("keeps preparation on Shared and activates the target only after the ownership switch", async () => {
+  const h = harness({ gateAssignment: true, fromGatewayId: "shared-blue" });
+  let owner = h.input.fromGatewayId;
+  h.deps.readCurrentGateway = async () => owner;
+  h.deps.readTargetSystemConfigCommit = async () => "a".repeat(40);
+  vi.mocked(h.deps.commitCutover).mockImplementation(async () => { owner = h.input.toGatewayId; });
+  vi.mocked(h.client.transferState).mockImplementation(async request => {
+    expect(owner).toBe(h.input.fromGatewayId);
+    if (request.mode === "pre") expect(h.assignmentWrites).toHaveLength(0);
+    return { migrationId: request.migrationId, slug: request.slug, imported: true };
+  });
+  vi.mocked(h.client.resume).mockImplementation(async request => {
+    expect(owner).toBe(h.input.toGatewayId);
+    expect(request.role).toBe("target");
+  });
+  expect(await runMigration({ ...h.input, preserveSource: true, convergeTargetSystemConfig: "target-commit" }, h.deps)).toMatchObject({ success: true });
+  expect(h.client.resume).toHaveBeenCalledOnce();
+  expect(h.client.verifyTarget).not.toHaveBeenCalled();
+});
+
+it("retains target ownership and source files when assigned target startup fails", async () => {
+  const h = harness({ gateAssignment: true, fromGatewayId: "shared-blue" });
+  let owner = h.input.fromGatewayId;
+  h.deps.readCurrentGateway = async () => owner;
+  vi.mocked(h.deps.commitCutover).mockImplementation(async () => { owner = h.input.toGatewayId; });
+  vi.mocked(h.client.resume).mockRejectedValue(new Error("runtime not ready"));
+  expect(await runMigration({ ...h.input, preserveSource: true }, h.deps)).toMatchObject({ success: false, rolledBack: false });
+  expect(owner).toBe(h.input.toGatewayId);
+  expect(h.client.unmount).not.toHaveBeenCalled();
+});

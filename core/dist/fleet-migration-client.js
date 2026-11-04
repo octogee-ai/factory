@@ -148,11 +148,11 @@ export function createMigrationClient(deps) {
             log(`[migration-client] ✅ restoreTarget migrationId=${migrationId} slug=${slug} gateway=${gatewayId} steps=${res.steps.join(",")}`);
             return res;
         },
-        async resume({ migrationId, gatewayId, transportId, slug }) {
+        async resume({ migrationId, gatewayId, transportId, slug, role }) {
             await deps.prepareAgentStores?.(gatewayId, slug);
             const response = await postSignedJson({
                 transportId: transportId ?? gatewayId, path: `/resume/${gatewayId}`,
-                gatewayId, migrationId, body: { migrationId, slug }, timeoutMs: quiesceMs,
+                gatewayId, migrationId, body: { migrationId, slug, ...(role ? { role } : {}) }, timeoutMs: quiesceMs,
             });
             if (response.resumed !== true)
                 throw new Error(`source ingress did not resume for ${slug}`);

@@ -1,3 +1,5 @@
+import { prepareBuilderPrelaunchConfig } from "../lib/system-config.js";
+import { builderClaimSlug } from "@octogee/shared/server/builder-claim";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const runtimeLogger = createServiceLogger("surge-openclaw-supervisor");
 import { assertBuilderStoreMigrationComplete, assertBuilderPostgresSelection, migrateBuilderStores } from "../lib/builder-store-migration.js";
@@ -49,6 +51,7 @@ export interface StartSurgeOpenClawSupervisorOptions {
   stopGraceMs?: number;
   readinessReleased?: () => Promise<boolean>;
   prelaunchBoot?: boolean;
+  preparePrelaunch?: () => Promise<void>;
   activationMigrationId?: string;
   spawnOpenClaw?: () => SpawnedOpenClaw;
   prepareTarget?: () => Promise<void>;
@@ -325,6 +328,7 @@ interface StartPermittedOpenClawChildOptions {
   sleep: (ms: number) => Promise<void>;
   spawnOpenClaw: () => SpawnedOpenClaw;
   timeoutMs: number;
+  stopChild: () => Promise<void>;
   gate: Pick<ReturnType<typeof createSurgeOpenClawProcessGate>, "markRunning">;
   bootWatcher: OpenClawBootWatcher;
 }
@@ -393,8 +397,9 @@ async function startPermittedOpenClawChild(
         signal: opts.signal,
       });
     } catch (error) {
-      if (exitedBeforeHealth && !retriedPreHealthExit && !opts.signal.aborted) {
-        await exitCleanup;
+      if (!retriedPreHealthExit && !opts.signal.aborted) {
+        await opts.stopChild();
+        if (exitedBeforeHealth) await exitCleanup;
         retriedPreHealthExit = true;
         continue;
       }
@@ -604,6 +609,12 @@ async function initializeBootGate(input: {
   }
   let initial = await gate.ensure({ podUid: opts.podUid, readinessReleased: await readinessReleased() });
   if (holdForPrelaunch && !matchingActivation) initial = await gate.holdPrelaunch({ podUid: opts.podUid });
+  if (opts.prelaunchBoot) {
+    if (!opts.preparePrelaunch) throw new Error("Builder prelaunch config preparation is unavailable");
+    await opts.preparePrelaunch();
+    initial = await gate.permitNormal({ podUid: opts.podUid });
+    await readiness.release({ targetPodUid: opts.podUid });
+  }
   return initial;
 }
 
@@ -736,8 +747,10 @@ export async function startSurgeOpenClawSupervisor(
         sleep,
         spawnOpenClaw,
         timeoutMs,
+        stopChild,
         gate,
-        bootWatcher: opts.bootWatcher ?? defaultBootWatcher(),      });
+        bootWatcher: opts.bootWatcher ?? defaultBootWatcher(),
+      });
     })();
     starting = work;
     try {
@@ -870,8 +883,8 @@ export function createSurgeOpenClawBootWatcher(input: {
     ? () => inspectConfiguredBuilderAgentStores({ stateDir: input.openclawDir,
       configPath: env.OPENCLAW_CONFIG_PATH || path.join(input.openclawDir, "openclaw.json") })
     : undefined,
-  upgradeDoctor: input.installedOpenClawBuild
-    ? { openclawBinary: OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild }
+  openclaw: input.installedOpenClawBuild
+    ? { binary: OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild }
     : undefined });
 }
 
@@ -913,6 +926,11 @@ async function main(): Promise<void> {
     log,
     bootWatcher,
     ...boot,
+    preparePrelaunch: async () => {
+      const slug = builderClaimSlug();
+      if (!slug) throw new Error("Builder prelaunch requires its owner slug");
+      await prepareBuilderPrelaunchConfig(openclawDir, slug);
+    },
     onUnexpectedChildExit: () => {
       runtimeLogger.error("[surge-openclaw] exiting so the runner restarts the supervisor and OpenClaw");
       process.exit(1);

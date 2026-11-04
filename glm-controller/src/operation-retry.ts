@@ -1,4 +1,4 @@
-import { isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
+import { isBuilderActivateOperationIdFor, isBuilderReturnOperationIdFor } from "@octogee/core/builder-activation-lease";
 import { sourceTransferBlocksRelease } from './lib/source-transfer-execution.js';
 import type { SourceTransferExecution } from '@octogee/shared/types/glm';
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
@@ -145,9 +145,12 @@ export function operationNeedsDurableRestartResume(op: {
   input?: Record<string, unknown>;
   customerMigrationV2?: CustomerMigrationV2State;
   schedulerHandoff?: SchedulerHandoffState;
+  schedulerHandoffReleased?: boolean;
+  cutoverCommittedAt?: number;
   sourceTransferExecution?: SourceTransferExecution;
 }): boolean {
-  return op.schedulerHandoff?.forwardRecovery !== undefined ||
+  return migrationCutoverNeedsRecovery(op) ||
+    op.schedulerHandoff?.forwardRecovery !== undefined ||
     sourceTransferBlocksRelease(op.sourceTransferExecution) || op.kind === "suspend-customer" ||
     (op.kind === "restart-gateway" && (op.input?.restoreRecovery !== undefined || op.input?.sourceRecovery !== undefined)) ||
     op.kind === "erase-customer" ||
@@ -180,7 +183,9 @@ export interface OperationCompletionInput {
     startedAt?: number | null;
     customerMigrationV2?: CustomerMigrationV2State;
     schedulerHandoff?: SchedulerHandoffState;
-  sourceTransferExecution?: SourceTransferExecution;
+    schedulerHandoffReleased?: boolean;
+    cutoverCommittedAt?: number;
+    sourceTransferExecution?: SourceTransferExecution;
   };
   result: OperationResult;
   steps: OperationStep[];
@@ -409,8 +414,24 @@ export function buildOperationCompletionUpdate(
     : failedCompletion(input, persistedSteps, attempts, failure);
 }
 
+function migrationCutoverNeedsRecovery(
+  op: Pick<OperationCompletionInput["op"], "kind" | "cutoverCommittedAt" | "schedulerHandoff" | "schedulerHandoffReleased">,
+): boolean {
+  return op.kind === MIGRATE_CUSTOMER_KIND &&
+    (op.cutoverCommittedAt !== undefined || op.schedulerHandoff?.stageAfterCutover === true && op.schedulerHandoffReleased !== true);
+}
+
+function builderActivationRolledBack(op: OperationCompletionInput["op"], result: OperationResult): boolean {
+  return result.rolledBack === true && op.kind === MIGRATE_CUSTOMER_KIND &&
+    op.customerMigrationV2 === undefined && op.schedulerHandoff?.forwardRecovery === undefined &&
+    op.input?.source === "builder-activation-lease" &&
+    isBuilderActivateOperationIdFor(op.id, op.input.toGatewayId);
+}
+
 function retriesBeyondAttemptCap(op: OperationCompletionInput["op"], failure: FailureCompletionContext, attempts: number): boolean {
   return failure.levelTriggeredFence ||
+    migrationCutoverNeedsRecovery(op) ||
+    op.kind === MIGRATE_CUSTOMER_KIND && failure.error.startsWith("migration cutover committed; destination recovery pending:") ||
     isFencedManagementHealthFailure(op, failure.error) ||
     (isComputerPreemptionFailure(failure.error) && attempts < MAX_PREEMPTED_OPERATION_ATTEMPTS) ||
     (isLevelTriggeredBuilderReturn(op) && !isGatewayMigrationReadinessFailure(failure.error)) ||
@@ -425,6 +446,7 @@ function shouldRetry(
   retryBeyondCap: boolean,
 ): boolean {
   if (classification !== "transient") return false;
+  if (builderActivationRolledBack(op, result)) return false;
   const hasDurableCleanup =
     result.output?.configCleanup !== null &&
     typeof result.output?.configCleanup === "object";

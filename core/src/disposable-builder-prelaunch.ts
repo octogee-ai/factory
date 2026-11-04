@@ -9,7 +9,13 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function prelaunchLease(gateway: DurableGateway, userData: unknown): Record<string, unknown> | null {
+function prelaunchStatusMatches(gatewayId: string, generation: number, lease: Record<string, unknown>, activationBoot: boolean): boolean {
+  return lease.status === "provisioning" && lease.activationOperationId === undefined && lease.activatingAt === undefined ||
+    activationBoot && ["provisioning", "activating"].includes(String(lease.status)) &&
+    lease.activationOperationId === builderActivateOperationId(gatewayId, generation);
+}
+
+function prelaunchLease(gateway: DurableGateway, userData: unknown, activationBoot = false): Record<string, unknown> | null {
   const user = record(userData);
   const openclaw = record(record(user?.provisioning)?.openclaw);
   const lease = record(openclaw?.activationLease);
@@ -23,9 +29,7 @@ function prelaunchLease(gateway: DurableGateway, userData: unknown): Record<stri
     lease.leaseId === allocation.leaseId,
     lease.generation === allocation.generation,
     lease.targetGatewayId === gateway.gatewayId,
-    lease.status === "provisioning",
-    lease.activationOperationId === undefined,
-    lease.activatingAt === undefined,
+    prelaunchStatusMatches(gateway.gatewayId, allocation.generation, lease, activationBoot),
     lease.activeAt === undefined,
     typeof lease.sourceGatewayId === "string",
     lease.sourceGatewayId !== gateway.gatewayId,
@@ -51,6 +55,7 @@ export async function disposableBuilderPrelaunchReserved(input: {
   gateway: DurableGateway;
   transaction?: Transaction;
   expectedGateway?: DurableGateway;
+  activationBoot?: true;
 }): Promise<boolean> {
   const { db, gateway, transaction, expectedGateway } = input;
   if (expectedGateway && !samePrelaunchAllocation(gateway, expectedGateway)) return false;
@@ -59,7 +64,7 @@ export async function disposableBuilderPrelaunchReserved(input: {
   }
   const userRef = db.collection("users").doc(gateway.ownerUid);
   const user = await (transaction ? transaction.get(userRef) : userRef.get());
-  const lease = prelaunchLease(gateway, user.data());
+  const lease = prelaunchLease(gateway, user.data(), input.activationBoot);
   if (!lease) return false;
   const sourceRef = db.collection(GATEWAYS_COLLECTION).doc(lease.sourceGatewayId as string);
   const assignmentRef = sourceRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(gateway.ownerUid);
@@ -101,6 +106,16 @@ function activationBootMode(gateway: DurableGateway, lease: Record<string, unkno
   return { mode: "prelaunch" };
 }
 
+async function hasServingBuilderAssignment(input: {
+  db: Firestore; gateway: DurableGateway; transaction: Transaction;
+}, userData: Record<string, unknown>, ownerUid: string): Promise<boolean> {
+  const { gateway, db, transaction } = input;
+  if (record(record(userData.provisioning)?.openclaw)?.gatewayId !== gateway.gatewayId) return false;
+  const assigned = (await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId)
+    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(ownerUid))).data();
+  return assigned?.uid === ownerUid && assigned.state === "serving";
+}
+
 export async function disposableBuilderBootMode(input: {
   db: Firestore; gateway: DurableGateway; transaction: Transaction;
 }): Promise<{ mode: "prelaunch" | "normal" | "activating"; migrationId?: string }> {
@@ -110,11 +125,13 @@ export async function disposableBuilderBootMode(input: {
   const user = await transaction.get(db.collection("users").doc(gateway.ownerUid));
   const data = user.data();
   if (!data) throw new Error("Builder prelaunch owner is unavailable");
+  if (await hasServingBuilderAssignment(input, data, gateway.ownerUid)) return { mode: "normal" };
   const lease = record(record(record(data.provisioning)?.openclaw)?.activationLease);
   if (!activationLeaseMatches(gateway, lease)) {
     throw new Error("Builder activation authority is inconsistent");
   }
   const boot = activationBootMode(gateway, lease);
-  if (boot.mode === "prelaunch" && !await disposableBuilderPrelaunchReserved(input)) throw new Error("Builder prelaunch authority is inconsistent");
+  if (boot.mode !== "normal" && await disposableBuilderPrelaunchReserved({ ...input, activationBoot: true })) return { mode: "prelaunch" };
+  if (boot.mode === "prelaunch") throw new Error("Builder prelaunch authority is inconsistent");
   return boot;
 }

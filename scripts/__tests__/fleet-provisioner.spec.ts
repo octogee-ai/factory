@@ -1714,19 +1714,21 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it.each(["success", "retry", "cleanup-failed", "hold-lost", "assigned", "assigned-after-drain", "residue"] as const)("keeps exact cancellation custody through imported cleanup: %s", async scenario => {
+  it.each(["success", "retry", "cleanup-failed", "hold-lost", "assigned", "assigned-after-drain", "residue", "warm"] as const)("keeps exact cancellation custody through imported cleanup: %s", async scenario => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const request = { migrationId: "cleanup-op", slug: "ceckert-test", targetPodUid: "target-pod" };
     let state: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "target", mode: "permitted", phase: "running", ...request };
-    if (scenario === "residue") state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held" };
+    if (scenario === "residue" || scenario === "warm") state = { version: 1, podUid: "target-pod", role: "normal", mode: scenario === "warm" ? "permitted" : "held", phase: scenario === "warm" ? "running" : "held" };
     const events: string[] = [];
     const processGate = {
       status: async () => state,
+      holdNormal: vi.fn(async () => { events.push("stop-normal"); state = { ...state, mode: "held", phase: "held" }; return state; }),
+      hydrate: vi.fn(async () => { events.push("reserve"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "held", ...request }; return state; }),
       rehold: vi.fn(async () => { events.push("stop"); state = { ...state, mode: "held", phase: "cancelling" }; return state; }),
       reholdReleasedTarget: vi.fn(async () => { events.push("restop"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "cancelling", ...request }; return state; }),
       finalizeTargetCancellation: vi.fn(async () => { events.push("finalize"); state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: request }; return state; }),
-      unreserve: vi.fn(async () => state),
+      unreserve: vi.fn(async () => { state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: request }; return state; }),
     } as unknown as SurgeOpenClawProcessSupervisorClient;
     const cleanup = vi.fn(async (assertCurrent: () => Promise<void>) => {
       events.push("cleanup");
@@ -1750,6 +1752,9 @@ describe("configured Builder surge release", () => {
           await expect(wiring.unreserveSurgeTarget(request, cleanup)).resolves.toMatchObject({ role: "normal", terminalTarget: request });
           expect(events).toEqual(["stop", "drain", "cleanup", "finalize", "restop", "drain", "cleanup", "finalize"]);
         }
+      } else if (scenario === "warm" || scenario === "residue") {
+        await expect(cancel).resolves.toMatchObject({ role: "normal", mode: "held" });
+        expect(events).toEqual(["stop-normal", "reserve", "drain", "cleanup"]);
       } else {
         await expect(cancel).rejects.toThrow();
         expect(processGate.finalizeTargetCancellation).not.toHaveBeenCalled();

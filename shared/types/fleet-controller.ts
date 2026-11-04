@@ -276,6 +276,7 @@ export interface PushRsyncStateRequestBody extends MigrationRequestBody {
 }
 
 export interface FinishRsyncImportRequestBody extends MigrationRequestBody {
+  preserveSource?: true;
   transferAttemptId?: string;
   rpcPhase: "finish-rsync-import";
   mode: MigrationTransferMode;

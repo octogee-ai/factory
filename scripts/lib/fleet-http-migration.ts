@@ -65,7 +65,6 @@ import {
   MIGRATION_VERIFY_TIMEOUT_MS,
   MIGRATION_RSYNC_PORT_DEFAULT,
   SIGNATURE_HEADER,
-  VERIFY_ACCOUNT_TIMEOUT_MS,
 } from "../../shared/types/fleet-controller.js";
 import type { FleetBrokerAgentAnchor } from "../../shared/types/fleet-broker.js";
 import { isValidUsername, parseAgentId } from "../../shared/types/identity.js";
@@ -310,8 +309,8 @@ async function resumeSystemConfigWatchForBuilder(
   await enableSystemConfigWatch(OPENCLAW_DIR, slug, expectedGeneration);
 }
 
-function importedActivationOptions(signal?: AbortSignal, migrationId?: string, beforeRuntimePublish?: () => Promise<void>) {
-  return signal || migrationId || beforeRuntimePublish ? { ...(signal ? { signal } : {}), ...(migrationId ? { migrationId } : {}), ...(beforeRuntimePublish ? { beforeRuntimePublish } : {}) } : undefined;
+function importedActivationOptions(signal?: AbortSignal, migrationId?: string, beforeRuntimePublish?: () => Promise<void>, deferRuntimeVerification?: true) {
+  return signal || migrationId || beforeRuntimePublish || deferRuntimeVerification ? { ...(signal ? { signal } : {}), ...(migrationId ? { migrationId } : {}), ...(beforeRuntimePublish ? { beforeRuntimePublish } : {}), ...(deferRuntimeVerification ? { deferRuntimeVerification } : {}) } : undefined;
 }
 
 async function importedWorkspaceIdentityRestore(input: { deps: MigrationHandlerDeps; slug: string; migrationId?: string; signal?: AbortSignal; beforeRuntimePublish?: () => Promise<void> }): Promise<(() => Promise<void>) | undefined> {
@@ -321,6 +320,7 @@ async function importedWorkspaceIdentityRestore(input: { deps: MigrationHandlerD
 }
 
 async function activateImportedCustomerForMigration(input: {
+  deferRuntimeVerification?: true;
   deps: MigrationHandlerDeps;
   slug: string;
   mode: MigrationImportMode;
@@ -351,7 +351,7 @@ async function activateImportedCustomerForMigration(input: {
       );
     }
   }
-  const options = importedActivationOptions(signal, input.migrationId, beforeRuntimePublish);
+  const options = importedActivationOptions(signal, input.migrationId, beforeRuntimePublish, input.deferRuntimeVerification);
   const activation = options ? await deps.adapter.activateImportedCustomer(slug, options) : await deps.adapter.activateImportedCustomer(slug);
   if (loadStrategy === "standard") {
     deps.adapter.recordAppliedFingerprint?.(
@@ -645,11 +645,11 @@ export function createSchedulerReadyHandler(deps: MigrationHandlerDeps): Request
 export function createResumeHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
-    const body = parseAndVerifyJsonBody<MigrationRequestBody>(req, res, deps, log);
+    const body = parseAndVerifyJsonBody<MigrationRequestBody & { role?: "target" }>(req, res, deps, log);
     if (!body) return;
     try {
       await ensureMigrationGiteaKey(deps, body.slug, "source-resume");
-      await deps.adapter.resumeCustomer(body.slug, { migrationId: body.migrationId });
+      await deps.adapter.resumeCustomer(body.slug, { migrationId: body.migrationId, ...(body.role ? { role: body.role } : {}) });
       await (deps.voiceMigration ?? updateVoiceMigration)({ slug: body.slug, operationId: body.migrationId, phase: "resume" });
       res.status(200).json({ migrationId: body.migrationId, slug: body.slug, resumed: true });
     } catch (error) {
@@ -2243,8 +2243,10 @@ async function activateBuilderCoach(
   slug: string,
   signal: AbortSignal,
   loadStrategy: MigrationLoadStrategy,
+  deferRuntimeVerification?: true,
 ): Promise<void> {
   const verificationPending = await activateImportedCustomerForMigration({
+    deferRuntimeVerification,
     deps,
     slug,
     mode: "final",
@@ -2255,11 +2257,6 @@ async function activateBuilderCoach(
   if (verificationPending) {
     throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
   }
-  const coachConnected = await deps.adapter.waitForAccountHealthy({ slug, timeoutMs: VERIFY_ACCOUNT_TIMEOUT_MS });
-  signal.throwIfAborted();
-  if (!coachConnected) {
-    throw new Error(`Builder Coach activation verification failed: ${slug}-coach did not reach running+connected within ${VERIFY_ACCOUNT_TIMEOUT_MS}ms`);
-  }
 }
 
 async function activateConfiguredBuilderImport(
@@ -2267,10 +2264,11 @@ async function activateConfiguredBuilderImport(
   activation: ConfiguredBuilderActivation,
   signal: AbortSignal,
   loadStrategy: MigrationLoadStrategy,
+  deferRuntimeVerification?: true,
 ): Promise<void> {
   if (activation.live) {
     signal.throwIfAborted();
-    await activateBuilderCoach(deps, activation.request.slug, signal, loadStrategy);
+    await activateBuilderCoach(deps, activation.request.slug, signal, loadStrategy, deferRuntimeVerification);
     return;
   }
   const { request } = activation;
@@ -2296,7 +2294,7 @@ async function activateConfiguredBuilderImport(
       { durationMs: Date.now() - releaseStartedAt },
     );
     signal.throwIfAborted();
-    await activateBuilderCoach(deps, request.slug, signal, loadStrategy);
+    await activateBuilderCoach(deps, request.slug, signal, loadStrategy, deferRuntimeVerification);
   } catch (error) {
     (deps.log ?? provisionerLog)(
       `[migration-rsync] Builder activation failed migrationId=${request.migrationId} slug=${request.slug}: ` +
@@ -2406,7 +2404,7 @@ async function activateFinishedRsyncImport(input: {
     const activation = await configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
     let verificationPending: string | undefined;
     if (activation) {
-      await activateConfiguredBuilderImport(deps, activation, signal, loadStrategy);
+      await activateConfiguredBuilderImport(deps, activation, signal, loadStrategy, body.preserveSource);
     } else {
       verificationPending = await activateImportedCustomerForMigration({
         deps,
@@ -2453,6 +2451,7 @@ async function removeObsoletePreparedProjects(deps: MigrationHandlerDeps, sessio
 }
 
 interface StagedImportInput {
+  preserveSource?: true;
   deps: MigrationHandlerDeps;
   session: RSyncImportSession;
   slug: string;
@@ -2516,7 +2515,7 @@ async function upgradeCarriedAgents(input: StagedImportInput, prepared: Prepared
     assertTargetIdentityCustody(authority.custody, targetIdentityCustody(input.deps, body, authority.custody.uid));
     input.signal.throwIfAborted();
   };
-  await (input.deps.upgradeImportedAgents ?? upgradeImportedAgentStores)({ stores, assertCurrent, signal: input.signal,
+  await (input.deps.upgradeImportedAgents ?? upgradeImportedAgentStores)({ stores, allowUpgrade: !input.preserveSource, assertCurrent, signal: input.signal,
     log: message => input.log(message), run: input.deps.runOpenClaw });
 }
 
@@ -2543,6 +2542,9 @@ async function reattachOfflineBuilderAgents(input: StagedImportInput, prepared: 
 
 async function deliverStagedImport(input: StagedImportInput): Promise<void> {
   const { deps, session, log } = input;
+  if (input.preserveSource && input.activation && !input.activation.live) {
+    throw new Error("Builder target did not finish normal startup before import; source retained");
+  }
   const deferAgentState = input.mode === "pre" && (!input.activation || input.activation.live);
   const copyOptions = { baselineEntries: session.baselineEntries, deferAgentState };
   if (input.mode !== "final") {
@@ -2560,7 +2562,7 @@ async function deliverStagedImport(input: StagedImportInput): Promise<void> {
   });
   log(`[migration-rsync] final-import agent-snapshots migrationId=${session.migrationId} slug=${input.slug}`, { durationMs: Date.now() - snapshotStartedAt });
   if (input.activation) await removeObsoletePreparedProjects(deps, session, input.slug);
-  const codex = deferAgentState ? null : await prepareCodexStoreSnapshots(session.stageDir, log);
+  const codex = await prepareCodexStoreSnapshots(session.stageDir, log);
   const copyFinalFiles = async () => {
     const copyStartedAt = Date.now();
     await copyStageToOpenClaw(session.stageDir, session.importDir, input.slug, copyOptions);
@@ -2685,13 +2687,15 @@ export function createFinishRsyncImportHandler(deps: MigrationHandlerDeps): Requ
         res.status(400).json({ error: "rsync import failed validation", message: rejection });
         return;
       }
+      const activation = await configuredBuilderActivationRequest(deps, body, mode, configTransferMode);
       const beforeRuntimePublish = mode === "final" ? await sharedTargetWorkspaceRestore(deps, body, session.importDir, controller.signal, session.stageDir) : undefined;
       await deliverStagedImport({
+        preserveSource: body.preserveSource,
         deps,
         session,
         slug: body.slug,
         mode,
-        activation: await configuredBuilderActivationRequest(deps, body, mode, configTransferMode),
+        activation,
         heldTarget: await systemConfigImportTarget(deps, body, configTransferMode),
         signal: controller.signal,
         log,
@@ -3097,7 +3101,7 @@ async function removeUnmountedBuilderImport(
         : deps.adapter.removeImportedCustomerBySlug!(slug),
     });
   };
-  if (activation && !activation.live) {
+  if (activation) {
     const state = await deps.unreserveSurgeTarget!(activation.request, remove);
     if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
   } else await remove();

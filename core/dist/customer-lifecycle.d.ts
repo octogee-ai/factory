@@ -211,6 +211,7 @@ export interface CustomerLifecycleAdapter {
     schedulerReady: () => Promise<void>;
     resumeCustomer: (slug: string, opts?: {
         migrationId: string;
+        role?: "target";
     }) => Promise<void>;
     sourceMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<MigrationSourceIdentityCustody>;
     sourceMigrationAgentAnchors?: (slug: string, migrationId: string) => Promise<import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchor[]>;
@@ -237,6 +238,7 @@ export interface CustomerLifecycleAdapter {
         signal?: AbortSignal;
         migrationId?: string;
         beforeRuntimePublish?: () => Promise<void>;
+        deferRuntimeVerification?: true;
     }) => Promise<{
         appliedFingerprint: string;
         verificationPending?: string;

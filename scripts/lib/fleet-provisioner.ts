@@ -2299,6 +2299,20 @@ async function assertBuilderTargetCleanupCurrent(
   if (await configuredBuilderAssigned(request.slug)) throw new Error("cannot clean a Builder with a serving assignment");
 }
 
+async function unreserveWarmBuilderTarget(
+  input: Parameters<typeof unreserveConfiguredBuilderTarget>[0],
+  cleanup: () => Promise<void>,
+): Promise<SurgeOpenClawProcessGateState> {
+  const { processGate, request } = input;
+  if (!input.cleanup) return processGate.unreserve(request);
+  if (await input.configuredBuilderAssigned(request.slug)) throw new Error("cannot clean a Builder with a serving assignment");
+  await processGate.holdNormal();
+  await processGate.hydrate(request);
+  await input.waitForActiveProvisioningDrain();
+  await cleanup();
+  return processGate.unreserve(request);
+}
+
 async function unreserveConfiguredBuilderTarget(input: {
   activeRelease: ActiveBuilderSurgeRelease | null;
   configuredBuilderAssigned: (slug: string) => Promise<boolean>;
@@ -2322,10 +2336,7 @@ async function unreserveConfiguredBuilderTarget(input: {
   };
   const state = await processGate.status();
   if (state.role === "normal") {
-    if (!releasedBuilderTargetMatches(state, request)) {
-      if (input.cleanup) throw new Error("Builder import cleanup has no matching target reservation");
-      return processGate.unreserve(request);
-    }
+    if (!releasedBuilderTargetMatches(state, request)) return unreserveWarmBuilderTarget(input, cleanup);
     if (await input.configuredBuilderAssigned(request.slug)) {
       throw new Error("cannot cancel a released Builder with a serving assignment");
     }

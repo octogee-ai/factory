@@ -536,20 +536,20 @@ export function createRsyncMigrationTransfer(
         body: pushBody as unknown as Record<string, unknown>,
       });
       await assertTransferClaim(claimed);
-      const finishBody: FinishRsyncImportRequestBody = {
-        transferAttemptId: claimed.attemptId,
-        migrationId: input.migrationId,
-        slug: input.slug,
-        rpcPhase: "finish-rsync-import",
-        mode,
-      };
       if (mode === "final") await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
       const finished = await control<ImportResponse>({
         transportId: toTransportId,
         gatewayId: input.toGatewayId,
         pathSuffix: "/finish-rsync-import",
         migrationId: input.migrationId,
-        body: finishBody as unknown as Record<string, unknown>,
+        body: {
+          transferAttemptId: claimed.attemptId,
+          migrationId: input.migrationId,
+          slug: input.slug,
+          rpcPhase: "finish-rsync-import",
+          mode,
+          ...(input.preserveSource ? { preserveSource: true as const, loadStrategy: "expedited" as const } : {}),
+        } satisfies FinishRsyncImportRequestBody,
         baseUrl: targetBaseUrl,
       });
       if (mode === "final") {

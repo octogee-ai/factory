@@ -39,6 +39,7 @@ function assertValidRoster(stores: readonly ImportedAgentStore[]): void {
 
 export async function upgradeImportedAgentStores(input: {
   stores: readonly ImportedAgentStore[];
+  allowUpgrade?: boolean;
   log: (message: string) => void;
   assertCurrent: () => Promise<void>;
   env?: NodeJS.ProcessEnv;
@@ -111,6 +112,9 @@ export async function upgradeImportedAgentStores(input: {
     if (!await phase("pre-metadata", () => verifyMetadata(false))) {
       input.log("[import-upgrade] upgrade=skipped schemas=current");
       return;
+    }
+    if (input.allowUpgrade === false) {
+      throw new Error("Builder import requires the source and target to use the same current agent schema; source retained");
     }
     input.log("[import-upgrade] upgrade=required schemas=older");
     const options = { env: { PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", NO_COLOR: "1", HOME: root,

@@ -275,7 +275,7 @@ schedulerMigration: (slug: string, request: SchedulerMigrationRequest) => Promis
 
 schedulerReady: () => Promise<void>;
 
-resumeCustomer: (slug: string, opts?: { migrationId: string }) => Promise<void>;
+resumeCustomer: (slug: string, opts?: { migrationId: string; role?: "target" }) => Promise<void>;
 sourceMigrationIdentityCustody?: (slug: string, migrationId: string) => Promise<MigrationSourceIdentityCustody>;
 sourceMigrationAgentAnchors?: (slug: string, migrationId: string) => Promise<import("@octogee/shared/types/fleet-broker").FleetBrokerAgentAnchor[]>;
 
@@ -298,7 +298,7 @@ prepareKeyImportDir: (slug: string) => Promise<string>;
 
   activateImportedCustomer: (
     slug: string,
-    opts?: { signal?: AbortSignal; migrationId?: string; beforeRuntimePublish?: () => Promise<void> },
+    opts?: { signal?: AbortSignal; migrationId?: string; beforeRuntimePublish?: () => Promise<void>; deferRuntimeVerification?: true },
   ) => Promise<{ appliedFingerprint: string; verificationPending?: string }>;
   recordAppliedFingerprint?: (slug: string, fingerprint: string) => void;
 

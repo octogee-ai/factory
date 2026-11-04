@@ -82,6 +82,20 @@ function servingRuntime(
 }
 
 describe("durable migration root resolution", () => {
+  it("rejects a source root with no authoritative gateway class", async () => {
+    const source = durableGateway("source");
+    delete source.gatewayClass;
+    const db = database({
+      "gateways/source": source,
+      "glmGateways/source": servingRuntime("source"),
+      "gateways/source/assignments/uid-alice": {
+        uid: "uid-alice", slug: "alice", gatewayId: "source", state: "serving", epoch: 7,
+      },
+    });
+    await expect(resolveSourceRevisionFromFirestore(db as never, "uid-alice", "source")).resolves.toBeNull();
+    await expect(resolveLiveRevisionAsSource(db as never, "source")).resolves.toBeNull();
+  });
+
   it("keeps a claimed retired gateway out of ordinary migration sources and destinations", async () => {
     const claimedRetired = durableGateway("default", {
       desiredStatus: "retired",

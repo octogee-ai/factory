@@ -5,7 +5,12 @@ import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, projectGatewayDesiredRootForGateway 
 function record(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-function prelaunchLease(gateway, userData) {
+function prelaunchStatusMatches(gatewayId, generation, lease, activationBoot) {
+    return lease.status === "provisioning" && lease.activationOperationId === undefined && lease.activatingAt === undefined ||
+        activationBoot && ["provisioning", "activating"].includes(String(lease.status)) &&
+            lease.activationOperationId === builderActivateOperationId(gatewayId, generation);
+}
+function prelaunchLease(gateway, userData, activationBoot = false) {
     const user = record(userData);
     const openclaw = record(record(user?.provisioning)?.openclaw);
     const lease = record(openclaw?.activationLease);
@@ -20,9 +25,7 @@ function prelaunchLease(gateway, userData) {
         lease.leaseId === allocation.leaseId,
         lease.generation === allocation.generation,
         lease.targetGatewayId === gateway.gatewayId,
-        lease.status === "provisioning",
-        lease.activationOperationId === undefined,
-        lease.activatingAt === undefined,
+        prelaunchStatusMatches(gateway.gatewayId, allocation.generation, lease, activationBoot),
         lease.activeAt === undefined,
         typeof lease.sourceGatewayId === "string",
         lease.sourceGatewayId !== gateway.gatewayId,
@@ -50,7 +53,7 @@ export async function disposableBuilderPrelaunchReserved(input) {
     }
     const userRef = db.collection("users").doc(gateway.ownerUid);
     const user = await (transaction ? transaction.get(userRef) : userRef.get());
-    const lease = prelaunchLease(gateway, user.data());
+    const lease = prelaunchLease(gateway, user.data(), input.activationBoot);
     if (!lease)
         return false;
     const sourceRef = db.collection(GATEWAYS_COLLECTION).doc(lease.sourceGatewayId);
@@ -92,6 +95,14 @@ function activationBootMode(gateway, lease) {
         throw new Error("Builder prelaunch authority is inconsistent");
     return { mode: "prelaunch" };
 }
+async function hasServingBuilderAssignment(input, userData, ownerUid) {
+    const { gateway, db, transaction } = input;
+    if (record(record(userData.provisioning)?.openclaw)?.gatewayId !== gateway.gatewayId)
+        return false;
+    const assigned = (await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId)
+        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(ownerUid))).data();
+    return assigned?.uid === ownerUid && assigned.state === "serving";
+}
 export async function disposableBuilderBootMode(input) {
     const { gateway, db, transaction } = input;
     if (gateway.gatewayClass !== "builder" || gateway.allocation?.kind !== "disposable-builder")
@@ -102,12 +113,16 @@ export async function disposableBuilderBootMode(input) {
     const data = user.data();
     if (!data)
         throw new Error("Builder prelaunch owner is unavailable");
+    if (await hasServingBuilderAssignment(input, data, gateway.ownerUid))
+        return { mode: "normal" };
     const lease = record(record(record(data.provisioning)?.openclaw)?.activationLease);
     if (!activationLeaseMatches(gateway, lease)) {
         throw new Error("Builder activation authority is inconsistent");
     }
     const boot = activationBootMode(gateway, lease);
-    if (boot.mode === "prelaunch" && !await disposableBuilderPrelaunchReserved(input))
+    if (boot.mode !== "normal" && await disposableBuilderPrelaunchReserved({ ...input, activationBoot: true }))
+        return { mode: "prelaunch" };
+    if (boot.mode === "prelaunch")
         throw new Error("Builder prelaunch authority is inconsistent");
     return boot;
 }

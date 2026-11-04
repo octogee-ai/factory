@@ -157,6 +157,7 @@ function mkDeps(options: HarnessOptions = {}) {
     prepareNativeComputerReturn: vi.fn(async () => null),
     retireNativeSchedulerBeforeStage: vi.fn(async () => undefined),
     readGatewaySystemConfigCommit: vi.fn(async () => TARGET_SYSTEM_CONFIG_COMMIT),
+    readOpenClawBuild: vi.fn(async () => "d".repeat(40)),
     commitCutover: vi.fn(async (commit) => {
       events.push(`cutover:${commit.fromGatewayId}->${commit.toGatewayId}:mirror=${commit.flipMirror}`);
     }),
@@ -430,7 +431,7 @@ describe("abandoned Shared migration recovery", () => {
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
   });
 
-  it.each(["success", "resume-failure", "authority-failure", "ownership-changed", "never-quiesced"])("restores a pre-cutover Builder activation through the existing source-only worker: %s", async (scenario) => {
+  it.each(["success", "resume-failure", "authority-failure", "ownership-changed", "never-quiesced", "controller-restart"])("restores a pre-cutover Builder activation through the existing source-only worker: %s", async (scenario) => {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     const target = "alice-s-12345678";
     const id = `builder-activate-${target}-g1`;
@@ -439,6 +440,12 @@ describe("abandoned Shared migration recovery", () => {
       schedulerHandoff: { migrationId: `mig-${id}:scheduler:1:claim:1000`, fromGatewayId: "shared-blue", toGatewayId: target, uid: "uid-alice", slug: "alice", stageAfterCutover: true },
     });
     request.schedulerHandoff!.sourceRecovery = { migrationId: request.schedulerHandoff!.migrationId, sourceEpoch: 4, steps: [{ name: "quiesce-source", status: "done" }] };
+    if (scenario === "controller-restart") {
+      delete request.input.recoverSourceOnly;
+      delete request.schedulerHandoff!.sourceRecovery;
+      h.client.abortImport = vi.fn().mockRejectedValue(new Error("live worker unavailable"));
+      h.client.unmount = vi.fn(async ({ slug, migrationId }) => ({ migrationId, slug, unmounted: true }));
+    }
     if (scenario === "resume-failure") h.client.resume = vi.fn().mockRejectedValue(new Error("native resume refused"));
     if (scenario === "authority-failure") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockRejectedValue(new Error("authority changed"));
     if (scenario === "ownership-changed") h.deps.assertMigrationRecoveryAuthority = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error("authority changed during target cleanup"));
@@ -451,12 +458,12 @@ describe("abandoned Shared migration recovery", () => {
     expect(result.success).toBe(false);
     expect(h.client.transferState).not.toHaveBeenCalled();
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
-    if (scenario === "success" || scenario === "never-quiesced") {
+    if (scenario === "success" || scenario === "never-quiesced" || scenario === "controller-restart") {
       expect(result.rolledBack).toBe(true);
       expect(h.deps.resolveGatewayUrl).toHaveBeenCalledWith(target, { allowUnready: true });
       expect(h.client.abortImport).not.toHaveBeenCalled();
       expect(h.client.unmount).toHaveBeenCalledOnce();
-      if (scenario === "success") expect(h.client.resume).toHaveBeenCalledOnce();
+      if (scenario !== "never-quiesced") expect(h.client.resume).toHaveBeenCalledOnce();
       else expect(h.client.resume).not.toHaveBeenCalled();
       expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
       expect(h.steps).toContainEqual(expect.objectContaining({ name: "recover-source", status: "done" }));
@@ -1928,6 +1935,25 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
     expect(h.client.scheduler).not.toHaveBeenCalled();
   });
 
+  it("activates the assigned Builder after losing the cutover acknowledgment", async () => {
+    const h = heldActivation({ sourceGatewayId: "gw-green" });
+    const handoff = { ...deferred, fromGatewayId: "shared-blue" };
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: handoff, attempts: 20 }), h.ctx);
+    expect(result).toMatchObject({ success: true });
+    expect(h.client.resume).toHaveBeenCalledWith({ migrationId: "mig-op-1", gatewayId: "gw-green", slug: "alice", role: "target" });
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+  });
+
+  it("keeps assignment recovery pending while the owner read is unavailable", async () => {
+    const h = heldActivation();
+    vi.mocked(h.deps.readUser).mockRejectedValue(new Error("unavailable"));
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred }), h.ctx);
+    expect(result).toMatchObject({ success: false, error: "migration ownership lookup pending: status 503: unavailable" });
+    expect(h.client.resume).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
+  });
+
   it("does not restore again once the snapshot is recorded restored", async () => {
     const h = heldActivation({ sourceGatewayId: "gw-green" });
     h.transfers.set("uid-alice/mig-op-1", { ...PENDING_SCHEDULES, restoredTo: "gw-green", restoredAt: 4_800, restoreFailures: [] });
@@ -2855,7 +2881,7 @@ it("migrates without reading version metadata or a release artifact for a fixed 
 });
 
 describe("legacy migration forward recovery", () => {
-  it.each(["released", "observed-release", "first-attempt", "held", "committed", "source-moved", "other-target", "other-rpc"] as const)("settles a forward-only Builder activation only after its target released before cutover: %s", async scenario => {
+  it.each(["released", "observed-release", "held", "committed", "source-moved", "other-target", "other-rpc"] as const)("settles a forward-only Builder activation only after its target released before cutover: %s", async scenario => {
     const h = mkDeps({ sourceGatewayId: "shared-blue" });
     const target = "alice-s-12345678", id = `builder-activate-${target}-g1`;
     const op = mkOp({ id, attempts: 1,
@@ -2868,7 +2894,6 @@ describe("legacy migration forward recovery", () => {
     vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
     let saved: Operation["schedulerHandoff"];
     vi.mocked(h.ctx.persistSchedulerHandoff!).mockImplementation(async state => { saved = structuredClone(state); });
-    if (scenario === "first-attempt") delete op.schedulerHandoff;
     const transfer = h.client.transferState;
     h.client.transferState = vi.fn(async request => {
       if (request.mode !== "final") return transfer(request);
@@ -2885,8 +2910,8 @@ describe("legacy migration forward recovery", () => {
     expect(result).toMatchObject({ success: false, rolledBack: false });
     expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.deps.commitCutover).not.toHaveBeenCalled();
-    const released = scenario === "released" || scenario === "observed-release" || scenario === "first-attempt";
-    expect(classifyOperationFailure(result.error)).toBe(released ? "terminal" : "transient");
+    const released = scenario === "released" || scenario === "observed-release";
+    expect(classifyOperationFailure(result.error)).toBe(released || scenario === "source-moved" ? "terminal" : "transient");
     if (!released) return;
     expect(buildOperationCompletionUpdate({ op, result, steps: h.steps, now: 5_000 })).toMatchObject({ status: "failed" });
     expect(saved?.forwardRecovery).toMatchObject({ targetReleased: true });
@@ -3040,4 +3065,41 @@ it.each(["final-transfer", "checkpoint-claim"])("keeps Native writers held acros
   expect(vi.mocked(h.client.scheduler).mock.calls.every(([request]) => request.migrationId === originalSchedulerId)).toBe(true);
   expect(native.release).not.toHaveBeenCalled();
   expect(h.client.resume).not.toHaveBeenCalled();
+});
+
+
+describe("source-owned Builder activation", () => {
+  function activation() {
+    const h = mkDeps({ sourceGatewayId: "shared-blue" });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, epoch: 4, assignmentMode: "assigned", gatewayClass: "shared" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+    const operation = mkOp({ id: "builder-activate-gw-green-g1", input: { uid: "uid-alice", builderSlug: "alice", fromGatewayId: "shared-blue", toGatewayId: "gw-green", source: "builder-activation-lease" } });
+    return { ...h, operation };
+  }
+
+  it("cleans the target and restores Shared after a failed final import without a forward-only checkpoint", async () => {
+    const h = activation();
+    const transfer = vi.mocked(h.client.transferState).getMockImplementation()!;
+    vi.mocked(h.client.transferState).mockImplementation(async request => {
+      if (request.mode === "final") throw new Error("native agent creation failed");
+      return transfer(request);
+    });
+    const result = await createMigrateCustomerHandler(h.deps)(h.operation, h.ctx);
+    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
+    expect(h.client.resume).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue" }));
+    expect(h.deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ gatewayId: "shared-blue", state: "serving" }));
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+    expect(buildOperationCompletionUpdate({ op: h.operation, result: { ...result, error: "status 503: native agent creation failed" }, steps: h.steps, now: 5_000 })).toMatchObject({ status: "failed", rolledBack: true });
+    expect(vi.mocked(h.client.transferState).mock.calls.find(([request]) => request.mode === "final")?.[0].preserveSource).toBe(true);
+    expect(vi.mocked(h.ctx.persistSchedulerHandoff!).mock.calls.every(([state]) => !state.forwardRecovery)).toBe(true);
+  });
+
+  it("keeps Shared serving when the target uses another OpenClaw build", async () => {
+    const h = activation();
+    vi.mocked(h.deps.readOpenClawBuild!).mockImplementation(async gateway => gateway === "shared-blue" ? "a".repeat(40) : "b".repeat(40));
+    expect(await createMigrateCustomerHandler(h.deps)(h.operation, h.ctx)).toMatchObject({ success: false, error: expect.stringContaining("same OpenClaw build") });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+  });
 });

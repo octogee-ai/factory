@@ -18,6 +18,8 @@ export type ScheduleRestoreRecord = Pick<ScheduleTransferDoc, "restoredTo" | "re
 export interface MigrationRunnerDeps {
     client: MigrationClient;
     commitCutover: (commit: CutoverCommit) => Promise<void>;
+    readCurrentGateway?: () => Promise<string | null>;
+    prepareRollbackTarget?: (gatewayId: string, slug: string) => Promise<void>;
     setAssignmentState?: (input: {
         gatewayId: string;
         uid: string;
@@ -51,6 +53,7 @@ export interface MigrationRunnerInput {
     gateAssignment?: boolean;
     projectCheckoutScope?: FleetBrokerProjectCheckoutScope;
     includeActivationManifest?: boolean;
+    preserveSource?: true;
     convergeTargetSystemConfig?: TargetSystemConfigConvergence;
 }
 export type TargetSystemConfigConvergence = "source-commit" | "target-commit";

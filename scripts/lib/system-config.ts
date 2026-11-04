@@ -1,3 +1,5 @@
+import { clearMountedMarker } from "./local-coach-wired.js";
+import { disableSystemConfigWatch, isSystemConfigRuntimeProjection } from "./system-config-watch-state.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import * as fs from "fs";
@@ -1986,6 +1988,11 @@ export function checkpointDurableSystemConfigForSlug(
   opts: SystemConfigSyncOptions = {},
   sync: typeof syncSystemConfigForSlug = syncSystemConfigForSlug,
 ): SystemConfigSyncResult {
+  if (isSystemConfigRuntimeProjection(opts.openclawDir ?? OPENCLAW_DIR, slug)) {
+    const acceptedCommit = readDurableSystemConfigHeadForSlug(slug, { openclawDir: opts.openclawDir, gitExec: opts.gitExec });
+    (opts.log ?? defaultLog)(`[system_config] ${slug}: config publication is paused; retaining accepted commit ${acceptedCommit}`);
+    return { committed: false, pushed: true, acceptedCommit };
+  }
   const result = sync(slug, {
     ...opts,
     durablePolicy: true,
@@ -1996,4 +2003,40 @@ export function checkpointDurableSystemConfigForSlug(
     throw new SystemConfigCheckpointError(result);
   }
   return result;
+}
+
+
+export function readAcceptedBuilderConfig(openclawDir: string, env: NodeJS.ProcessEnv = process.env): UnknownRecord {
+  const bytes = readSystemConfigCommitBlob(systemConfigDir(openclawDir), "HEAD", OPENCLAW_CONFIG_FILENAME);
+  const config = bytes && readTrackedConfigObject(bytes.toString("utf8"));
+  if (!config) throw new Error("Builder prelaunch requires its accepted system config");
+  reconcilePlatformInvariants(config, env);
+  return config;
+}
+
+export async function prepareBuilderPrelaunchConfig(openclawDir: string, slug: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  await disableSystemConfigWatch(openclawDir, slug, { runtimeProjection: true });
+  clearMountedMarker(path.join(openclawDir, "customers"), slug);
+  const config = readAcceptedBuilderConfig(openclawDir, env);
+  const { id: _id, ...agent } = buildSafeDefaultAgent({ ...env, OPENCLAW_DIR: openclawDir });
+  const agents = asRecord(config.agents) ?? {};
+  delete agents.list;
+  agents.entries = { [SAFE_DEFAULT_AGENT_ID]: agent };
+  agents.ownership = "explicit";
+  agents.defaults = { ...asRecord(agents.defaults), authInheritance: { agentId: SAFE_DEFAULT_AGENT_ID }, systemAgent: { agentId: SAFE_DEFAULT_AGENT_ID } };
+  config.agents = agents;
+  config.bindings = [];
+  for (const channel of Object.values(asRecord(config.channels) ?? {})) {
+    const entry = asRecord(channel);
+    if (entry) {
+      entry.enabled = false;
+      for (const account of Object.values(asRecord(entry.accounts) ?? {})) {
+        const configured = asRecord(account);
+        if (configured) configured.enabled = false;
+      }
+    }
+  }
+  config.cron = { ...asRecord(config.cron), enabled: false };
+  if (asRecord(config.talk)) config.talk = { ...asRecord(config.talk), agentId: SAFE_DEFAULT_AGENT_ID };
+  atomicWrite(systemConfigPath(openclawDir), `${JSON.stringify(config, null, 2)}\n`);
 }

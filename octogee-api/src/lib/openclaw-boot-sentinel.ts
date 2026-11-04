@@ -1,9 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { FieldValue, type DocumentData, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore";
 
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_RELEASES_SUBCOLLECTION, isReleasePayload } from "@octogee/shared/types/gateway-releases";
-import { GLM_GATEWAYS_COLLECTION, resolveGatewayImageProfile } from "@octogee/shared/types/glm";
+import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import type { FleetBrokerOpenClawBootClaim } from "@octogee/shared/types/fleet-broker";
@@ -24,13 +22,6 @@ export interface OpenClawBootSentinelStore {
 }
 
 export const OPENCLAW_BUILD_PATTERN = /^[0-9a-f]{40}$/;
-
-function recordedHealthyOpenClawBuild(runtime: DocumentData | undefined): string | undefined {
-  const build = runtime?.openclawHealthyBuild;
-  if (build === undefined) return undefined;
-  if (typeof build !== "string" || !OPENCLAW_BUILD_PATTERN.test(build)) throw new Error("stored healthy OpenClaw build is malformed");
-  return build;
-}
 
 function record(value: unknown): DocumentData {
   return value && typeof value === "object" && !Array.isArray(value) ? value as DocumentData : {};
@@ -126,26 +117,13 @@ function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sour
     schedulerStateRecovery: context.schedulerStateRecovery, postgresAgentStores: context.postgresAgentStores };
 }
 
-async function onlyReleaseBuiltOpenClaw(db: Firestore, txn: Transaction, input: OpenClawBootInput): Promise<boolean> {
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
-  const gateway = (await txn.get(gatewayRef)).data();
-  if (gateway?.latestRelease !== 1 || gateway.desiredRelease !== 1 || gateway.liveRelease !== 1) return false;
-  const payload = (await txn.get(gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc("1"))).data()?.payload;
-  if (!isReleasePayload(payload) || payload.openclawSourceSha !== input.openclawBuild) return false;
-  const profile = resolveGatewayImageProfile({ gatewayClass: gateway.gatewayClass ?? undefined,
-    profile: gateway.profile ?? undefined, imageProfile: gateway.imageProfile ?? undefined });
-  const image = profile === "builder" ? payload.profileImages?.builder : payload;
-  return image?.imageTag === input.releaseKey;
-}
-
 function claimReleaseSentinel(
   txn: Transaction,
   runtimeRef: DocumentReference,
   runtime: DocumentData | undefined,
   input: OpenClawBootInput,
-  { at, firstReleaseBuild }: { at: number; firstReleaseBuild: boolean },
+  at: number,
 ): FleetBrokerOpenClawBootClaim {
-  const healthyBuild = recordedHealthyOpenClawBuild(runtime);
   const sentinel = runtime?.openclawBootSentinel as
     | Record<string, unknown>
     | undefined;
@@ -169,9 +147,7 @@ function claimReleaseSentinel(
         updatedAt: at,
       },
     });
-    if (input.openclawBuild && input.openclawBuild !== healthyBuild && !firstReleaseBuild) {
-      return { action: "doctor" as const, openclawUpgrade: healthyBuild ? { replacesBuild: healthyBuild } : {} };
-    }
+
   } else if (
     sentinel.state === "doctor-attempted"
     && sentinel.podUid !== input.podUid
@@ -207,9 +183,7 @@ export function createOpenClawBootSentinelStore(
           return { action: "doctor" as const, sourceDoctor };
         }
         const runtime = runtimeSnap.data();
-        const firstReleaseBuild = recordedHealthyOpenClawBuild(runtime) === undefined && input.openclawBuild !== undefined &&
-          runtime?.runtime !== "gce-vm" && await onlyReleaseBuiltOpenClaw(db, txn, input);
-        return claimReleaseSentinel(txn, runtimeRef, runtime, input, { at: now(), firstReleaseBuild });
+        return claimReleaseSentinel(txn, runtimeRef, runtime, input, now());
       });
     },
     async assertDoctor(input) {

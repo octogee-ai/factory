@@ -219,3 +219,10 @@ it("caches a successful immutable descriptor and retries a rejected probe", asyn
   await upgradeImportedAgentStores(f);
   expect(f.run.mock.calls.filter(([args]) => args[1] === "preflight-agent")).toHaveLength(2);
 });
+
+
+it("leaves an older source schema unchanged when preparing a Builder activation", async () => {
+  const f = await fixture();
+  await expect(upgradeImportedAgentStores({ ...f, allowUpgrade: false })).rejects.toThrow("source retained");
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(["database"]);
+});

@@ -1788,7 +1788,7 @@ export function startOperationWorker(deps: ControllerDeps): () => void {
 export const OPERATION_QUEUE_DRAIN_MS_DEFAULT = 20_000;
 
 // Restart re-drive candidates. The predicate below admits only migrations with
-// the durable V2 state machine; legacy rollout sub-operations remain rollout-owned.
+// durable migration or recovery state; legacy rollout sub-operations remain rollout-owned.
 const RESUMABLE_OP_KINDS: ReadonlySet<string> = new Set([
   "rollout",
   "restart-gateway",
@@ -2170,6 +2170,8 @@ async function runClaimedOperation(
         startedAt: freshOp.startedAt,
         customerMigrationV2: freshOp.customerMigrationV2,
         schedulerHandoff: freshOp.schedulerHandoff,
+        schedulerHandoffReleased: freshOp.schedulerHandoffReleased,
+        cutoverCommittedAt: freshOp.cutoverCommittedAt,
         sourceTransferExecution: freshOp.sourceTransferExecution,
       },
       result,
@@ -3336,6 +3338,8 @@ async function buildHandlers(
     recordScheduleRestore: (uid, migrationId, restore) => recordScheduleRestore(db, uid, migrationId, restore),
     readGatewaySystemConfigCommit: (gatewayId) =>
       readGatewaySystemConfigCommitFromFirestore(db, gatewayId),
+    readOpenClawBuild: async (gatewayId, release) =>
+      (await readReleasePayloadFromFirestore(db, gatewayId, release))?.openclawSourceSha ?? null,
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
         {

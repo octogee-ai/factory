@@ -11,8 +11,8 @@ export interface OpenClawBootWatcher {
 
 type RunCommand = (command: string, args: readonly string[]) => Promise<void>;
 
-interface UpgradeDoctor {
-  openclawBinary: string;
+interface InstalledOpenClaw {
+  binary: string;
   installedBuild?: () => Promise<string>;
 }
 
@@ -48,14 +48,6 @@ function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimO
   return request;
 }
 
-function requestedUpgradeDoctor(claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>,
-  upgrade: UpgradeDoctor | undefined, build: { openclawBuild?: string }): UpgradeDoctor | undefined {
-  if (!claim.openclawUpgrade) return undefined;
-  if (claim.action !== "doctor" || claim.sourceDoctor) throw new Error("invalid OpenClaw upgrade Doctor request");
-  if (!upgrade || !build.openclawBuild) throw new Error("upgrade Doctor requested without a reported OpenClaw build");
-  return upgrade;
-}
-
 export function createOpenClawBootWatcher(input: {
   client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor"> & Partial<Pick<FleetBrokerClient, "assertOpenClawDoctor">>;
   releaseKey: string;
@@ -63,16 +55,16 @@ export function createOpenClawBootWatcher(input: {
   run?: RunCommand;
   repairSourceDoctor?: typeof repairSourceDoctorAgentStores;
   inspectBuilderStores?: () => Promise<"exact">;
-  upgradeDoctor?: UpgradeDoctor;
+  openclaw?: InstalledOpenClaw;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }): OpenClawBootWatcher {
   const run = input.run ?? runCommand;
   const now = input.now ?? (() => performance.now());
   const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const upgrade = input.upgradeDoctor;
-  const installedBuild = async () => upgrade
-    ? { openclawBuild: await (upgrade.installedBuild ?? (() => readInstalledOpenClawBuild(upgrade.openclawBinary)))() }
+  const openclaw = input.openclaw;
+  const installedBuild = async () => openclaw
+    ? { openclawBuild: await (openclaw.installedBuild ?? (() => readInstalledOpenClawBuild(openclaw.binary)))() }
     : {};
   async function claimBoot(build: { openclawBuild?: string }): Promise<Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>> {
     const deadline = now() + 120_000;
@@ -109,12 +101,10 @@ export function createOpenClawBootWatcher(input: {
       if (claim.action !== "start" && claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
-      const requestedUpgrade = requestedUpgradeDoctor(claim, upgrade, build);
       await input.inspectBuilderStores?.();
       if (claim.action === "start") return;
-      if (requestedUpgrade) {
-        input.log(`[openclaw-boot] OpenClaw ${build.openclawBuild} replaces ${claim.openclawUpgrade?.replacesBuild ?? "an unrecorded build"}; running openclaw doctor --fix before startup`);
-        await run(requestedUpgrade.openclawBinary, ["doctor", "--fix", "--non-interactive", "--skip-recovery-backups"]);
+      if (claim.openclawUpgrade && !claim.sourceDoctor) {
+        input.log("[openclaw-boot] ignoring proactive upgrade Doctor from the previous platform release; trying normal startup");
         return;
       }
       if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
@@ -139,7 +129,7 @@ export function createOpenClawBootWatcher(input: {
 async function runClaimedDoctor(input: Parameters<typeof createOpenClawBootWatcher>[0],
   claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>, run: RunCommand): Promise<void> {
   if (!claim.sourceDoctor) {
-    await run("openclaw", ["doctor", "--fix", "--non-interactive"]);
+    await run(input.openclaw?.binary ?? "openclaw", ["doctor", "--fix", "--yes", "--non-interactive"]);
     return;
   }
   const request = claim.sourceDoctor, assertDoctor = input.client.assertOpenClawDoctor;

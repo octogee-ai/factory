@@ -100,6 +100,7 @@ export interface MigrateCustomerDeps {
   ) => Promise<FleetBrokerUserSnapshot | null>;
 
   readGatewaySystemConfigCommit: (gatewayId: string) => Promise<string | null>;
+  readOpenClawBuild?: (gatewayId: string, release: number) => Promise<string | null>;
 
   commitCutover: (commit: CutoverCommit & { automatic?: boolean }) => Promise<void>;
 
@@ -665,6 +666,12 @@ function buildRunnerDeps(
   const { deps, client, ctx } = input;
   return {
     client,
+    readCurrentGateway: async () => (await deps.readUser(input.uid))?.currentGatewayId ?? null,
+    prepareRollbackTarget: async (gatewayId, slug) => {
+      if (!deps.prepareMigrationAgentStores || !ctx.assertActiveClaim) throw new Error("Target cleanup requires claimed agent-store ownership preparation");
+      await ctx.assertActiveClaim();
+      await deps.prepareMigrationAgentStores(gatewayId, slug, { expectedBuilderUid: input.uid, assertCurrent: ctx.assertActiveClaim });
+    },
     ...scheduleTransferDeps(deps, input.uid),
     setMigrationPhase: (phase) => deps.setMigrationPhase?.({ uid: input.uid, sourceGatewayId: input.sourceGatewayId, operationId: input.operationId, phase }) ?? Promise.resolve(),
     readTargetSystemConfigCommit: deps.readGatewaySystemConfigCommit,
@@ -1464,6 +1471,17 @@ async function completeSchedulerHandoff(
     return failure("scheduler handoff scope changed after cutover", false);
   }
   const migrationId = deps.genMigrationId(op.id);
+  if (handoff.stageAfterCutover && !handoff.forwardRecovery && handoff.fromGatewayId.startsWith("shared-")) {
+    try {
+      const client = await gatewayClient(deps, [handoff.toGatewayId]);
+      await client.resume({ migrationId, gatewayId: handoff.toGatewayId, slug: handoff.slug, role: "target" });
+      const expectedSystemConfigCommit = await deps.readGatewaySystemConfigCommit(handoff.toGatewayId);
+      if (!expectedSystemConfigCommit) throw new Error("target has no accepted system config");
+      await client.flushGateway({ migrationId, gatewayId: handoff.toGatewayId, slug: handoff.slug, reason: "migration-converge", expectedSystemConfigCommit });
+    } catch (error) {
+      return failure(`migration cutover committed; destination recovery pending: status 503: ${errorMessage(error)}`, false);
+    }
+  }
   if (handoff.scheduleTransfer) await restoreSchedulesAfterCutover(deps, op, handoff, migrationId);
   else await finishLegacySchedulerHandoff(deps, op, handoff);
   await unmountSourceAfterCutover(deps, { migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId });
@@ -1556,12 +1574,12 @@ async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Ope
   if (sharedScope && sharedRecoveryTargetCleaned(op.input, previous)) return;
   await assertNativeReturnCurrent?.();
   if (!previous.stageAfterCutover) await abortPreviousTargetAttempt(deps, previous, assertNativeReturnCurrent);
-  if (op.input.recoverSourceOnly === true && op.input.source === "builder-activation-lease") {
+  if (builderActivationSourceRecoveryPending(op) || op.input.recoverSourceOnly === true && op.input.source === "builder-activation-lease") {
     if (!recovery || !deps.prepareBuilderRecoveryTarget) throw new Error("Builder source recovery target preparation is unavailable");
     await deps.assertMigrationRecoveryAuthority!(recovery);
     await deps.prepareBuilderRecoveryTarget({ recovery, targetGatewayId: previous.toGatewayId, migrationId: deps.genMigrationId(op.id), slug: previous.slug });
     await deps.assertMigrationRecoveryAuthority!(recovery);
-    await prepareRecoveryAgentStores(deps, ctx, recovery, previous.toGatewayId, previous.slug);
+    if (previous.forwardRecovery || !attemptNeverHeldSource(op)) await prepareRecoveryAgentStores(deps, ctx, recovery, previous.toGatewayId, previous.slug);
     const targetUrl = await deps.resolveGatewayUrl(previous.toGatewayId, { allowUnready: true });
     const assertCurrent = activeRecoveryAuthority(deps, ctx, recovery);
     await assertCurrent();
@@ -1692,7 +1710,7 @@ function previousAttemptScope(
   const sourceNeverHeld = op.input.recoverSourceOnly !== true && attemptNeverHeldSource(op);
   return {
     sharedScope,
-    recoveryRequired: sharedScope && !sourceNeverHeld,
+    recoveryRequired: sharedScope && (!sourceNeverHeld || builderActivationSourceRecoveryPending(op)),
     resumeSourceScheduler: !sourceNeverHeld,
     releaseSourceIngress: !legacyAttemptNeverQuiesced(op) && (!sourceNeverHeld || attemptMayHoldSourceIngress(op)),
   };
@@ -1759,7 +1777,7 @@ function sourceRecoveryOwnershipChanged(op: Operation, user: UserGatewayInfo): b
 }
 
 async function sourceOnlyRecoveryResult(op: Operation, sourceRecovered: boolean, ctx: OperationContext, now: number): Promise<OperationResult | null> {
-  if (op.input.recoverSourceOnly !== true) return null;
+  if (op.input.recoverSourceOnly !== true && !(sourceRecovered && builderActivationSourceRecoveryPending(op))) return null;
   if (!sourceRecovered) throw new Error("source-only recovery requires an abandoned Shared migration");
   await ctx.reportStep(reportedToOperationStep({ name: "recover-source", status: "done" }, now));
   return { steps: [], success: false, rolledBack: true, error: "abandoned Shared migration rolled back; native source recovery completed" };
@@ -1836,7 +1854,9 @@ async function prepareMigration(
   try {
     user = await deps.readUser(request.uid);
   } catch (error) {
-    return { error: errorMessage(error) };
+    return { error: op.schedulerHandoff?.stageAfterCutover === true
+      ? `migration ownership lookup pending: status 503: ${errorMessage(error)}`
+      : errorMessage(error) };
   }
   if (!user) return { error: `user not found: ${request.uid}` };
   if (sourceRecoveryOwnershipChanged(op, user)) {
@@ -1910,36 +1930,59 @@ async function prepareMigration(
       });
       return { result };
     }
-    await prepareSharedSourceAgentStores({ deps, op, ctx, targets: resolved.targets, uid: request.uid, slug: user.slug });
-    const urls = new Map<string, string>();
-    urls.set(
-      resolved.targets.fromGatewayId,
-      await deps.resolveGatewayUrl(resolved.targets.fromGatewayId),
-    );
-    urls.set(
-      resolved.targets.toGatewayId,
-      await deps.resolveGatewayUrl(resolved.targets.toGatewayId),
-    );
-    const migrationSnapshot = await deps.readUserSnapshot(
-      request.uid,
-      resolved.targets.toGatewayId,
-    );
-    if (!migrationSnapshot) {
-      return { error: `durable snapshot not found for ${request.uid}` };
-    }
-    return {
-      ...request,
-      user,
-      migrationId,
-      targets: resolved.targets,
-      ...(migrationSnapshot.projectCheckoutScope
-        ? { projectCheckoutScope: migrationSnapshot.projectCheckoutScope }
-        : {}),
-      urls,
-    };
+    return await prepareLegacyMigration({ deps, op, ctx, user, request, migrationId, targets: resolved.targets });
   } catch (error) {
     return migrationPreparationFailure(error, op);
   }
+}
+
+async function prepareLegacyMigration(input: {
+  deps: MigrateCustomerDeps;
+  op: Operation;
+  ctx: OperationContext;
+  user: UserGatewayInfo;
+  request: { uid: string; toGatewayId: string };
+  migrationId: string;
+  targets: MigrationTargets;
+}): Promise<PreparedMigration | { error: string }> {
+  const { deps, op, ctx, user, request, migrationId, targets } = input;
+  if (!op.schedulerHandoff?.forwardRecovery && sourceOwnedBuilderActivation(targets)) {
+    if (!deps.readOpenClawBuild) throw new Error("Builder activation requires its source OpenClaw build");
+    const [sourceBuild, targetBuild] = await Promise.all([
+      deps.readOpenClawBuild(targets.fromGatewayId, targets.fromRelease),
+      deps.readOpenClawBuild(targets.toGatewayId, targets.toRelease!),
+    ]);
+    if (!sourceBuild || sourceBuild !== targetBuild) {
+      throw new Error("Builder activation waits for the source and target to run the same OpenClaw build");
+    }
+  }
+  await prepareSharedSourceAgentStores({ deps, op, ctx, targets, uid: request.uid, slug: user.slug });
+  const urls = new Map<string, string>();
+  urls.set(
+    targets.fromGatewayId,
+    await deps.resolveGatewayUrl(targets.fromGatewayId),
+  );
+  urls.set(
+    targets.toGatewayId,
+    await deps.resolveGatewayUrl(targets.toGatewayId),
+  );
+  const migrationSnapshot = await deps.readUserSnapshot(
+    request.uid,
+    targets.toGatewayId,
+  );
+  if (!migrationSnapshot) {
+    return { error: `durable snapshot not found for ${request.uid}` };
+  }
+  return {
+    ...request,
+    user,
+    migrationId,
+    targets,
+    ...(migrationSnapshot.projectCheckoutScope
+      ? { projectCheckoutScope: migrationSnapshot.projectCheckoutScope }
+      : {}),
+    urls,
+  };
 }
 
 function migrationPreparationFailure(error: unknown, op: Operation): { error: string; rolledBack?: false } {
@@ -2038,6 +2081,10 @@ async function recordReleasedBuilderTarget(input: {
   return true;
 }
 
+function sourceOwnedBuilderActivation(targets: MigrationTargets): boolean {
+  return targets.fromGatewayClass === "shared" && targets.toGatewayClass === "builder";
+}
+
 async function executeMigration(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
@@ -2111,11 +2158,12 @@ async function executeMigration(
       gateAssignment: true,
       projectCheckoutScope: prepared.projectCheckoutScope,
       includeActivationManifest: true,
+      ...(sourceOwnedBuilderActivation(prepared.targets) && !handoff.forwardRecovery ? { preserveSource: true as const } : {}),
     },
     {
       ...buildRunnerDeps({ deps, client, ctx: destinationContext, automatic, operationId, uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId }),
       ...legacySchedulerHandoffDeps(deps, op, handoff),
-      persistForwardRecovery: async (state) => {
+      ...(!sourceOwnedBuilderActivation(prepared.targets) || handoff.forwardRecovery ? { persistForwardRecovery: async (state: { sourceSystemConfigCommit?: string }) => {
         if (!ctx.assertActiveClaim) throw new Error("forward recovery requires an active operation claim");
         await ctx.assertActiveClaim(handoff.forwardRecovery !== undefined);
         const owner = await deps.readUser(prepared.uid);
@@ -2130,7 +2178,7 @@ async function executeMigration(
           sourceEpoch: prepared.targets.fromEpoch, ...state,
         } };
         await persistSchedulerHandoff(handoff);
-      },
+      } } : {}),
     },
   );
   return finishMigrationAttempt({

@@ -12,6 +12,7 @@ const DEFAULT_FENCE_TIMEOUT_MS = 30_000;
 const DEFAULT_FENCE_RETRY_MS = 25;
 
 interface SystemConfigWatchFenceOptions {
+  runtimeProjection?: true;
   heartbeatMs?: number;
   staleAfterMs?: number;
   timeoutMs?: number;
@@ -19,6 +20,7 @@ interface SystemConfigWatchFenceOptions {
 }
 
 interface SystemConfigWatchFence {
+  runtimeProjection?: true;
   slug: string;
   generation: string;
 }
@@ -40,11 +42,16 @@ function readSystemConfigWatchFence(openclawDir: string): SystemConfigWatchFence
     ) {
       throw new Error("system config watcher fence is invalid");
     }
-    return { slug: parsed.slug, generation: parsed.generation };
+    return { slug: parsed.slug, generation: parsed.generation, ...(parsed.runtimeProjection ? { runtimeProjection: true } : {}) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+export function isSystemConfigRuntimeProjection(openclawDir: string, slug: string): boolean {
+  const fence = readSystemConfigWatchFence(openclawDir);
+  return fence?.slug === slug && fence.runtimeProjection === true;
 }
 
 export function isSystemConfigWatchDisabled(openclawDir: string, slug: string): boolean {
@@ -109,9 +116,10 @@ async function writeDisabledBuilderSlug(
   const temporary = `${target}.${process.pid}.${generation}.tmp`;
   try {
     rejectDifferentBuilderFence(openclawDir, slug);
+    const runtimeProjection = options.runtimeProjection || readSystemConfigWatchFence(openclawDir)?.runtimeProjection;
     await fsp.writeFile(
       temporary,
-      `${JSON.stringify({ slug, generation })}\n`,
+      `${JSON.stringify({ slug, generation, ...(runtimeProjection ? { runtimeProjection: true } : {}) })}\n`,
       { encoding: "utf8", mode: 0o600 },
     );
     await fsp.rename(temporary, target);

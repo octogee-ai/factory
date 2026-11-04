@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { queryAgentStore, readPostgresAgentAnchor, type PostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import { podBelongsToGateway } from "@octogee/core/gateway-live-release";
-import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { clientCredentialStorePath, clusterBuilderGateway, localStateStorePath, openclawStateRoot } from "./openclaw-state-store.js";
 
 export const GATEWAY_OWNER_RELEASE_WAIT_MS = 4 * 60_000;
@@ -68,7 +67,6 @@ export async function prepareGatewayStateStore(input: {
   log: (message: string) => void;
   env?: NodeJS.ProcessEnv;
   hostname?: string;
-  run?: OpenClawCommand;
   waitForOwner?: typeof waitForGatewayOwnerRelease;
 }): Promise<void> {
   const env = input.env ?? process.env;
@@ -85,17 +83,5 @@ export async function prepareGatewayStateStore(input: {
   const waitForOwner = input.waitForOwner ?? waitForGatewayOwnerRelease;
   await waitForOwner(ownerInput);
   if (fs.existsSync(clientCredentialStorePath(stateRoot))) return;
-  input.log("[state-store] local client credentials are missing for the PostgreSQL state store; rebinding fresh local credentials (local clients pair again)");
-  const run = input.run ?? runOpenClaw;
-  const args = ["doctor", "--fix", "--yes", "--non-interactive"];
-  const options = { env, timeoutMs: 300_000 };
-  let result = await run([...args, "--skip-recovery-backups"], options);
-  if (result.code !== 0) {
-    input.log(`[state-store] credential rebind without recovery backups failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}; retrying full Doctor after checking state ownership`);
-    await waitForOwner(ownerInput);
-    result = await run(args, options);
-  }
-  if (result.code !== 0) {
-    throw new Error(`client credential rebind failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400)}`);
-  }
+  input.log("[state-store] local client credentials are missing; trying normal startup before the one-shot boot Doctor");
 }
