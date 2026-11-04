@@ -78,3 +78,51 @@ describe.skipIf(!dsn)("bound agent-store handoff", () => {
     }
   });
 });
+
+const FLEET_CREDENTIAL_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))";
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+describe.skipIf(!dsn)("agent-store handoff queued behind the fleet credential lock", () => {
+  it.each([
+    { outcome: "moves the store once the lock is released", storeLocked: false },
+    { outcome: "still refuses a locked store within the relation lock budget", storeLocked: true },
+  ])("$outcome", async ({ storeLocked }) => {
+    const suffix = randomUUID().replaceAll("-", ""), storeId = randomUUID();
+    const builder = { uid: suffix, slug: suffix }, schema = `queued_${suffix}`, agentId = `octogee-${suffix}-coach`;
+    const provision = createAgentStoreCredentialProvisioner(dsn!, dsn!);
+    const shared = new pg.Client({ connectionString: await provision({ gatewayClass: "shared", gatewayId: `shared-${suffix}`, token: "synthetic" }, async () => {}) });
+    const admin = new pg.Client({ connectionString: dsn }), holder = new pg.Client({ connectionString: dsn });
+    await shared.connect(); await admin.connect(); await holder.connect();
+    let pending: Promise<void> | undefined;
+    try {
+      await query(shared, `CREATE SCHEMA ${pg.escapeIdentifier(schema)}`);
+      await query(shared, `CREATE TABLE ${pg.escapeIdentifier(schema)}.schema_meta (meta_key TEXT, role TEXT, agent_id TEXT)`);
+      await query(shared, `INSERT INTO ${pg.escapeIdentifier(schema)}.schema_meta VALUES ('primary', 'agent', $1)`, [agentId]);
+      await query(shared, `CREATE TABLE ${pg.escapeIdentifier(schema)}.openclaw_schema_meta (store TEXT, store_id TEXT)`);
+      await query(shared, `INSERT INTO ${pg.escapeIdentifier(schema)}.openclaw_schema_meta VALUES ('agent', $1)`, [storeId]);
+      if (storeLocked) {
+        await shared.query("BEGIN");
+        await query(shared, `SELECT * FROM ${pg.escapeIdentifier(schema)}.schema_meta`);
+      }
+      await holder.query("BEGIN");
+      await holder.query(FLEET_CREDENTIAL_LOCK);
+      const transfer = createAgentStoreOwnershipTransferer(dsn!, async () => [{ schema, storeId, agentId }]);
+      pending = transfer(builder, "builder");
+      const settled = pending.then(() => "moved", error => `failed:${error.code}`);
+      expect(await Promise.race([settled, delay(3_000).then(() => "waiting")])).toBe("waiting");
+      await holder.query("ROLLBACK");
+      if (storeLocked) {
+        await expect(pending).rejects.toMatchObject({ code: "55P03" });
+      } else {
+        await pending;
+        await expect(query(shared, `SELECT * FROM ${pg.escapeIdentifier(schema)}.schema_meta`)).rejects.toMatchObject({ code: "42501" });
+      }
+    } finally {
+      await shared.query("ROLLBACK").catch(() => {});
+      await holder.query("ROLLBACK").catch(() => {});
+      await pending?.catch(() => {});
+      await query(admin, `DROP SCHEMA IF EXISTS ${pg.escapeIdentifier(schema)} CASCADE`);
+      await shared.end(); await holder.end(); await admin.end();
+    }
+  }, 15_000);
+});

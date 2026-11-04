@@ -7,6 +7,9 @@ const identifier = pg.escapeIdentifier;
 const literal = pg.escapeLiteral;
 const AGENT_STORE_SEARCH_PATH = "SET LOCAL search_path = pg_catalog";
 const AGENT_STORE_CREDENTIAL_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended('octogee-agent-store-credentials', 0))";
+const AGENT_STORE_CREDENTIAL_LOCK_WAIT = "SET LOCAL lock_timeout = '60s'";
+const AGENT_STORE_RELATION_LOCK_WAIT = "SET LOCAL lock_timeout = '2s'";
+const AGENT_STORE_HANDOFF_STATEMENT_TIMEOUT = "SET LOCAL statement_timeout = '30s'";
 const roleFor = (kind: string, id: string) => `octogee_${kind}_${createHash("sha256").update(id).digest("hex").slice(0, 24)}`;
 
 export interface AgentStoreGatewayIdentity {
@@ -291,9 +294,10 @@ export function createAgentStoreOwnershipTransferer(
     try {
       await client.query("BEGIN");
       await client.query(AGENT_STORE_SEARCH_PATH);
-      await client.query("SET LOCAL lock_timeout = '2s'");
-      await client.query("SET LOCAL statement_timeout = '30s'");
+      await client.query(AGENT_STORE_CREDENTIAL_LOCK_WAIT);
       await client.query(AGENT_STORE_CREDENTIAL_LOCK);
+      await client.query(AGENT_STORE_RELATION_LOCK_WAIT);
+      await client.query(AGENT_STORE_HANDOFF_STATEMENT_TIMEOUT);
       await assertCurrent?.();
       const stores = await readStores(builder);
       if (new Set(stores.map(store => store.schema)).size !== stores.length ||
