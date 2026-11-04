@@ -3079,13 +3079,19 @@ describe("source-owned Builder activation", () => {
 
   it("cleans the target and restores Shared after a failed final import without a forward-only checkpoint", async () => {
     const h = activation();
+    h.deps.clearMigrationPreparation = vi.fn(async () => undefined);
     const transfer = vi.mocked(h.client.transferState).getMockImplementation()!;
     vi.mocked(h.client.transferState).mockImplementation(async request => {
       if (request.mode === "final") throw new Error("native agent creation failed");
       return transfer(request);
     });
     const result = await createMigrateCustomerHandler(h.deps)(h.operation, h.ctx);
-    expect(result).toMatchObject({ success: false, rolledBack: true });
+    expect(result).toMatchObject({ success: false, rolledBack: true, error: "native agent creation failed" });
+    expect(h.deps.completeMigrationRecovery).toHaveBeenCalledWith({
+      uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: h.operation.id,
+      sourceEpoch: 4, claimStartedAt: 4_000,
+    });
+    expect(h.deps.clearMigrationPreparation).not.toHaveBeenCalled();
     expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green" }));
     expect(h.client.resume).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue" }));
     expect(h.deps.setAssignmentState).toHaveBeenLastCalledWith(expect.objectContaining({ gatewayId: "shared-blue", state: "serving" }));

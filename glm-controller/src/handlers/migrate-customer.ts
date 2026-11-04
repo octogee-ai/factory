@@ -2195,7 +2195,13 @@ async function finishMigrationAttempt(input: {
   if (!result.success && targetReleased && await recordReleasedBuilderTarget({ deps, ctx, op, handoff })) {
     return failure(RELEASED_BUILDER_TARGET_ERROR, false);
   }
-  if (shouldClearMigrationPreparation({ preparationFailed, postQuiesceFailed, targetUnmountConfirmed, result })) {
+  if (sourceOwnedBuilderActivation(prepared.targets) && postQuiesceFailed && result.rolledBack && targetUnmountConfirmed) {
+    if (!deps.completeMigrationRecovery) throw new Error("migration rollback completion requires claimed recovery authority");
+    await deps.completeMigrationRecovery({
+      uid: prepared.uid, sourceGatewayId: prepared.user.currentGatewayId,
+      operationId: op.id, sourceEpoch: prepared.targets.fromEpoch, claimStartedAt: requiredClaimStartedAt(op),
+    });
+  } else if (shouldClearMigrationPreparation({ preparationFailed, postQuiesceFailed, targetUnmountConfirmed, result })) {
     await deps.clearMigrationPreparation?.({
       uid: prepared.uid,
       sourceGatewayId: prepared.user.currentGatewayId,

@@ -144,6 +144,10 @@ name is not proof. Read back published generations and hashes. Set
 exact overlay branch; use `--force-with-lease` only when rewriting a previously
 published branch.
 
+After changing the source pin, regenerate `core/src/agent-store-routines.json`
+with `scripts/ops/qualify-agent-store-routines.mjs` against disposable PostgreSQL
+16 with pgvector 0.8.7, then rebuild `core/`.
+
 The hosted UI islands ship from the same source. Regenerate them from the same
 clean, built checkout before publishing, so `sourceSha` pins the gateway objects
 and the committed bundles together:
@@ -169,8 +173,8 @@ This refresh freezes the fetched OpenClaw main tip at
 `2b0a8fe8afc442843353e82158ff291e0099c0e6`, 212 commits after the previous
 `c1b0fc1415a09138c48e3f81055aca0f8e4f12aa` base. The operator selected this
 exact tip for independent qualification; later commits are not build inputs.
-The clean built overlay is `05e4976b4cff904c77fdafeef3d5004576eeeb4b` on
-`ceckert/openclaw:codex/gateway-refresh-20261103`. The archives and hosted
+The clean built overlay is `2f9e0976842e43a2e85bd96b7c54bbfebba9ff6e` on
+`ceckert/openclaw:codex/pro-retained-agent-import`. The archives and hosted
 islands come from that source.
 
 The tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41602367652)
@@ -191,6 +195,23 @@ channel membership, strict stop, Mattermost action gates and these conflict
 resolutions; it found no actionable issue, but did not review every overlay
 change. The boundaries and removal conditions below remain the assessment for
 the retained behavior, not a claim that every family was newly proven.
+
+### Retained-agent live import repair
+
+A reused Builder home can boot with a completed detach record and no configured
+agent. Replacing its retained PostgreSQL anchor during a live import then made
+`agents.create` fail during config preflight: the creation claim had already
+closed even though publication still needed the recreated identity. The overlay
+keeps that existing claim through preflight and settles its handles at the native
+config writer’s precommit hook. Cleanup failures still prevent publication and
+roll back staged auth. It adds no Doctor run, deletion-journal bypass, or recovery
+owner. Remove this patch when the selected OpenClaw source carries the same fix.
+
+The real PostgreSQL RPC regression is red on the previous source and green on
+this source, preserving store identity, full history, live reads and session
+creation before restart, and writes after restart. Existing staged-auth commit,
+rollback, close-failure and post-publication bookkeeping tests also pass.
+Core typecheck, scoped lint and independent review cover the source change.
 
 ### Native adoption and retained product boundaries
 
