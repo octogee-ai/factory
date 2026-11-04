@@ -3103,7 +3103,8 @@ async function removeUnmountedBuilderImport(
   };
   if (activation) {
     const state = await deps.unreserveSurgeTarget!(activation.request, remove);
-    if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
+    if (state.role !== "normal") throw new Error("Builder import cleanup did not release its target custody");
+    if (activation.live && state.mode !== "permitted") throw new Error("live Builder cleanup did not restart its prelaunch OpenClaw");
   } else await remove();
   if (!result) throw new Error("Builder import cleanup was not executed before unreserve");
   return result;

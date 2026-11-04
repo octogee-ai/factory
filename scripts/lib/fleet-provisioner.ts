@@ -115,6 +115,7 @@ import {
   observeDashboardControl,
   probeOpenClawHealth,
 } from "./system-config-runtime-health.js";
+import { prepareBuilderPrelaunchConfig } from "./system-config.js";
 import type { FleetBrokerUserSnapshot } from "../../shared/types/fleet-broker.js";
 import {
   resetRecoveredCustomerRuntime,
@@ -2286,6 +2287,7 @@ async function assertBuilderTargetCleanupCurrent(
 async function unreserveWarmBuilderTarget(
   input: Parameters<typeof unreserveConfiguredBuilderTarget>[0],
   cleanup: () => Promise<void>,
+  observed: SurgeOpenClawProcessGateState,
 ): Promise<SurgeOpenClawProcessGateState> {
   const { processGate, request } = input;
   if (!input.cleanup) return processGate.unreserve(request);
@@ -2294,7 +2296,39 @@ async function unreserveWarmBuilderTarget(
   await processGate.hydrate(request);
   await input.waitForActiveProvisioningDrain();
   await cleanup();
-  return processGate.unreserve(request);
+  const released = await processGate.unreserve(request);
+  if (observed.mode !== "permitted") return released;
+  return restartBuilderPrelaunch(input);
+}
+
+async function restartBuilderPrelaunch(
+  input: Pick<Parameters<typeof unreserveConfiguredBuilderTarget>[0], "processGate" | "request" | "prepareBuilderPrelaunch">,
+): Promise<SurgeOpenClawProcessGateState> {
+  return openClawRuntimeUpdateGuard.run(async () => {
+    await input.prepareBuilderPrelaunch(input.request.slug);
+    return input.processGate.permitNormal();
+  });
+}
+
+function servingAfterWarmCleanup(state: SurgeOpenClawProcessGateState): boolean {
+  return state.mode === "permitted" && state.terminalTarget?.completionStarted === false;
+}
+
+async function cancelReleasedBuilderTarget(
+  input: Parameters<typeof unreserveConfiguredBuilderTarget>[0],
+  cleanup: () => Promise<void>,
+  observed: SurgeOpenClawProcessGateState,
+): Promise<SurgeOpenClawProcessGateState> {
+  const { processGate, request } = input;
+  if (await input.configuredBuilderAssigned(request.slug)) {
+    throw new Error("cannot cancel a released Builder with a serving assignment");
+  }
+  if (!input.cleanup && settledBuilderCancellation(observed)) return observed;
+  await processGate.reholdReleasedTarget(request);
+  await input.waitForActiveProvisioningDrain();
+  await cleanup();
+  const cancelled = await processGate.finalizeTargetCancellation(request);
+  return input.cleanup && servingAfterWarmCleanup(observed) ? restartBuilderPrelaunch(input) : cancelled;
 }
 
 async function unreserveConfiguredBuilderTarget(input: {
@@ -2303,6 +2337,7 @@ async function unreserveConfiguredBuilderTarget(input: {
   processGate: SurgeOpenClawProcessSupervisorClient;
   request: BuilderSurgeTargetRequest;
   waitForActiveProvisioningDrain: () => Promise<void>;
+  prepareBuilderPrelaunch: (slug: string) => Promise<void>;
   cleanup?: (assertCurrent: () => Promise<void>) => Promise<void>;
 }): Promise<SurgeOpenClawProcessGateState> {
   const { activeRelease, processGate, request, waitForActiveProvisioningDrain } = input;
@@ -2320,15 +2355,9 @@ async function unreserveConfiguredBuilderTarget(input: {
   };
   const state = await processGate.status();
   if (state.role === "normal") {
-    if (!releasedBuilderTargetMatches(state, request)) return unreserveWarmBuilderTarget(input, cleanup);
-    if (await input.configuredBuilderAssigned(request.slug)) {
-      throw new Error("cannot cancel a released Builder with a serving assignment");
-    }
-    if (!input.cleanup && settledBuilderCancellation(state)) return state;
-    await processGate.reholdReleasedTarget(request);
-    await waitForActiveProvisioningDrain();
-    await cleanup();
-    return processGate.finalizeTargetCancellation(request);
+    return releasedBuilderTargetMatches(state, request)
+      ? cancelReleasedBuilderTarget(input, cleanup, state)
+      : unreserveWarmBuilderTarget(input, cleanup, state);
   }
   if (!reservedBuilderTargetMatches(state, request)) {
     if (input.cleanup) throw new Error("Builder import cleanup has no matching target reservation");
@@ -2356,6 +2385,7 @@ interface BuilderSurgeGateWiringOptions {
   waitForActiveProvisioningDrain?: () => Promise<void>;
   attachConfiguredBuilderBeforeOpenClaw?: ConfiguredBuilderAttach;
   configuredBuilderAssigned?: (slug: string) => Promise<boolean>;
+  prepareBuilderPrelaunch?: (slug: string) => Promise<void>;
 }
 
 function reservedTargetOpenClawHeld(
@@ -2527,6 +2557,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
     waitForActiveProvisioningDrain = async () => undefined,
     attachConfiguredBuilderBeforeOpenClaw: attachConfigured = attachConfiguredBuilderBeforeOpenClaw,
     configuredBuilderAssigned = async () => false,
+    prepareBuilderPrelaunch = (slug: string) => prepareBuilderPrelaunchConfig(openclawDir, slug),
   } = input;
   let activeRelease: ActiveBuilderSurgeRelease | null = null;
   let preparedTarget: PreparedBuilderTarget | null = null;
@@ -2664,7 +2695,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
       if (!processGate) throw new Error("configured Builder OpenClaw process gate is unavailable");
       return runCancellation(() => unreserveConfiguredBuilderTarget({
         activeRelease, configuredBuilderAssigned, processGate, request,
-        waitForActiveProvisioningDrain, cleanup,
+        waitForActiveProvisioningDrain, prepareBuilderPrelaunch, cleanup,
       }));
     },
     releaseSurgeReadiness(input) {

@@ -54,6 +54,7 @@ import type {
   SurgeOpenClawProcessSupervisorClient,
 } from "../lib/surge-openclaw-process-gate.js";
 import type { SurgeReadinessGate } from "../lib/surge-readiness.js";
+import { openClawRuntimeUpdateGuard } from "../lib/openclaw-runtime-update-guard.js";
 import { _resetReconcileInFlightForTests, startReconcileLoop } from "../lib/reconcile-loop.js";
 import { startAfterSurgeReadiness } from "../lib/surge-reconcile-gate.js";
 import {
@@ -1719,21 +1720,25 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it.each(["success", "retry", "cleanup-failed", "hold-lost", "assigned", "assigned-after-drain", "residue", "warm"] as const)("keeps exact cancellation custody through imported cleanup: %s", async scenario => {
+  it.each(["success", "retry", "cleanup-failed", "hold-lost", "assigned", "assigned-after-drain", "residue", "warm", "warm-replay", "released", "prelaunch-failed"] as const)("keeps exact cancellation custody through imported cleanup: %s", async scenario => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     const request = { migrationId: "cleanup-op", slug: "ceckert-test", targetPodUid: "target-pod" };
     let state: SurgeOpenClawProcessGateState = { version: 1, podUid: "target-pod", role: "target", mode: "permitted", phase: "running", ...request };
-    if (scenario === "residue" || scenario === "warm") state = { version: 1, podUid: "target-pod", role: "normal", mode: scenario === "warm" ? "permitted" : "held", phase: scenario === "warm" ? "running" : "held" };
+    const warm = scenario === "warm" || scenario === "warm-replay" || scenario === "prelaunch-failed";
+    if (scenario === "residue" || warm) state = { version: 1, podUid: "target-pod", role: "normal", mode: warm ? "permitted" : "held", phase: warm ? "running" : "held" };
+    if (scenario === "released") state = { version: 1, podUid: "target-pod", role: "normal", mode: "permitted", phase: "running", terminalTarget: { ...request, completionStarted: true } };
+    const carried = (completionStarted: boolean | undefined) => completionStarted === undefined ? {} : { completionStarted };
     const events: string[] = [];
     const processGate = {
       status: async () => state,
       holdNormal: vi.fn(async () => { events.push("stop-normal"); state = { ...state, mode: "held", phase: "held" }; return state; }),
-      hydrate: vi.fn(async () => { events.push("reserve"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "held", ...request }; return state; }),
+      hydrate: vi.fn(async () => { events.push("reserve"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "held", ...request, completionStarted: false }; return state; }),
       rehold: vi.fn(async () => { events.push("stop"); state = { ...state, mode: "held", phase: "cancelling" }; return state; }),
-      reholdReleasedTarget: vi.fn(async () => { events.push("restop"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "cancelling", ...request }; return state; }),
-      finalizeTargetCancellation: vi.fn(async () => { events.push("finalize"); state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: request }; return state; }),
-      unreserve: vi.fn(async () => { state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: request }; return state; }),
+      reholdReleasedTarget: vi.fn(async () => { events.push("restop"); state = { version: 1, podUid: "target-pod", role: "target", mode: "held", phase: "cancelling", ...request, ...carried(state.terminalTarget?.completionStarted) }; return state; }),
+      finalizeTargetCancellation: vi.fn(async () => { events.push("finalize"); state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: { ...request, ...carried(state.completionStarted) } }; return state; }),
+      unreserve: vi.fn(async () => { state = { version: 1, podUid: "target-pod", role: "normal", mode: "held", phase: "held", terminalTarget: { ...request, ...carried(state.completionStarted) } }; return state; }),
+      permitNormal: vi.fn(async () => { events.push("permit-normal"); state = { ...state, mode: "permitted", phase: "starting" }; return state; }),
     } as unknown as SurgeOpenClawProcessSupervisorClient;
     const cleanup = vi.fn(async (assertCurrent: () => Promise<void>) => {
       events.push("cleanup");
@@ -1748,6 +1753,11 @@ describe("configured Builder surge release", () => {
         log: () => undefined, provisioning: { beginProvisioning: vi.fn(), finishProvisioning: vi.fn() },
         waitForActiveProvisioningDrain: async () => { events.push("drain"); },
         configuredBuilderAssigned: async () => scenario === "assigned" || (scenario === "assigned-after-drain" && events.includes("drain")),
+        prepareBuilderPrelaunch: async (slug) => {
+          if (openClawRuntimeUpdateGuard.tryRun(async () => undefined) !== undefined) throw new Error("prelaunch config written outside the runtime update guard");
+          if (scenario === "prelaunch-failed") throw new Error("Builder prelaunch requires its accepted system config");
+          events.push(`prelaunch:${slug}`);
+        },
       });
       const cancel = wiring.unreserveSurgeTarget(request, cleanup);
       if (scenario === "success" || scenario === "retry") {
@@ -1757,9 +1767,25 @@ describe("configured Builder surge release", () => {
           await expect(wiring.unreserveSurgeTarget(request, cleanup)).resolves.toMatchObject({ role: "normal", terminalTarget: request });
           expect(events).toEqual(["stop", "drain", "cleanup", "finalize", "restop", "drain", "cleanup", "finalize"]);
         }
-      } else if (scenario === "warm" || scenario === "residue") {
+      } else if (scenario === "prelaunch-failed") {
+        await expect(cancel).rejects.toThrow("Builder prelaunch requires its accepted system config");
+        expect(state).toMatchObject({ role: "normal", mode: "held", terminalTarget: request });
+        expect(processGate.permitNormal).not.toHaveBeenCalled();
+      } else if (warm) {
+        await expect(cancel).resolves.toMatchObject({ role: "normal", mode: "permitted", terminalTarget: request });
+        expect(events).toEqual(["stop-normal", "reserve", "drain", "cleanup", "prelaunch:ceckert-test", "permit-normal"]);
+        if (scenario === "warm-replay") {
+          await expect(wiring.unreserveSurgeTarget(request, cleanup)).resolves.toMatchObject({ role: "normal", mode: "permitted", terminalTarget: request });
+          expect(events.slice(6)).toEqual(["restop", "drain", "cleanup", "finalize", "prelaunch:ceckert-test", "permit-normal"]);
+        }
+      } else if (scenario === "released") {
+        await expect(cancel).resolves.toMatchObject({ role: "normal", mode: "held", terminalTarget: request });
+        expect(events).toEqual(["restop", "drain", "cleanup", "finalize"]);
+        expect(processGate.permitNormal).not.toHaveBeenCalled();
+      } else if (scenario === "residue") {
         await expect(cancel).resolves.toMatchObject({ role: "normal", mode: "held" });
         expect(events).toEqual(["stop-normal", "reserve", "drain", "cleanup"]);
+        expect(processGate.permitNormal).not.toHaveBeenCalled();
       } else {
         await expect(cancel).rejects.toThrow();
         expect(processGate.finalizeTargetCancellation).not.toHaveBeenCalled();

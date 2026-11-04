@@ -119,6 +119,7 @@ const SAMPLE_COMPLETE_SURGE: CompleteSurgeHandoffRequestBody = {
 const HELD_BUILDER_GATE_STATE = {
   version: 1, podUid: "builder-pod", role: "normal", mode: "held", phase: "held",
 } as const;
+const PRELAUNCH_BUILDER_GATE_STATE = { ...HELD_BUILDER_GATE_STATE, mode: "permitted", phase: "starting" } as const;
 
 const RESTORE_SNAPSHOT = {
   uid: "uid-chris",
@@ -4623,7 +4624,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
         releaseSurgeReadiness: permitted("configured Builder target is not reserved by this migration"),
         unreserveSurgeTarget: vi.fn(async (_request, cleanup) => {
           await cleanup?.(async () => {});
-          return HELD_BUILDER_GATE_STATE;
+          return PRELAUNCH_BUILDER_GATE_STATE;
         }),
         surgeTargetOpenClawHeld: permitted("configured Builder target is not reserved by this migration"),
         surgeTargetLive: vi.fn(async (request) => {
@@ -4871,6 +4872,43 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(deps.liveSurgeTargetAssigned).toHaveBeenCalledOnce();
     expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledWith("chris", undefined, undefined, expect.objectContaining({ slug: "chris", assertCurrent: expect.any(Function) }));
     expect(await abortLiveImport(deps, "mig-live-builder-unmount")).toBe(200);
+  });
+
+  it.each([
+    { case: "live Builder restarted in prelaunch", live: true, gate: PRELAUNCH_BUILDER_GATE_STATE, status: 200 },
+    { case: "live Builder left held", live: true, gate: HELD_BUILDER_GATE_STATE, status: 500 },
+    { case: "replayed return already restarted in prelaunch", live: false, gate: PRELAUNCH_BUILDER_GATE_STATE, status: 200 },
+    { case: "cancelled import left held", live: false, gate: HELD_BUILDER_GATE_STATE, status: 200 },
+    { case: "target custody never released", live: false, gate: { ...HELD_BUILDER_GATE_STATE, role: "target" }, status: 500 },
+  ] as const)("unmount after Builder cleanup: $case → $status", async ({ live, gate, status }) => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({
+      ...target.deps,
+      adapter: mkAdapter(target.adapter),
+      surgeTargetLive: vi.fn(async () => live),
+      unreserveSurgeTarget: vi.fn(async (_request, cleanup) => {
+        await cleanup?.(async () => {});
+        return gate;
+      }),
+    });
+    const response = await unmountLiveImport(deps, `mig-builder-return-${live}-${gate.role}-${gate.mode}`);
+    expect(response.getStatus()).toBe(status);
+    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledOnce();
+  });
+
+  it("fails the unmount when a live Builder cannot restart in prelaunch after cleanup", async () => {
+    const target = liveBuilderTargetImport();
+    const deps = mkDeps({
+      ...target.deps,
+      adapter: mkAdapter(target.adapter),
+      unreserveSurgeTarget: vi.fn(async (_request, cleanup) => {
+        await cleanup?.(async () => {});
+        throw new Error("Builder prelaunch requires its accepted system config");
+      }),
+    });
+    const response = await unmountLiveImport(deps, "mig-builder-return-prelaunch-failed");
+    expect(response.getStatus()).toBe(500);
+    expect(deps.adapter.removeImportedCustomerBySlug).toHaveBeenCalledOnce();
   });
 
   async function unmountAfterRestart(deps: MigrationHandlerDeps, migrationId: string): Promise<ReturnType<typeof mkResponse>> {
