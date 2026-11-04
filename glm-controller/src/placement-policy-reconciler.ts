@@ -28,9 +28,11 @@ import {
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
+  isGatewayRuntime,
   resolveGatewayRuntime,
   resolveUserGatewayControlState,
     type GatewayRuntime,
+    type GatewayVmState,
 } from "@octogee/shared/types/glm";
 import {
   commitPlacementAtomic,
@@ -122,6 +124,7 @@ import {
 } from "./operation-retry.js";
 
 export const PLACEMENT_POLICY_RECONCILE_MS_DEFAULT = 15_000;
+export const DISPOSABLE_GATEWAY_COMPUTER_START_TIMEOUT_MS = 20 * 60_000;
 export const DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS = 10 * 60_000;
 export const DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS = 10 * 60_000;
 export const DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS =
@@ -231,6 +234,7 @@ export interface PlacementPolicyGateway extends ContinuousPlacementOwnedGateway 
   serving?: boolean;
   runtimeStatus?: string;
   heartbeatFresh?: boolean;
+  computerStartedAt?: number | null;
   runtimeStartedAt?: number | null;
   liveReleaseReady?: boolean;
   rosterComplete?: boolean;
@@ -1350,17 +1354,35 @@ async function recoverAndRetireUnreachableTarget(
   return recovery.operationId;
 }
 
+function disposableGatewayProvisioningClockStartedAt(input: {
+  now: number;
+  provisionedAt: number;
+  target: PlacementPolicyGateway;
+}): number | null {
+  if (input.target.runtime === "cluster") return input.provisionedAt;
+  const computerStartedAt = millis(input.target.computerStartedAt);
+  return computerStartedAt !== null &&
+    computerStartedAt >= input.provisionedAt &&
+    computerStartedAt <= input.now
+    ? computerStartedAt
+    : null;
+}
+
 function disposableGatewayProvisioningBudgetOpen(input: {
   now: number;
   provisionedAt: number;
-  runtimeStartedAt: unknown;
+  target: PlacementPolicyGateway;
 }): boolean {
-  const provisionElapsedMs = input.now - input.provisionedAt;
+  const clockStartedAt = disposableGatewayProvisioningClockStartedAt(input);
+  if (clockStartedAt === null) {
+    return input.now - input.provisionedAt < DISPOSABLE_GATEWAY_COMPUTER_START_TIMEOUT_MS;
+  }
+  const provisionElapsedMs = input.now - clockStartedAt;
   if (provisionElapsedMs < DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS) return true;
-  const runtimeStartedAt = millis(input.runtimeStartedAt);
+  const runtimeStartedAt = millis(input.target.runtimeStartedAt);
   if (
     runtimeStartedAt === null ||
-    runtimeStartedAt < input.provisionedAt ||
+    runtimeStartedAt < clockStartedAt ||
     runtimeStartedAt > input.now
   ) {
     return false;
@@ -1398,7 +1420,7 @@ async function cleanupUnreachableProvisioningTarget(
     if (disposableGatewayProvisioningBudgetOpen({
       now: context.deps.now(),
       provisionedAt,
-      runtimeStartedAt: target.runtimeStartedAt,
+      target,
     })) {
       return true;
     }
@@ -3180,9 +3202,16 @@ function gatewayPodStartedAt(
   return currentPods.length === 1 ? millis(currentPods[0].gatewayContainerStartedAt) : null;
 }
 
+function gatewayComputerStartedAt(value: Record<string, unknown> | undefined): number | null {
+  if (value?.runtime !== "gce-vm") return null;
+  const vm = value.vm as Partial<GatewayVmState> | null | undefined;
+  return vm?.status === "RUNNING" ? millis(vm.startedAt) : null;
+}
+
 function gatewayRuntimeObservation(value: Record<string, unknown> | undefined) {
   return {
-    runtime: resolveGatewayRuntime(value?.runtime),
+    runtime: isGatewayRuntime(value?.runtime) ? value.runtime : undefined,
+    computerStartedAt: gatewayComputerStartedAt(value),
     runtimeStatus: isGatewayRuntimeDoc(value) ? value.heartbeat.status : undefined,
   };
 }

@@ -89,6 +89,7 @@ export interface GatewayVmState {
     instanceId: string | null;
     internalIp: string | null;
     status: string | null;
+    startedAt: number | null;
     provisioningModel: GatewayVmProvisioningModel | null;
     stopReason: GatewayVmStopReason | null;
     parkedCheckpoint?: GatewayVmParkedCheckpoint;

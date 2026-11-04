@@ -95,7 +95,7 @@ const stopped: GatewayVmDescription = { ...running, status: "TERMINATED", intern
 const suspended: GatewayVmDescription = { ...running, status: "SUSPENDED", internalIp: null };
 const CURRENT_IMAGE = { name: "octogee-computer-20260927", id: "2027" };
 const OLD_IMAGE = { name: "octogee-computer-20260914", id: "1914" };
-const recorded = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", internalIp: "172.20.0.9", status: "RUNNING", provisioningModel: "SPOT", stopReason: null, updatedAt: 1 };
+const recorded = { instanceName: COMPUTER, zone: "us-west1-b", instanceId: "4242", internalIp: "172.20.0.9", status: "RUNNING", startedAt: 100, provisioningModel: "SPOT", stopReason: null, updatedAt: 1 };
 
 function harness(
   docs: Docs,
@@ -1443,6 +1443,21 @@ describe("createVmGatewayRuntime.recoverUnreachable", () => {
     await gone.runtime.recoverUnreachable("b-x");
     expect(gone.log).toHaveBeenCalledWith(expect.stringMatching(/octogee-computer-test-uida is absent from Compute/));
     expect(gone.docs["glmGateways/b-x"].vm).toEqual(recorded);
+  });
+
+  it("records the computer's start time when the running record lacks it or Compute restarted it", async () => {
+    const { startedAt: _startedAt, ...unstamped } = recorded;
+    const legacy = harness(live(unstamped));
+    await legacy.runtime.recoverUnreachable("b-x");
+    expect(legacy.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
+
+    const restarted = harness(live(), { describe: vi.fn(async () => ({ ...running, lastStartedAt: 500 })) });
+    await restarted.runtime.recoverUnreachable("b-x");
+    expect(restarted.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, startedAt: 500, updatedAt: 1_000 });
+
+    const unchanged = harness(live());
+    await unchanged.runtime.recoverUnreachable("b-x");
+    expect(unchanged.writes.filter((w) => w.path === "glmGateways/b-x")).toHaveLength(0);
   });
 
   it("stops recovering once retirement has deleted the runtime record: no preemption write, no restart", async () => {

@@ -15,6 +15,7 @@ const description: GatewayVmDescription = {
   gatewayId: "b-mama-3-abc-hobby",
   labels: {},
   metadata: { "gateway-id": "b-mama-3-abc-hobby" },
+  lastStartedAt: 7,
 };
 
 const vmState: GatewayVmState = {
@@ -23,6 +24,7 @@ const vmState: GatewayVmState = {
   instanceId: "42",
   internalIp: "10.138.0.9",
   status: "RUNNING",
+  startedAt: 7,
   provisioningModel: "SPOT",
   stopReason: null,
   updatedAt: 1,

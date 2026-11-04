@@ -112,6 +112,7 @@ function stateFrom(
     instanceId: description.instanceId,
     internalIp: description.internalIp,
     status: description.status,
+    startedAt: description.lastStartedAt,
     provisioningModel: description.provisioningModel,
     stopReason,
     updatedAt: now,
@@ -154,6 +155,7 @@ function sameObservation(recorded: GatewayVmState, description: GatewayVmDescrip
   return recorded.status === description.status
     && recorded.internalIp === description.internalIp
     && recorded.instanceId === description.instanceId
+    && (recorded.startedAt ?? null) === description.lastStartedAt
     && (recorded.stopReason ?? null) === stopReason;
 }
 
@@ -623,7 +625,7 @@ async function replacementRecord(deps: ComputerLifecycleDeps, gatewayId: string,
   if (!parked || parked.gatewayId !== gatewayId) throw new Error("retired replacement requires the same owner-anchored parked computer");
   return { data: { runtime: "gce-vm", vmInstance: { ownerUid }, vmSpec: parked.vmSpec, vmBootRecovery: parked.bootRecovery },
     vm: { instanceName: parked.instanceName, zone: parked.zone, instanceId: parked.instanceId, updatedAt: parked.parkedAt,
-      internalIp: null, status: "TERMINATED", provisioningModel: null, stopReason: "idle" } };
+      internalIp: null, status: "TERMINATED", startedAt: null, provisioningModel: null, stopReason: "idle" } };
 }
 
 async function clearForceReplacementRuntime(deps: ComputerLifecycleDeps, gatewayId: string, ownerUid: string, instanceId: string): Promise<boolean> {

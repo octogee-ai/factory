@@ -61,6 +61,7 @@ function stateFrom(description: GatewayVmDescription, now: number, stopReason: G
     instanceId: description.instanceId,
     internalIp: description.internalIp,
     status: description.status,
+    startedAt: description.lastStartedAt,
     provisioningModel: description.provisioningModel,
     stopReason,
     updatedAt: now,
