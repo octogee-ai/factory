@@ -2684,8 +2684,12 @@ describe("queued-rsync migration control handlers", () => {
       expect(releaseSurgeReadiness).toHaveBeenCalledWith({
         migrationId: prepare.migrationId, targetPodUid: "builder-pod", importSlug: "chris",
       });
-      if (outcome === "ready") {
+      if (outcome === "ready" || outcome === "verification-pending") {
         expect(response.getStatus()).toBe(200);
+        expect(response.getBody()).toEqual({
+          migrationId: prepare.migrationId, slug: "chris", imported: true,
+          ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}),
+        });
         expect(adapter.onMounted).toHaveBeenCalledWith("chris");
         expect(unreserveSurgeTarget).not.toHaveBeenCalled();
       } else {
@@ -4702,15 +4706,13 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
       expect(deps.adapter.releaseAgent).toHaveBeenCalledExactlyOnceWith("octogee-chris-coach");
       expect(deps.adapter.activateImportedCustomer).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
       expect(rowCount(previous)).toBe(2);
-      if (outcome === "ready") {
-        expect(result.getStatus()).toBe(200);
-        expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
-        expect(deps.adapter.onMounted).toHaveBeenCalledWith("chris");
-      } else {
-        expect(result.getStatus()).toBe(500);
-        expect(result.getBody()).toMatchObject({ message: "Builder Coach activation verification failed: Coach disconnected" });
-        expect(deps.adapter.onMounted).not.toHaveBeenCalled();
-      }
+      expect(result.getStatus()).toBe(200);
+      expect(result.getBody()).toEqual({
+        migrationId, slug: "chris", imported: true,
+        ...(outcome === "verification-pending" ? { verificationPending: "Coach disconnected" } : {}),
+      });
+      expect(deps.adapter.writeMountMarker).toHaveBeenCalledWith("chris");
+      expect(deps.adapter.onMounted).toHaveBeenCalledWith("chris");
     },
   );
 

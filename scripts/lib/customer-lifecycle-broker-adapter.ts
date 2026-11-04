@@ -245,12 +245,12 @@ function evictionSlugsExcept(
   return [...new Set(batch ?? [])].filter((slug) => slug !== mountedSlug);
 }
 
-async function currentEvictionSlugs(
+async function stillEvictedSlugs(
   mountedSlug: string,
-  fallback: readonly string[],
+  admitted: readonly string[],
   readCurrent: (() => Promise<readonly string[]>) | undefined,
 ): Promise<string[]> {
-  const batch = readCurrent ? await readCurrent() : fallback;
+  const batch = readCurrent ? (await readCurrent()).filter((slug) => admitted.includes(slug)) : admitted;
   return evictionSlugsExcept(mountedSlug, batch);
 }
 
@@ -314,7 +314,7 @@ async function exportSourceActivationManifest(ctx: BrokerCtx, slug: string,
       }
       options.signal?.throwIfAborted();
       return exportActivationManifestWithSecret(OPENCLAW_CONFIG, OPENCLAW_DIR, slug);
-    }, { signal: options.signal, timeoutMs: remaining });
+    }, { signal: options.signal, timeoutMs: remaining, slug });
     if (manifest) return manifest;
     if (!waiting) ctx.log(`[migration-activation:${slug}] waiting for source runtime configuration to converge`);
     waiting = true;
@@ -1279,7 +1279,7 @@ async function applyAddCustomerConfigPatch(
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
   );
-  evictionSlugs = await currentEvictionSlugs(
+  evictionSlugs = await stillEvictedSlugs(
     snapshot.slug,
     evictionSlugs,
     callOpts?.currentEvictionBatch,
@@ -2314,6 +2314,56 @@ async function resumeAssignedBuilderRuntime(ctx: BrokerCtx, slug: string): Promi
   await removeActivationManifest(OPENCLAW_DIR, slug);
 }
 
+function runtimeUpdateOperations(ctx: BrokerCtx): Pick<CustomerLifecycleAdapter,
+  "applyAddCustomerConfigPatch" | "reconcileConfiguredBuilderProjectAgents" | "applyRemoveCustomerConfigPatch" | "resumeCustomer" |
+  "prepareImportDir" | "activateImportedCustomer" | "removeImportedCustomerBySlug" | "releaseAgent"> {
+  return {
+    applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
+      openClawRuntimeUpdateGuard.run(async () => {
+        callOpts?.runtimePublication?.invalidateFingerprint();
+        return applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts);
+      }, {
+        signal: callOpts?.signal,
+        slug: snapshot.slug,
+        evicting: callOpts?.evictionBatch,
+        holdUntil: callOpts?.runtimePublication?.settled,
+      }),
+    reconcileConfiguredBuilderProjectAgents: (snapshot, options) =>
+      openClawRuntimeUpdateGuard.run(async () => {
+        options?.runtimePublication?.invalidateFingerprint();
+        return reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options);
+      }, {
+        signal: options?.signal,
+        slug: snapshot.slug,
+        holdUntil: options?.runtimePublication?.settled,
+      }),
+    applyRemoveCustomerConfigPatch: (slug, agentId, evictionBatch, currentEvictionBatch) =>
+      openClawRuntimeUpdateGuard.run(() =>
+        applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch), { slug, evicting: evictionBatch }),
+    resumeCustomer: (slug, resumeOptions) => openClawRuntimeUpdateGuard.run(async () => {
+      if (resumeOptions?.role === "target") return resumeAssignedBuilderRuntime(ctx, slug);
+      const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (manifest) await activateImportedCustomer(ctx, slug, { resumeExistingSharedCustody: true, migrationId: resumeOptions?.migrationId });
+      await setCustomerChannelsRunning(ctx.rpc, slug, true);
+    }, { ignorePublications: true }),
+    prepareImportDir: (slug, mode) => openClawRuntimeUpdateGuard.run(() =>
+      prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`)), { slug }),
+    activateImportedCustomer: (slug, callOpts) =>
+      openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {
+        signal: callOpts?.signal,
+        slug,
+      }),
+    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds) =>
+      openClawRuntimeUpdateGuard.run(() =>
+        removeImportedCustomerBySlug(ctx, slug, { evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds }), { slug, evicting: evictionBatch }),
+    releaseAgent: (agentId) => openClawRuntimeUpdateGuard.run(() =>
+      releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`)),
+  };
+}
+
 export function buildBrokeredLifecycleAdapter(
   opts: BuildBrokeredLifecycleAdapterOptions,
 ): CustomerLifecycleAdapter {
@@ -2445,25 +2495,7 @@ export function buildBrokeredLifecycleAdapter(
     },
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
-    applyAddCustomerConfigPatch: (snapshot, mmUpdate, callOpts) =>
-      openClawRuntimeUpdateGuard.run(async () => {
-        callOpts?.runtimePublication?.invalidateFingerprint();
-        return applyAddCustomerConfigPatch(ctx, snapshot, mmUpdate, callOpts);
-      }, {
-        signal: callOpts?.signal,
-        holdUntil: callOpts?.runtimePublication?.settled,
-      }),
-    reconcileConfiguredBuilderProjectAgents: (snapshot, options) =>
-      openClawRuntimeUpdateGuard.run(async () => {
-        options?.runtimePublication?.invalidateFingerprint();
-        return reconcileConfiguredBuilderProjectAgents(ctx, snapshot, options);
-      }, {
-        signal: options?.signal,
-        holdUntil: options?.runtimePublication?.settled,
-      }),
-    applyRemoveCustomerConfigPatch: (slug, agentId, evictionBatch, currentEvictionBatch) =>
-      openClawRuntimeUpdateGuard.run(() =>
-        applyRemoveCustomerConfigPatch(ctx, slug, agentId, evictionBatch, currentEvictionBatch)),
+    ...runtimeUpdateOperations(ctx),
     cancelPendingEviction: (slug) => ctx.configRemovedForEviction.delete(slug),
     waitForAccountHealthy: (p) => waitForAccountHealthy(ctx, p),
     projectAgentsHealthy: (snapshot) => projectAgentsRuntimeReady({ ...snapshot, rpc: ctx.rpc }),
@@ -2479,18 +2511,7 @@ export function buildBrokeredLifecycleAdapter(
       assertSourceIdentityCustody(custody, await sourceMigrationIdentityCustody(ctx, slug, migrationId));
       return current.anchors.filter(anchor => anchor.agentId !== SAFE_DEFAULT_AGENT_ID);
     },
-    resumeCustomer: (slug, resumeOptions) => openClawRuntimeUpdateGuard.run(async () => {
-      if (resumeOptions?.role === "target") return resumeAssignedBuilderRuntime(ctx, slug);
-      const manifest = await readActivationManifest(OPENCLAW_DIR, slug).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (manifest) await activateImportedCustomer(ctx, slug, { resumeExistingSharedCustody: true, migrationId: resumeOptions?.migrationId });
-      await setCustomerChannelsRunning(ctx.rpc, slug, true);
-    }),
     listExportPaths,
-    prepareImportDir: (slug, mode) => openClawRuntimeUpdateGuard.run(() =>
-      prepareImportDir(slug, mode, agentStateRelease(ctx, `[prepare-import:${slug}]`))),
     prepareKeyImportDir,
     targetMigrationIdentityCustody: async (slug, migrationId) => {
       if (!migrationId) throw new Error("target migration authority is required");
@@ -2502,17 +2523,8 @@ export function buildBrokeredLifecycleAdapter(
       }
       return { custody: { migrationId, uid: current.assignment.uid, gatewayId, podUid }, migration: current.migration, anchors: current.anchors };
     },
-    activateImportedCustomer: (slug, callOpts) =>
-      openClawRuntimeUpdateGuard.run(() => activateImportedCustomer(ctx, slug, callOpts), {
-        signal: callOpts?.signal,
-      }),
     exportOpenClawActivationManifest: (slug, options) =>
       exportSourceActivationManifest(ctx, slug, options),
-    removeImportedCustomerBySlug: (slug, evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds) =>
-      openClawRuntimeUpdateGuard.run(() =>
-        removeImportedCustomerBySlug(ctx, slug, { evictionBatch, currentEvictionBatch, targetCleanup, erasureAgentIds })),
-    releaseAgent: (agentId) => openClawRuntimeUpdateGuard.run(() =>
-      releaseAgentsAndInvalidateCache(ctx, [agentId], `[release:${agentId}]`)),
   };
   return adapter;
 }

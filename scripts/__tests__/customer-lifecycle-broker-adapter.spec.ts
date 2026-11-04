@@ -109,7 +109,7 @@ describe("migration manifest export runtime wait", () => {
     vi.useFakeTimers();
     let release!: () => void;
     const custody = new Promise<void>((resolve) => { release = resolve; });
-    const publishing = openClawRuntimeUpdateGuard.run(async () => undefined, { holdUntil: custody });
+    const publishing = openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "alice", holdUntil: custody });
     await publishing;
     const manifest = { slug: "alice", appliedFingerprint: "stable-after-publication" };
     secretMocks.exportActivationManifestWithSecret.mockClear();
@@ -128,7 +128,7 @@ describe("migration manifest export runtime wait", () => {
     vi.useFakeTimers();
     let release!: () => void;
     const custody = new Promise<void>((resolve) => { release = resolve; });
-    await openClawRuntimeUpdateGuard.run(async () => undefined, { holdUntil: custody });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "alice", holdUntil: custody });
     secretMocks.exportActivationManifestWithSecret.mockClear();
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: mkGatewayRpc(), log: vi.fn() });
     const controller = new AbortController();
@@ -142,6 +142,58 @@ describe("migration manifest export runtime wait", () => {
     } finally { release(); }
     await Promise.resolve(); await Promise.resolve();
     expect(secretMocks.exportActivationManifestWithSecret).not.toHaveBeenCalled();
+  });
+
+  it("exports one customer's manifest while another customer's publication settles", async () => {
+    let release!: () => void;
+    const custody = new Promise<void>((resolve) => { release = resolve; });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "bob", holdUntil: custody });
+    const manifest = { slug: "alice", appliedFingerprint: "alice-stable" };
+    secretMocks.exportActivationManifestWithSecret.mockClear();
+    secretMocks.exportActivationManifestWithSecret.mockResolvedValueOnce(manifest);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: mkGatewayRpc(), log: vi.fn() });
+    try {
+      await expect(adapter.exportOpenClawActivationManifest!("alice", { timeoutMs: 1_000 })).resolves.toEqual(manifest);
+    } finally { release(); }
+  });
+
+  it("turns a customer's channels on without waiting for its own publication tail", async () => {
+    let release!: () => void;
+    const custody = new Promise<void>((resolve) => { release = resolve; });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "carol", holdUntil: custody });
+    mocks.readActivationManifest.mockRejectedValueOnce(Object.assign(new Error("no manifest"), { code: "ENOENT" }));
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const resumed = adapter.resumeCustomer("carol");
+    try {
+      await vi.waitFor(() => expect(rpc.configGet).toHaveBeenCalled());
+      await expect(resumed).resolves.toBeUndefined();
+    } finally {
+      release();
+      await resumed.catch(() => undefined);
+    }
+  });
+
+  it.each<{ entry: string; evict: (adapter: ReturnType<typeof buildBrokeredLifecycleAdapter>) => Promise<unknown> }>([
+    { entry: "add", evict: (adapter) => adapter.applyAddCustomerConfigPatch(aliceSnapshot(), { _coachPersonalToken: "coach-pat" }, {
+      evictionBatch: ["bob"],
+      runtimePublication: { settled: Promise.resolve(), invalidateFingerprint: () => { throw new Error("alice add admitted"); } },
+    }) },
+    { entry: "remove", evict: (adapter) => adapter.applyRemoveCustomerConfigPatch("alice", "octogee-alice-coach", ["alice", "bob"]) },
+    { entry: "imported removal", evict: (adapter) => adapter.removeImportedCustomerBySlug!("alice", ["alice", "bob"]) },
+  ])("waits for an evicted customer's publication before the $entry patch mutates it", async ({ evict }) => {
+    let release!: () => void;
+    const custody = new Promise<void>((resolve) => { release = resolve; });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "bob", holdUntil: custody });
+    const rpc = mkGatewayRpc({ configGet: vi.fn(async () => { throw new Error("alice removal admitted"); }) });
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    let settled = false;
+    const evicting = evict(adapter).catch(() => undefined).finally(() => { settled = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+    } finally { release(); }
+    await evicting;
   });
 });
 
@@ -4942,6 +4994,41 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     );
   });
 
+  it("leaves a customer that became pending eviction after admission, while its publication settles, to the next eviction pass", async () => {
+    let release!: () => void;
+    const lateCustody = new Promise<void>((resolve) => { release = resolve; });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "late", holdUntil: lateCustody });
+    const roster = { agents: { entries: keyedRoster(["octogee-stale-coach", "octogee-late-coach"]) } };
+    const rpc = mkRemovalRpc(roster);
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    const snapshot: FleetBrokerUserSnapshot = {
+      uid: "uid-fresh", slug: "fresh", tier: "standard", gatewayId: "default", status: "", agentIds: [], repoUrl: "",
+      mattermostUserId: FRESH_OWNER_MM_ID, customerMmUserId: FRESH_OWNER_MM_ID, channels: [], projects: [],
+      ownerName: "Fresh", coachToken: "pat-fresh", coachMmUserId: "mm-fresh-coach",
+    };
+    try {
+      await adapter.applyAddCustomerConfigPatch(snapshot, { _coachPersonalToken: "pat-fresh" }, {
+        evictionBatch: ["stale"],
+        currentEvictionBatch: vi.fn(async () => ["stale", "late"]),
+      });
+    } finally { release(); }
+
+    expect(vi.mocked(rpc.agentsDelete).mock.calls.map(([params]) => params.agentId)).toEqual(["octogee-stale-coach"]);
+    const secretWrite = secretMocks.updateMattermostAccountSecrets.mock.calls.at(-1)![1] as { remove: string[]; removePrefixes: string[] };
+    expect(secretWrite.remove).not.toContain("late-coach");
+    expect(secretWrite.removePrefixes).toEqual(["stale-proj-"]);
+    const args = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0] as {
+      buildPatch: (current: unknown) => { channels: { mattermost: { accounts: Record<string, unknown> } } };
+    };
+    const patch = args.buildPatch({
+      agents: { list: [{ id: "octogee-late-coach" }] },
+      bindings: [{ agentId: "octogee-late-coach" }],
+      channels: { mattermost: { accounts: { "stale-coach": {}, "late-coach": {} } } },
+    });
+    expect(patch.channels.mattermost.accounts["stale-coach"]).toBeNull();
+    expect(patch.channels.mattermost.accounts["late-coach"]).toEqual({ dmPolicy: "disabled" });
+  });
+
   it("never re-adds a deleted eviction agent to the roster patch", async () => {
     const roster = { agents: { entries: keyedRoster(["octogee-stale-coach"]) } };
     const rpc = mkRemovalRpc(roster);
@@ -6090,7 +6177,7 @@ it("waits for runtime publication before detaching a PostgreSQL roster entry", a
   await withPostgresAgentConfig({}, async () => {
     let finishPublication!: () => void;
     const custody = new Promise<void>((resolve) => { finishPublication = resolve; });
-    await openClawRuntimeUpdateGuard.run(async () => undefined, { holdUntil: custody });
+    await openClawRuntimeUpdateGuard.run(async () => undefined, { slug: "alice", holdUntil: custody });
     const rpc = mkGatewayRpc({ agentsDetach: vi.fn(async ({ agentId }) => ({ ok: true, agentId })) });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
     const detached = adapter.releaseAgent!("octogee-alice-coach");

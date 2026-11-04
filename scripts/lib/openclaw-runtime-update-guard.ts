@@ -1,39 +1,62 @@
 const WAIT_TIMEOUT_MS = 60_000;
 
+export type OpenClawRuntimeUpdateOptions = { signal?: AbortSignal; timeoutMs?: number } & (
+  | { slug?: undefined; evicting?: undefined; holdUntil?: undefined; ignorePublications?: true }
+  | { slug: string; evicting?: readonly string[]; holdUntil?: Promise<void>; ignorePublications?: undefined }
+);
+
 export class OpenClawRuntimeUpdateGuard {
   private active: Promise<void> | null = null;
   private waiting = 0;
+  private readonly publications = new Map<string, Promise<void>>();
 
   tryRun<T>(operation: () => Promise<T>): Promise<T> | undefined {
-    if (this.active || this.waiting > 0) return undefined;
+    if (this.active || this.waiting > 0 || this.publications.size > 0) return undefined;
     return this.start(operation);
   }
 
-  async run<T>(operation: () => Promise<T>, options: { signal?: AbortSignal; timeoutMs?: number; holdUntil?: Promise<void> } = {}): Promise<T> {
+  async run<T>(operation: () => Promise<T>, options: OpenClawRuntimeUpdateOptions = {}): Promise<T> {
     const deadline = Date.now() + (options.timeoutMs ?? WAIT_TIMEOUT_MS);
     this.waiting += 1;
     try {
       options.signal?.throwIfAborted();
-      while (this.active) await this.wait(this.active, deadline, options.signal);
+      for (let blocker = this.blocker(options); blocker; blocker = this.blocker(options)) {
+        await this.wait(blocker, deadline, options.signal);
+      }
       options.signal?.throwIfAborted();
-      return this.start(operation, options.holdUntil);
+      if (options.holdUntil) this.holdPublication(options.slug, options.holdUntil);
+      return this.start(operation);
     } finally {
       this.waiting -= 1;
     }
   }
 
-  private start<T>(operation: () => Promise<T>, holdUntil?: Promise<void>): Promise<T> {
+  private blocker(options: OpenClawRuntimeUpdateOptions): Promise<void> | undefined {
+    if (this.active) return this.active;
+    if (options.ignorePublications) return undefined;
+    if (options.slug === undefined) return this.publications.values().next().value;
+    for (const slug of [options.slug, ...(options.evicting ?? [])]) {
+      const publication = this.publications.get(slug);
+      if (publication) return publication;
+    }
+    return undefined;
+  }
+
+  private holdPublication(slug: string, until: Promise<void>): void {
+    const held: Promise<void> = until.then(() => undefined, () => undefined).then(() => {
+      if (this.publications.get(slug) === held) this.publications.delete(slug);
+    });
+    this.publications.set(slug, held);
+  }
+
+  private start<T>(operation: () => Promise<T>): Promise<T> {
     let release!: () => void;
     const active = new Promise<void>((resolve) => { release = resolve; });
     this.active = active;
-    const finish = () => {
+    return Promise.resolve().then(operation).finally(() => {
       if (this.active === active) this.active = null;
       release();
-    };
-    const work = Promise.resolve().then(operation);
-    if (!holdUntil) return work.finally(finish);
-    void Promise.allSettled([work, holdUntil]).then(finish);
-    return work;
+    });
   }
 
   private wait(active: Promise<void>, deadline: number, signal?: AbortSignal): Promise<void> {

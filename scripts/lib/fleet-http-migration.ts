@@ -2244,7 +2244,7 @@ async function activateBuilderCoach(
   signal: AbortSignal,
   loadStrategy: MigrationLoadStrategy,
   deferRuntimeVerification?: true,
-): Promise<void> {
+): Promise<string | undefined> {
   const verificationPending = await activateImportedCustomerForMigration({
     deferRuntimeVerification,
     deps,
@@ -2254,9 +2254,7 @@ async function activateBuilderCoach(
     signal,
   });
   signal.throwIfAborted();
-  if (verificationPending) {
-    throw new Error(`Builder Coach activation verification failed: ${verificationPending}`);
-  }
+  return verificationPending;
 }
 
 async function activateConfiguredBuilderImport(
@@ -2265,11 +2263,10 @@ async function activateConfiguredBuilderImport(
   signal: AbortSignal,
   loadStrategy: MigrationLoadStrategy,
   deferRuntimeVerification?: true,
-): Promise<void> {
+): Promise<string | undefined> {
   if (activation.live) {
     signal.throwIfAborted();
-    await activateBuilderCoach(deps, activation.request.slug, signal, loadStrategy, deferRuntimeVerification);
-    return;
+    return activateBuilderCoach(deps, activation.request.slug, signal, loadStrategy, deferRuntimeVerification);
   }
   const { request } = activation;
   let cancellation: Promise<void> | null = null;
@@ -2294,7 +2291,7 @@ async function activateConfiguredBuilderImport(
       { durationMs: Date.now() - releaseStartedAt },
     );
     signal.throwIfAborted();
-    await activateBuilderCoach(deps, request.slug, signal, loadStrategy, deferRuntimeVerification);
+    return await activateBuilderCoach(deps, request.slug, signal, loadStrategy, deferRuntimeVerification);
   } catch (error) {
     (deps.log ?? provisionerLog)(
       `[migration-rsync] Builder activation failed migrationId=${request.migrationId} slug=${request.slug}: ` +
@@ -2404,7 +2401,7 @@ async function activateFinishedRsyncImport(input: {
     const activation = await configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
     let verificationPending: string | undefined;
     if (activation) {
-      await activateConfiguredBuilderImport(deps, activation, signal, loadStrategy, body.preserveSource);
+      verificationPending = await activateConfiguredBuilderImport(deps, activation, signal, loadStrategy, body.preserveSource);
     } else {
       verificationPending = await activateImportedCustomerForMigration({
         deps,

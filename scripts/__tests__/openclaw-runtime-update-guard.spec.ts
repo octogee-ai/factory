@@ -60,27 +60,49 @@ describe("OpenClaw runtime update coordination", () => {
     expect(imported).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("holds publication custody after work settles until its fingerprint tail ends (failed: %s)", async (failed) => {
+  it.each([false, true])("holds a customer's publication custody after work settles until its fingerprint tail ends (failed: %s)", async (failed) => {
     const guard = new OpenClawRuntimeUpdateGuard();
     const tail = deferred();
     const work = guard.run(async () => {
       if (failed) throw new Error("publication failed");
       return "published";
-    }, { holdUntil: tail.promise });
+    }, { slug: "alice", holdUntil: tail.promise });
     if (failed) await expect(work).rejects.toThrow("publication failed");
     else await expect(work).resolves.toBe("published");
     const exported = vi.fn(async () => "exported");
-    const waiting = guard.run(exported);
+    const released = vi.fn(async () => "released");
+    const waiting = guard.run(exported, { slug: "alice" });
+    const releasing = guard.run(released);
+    await Promise.resolve();
     expect(exported).not.toHaveBeenCalled();
+    expect(released).not.toHaveBeenCalled();
     expect(guard.tryRun(exported)).toBeUndefined();
     tail.resolve();
     await expect(waiting).resolves.toBe("exported");
+    await expect(releasing).resolves.toBe("released");
+  });
+
+  it("runs other customers and publication-free updates while one customer's fingerprint tail settles", async () => {
+    const guard = new OpenClawRuntimeUpdateGuard();
+    const tail = deferred();
+    await guard.run(async () => undefined, { slug: "alice", holdUntil: tail.promise });
+    const bobExport = vi.fn(async () => "bob");
+    const aliceResume = vi.fn(async () => "resumed");
+    const aliceExport = vi.fn(async () => "alice");
+
+    await expect(guard.run(bobExport, { slug: "bob" })).resolves.toBe("bob");
+    await expect(guard.run(aliceResume, { ignorePublications: true })).resolves.toBe("resumed");
+    const waiting = guard.run(aliceExport, { slug: "alice" });
+    await Promise.resolve();
+    expect(aliceExport).not.toHaveBeenCalled();
+    tail.resolve();
+    await expect(waiting).resolves.toBe("alice");
   });
 
   it("does not release unfinished runtime work when its owner tail ends first", async () => {
     const guard = new OpenClawRuntimeUpdateGuard();
     const pending = deferred();
-    const work = guard.run(() => pending.promise, { holdUntil: Promise.resolve() });
+    const work = guard.run(() => pending.promise, { slug: "alice", holdUntil: Promise.resolve() });
     const exported = vi.fn(async () => undefined);
     const waiting = guard.run(exported);
     await Promise.resolve();
@@ -89,6 +111,19 @@ describe("OpenClaw runtime update coordination", () => {
     await work;
     await waiting;
     expect(exported).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the publication of every customer an update evicts", async () => {
+    const guard = new OpenClawRuntimeUpdateGuard();
+    const bobTail = deferred();
+    await guard.run(async () => undefined, { slug: "bob", holdUntil: bobTail.promise });
+    const added = vi.fn(async () => "added");
+    const adding = guard.run(added, { slug: "alice", evicting: ["carol", "bob"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(added).not.toHaveBeenCalled();
+    await expect(guard.run(async () => "unrelated", { slug: "dave", evicting: ["carol"] })).resolves.toBe("unrelated");
+    bobTail.resolve();
+    await expect(adding).resolves.toBe("added");
   });
 
   it("releases failed work and gives a waiting import priority over background repair", async () => {
