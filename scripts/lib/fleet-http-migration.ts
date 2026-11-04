@@ -332,7 +332,7 @@ async function activateImportedCustomerForMigration(input: {
   const { deps, slug, mode, signal, loadStrategy = "standard" } = input;
   const beforeRuntimePublish = await importedWorkspaceIdentityRestore(input);
   await ensureMigrationGiteaKey(deps, slug, "target-activation");
-  const fenceGeneration = await pauseSystemConfigWatchForBuilder(deps, slug);
+  const fenceGeneration = mode === "default" ? await pauseSystemConfigWatchForBuilder(deps, slug) : undefined;
   let deferredCheckouts: string[] = [];
   if (
     loadStrategy === "standard" &&
@@ -2402,6 +2402,7 @@ async function activateFinishedRsyncImport(input: {
   const { deps, body, configTransferMode, loadStrategy, signal } = input;
   deps.adapter.markCustomerMigratingIn?.(body.slug);
   if (configTransferMode === ACTIVATION_MANIFEST_TRANSFER) {
+    await pauseSystemConfigWatchForBuilder(deps, body.slug);
     const activation = await configuredBuilderActivationRequest(deps, body, "final", configTransferMode);
     let verificationPending: string | undefined;
     if (activation) {
@@ -2805,15 +2806,17 @@ async function assertLiveBuilderUnassigned(deps: MigrationHandlerDeps, activatio
   }
 }
 
-async function releaseUnmountedBuilderTarget(
+async function prepareUnmountedImport(
   deps: MigrationHandlerDeps,
+  body: UnmountRequestBody,
   activation: ConfiguredBuilderActivation | null,
 ): Promise<boolean> {
-  if (!activation) return true;
-  if (!activation.live) return true;
-  const admission = await liveImportAdmission(deps, activation);
-  if (admission === "refused") return false;
-  await assertLiveBuilderUnassigned(deps, activation);
+  if (activation) {
+    if (!activation.live) return true;
+    if (await liveImportAdmission(deps, activation) === "refused") return false;
+    await assertLiveBuilderUnassigned(deps, activation);
+  }
+  await clearUnmountedImportStaging(deps, body);
   return true;
 }
 
@@ -3072,11 +3075,19 @@ function matchesAllowedMigrationPath(raw: string, entry: string, allowedPrefix: 
 
 async function removeUnmountedBuilderImport(
   deps: MigrationHandlerDeps,
-  slug: string,
+  body: UnmountRequestBody,
   activation: ConfiguredBuilderActivation | null,
 ): Promise<RemoveCustomerResult> {
+  const { slug } = body;
   let result: RemoveCustomerResult | undefined;
   const remove = async (assertCurrent?: () => Promise<void>) => {
+    if (assertCurrent) {
+      for (const session of rsyncImportSessions.values()) {
+        if (session.migrationId === body.migrationId && session.slug === slug) await stopRsyncSession(session);
+      }
+      await assertCurrent();
+      await clearUnmountedImportStaging(deps, body);
+    }
     result = await removeCustomerWithSystemConfigWatchPaused({
       deps, slug,
       remove: () => assertCurrent && activation
@@ -3084,8 +3095,10 @@ async function removeUnmountedBuilderImport(
         : deps.adapter.removeImportedCustomerBySlug!(slug),
     });
   };
-  if (activation && !activation.live) await deps.unreserveSurgeTarget!(activation.request, remove);
-  else await remove();
+  if (activation && !activation.live) {
+    const state = await deps.unreserveSurgeTarget!(activation.request, remove);
+    if (state.mode !== "held") throw new Error("cannot clear an import while its Builder process is permitted");
+  } else await remove();
   if (!result) throw new Error("Builder import cleanup was not executed before unreserve");
   return result;
 }
@@ -3117,41 +3130,56 @@ async function completeSharedErasureUnmount(deps: MigrationHandlerDeps, body: Un
     agentStoreErasure: coverage } satisfies UnmountResponse);
 }
 
+async function clearUnmountedImportStaging(deps: MigrationHandlerDeps, body: UnmountRequestBody): Promise<void> {
+  await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, ACTIVATION_MANIFEST_TRANSFER));
+  await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, BUILDER_SYSTEM_CONFIG_TRANSFER));
+}
+
+async function unmountImportedCustomer(
+  deps: MigrationHandlerDeps,
+  body: UnmountRequestBody,
+  activation: ConfiguredBuilderActivation | null,
+): Promise<UnmountResponse | undefined> {
+  if (!deps.adapter.removeImportedCustomerBySlug) {
+    if (activation && !activation.live) throw new Error("held Builder import cannot be returned without imported-customer removal");
+    return undefined;
+  }
+  const { slug, migrationId } = body;
+  const result = await removeUnmountedBuilderImport(deps, body, activation);
+  if (result.wasMounted) deps.adapter.onUnmounted?.(slug);
+  await releaseVoiceHold(deps, slug, migrationId);
+  dlog(
+    `[migration-http] 🟢 unmount migrationId=${migrationId} slug=${slug} wasMounted=${result.wasMounted} steps=${result.steps.join(",")}`,
+  );
+  return { migrationId, slug, unmounted: result.wasMounted };
+}
+
 export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   return (req, res) => withLogContext({}, async () => {
     const body = parseAndVerifyJsonBody<UnmountRequestBody>(req, res, deps, log);
     if (!body) return;
 
+    const builder = deps.adapter.isBuilderGateway?.() === true;
+    if (builder && migrationImportBusy()) {
+      res.status(409).json({ error: "migration import is still in progress" });
+      return;
+    }
+    if (builder) abortingRsyncImport = true;
     try {
       if (body.agentStoreErasure !== undefined) {
         await completeSharedErasureUnmount(deps, body, res);
         return;
       }
       const activation = await configuredBuilderActivationRequest(deps, body, "final", ACTIVATION_MANIFEST_TRANSFER);
-      if (!await releaseUnmountedBuilderTarget(deps, activation)) {
+      if (!await prepareUnmountedImport(deps, body, activation)) {
         log(`[migration-http] unmount left the live Builder untouched: import was never admitted migrationId=${body.migrationId} slug=${body.slug}`);
         res.status(200).json({ migrationId: body.migrationId, slug: body.slug, unmounted: false } satisfies UnmountResponse);
         return;
       }
-      await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, ACTIVATION_MANIFEST_TRANSFER));
-      await clearMigrationStaging(os.tmpdir(), stagingIdentity(deps, body, BUILDER_SYSTEM_CONFIG_TRANSFER));
-      if (activation && !activation.live && !deps.adapter.removeImportedCustomerBySlug) {
-        throw new Error("held Builder import cannot be returned without imported-customer removal");
-      }
-      if (deps.adapter.removeImportedCustomerBySlug) {
-        const result = await removeUnmountedBuilderImport(deps, body.slug, activation);
-        if (result.wasMounted) deps.adapter.onUnmounted?.(body.slug);
-        await releaseVoiceHold(deps, body.slug, body.migrationId);
-        const response: UnmountResponse = {
-          migrationId: body.migrationId,
-          slug: body.slug,
-          unmounted: result.wasMounted,
-        };
-        dlog(
-          `[migration-http] 🟢 unmount migrationId=${body.migrationId} slug=${body.slug} wasMounted=${result.wasMounted} steps=${result.steps.join(",")}`,
-        );
-        res.status(200).json(response);
+      const imported = await unmountImportedCustomer(deps, body, activation);
+      if (imported) {
+        res.status(200).json(imported);
         return;
       }
 
@@ -3193,6 +3221,8 @@ export function createUnmountHandler(deps: MigrationHandlerDeps): RequestHandler
         message,
         ...(err instanceof OpenclawWireError ? { code: err.code } : {}),
       });
+    } finally {
+      if (builder) abortingRsyncImport = false;
     }
   });
 }

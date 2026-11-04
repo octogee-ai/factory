@@ -454,7 +454,8 @@ describe("abandoned Shared migration recovery", () => {
     if (scenario === "success" || scenario === "never-quiesced") {
       expect(result.rolledBack).toBe(true);
       expect(h.deps.resolveGatewayUrl).toHaveBeenCalledWith(target, { allowUnready: true });
-      expect(h.client.abortImport).toHaveBeenCalledTimes(3);
+      expect(h.client.abortImport).not.toHaveBeenCalled();
+      expect(h.client.unmount).toHaveBeenCalledOnce();
       if (scenario === "success") expect(h.client.resume).toHaveBeenCalledOnce();
       else expect(h.client.resume).not.toHaveBeenCalled();
       expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
@@ -482,7 +483,11 @@ describe("abandoned Shared migration recovery", () => {
       return { operationId: migrationId, phase, agentIds: [], drained: true };
     });
     const originalUnmount = h.client.unmount;
-    h.client.unmount = vi.fn(async request => { events.push("unmount"); return originalUnmount(request); });
+    h.client.unmount = vi.fn(async request => {
+      if (!reserved || scenario === "terminal-changed") throw new Error("Builder import cleanup has no matching target reservation");
+      events.push("unmount");
+      return originalUnmount(request);
+    });
     let reserved = false;
     const reserve = vi.fn(async () => { events.push("reserve"); reserved = true; });
     h.deps.prepareBuilderRecoveryTarget = scenario === "missing-callback" ? undefined : reserve;
@@ -490,22 +495,17 @@ describe("abandoned Shared migration recovery", () => {
       events.push("authority");
       if (scenario === "authority-lost" && reserved) throw new Error("authority changed after reservation");
     });
-    h.client.abortImport = vi.fn(async request => {
-      if (!reserved || scenario === "terminal-changed") throw new Error("Builder import cleanup has no matching target reservation");
-      events.push(`abort:${request.mode}`);
-    });
     const result = await createMigrateCustomerHandler(h.deps)(op, h.ctx);
     if (scenario === "reserved") {
       expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
       expect(reserve).toHaveBeenCalledExactlyOnceWith({ recovery: { uid: "uid-alice", sourceGatewayId: "shared-blue", operationId: id, sourceEpoch: 4, claimStartedAt: 4_000 },
         targetGatewayId: target, migrationId: `mig-${id}`, slug: "alice" });
-      expect(events.slice(0, 16)).toEqual(["authority", "authority", "reserve", "authority", "authority", "authority", "authority", "authority",
-        "abort:keys", "authority", "abort:pre", "authority", "abort:final", "authority", "unmount", "authority"]);
+      expect(events.filter(event => event !== "authority")).toEqual(["reserve", "unmount", "scheduler:resume"]);
       expect(h.deps.prepareMigrationAgentStores).toHaveBeenNthCalledWith(1, target, "alice", expect.objectContaining({ expectedBuilderUid: "uid-alice" }));
       expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
     } else {
       expect(result.rolledBack).not.toBe(true);
-      if (scenario !== "terminal-changed") expect(h.client.abortImport).not.toHaveBeenCalled();
+      expect(h.client.abortImport).not.toHaveBeenCalled();
       if (scenario.startsWith("scheduler-")) {
         expect(reserve).not.toHaveBeenCalled();
         expect(events).toEqual(["scheduler:abort"]);
@@ -540,12 +540,12 @@ describe("abandoned Shared migration recovery", () => {
       owner = gatewayId;
       events.push(`stores:${gatewayId}`);
     });
-    h.client.abortImport = vi.fn(async request => {
-      if (owner !== target) throw new Error("PostgreSQL search capability unavailable: insufficient CREATE privilege");
-      events.push(`abort:${request.mode}`);
-    });
     const unmount = h.client.unmount;
-    h.client.unmount = vi.fn(async request => { events.push(`unmount:${request.gatewayId}`); return unmount(request); });
+    h.client.unmount = vi.fn(async request => {
+      if (owner !== target) throw new Error("PostgreSQL search capability unavailable: insufficient CREATE privilege");
+      events.push(`unmount:${request.gatewayId}`);
+      return unmount(request);
+    });
     const resume = h.client.resume;
     h.client.resume = vi.fn(async request => {
       if (owner !== "shared-blue") throw new Error("source resumed without its stores");
@@ -557,7 +557,7 @@ describe("abandoned Shared migration recovery", () => {
 
     if (scenario === "handed-back") {
       expect(result, JSON.stringify(result)).toMatchObject({ success: false, rolledBack: true });
-      expect(events).toEqual(["reserve", `stores:${target}`, "abort:keys", "abort:pre", "abort:final", `unmount:${target}`, "stores:shared-blue", "resume"]);
+      expect(events).toEqual(["reserve", `stores:${target}`, `unmount:${target}`, "stores:shared-blue", "resume"]);
       expect(h.deps.completeMigrationRecovery).toHaveBeenCalledOnce();
     } else {
       expect(result.rolledBack).not.toBe(true);
@@ -2923,7 +2923,7 @@ describe("legacy migration forward recovery", () => {
         sourceRecovery: { migrationId, sourceEpoch: scenario === "epoch-changed" ? 5 : 4, steps: [{ name: "final-sync-state", status: "failed" }] } },
     });
     if (scenario === "committed") op.cutoverCommittedAt = 5_000;
-    if (scenario === "cleanup-failed") vi.mocked(h.client.abortImport).mockRejectedValue(new Error("target cleanup failed"));
+    if (scenario === "cleanup-failed") vi.mocked(h.client.unmount).mockRejectedValue(new Error("target cleanup failed"));
     expect(await createMigrateCustomerHandler(h.deps)(op, h.ctx)).toMatchObject({ success: false, rolledBack: false });
     expect(h.client.resume).not.toHaveBeenCalled();
     expect(h.client.scheduler).not.toHaveBeenCalled();

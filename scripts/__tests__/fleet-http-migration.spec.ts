@@ -1595,6 +1595,45 @@ const adapter = mkAdapter();
 });
 
 describe("queued-rsync migration control handlers", () => {
+  it("unmounts a held Builder and closes its fenced transfer without a transfer attempt ID", async () => {
+    vi.stubEnv("POD_UID", "builder-pod");
+    const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "builder-unmount-"));
+    migrationTempRoots.push(importDir);
+    const close = vi.fn(async () => {});
+    const removeImportedCustomerBySlug = vi.fn(async () => {
+      expect(close).toHaveBeenCalledOnce();
+      return { wasMounted: true, steps: [] };
+    });
+    const unreserveSurgeTarget: NonNullable<MigrationHandlerDeps["unreserveSurgeTarget"]> = async (_request, cleanup) => {
+      await cleanup?.(async () => undefined);
+      return HELD_BUILDER_GATE_STATE;
+    };
+    const deps = mkDeps({
+      adapter: mkAdapter({ isBuilderGateway: () => true, prepareImportDir: async () => importDir, removeImportedCustomerBySlug }),
+      reserveSurgeTarget: async () => undefined, releaseSurgeReadiness: async () => undefined, unreserveSurgeTarget,
+      waitForRsyncReady: async () => undefined,
+      openMigrationTlsEndpoint: async () => ({ certificatePem: TARGET_CERTIFICATE_PEM, close }),
+    });
+    const migrationId = "builder-unmount-fenced";
+    const send = async (handler: ReturnType<typeof createPrepareRsyncImportHandler>, body: object) => {
+      const response = mkResponse();
+      await handler(mkRequest(body, { signature: signForPod(migrationId, JSON.stringify(body)) }), response.res, vi.fn());
+      return response;
+    };
+    spawnMock.mockReturnValueOnce(mkFakeChild());
+    const prepare = { migrationId, slug: "chris", mode: "pre", rpcPhase: "prepare-rsync-import",
+      transferAttempt: 1, transferAttemptId: "first", transferUser: "migration", transferKey: "a".repeat(64) };
+    expect((await send(createPrepareRsyncImportHandler(deps), prepare)).getStatus()).toBe(200);
+    try {
+      expect((await send(createUnmountHandler(deps), { migrationId, slug: "chris" })).getBody()).toEqual({
+        migrationId, slug: "chris", unmounted: true,
+      });
+      expect(removeImportedCustomerBySlug).toHaveBeenCalledOnce();
+    } finally {
+      await send(createAbortRsyncImportHandler(mkDeps({ adapter: mkAdapter() })), { ...prepare, rpcPhase: "abort-rsync-import" });
+    }
+  });
+
   it("serializes abort cleanup with prepare and remembers superseded attempts after cleanup", async () => {
     const importDir = await fs.mkdtemp(path.join(os.tmpdir(), "rsync-abort-fence-"));
     migrationTempRoots.push(importDir);
@@ -2614,6 +2653,7 @@ describe("queued-rsync migration control handlers", () => {
       });
       const deps = mkDeps({
         adapter, reserveSurgeTarget, releaseSurgeReadiness, unreserveSurgeTarget,
+        pauseSystemConfigWatch: vi.fn(async () => { events.push("pause-config-watch"); }),
         waitForRsyncReady: async () => undefined,
       });
       spawnMock.mockReturnValueOnce(mkFakeChild()).mockImplementationOnce(() => {
@@ -2635,7 +2675,7 @@ describe("queued-rsync migration control handlers", () => {
       await createFinishRsyncImportHandler(deps)(mkRequest(finish, {
         signature: signForPod(finish.migrationId, JSON.stringify(finish)),
       }), response.res, vi.fn());
-      expect(events.slice(0, 3)).toEqual(["reserve", "copy", "attach-permit-verify"]);
+      expect(events.slice(0, 4)).toEqual(["reserve", "copy", "pause-config-watch", "attach-permit-verify"]);
       if (["ready", "activation-failed", "verification-pending"].includes(outcome)) {
         expect(adapter.activateImportedCustomer).toHaveBeenCalledExactlyOnceWith("chris", { signal: expect.any(AbortSignal) });
       } else {

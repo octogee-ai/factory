@@ -1562,7 +1562,11 @@ async function cleanupPreviousSchedulerTarget(deps: MigrateCustomerDeps, op: Ope
     await deps.prepareBuilderRecoveryTarget({ recovery, targetGatewayId: previous.toGatewayId, migrationId: deps.genMigrationId(op.id), slug: previous.slug });
     await deps.assertMigrationRecoveryAuthority!(recovery);
     await prepareRecoveryAgentStores(deps, ctx, recovery, previous.toGatewayId, previous.slug);
-    await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId, activeRecoveryAuthority(deps, ctx, recovery));
+    const targetUrl = await deps.resolveGatewayUrl(previous.toGatewayId, { allowUnready: true });
+    const assertCurrent = activeRecoveryAuthority(deps, ctx, recovery);
+    await assertCurrent();
+    await deps.buildClient(() => targetUrl).unmount({ migrationId: deps.genMigrationId(op.id), slug: previous.slug, gatewayId: previous.toGatewayId });
+    await assertCurrent();
     return;
   }
   if (sharedScope || assertNativeReturnCurrent) await abortSharedTargetLeftovers(deps, op, previous.slug, previous.toGatewayId, assertNativeReturnCurrent);
