@@ -149,7 +149,7 @@ const CUSTOMER_PLUGIN_ENTRIES = {
   "octogee-chat-tools": {
     enabled: true,
     hooks: {
-      allowPromptInjection: true,
+      allowPromptModification: true,
       allowConversationAccess: true,
       timeouts: { before_dispatch: 3000, before_prompt_build: 3000, before_agent_run: 3000 },
     },

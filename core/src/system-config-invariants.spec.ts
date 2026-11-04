@@ -642,7 +642,7 @@ describe("system config platform invariants", () => {
         entries: {
           "octogee-chat-tools": {
             hooks: {
-              allowPromptInjection: true,
+              allowPromptModification: true,
               allowConversationAccess: true,
               timeouts: { before_dispatch: 3000, before_prompt_build: 3000, before_agent_run: 3000 },
             },
@@ -1028,7 +1028,7 @@ describe("system config platform invariants", () => {
         "channels.mattermost.interactions.allowedSourceIps",
         "plugins.entries.octogee-chat-tools.enabled",
         "plugins.entries.octogee-chat-tools.config",
-        "plugins.entries.octogee-chat-tools.hooks.allowPromptInjection",
+        "plugins.entries.octogee-chat-tools.hooks.allowPromptModification",
         "plugins.entries.octogee-chat-tools.hooks.allowConversationAccess",
         "plugins.entries.octogee-chat-tools.hooks.timeouts.before_prompt_build",
         "plugins.entries.octogee-chat-tools.hooks.timeouts.before_agent_run",

@@ -103,7 +103,7 @@ const PLATFORM_PLUGIN_CONFIG_FIELDS = {
     "plugins.entries.octogee-connector-tools.config.brokerUrl": FLEET_BROKER_URL_PLACEHOLDER,
     "plugins.entries.octogee-connector-tools.config.tokenPath": OCTOGEE_API_SA_TOKEN_PATH_PLACEHOLDER,
     "plugins.entries.octogee-connector-tools.config.requireWriteApproval": ABSENT,
-    "plugins.entries.octogee-chat-tools.hooks.allowPromptInjection": true,
+    "plugins.entries.octogee-chat-tools.hooks.allowPromptModification": true,
     "plugins.entries.octogee-chat-tools.hooks.allowConversationAccess": true,
     "plugins.entries.octogee-chat-tools.hooks.timeouts.before_dispatch": 3000,
     "plugins.entries.octogee-chat-tools.hooks.timeouts.before_prompt_build": 3000,

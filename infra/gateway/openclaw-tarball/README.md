@@ -167,34 +167,37 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 3 daily runtime refresh
+## Current overlay: November 4 daily runtime refresh
 
 This refresh freezes the fetched OpenClaw main tip at
-`2b0a8fe8afc442843353e82158ff291e0099c0e6`, 212 commits after the previous
-`c1b0fc1415a09138c48e3f81055aca0f8e4f12aa` base. The operator selected this
-exact tip for independent qualification; later commits are not build inputs.
-The clean built overlay is `2f9e0976842e43a2e85bd96b7c54bbfebba9ff6e` on
-`ceckert/openclaw:codex/pro-retained-agent-import`. The archives and hosted
+`7c2ff8f775acca3e5c93c9c22b6247e37df29bae`. The operator selected this exact
+SHA for independent qualification; later commits are not the base. The built
+overlay is `e52e40c6ef41dbf4e45aca47bc03aaaa68207017` on
+`ceckert/openclaw:codex/gateway-refresh-20261104`. The archives and hosted
 islands come from that source.
 
-The tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41602367652)
+The tip's [push CI run](https://github.com/openclaw/openclaw/actions/runs/41863178732)
 failed its only executed job, `security-fast`: the test-line budget exceeded
-its ceiling by five lines. Build, core tests, PostgreSQL conformance, lint,
-UI and platform jobs were skipped. The latest successful scheduled
-[full CI run](https://github.com/openclaw/openclaw/actions/runs/41377849337)
+its ceiling by 191 lines. Build, tests, lint, UI, PostgreSQL and platform jobs
+were skipped. The latest successful scheduled [full CI run](https://github.com/openclaw/openclaw/actions/runs/41377849337)
 is on `d1d45068a49bc85eb2a1eff077678b3a87a68621`; its 11 skipped jobs are
 check-plan, Node 24 compatibility, shared SDK declarations, Control UI i18n,
 Android/iOS screenshots and release e2e, iOS screenshot evidence, PR failure
 report and release-child sealing. That older run does not qualify this tip.
+[Upstream #192905](https://github.com/openclaw/openclaw/pull/192905) proposes
+a budget reconciliation but does not change this run's result.
 
-The prior overlay was rebased onto this tip. Native Doctor credential custody
-and orphan recovery are preserved with retained cron normalization inside the
-source transaction; native Codex input rewrites and the retained execution
-admission check both remain. An independent review sampled requester authority,
-channel membership, strict stop, Mattermost action gates and these conflict
-resolutions; it found no actionable issue, but did not review every overlay
-change. The boundaries and removal conditions below remain the assessment for
-the retained behavior, not a claim that every family was newly proven.
+An Astra review compared the retained overlay with native behavior and found no
+newly adopted family to remove. It sampled requester authority, channel membership,
+strict stop, recovery and worker ownership; this is not an exhaustive proof of
+every retained hunk. The rebase retains native reload receipt ownership,
+foreground-turn binding, delivery custody and Mattermost caption accounting.
+Gateway templates, class policy, BYOT sync and system-config invariants use native `allowPromptModification`
+for the existing chat-tools grant, following #192634; the inspection API retains
+its separate `allowPromptInjection` response field.
+[Upstream #192868](https://github.com/openclaw/openclaw/pull/192868), merged
+after the frozen tip, supplies the browser-panel type repair carried here.
+The retained boundaries and removal conditions below remain in force.
 
 ### Retained-agent live import repair
 
@@ -463,35 +466,31 @@ permission, handoff and recovery controls pass.
 ### Qualification and publication
 
 The clean checkout built with pinned pnpm 12.15.0 and the frozen lockfile using
-`pnpm build package`. Its build-info commit is the overlay SHA above. The build
-reported the advisory chat boot JavaScript gzip budget overage (1251.3 KiB
-versus 1250.7 KiB). Production core, UI and extension typechecks, channel
-metadata and generated Gateway validators passed. Focused native authorization,
-membership, stop, recovery, reload and Mattermost controls passed 173 tests;
-the package checker passed the root archive inventory and dist import graph.
-The root and Mattermost packers ran sequentially and left source clean. The
-isolated installed pair has the matching build-info and source-matched companion
-archives. All 24 npm distribution controls passed for the vendored and installed
-copies.
+`pnpm build package`. Its build-info commit matches the overlay SHA above.
+The build reported advisory UI size budget overages. Production typechecks and
+channel metadata passed. The focused authorization, membership, stop and worker
+suite passed 110 tests; reload and retained-state suites passed 161 tests, and
+PostgreSQL creation, cold-secret reload and reattachment controls passed against
+a disposable PostgreSQL 16 fixture. The browser-panel suite passed 33 tests.
+The reattachment test was updated for the two native config migration stamps.
 
-The actual Linux amd64 `openclaw-full-plugin-installer` target passed native
-CUA artifact lint, registry refresh, source matching and native-hook imports.
-The PostgreSQL catalog was regenerated against PostgreSQL 16 and pgvector 0.8.7;
-it includes new upstream schema entries. All 48 agent-store PostgreSQL import,
-recovery and handoff tests passed against the disposable fixture.
+Aggregate `pnpm check` failed lint on 20 max-lines violations in files
+byte-identical to the frozen upstream tip. Its production, scripts and test-root
+typechecks passed. This is not an aggregate check pass. The archive checker passed,
+the root and Mattermost packers ran sequentially and left the source clean, and
+the isolated installed pair has matching build-info. The vendored and installed
+npm distributions passed all 24 controls. The Linux amd64
+`openclaw-full-plugin-installer` target passed registry refresh, bundled trust,
+source matching and three native-hook imports. The agent-store catalog was
+regenerated against disposable PostgreSQL 16 with pgvector 0.8.7 and core rebuilt.
 
-Aggregate `pnpm check` failed lint on 18 max-lines violations in files
-byte-identical to the frozen upstream tip. Its preflight and typecheck ran;
-this is not an aggregate check pass. Focused Octogee artifact, template and
-hosted-island checks passed 106 tests.
+Both objects were created with generation-match zero and their exact generations
+read back with matching full SHA-256 hashes:
 
-Both objects were created with generation-match zero. Readback of each exact
-published generation matched its full SHA-256:
-
-| Package | Write-once object and generation | Bytes | SHA256 |
+| Package | Write-once object and generation | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
-| root | `openclaw-fork-4d051aef.tgz#1793695691305573` | 117086789 | `4d051aefd0ba115071229fef57cafa7e957058555ba1b9f14b5ea046e74870ee` |
-| mattermost | `openclaw-mattermost-20595026.tgz#1793695694418997` | 1266403 | `20595026cdd428c0e1c6cf8778f694d693303cdc34f96c2fe51ee823ca1f7baf` |
+| root | `openclaw-fork-4ac11238.tgz#1793814198234902` | 115960214 | `4ac1123816b72ab10302704db960b2665c619775a251013e01b56ed17e01c517` |
+| Mattermost | `openclaw-mattermost-29f852a5.tgz#1793811565515958` | 1266613 | `29f852a59dcd43baf2e755c8d1fb1a202e550b6638081294e4668ea8e175f21f` |
 
 Strict isolated Doctor comparisons, installed Memory/Skills workers and
 final-head CI require their own results before merge. No deployment or live
@@ -499,7 +498,7 @@ migration is implied by this refresh.
 
 ### Upstream contributions
 
-As checked on November 3, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
+As checked on November 4, #189036 (`bfc19c0c863`), #189418 (`6b4438cd188`),
 #186891 (`1d18f8eb784`), #186893 (`d4fd7a5c5de`), #167431 (`27193149bc2`)
 and #178755 (`d576caa76fe`) remain open and unmerged. Their prior conflict
 status against live upstream main has not been reassessed. Earlier reviewed-head checks and published

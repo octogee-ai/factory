@@ -294,7 +294,7 @@
       "octogee-chat-tools": {
         "enabled": true,
         "hooks": {
-          "allowPromptInjection": true,
+          "allowPromptModification": true,
           "allowConversationAccess": true,
           "timeouts": {
             "before_dispatch": 3000,

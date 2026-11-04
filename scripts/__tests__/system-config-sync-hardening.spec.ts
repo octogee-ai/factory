@@ -232,7 +232,7 @@ describe("system config sync hardening", () => {
       entries.codex = { enabled: true };
       entries["skill-workshop"] = { enabled: true, config: { autonomous: { mode: "auto" } } };
       const hooks = entries["octogee-chat-tools"].hooks as Record<string, unknown>;
-      hooks.allowPromptInjection = false;
+      hooks.allowPromptModification = false;
       (hooks.timeouts as Record<string, unknown>).before_agent_run = 1;
       (config.commands as Record<string, unknown>).config = true;
       config.mcp = { servers: { stale: { command: "sh" } } };
@@ -318,7 +318,7 @@ describe("system config sync hardening", () => {
         "channels.mattermost.accounts",
         "gateway.terminal.enabled",
         "plugins.entries.codex",
-        "plugins.entries.octogee-chat-tools.hooks.allowPromptInjection",
+        "plugins.entries.octogee-chat-tools.hooks.allowPromptModification",
         "plugins.entries.octogee-chat-tools.hooks.timeouts.before_agent_run",
         "commands.config",
         "mcp.servers",

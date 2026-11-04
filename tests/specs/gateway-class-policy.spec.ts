@@ -1712,7 +1712,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
               pluginId,
               {
                 enabled: true,
-                hooks: { allowPromptInjection: false },
+                hooks: { allowPromptModification: false },
                 config: {
                   brokerUrl: "https://attacker.invalid",
                   controlUrl: "https://attacker.invalid",
@@ -1860,7 +1860,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
     expect(out.plugins.entries["octogee-chat-tools"]).toEqual({
       enabled: true,
       hooks: {
-        allowPromptInjection: true,
+        allowPromptModification: true,
         allowConversationAccess: true,
         timeouts: { before_dispatch: 3000, before_prompt_build: 3000, before_agent_run: 3000 },
       },
