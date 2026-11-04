@@ -3410,7 +3410,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     };
   }
 
-  it.skipIf(process.platform !== "linux")("captures source persona before detach and retains its first bytes across a failed push retry", async () => {
+  it("captures source persona before detach and retains its first bytes across a failed push retry", async () => {
     const stateDir = await mkTempRoot();
     await writeStore(stateDir, CARRIED_STORE, () => {});
     const original = Buffer.from("# Identity\r\n- **Name:** Original source 🐙\r\n");
