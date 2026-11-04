@@ -266,12 +266,15 @@ describe("createRsyncMigrationTransfer", () => {
   });
 
   it.each([
-    ["g4", "123", "target import already released"],
-    ["g4", "999", "terminal identity does not match"],
-    ["g3", "999", "terminal identity does not match"],
-    ["g5", "123", "terminal identity does not match"],
-    ["g3", "123", null],
-  ])("checks release receipt %s on VM %s when reclaiming g4", async (generation, vmId, error) => {
+    ["g4", "123", 200, false, "target import already released"],
+    ["g4", "123", 503, true, "target import already released"],
+    ["g4", "999", 200, false, "terminal identity does not match"],
+    ["g3", "999", 503, true, "terminal identity does not match"],
+    ["g5", "123", 503, true, "terminal identity does not match"],
+    ["g3", "123", 503, false, "terminal identity does not match"],
+    ["g3", "123", 200, false, null],
+    ["g3", "123", 503, true, null],
+  ])("checks release receipt %s on VM %s (HTTP %s, held=%s) when reclaiming g4", async (generation, vmId, status, processHeld, error) => {
     const migrationId = "mig-builder-activate-gw-to-g4";
     const store: Store = { [`${migrationId}__final`]: { ...evictedTask(), migrationId } };
     const calls: string[] = [];
@@ -283,8 +286,14 @@ describe("createRsyncMigrationTransfer", () => {
     const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
       resolveGatewayVm: async id => id === "gw-to" ? { instanceName: "vm", internalIp: "172.20.0.9", instanceId: "123" } : null,
-      fetch: (async (url, init) => String(url).endsWith("/surge-ready")
-        ? jsonResponse({ terminalTarget: { migrationId: `mig-builder-activate-gw-to-${generation}`, slug: "alice", targetPodUid: `octogee-gateway-gw-to-vm-${vmId}` } }, 200) : makeFetch(calls, "172.20.0.9")(url, init)) as typeof globalThis.fetch,
+      fetch: (async (url, init) => {
+        if (!String(url).endsWith("/surge-ready")) return makeFetch(calls, "172.20.0.9")(url, init);
+        if (calls.some(call => call.includes("/finish-rsync-import/"))) return jsonResponse({ ready: true });
+        return jsonResponse({ terminalTarget: {
+          migrationId: `mig-builder-activate-gw-to-${generation}`, slug: "alice",
+          targetPodUid: `octogee-gateway-gw-to-vm-${vmId}`, processHeld,
+        } }, status);
+      }) as typeof globalThis.fetch,
       runCommand, now: () => 10_000, controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
     const result = transfer({ migrationId, fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
     if (error) {

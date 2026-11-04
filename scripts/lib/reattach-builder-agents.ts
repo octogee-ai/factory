@@ -30,21 +30,21 @@ function restorationOutcome(
 }
 
 type CarriedAgentStore = Pick<PreparedAgentStore, "agentId" | "destinationPath">;
-type ProjectWorkspaceResolver = (agentId: string) => Promise<string | null>;
+type CarriedWorkspaceResolver = (agentId: string) => Promise<string | null>;
 type CarriedAgentRegistration = { agentId: string; workspace: string; agentDir: string; configured: boolean };
 
-function requiresProjectAuthority(registration: CarriedAgentRegistration): boolean {
+function requiresWorkspaceAuthority(registration: CarriedAgentRegistration): boolean {
   return !registration.configured || parseAgentId(registration.agentId).kind === "project";
 }
 
-async function assertProjectAuthority(registration: CarriedAgentRegistration, resolveProject?: ProjectWorkspaceResolver): Promise<void> {
-  if (!requiresProjectAuthority(registration)) return;
-  if (await resolveProject?.(registration.agentId) !== registration.workspace) {
-    throw new Error(`Carried Builder project authority changed for ${registration.agentId}`);
+async function assertWorkspaceAuthority(registration: CarriedAgentRegistration, resolveWorkspace?: CarriedWorkspaceResolver): Promise<void> {
+  if (!requiresWorkspaceAuthority(registration)) return;
+  if (await resolveWorkspace?.(registration.agentId) !== registration.workspace) {
+    throw new Error(`Carried Builder workspace authority changed for ${registration.agentId}`);
   }
 }
 
-async function carriedAgentRegistration(store: CarriedAgentStore, roster: unknown[], resolveProject?: ProjectWorkspaceResolver): Promise<CarriedAgentRegistration> {
+async function carriedAgentRegistration(store: CarriedAgentStore, roster: unknown[], resolveWorkspace?: CarriedWorkspaceResolver): Promise<CarriedAgentRegistration> {
   const matches = roster.filter((row: unknown) => record(row) && row.id === store.agentId);
   const row: unknown = matches[0];
   const agentDir = path.dirname(store.destinationPath);
@@ -54,10 +54,10 @@ async function carriedAgentRegistration(store: CarriedAgentStore, roster: unknow
       throw new Error(`Native roster does not match the carried Builder agent ${store.agentId}`);
     }
     const registration = { agentId: store.agentId, workspace: row.workspace, agentDir, configured: true };
-    await assertProjectAuthority(registration, resolveProject);
+    await assertWorkspaceAuthority(registration, resolveWorkspace);
     return registration;
   }
-  const workspace = await resolveProject?.(store.agentId);
+  const workspace = await resolveWorkspace?.(store.agentId);
   if (typeof workspace !== "string" || !path.isAbsolute(workspace)) {
     throw new Error(`Native roster does not match the carried Builder agent ${store.agentId}`);
   }
@@ -70,7 +70,7 @@ export async function reattachBuilderAgents(input: {
   assertHeld: () => Promise<void>;
   signal?: AbortSignal;
   run?: OpenClawCommand;
-  resolveCarriedProjectWorkspace?: ProjectWorkspaceResolver;
+  resolveCarriedWorkspace?: CarriedWorkspaceResolver;
   diagnosticIdentity?: CarriedAgentDiagnosticIdentity;
   log: (message: string, fields?: LogContext) => void;
 }): Promise<void> {
@@ -109,17 +109,17 @@ export async function reattachBuilderAgents(input: {
   if (!Array.isArray(roster)) throw new Error("Native carried-agent roster is not an array");
   const registrations = [];
   for (const store of stores) {
-    const registration = await carriedAgentRegistration(store, roster, input.resolveCarriedProjectWorkspace);
-    if (requiresProjectAuthority(registration) && (!input.env.OPENCLAW_STATE_DIR || registration.agentDir !==
+    const registration = await carriedAgentRegistration(store, roster, input.resolveCarriedWorkspace);
+    if (requiresWorkspaceAuthority(registration) && (!input.env.OPENCLAW_STATE_DIR || registration.agentDir !==
         path.join(input.env.OPENCLAW_STATE_DIR, "agents", store.agentId, "agent"))) {
-      throw new Error(`Native carried project agentDir is not canonical for ${store.agentId}`);
+      throw new Error(`Native carried agentDir is not canonical for ${store.agentId}`);
     }
     await assertCurrent();
     assertAnchors(stores);
     registrations.push({ store, registration });
   }
   for (const { store, registration } of registrations) {
-    await assertProjectAuthority(registration, input.resolveCarriedProjectWorkspace);
+    await assertWorkspaceAuthority(registration, input.resolveCarriedWorkspace);
     await assertCurrent();
     assertAnchors(stores);
     const addStartedAt = Date.now();
@@ -128,12 +128,12 @@ export async function reattachBuilderAgents(input: {
       "--agent-dir", registration.agentDir, "--non-interactive", "--json",
     ], { env: input.env, signal: input.signal });
     const durationMs = Date.now() - addStartedAt;
-    await assertProjectAuthority(registration, input.resolveCarriedProjectWorkspace);
+    await assertWorkspaceAuthority(registration, input.resolveCarriedWorkspace);
     await assertCurrent();
     assertAnchors([store]);
     const outcome = restorationOutcome(result, registration);
     if (outcome === "already-configured" && !registration.configured) {
-      throw new Error(`Native carried-agent roster changed during project restoration for ${store.agentId}`);
+      throw new Error(`Native carried-agent roster changed during restoration for ${store.agentId}`);
     }
     input.log(outcome === "restored"
       ? `[migration-rsync] Native restored carried Builder agent ${store.agentId}`

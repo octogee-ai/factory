@@ -4305,6 +4305,36 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     }
   });
 
+  it.each([false, true])("reattaches a missing carried Builder coach only for the current owner (owner changed=%s)", async ownerChanged => {
+    const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
+    const migrationId = `mig-builder-missing-coach-${ownerChanged}`;
+    const agentId = "octogee-chris-coach";
+    const workspace = path.join(importDir, "customers", "chris");
+    const agentDir = path.dirname(path.join(importDir, CARRIED_STORE));
+    const target = builderTargetImport(async () => true);
+    const runOpenClaw = vi.fn(async (args: string[]) => {
+      if (args[1] === "list") return { code: 0, stdout: "[]" };
+      expect(target.deps.releaseSurgeReadiness).not.toHaveBeenCalled();
+      expect(args).toEqual(["agents", "add", agentId, "--workspace", workspace, "--agent-dir", agentDir, "--non-interactive", "--json"]);
+      return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
+    });
+    const { deps, stageDir } = await prepareImport({
+      migrationId, importDir, daemon: mkFakeChild(),
+      adapter: { ...target.adapter, loadUserSnapshot: vi.fn(async () => ({
+        ...RESTORE_SNAPSHOT, uid: ownerChanged ? "other-owner" : "uid-chris",
+      })) },
+      deps: { ...target.deps, procRoot, runOpenClaw },
+    });
+    await stageSnapshot(stageDir, () => {});
+    spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+
+    const result = await finishImport(deps, migrationId);
+
+    expect(result.getStatus(), JSON.stringify(result.getBody())).toBe(ownerChanged ? 500 : 200);
+    expect(runOpenClaw).toHaveBeenCalledTimes(ownerChanged ? 1 : 2);
+    expect(target.deps.releaseSurgeReadiness).toHaveBeenCalledTimes(ownerChanged ? 0 : 1);
+  });
+
   it.each(["active", "disabled", "missing-token", "owner-changed", "hold-lost"] as const)("checks current ownership before admitting a carried project absent from a fresh Builder roster: %s", async mode => {
     const importDir = await mkTempRoot(), procRoot = await mkTempRoot();
     let held = true;

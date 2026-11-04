@@ -2463,15 +2463,17 @@ interface StagedImportInput {
   log: (msg: string, fields?: LogContext) => void;
 }
 
-async function carriedProjectWorkspace(input: StagedImportInput, agentId: string): Promise<string | null> {
+async function carriedBuilderWorkspace(input: StagedImportInput, agentId: string): Promise<string | null> {
   const parsed = parseAgentId(agentId);
-  if (parsed.kind !== "project" || parsed.username !== input.slug) return null;
+  if (parsed.kind === "unknown" || parsed.username !== input.slug) return null;
   const uid = await input.deps.adapter.uidForSlug(input.slug);
-  if (!uid) throw new Error("Carried Builder project has no current owner");
+  if (!uid) throw new Error("Carried Builder workspace has no current owner");
   const snapshot = await input.deps.adapter.loadUserSnapshot(uid, { refresh: true });
-  if (!snapshot || snapshot.uid !== uid || snapshot.slug !== input.slug) throw new Error("Carried Builder project ownership changed");
+  if (!snapshot || snapshot.uid !== uid || snapshot.slug !== input.slug) throw new Error("Carried Builder workspace ownership changed");
+  const workspace = path.join(input.session.importDir, "customers", input.slug);
+  if (parsed.kind === "coach") return workspace;
   if (!activeAgentProjectIds(snapshot.projectAgents ?? []).has(parsed.project)) return null;
-  return path.join(input.session.importDir, "customers", input.slug, "projects", parsed.project);
+  return path.join(workspace, "projects", parsed.project);
 }
 
 async function heldBuilderImport(input: StagedImportInput): Promise<BuilderImportTarget | null> {
@@ -2527,7 +2529,7 @@ async function reattachOfflineBuilderAgents(input: StagedImportInput, prepared: 
     diagnosticIdentity: offlineTarget,
     env: { ...process.env, OPENCLAW_STATE_DIR: session.importDir, OPENCLAW_DIR: session.importDir, OPENCLAW_CONFIG_PATH: openClawConfigPath() },
     run: deps.runOpenClaw,
-    resolveCarriedProjectWorkspace: agentId => carriedProjectWorkspace(input, agentId),
+    resolveCarriedWorkspace: agentId => carriedBuilderWorkspace(input, agentId),
     signal: input.signal,
     log,
     assertHeld: async () => {

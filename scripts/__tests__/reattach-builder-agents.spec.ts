@@ -120,7 +120,7 @@ it("restores a carried project absent from the fresh Builder roster through Nati
   database.prepare("UPDATE openclaw_engine_anchor SET store_id = ?").run("2514f000-4540-4f4e-92a1-831adeac3d5b");
   database.close();
   const before = await fs.readFile(project.destinationPath);
-  const resolveCarriedProjectWorkspace = vi.fn(async (id: string) => id === agentId ? project.workspace : null);
+  const resolveCarriedWorkspace = vi.fn(async (id: string) => id === agentId ? project.workspace : null);
   vi.useFakeTimers({ toFake: ["Date"] });
   const run = vi.fn(async (args: string[]) => {
     if (args[1] === "list") {
@@ -133,15 +133,15 @@ it("restores a carried project absent from the fresh Builder roster through Nati
   const log = vi.fn();
 
   await expect(reattachBuilderAgents({ stores: [coach, project], env: { OPENCLAW_STATE_DIR: coach.root }, run, log,
-    assertHeld: async () => {}, resolveCarriedProjectWorkspace })).resolves.toBeUndefined();
+    assertHeld: async () => {}, resolveCarriedWorkspace })).resolves.toBeUndefined();
 
   expect(log.mock.calls).toEqual([
     [expect.stringContaining(`restored carried Builder agent ${coach.agentId}`), { durationMs: 23_000 }],
     [expect.stringContaining(`restored carried Builder agent ${agentId}`), { durationMs: 27_000 }],
   ]);
 
-  expect(resolveCarriedProjectWorkspace).toHaveBeenCalledTimes(3);
-  expect(resolveCarriedProjectWorkspace.mock.calls.every(([id]) => id === agentId)).toBe(true);
+  expect(resolveCarriedWorkspace).toHaveBeenCalledTimes(3);
+  expect(resolveCarriedWorkspace.mock.calls.every(([id]) => id === agentId)).toBe(true);
   expect(run.mock.calls.map(([args]) => args)).toContainEqual([
     "agents", "add", agentId, "--workspace", project.workspace, "--agent-dir", agentDir, "--non-interactive", "--json",
   ]);
@@ -167,7 +167,7 @@ it.each(["noncanonical-agent-dir", "missing-workspace", "duplicate-roster", "ros
     const before = await fs.readFile(destinationPath);
     await expect(reattachBuilderAgents({ stores: [{ agentId: projectId, destinationPath }], env: { OPENCLAW_STATE_DIR: f.root }, run,
       log: vi.fn(), assertHeld: async () => { if (!held) throw new Error("target hold lost"); },
-      resolveCarriedProjectWorkspace: async () => {
+      resolveCarriedWorkspace: async () => {
         if (mode === "hold-lost") held = false;
         return mode === "missing-workspace" ? null : workspace;
       },
@@ -198,8 +198,8 @@ it.each(["earlier-agent-add", "project-add"] as const)("rechecks carried project
   });
 
   await expect(reattachBuilderAgents({ stores: [coach, { agentId, destinationPath }], env: { OPENCLAW_STATE_DIR: coach.root }, run,
-    log: vi.fn(), assertHeld: async () => {}, resolveCarriedProjectWorkspace: async () => enabled ? workspace : null,
-  })).rejects.toThrow("Carried Builder project authority changed");
+    log: vi.fn(), assertHeld: async () => {}, resolveCarriedWorkspace: async () => enabled ? workspace : null,
+  })).rejects.toThrow("Carried Builder workspace authority changed");
 
   expect(run.mock.calls.some(([args]) => args[1] === "add" && args[2] === agentId)).toBe(mode === "project-add");
   expect(await fs.readFile(destinationPath)).toEqual(before);
@@ -215,7 +215,7 @@ it.each(["disabled", "workspace-changed"] as const)("rechecks current project au
   await fs.copyFile(f.destinationPath, destinationPath);
   const before = await fs.readFile(destinationPath);
   let registered = false, enabled = true, currentWorkspace = workspace;
-  const resolveCarriedProjectWorkspace = vi.fn(async () => enabled ? currentWorkspace : null);
+  const resolveCarriedWorkspace = vi.fn(async () => enabled ? currentWorkspace : null);
   const run = vi.fn(async (args: string[]) => {
     if (args[1] === "list") return { code: 0, stdout: JSON.stringify(registered ? [{ id: agentId, workspace, agentDir }] : []) };
     if (registered) return { code: 1, stdout: JSON.stringify({ ok: false,
@@ -225,15 +225,15 @@ it.each(["disabled", "workspace-changed"] as const)("rechecks current project au
     return { code: 0, stdout: JSON.stringify({ agentId, workspace, agentDir }) };
   });
   const input = { stores: [{ agentId, destinationPath }], env: { OPENCLAW_STATE_DIR: f.root }, run,
-    log: vi.fn(), assertHeld: async () => {}, resolveCarriedProjectWorkspace };
-  await expect(reattachBuilderAgents(input)).rejects.toThrow("Carried Builder project authority changed");
+    log: vi.fn(), assertHeld: async () => {}, resolveCarriedWorkspace };
+  await expect(reattachBuilderAgents(input)).rejects.toThrow("Carried Builder workspace authority changed");
   expect(registered).toBe(true);
-  const checksAfterFirst = resolveCarriedProjectWorkspace.mock.calls.length;
+  const checksAfterFirst = resolveCarriedWorkspace.mock.calls.length;
   if (mode === "workspace-changed") { enabled = true; currentWorkspace = path.join(f.workspace, "other"); }
 
-  await expect(reattachBuilderAgents(input)).rejects.toThrow("Carried Builder project authority changed");
+  await expect(reattachBuilderAgents(input)).rejects.toThrow("Carried Builder workspace authority changed");
 
-  expect(resolveCarriedProjectWorkspace.mock.calls.length).toBeGreaterThan(checksAfterFirst);
+  expect(resolveCarriedWorkspace.mock.calls.length).toBeGreaterThan(checksAfterFirst);
   expect(run.mock.calls.filter(([args]) => args[1] === "add")).toHaveLength(1);
   enabled = true;
   currentWorkspace = workspace;
@@ -258,7 +258,7 @@ it.each(["missing-authority", "wrong-workspace", "noncanonical-agent-dir"] as co
     error: { type: "cli_error", message: `agent "${args[2]}" already exists` } }) });
   await expect(reattachBuilderAgents({ stores: [f, { agentId, destinationPath }], env: { OPENCLAW_STATE_DIR: f.root }, run,
     log: vi.fn(), assertHeld: async () => {},
-    resolveCarriedProjectWorkspace: mode === "missing-authority" ? undefined : async () => workspace,
+    resolveCarriedWorkspace: mode === "missing-authority" ? undefined : async () => workspace,
   })).rejects.toThrow(/authority changed|agentDir is not canonical/);
   expect(run).toHaveBeenCalledOnce();
   expect(await fs.readFile(destinationPath)).toEqual(before);
@@ -267,13 +267,13 @@ it.each(["missing-authority", "wrong-workspace", "noncanonical-agent-dir"] as co
 it("preserves configured custom-agent restoration without project authority", async () => {
   const f = await fixture();
   const agentId = "custom-retained-agent";
-  const resolveCarriedProjectWorkspace = vi.fn(async () => null);
+  const resolveCarriedWorkspace = vi.fn(async () => null);
   const run = vi.fn(async (args: string[]) => args[1] === "list"
     ? { code: 0, stdout: JSON.stringify([{ id: agentId, workspace: f.workspace, agentDir: f.agentDir }]) }
     : { code: 1, stdout: JSON.stringify({ ok: false, error: { type: "cli_error", message: `agent "${agentId}" already exists` } }) });
   await expect(reattachBuilderAgents({ stores: [{ agentId, destinationPath: f.destinationPath }], env: { OPENCLAW_STATE_DIR: f.root },
-    run, log: vi.fn(), assertHeld: async () => {}, resolveCarriedProjectWorkspace })).resolves.toBeUndefined();
-  expect(resolveCarriedProjectWorkspace).not.toHaveBeenCalled();
+    run, log: vi.fn(), assertHeld: async () => {}, resolveCarriedWorkspace })).resolves.toBeUndefined();
+  expect(resolveCarriedWorkspace).not.toHaveBeenCalled();
 });
 
 

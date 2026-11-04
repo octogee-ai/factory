@@ -273,7 +273,7 @@ async function assertFinalImportNotReleased(fetchImpl: typeof globalThis.fetch, 
   }
   const previous = builderActivationGeneration(terminal.migrationId, input.toGatewayId);
   const current = builderActivationGeneration(input.migrationId, input.toGatewayId);
-  if (response.ok && previous !== undefined && current !== undefined && previous < current) return;
+  if ((response.ok || terminal.processHeld === true) && previous !== undefined && current !== undefined && previous < current) return;
   throw new Error("migration target terminal identity does not match the reclaimed transfer");
 }
 
