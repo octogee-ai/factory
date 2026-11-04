@@ -2,7 +2,7 @@ import { migrationSourceReady } from "../migration-root-stability.js";
 import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
-import { createMigrateCustomerHandler } from "../handlers/migrate-customer";
+import { createMigrateCustomerHandler, FRESH_TARGET_CONFIG_COMMIT_WAIT_MS } from "../handlers/migrate-customer";
 import type { MigrateCustomerDeps } from "../handlers/migrate-customer";
 import type { OperationContext } from "../operation-router";
 import { createMigrationClient, MigrationDrainPendingError, MigrationRpcError, MigrationTransportError, type MigrationClient } from "@octogee/core/fleet-migration-client";
@@ -209,6 +209,37 @@ function mkDeps(options: HarnessOptions = {}) {
     }),
   } as unknown as OperationContext;
   return { deps, ctx, client, events, steps, persisted, transfers };
+}
+
+function tickingClock(h: ReturnType<typeof mkDeps>): void {
+  let clock = 5_000;
+  vi.mocked(h.deps.now).mockImplementation(() => clock);
+  vi.mocked(h.deps.sleep).mockImplementation(async (ms: number) => { clock += ms; });
+}
+
+function freshBuilderFromBarn(h: ReturnType<typeof mkDeps>, commits: Array<string | null>): void {
+  tickingClock(h);
+  vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, gatewayClass: "shared" });
+  vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: "builder" });
+  vi.mocked(h.client.flushGateway).mockImplementation(async ({ migrationId, slug }) => ({ migrationId, slug, ok: true, durationMs: 1, steps: [] }));
+  const commitCutover = vi.mocked(h.deps.commitCutover).getMockImplementation()!;
+  vi.mocked(h.deps.commitCutover).mockImplementation(async (commit) => {
+    await commitCutover(commit);
+    vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: commit.toGatewayId });
+  });
+  const reads = vi.mocked(h.deps.readGatewaySystemConfigCommit).mockResolvedValue(commits.at(-1)!);
+  for (const commit of commits.slice(0, -1)) reads.mockResolvedValueOnce(commit);
+}
+
+function loseClaimDuringCommitRead(h: ReturnType<typeof mkDeps>): void {
+  vi.mocked(h.deps.readGatewaySystemConfigCommit).mockImplementation(async () => {
+    vi.mocked(h.ctx.assertActiveClaim!).mockRejectedValue(new Error("operation op-1 claim lost"));
+    return TARGET_SYSTEM_CONFIG_COMMIT;
+  });
+}
+
+function targetConvergeRequests(h: ReturnType<typeof mkDeps>) {
+  return vi.mocked(h.client.flushGateway).mock.calls.map(([request]) => request).filter((request) => request.gatewayId === "gw-green");
 }
 
 function mockNativeReturn(checkpointRequested = false) {
@@ -1795,6 +1826,46 @@ describe("migrate-customer — Builder computer activation", () => {
     })]);
   });
 
+  it("waits for a fresh Builder's first accepted commit before converging on it", async () => {
+    const h = mkDeps();
+    freshBuilderFromBarn(h, [null, null, TARGET_SYSTEM_CONFIG_COMMIT]);
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+
+    expect(h.deps.readGatewaySystemConfigCommit).toHaveBeenCalledTimes(3);
+    expect(targetConvergeRequests(h)).toEqual([expect.objectContaining({
+      reason: "migration-converge",
+      expectedSystemConfigCommit: TARGET_SYSTEM_CONFIG_COMMIT,
+    })]);
+  });
+
+  it("fails the attempt once a fresh Builder has accepted no commit within the wait", async () => {
+    const h = mkDeps();
+    freshBuilderFromBarn(h, [null]);
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false,
+      rolledBack: false,
+      error: expect.stringContaining("destination recovery pending: status 503: target gw-green has no accepted system config commit"),
+    });
+
+    expect(vi.mocked(h.deps.sleep).mock.calls.reduce((slept, [ms]) => slept + ms, 0)).toBe(FRESH_TARGET_CONFIG_COMMIT_WAIT_MS);
+    expect(targetConvergeRequests(h)).toEqual([]);
+  });
+
+  it("never converges a fresh Builder on an attempt that lost its claim during the commit read", async () => {
+    const h = mkDeps();
+    freshBuilderFromBarn(h, [TARGET_SYSTEM_CONFIG_COMMIT]);
+    loseClaimDuringCommitRead(h);
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({
+      success: false,
+      rolledBack: false,
+      error: expect.stringContaining("destination recovery pending: status 503: operation op-1 claim lost"),
+    });
+    expect(targetConvergeRequests(h)).toEqual([]);
+  });
+
   it("fails a Builder-to-Builder activation whose source flush proves no commit", async () => {
     const h = mkDeps();
     vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, gatewayClass: "builder" });
@@ -2618,6 +2689,37 @@ describe("scheduler handoff recovery", () => {
     if (!fails) expect(h.client.scheduler).toHaveBeenLastCalledWith(expect.objectContaining({ gatewayId: "gw-green", phase: "activate" }));
     else expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("legacy schedule transfer failed"));
     expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-blue" }));
+  });
+
+  it("waits for a fresh Builder's first accepted commit before converging a Shared-sourced handoff", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    tickingClock(h);
+    const fromShared = { ...schedulerHandoff, scheduleTransfer: undefined, stageAfterCutover: true as const, fromGatewayId: "shared-blue" };
+    vi.mocked(h.deps.readGatewaySystemConfigCommit).mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValue(TARGET_SYSTEM_CONFIG_COMMIT);
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: fromShared, attempts: 1 }), h.ctx))
+      .toMatchObject({ success: true, rolledBack: false });
+
+    expect(h.client.resume).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "gw-green", role: "target" }));
+    expect(h.deps.readGatewaySystemConfigCommit).toHaveBeenCalledTimes(3);
+    expect(h.client.flushGateway).toHaveBeenCalledWith(expect.objectContaining({
+      gatewayId: "gw-green", reason: "migration-converge", expectedSystemConfigCommit: TARGET_SYSTEM_CONFIG_COMMIT,
+    }));
+    expect(h.client.unmount).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: "shared-blue" }));
+  });
+
+  it("never converges a Shared-sourced handoff on an attempt that lost its claim during the commit read", async () => {
+    const h = mkDeps({ sourceGatewayId: "gw-green" });
+    const fromShared = { ...schedulerHandoff, scheduleTransfer: undefined, stageAfterCutover: true as const, fromGatewayId: "shared-blue" };
+    loseClaimDuringCommitRead(h);
+
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: fromShared, attempts: 1 }), h.ctx)).toMatchObject({
+      success: false,
+      rolledBack: false,
+      error: expect.stringContaining("destination recovery pending: status 503: operation op-1 claim lost"),
+    });
+    expect(h.client.flushGateway).not.toHaveBeenCalled();
+    expect(h.client.unmount).not.toHaveBeenCalled();
   });
 
   it("completes committed cutover when the schedule restore fails", async () => {

@@ -62,6 +62,8 @@ import {
 const RETAINED_POD = "retained-pod";
 const RELEASED_BUILDER_TARGET_ERROR = "Builder activation target released before cutover; source recovery required";
 const COACH_ATTACH_POLL_MS = 5_000;
+export const FRESH_TARGET_CONFIG_COMMIT_WAIT_MS = 120_000;
+const TARGET_CONFIG_COMMIT_POLL_MS = 5_000;
 
 // At most one migration per target gateway at a time. Enforced durably, before
 // this handler ever runs, by the operation queue in index.ts (operation-queue.ts
@@ -652,6 +654,33 @@ function scheduleTransferDeps(
   };
 }
 
+async function readClaimedTargetSystemConfigCommit(
+  deps: MigrateCustomerDeps,
+  gatewayId: string,
+  assertCurrent?: () => Promise<void>,
+): Promise<string | null> {
+  const commit = await deps.readGatewaySystemConfigCommit(gatewayId);
+  await assertCurrent?.();
+  return commit;
+}
+
+async function awaitTargetSystemConfigCommit(
+  deps: MigrateCustomerDeps,
+  gatewayId: string,
+  assertCurrent?: () => Promise<void>,
+): Promise<string | null> {
+  const deadline = deps.now() + FRESH_TARGET_CONFIG_COMMIT_WAIT_MS;
+  let commit = await readClaimedTargetSystemConfigCommit(deps, gatewayId, assertCurrent);
+  if (commit) return commit;
+  deps.log(`[migrate-customer] target ${gatewayId} has not accepted a system config commit yet; waiting up to ${FRESH_TARGET_CONFIG_COMMIT_WAIT_MS / 1000}s for its heartbeat`);
+  while (deps.now() < deadline) {
+    await deps.sleep(Math.min(TARGET_CONFIG_COMMIT_POLL_MS, deadline - deps.now()));
+    commit = await readClaimedTargetSystemConfigCommit(deps, gatewayId, assertCurrent);
+    if (commit) return commit;
+  }
+  return null;
+}
+
 function buildRunnerDeps(
   input: {
     deps: MigrateCustomerDeps;
@@ -674,7 +703,7 @@ function buildRunnerDeps(
     },
     ...scheduleTransferDeps(deps, input.uid),
     setMigrationPhase: (phase) => deps.setMigrationPhase?.({ uid: input.uid, sourceGatewayId: input.sourceGatewayId, operationId: input.operationId, phase }) ?? Promise.resolve(),
-    readTargetSystemConfigCommit: deps.readGatewaySystemConfigCommit,
+    readTargetSystemConfigCommit: (gatewayId) => awaitTargetSystemConfigCommit(deps, gatewayId, ctx.assertActiveClaim),
     commitCutover: async (commit) => {
       await deps.commitCutover({ ...commit, automatic: input.automatic });
       await recordCutoverCommitted(deps, ctx);
@@ -1427,6 +1456,7 @@ async function finishNativeReturnAfterCutover(
 async function completeSchedulerHandoff(
   deps: MigrateCustomerDeps,
   op: Operation,
+  ctx: OperationContext,
   user: UserGatewayInfo,
   request: { uid: string; toGatewayId: string },
 ): Promise<OperationResult> {
@@ -1439,8 +1469,8 @@ async function completeSchedulerHandoff(
     try {
       const client = await gatewayClient(deps, [handoff.toGatewayId]);
       await client.resume({ migrationId, gatewayId: handoff.toGatewayId, slug: handoff.slug, role: "target" });
-      const expectedSystemConfigCommit = await deps.readGatewaySystemConfigCommit(handoff.toGatewayId);
-      if (!expectedSystemConfigCommit) throw new Error("target has no accepted system config");
+      const expectedSystemConfigCommit = await awaitTargetSystemConfigCommit(deps, handoff.toGatewayId, ctx.assertActiveClaim);
+      if (!expectedSystemConfigCommit) throw new Error(`target ${handoff.toGatewayId} has no accepted system config commit to converge ${handoff.slug} on`);
       await client.flushGateway({ migrationId, gatewayId: handoff.toGatewayId, slug: handoff.slug, reason: "migration-converge", expectedSystemConfigCommit });
     } catch (error) {
       return failure(`migration cutover committed; destination recovery pending: status 503: ${errorMessage(error)}`, false);
@@ -1727,7 +1757,7 @@ async function recoverCommittedMigration(
     const nativeReturn = await finishNativeReturnAfterCutover(deps, op, ctx, user, request);
     if (nativeReturn) return nativeReturn;
   }
-  if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, user, request);
+  if (op.schedulerHandoff) return completeSchedulerHandoff(deps, op, ctx, user, request);
   return convergence ? { steps: [], success: true, rolledBack: false } : null;
 }
 
