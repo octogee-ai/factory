@@ -470,12 +470,31 @@ function configuredBuilderClient(): FleetBrokerClient {
 }
 
 describe("Builder target runtime enablement", () => {
-  it.each([true, false])("enables the imported runtime only after its serving assignment commits (assigned=%s)", async assigned => {
+  it.each([
+    { assigned: true, talkAgentId: "octogee-alice-coach" },
+    { assigned: true, talkAgentId: undefined },
+    { assigned: false, talkAgentId: "octogee-alice-coach" },
+  ])("enables the imported runtime only after its serving assignment commits (assigned=$assigned, talk=$talkAgentId)", async ({ assigned, talkAgentId }) => {
     const previousGatewayId = process.env.GATEWAY_ID;
+    const previousGatewayClass = process.env.GATEWAY_CLASS;
+    const previousApiOrigin = process.env.API_PUBLIC_URL;
     process.env.GATEWAY_ID = "alice-builder";
+    process.env.GATEWAY_CLASS = "builder";
+    process.env.API_PUBLIC_URL = "https://api.example.invalid";
     withBuilderClaim({ OPENCLAW_DIR: testRuntime.dir, GATEWAY_ID: "alice-builder" }, "alice");
     const repo = path.join(testRuntime.dir, "system_config");
-    const desired = { cron: { enabled: true }, channels: { mattermost: { enabled: true, accounts: { "alice-coach": {} } } } };
+    const desired = { cron: { enabled: true, maxConcurrentRuns: 3 }, talk: { agentId: talkAgentId, realtime: { provider: "openai" } }, channels: {
+      mattermost: { enabled: true, accounts: { "alice-coach": {} } },
+      slack: { enabled: true, accounts: { primary: {}, paused: { enabled: false } } },
+    } };
+    const dormant = { agents: { entries: keyedRoster([SAFE_DEFAULT_AGENT_ID, "octogee-alice-coach"]) },
+      cron: { enabled: false, maxConcurrentRuns: 7 }, talk: { agentId: SAFE_DEFAULT_AGENT_ID, voiceId: "live-voice" },
+      channels: {
+        mattermost: { enabled: false, accounts: { "alice-coach": { enabled: false, botToken: "live-token" } } },
+        slack: { enabled: false, accounts: { primary: { enabled: false, appToken: "live-token" }, paused: { enabled: false } } },
+      },
+    };
+    let current = structuredClone(dormant);
     await fs.mkdir(repo, { recursive: true });
     await fs.writeFile(path.join(repo, "openclaw.json"), JSON.stringify(desired));
     execFileSync("git", ["init", "-b", "main"], { cwd: repo });
@@ -483,7 +502,10 @@ describe("Builder target runtime enablement", () => {
     execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], { cwd: repo });
     await disableSystemConfigWatch(testRuntime.dir, "alice", { runtimeProjection: true });
     patchMocks.applyConfigPatch.mockClear();
-    const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot(desired)) });
+    patchMocks.applyConfigPatch.mockImplementationOnce(realApplyConfigPatch);
+    const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot(current)),
+      configPatch: vi.fn(async patch => { current = mergePatch(current, patch) as typeof current; return { ok: true }; }),
+    });
     const adapter = buildBrokeredLifecycleAdapter({ client: mkClient({
       uidForSlug: vi.fn(async () => "uid-alice"),
       userSnapshot: vi.fn(async () => aliceSnapshot({ gatewayId: assigned ? "alice-builder" : "shared-blue" })),
@@ -495,20 +517,33 @@ describe("Builder target runtime enablement", () => {
         await resumed;
         const patch = vi.mocked(applyConfigPatch).mock.calls.at(-1)![0];
         expect(patch.buildPatch({})).toMatchObject({ cron: { enabled: true }, channels: { mattermost: { enabled: true } } });
+        expect(current.agents).toEqual(dormant.agents);
+        expect(current.cron).toEqual({ enabled: true, maxConcurrentRuns: 7 });
+        expect(current.talk).toEqual({ ...(talkAgentId ? { agentId: talkAgentId } : {}), voiceId: "live-voice" });
+        expect(current.channels).toEqual({
+          mattermost: { enabled: true, accounts: { "alice-coach": { enabled: true, botToken: "live-token" } } },
+          slack: { enabled: true, accounts: { primary: { enabled: true, appToken: "live-token" }, paused: { enabled: false } } },
+        });
         expect(rpc.channelsStart).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });
         expect(isSystemConfigWatchDisabled(testRuntime.dir, "alice")).toBe(false);
       } else {
         await expect(resumed).rejects.toThrow("requires its current serving assignment");
         expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
         expect(rpc.channelsStart).not.toHaveBeenCalled();
+        expect(current).toEqual(dormant);
         expect(isSystemConfigWatchDisabled(testRuntime.dir, "alice")).toBe(true);
       }
     } finally {
+      patchMocks.applyConfigPatch.mockReset().mockResolvedValue({ mode: "rpc", attempts: 1 });
       await fs.rm(repo, { recursive: true, force: true });
       await fs.rm(path.join(testRuntime.dir, "system_config.watch.disabled"), { force: true });
       clearBuilderClaim();
       if (previousGatewayId === undefined) delete process.env.GATEWAY_ID;
       else process.env.GATEWAY_ID = previousGatewayId;
+      if (previousGatewayClass === undefined) delete process.env.GATEWAY_CLASS;
+      else process.env.GATEWAY_CLASS = previousGatewayClass;
+      if (previousApiOrigin === undefined) delete process.env.API_PUBLIC_URL;
+      else process.env.API_PUBLIC_URL = previousApiOrigin;
     }
   });
 });
@@ -1878,6 +1913,70 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
     } finally {
       clock.mockRestore();
       clearBuilderClaim();
+    }
+  });
+
+  it.each([false, true])("keeps Native's imported roster while disabling the pre-cutover Builder runtime (retry=%s)", async retry => {
+    stubBuilderClaim("tester10");
+    const repo = path.join(testRuntime.dir, "system_config");
+    const agentIds = ["octogee-tester10-coach", "octogee-tester10-proj-orbit-coach"];
+    const accepted = { agents: { entries: keyedRoster([SAFE_DEFAULT_AGENT_ID]) } };
+    let current = {
+      ...accepted,
+      agents: { entries: { ...keyedRoster([SAFE_DEFAULT_AGENT_ID]), ...(retry
+        ? Object.fromEntries(agentIds.map(id => [id, { model: "native-model" }])) : {}) } },
+      cron: { enabled: true, maxConcurrentRuns: 3 },
+      channels: { mattermost: { enabled: true, baseUrl: "https://chat.example.invalid", accounts: {
+        "tester10-coach": { enabled: false }, "tester10-proj-orbit": { enabled: false },
+      } } },
+    };
+    let revision = 0;
+    const persist = (next: typeof current, hash: string) => {
+      expect(hash).toBe(`cfg-${revision}`);
+      const dropped = Object.keys(current.agents.entries).filter(id => !(id in next.agents.entries));
+      if (dropped.length) throw new Error(`Config write would drop agent roster entries without an explicit deletion: ${dropped.join(", ")}.`);
+      current = structuredClone(next);
+      revision++;
+      return { ok: true as const };
+    };
+    const rpc = mkGatewayRpc({
+      configGet: vi.fn(async () => ({ ...configSnapshot(structuredClone(current)), hash: `cfg-${revision}` })),
+      configApply: vi.fn(async (config, hash) => persist(config as typeof current, hash)),
+      configPatch: vi.fn(async (patch, hash) => persist(mergePatch(current, patch) as typeof current, hash)),
+      agentsCreate: vi.fn(async ({ name, workspace }) => {
+        if (name in current.agents.entries) throw new OpenclawWireError("rpc-error", `agent "${name}" already exists`);
+        current.agents.entries[name] = { workspace, model: "native-model" };
+        revision++;
+        return { ok: true as const, agentId: name, name, workspace };
+      }),
+    });
+    mocks.readActivationManifest.mockResolvedValue({
+      slug: "tester10", appliedFingerprint: "fp-tester10", agentId: agentIds[0],
+      agent: { id: agentIds[0], workspace: path.join(testRuntime.dir, "customers/tester10") },
+      projectAgents: [{ agentId: agentIds[1], accountId: "tester10-proj-orbit", agent: {
+        id: agentIds[1], workspace: path.join(testRuntime.dir, "customers/tester10/projects/orbit"),
+      } }],
+    });
+    patchMocks.applyConfigPatch.mockImplementationOnce(realApplyConfigPatch);
+    const adapter = buildBrokeredLifecycleAdapter({ client: configuredBuilderClient(), rpc, log: vi.fn(), isBuilderGateway: () => true });
+    try {
+      await fs.mkdir(repo, { recursive: true });
+      await fs.writeFile(path.join(repo, "openclaw.json"), JSON.stringify(accepted));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+      execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
+      execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], { cwd: repo });
+      await expect(adapter.activateImportedCustomer("tester10", { deferRuntimeVerification: true })).resolves.toEqual({ appliedFingerprint: "fp-tester10" });
+      expect(Object.keys(current.agents.entries)).toEqual([SAFE_DEFAULT_AGENT_ID, ...agentIds]);
+      for (const id of agentIds) expect(current.agents.entries[id]).toEqual(expect.objectContaining({ model: "native-model" }));
+      expect(current.cron).toEqual({ enabled: false, maxConcurrentRuns: 3 });
+      expect(current.channels.mattermost).toEqual({ enabled: false, baseUrl: "https://chat.example.invalid", accounts: {
+        "tester10-coach": { enabled: false }, "tester10-proj-orbit": { enabled: false },
+      } });
+      expect(rpc.channelsStart).not.toHaveBeenCalled();
+      expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
+    } finally {
+      patchMocks.applyConfigPatch.mockReset().mockResolvedValue({ mode: "rpc", attempts: 1 });
+      await fs.rm(repo, { recursive: true, force: true });
     }
   });
 

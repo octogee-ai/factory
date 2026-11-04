@@ -1895,16 +1895,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-async function restoreDormantBuilderConfig(ctx: BrokerCtx): Promise<void> {
-  const current = await ctx.rpc.configGet();
-  const desired = readAcceptedBuilderConfig(OPENCLAW_DIR);
-  desired.cron = { ...asRecord(desired.cron), enabled: false };
-  for (const channel of Object.values(asRecord(desired.channels) ?? {})) {
-    const entry = asRecord(channel);
-    if (entry) entry.enabled = false;
-  }
-  await ctx.rpc.configApply(desired, current.hash);
-  invalidateConfigCache(ctx);
+async function keepBuilderRuntimeDormant(ctx: BrokerCtx): Promise<void> {
+  await applyConfigPatch({ buildPatch: current => ({
+    cron: { enabled: false },
+    channels: Object.fromEntries(Object.keys(asRecord(asRecord(current)?.channels) ?? {})
+      .map(id => [id, { enabled: false }])),
+  }) }, { rpc: ctx.rpc, cache: ctx.configCache, log: ctx.log });
 }
 
 async function prepareImportControlRuntime(ctx: BrokerCtx, slug: string, signal?: AbortSignal) {
@@ -1963,7 +1959,7 @@ async function activateImportedCustomer(
       waitForAppliedRevision: ctx.isBuilderGateway(),
     });
   }
-  if (configuredBuilder && opts.deferRuntimeVerification) await restoreDormantBuilderConfig(ctx);
+  if (configuredBuilder && opts.deferRuntimeVerification) await keepBuilderRuntimeDormant(ctx);
   await restoreSourceIdentityAfterRoster(ctx, manifest, safeManifest, sourceIdentity);
   await reportSharedAnchors?.();
   await materializeCustomerBrokerProfiles(
@@ -2300,9 +2296,19 @@ async function resumeAssignedBuilderRuntime(ctx: BrokerCtx, slug: string): Promi
     await reloadRuntimeSecretsIfChanged(ctx, `[resume:${slug}]`, secrets);
     ctx.pendingRuntimeSecrets.delete(slug);
   }
-  await applyConfigPatch({ buildPatch: () => ({ cron: desired.cron ?? { enabled: true },
-    channels: Object.fromEntries(Object.entries(asRecord(desired.channels) ?? {}).map(([id, channel]) =>
-      [id, { enabled: asRecord(channel)?.enabled ?? true }])) }) }, { rpc: ctx.rpc, cache: ctx.configCache, log: ctx.log });
+  const talk = asRecord(desired.talk);
+  await applyConfigPatch({ buildPatch: () => ({
+    cron: { enabled: asRecord(desired.cron)?.enabled ?? true },
+    ...(talk ? { talk: { agentId: talk.agentId ?? null } } : {}),
+    channels: Object.fromEntries(Object.entries(asRecord(desired.channels) ?? {}).map(([id, channel]) => {
+      const entry = asRecord(channel);
+      const accounts = asRecord(entry?.accounts);
+      return [id, { enabled: entry?.enabled ?? true, ...(accounts ? {
+        accounts: Object.fromEntries(Object.entries(accounts).map(([accountId, account]) =>
+          [accountId, { enabled: asRecord(account)?.enabled ?? true }])),
+      } : {}) }];
+    })),
+  }) }, { rpc: ctx.rpc, cache: ctx.configCache, log: ctx.log });
   await setCustomerChannelsRunning(ctx.rpc, slug, true);
   await enableSystemConfigWatch(OPENCLAW_DIR, slug);
 }
