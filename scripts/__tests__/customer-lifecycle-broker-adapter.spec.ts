@@ -503,6 +503,7 @@ describe("Builder target runtime enablement", () => {
     await disableSystemConfigWatch(testRuntime.dir, "alice", { runtimeProjection: true });
     patchMocks.applyConfigPatch.mockClear();
     patchMocks.applyConfigPatch.mockImplementationOnce(realApplyConfigPatch);
+    mocks.removeActivationManifest.mockReset().mockResolvedValue(undefined);
     const rpc = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot(current)),
       configPatch: vi.fn(async patch => { current = mergePatch(current, patch) as typeof current; return { ok: true }; }),
     });
@@ -526,8 +527,10 @@ describe("Builder target runtime enablement", () => {
         });
         expect(rpc.channelsStart).toHaveBeenCalledWith({ channel: "mattermost", accountId: "alice-coach" });
         expect(isSystemConfigWatchDisabled(testRuntime.dir, "alice")).toBe(false);
+        expect(mocks.removeActivationManifest).toHaveBeenCalledWith(testRuntime.dir, "alice");
       } else {
         await expect(resumed).rejects.toThrow("requires its current serving assignment");
+        expect(mocks.removeActivationManifest).not.toHaveBeenCalled();
         expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
         expect(rpc.channelsStart).not.toHaveBeenCalled();
         expect(current).toEqual(dormant);

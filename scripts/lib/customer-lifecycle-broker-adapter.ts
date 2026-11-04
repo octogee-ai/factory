@@ -2311,6 +2311,7 @@ async function resumeAssignedBuilderRuntime(ctx: BrokerCtx, slug: string): Promi
   }) }, { rpc: ctx.rpc, cache: ctx.configCache, log: ctx.log });
   await setCustomerChannelsRunning(ctx.rpc, slug, true);
   await enableSystemConfigWatch(OPENCLAW_DIR, slug);
+  await removeActivationManifest(OPENCLAW_DIR, slug);
 }
 
 export function buildBrokeredLifecycleAdapter(
