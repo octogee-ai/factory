@@ -16,6 +16,7 @@ import {
   type PushRsyncStateRequestBody,
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
+import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
 import type { MigrationSyncMode } from "@octogee/core/fleet-migration";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
 import { gatewayScopedJobId, signFleetRequest } from "@octogee/core/fleet-signature";
@@ -250,6 +251,13 @@ async function assertTargetTransferFencing(fetchImpl: typeof globalThis.fetch, b
   }
 }
 
+function builderActivationGeneration(migrationId: unknown, gatewayId: string): number | undefined {
+  if (typeof migrationId !== "string" || !migrationId.startsWith("mig-") ||
+      !isBuilderActivateOperationIdFor(migrationId.slice(4), gatewayId)) return undefined;
+  const generation = Number(migrationId.slice(migrationId.lastIndexOf("-g") + 2));
+  return Number.isSafeInteger(generation) ? generation : undefined;
+}
+
 async function assertFinalImportNotReleased(fetchImpl: typeof globalThis.fetch, baseUrl: string, input: { migrationId: string; slug: string; toGatewayId: string }, targetUid?: string): Promise<void> {
   const response = await fetchImpl(`${baseUrl}/surge-ready`, { signal: AbortSignal.timeout(5_000) });
   if (response.status !== 200 && response.status !== 503) throw new Error(`migration target readiness inspection failed: status ${response.status}`);
@@ -257,10 +265,16 @@ async function assertFinalImportNotReleased(fetchImpl: typeof globalThis.fetch, 
   if (state.terminalTarget === undefined) return;
   const terminal = state.terminalTarget as Record<string, unknown> | null;
   if (!terminal || typeof terminal !== "object" || !targetUid || terminal.targetPodUid !== targetUid ||
-      terminal.migrationId !== input.migrationId || terminal.slug !== input.slug) {
+      terminal.slug !== input.slug) {
     throw new Error("migration target terminal identity does not match the reclaimed transfer");
   }
-  throw new Error(`target import already released for migration ${input.migrationId} on ${input.toGatewayId}`);
+  if (terminal.migrationId === input.migrationId) {
+    throw new Error(`target import already released for migration ${input.migrationId} on ${input.toGatewayId}`);
+  }
+  const previous = builderActivationGeneration(terminal.migrationId, input.toGatewayId);
+  const current = builderActivationGeneration(input.migrationId, input.toGatewayId);
+  if (response.ok && previous !== undefined && current !== undefined && previous < current) return;
+  throw new Error("migration target terminal identity does not match the reclaimed transfer");
 }
 
 async function inspectReclaimedFinalImport(fetchImpl: typeof globalThis.fetch, baseUrl: string, input: { migrationId: string; slug: string; toGatewayId: string; mode: MigrationSyncMode }, claim: TransferClaim, targetUid?: string): Promise<void> {

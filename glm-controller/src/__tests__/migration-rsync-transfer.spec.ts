@@ -265,8 +265,15 @@ describe("createRsyncMigrationTransfer", () => {
     expect(calls).toEqual([]);
   });
 
-  it.each(["octogee-gateway-gw-to-vm-123", "octogee-gateway-gw-to-vm-999"])("checks the released VM allocation identity %s", async targetPodUid => {
-    const store: Store = { evicted__final: evictedTask() };
+  it.each([
+    ["g4", "123", "target import already released"],
+    ["g4", "999", "terminal identity does not match"],
+    ["g3", "999", "terminal identity does not match"],
+    ["g5", "123", "terminal identity does not match"],
+    ["g3", "123", null],
+  ])("checks release receipt %s on VM %s when reclaiming g4", async (generation, vmId, error) => {
+    const migrationId = "mig-builder-activate-gw-to-g4";
+    const store: Store = { [`${migrationId}__final`]: { ...evictedTask(), migrationId } };
     const calls: string[] = [];
     const fallback = makeCommandRunner([]);
     const runCommand: CommandRunner = async (command, args, options) => args.includes("old-controller")
@@ -277,11 +284,16 @@ describe("createRsyncMigrationTransfer", () => {
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
       resolveGatewayVm: async id => id === "gw-to" ? { instanceName: "vm", internalIp: "172.20.0.9", instanceId: "123" } : null,
       fetch: (async (url, init) => String(url).endsWith("/surge-ready")
-        ? jsonResponse({ terminalTarget: { migrationId: "evicted", slug: "alice", targetPodUid } }, 503) : makeFetch(calls)(url, init)) as typeof globalThis.fetch,
+        ? jsonResponse({ terminalTarget: { migrationId: `mig-builder-activate-gw-to-${generation}`, slug: "alice", targetPodUid: `octogee-gateway-gw-to-vm-${vmId}` } }, 200) : makeFetch(calls, "172.20.0.9")(url, init)) as typeof globalThis.fetch,
       runCommand, now: () => 10_000, controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
-    await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" }))
-      .rejects.toThrow(targetPodUid === "octogee-gateway-gw-to-vm-123" ? "target import already released" : "terminal identity does not match");
-    expect(calls).toEqual([]);
+    const result = transfer({ migrationId, fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+      expect(calls).toEqual([]);
+    } else {
+      await expect(result).resolves.toMatchObject({ imported: true });
+      expect(calls.some(url => url.includes("/finish-rsync-import/"))).toBe(true);
+    }
   });
 
   it.each([{}, { deletionTimestamp: "2026-11-02T03:05:34Z" }])("preserves a transfer whose owner pod still exists, including termination (%j)", async metadata => {
