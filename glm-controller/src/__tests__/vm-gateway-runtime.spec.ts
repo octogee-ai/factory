@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { GatewayVmSpec, HelmInstancesMap } from "@octogee/shared/types/glm";
-import type { GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
-import { GATEWAY_VM_ACCESS_SCOPES } from "../lib/compute-vm";
+import type { CreateGatewayVmInput, CreateGatewayVmResult, GatewayVmClient, GatewayVmDescription } from "../lib/compute-vm";
+import { ComputeOperationError, GATEWAY_VM_ACCESS_SCOPES } from "../lib/compute-vm";
 import type { HelmRunner } from "../helm-runner";
 import {
   createRuntimeDispatchingHelmRunner,
@@ -15,7 +15,7 @@ import {
   stampGatewayRuntime,
   vmRoutesFromDocs,
 } from "../vm-gateway-runtime";
-import { builderComputerInstanceInput } from "../vm-computer-lifecycle";
+import { ComputerCreationPendingError, builderComputerInstanceInput } from "../vm-computer-lifecycle";
 
 const renderedJson = readFileSync(new URL("./fixtures/vm-runtime-render.json", import.meta.url), "utf8");
 const concatenated = (JSON.parse(renderedJson) as unknown[]).map((item) => JSON.stringify(item)).join("\n");
@@ -102,7 +102,7 @@ function harness(
   vmOverrides: Partial<GatewayVmClient> = {},
   bridge = "172.20.7.7",
   desiredStatus: Record<string, string | null> = {},
-  extra: { beforeWrite?: (path: string, data: Record<string, unknown>) => void; disposableParking?: boolean; clock?: { now: number }; onWait?: (ms: number, waits: number) => void; homeCheckpointTimeoutMs?: number; applyFails?: boolean; onApply?: (routes: Record<string, string>) => Promise<void>; vmSpec?: GatewayVmSpec } = {},
+  extra: { beforeWrite?: (path: string, data: Record<string, unknown>) => void; disposableParking?: boolean; clock?: { now: number }; onWait?: (ms: number, waits: number) => void | Promise<void>; homeCheckpointTimeoutMs?: number; applyFails?: boolean; onApply?: (routes: Record<string, string>) => Promise<void>; vmSpec?: GatewayVmSpec } = {},
 ) {
   docs["users/UidA"] ??= { provisioning: { openclaw: { gatewayId: "b-x" } } };
   const { db, writes, deletes } = fakeDb(docs, extra.beforeWrite);
@@ -135,6 +135,7 @@ function harness(
     ...vmOverrides,
   };
   const log = vi.fn();
+  const creationSettled = vi.fn();
   const helmCalls: string[][] = [];
   const kubectlCalls: Array<{ args: string[]; stdin?: string }> = [];
   const runtime = createVmGatewayRuntime({
@@ -156,14 +157,15 @@ function harness(
     ensureAuthSecret: vi.fn(async () => {}),
     readDesiredStatus: async (gatewayId) => gatewayId in desiredStatus ? desiredStatus[gatewayId] : "running",
     journalBootUpgrade: async (_input, work) => work(async () => {}),
-    wait: async (ms) => { waits.push(ms); clock.now += ms; extra.onWait?.(ms, waits.length); },
+    wait: async (ms) => { waits.push(ms); clock.now += ms; await extra.onWait?.(ms, waits.length); },
     disposableParking: extra.disposableParking,
     homeCheckpointTimeoutMs: extra.homeCheckpointTimeoutMs ?? 60_000,
     homeCheckpointPollMs: 10_000,
+    onComputerCreationSettled: creationSettled,
     now: () => clock.now, log,
   });
   const routesPublished = () => kubectlCalls.filter((c) => c.args[0] === "apply").map((c) => JSON.parse(JSON.parse(c.stdin!).data["routes.json"]) as Record<string, string>);
-  return { runtime, db, docs, writes, deletes, vm, log, helmCalls, kubectlCalls, routesPublished, clock, waits };
+  return { runtime, db, docs, writes, deletes, vm, log, creationSettled, helmCalls, kubectlCalls, routesPublished, clock, waits };
 }
 
 const upsertOpts = {
@@ -171,6 +173,17 @@ const upsertOpts = {
   chartPath: "/chart", builderIdentity: { ownerUid: "UidA", builderSlug: "mama" }, gatewayClass: "builder" as const, profile: "builder" as const,
   imageProfile: "builder" as const, chartFingerprint: "cf", deploymentIntentFingerprint: "dif",
 };
+
+async function createComputer(h: ReturnType<typeof harness>, opts: typeof upsertOpts = upsertOpts): Promise<void> {
+  const settled = h.creationSettled.mock.calls.length;
+  await expect(h.runtime.upsertInstance(opts)).rejects.toBeInstanceOf(ComputerCreationPendingError);
+  await vi.waitFor(() => expect(h.creationSettled.mock.calls.length).toBeGreaterThan(settled));
+}
+
+async function deployCreatingComputer(h: ReturnType<typeof harness>, opts: typeof upsertOpts = upsertOpts): Promise<void> {
+  await createComputer(h, opts);
+  await h.runtime.upsertInstance(opts);
+}
 
 describe("builderComputerInstanceInput", () => {
   const source = { gatewayId: "b-X", ownerUid: "UidA", spec, environment: "test", image: "us-docker.pkg.dev/octogee/octogee/gateway:main.abc123", bridgeIp: "172.20.7.7" };
@@ -200,7 +213,7 @@ describe("builderComputerInstanceInput", () => {
     const gatewayDoc = { "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } };
 
     const created = harness({ ...gatewayDoc });
-    await created.runtime.upsertInstance(upsertOpts);
+    await deployCreatingComputer(created);
     const parkedElsewhere = { ...stopped, gatewayId: "b-old" };
     const rebound = harness({ ...gatewayDoc }, {
       findByLabels: vi.fn(async () => parkedElsewhere),
@@ -228,15 +241,18 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     const firstApply = new Promise<void>(resolve => { entered = resolve; });
     const applied: Record<string, string>[] = [];
     let calls = 0;
+    const createdComputers = new Map<string, GatewayVmDescription>();
     const h = harness({
       "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm", vm: { ...recorded } },
       "glmGateways/b-y": { docKind: "runtime", gatewayId: "b-y", runtime: "gce-vm" },
       "users/UidB": { provisioning: { openclaw: { gatewayId: "b-y" } } },
     }, {
-      create: vi.fn(async input => ({
-        description: { ...running, name: input.instanceName, gatewayId: "b-y", internalIp: "172.20.0.10", labels: input.labels, metadata: input.metadata },
-        provisioningModel: "SPOT" as const, fellBackToStandard: false, alreadyExisted: false,
-      })),
+      create: vi.fn(async input => {
+        const description = { ...running, name: input.instanceName, gatewayId: "b-y", internalIp: "172.20.0.10", labels: input.labels, metadata: input.metadata };
+        createdComputers.set(input.instanceName, description);
+        return { description, provisioningModel: "SPOT" as const, fellBackToStandard: false, alreadyExisted: false };
+      }),
+      describe: vi.fn(async (name: string) => createdComputers.get(name) ?? running),
     }, "172.20.7.7", {}, {
       onApply: async routes => {
         if (calls++ === 0) { entered(); await held; }
@@ -245,7 +261,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     });
     const first = h.runtime.upsertInstance(upsertOpts);
     await firstApply;
-    const second = h.runtime.upsertInstance({ ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "bob" } });
+    const second = deployCreatingComputer(h, { ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "bob" } });
     try {
       await vi.waitFor(() => expect(h.docs["glmGateways/b-y/vm/runtime"]).toBeDefined());
       expect(h.routesPublished()).toHaveLength(1);
@@ -511,7 +527,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
   it("renders the chart through helm template, stores the bundle and instance, creates the VM, and publishes routes", async () => {
     const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } });
 
-    await h.runtime.upsertInstance(upsertOpts);
+    await deployCreatingComputer(h);
 
     expect(h.helmCalls[0].slice(0, 3)).toEqual(["template", "octogee-gw-b-x", "/chart"]);
     expect(h.helmCalls[0]).not.toContain("--wait");
@@ -550,7 +566,7 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       "172.20.7.7", {}, { vmSpec: { ...spec, zones } },
     );
 
-    await h.runtime.upsertInstance(upsertOpts);
+    await deployCreatingComputer(h);
 
     expect(h.vm.list).toHaveBeenCalledWith({ labels: { "octogee-environment": "test", purpose: "octogee-computer" } });
     const created = vi.mocked(h.vm.create).mock.calls[0][0];
@@ -591,18 +607,21 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
       .mockRejectedValueOnce(new Error("ZONE_RESOURCE_POOL_EXHAUSTED"));
     const h = harness({ "glmGateways/b-x": { ...gatewayDoc } }, { create });
 
-    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/ZONE_RESOURCE_POOL_EXHAUSTED/);
+    await createComputer(h);
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: creating octogee-computer-test-uida failed: ZONE_RESOURCE_POOL_EXHAUSTED/));
     expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
     expect(h.docs["glmGateways/b-x"].vm).toBeUndefined();
     expect(await h.runtime.readDeployedInstance({ namespace: "octogee-test", gatewayId: "b-x" })).toBeNull();
+    expect(h.waits).toEqual([30_000]);
 
-    await h.runtime.upsertInstance(upsertOpts);
+    await deployCreatingComputer(h);
     expect(create).toHaveBeenCalledTimes(2);
     expect(h.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x", deploymentIntentFingerprint: "dif" });
-    expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
+    expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 31_000 });
 
     const routesFail = harness({ "glmGateways/b-x": { ...gatewayDoc } }, {}, "172.20.7.7", {}, { applyFails: true });
+    await createComputer(routesFail);
     await expect(routesFail.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/configmaps is forbidden/);
     expect(routesFail.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
     expect(routesFail.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
@@ -781,6 +800,174 @@ describe("createVmGatewayRuntime.upsertInstance", () => {
     });
     await expect(stopping.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/still stopping/);
     expect(stopping.vm.start).not.toHaveBeenCalled();
+  });
+});
+
+describe("createVmGatewayRuntime creating a fresh computer", () => {
+  const otherBuilder = { ...upsertOpts, gatewayId: "b-y", builderIdentity: { ownerUid: "UidB", builderSlug: "papa" } };
+
+  function heldInserts() {
+    const finish = new Map<string, (outcome: GatewayVmDescription | Error) => void>();
+    const create = vi.fn((input: CreateGatewayVmInput) => new Promise<CreateGatewayVmResult>((resolve, reject) => {
+      finish.set(input.labels["octogee-owner-uid"], (outcome) => outcome instanceof Error
+        ? reject(outcome)
+        : resolve({ description: outcome, provisioningModel: "SPOT", fellBackToStandard: false, alreadyExisted: false }));
+    }));
+    return { create, finish };
+  }
+
+  function settledOrWaiting(work: Promise<unknown>): Promise<unknown> {
+    return Promise.race([
+      work.then(() => "deployed", (error: unknown) => error),
+      new Promise((resolve) => setTimeout(() => resolve("still waiting on the insert"), 200)),
+    ]);
+  }
+
+  it("returns while Compute inserts the computer, so another Builder's converge starts its own insert, then adopts the computer", async () => {
+    const { create, finish } = heldInserts();
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
+      "glmGateways/b-y": { docKind: "runtime", gatewayId: "b-y", runtime: "gce-vm" },
+    }, { create });
+
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(otherBuilder))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(create.mock.calls.map(([input]) => input.labels["octogee-owner-uid"])).toEqual(["uida", "uidb"]);
+    expect(h.docs["glmGateways/b-x"].vm).toBeUndefined();
+    expect(h.docs["glmGateways/b-x"].vmInstance).toBeUndefined();
+    expect(h.docs["glmGateways/b-x/vm/runtime"]).toBeUndefined();
+    expect(h.creationSettled).not.toHaveBeenCalled();
+
+    finish.get("uida")!(running);
+    await vi.waitFor(() => expect(h.creationSettled).toHaveBeenCalledWith("b-x"));
+    expect(h.docs["glmGateways/b-x"].vm).toEqual({ ...recorded, updatedAt: 1_000 });
+    expect(h.log).toHaveBeenCalledWith("[vm-gateway-runtime] b-x: created octogee-computer-test-uida in us-west1-b (SPOT)");
+
+    await h.runtime.upsertInstance(upsertOpts);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(h.docs["glmGateways/b-x"].vmInstance).toMatchObject({ gatewayId: "b-x", ownerUid: "UidA" });
+    expect((h.docs["glmGateways/b-x/vm/runtime"] as Record<string, unknown>).gatewayId).toBe("b-x");
+    expect(h.routesPublished().at(-1)).toEqual({ "b-x": "172.20.0.9" });
+  });
+
+  it("waits for a computer it is still creating before parking it, so retiring mid-insert parks the new computer", async () => {
+    const { create, finish } = heldInserts();
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
+      create, describe: vi.fn(async () => suspended).mockResolvedValueOnce(running),
+    });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+
+    await h.runtime.recoverUnreachable("b-x");
+    const removing = h.runtime.removeInstance({ namespace: "octogee-test", gatewayId: "b-x" });
+    expect(await settledOrWaiting(removing)).toBe("still waiting on the insert");
+    expect(h.vm.suspend).not.toHaveBeenCalled();
+
+    finish.get("uida")!(running);
+    await removing;
+    expect(h.vm.suspend).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"].vm).toMatchObject({ instanceName: COMPUTER, instanceId: "4242", status: "SUSPENDED", stopReason: "idle" });
+    expect(h.log).not.toHaveBeenCalledWith(expect.stringMatching(/absent from Compute/));
+  });
+
+  it("reports a failed insert, reports it again until its backoff ends, then inserts again", async () => {
+    const { create, finish } = heldInserts();
+    let endBackoff!: () => void;
+    const backoff = new Promise<void>((resolve) => { endBackoff = resolve; });
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, { create },
+      "172.20.7.7", {}, { onWait: (ms) => (ms === 30_000 ? backoff : undefined) });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+
+    finish.get("uida")!(new ComputeOperationError("insert octogee-computer-test-uida: ZONE_RESOURCE_POOL_EXHAUSTED: no capacity", ["ZONE_RESOURCE_POOL_EXHAUSTED"]));
+    await vi.waitFor(() => expect(h.waits).toContain(30_000));
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/⚠ b-x: creating octogee-computer-test-uida failed: insert octogee-computer-test-uida: ZONE_RESOURCE_POOL_EXHAUSTED/));
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow(/creating octogee-computer-test-uida failed: .*ZONE_RESOURCE_POOL_EXHAUSTED.*retrying after 30000ms/);
+    expect(create).toHaveBeenCalledOnce();
+    expect(h.creationSettled).not.toHaveBeenCalled();
+    expect(h.docs["glmGateways/b-x"].vm).toBeUndefined();
+
+    endBackoff();
+    await vi.waitFor(() => expect(h.creationSettled).toHaveBeenCalledWith("b-x"));
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails another gateway of the same owner loudly while the owner's computer is being created, so its converge is retried", async () => {
+    const { create, finish } = heldInserts();
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
+      "glmGateways/b-z": { docKind: "runtime", gatewayId: "b-z", runtime: "gce-vm" },
+    }, { create });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+
+    const sameOwner = await settledOrWaiting(h.runtime.upsertInstance({ ...upsertOpts, gatewayId: "b-z" }));
+    expect(sameOwner).not.toBeInstanceOf(ComputerCreationPendingError);
+    expect(sameOwner).toMatchObject({ message: "computer octogee-computer-test-uida is being created for b-x; retrying once it exists" });
+    expect(create).toHaveBeenCalledOnce();
+    finish.get("uida")!(running);
+  });
+
+  it("inserts one computer when two gateways of the same owner converge concurrently, failing the other loudly", async () => {
+    const { create, finish } = heldInserts();
+    const h = harness({
+      "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" },
+      "glmGateways/b-z": { docKind: "runtime", gatewayId: "b-z", runtime: "gce-vm" },
+    }, { create });
+
+    const [first, sameOwner] = await Promise.all([
+      settledOrWaiting(h.runtime.upsertInstance(upsertOpts)),
+      settledOrWaiting(h.runtime.upsertInstance({ ...upsertOpts, gatewayId: "b-z" })),
+    ]);
+    expect(create).toHaveBeenCalledOnce();
+    expect(first).toMatchObject({ name: "ComputerCreationPendingError" });
+    expect(sameOwner).toMatchObject({ message: "computer octogee-computer-test-uida is being created for b-x; retrying once it exists" });
+    finish.get("uida")!(running);
+  });
+
+  it("stops a computer whose runtime record was deleted while Compute created it", async () => {
+    const { create, finish } = heldInserts();
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, { create });
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+
+    delete h.docs["glmGateways/b-x"];
+    finish.get("uida")!(running);
+    await vi.waitFor(() => expect(h.creationSettled).toHaveBeenCalledWith("b-x"));
+    expect(h.vm.stop).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
+    expect(h.docs["glmGateways/b-x"]).toBeUndefined();
+    expect(h.log).toHaveBeenCalledWith("[vm-gateway-runtime] ⚠ b-x: created octogee-computer-test-uida in us-west1-b after its runtime record was deleted; stopped it for the owner's next Builder or erasure");
+  });
+
+  it("creates no computer for an owner while that owner's computer is being deleted", async () => {
+    const { create, finish } = heldInserts();
+    let endLookup!: (description: GatewayVmDescription | null) => void;
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, { create });
+    vi.mocked(h.vm.findByLabels).mockImplementationOnce(() => new Promise((resolve) => { endLookup = resolve; }));
+
+    const deleting = h.runtime.deleteComputer("UidA");
+    await expect(h.runtime.upsertInstance(upsertOpts)).rejects.toThrow("the computer of UidA is being deleted; not creating one until the deletion finishes");
+    expect(create).not.toHaveBeenCalled();
+
+    endLookup(null);
+    expect(await deleting).toBe(false);
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+    finish.get("uida")!(running);
+  });
+
+  it("waits for an owner's computer still being created before deleting it", async () => {
+    const { create, finish } = heldInserts();
+    const h = harness({ "glmGateways/b-x": { docKind: "runtime", gatewayId: "b-x", runtime: "gce-vm" } }, {
+      create, findByLabels: vi.fn(async () => running),
+    });
+    vi.mocked(h.vm.findByLabels).mockResolvedValueOnce(null);
+    expect(await settledOrWaiting(h.runtime.upsertInstance(upsertOpts))).toMatchObject({ name: "ComputerCreationPendingError" });
+
+    const deleting = h.runtime.deleteComputer("UidA");
+    expect(await settledOrWaiting(deleting)).toBe("still waiting on the insert");
+    expect(h.vm.delete).not.toHaveBeenCalled();
+
+    finish.get("uida")!(running);
+    expect(await deleting).toBe(true);
+    expect(h.vm.delete).toHaveBeenCalledWith(COMPUTER, "us-west1-b");
   });
 });
 

@@ -56,6 +56,7 @@ export interface VmGatewayRuntimeDeps {
   disposableParking?: boolean;
   homeCheckpointTimeoutMs?: number;
   homeCheckpointPollMs?: number;
+  onComputerCreationSettled: (gatewayId: string) => void;
   now: () => number;
   log: (msg: string) => void;
 }
@@ -278,6 +279,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
     disposableParking: deps.disposableParking,
     homeCheckpointTimeoutMs: deps.homeCheckpointTimeoutMs,
     homeCheckpointPollMs: deps.homeCheckpointPollMs,
+    onComputerCreationSettled: deps.onComputerCreationSettled,
     now: deps.now,
     log: deps.log,
   });

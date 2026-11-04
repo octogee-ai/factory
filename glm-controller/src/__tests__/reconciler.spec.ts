@@ -11,7 +11,7 @@ import {
 } from "../index";
 import { FieldValue } from "firebase-admin/firestore";
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
-import { FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
+import { ComputerCreationPendingError, FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
 import { runGatewayRuntimeExclusive } from "../lib/gateway-runtime-mutation";
 import { reconcileSurgeCustomerHandoff } from "../surge-customer-handoff";
 import { assignment, createSurgeHandoffHarness } from "./fixtures/surge-customer-handoff";
@@ -121,6 +121,7 @@ function makeDb(input: {
       for (const write of writes) await write();
       return result;
     },
+    getAll: async (...refs: any[]) => Promise.all(refs.map(async (ref) => ({ id: ref.id, ...(await ref.get()) }))),
     doc: (path: string) => {
       const match = /^gateways\/([^/]+)\/releases\/(\d+)$/u.exec(path);
       if (!match) throw new Error(`unexpected document ${path}`);
@@ -886,6 +887,29 @@ describe("gateway convergence pass outcomes", () => {
     const healthy = (helm.upsertInstance.mock.calls as unknown as Array<[Record<string, unknown>]>)
       .find(([opts]) => opts.gatewayId === "healthy")![0];
     expect(healthy).not.toHaveProperty("builderIdentity");
+  });
+
+  it("moves past a Builder whose computer Compute is still creating, so the next converge takes the runtime lock", async () => {
+    const roots = {
+      creating: durableRoot({ gatewayId: "creating", liveRelease: null }),
+      next: durableRoot({ gatewayId: "next", liveRelease: null }),
+    };
+    const db = makeDb({ roots, runtimes: {}, callbacks: {},
+      releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])),
+    });
+    const upsertInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
+      if (gatewayId === "creating") throw new ComputerCreationPendingError("computer c is being created; converging it once Compute finishes");
+    });
+    const helm = { upsertInstance, readDeployedInstance: vi.fn(async () => null), readDeployedInstances: vi.fn(async () => ({})) };
+    const log = vi.fn();
+    const converge = serializeGatewayConvergence((gatewayIds) => runGatewayConvergencePass({ db, helm: helm as never, kubeOps: {} as never,
+      chartFingerprint: "chart", prepareGatewayConfig: vi.fn(async (config: any) => config),
+      reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log }, gatewayIds));
+
+    await converge(["creating"]);
+    await converge(["next"]);
+    expect(upsertInstance.mock.calls.map(([opts]) => opts.gatewayId)).toEqual(["creating", "next"]);
+    expect(log.mock.calls.flat().filter((line) => String(line).includes("⚠"))).toEqual([]);
   });
 
   it("holds same-release stale Helm intent until native restore acknowledges customer custody", async () => {

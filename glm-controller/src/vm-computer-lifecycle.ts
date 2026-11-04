@@ -40,6 +40,7 @@ export const STOPPED_STATUSES: ReadonlySet<string> = new Set(["TERMINATED", "STO
 export const PARKED_STATUSES: ReadonlySet<string> = new Set([...STOPPED_STATUSES, "SUSPENDED"]);
 const TRANSITIONAL_STATUSES = new Set(["STOPPING", "SUSPENDING"]);
 const COWBOY_STOP_REASONS = new Set<GatewayVmStopReason>(["idle", "operator"]);
+const COMPUTER_CREATION_RETRY_MS = 30_000;
 
 export interface ComputerLifecycleDeps {
   db: Firestore;
@@ -54,6 +55,7 @@ export interface ComputerLifecycleDeps {
   disposableParking?: boolean;
   homeCheckpointTimeoutMs?: number;
   homeCheckpointPollMs?: number;
+  onComputerCreationSettled: (gatewayId: string) => void;
   now: () => number;
   log: (msg: string) => void;
 }
@@ -164,6 +166,21 @@ function parkedCheckpointFrom(home: Partial<GatewayVmHomeState> | undefined): Ga
   const completedAt = homeCheckpointCompletedAt(home);
   const fresh = requestedAt !== null && completedAt !== null && !homeCheckpointOutstanding({ ...home, checkpointRequestedAt: requestedAt });
   return { outcome: fresh ? "fresh" : "stale", requestedAt, completedAt };
+}
+
+export class ComputerCreationPendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ComputerCreationPendingError";
+  }
+}
+
+interface ComputerCreation {
+  gatewayId: string;
+  ownerUid: string;
+  instanceName: string;
+  inserted: Promise<void>;
+  failure?: unknown;
 }
 
 export class FinalHomeCheckpointPendingError extends Error {
@@ -953,7 +970,71 @@ async function upgradePreemptedBoot(deps: ComputerLifecycleDeps, gatewayId: stri
 }
 
 
+function computerCreations(deps: ComputerLifecycleDeps) {
+  const creations = new Map<string, ComputerCreation>();
+  const deletingOwners = new Set<string>();
+  const ofOwner = (ownerUid: string) => [...creations.values()].filter((creation) => creation.ownerUid === ownerUid);
+
+  async function insert(gatewayId: string, input: CreateGatewayVmInput): Promise<void> {
+    const zones = spreadZones(input.zones, await occupiedComputerZones(deps.vm, deps.environment));
+    const created = await deps.vm.create({ ...input, zones });
+    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${created.alreadyExisted ? "adopted" : "created"} ${input.instanceName} in ${created.description.zone} (${created.provisioningModel})`);
+    if (!(await recordVmObservation(deps, gatewayId, { vm: stateFrom(created.description, deps.now(), null) }, "creation"))) {
+      await deps.vm.stop(created.description.name, created.description.zone);
+      deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: created ${input.instanceName} in ${created.description.zone} after its runtime record was deleted; stopped it for the owner's next Builder or erasure`);
+    }
+  }
+
+  function assertNoneInFlight(gatewayId: string, ownerUid: string): void {
+    if (deletingOwners.has(ownerUid)) throw new Error(`the computer of ${ownerUid} is being deleted; not creating one until the deletion finishes`);
+    const creation = creations.get(gatewayId);
+    if (creation) {
+      if (creation.failure !== undefined) {
+        throw new Error(`creating ${creation.instanceName} failed: ${errorMessage(creation.failure)}; retrying after ${COMPUTER_CREATION_RETRY_MS}ms`);
+      }
+      throw new ComputerCreationPendingError(`computer ${creation.instanceName} is being created; converging it once Compute finishes`);
+    }
+    const ownerCreation = ofOwner(ownerUid)[0];
+    if (ownerCreation) throw new Error(`computer ${ownerCreation.instanceName} is being created for ${ownerCreation.gatewayId}; retrying once it exists`);
+  }
+
+  return {
+    has: (gatewayId: string) => creations.has(gatewayId),
+    inserted: (gatewayId: string) => creations.get(gatewayId)?.inserted,
+    assertNoneInFlight,
+
+    async deleting<T>(ownerUid: string, deletion: () => Promise<T>): Promise<T> {
+      deletingOwners.add(ownerUid);
+      try {
+        await Promise.all(ofOwner(ownerUid).map((creation) => creation.inserted));
+        return await deletion();
+      } finally {
+        deletingOwners.delete(ownerUid);
+      }
+    },
+
+    begin(gatewayId: string, ownerUid: string, input: CreateGatewayVmInput): ComputerCreationPendingError {
+      assertNoneInFlight(gatewayId, ownerUid);
+      const creation: ComputerCreation = { gatewayId, ownerUid, instanceName: input.instanceName, inserted: Promise.resolve() };
+      creation.inserted = insert(gatewayId, input).catch((err: unknown) => {
+        creation.failure = err;
+        deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: creating ${input.instanceName} failed: ${errorMessage(err)}; retrying after ${COMPUTER_CREATION_RETRY_MS}ms`);
+      });
+      creations.set(gatewayId, creation);
+      deps.log(`[vm-gateway-runtime] ${gatewayId}: creating ${input.instanceName}; converging it once Compute finishes`);
+      void (async () => {
+        await creation.inserted;
+        if (creation.failure !== undefined) await deps.wait(COMPUTER_CREATION_RETRY_MS);
+        creations.delete(gatewayId);
+        deps.onComputerCreationSettled(gatewayId);
+      })();
+      return new ComputerCreationPendingError(`computer ${input.instanceName} is being created; converging it once Compute finishes`);
+    },
+  };
+}
+
 export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLifecycle {
+  const creations = computerCreations(deps);
 
   async function recordVm(gatewayId: string, vm: GatewayVmState | null, what: string): Promise<boolean> {
     return recordVmObservation(deps, gatewayId, { vm }, what);
@@ -971,14 +1052,9 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function acquireComputer(gatewayId: string, ownerUid: string, input: CreateGatewayVmInput): Promise<GatewayVmDescription> {
-    if (input.retainedHome) {
-      await deps.vm.verifyDetachedHome(input.retainedHome, ownerUid);
-      return (await deps.vm.create(input)).description;
-    }
-    const zones = spreadZones(input.zones, await occupiedComputerZones(deps.vm, deps.environment));
-    const created = await deps.vm.create({ ...input, zones });
-    deps.log(`[vm-gateway-runtime] ${gatewayId}: ${created.alreadyExisted ? "adopted" : "created"} ${input.instanceName} in ${created.description.zone} (${created.provisioningModel})`);
-    return created.description;
+    if (!input.retainedHome) throw creations.begin(gatewayId, ownerUid, input);
+    await deps.vm.verifyDetachedHome(input.retainedHome, ownerUid);
+    return (await deps.vm.create(input)).description;
   }
 
 
@@ -1032,6 +1108,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
 
   async function ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState> {
     if (!ownerUid) throw new Error(`gateway ${gatewayId}: a gce-vm Builder gateway needs an owner`);
+    creations.assertNoneInFlight(gatewayId, ownerUid);
     const { data, vm: existing } = await readVmRecord(deps.db, gatewayId);
     const spec = recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec);
     let input = builderComputerInstanceInput({ gatewayId, ownerUid, spec, environment: deps.environment, image, bridgeIp: bridge });
@@ -1066,6 +1143,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
 
 
   async function parkComputer(gatewayId: string, opts: ParkComputerOptions = {}): Promise<GatewayVmState | null> {
+    await creations.inserted(gatewayId);
     const { data, vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return null;
     const description = await stoppableComputer(gatewayId, vm);
@@ -1081,6 +1159,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function pauseComputer(gatewayId: string): Promise<void> {
+    await creations.inserted(gatewayId);
     const { data, vm } = await readVmRecord(deps.db, gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
@@ -1159,6 +1238,9 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   return {
     readDeploymentPrerequisiteError: (gatewayId) => readComputerDeploymentPrerequisiteError(deps, gatewayId),
     detectPreemption: (gatewayId, sinceMs) => detectComputerPreemption(deps, gatewayId, sinceMs),
-    ensureVm, parkComputer, pauseComputer, recoverUnreachable, replaceStoppedComputer: (gatewayId, operationId, assertAuthority, options) => replaceStoppedComputer(deps, gatewayId, operationId, assertAuthority, options), deleteComputer: (ownerUid) => deleteOwnedComputer(deps, ownerUid),
+    ensureVm, parkComputer, pauseComputer,
+    recoverUnreachable: async (gatewayId) => { if (!creations.has(gatewayId)) await recoverUnreachable(gatewayId); },
+    replaceStoppedComputer: (gatewayId, operationId, assertAuthority, options) => replaceStoppedComputer(deps, gatewayId, operationId, assertAuthority, options),
+    deleteComputer: (ownerUid) => creations.deleting(ownerUid, () => deleteOwnedComputer(deps, ownerUid)),
   };
 }

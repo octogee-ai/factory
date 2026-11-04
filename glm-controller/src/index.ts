@@ -378,7 +378,7 @@ import {
   writePlatformReleaseRecord,
   sharedPoolReplicaBoundsFromEnvironment,
 } from "./platform-release.js";
-import { FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
+import { ComputerCreationPendingError, FinalHomeCheckpointPendingError, clearReplacedComputer } from "./vm-computer-lifecycle.js";
 import { createCachedApiServerEgressResolver } from "./apiserver-egress.js";
 import {
   PLACEMENT_POLICY_RECONCILE_MS_DEFAULT,
@@ -1138,7 +1138,7 @@ export async function runGatewayConvergencePass(
       try {
         await convergeOneGateway(passDeps, gateway, instances, runtimeById);
       } catch (err) {
-        if (err instanceof FinalHomeCheckpointPendingError) continue;
+        if (err instanceof FinalHomeCheckpointPendingError || err instanceof ComputerCreationPendingError) continue;
         const message = err instanceof Error ? err.message : String(err);
         if (err instanceof SurgeAssignmentBusyError) {
           log(`[converge-gateway] ${gateway.gatewayId} deferred: ${message}`);
@@ -1434,6 +1434,18 @@ async function convergeGatewaysIfConfigured(
   } catch (err) {
     deps.log(`[converge-gateway] ⚠ pass failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+function convergeAfterComputerCreation(
+  convergeGateways: (gatewayIds: readonly string[]) => Promise<void>,
+  log: (msg: string) => void,
+): (gatewayId: string) => void {
+  return (gatewayId) => {
+    void convergeGateways([gatewayId]).catch((err: unknown) => {
+      log(`[converge-gateway] ⚠ ${gatewayId}: converge after its computer creation settled failed: ${err instanceof Error ? err.message : String(err)}; requeued`);
+      requestReconcileTickRef.fire?.(gatewayId);
+    });
+  };
 }
 
 export function serializeGatewayConvergence(
@@ -2816,6 +2828,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       },
       journalBootUpgrade: createBootUpgradeJournal(db),
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      onComputerCreationSettled: (gatewayId) => convergeSettledComputer(gatewayId),
       now: () => Date.now(),
       log,
     })
@@ -2880,6 +2893,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       log,
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
+  const convergeSettledComputer = convergeAfterComputerCreation(convergeGateways, log);
   const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(db, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
   const handlers = await buildHandlers(db, log, helm, kubeOps, {
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
