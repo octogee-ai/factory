@@ -9,6 +9,7 @@ import {
   platformInvariantTable,
   platformInvariantViolations,
   reconcilePlatformInvariants,
+  CUSTOMER_CODE_DENIED_TOOLS,
 } from "./system-config-invariants.js";
 import { openClawOperatorRoles } from "@octogee/shared/types/openclaw-proxy-identity";
 
@@ -425,6 +426,7 @@ describe("system config platform invariants", () => {
           "octogee_publish",
           "bundle-mcp",
           "skill_workshop",
+          "skill_library",
           "conversations_list",
           "conversations_send",
           "conversations_turn",
@@ -559,6 +561,7 @@ describe("system config platform invariants", () => {
       "browser",
       "automations",
       "skill_workshop",
+      "skill_library",
       "workspace_commit",
       "octogee_project_publish",
     ]));
@@ -1189,5 +1192,12 @@ describe("per-user Builder role definitions", () => {
     reconcilePlatformInvariants(config, context);
     config.gateway.roles.definitions.admin.scopes = ["operator.read"];
     expect(platformInvariantViolations(config, context)).toEqual(["gateway.roles.definitions.admin"]);
+  });
+});
+
+describe("customer code tool fences", () => {
+  it("denies the skill library beside the skill workshop, so OpenClaw's skill-library tool split never widens a booted deny list past the patch", () => {
+    expect(CUSTOMER_CODE_DENIED_TOOLS).toContain("skill_workshop");
+    expect(CUSTOMER_CODE_DENIED_TOOLS).toContain("skill_library");
   });
 });

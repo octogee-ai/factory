@@ -439,6 +439,7 @@ describe("infra/gateway/apply-gateway-class-policy.mjs", () => {
       "octogee_publish",
       "bundle-mcp",
       "skill_workshop",
+      "skill_library",
       "conversations_list",
       "conversations_send",
       "conversations_turn",

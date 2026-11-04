@@ -106,6 +106,7 @@ describe("infra/gateway/openclaw.template.json — standard gateway exec-off pos
       "octogee_publish",
       "bundle-mcp",
       "skill_workshop",
+      "skill_library",
       "conversations_list",
       "conversations_send",
       "conversations_turn",
