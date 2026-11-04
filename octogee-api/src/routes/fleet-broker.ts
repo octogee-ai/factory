@@ -12,6 +12,7 @@ import { isIP } from "node:net";
 import {
   COMPUTER_HOME_CHECKPOINT_CONTENT_TYPE,
   COMPUTER_HOME_CHECKPOINT_KEEP,
+  GLM_OPERATIONS_COLLECTION,
   gatewayVmPodName,
   COMPUTER_HOME_CHECKPOINT_MAX_BYTES,
   computerHomeCheckpointName,
@@ -2317,6 +2318,7 @@ async function requireAgentAnchorScope(db: Firestore, req: Request, res: Respons
   if (projectGatewayDesiredRootForGateway(gateway.data(), bound.gatewayId)?.gatewayClass !== "shared") {
     if (!migrationAnchorRequest(req)) return requireConfiguredBuilderRuntimeState(db, req, res);
     if (!req.path.endsWith("/read")) { res.status(403).json(FORBIDDEN); return null; }
+    if (await migrationSourceGatewayId(db, req) === bound.gatewayId) return requireConfiguredBuilderRuntimeState(db, req, res);
     return requireMigratingAgentAnchorScope(db, req, res, bound, request.slug);
   }
   if (migrationAnchorRequest(req)) {
@@ -2356,6 +2358,13 @@ async function requireAssignedSharedAgentAnchorScope(
 
 function migrationAnchorRequest(req: Request): boolean {
   return req.body?.migrationId !== undefined || req.body?.migration !== undefined;
+}
+
+async function migrationSourceGatewayId(db: Firestore, req: Request): Promise<unknown> {
+  const migrationId: unknown = req.body?.migration?.migrationId ?? req.body?.migrationId;
+  if (typeof migrationId !== "string" || !/^mig-[a-zA-Z0-9_-]+$/.test(migrationId)) return undefined;
+  const operation = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(migrationId.slice(4)).get()).data();
+  return operation?.kind === "migrate-customer" ? operation.input?.fromGatewayId : undefined;
 }
 
 async function requireMigratingAgentAnchorScope(
