@@ -8,12 +8,23 @@ import { createMainBuildReleaseDigestManifest } from '../../.github/actions/rele
 
 const build = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/desktop-image.yml'), 'utf8'));
 const main = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/build-main.yml'), 'utf8'));
+const shipTest = parse(readFileSync(resolve(import.meta.dirname, '../../.github/workflows/ship-test.yml'), 'utf8'));
 
-it('keeps desktop construction explicit and out of automatic main builds', () => {
+it('keeps desktop construction out of automatic main builds', () => {
   expect(build.on.workflow_dispatch.inputs.build_desktop_image).toMatchObject({ type: 'boolean', default: false });
   expect(build.jobs.build.if).toBe('inputs.build_desktop_image');
   expect(build.on).not.toHaveProperty('push');
   expect(main.on.workflow_dispatch.inputs).not.toHaveProperty('build_desktop_image');
+});
+
+it('builds the shipped SHA desktop companion before Ship TEST deploys', () => {
+  const desktop = shipTest.jobs.desktop;
+  expect(desktop.needs).toBe('build');
+  expect(shipTest.jobs.deploy.needs).toEqual(['build', 'desktop']);
+  const checkout = desktop.steps.find((step: { uses?: string }) => step.uses?.startsWith('actions/checkout@'));
+  expect(checkout.with).toMatchObject({ ref: '${{ inputs.source_sha }}', 'fetch-depth': 0 });
+  const construct = desktop.steps.find((step: { run?: string }) => step.run === 'node scripts/ci/desktop.mjs');
+  expect(construct.env).toMatchObject({ CI_SOURCE_SHA: '${{ inputs.source_sha }}', CI_BRANCH: 'main', CI_DESKTOP_ACTIONS: 'true' });
 });
 
 it.each(['', JSON.stringify({
