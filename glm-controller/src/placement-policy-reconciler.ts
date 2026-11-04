@@ -371,10 +371,21 @@ export interface BuilderRuntimeActivity {
 
 type AuthoritativeLeaseStatus = "provisioning" | "activating" | "returning";
 
+export type PlacementRetirementReason =
+  | "provisioning-timeout"
+  | "provisioning-target-paused"
+  | "builder-authorization-ended"
+  | "activation-failed"
+  | "builder-returned"
+  | "operator-terminated"
+  | "parked-computer-replaced"
+  | "owned-gateway-not-kept";
+
 export interface RetireOwnedGatewayInput {
   uid: string;
   builderSlug: string;
   gatewayId: string;
+  reason: PlacementRetirementReason;
   leaseId?: string;
   generation: number;
   telemetryFenceOperationId?: string;
@@ -917,6 +928,7 @@ async function retireObsoleteParkedComputers(
       uid: user.uid,
       builderSlug,
       gatewayId: gateway.gatewayId,
+      reason: "parked-computer-replaced",
       generation: gateway.allocation!.generation,
     });
     if (!retired) {
@@ -960,6 +972,7 @@ async function retireUnentitledOwnedGateways(
       uid: user.uid,
       builderSlug,
       gatewayId: gateway.gatewayId,
+      reason: "owned-gateway-not-kept",
       generation,
     });
     if (retired) context.result.retired += 1;
@@ -1278,12 +1291,10 @@ function authoritativeLeaseStatus(
 }
 
 async function recoverAndRetireUnreachableTarget(
-  context: PlacementPolicyReconcileContext,
-  user: PlacementPolicyUser,
-  builderSlug: string,
-  lease: BuilderActivationLease,
-  target: ContinuousPlacementOwnedGateway,
+  input: ActivationTargetContext,
+  reason: PlacementRetirementReason,
 ): Promise<string | null> {
+  const { context, user, builderSlug, lease, target } = input;
   const authoritativeGatewayId = sharedAuthorityGatewayId(
     context,
     currentGatewayId(user.data),
@@ -1319,6 +1330,7 @@ async function recoverAndRetireUnreachableTarget(
     uid: user.uid,
     builderSlug,
     gatewayId: target.gatewayId,
+    reason,
     leaseId: lease.leaseId,
     generation: lease.generation,
     authoritativeGatewayId,
@@ -1360,7 +1372,7 @@ function disposableGatewayProvisioningBudgetOpen(input: {
 async function cleanupUnreachableProvisioningTarget(
   input: ActivationTargetContext,
 ): Promise<boolean> {
-  const { context, user, builderSlug, current, lease, target } = input;
+  const { context, user, current, lease, target } = input;
   if (target.desiredStatus === "running" && provisioningTargetActivationReady(target, lease)) return false;
   if (target.desiredStatus !== "running" && target.desiredStatus !== "paused") return false;
   if (!isSharedPoolGateway(context, current)) {
@@ -1392,11 +1404,8 @@ async function cleanupUnreachableProvisioningTarget(
     }
   }
   const recoveryOperationId = await recoverAndRetireUnreachableTarget(
-    context,
-    user,
-    builderSlug,
-    lease,
-    target,
+    input,
+    target.desiredStatus === "running" ? "provisioning-timeout" : "provisioning-target-paused",
   );
   if (!recoveryOperationId) return true;
   await context.deps.failActivationLease({
@@ -1468,6 +1477,7 @@ async function reconcileRequestedActivation(
 
 async function retireProvisioningTarget(
   input: ActivationTargetContext,
+  reason: PlacementRetirementReason,
   blocked: { code: string; reason: string },
 ): Promise<boolean> {
   const { context, user, builderSlug, lease, target } = input;
@@ -1476,6 +1486,7 @@ async function retireProvisioningTarget(
         uid: user.uid,
         builderSlug,
         gatewayId: target.gatewayId,
+        reason,
         leaseId: lease.leaseId,
         generation: lease.generation,
         authoritativeGatewayId: sharedAuthorityGatewayId(
@@ -1484,13 +1495,7 @@ async function retireProvisioningTarget(
         ) ?? context.state.defaultGatewayId,
         authoritativeLeaseStatus: "provisioning",
       })
-    : Boolean(await recoverAndRetireUnreachableTarget(
-        context,
-        user,
-        builderSlug,
-        lease,
-        target,
-      ));
+    : Boolean(await recoverAndRetireUnreachableTarget(input, reason));
   if (!retired) {
     blockPlacement(context, { uid: user.uid, lease, ...blocked });
     return false;
@@ -1506,7 +1511,7 @@ async function cleanupUnauthorizedProvisioningTarget(
   const authorized = accountAllowsInteractiveAccess(user.data) &&
     resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
   if (authorized) return false;
-  if (!await retireProvisioningTarget(input, {
+  if (!await retireProvisioningTarget(input, "builder-authorization-ended", {
     code: "provisioning-authorization-cleanup-pending",
     reason: `target ${target.gatewayId} is awaiting safe cleanup after authorization ended`,
   })) return true;
@@ -1759,17 +1764,12 @@ async function cleanupFailedActivation(
   if (target.desiredStatus !== "retired") {
     const recoveredRetirement = isSharedPoolGateway(context, current) && !target.ready;
     const retired = recoveredRetirement
-      ? Boolean(await recoverAndRetireUnreachableTarget(
-          context,
-          user,
-          builderSlug,
-          lease,
-          target,
-        ))
+      ? Boolean(await recoverAndRetireUnreachableTarget(input, "activation-failed"))
       : await context.deps.retireOwnedGateway({
           uid: user.uid,
           builderSlug,
           gatewayId: target.gatewayId,
+          reason: "activation-failed",
           leaseId: lease.leaseId,
           generation: lease.generation,
           telemetryFenceOperationId: operationId,
@@ -2054,12 +2054,17 @@ function returnedComputerStaysParked(
     parkedComputerGateway(target, user.uid, builderSlug, entitledComputerSizing(context, user));
 }
 
+function returnRetirementReason(lease: BuilderActivationLease): PlacementRetirementReason {
+  return millis(lease.raw.operatorTerminateRequestedAt) === null ? "builder-returned" : "operator-terminated";
+}
+
 async function completeReturnedLease(
   input: ActivationTargetContext,
 ): Promise<void> {
   const { context, user, builderSlug, lease, target } = input;
   const targetGatewayId = lease.targetGatewayId!;
   const returnOperationId = builderReturnOperationId(targetGatewayId, lease.generation);
+  const reason = returnRetirementReason(lease);
   const operation = context.operations.get(returnOperationId);
   if (operation?.status === "pending" || operation?.status === "running") {
     context.result.adopted += 1;
@@ -2089,13 +2094,7 @@ async function completeReturnedLease(
     !target.ready ||
     target.desiredStatus === "paused"
   ) {
-    const recoveryOperationId = await recoverAndRetireUnreachableTarget(
-      context,
-      user,
-      builderSlug,
-      lease,
-      target,
-    );
+    const recoveryOperationId = await recoverAndRetireUnreachableTarget(input, reason);
     if (!recoveryOperationId) return;
     await context.deps.completeActivationLease({
       uid: user.uid,
@@ -2119,6 +2118,7 @@ async function completeReturnedLease(
     uid: user.uid,
     builderSlug,
     gatewayId: targetGatewayId,
+    reason,
     leaseId: lease.leaseId,
     generation: lease.generation,
     ...(operatorTermination
@@ -4392,7 +4392,7 @@ async function retireOwnedGatewayFirestore(
           gatewayId: request.gatewayId,
           uid: request.uid,
           builderSlug: request.builderSlug,
-          reason: "builder-activity-ended",
+          reason: request.reason,
         },
         steps: [],
         gatewayId: request.gatewayId,
@@ -4602,7 +4602,8 @@ export function createFirestorePlacementPolicyReconcilerDeps(
       if (input.prepareBuilderHome && !await input.prepareBuilderHome(request)) return null;
       return allocateDisposableGatewayFirestore({
         ...input,
-        retireParkedGateway: (parked) => retireOwnedGatewayFirestore(input, parked),
+        retireParkedGateway: (parked) =>
+          retireOwnedGatewayFirestore(input, { ...parked, reason: "parked-computer-replaced" }),
       }, request);
     },
     advanceActivationLease: (request) => advanceActivationLeaseFirestore(input, request),
