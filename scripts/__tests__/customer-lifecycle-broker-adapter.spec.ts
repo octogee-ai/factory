@@ -146,13 +146,13 @@ describe("migration manifest export runtime wait", () => {
 });
 
 const testRuntime = await vi.hoisted(async () => {
-  const { mkdtempSync } = await import("node:fs");
+  const { mkdtempSync, realpathSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const originalDir = process.env.OPENCLAW_DIR;
   const originalAgentsDir = process.env.OPENCLAW_AGENTS_DIR;
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  const dir = mkdtempSync(join(tmpdir(), "octogee-broker-test-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "octogee-broker-test-")));
   process.env.OPENCLAW_DIR = dir;
   process.env.OPENCLAW_AGENTS_DIR = join(dir, "agents");
   process.env.OPENCLAW_STATE_DIR = dir;
