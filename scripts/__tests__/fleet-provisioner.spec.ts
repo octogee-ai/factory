@@ -863,7 +863,7 @@ describe("configured Builder surge release", () => {
     }
   });
 
-  it("reconciles and mounts the held imported tree before permitting OpenClaw", async () => {
+  it("mounts the held imported tree before permitting OpenClaw and releases the target without waiting on its coach", async () => {
     stubBuilderClaim("ceckert-test");
     vi.stubEnv("POD_UID", "target-pod");
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -876,6 +876,11 @@ describe("configured Builder surge release", () => {
         configuredBuilderOverlayPresent: () => true,
         listLocalCustomerSlugs: () => mounted ? ["ceckert-test"] : [],
         customerMountMarked: () => mounted,
+        customerCoachWiredInOpenclawConfig: () => true,
+        waitForAccountHealthy: async () => {
+          events.push("coach-health");
+          return false;
+        },
         hasWorkspaceGitDir: () => true,
         hasGitRemote: () => true,
       } as unknown as CustomerLifecycleAdapter;

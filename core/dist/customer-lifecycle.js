@@ -289,18 +289,8 @@ async function attachConfiguredBuilderOverlay(adapter, snapshot, opts) {
     else if (snapshot.projectAgents?.length) {
         throw new Error(`[add:${slug}] configured Builder project reconciliation is unavailable`);
     }
-    const platformCoachWired = adapter.customerCoachWiredInOpenclawConfig?.(slug) ?? false;
-    if (platformCoachWired && !opts.deferRuntimeVerification) {
-        adapter.log(`[add:${slug}] configured Builder overlay retained — verifying MM coach`);
-        opts.markStep(VERIFY_CHANNEL_READY);
-        await verifyChannelReady(adapter, slug, opts.verifyTimeoutMs);
-        steps.push(VERIFY_CHANNEL_READY);
-    }
-    else if (!platformCoachWired) {
+    if (!adapter.customerCoachWiredInOpenclawConfig?.(slug)) {
         adapter.log(`[add:${slug}] configured Builder overlay has no platform MM coach wiring; retaining workspace config`);
-    }
-    else {
-        adapter.log(`[add:${slug}] configured Builder overlay runtime verification deferred without a config patch`);
     }
     if (adapter.onMounted)
         adapter.onMounted(slug);
@@ -324,7 +314,6 @@ async function addCustomerToGatewayInner(adapter, uid, opts = {}) {
             throw new Error(`[add:${slug}] configured Builder system-config overlay is unavailable`);
         }
         return attachConfiguredBuilderOverlay(adapter, snapshot, {
-            verifyTimeoutMs,
             customersDir,
             convergeContent: opts.convergeContent,
             deferRuntimeVerification: opts.deferRuntimeVerification,

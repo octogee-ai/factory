@@ -1044,6 +1044,28 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     expect(result.steps).toContain("config-patch");
   });
 
+  it("finishes a coach-wired Builder overlay attach while its Mattermost coach is still dormant", async () => {
+    const state = configuredProjectState();
+    state.healthy = false;
+    const adapter = makeAdapter(state);
+    adapter.isBuilderGateway = () => true;
+    adapter.customerCoachWiredInOpenclawConfig = () => true;
+    adapter.reconcileConfiguredBuilderProjectAgents = async () => {
+      state.calls.push("reconcileConfiguredBuilderProjectAgents");
+      return { elapsedMs: 0, appliedFingerprint: "project-activation" };
+    };
+    adapter.materializeBrokerProfiles = async () => {
+      throw new Error("Agent model profiles are not ready: octogee-test-coach");
+    };
+
+    const result = await addCustomerToGateway(adapter, "uid-test", { convergeContent: true });
+
+    expect(state.calls).not.toContain("waitForAccountHealthy");
+    expect(state.calls).toContain("onMounted");
+    expect(result.steps).not.toContain("verify-channel-ready");
+    expect(result.appliedFingerprint).toBe("project-activation");
+  });
+
   it("does not mark a configured Builder mounted when project activation fails", async () => {
     const state = configuredProjectState();
     const adapter = makeAdapter(state);
@@ -1153,14 +1175,13 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     const result = await addCustomerToGateway(adapter, "uid-test");
 
     expect(result.newCustomer).toBe(false);
-    expect(result.steps).toEqual(["verify-channel-ready"]);
+    expect(result.steps).toEqual([]);
     expect(state.calls).not.toContain("ensureGiteaOrg");
     expect(state.calls).not.toContain("createGiteaUser");
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(state.calls).toContain("restoreByosubForAgent");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    // The fast-attach path must keep MM-side liveness verification.
-    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(state.calls).not.toContain("waitForAccountHealthy");
     // Fleet heartbeat MUST register this customer as mounted, even on the
     // short-circuit path — Copilot review on PR #1182 caught a regression
     // here. Without it, fleet/heartbeat reports no mounted customers.
@@ -1260,8 +1281,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
       convergeContent: true,
     });
 
-    expect(result.steps).toEqual(["verify-channel-ready"]);
-    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(result.steps).toEqual([]);
     expect(state.calls).toContain("onMounted");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
     expect(state.calls).not.toContain("removePartialWorkspace");
@@ -1324,7 +1344,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
 
     const result = await addCustomerToGateway(adapter, "uid-test");
 
-    expect(result.steps).toEqual(["ssh-key-resync", "verify-channel-ready"]);
+    expect(result.steps).toEqual(["ssh-key-resync"]);
     expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
     expect(state.calls).toContain("createGiteaUser");
     expect(state.calls).not.toContain("ensureGiteaOrg");
@@ -1363,7 +1383,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     expect(result.steps).toContain("clone-workspace-repo");
     expect(state.calls).toContain("cloneWorkspaceRepo");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).toContain("waitForAccountHealthy");
   });
 
   it("attaches a Discord-only Builder overlay without a canonical Mattermost coach", async () => {
@@ -1441,7 +1460,6 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     expect(state.calls).not.toContain("initWorkspaceRepoFromExistingDir");
     expect(state.disk.sshKey).toBe(true);
     expect(result.steps).toContain("clone-workspace-repo");
-    expect(result.steps).toContain("verify-channel-ready");
   });
 
   it("does not rewrite an already configured Builder overlay when the agent runtime dir is absent", async () => {
@@ -1469,7 +1487,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     await addCustomerToGateway(adapter, "uid-test");
 
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
-    expect(state.calls).toContain("waitForAccountHealthy");
+    expect(state.calls).toContain("onMounted");
   });
 
   it("does not overwrite a complete Builder overlay when its platform coach wiring is absent", async () => {

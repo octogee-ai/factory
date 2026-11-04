@@ -123,7 +123,6 @@ import {
 
 const RECONCILE_LOOP_INTERVAL_MS = 2 * 1000;
 export const MOUNT_CONCURRENCY = 4;
-const BUILDER_POST_START_ACCOUNT_TIMEOUT_MS = 120_000;
 const BUILDER_POST_START_HEALTH_TIMEOUT_MS = 600_000;
 
 export const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
@@ -2067,9 +2066,6 @@ async function attachConfiguredBuilderBeforeOpenClaw(input: {
   return slug;
 }
 
-// A healthy OpenClaw is what readiness proves; the coach's Mattermost account is
-// observed and reported, but a slow or down chat backend never holds the
-// Builder's own gateway hostage — the reconcile loop keeps verifying the channel.
 async function verifyConfiguredBuilderAfterOpenClaw(input: {
   adapter: CustomerLifecycleAdapter;
   waitForGatewayReady: () => Promise<void>;
@@ -2083,18 +2079,6 @@ async function verifyConfiguredBuilderAfterOpenClaw(input: {
   await input.waitForGatewayReady();
   if (input.permittedAt !== undefined) {
     input.log(`[surge-handoff] configured Builder OpenClaw ready ${Date.now() - input.permittedAt}ms after permit: ${slug}`);
-  }
-  if (input.adapter.customerCoachWiredInOpenclawConfig?.(slug)) {
-    const healthy = await input.adapter.waitForAccountHealthy({
-      slug,
-      timeoutMs: BUILDER_POST_START_ACCOUNT_TIMEOUT_MS,
-    });
-    if (!healthy) {
-      input.log(
-        `[surge-handoff] ⚠ configured Builder Mattermost coach is not healthy yet ` +
-        `after OpenClaw start; the reconcile loop keeps verifying it: ${slug}`,
-      );
-    }
   }
   return slug;
 }
