@@ -110,3 +110,35 @@ it('selects an older image for rollback while retaining newer images in a valid 
 it('fails publication if the family resolves to a different image', async () => {
   await expect(selectDesktopFamily('selected', { listMembers: async () => [], setFamily: vi.fn(), resolveFamily: async () => ({ name: 'concurrent' }) })).rejects.toThrow('does not resolve');
 });
+
+import { planDesktopArchivePrune, pruneDesktopArchive } from '../lib/desktop-image-publication';
+const archived = (name: string, creationTimestamp: string, family = 'octogee-computer-archive') => ({ name, creationTimestamp, family });
+
+it('plans to remove archived images beyond the newest kept ones, never the family head or an image a disk was created from', () => {
+  const plan = planDesktopArchivePrune({
+    images: [
+      archived('head', '2026-11-04T00:00:00Z', 'octogee-computer'),
+      archived('a5', '2026-11-03T00:00:00Z'), archived('a4', '2026-11-02T00:00:00Z'), archived('a3', '2026-10-30T00:00:00Z'),
+      archived('a2', '2026-10-22T00:00:00Z'), archived('a1', '2026-10-01T00:00:00Z'), archived('a0', '2026-09-01T00:00:00Z'),
+      archived('other', '2026-09-15T00:00:00Z', 'something-else'),
+    ],
+    keep: 2, referenced: new Set(['a1']),
+  });
+  expect(plan).toEqual({ kept: ['a5', 'a4'], retainedInUse: ['a1'], remove: ['a3', 'a2', 'a0'] });
+});
+it('refuses to prune without keeping at least one archived image', () => {
+  expect(() => planDesktopArchivePrune({ images: [], keep: 0, referenced: new Set() })).toThrow('keep');
+});
+it('removes exactly the planned archived images when applied and only plans otherwise', async () => {
+  const removed: string[] = [];
+  const deps = {
+    listImages: vi.fn().mockResolvedValue([archived('a2', '2026-11-02T00:00:00Z'), archived('a1', '2026-11-01T00:00:00Z'), archived('head', '2026-11-03T00:00:00Z', 'octogee-computer')]),
+    listDiskSourceImages: vi.fn().mockResolvedValue(new Set<string>()),
+    deleteImage: vi.fn(async (project: string, name: string) => { removed.push(`${project}/${name}`); }),
+  };
+  expect(await pruneDesktopArchive('octogee-test', { keep: 1, apply: false }, deps)).toEqual({ project: 'octogee-test', kept: ['a2'], retainedInUse: [], remove: ['a1'], removed: 0 });
+  expect(removed).toEqual([]);
+  expect(await pruneDesktopArchive('octogee-test', { keep: 1, apply: true }, deps)).toEqual({ project: 'octogee-test', kept: ['a2'], retainedInUse: [], remove: ['a1'], removed: 1 });
+  expect(removed).toEqual(['octogee-test/a1']);
+  expect(deps.listImages).toHaveBeenCalledWith('octogee-test');
+});

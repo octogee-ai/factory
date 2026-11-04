@@ -17,7 +17,7 @@ export interface DesktopPublicationDeps {
   resolveFamily(project: string): Promise<string | null>;
 }
 
-function desktopImageProject(environment: 'test' | 'prod'): string {
+export function desktopImageProject(environment: 'test' | 'prod'): string {
   return environment === 'test' ? 'octogee-test' : 'octogee';
 }
 
@@ -57,6 +57,72 @@ export async function publishDesktopArtifact(value: unknown, environment: 'test'
   return { project: targetProject, image: artifact.name };
 }
 
+export const DESKTOP_ARCHIVE_KEEP_DEFAULT = 5;
+
+export interface DesktopArchiveImage { name: string; creationTimestamp: string; family?: string }
+export interface DesktopArchiveDeps {
+  listImages(project: string): Promise<DesktopArchiveImage[]>;
+  listDiskSourceImages(): Promise<Set<string>>;
+  deleteImage(project: string, name: string): Promise<void>;
+}
+export interface DesktopArchivePrunePlan { kept: string[]; retainedInUse: string[]; remove: string[] }
+
+export function planDesktopArchivePrune(input: { images: DesktopArchiveImage[]; keep: number; referenced: ReadonlySet<string> }): DesktopArchivePrunePlan {
+  if (!Number.isInteger(input.keep) || input.keep < 1) throw new Error('desktop archive prune requires keep >= 1');
+  const archived = input.images.filter(image => image.family === 'octogee-computer-archive')
+    .sort((a, b) => Date.parse(b.creationTimestamp) - Date.parse(a.creationTimestamp));
+  const plan: DesktopArchivePrunePlan = { kept: archived.slice(0, input.keep).map(image => image.name), retainedInUse: [], remove: [] };
+  for (const image of archived.slice(input.keep)) (input.referenced.has(image.name) ? plan.retainedInUse : plan.remove).push(image.name);
+  return plan;
+}
+
+export async function pruneDesktopArchive(project: string, options: { keep: number; apply: boolean }, deps: DesktopArchiveDeps) {
+  const plan = planDesktopArchivePrune({ images: await deps.listImages(project), keep: options.keep, referenced: await deps.listDiskSourceImages() });
+  let removed = 0;
+  if (options.apply) {
+    for (const name of plan.remove) {
+      await deps.deleteImage(project, name);
+      removed += 1;
+    }
+  }
+  return { project, ...plan, removed };
+}
+
+async function pruneArchiveAfterPublication(project: string, keep: number, archive: DesktopArchiveDeps): Promise<void> {
+  try {
+    console.log(JSON.stringify({ desktopArchivePrune: await pruneDesktopArchive(project, { keep, apply: true }, archive) }));
+  } catch (error) {
+    console.error(
+      `desktop image: ⚠ archive prune of ${project} failed after publication; the family head is published and the archive is unchanged: ` +
+      (error instanceof Error ? error.message : String(error)),
+    );
+  }
+}
+
+export async function runDesktopArchivePrune(input: {
+  environment: 'test' | 'prod'; keep: number; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; archive?: DesktopArchiveDeps;
+}) {
+  const project = desktopImageProject(input.environment);
+  const archive = input.archive ?? createDesktopArchiveCloud(
+    input.auth ?? new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }),
+    deploymentEnvironmentSettings(input.environment).clusterProjectId,
+  );
+  const plan = await pruneDesktopArchive(project, { keep: input.keep, apply: false }, archive);
+  console.log(JSON.stringify(plan, null, 2));
+  if (!input.apply || plan.remove.length === 0) return plan;
+  let applied = plan;
+  await runWithOperationAuditIntent(input.db, {
+    actor: input.actor, forced: false, what: 'Prune archived desktop images', why: input.why,
+    target: { environment: input.environment }, preActionStatus: plan,
+    mutation: { action: 'prune-desktop-archive' },
+    idempotencyKey: `desktop-archive-prune:${input.environment}:${randomUUID()}`,
+  }, { claimId: randomUUID() }, async () => {
+    applied = await pruneDesktopArchive(project, { keep: input.keep, apply: true }, archive);
+    console.log(JSON.stringify({ desktopArchivePrune: applied }));
+  });
+  return applied;
+}
+
 export async function selectDesktopFamily(name: string, deps: {
   listMembers(): Promise<string[]>;
   setFamily(name: string, family: string): Promise<void>;
@@ -69,11 +135,11 @@ export async function selectDesktopFamily(name: string, deps: {
   if ((await deps.resolveFamily()).name !== name) throw new Error('desktop family does not resolve to the selected image');
 }
 
-export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps {
+function computeClient(auth: GoogleAuth) {
   const base = 'https://compute.googleapis.com/compute/v1/projects';
-  async function request<T>(url: string, data?: object, method = 'POST'): Promise<T> {
+  async function request<T>(url: string, data?: object, method?: 'POST' | 'PATCH' | 'DELETE'): Promise<T> {
     const client = await auth.getClient();
-    return (await client.request<T>({ url, method: data ? method as 'POST' | 'PATCH' : 'GET', ...(data ? { data } : {}), timeout: 30_000 })).data;
+    return (await client.request<T>({ url, method: method ?? (data ? 'POST' : 'GET'), ...(data ? { data } : {}), timeout: 30_000 })).data;
   }
   async function requestOrNull<T>(url: string): Promise<T | null> {
     try { return await request<T>(url); }
@@ -92,6 +158,39 @@ export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicat
     }
     throw new Error('desktop image operation timed out');
   }
+  return { base, request, requestOrNull, waitOperation };
+}
+
+export function createDesktopArchiveCloud(auth: GoogleAuth, computeProject: string): DesktopArchiveDeps {
+  const { base, request, waitOperation } = computeClient(auth);
+  async function pages<T>(url: string, pick: (page: Record<string, unknown>) => T[]): Promise<T[]> {
+    const items: T[] = [];
+    let pageToken = '';
+    do {
+      const target = new URL(url);
+      if (pageToken) target.searchParams.set('pageToken', pageToken);
+      const page = await request<{ nextPageToken?: string } & Record<string, unknown>>(target.toString());
+      items.push(...pick(page));
+      pageToken = page.nextPageToken ?? '';
+    } while (pageToken);
+    return items;
+  }
+  return {
+    listImages: project => pages(`${base}/${project}/global/images`,
+      page => ((page.items ?? []) as DesktopArchiveImage[]).map(({ name, creationTimestamp, family }) => ({ name, creationTimestamp, family }))),
+    async listDiskSourceImages() {
+      const disks = await pages(`${base}/${computeProject}/aggregated/disks`,
+        page => Object.values((page.items ?? {}) as Record<string, { disks?: Array<{ sourceImage?: string }> }>).flatMap(scope => scope.disks ?? []));
+      return new Set(disks.map(disk => disk.sourceImage?.split('/').at(-1)).filter((name): name is string => typeof name === 'string'));
+    },
+    async deleteImage(project, name) {
+      await waitOperation(project, await request<{ name: string }>(`${base}/${project}/global/images/${name}`, undefined, 'DELETE'));
+    },
+  };
+}
+
+export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicationDeps {
+  const { base, request, requestOrNull, waitOperation } = computeClient(auth);
   return {
     getImage: (project, name) => requestOrNull<DesktopCloudImage>(`${base}/${project}/global/images/${name}`),
     async copyImage(sourceProject, name, project, sourceSha) {
@@ -126,6 +225,7 @@ export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicat
 
 export async function runDesktopImagePublication(input: {
   environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; skipMissing?: boolean;
+  archiveKeep?: number; cloud?: DesktopPublicationDeps; archive?: DesktopArchiveDeps;
 }) {
   if (!/^[a-f0-9]{40}$/.test(input.sourceSha)) throw new Error('desktop-image publish requires --sha=<full-main-sha>');
   const auth = input.auth ?? new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
@@ -149,7 +249,7 @@ export async function runDesktopImagePublication(input: {
     console.log(`desktop image: build ${manifest.sourceSha} has no desktop image; skipping publication`);
     return;
   }
-  const cloud = createDesktopPublicationCloud(auth);
+  const cloud = input.cloud ?? createDesktopPublicationCloud(auth);
   if (!desktop) throw new Error(`Build ${manifest.sourceSha} has no accepted desktop image`);
   const publication = await planDesktopPublication(desktop.desktopImage, input.environment, cloud);
   const plan = { environment: input.environment, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest, desktopManifestDigest: desktop.digest, desktopImage: desktop.desktopImage, publication };
@@ -166,5 +266,10 @@ export async function runDesktopImagePublication(input: {
     idempotencyKey: `desktop-image:${input.environment}:${manifest.manifestDigest}:${randomUUID()}`,
   }, { claimId: randomUUID() }, async () => {
     console.log(JSON.stringify(await publishDesktopArtifact(desktop.desktopImage, input.environment, cloud)));
+    await pruneArchiveAfterPublication(
+      publication.project,
+      input.archiveKeep ?? DESKTOP_ARCHIVE_KEEP_DEFAULT,
+      input.archive ?? createDesktopArchiveCloud(auth, target.clusterProjectId),
+    );
   });
 }

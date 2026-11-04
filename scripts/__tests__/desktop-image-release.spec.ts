@@ -3,7 +3,7 @@ import { GoogleAuth } from 'google-auth-library';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createCentralReleaseAuthority } from '@octogee/core/artifact-registry';
 import { runWithOperationAuditIntent } from '@octogee/core/operation-audit';
-import { runDesktopImagePublication } from '../lib/desktop-image-publication';
+import { runDesktopArchivePrune, runDesktopImagePublication, type DesktopArchiveDeps, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
 import * as releaseSource from '../lib/desktop-image-release.mjs';
 
 vi.mock('@octogee/core/artifact-registry', () => ({ createCentralReleaseAuthority: vi.fn() }));
@@ -92,4 +92,75 @@ it('still inspects and plans publication when the optional desktop artifact is p
   expect(request).toHaveBeenCalledTimes(2);
   expect(log).toHaveBeenCalledWith(expect.stringContaining('family already serves'));
   expect(runWithOperationAuditIntent).not.toHaveBeenCalled();
+});
+
+const publishedArtifact = {
+  project: 'octogee-test', name: 'octogee-computer-fixture', id: '123', sourceSha: 'a'.repeat(40),
+  inputFingerprint: 'b'.repeat(64), acceptance: 'resize-reboot-v1',
+};
+function publicationCloud(): DesktopPublicationDeps {
+  return {
+    getImage: vi.fn().mockResolvedValue({ name: publishedArtifact.name, id: publishedArtifact.id, status: 'READY', labels: { source: publishedArtifact.sourceSha } }),
+    copyImage: vi.fn(), setFamily: vi.fn(), resolveFamily: vi.fn().mockResolvedValue('octogee-computer-previous'),
+  };
+}
+function archiveFixture() {
+  return {
+    listImages: vi.fn().mockResolvedValue([
+      { name: publishedArtifact.name, creationTimestamp: '2026-11-04T00:00:00Z', family: 'octogee-computer' },
+      { name: 'a3', creationTimestamp: '2026-11-03T00:00:00Z', family: 'octogee-computer-archive' },
+      { name: 'a2', creationTimestamp: '2026-11-02T00:00:00Z', family: 'octogee-computer-archive' },
+      { name: 'a1', creationTimestamp: '2026-11-01T00:00:00Z', family: 'octogee-computer-archive' },
+    ]),
+    listDiskSourceImages: vi.fn().mockResolvedValue(new Set<string>()),
+    deleteImage: vi.fn(async () => {}),
+  } satisfies DesktopArchiveDeps;
+}
+function runAuditedWork() {
+  vi.mocked(runWithOperationAuditIntent).mockImplementation(async (_db, _intent, _claim, work) => { await work(); });
+}
+
+it('prunes the archive inside the audited publication once the family head has moved', async () => {
+  const { input, log } = publication(publishedArtifact);
+  runAuditedWork();
+  const cloud = publicationCloud();
+  const archive = archiveFixture();
+  await runDesktopImagePublication({ ...input, cloud, archive, archiveKeep: 2 });
+  expect(cloud.setFamily).toHaveBeenCalledWith('octogee-test', publishedArtifact.name);
+  expect(runWithOperationAuditIntent).toHaveBeenCalledOnce();
+  expect(archive.listImages).toHaveBeenCalledWith('octogee-test');
+  expect(archive.deleteImage).toHaveBeenCalledOnce();
+  expect(archive.deleteImage).toHaveBeenCalledWith('octogee-test', 'a1');
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('"desktopArchivePrune"'));
+});
+
+it('keeps the publication when the archive prune is denied, and reports the failure', async () => {
+  const { input } = publication(publishedArtifact);
+  runAuditedWork();
+  const cloud = publicationCloud();
+  const archive = archiveFixture();
+  archive.listDiskSourceImages.mockRejectedValue(new Error('compute.disks.list denied'));
+  const reported = vi.spyOn(console, 'error').mockImplementation(() => {});
+  await expect(runDesktopImagePublication({ ...input, cloud, archive })).resolves.toBeUndefined();
+  expect(cloud.setFamily).toHaveBeenCalledWith('octogee-test', publishedArtifact.name);
+  expect(archive.deleteImage).not.toHaveBeenCalled();
+  expect(reported).toHaveBeenCalledWith(expect.stringContaining('archive prune of octogee-test failed'));
+  expect(reported).toHaveBeenCalledWith(expect.stringContaining('compute.disks.list denied'));
+});
+
+it('audits an on-demand archive prune only when it applies removals', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  runAuditedWork();
+  const archive = archiveFixture();
+  const prune = { environment: 'test' as const, keep: 2, actor: 'fixture', why: 'fixture', db: {} as Firestore, auth: new GoogleAuth(), archive };
+  const dry = await runDesktopArchivePrune({ ...prune, apply: false });
+  expect(dry).toMatchObject({ project: 'octogee-test', kept: ['a3', 'a2'], remove: ['a1'], removed: 0 });
+  expect(runWithOperationAuditIntent).not.toHaveBeenCalled();
+  expect(archive.deleteImage).not.toHaveBeenCalled();
+  const applied = await runDesktopArchivePrune({ ...prune, apply: true });
+  expect(runWithOperationAuditIntent).toHaveBeenCalledWith(
+    prune.db, expect.objectContaining({ actor: 'fixture', mutation: { action: 'prune-desktop-archive' } }), expect.anything(), expect.any(Function),
+  );
+  expect(archive.deleteImage).toHaveBeenCalledWith('octogee-test', 'a1');
+  expect(applied).toMatchObject({ remove: ['a1'], removed: 1 });
 });
