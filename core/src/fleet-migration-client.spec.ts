@@ -260,7 +260,7 @@ describe("MigrationClient — transport/tenant split", () => {
             migrationId: "m1",
             slug: "alice",
             ready: true,
-            checks: { customerDir: true, coachWired: true, mountMarked: true, accountHealthy: true },
+            checks: { customerDir: true, coachWired: true, mountMarked: true },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -386,7 +386,7 @@ describe("MigrationClient verification errors", () => {
   it("retains structured readiness details for scoped recovery without parsing error messages", async () => {
     const details = {
       migrationId: "m1", slug: "alice", ready: false,
-      checks: { customerDir: true, coachWired: true, mountMarked: false, accountHealthy: true },
+      checks: { customerDir: true, coachWired: true, mountMarked: false },
     };
     const { fakeFetch } = captureFetch(() => new Response(JSON.stringify(details), { status: 409 }));
     const client = createMigrationClient({
@@ -475,7 +475,6 @@ describe("MigrationClient.verifyTarget", () => {
             customerDir: true,
             coachWired: true,
             mountMarked: true,
-            accountHealthy: true,
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -491,56 +490,13 @@ describe("MigrationClient.verifyTarget", () => {
       migrationId: "m1",
       gatewayId: "gw-green",
       slug: "alice",
-      timeoutMs: 7_000,
     });
     expect(res.ready).toBe(true);
     expect(calls[0].url).toBe("https://fleet.example.com/verify/gw-green");
-    const parsed = JSON.parse(calls[0].body!);
-    expect(parsed).toMatchObject({ migrationId: "m1", slug: "alice", timeoutMs: 7_000 });
+    expect(JSON.parse(calls[0].body!)).toEqual({ migrationId: "m1", slug: "alice" });
     expect(calls[0].headers[SIGNATURE_HEADER.toLowerCase()]).toBe(
       signFleetRequest(PRIVATE_KEY, gatewayScopedJobId("m1", "gw-green"), calls[0].body!),
     );
-  });
-
-  it("derives the HTTP timeout from a larger per-call verify timeout", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const { fakeFetch } = captureFetch(() =>
-        new Response(
-          JSON.stringify({
-            migrationId: "m1",
-            slug: "alice",
-            ready: true,
-            checks: {
-              customerDir: true,
-              coachWired: true,
-              mountMarked: true,
-              accountHealthy: true,
-            },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      );
-      const client = createMigrationClient({
-        transferState: transferNotUnderTest,
-        privateKey: PRIVATE_KEY,
-        resolveGatewayUrl: () => `https://fleet.example.com`,
-        fetch: fakeFetch,
-        timeouts: {
-          verifyMs: 25,
-        },
-      });
-      await client.verifyTarget({
-        migrationId: "m1",
-        gatewayId: "gw-green",
-        slug: "alice",
-        timeoutMs: 7_000,
-      });
-
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 37_000);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
   });
 
   it("throws when the target reports ready=false", async () => {
@@ -554,7 +510,6 @@ describe("MigrationClient.verifyTarget", () => {
             customerDir: true,
             coachWired: true,
             mountMarked: false,
-            accountHealthy: true,
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -665,7 +620,6 @@ describe("MigrationClient — per-RPC AbortSignal timeouts", () => {
           customerDir: true,
           coachWired: true,
           mountMarked: true,
-          accountHealthy: true,
         },
       }), {
         status: 200,

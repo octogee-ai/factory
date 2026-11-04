@@ -119,7 +119,6 @@ export interface MigrationClient {
     gatewayId: string;
     transportId?: string;
     slug: string;
-    timeoutMs?: number;
   }): Promise<VerifyMigrationResponse>;
 
   unmount(opts: {
@@ -404,16 +403,14 @@ export function createMigrationClient(deps: MigrationClientDeps): MigrationClien
 
     transferState: deps.transferState,
 
-    async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
-      const requestTimeoutMs =
-        timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);
+    async verifyTarget({ migrationId, gatewayId, transportId, slug }) {
       const res = await postSignedJson<VerifyMigrationResponse>({
         transportId: transportId ?? gatewayId,
         path: `/verify/${gatewayId}`,
         gatewayId,
         migrationId,
-        body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
-        timeoutMs: requestTimeoutMs,
+        body: { migrationId, slug },
+        timeoutMs: verifyMs,
       });
       if (!res.ready) {
         throw new Error(

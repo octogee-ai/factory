@@ -38,7 +38,7 @@ function happyClient(): MigrationClient & { calls: string[] } {
         migrationId: "m1",
         slug,
         ready: true,
-        checks: { customerDir: true, coachWired: true, mountMarked: true, accountHealthy: true },
+        checks: { customerDir: true, coachWired: true, mountMarked: true },
       };
     }) as MigrationClient["verifyTarget"],
     unmount: vi.fn(async ({ gatewayId, slug }) => {

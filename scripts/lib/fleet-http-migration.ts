@@ -62,7 +62,6 @@ import {
   type VerifyMigrationResponse,
   MIGRATION_TRANSFER_TIMEOUT_MS,
   MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
-  MIGRATION_VERIFY_TIMEOUT_MS,
   MIGRATION_RSYNC_PORT_DEFAULT,
   SIGNATURE_HEADER,
 } from "../../shared/types/fleet-controller.js";
@@ -2845,21 +2844,6 @@ function activationCoachWired(deps: MigrationHandlerDeps, slug: string): boolean
     ?? false;
 }
 
-async function activationManifestVerifyChecks(
-  deps: MigrationHandlerDeps,
-  body: VerifyMigrationRequestBody,
-  wiring: { coachWired: boolean; mountMarked: boolean },
-): Promise<Extract<VerifyMigrationResponse, { configTransferMode?: "activation-manifest" }>["checks"]> {
-  return {
-    customerDir: deps.adapter.hasCustomerDir(body.slug),
-    ...wiring,
-    accountHealthy: await deps.adapter.waitForAccountHealthy({
-      slug: body.slug,
-      timeoutMs: body.timeoutMs ?? MIGRATION_VERIFY_TIMEOUT_MS,
-    }),
-  };
-}
-
 async function verifyMigrationResponse(
   deps: MigrationHandlerDeps,
   body: VerifyMigrationRequestBody,
@@ -2877,28 +2861,15 @@ async function verifyMigrationResponse(
     };
   }
   const coachWired = activationCoachWired(deps, body.slug);
-  const mountMarked = deps.adapter.customerMountMarked?.(body.slug) ?? coachWired;
-  if ((!coachWired || !mountMarked) && await deps.customerAttachPending?.(body.slug) === true) {
-    return {
-      migrationId: body.migrationId,
-      slug: body.slug,
-      ready: false,
-      code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
-      checks: {
-        customerDir: deps.adapter.hasCustomerDir(body.slug),
-        coachWired,
-        mountMarked,
-        accountHealthy: false,
-      },
-    };
-  }
-  const checks = await activationManifestVerifyChecks(deps, body, { coachWired, mountMarked });
-  return {
-    migrationId: body.migrationId,
-    slug: body.slug,
-    ready: Object.values(checks).every(Boolean),
-    checks,
+  const checks = {
+    customerDir: deps.adapter.hasCustomerDir(body.slug),
+    coachWired,
+    mountMarked: deps.adapter.customerMountMarked?.(body.slug) ?? coachWired,
   };
+  if ((!checks.coachWired || !checks.mountMarked) && await deps.customerAttachPending?.(body.slug) === true) {
+    return { migrationId: body.migrationId, slug: body.slug, ready: false, code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS, checks };
+  }
+  return { migrationId: body.migrationId, slug: body.slug, ready: Object.values(checks).every(Boolean), checks };
 }
 
 export function createVerifyHandler(deps: MigrationHandlerDeps): RequestHandler {

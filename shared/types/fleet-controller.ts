@@ -370,7 +370,6 @@ export interface RestoreMigrationResponse {
 }
 
 export interface VerifyMigrationRequestBody extends MigrationRequestBody {
-  timeoutMs?: number;
   configTransferMode?: MigrationConfigTransferMode;
 }
 
@@ -384,7 +383,6 @@ export type VerifyMigrationResponse = {
     customerDir: boolean;
     coachWired: boolean;
     mountMarked: boolean;
-    accountHealthy: boolean;
   };
 } | {
   migrationId: string;

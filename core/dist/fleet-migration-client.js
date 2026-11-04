@@ -208,15 +208,14 @@ export function createMigrationClient(deps) {
             return res;
         },
         transferState: deps.transferState,
-        async verifyTarget({ migrationId, gatewayId, transportId, slug, timeoutMs }) {
-            const requestTimeoutMs = timeoutMs == null ? verifyMs : Math.max(verifyMs, timeoutMs + 30_000);
+        async verifyTarget({ migrationId, gatewayId, transportId, slug }) {
             const res = await postSignedJson({
                 transportId: transportId ?? gatewayId,
                 path: `/verify/${gatewayId}`,
                 gatewayId,
                 migrationId,
-                body: timeoutMs == null ? { migrationId, slug } : { migrationId, slug, timeoutMs },
-                timeoutMs: requestTimeoutMs,
+                body: { migrationId, slug },
+                timeoutMs: verifyMs,
             });
             if (!res.ready) {
                 throw new Error(`target verify failed on ${gatewayId} for slug=${slug}: ${JSON.stringify(res.checks)}`);

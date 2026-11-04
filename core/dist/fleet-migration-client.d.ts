@@ -88,7 +88,6 @@ export interface MigrationClient {
         gatewayId: string;
         transportId?: string;
         slug: string;
-        timeoutMs?: number;
     }): Promise<VerifyMigrationResponse>;
     unmount(opts: {
         migrationId: string;

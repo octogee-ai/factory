@@ -1262,7 +1262,7 @@ async function completeNativeReturn(
       await ctx.assertCustomerRestoreSettled?.();
     } catch (error) {
       if (!(error instanceof PendingCustomerRestoreError)) throw error;
-      await restoreInterruptedSharedMount(deps, ctx, input, true);
+      await resumeDispatchedSharedRestore(deps, ctx, input);
       await ctx.assertCustomerRestoreSettled?.();
     }
     await reportNativeReturnStep(deps, ctx, "release-native-writers", native.releaseWriterHold);
@@ -1273,7 +1273,7 @@ async function completeNativeReturn(
       const handoff = input.handoff;
       await reportNativeReturnStep(deps, ctx, "activate-scheduler", () => activateSharedSchedules(deps, ctx, handoff));
     }
-    await reportNativeReturnStep(deps, ctx, "verify-target", () => verifyOrRestoreNativeReturnTarget(deps, ctx, input));
+    await reportNativeReturnStep(deps, ctx, "verify-target", () => verifyNativeReturnTarget(deps, input));
     await native.acknowledgeCompletedSchedulerHandoff();
     return { steps: [], success: true, rolledBack: false, output: { nativeSourcePark: { ...parked } } };
   } catch (error) {
@@ -1329,28 +1329,10 @@ interface NativeReturnTarget {
   migrationId: string;
 }
 
-function interruptedSharedMount(error: unknown, input: NativeReturnTarget): boolean {
-  if (!(error instanceof MigrationRpcError) || error.status !== 409 || error.code !== undefined) return false;
-  const body = error.details;
-  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
-  const details = body as Record<string, unknown>;
-  const checks = details.checks;
-  if (!checks || typeof checks !== "object" || Array.isArray(checks)) return false;
-  const readiness = checks as Record<string, unknown>;
-  return [
-    details.migrationId === input.migrationId, details.slug === input.slug, details.ready === false,
-    details.code === undefined,
-    details.configTransferMode === undefined || details.configTransferMode === "activation-manifest",
-    readiness.customerDir === true, readiness.coachWired === true,
-    readiness.mountMarked === false, readiness.accountHealthy === true,
-  ].every(Boolean);
-}
-
 async function withAssignedSharedRestoreFence(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   input: NativeReturnTarget,
-  resume: boolean,
   work: () => Promise<void>,
 ): Promise<void> {
   if (!ctx.assertActiveClaim) throw new Error("Shared restore requires an active operation claim check");
@@ -1360,8 +1342,7 @@ async function withAssignedSharedRestoreFence(
   await ctx.assertActiveClaim();
   await ctx.withCustomerRestoreFence({
     uid: input.uid, slug: input.slug, gatewayId: input.toGatewayId,
-    fromGatewayId: input.fromGatewayId, assignmentEpoch: placement.epoch,
-    ...(resume ? { resume: true } : {}),
+    fromGatewayId: input.fromGatewayId, assignmentEpoch: placement.epoch, resume: true,
   }, work);
   await ctx.assertActiveClaim();
   const owner = await deps.readUser(input.uid);
@@ -1370,11 +1351,10 @@ async function withAssignedSharedRestoreFence(
   }
 }
 
-async function restoreInterruptedSharedMount(
+async function resumeDispatchedSharedRestore(
   deps: MigrateCustomerDeps,
   ctx: OperationContext,
   input: NativeReturnTarget,
-  resume = false,
 ): Promise<void> {
   const url = await deps.resolveGatewayUrl(input.toGatewayId);
   const snapshot = await deps.readUserSnapshot(input.uid, input.toGatewayId);
@@ -1382,31 +1362,15 @@ async function restoreInterruptedSharedMount(
       snapshot.gatewayId !== input.toGatewayId || snapshot.status !== "complete") {
     throw new Error("Shared restore snapshot no longer proves the assigned complete owner");
   }
-  await withAssignedSharedRestoreFence(deps, ctx, input, resume, () => reportNativeReturnStep(deps, ctx, "restore-target", async () => {
+  await withAssignedSharedRestoreFence(deps, ctx, input, () => reportNativeReturnStep(deps, ctx, "restore-target", async () => {
     const result = await deps.buildClient(() => url).restoreTarget({
       migrationId: input.migrationId, gatewayId: input.toGatewayId,
-      uid: input.uid, slug: input.slug, snapshot,
-      ...(resume ? { resume: true } : {}),
+      uid: input.uid, slug: input.slug, snapshot, resume: true,
     });
     if (result.restored !== true || result.migrationId !== input.migrationId || result.slug !== input.slug) {
       throw new Error("Shared restore did not confirm the matching migration");
     }
   }));
-}
-
-async function verifyOrRestoreNativeReturnTarget(
-  deps: MigrateCustomerDeps,
-  ctx: OperationContext,
-  input: NativeReturnTarget,
-): Promise<void> {
-  try {
-    await verifyNativeReturnTarget(deps, input);
-    return;
-  } catch (error) {
-    if (!interruptedSharedMount(error, input)) throw error;
-  }
-  await restoreInterruptedSharedMount(deps, ctx, input);
-  await verifyNativeReturnTarget(deps, input);
 }
 
 function coachAttachInProgress(error: unknown): boolean {

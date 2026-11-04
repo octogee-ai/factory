@@ -914,7 +914,7 @@ describe("createVerifyHandler", () => {
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
     expect(response.getStatus()).toBe(200);
-    expect(response.getBody()).toMatchObject({ ready: true, checks: { accountHealthy: true } });
+    expect(response.getBody()).toMatchObject({ ready: true, checks: { customerDir: true, coachWired: true, mountMarked: true } });
     expect(adapter.uidForSlug).not.toHaveBeenCalled();
     expect(adapter.loadUserSnapshot).not.toHaveBeenCalled();
     expect(adapter.projectAgentsHealthy).not.toHaveBeenCalled();
@@ -928,11 +928,11 @@ describe("createVerifyHandler", () => {
     expect(getStatus()).toBe(401);
   });
 
-  it("returns 200 ready=true when local migration readiness checks pass", async () => {
-    const adapter = mkAdapter();
+  it("returns 200 ready=true from the mount structure without waiting on the coach account", async () => {
+    const adapter = mkAdapter({ waitForAccountHealthy: vi.fn(async () => false) });
     const log = vi.fn();
     const handler = createVerifyHandler(mkDeps({ adapter, log }));
-    const body = { migrationId: "mig-1", slug: "chris", timeoutMs: 5_000 };
+    const body = { migrationId: "mig-1", slug: "chris" };
     const rawBody = JSON.stringify(body);
     const sig = signForPod(body.migrationId, rawBody);
     const req = mkRequest(body, { signature: sig });
@@ -949,13 +949,9 @@ describe("createVerifyHandler", () => {
         customerDir: true,
         coachWired: true,
         mountMarked: true,
-        accountHealthy: true,
       },
     });
-    expect(adapter.waitForAccountHealthy).toHaveBeenCalledWith({
-      slug: "chris",
-      timeoutMs: 5_000,
-    });
+    expect(adapter.waitForAccountHealthy).not.toHaveBeenCalled();
   });
 
   it("returns 409 ready=false when any readiness check fails", async () => {
@@ -1006,7 +1002,7 @@ describe("createVerifyHandler", () => {
     expect(result.body).toMatchObject({
       ready: false,
       code: MIGRATION_VERIFY_COACH_ATTACH_IN_PROGRESS,
-      checks: { ...wiring, accountHealthy: false },
+      checks: { customerDir: true, ...wiring },
     });
     expect(result.customerAttachPending).toHaveBeenCalledWith("chris");
     expect(result.adapter.waitForAccountHealthy).not.toHaveBeenCalled();
@@ -1025,7 +1021,6 @@ describe("createVerifyHandler", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).not.toHaveProperty("code");
-    expect(result.adapter.waitForAccountHealthy).toHaveBeenCalled();
   });
 
   it.each([
