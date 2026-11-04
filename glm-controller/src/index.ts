@@ -2740,6 +2740,13 @@ function createBootUpgradeJournal(db: Firestore): VmGatewayRuntimeDeps["journalB
   };
 }
 
+function agentStoreDsns(): { adminDsn: string; clientDsn: string } {
+  return {
+    adminDsn: requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store administration requires the controller-only administration URL"),
+    clientDsn: requireEnv("OPENCLAW_AGENT_STORE_CLIENT_DSN", "all Gateways require a reachable agent-store database endpoint"),
+  };
+}
+
 async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
@@ -2747,10 +2754,8 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     randomTokenHex: defaultRandomTokenHex,
     log,
   });
-  const provisionAgentStoreCredentials = createAgentStoreCredentialProvisioner(
-    requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store credential provisioning requires the controller-only administration URL"),
-    requireEnv("OPENCLAW_AGENT_STORE_CLIENT_DSN", "all Gateways require a reachable agent-store database endpoint"),
-  );
+  const agentStore = agentStoreDsns();
+  const provisionAgentStoreCredentials = createAgentStoreCredentialProvisioner(agentStore.adminDsn, agentStore.clientDsn);
   const { ensureGatewayAuthSecret, ensureGatewayCredentials } = createGatewayCredentialEnsurers({
     auth: authSecretEnsurer,
     readGateway: async (gatewayId) => {
@@ -2759,6 +2764,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     },
     provisionAgentStore: provisionAgentStoreCredentials,
     runKubectl,
+    agentStoreClientDsn: agentStore.clientDsn,
   });
   const prepareMigrationAgentStores = createMigrationAgentStorePreparer({
     readGateway: async gatewayId => {
@@ -2771,10 +2777,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
       return { uid: users.docs[0].id, slug };
     },
     ensureCredentials: gatewayId => ensureGatewayCredentials({ namespace: NAMESPACE, gatewayId }),
-    transferOwnership: createAgentStoreOwnershipTransferer(
-      requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "agent-store handoff requires the controller-only administration URL"),
-      builder => readBuilderAgentStoreInventory(db, builder),
-    ),
+    transferOwnership: createAgentStoreOwnershipTransferer(agentStore.adminDsn, builder => readBuilderAgentStoreInventory(db, builder)),
   });
   const serviceAccountEnsurer = createGatewayServiceAccountEnsurer({
     runKubectl,

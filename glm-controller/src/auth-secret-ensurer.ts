@@ -47,34 +47,41 @@ function secretNameForGateway(gatewayId: string): string {
   return `gateway-auth-token-${gatewayId}`;
 }
 
-export async function readGatewayAuthToken(
+export interface GatewayAuthSecret {
+  token: string;
+  agentStoreDsn?: string | undefined;
+  agentStoreOwner?: string | undefined;
+}
+
+export async function readGatewayAuthSecret(
   deps: { runKubectl: KubectlSubprocess },
   opts: { namespace: string; gatewayId: string },
-): Promise<string> {
+): Promise<GatewayAuthSecret> {
   const secretName = secretNameForGateway(opts.gatewayId);
-  const result = await deps.runKubectl([
-    "get",
-    "secret",
-    secretName,
-    "-n",
-    opts.namespace,
-    "-o",
-    "jsonpath={.data.token}",
-  ]);
+  const result = await deps.runKubectl(["get", "secret", secretName, "-n", opts.namespace, "-o", "json"]);
   if (result.code !== 0) {
     throw new Error(
       `kubectl get secret ${secretName} (ns=${opts.namespace}) failed (code=${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
     );
   }
-  const raw = result.stdout.trim();
-  if (!raw) {
+  let data: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(result.stdout);
+    const secretData = (parsed as { data?: unknown } | null)?.data;
+    if (typeof secretData === "object" && secretData !== null) data = secretData as Record<string, unknown>;
+  } catch {
+    throw new Error(`gateway auth secret ${secretName} (ns=${opts.namespace}) is not readable`);
+  }
+  const decode = (key: string): string | undefined => {
+    const raw = data[key];
+    const value = typeof raw === "string" ? Buffer.from(raw, "base64").toString("utf8") : "";
+    return value || undefined;
+  };
+  const token = decode("token");
+  if (!token) {
     throw new Error(`gateway auth secret ${secretName} (ns=${opts.namespace}) has no token data`);
   }
-  const token = Buffer.from(raw, "base64").toString("utf8");
-  if (!token) {
-    throw new Error(`gateway auth secret ${secretName} (ns=${opts.namespace}) decoded to an empty token`);
-  }
-  return token;
+  return { token, agentStoreDsn: decode("agent-store-dsn"), agentStoreOwner: decode("agent-store-owner") };
 }
 
 /**

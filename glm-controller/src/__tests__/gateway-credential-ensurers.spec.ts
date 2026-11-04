@@ -4,14 +4,35 @@ import type { AgentStoreGatewayIdentity } from "@octogee/core/agent-store-creden
 import type { KubectlSubprocess } from "../auth-secret-ensurer.js";
 import { createGatewayCredentialEnsurers } from "../gateway-credential-ensurers.js";
 
-function harness() {
+const b64 = (value: string) => Buffer.from(value).toString("base64");
+const secretJson = (data: Record<string, string>) =>
+  JSON.stringify({ data: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, b64(value)])) });
+const agentStoreClientDsn = "postgresql://private/agents_test";
+
+function harness(secret: Record<string, string> = { token: "synthetic-token" }) {
   const auth = { ensureAuthSecret: vi.fn(async () => {}) };
   const readGateway = vi.fn(async (): Promise<{ gatewayClass: "shared" | "builder"; ownerUid: string | null; builderSlug: string | null; desiredStatus: string; retirementClaim?: unknown } | null> => null);
   const provisionAgentStore = vi.fn(async (_identity: AgentStoreGatewayIdentity, assertCurrent: () => Promise<void>) => { await assertCurrent?.(); return "postgresql://gateway:synthetic@private/agents_test"; });
-  const runKubectl = vi.fn<KubectlSubprocess>(async () => ({ code: 0, stdout: Buffer.from("synthetic-token").toString("base64"), stderr: "" }));
-  return { auth, readGateway, provisionAgentStore, runKubectl, stages: createGatewayCredentialEnsurers({ auth, readGateway, provisionAgentStore, runKubectl }) };
+  const runKubectl = vi.fn<KubectlSubprocess>(async args =>
+    ({ code: 0, stdout: args[args.indexOf("-o") + 1] === "json" ? secretJson(secret) : b64(secret.token!), stderr: "" }));
+  return { auth, readGateway, provisionAgentStore, runKubectl, stages: createGatewayCredentialEnsurers({ auth, readGateway, provisionAgentStore, runKubectl, agentStoreClientDsn }) };
 }
 const request = { namespace: "test", gatewayId: "fresh-builder" };
+
+function capturePublication(h: ReturnType<typeof harness>, secret: Record<string, string> = { token: "synthetic-token" }) {
+  const captured = { args: [] as string[], patch: undefined as unknown, path: "", mode: 0 };
+  h.runKubectl.mockImplementation(async args => {
+    if (args[0] === "get") return { code: 0, stdout: args[args.indexOf("-o") + 1] === "json" ? secretJson(secret) : b64(secret.token!), stderr: "" };
+    captured.args = args;
+    const fileArg = args.find(arg => arg.startsWith("--patch-file="));
+    if (!fileArg) throw new Error("Credential publication requires a private patch file");
+    captured.path = fileArg.slice("--patch-file=".length);
+    captured.patch = JSON.parse(await readFile(captured.path, "utf8"));
+    captured.mode = (await stat(captured.path)).mode & 0o777;
+    return { code: 0, stdout: "", stderr: "" };
+  });
+  return captured;
+}
 
 describe("Gateway credential provisioning stages", () => {
   it("allocates the token before the desired root exists and provisions SQL credentials before runtime start", async () => {
@@ -62,29 +83,17 @@ describe("Gateway credential provisioning stages", () => {
 
   it("publishes a token-fenced update through a private file and removes it afterward", async () => {
     const h = harness();
-    let patchPath = "";
-    let patch: unknown;
-    let mode = 0;
-    let publicationArgs: string[] = [];
-    h.runKubectl.mockImplementation(async args => {
-      if (args[0] === "get") return { code: 0, stdout: Buffer.from("synthetic-token").toString("base64"), stderr: "" };
-      publicationArgs = args;
-      const fileArg = args.find(arg => arg.startsWith("--patch-file="));
-      if (!fileArg) throw new Error("Credential publication requires a private patch file");
-      patchPath = fileArg.slice("--patch-file=".length);
-      patch = JSON.parse(await readFile(patchPath, "utf8"));
-      mode = (await stat(patchPath)).mode & 0o777;
-      return { code: 0, stdout: "", stderr: "" };
-    });
+    const publication = capturePublication(h);
     h.readGateway.mockResolvedValue({ desiredStatus: "running", gatewayClass: "shared", ownerUid: null, builderSlug: null });
     await h.stages.ensureGatewayCredentials(request);
-    expect(publicationArgs).toEqual(["patch", "secret", "gateway-auth-token-fresh-builder", "-n", "test", "--type=json", `--patch-file=${patchPath}`]);
-    expect(patch).toEqual([
-      { op: "test", path: "/data/token", value: Buffer.from("synthetic-token").toString("base64") },
-      { op: "add", path: "/data/agent-store-dsn", value: Buffer.from("postgresql://gateway:synthetic@private/agents_test").toString("base64") },
+    expect(publication.args).toEqual(["patch", "secret", "gateway-auth-token-fresh-builder", "-n", "test", "--type=json", `--patch-file=${publication.path}`]);
+    expect(publication.patch).toEqual([
+      { op: "test", path: "/data/token", value: b64("synthetic-token") },
+      { op: "add", path: "/data/agent-store-dsn", value: b64("postgresql://gateway:synthetic@private/agents_test") },
+      { op: "add", path: "/data/agent-store-owner", value: b64("shared") },
     ]);
-    expect(mode).toBe(0o600);
-    await expect(access(patchPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(publication.mode).toBe(0o600);
+    await expect(access(publication.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses runtime credentials without a durable root", async () => {
@@ -111,9 +120,64 @@ describe("Gateway credential provisioning stages", () => {
   it("fails runtime preparation when scoped credentials cannot be published", async () => {
     const h = harness();
     h.readGateway.mockResolvedValue({ desiredStatus: "running", gatewayClass: "shared", ownerUid: null, builderSlug: null });
-    h.runKubectl.mockResolvedValueOnce({ code: 0, stdout: Buffer.from("synthetic-token").toString("base64"), stderr: "" }).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "denied" });
+    h.runKubectl.mockResolvedValueOnce({ code: 0, stdout: secretJson({ token: "synthetic-token" }), stderr: "" }).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "denied" });
     await expect(h.stages.ensureGatewayCredentials(request)).rejects.toThrow("publication failed");
     const fileArg = h.runKubectl.mock.calls.at(-1)![0].find(arg => arg.startsWith("--patch-file="))!;
     await expect(access(fileArg.slice("--patch-file=".length))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("Gateway credential reuse", () => {
+  const alice = { desiredStatus: "running", gatewayClass: "builder" as const, ownerUid: "uid-alice", builderSlug: "alice" };
+  const published = {
+    token: "synthetic-token",
+    "agent-store-dsn": "postgresql://octogee_gateway_fresh:synthetic-token@private/agents_test",
+    "agent-store-owner": "builder:uid-alice",
+  };
+
+  it("skips SQL provisioning when the secret already publishes credentials for the same token, endpoint and owner", async () => {
+    const h = harness(published);
+    h.readGateway.mockResolvedValue(alice);
+    await h.stages.ensureGatewayCredentials(request);
+    expect(h.provisionAgentStore).not.toHaveBeenCalled();
+    expect(h.runKubectl.mock.calls.every(([args]) => args[0] === "get")).toBe(true);
+  });
+
+  it.each([
+    ["the token rotated", { ...published, token: "rotated-token" }, alice],
+    ["the endpoint moved", { ...published, "agent-store-dsn": "postgresql://octogee_gateway_fresh:synthetic-token@elsewhere/agents_test" }, alice],
+    ["the runtime was claimed", { ...published, "agent-store-owner": "unclaimed" }, alice],
+    ["no owner was recorded", { token: published.token, "agent-store-dsn": published["agent-store-dsn"] }, alice],
+    ["the desired owner differs", published, { ...alice, ownerUid: "uid-bob", builderSlug: "bob" }],
+    ["the published endpoint is unreadable", { ...published, "agent-store-dsn": "not a url" }, alice],
+    ["the published password has a bad escape", { ...published, "agent-store-dsn": "postgresql://octogee_gateway_fresh:%E0%A4%A@private/agents_test" }, alice],
+  ])("provisions again when %s", async (_reason, secret, gateway) => {
+    const h = harness(secret);
+    const publication = capturePublication(h, secret);
+    h.readGateway.mockResolvedValue(gateway);
+    await h.stages.ensureGatewayCredentials(request);
+    expect(h.provisionAgentStore).toHaveBeenCalledOnce();
+    expect(publication.patch).toContainEqual({ op: "add", path: "/data/agent-store-owner", value: b64(`builder:${gateway.ownerUid}`) });
+  });
+
+  it.each([
+    { desiredStatus: "retired" },
+    { retirementClaim: { operationId: "retire" } },
+    { ownerUid: "uid-bob", builderSlug: "bob" },
+    { gatewayClass: "shared" as const, ownerUid: null, builderSlug: null },
+  ])("refuses reuse when the gateway changed during the secret read: %j", async change => {
+    const h = harness(published);
+    h.readGateway.mockResolvedValueOnce(alice).mockResolvedValue({ ...alice, ...change });
+    await expect(h.stages.ensureGatewayCredentials(request)).rejects.toThrow("retired or changed");
+    expect(h.provisionAgentStore).not.toHaveBeenCalled();
+    expect(h.runKubectl.mock.calls.every(([args]) => args[0] === "get")).toBe(true);
+  });
+
+  it.each([{ desiredStatus: "retired" }, { retirementClaim: { operationId: "retire" } }])("refuses a retired runtime even when its credentials are already published: %j", async retirement => {
+    const h = harness(published);
+    h.readGateway.mockResolvedValue({ ...alice, ...retirement });
+    await expect(h.stages.ensureGatewayCredentials(request)).rejects.toThrow("retired or changed");
+    expect(h.provisionAgentStore).not.toHaveBeenCalled();
+    expect(h.runKubectl.mock.calls.every(([args]) => args[0] === "get")).toBe(true);
   });
 });

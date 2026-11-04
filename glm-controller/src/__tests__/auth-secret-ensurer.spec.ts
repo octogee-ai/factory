@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   createAuthSecretEnsurer,
-  readGatewayAuthToken,
+  readGatewayAuthSecret,
   type KubectlSubprocess,
 } from "../auth-secret-ensurer";
 
@@ -189,27 +189,39 @@ describe("createAuthSecretEnsurer", () => {
   });
 });
 
-describe("readGatewayAuthToken", () => {
-  it("reads and base64-decodes the per-gateway token from the K8s secret", async () => {
-    const { runKubectl, calls } = mockKubectl([
-      { stdout: Buffer.from("token-for-gw").toString("base64"), code: 0 },
-    ]);
+describe("readGatewayAuthSecret", () => {
+  const b64 = (value: string) => Buffer.from(value).toString("base64");
+  const request = { namespace: "octogee-test", gatewayId: "gw-test-op" };
 
-    await expect(
-      readGatewayAuthToken(
-        { runKubectl },
-        { namespace: "octogee-test", gatewayId: "gw-test-op" },
-      ),
-    ).resolves.toBe("token-for-gw");
+  it("reads and base64-decodes the token and the published agent-store credentials from the K8s secret", async () => {
+    const data = { token: b64("token-for-gw"), "agent-store-dsn": b64("postgresql://gw:token-for-gw@private/agents"), "agent-store-owner": b64("shared") };
+    const { runKubectl, calls } = mockKubectl([{ stdout: JSON.stringify({ data }), code: 0 }]);
 
-    expect(calls[0]).toEqual([
-      "get",
-      "secret",
-      "gateway-auth-token-gw-test-op",
-      "-n",
-      "octogee-test",
-      "-o",
-      "jsonpath={.data.token}",
-    ]);
+    await expect(readGatewayAuthSecret({ runKubectl }, request)).resolves.toEqual({
+      token: "token-for-gw",
+      agentStoreDsn: "postgresql://gw:token-for-gw@private/agents",
+      agentStoreOwner: "shared",
+    });
+
+    expect(calls[0]).toEqual(["get", "secret", "gateway-auth-token-gw-test-op", "-n", "octogee-test", "-o", "json"]);
+  });
+
+  it("leaves unpublished agent-store credentials undefined", async () => {
+    const { runKubectl } = mockKubectl([{ stdout: JSON.stringify({ data: { token: b64("token-for-gw") } }), code: 0 }]);
+    await expect(readGatewayAuthSecret({ runKubectl }, request)).resolves.toEqual({ token: "token-for-gw", agentStoreDsn: undefined, agentStoreOwner: undefined });
+  });
+
+  it.each([
+    ["an empty token", JSON.stringify({ data: { token: "" } }), "has no token data"],
+    ["no data", JSON.stringify({ metadata: {} }), "has no token data"],
+    ["unreadable output", "not json", "is not readable"],
+  ])("refuses a secret with %s", async (_shape, stdout, message) => {
+    const { runKubectl } = mockKubectl([{ stdout, code: 0 }]);
+    await expect(readGatewayAuthSecret({ runKubectl }, request)).rejects.toThrow(message);
+  });
+
+  it("surfaces a failed secret read", async () => {
+    const { runKubectl } = mockKubectl([{ stderr: "forbidden", code: 1 }]);
+    await expect(readGatewayAuthSecret({ runKubectl }, request)).rejects.toThrow("failed (code=1): forbidden");
   });
 });
