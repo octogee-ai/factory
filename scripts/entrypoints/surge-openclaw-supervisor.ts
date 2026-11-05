@@ -127,8 +127,14 @@ const OPENCLAW_BINARY = "/usr/local/bin/openclaw";
 
 // Detached: OpenClaw leads its own process group so a stop can reap the whole
 // tree and a supervisor restart can reap an orphaned group by recorded pid.
+const OPENCLAW_STACK_TRACE_LIMIT = "--stack-trace-limit=50";
+
 export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const withFailureStacks: NodeJS.ProcessEnv = { ...env, OPENCLAW_DEBUG: "1" };
+  const withFailureStacks: NodeJS.ProcessEnv = {
+    ...env,
+    OPENCLAW_DEBUG: "1",
+    NODE_OPTIONS: [env.NODE_OPTIONS?.trim(), OPENCLAW_STACK_TRACE_LIMIT].filter(Boolean).join(" "),
+  };
   if (!isPerUserControlIdentity(env)) return withFailureStacks;
   const { OPENCLAW_GATEWAY_TOKEN: podToken, ...rest } = withFailureStacks;
   if ((env.GATEWAY_RUNTIME_KIND === "gce-vm" ||

@@ -62,4 +62,16 @@ describe("surge OpenClaw supervisor process environment", () => {
   ])("asks OpenClaw to print its failure stack for the %s identity", (_identity, source) => {
     expect(openClawProcessEnv({ ...source, OPENCLAW_GATEWAY_TOKEN: "pod-token" }).OPENCLAW_DEBUG).toBe("1");
   });
+
+  it.each([
+    ["shared-operator", { OPENCLAW_CONTROL_IDENTITY: "shared-operator" }],
+    ["per-user", { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_RUNTIME_KIND: "gce-vm" }],
+  ])("widens the failure stack past Node's default frame limit for the %s identity", (_identity, source) => {
+    expect(openClawProcessEnv({ ...source, OPENCLAW_GATEWAY_TOKEN: "pod-token" }).NODE_OPTIONS).toBe("--stack-trace-limit=50");
+  });
+
+  it("keeps inherited Node options ahead of the stack-trace limit", () => {
+    const env = openClawProcessEnv({ OPENCLAW_CONTROL_IDENTITY: "shared-operator", NODE_OPTIONS: "--max-old-space-size=4096" });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=4096 --stack-trace-limit=50");
+  });
 });
