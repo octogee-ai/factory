@@ -58,8 +58,15 @@ if [[ "$run_label" =~ ^[0-9]+-[0-9]+$ ]]; then
   ci_lifetime_args=(--max-run-duration=2h --instance-termination-action=DELETE)
 fi
 work="$(mktemp -d)"
+ssh_options=(-i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o ControlMaster=auto -o ControlPath="$work/ssh" -o ControlPersist=60)
+close_ssh() {
+  if [[ -n "${IP:-}" && -S "$work/ssh" ]]; then
+    ssh "${ssh_options[@]}" -O exit "octo@$IP" || log "could not close SSH master"
+  fi
+}
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) [test]" "$*"; }
 cleanup() {
+  close_ssh
   if [[ "$KEEP" == 1 ]]; then log "keeping $NAME"; else
     gcloud compute instances delete "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null 2>&1 || true
     log "deleted $NAME"
@@ -70,7 +77,7 @@ trap cleanup EXIT
 
 ssh-keygen -q -t ed25519 -N "" -C "octogee-computer-test" -f "$work/key"
 printf 'octo:%s\n' "$(cat "$work/key.pub")" > "$work/ssh-keys"
-vssh() { ssh -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 "octo@$IP" "$@"; }
+vssh() { ssh "${ssh_options[@]}" "octo@$IP" "$@"; }
 wait_ssh() {
   local deadline=$(( $(date +%s) + $1 ))
   while (( $(date +%s) < deadline )); do vssh true 2>/dev/null && return 0; sleep 3; done
@@ -109,13 +116,13 @@ fi
 
 check_gateway_image() {
   local image
-  image="$(vssh 'set -e; image="$(cat /etc/octogee-gateway-image)"; sudo docker image inspect "$image" >/dev/null; printf "%s\n" "$image"')" || { echo "gateway image preload is missing" >&2; return 1; }
+  image="$(vssh 'set -e; image="$(cat /etc/octogee-gateway-image)"; sudo docker image inspect "$image" >/dev/null; printf "%s\n" "$image"')" || { echo "could not verify gateway image preload" >&2; return 1; }
   [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ && "$image" == "${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}" ]] || { echo "gateway image preload does not match the requested digest" >&2; return 1; }
 }
 check_gateway_image
 check_edge_image() {
   local image
-  image="$(vssh 'set -e; image="$(cat /etc/octogee-gateway-edge-image)"; sudo docker image inspect "$image" >/dev/null; printf "%s\n" "$image"')" || { echo "gateway-edge image preload is missing" >&2; return 1; }
+  image="$(vssh 'set -e; image="$(cat /etc/octogee-gateway-edge-image)"; sudo docker image inspect "$image" >/dev/null; printf "%s\n" "$image"')" || { echo "could not verify gateway-edge image preload" >&2; return 1; }
   [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/gateway-edge@sha256:[a-f0-9]{64}$ && "$image" == "${OCTOGEE_DESKTOP_EDGE_IMAGE:?immutable gateway-edge image is required}" ]] || { echo "gateway-edge image preload does not match the requested digest" >&2; return 1; }
 }
 check_edge_image
@@ -154,7 +161,7 @@ desk="$(vssh 'bash -s desk' < "$HERE/../acceptance/desk.sh")" \
 familiar="$(vssh 'bash -s familiar' < "$HERE/../acceptance/familiar-desktop.sh")" \
   || { echo "familiar desktop acceptance failed" >&2; vssh 'octo-desktop-style status; hyprctl configerrors; tail -20 ~/.local/state/octo-desktop/hyprland.log' >&2 || true; exit 1; }
 
-vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "octo@$IP:~/screenshot.png" "$work/screenshot.png"
+vssh 'curl -fsS http://127.0.0.1:7777/screenshot -o ~/screenshot.png' && scp "${ssh_options[@]}" "octo@$IP:~/screenshot.png" "$work/screenshot.png"
 chromium_title="$(vssh 'curl -fsS http://127.0.0.1:7777/windows' | jq -r '.[] | select(.class | test("chrom";"i")) | .title' | head -1)"
 read -r -a ihdr < <(od -An -tu1 -j16 -N8 "$work/screenshot.png")
 screenshot_size="$(( (ihdr[0] << 24) | (ihdr[1] << 16) | (ihdr[2] << 8) | ihdr[3] ))x$(( (ihdr[4] << 24) | (ihdr[5] << 16) | (ihdr[6] << 8) | ihdr[7] ))"
@@ -164,6 +171,7 @@ persist=skipped
 if [[ "$STOP_START" == 1 ]]; then
   vssh "echo persist-$(date +%s) > ~/persist-marker"
   marker="$(vssh 'cat ~/persist-marker')"
+  close_ssh
   gcloud compute instances stop "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null
   t_start=$(date +%s)
   start_instance_with_capacity_retry "$NAME" --zone "$ZONE" --project "$PROJECT" --quiet >/dev/null

@@ -6,11 +6,14 @@ import unittest
 
 
 MOCK = r'''#!/usr/bin/env python3
-import json, os, pathlib, struct, sys
+import json, os, pathlib, socket, struct, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 case = os.environ['ACCEPTANCE_CASE']
+connection = pathlib.Path(os.environ['ACCEPTANCE_MARKER'] + '.connection')
 if name == 'gcloud':
+    if 'stop' in args and case == 'ssh-new-connection-timeout':
+        assert not connection.exists(), 'SSH master must close before stopping the VM'
     if args[:3] == ['compute', 'instances', 'create']:
         ci = os.environ['OCTOGEE_IMAGE_RUN_ID'] != 'manual'
         assert ('--max-run-duration=2h' in args) == ci
@@ -24,9 +27,30 @@ if name == 'gcloud':
     if 'describe' in args: assert '--zone' in args and args[args.index('--zone') + 1] == os.environ['ACCEPTANCE_EXPECTED_ZONE']
     if 'describe' in args: print('192.0.2.1')
 elif name == 'scp':
+    if case == 'ssh-new-connection-timeout':
+        assert connection.exists() and 'ControlPath=' + connection.read_text() in args
     pathlib.Path(args[-1]).write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * 8 + struct.pack('>II', 1440, 900))
 elif name == 'ssh':
     command = args[-1]
+    if case == 'ssh-new-connection-timeout':
+        control = next((arg.removeprefix('ControlPath=') for arg in args if arg.startswith('ControlPath=')), None)
+        if '-O' in args and args[args.index('-O') + 1] == 'exit':
+            pathlib.Path(connection.read_text()).unlink()
+            connection.unlink()
+            sys.exit(0)
+        if connection.exists():
+            if control != connection.read_text():
+                print('ssh: connect to host port 22: Connection timed out', file=sys.stderr)
+                sys.exit(255)
+        else:
+            connection.write_text(control or 'no-master')
+            if control:
+                assert 'ControlMaster=auto' in args
+                master = socket.socket(socket.AF_UNIX)
+                master.bind(control)
+    if case == 'ssh-preload-timeout' and '/etc/octogee-gateway-image' in command:
+        print('ssh: connect to host port 22: Connection timed out', file=sys.stderr)
+        sys.exit(255)
     if command == 'bash -s':
         if case == 'no-accessibility':
             print('Chromium never registered on the accessibility bus', file=sys.stderr)
@@ -100,13 +124,29 @@ class ImageAcceptanceTests(unittest.TestCase):
                 path = root / name
                 path.write_text(MOCK)
                 path.chmod(0o755)
-            return subprocess.run(
+            result = subprocess.run(
                 ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', *(['--smoke'] if smoke else ['--stop-start']), '--zone', 'us-central1-a', '--fallback-zones', 'us-central1-b,us-central1-c'],
                 env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
                      'ACCEPTANCE_CASE': case, 'OCTOGEE_IMAGE_RUN_ID': '123-1' if ci else 'manual', 'ACCEPTANCE_MARKER': str(root / 'marker'),
                      'ACCEPTANCE_EXPECTED_ZONE': expected_zone, 'OCTOGEE_DESKTOP_EDGE_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + 'b' * 64, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64},
                 capture_output=True, text=True, timeout=15,
             )
+            if case == 'ssh-new-connection-timeout' and result.returncode == 0:
+                self.assertFalse((root / 'marker.connection').exists(), 'SSH master must close on exit')
+            return result
+
+    def test_checks_reuse_ready_ssh_connection_and_reopen_after_restart(self):
+        for smoke in (True, False):
+            with self.subTest(smoke=smoke):
+                result = self.run_acceptance('ssh-new-connection-timeout', smoke=smoke)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_ssh_failure_is_not_reported_as_missing_image(self):
+        result = self.run_acceptance('ssh-preload-timeout', smoke=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Connection timed out', result.stderr)
+        self.assertIn('could not verify gateway image preload', result.stderr)
+        self.assertNotIn('preload is missing', result.stderr)
 
     def test_smoke_checks_boot_and_images_without_ui_or_restart_suite(self):
         for case in ['success', 'familiar-broken', 'missing-resize', 'missing-profile']:
