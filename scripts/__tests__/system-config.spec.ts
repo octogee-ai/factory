@@ -430,6 +430,35 @@ describe("system_config restore", () => {
     expect(restored.talk).toEqual({ agentId: "octogee-robert-coach" });
   });
 
+  it("leaves a detached coach out of a retained Builder roster so the import's agents.create brings it back", async () => {
+    const configPath = path.join(repoDir, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          authInheritance: { agentId: "octogee-unmatched-route" },
+          systemAgent: { agentId: "octogee-unmatched-route" },
+        },
+        entries: {
+          "octogee-unmatched-route": { name: "Unmatched Mattermost route" },
+        },
+      },
+    }));
+    fs.writeFileSync(path.join(repoDir, ".octogee.json"), `${JSON.stringify({ schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, lastMigration: "initial" })}\n`);
+    const env = withBuilderClaim({
+      GATEWAY_CLASS: "builder",
+      GATEWAY_ID: "robert-m-2271ce5a",
+      API_PUBLIC_URL: "https://api.octogee.com",
+    }, "robert");
+
+    await restoreSystemConfigForSlug("robert", { openclawDir, env, log: () => {} });
+
+    const restored = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(Object.keys(restored.agents.entries)).toEqual(["octogee-unmatched-route"]);
+    expect(restored.agents.defaults.systemAgent).toEqual({ agentId: "octogee-unmatched-route" });
+    expect(restored.agents.ownership).toBe("explicit");
+  });
+
   it("refuses to seed an isolated gateway that cannot resolve its own api origin", async () => {
     templatePath = path.resolve(__dirname, "../../infra/gateway/openclaw.template.json");
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>

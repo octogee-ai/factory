@@ -796,8 +796,10 @@ function repointAgentDefault(holder: UnknownRecord, key: string, from: string, t
 
 // OpenClaw materializes its implicit `main` agent the first time a roster-less
 // config gains an explicit roster, and the hello's default agent is the first
-// roster entry. A Builder therefore boots with its coach already first and the
-// model-less anchor last, so Model Setup never sees `main`.
+// roster entry. A fresh Builder therefore boots with its coach already first and
+// the model-less anchor last, so Model Setup never sees `main`. A rostered config
+// without its coach was detached by a return: OpenClaw fences that agent id until
+// the import's agents.create claims it, so the restore never re-declares it.
 export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: string): boolean {
   const agents = asRecord(config.agents) ?? {};
   config.agents = agents;
@@ -806,7 +808,22 @@ export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: s
   const before = JSON.stringify({ ownership: agents.ownership, ids: roster.map((item) => item.id) });
 
   const kept = roster.filter((item) => item.id !== LEGACY_IMPLICIT_AGENT_ID);
-  const coach = kept.find((item) => item.id === coachId) ?? {
+  const coach = kept.find((item) => item.id === coachId) ?? (kept.length === 0 ? seedBuilderCoach(slug, coachId) : undefined);
+  if (coach && coach.entry.model === undefined) coach.entry.model = DEFAULT_BUILDER_AGENT_MODEL_REF;
+  const { id: _anchorId, ...anchorSeed } = buildSafeDefaultAgent();
+  const anchor = kept.find((item) => item.id === SAFE_DEFAULT_AGENT_ID) ?? { id: SAFE_DEFAULT_AGENT_ID, entry: anchorSeed };
+  const others = kept.filter((item) => item.id !== coachId && item.id !== SAFE_DEFAULT_AGENT_ID);
+  const ordered = [...(coach ? [coach] : []), ...others, anchor];
+  writeRosterEntries(agents, form, ordered);
+  agents.ownership = "explicit";
+  const defaultsChanged = reconcileBuilderRosterDefaults(config, agents, coach ? coachId : SAFE_DEFAULT_AGENT_ID);
+
+  const after = JSON.stringify({ ownership: agents.ownership, ids: ordered.map((item) => item.id) });
+  return before !== after || defaultsChanged;
+}
+
+function seedBuilderCoach(slug: string, coachId: string): RosterEntry {
+  return {
     id: coachId,
     entry: {
       workspace: path.join(CUSTOMERS_DIR, slug),
@@ -814,30 +831,22 @@ export function ensureBuilderRosterLeadsWithCoach(config: UnknownRecord, slug: s
       model: DEFAULT_BUILDER_AGENT_MODEL_REF,
     },
   };
-  if (coach.entry.model === undefined) coach.entry.model = DEFAULT_BUILDER_AGENT_MODEL_REF;
-  const { id: _anchorId, ...anchorSeed } = buildSafeDefaultAgent();
-  const anchor = kept.find((item) => item.id === SAFE_DEFAULT_AGENT_ID) ?? { id: SAFE_DEFAULT_AGENT_ID, entry: anchorSeed };
-  const others = kept.filter((item) => item.id !== coachId && item.id !== SAFE_DEFAULT_AGENT_ID);
-  const ordered = [coach, ...others, anchor];
-  writeRosterEntries(agents, form, ordered);
-  agents.ownership = "explicit";
+}
 
+function reconcileBuilderRosterDefaults(config: UnknownRecord, agents: UnknownRecord, defaultAgentId: string): boolean {
   const defaults = asRecord(agents.defaults) ?? {};
   agents.defaults = defaults;
-  let defaultsChanged = false;
+  let changed = false;
   if (asRecord(defaults.authInheritance)?.agentId !== SAFE_DEFAULT_AGENT_ID) {
     defaults.authInheritance = { agentId: SAFE_DEFAULT_AGENT_ID };
-    defaultsChanged = true;
+    changed = true;
   }
   const systemAgent = asRecord(defaults.systemAgent) ?? {};
-  if (systemAgent.agentId !== coachId) {
-    defaults.systemAgent = { ...systemAgent, agentId: coachId };
-    defaultsChanged = true;
+  if (defaultAgentId !== SAFE_DEFAULT_AGENT_ID && systemAgent.agentId !== defaultAgentId) {
+    defaults.systemAgent = { ...systemAgent, agentId: defaultAgentId };
+    changed = true;
   }
-  defaultsChanged = repointAgentDefault(config, "talk", LEGACY_IMPLICIT_AGENT_ID, coachId) || defaultsChanged;
-
-  const after = JSON.stringify({ ownership: agents.ownership, ids: ordered.map((item) => item.id) });
-  return before !== after || defaultsChanged;
+  return repointAgentDefault(config, "talk", LEGACY_IMPLICIT_AGENT_ID, defaultAgentId) || changed;
 }
 
 function ensureBuilderRosterAtPath(configPath: string, slug: string, log: (msg: string) => void): void {
