@@ -11,7 +11,7 @@ const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-it("tries normal boot first, repairs a failed boot once, and starts a changed build without proactive Doctor", async () => {
+it("restarts a failed boot as-is without Doctor, reports the installed build with health, and starts a changed build the same way", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "shared-openclaw-boot-")); roots.push(root);
   const database = path.join(root, "agents/octogee-unmatched-route/agent/openclaw-agent.sqlite");
   await fs.mkdir(path.dirname(database), { recursive: true });
@@ -25,31 +25,23 @@ it("tries normal boot first, repairs a failed boot once, and starts a changed bu
 import fs from 'node:fs';import {DatabaseSync} from 'node:sqlite';
 const root=process.env.QUAL_BOOT_ROOT, database=root+'/agents/octogee-unmatched-route/agent/openclaw-agent.sqlite';
 const append=value=>fs.appendFileSync(root+'/order.log',value+'\\n');
-if(process.argv[2]==='doctor'){
- if(fs.existsSync(root+'/writer-active')) throw Error('Doctor must not run while the prior gateway writer is active');
- const db=new DatabaseSync(database);db.exec('PRAGMA user_version=25');db.close();append('doctor');process.exit(0);
-}
+if(process.argv[2]==='doctor'){append('doctor');console.error('Doctor must never run from the boot hook');process.exit(1);}
 const db=new DatabaseSync(database),version=db.prepare('PRAGMA user_version').get().user_version;db.close();
 append('gateway-'+version);
-if(version!==25){console.error('configured default schema24 requires canonical Doctor');process.exit(1);}
+if(!fs.existsSync(root+'/booted-once')){fs.writeFileSync(root+'/booted-once','true');console.error('transient startup failure');process.exit(1);}
 fs.writeFileSync(root+'/writer-active','true');fs.writeFileSync(root+'/healthy','true');
 process.on('SIGTERM',()=>{fs.rmSync(root+'/writer-active',{force:true});process.exit(0)});
 setInterval(()=>{},1000);
 `);
   const hook = path.join(root, "boot-hook.mts");
   await fs.writeFile(hook, `
-import fs from 'node:fs';import {execFileSync} from 'node:child_process';
+import fs from 'node:fs';
 import {runOpenClawBootPhase} from ${JSON.stringify(path.join(repo, "scripts/entrypoints/openclaw-boot-sentinel.ts"))};
 const root=process.env.QUAL_BOOT_ROOT,file=root+'/sentinel';
 await runOpenClawBootPhase(process.argv[2],{log:()=>{},openclawBinary:root+'/openclaw',
-client:{claimOpenClawBoot:async({openclawBuild})=>{const prior=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
- const healthy=fs.existsSync(root+'/healthy-build')?fs.readFileSync(root+'/healthy-build','utf8'):undefined;
- if(!prior){fs.writeFileSync(file,'starting');return{action:'start'};}
- if(prior==='starting'){fs.writeFileSync(file,'doctor-attempted');return{action:'doctor'};}
- return{action:'start'};},
-completeOpenClawDoctor:async()=>{},completeOpenClawBoot:async({openclawBuild})=>{fs.rmSync(file,{force:true});
- fs.writeFileSync(root+'/healthy-build',openclawBuild);fs.appendFileSync(root+'/order.log','healthy\\n');}},
-run:async(command,args)=>{execFileSync(command,args,{stdio:'inherit'});}});
+client:{claimOpenClawBoot:async()=>{fs.appendFileSync(root+'/order.log','claim\\n');return{action:'start'};},
+completeOpenClawDoctor:async()=>{},completeOpenClawBoot:async({openclawBuild})=>{
+ fs.writeFileSync(root+'/healthy-build',openclawBuild);fs.appendFileSync(root+'/order.log','healthy\\n');}}});
 `);
   const tsx = path.join(root, "tsx");
   await fs.writeFile(tsx, `#!/bin/sh\ncase "$1" in\n*prepare-openclaw-sqlite-journals.ts) exit 0;;\n*openclaw-boot-sentinel.ts) shift; exec ${quote(process.execPath)} --import ${quote(path.join(repo, "scripts/node_modules/tsx/dist/loader.mjs"))} ${quote(hook)} "$@";;\n*) exit 2;;\nesac\n`, { mode: 0o700 });
@@ -70,19 +62,20 @@ run:async(command,args)=>{execFileSync(command,args,{stdio:'inherit'});}});
   const second = boot(); expect(second.status, second.stderr).toBe(0);
   await installBuild("b".repeat(40));
   const upgraded = boot(); expect(upgraded.status, upgraded.stderr).toBe(0);
+  expect(await fs.readFile(path.join(root, "healthy-build"), "utf8")).toBe("b".repeat(40));
   const verified = new DatabaseSync(database, { readOnly: true });
-  try { expect(verified.prepare("PRAGMA user_version").get()?.user_version).toBe(25);
+  try { expect(verified.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
     expect(verified.prepare("SELECT body FROM history").get()?.body).toBe("retained default state"); }
   finally { verified.close(); }
   expect((await fs.readFile(path.join(root, "order.log"), "utf8")).trim().split("\n"))
-    .toEqual(["gateway-24", "doctor", "gateway-25", "healthy", "gateway-25", "healthy"]);
+    .toEqual(["claim", "gateway-24", "claim", "gateway-24", "healthy", "claim", "gateway-24", "healthy"]);
 });
 
 
 it("uses the installed build identity when in-place recovery retains the old pod image tag", async () => {
   const client = { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "start" }), completeOpenClawDoctor: vi.fn(async () => undefined),
       completeOpenClawBoot: vi.fn().mockResolvedValue(undefined) };
-  const input = { client, run: vi.fn(async () => undefined), installedOpenClawBuild: async () => "c".repeat(40),
+  const input = { client, installedOpenClawBuild: async () => "c".repeat(40),
     env: { GATEWAY_ID: "shared-fixture", BUILD_SHA: "new-build-sha", GATEWAY_IMAGE_TAG: "old-pod-tag" } };
   await runOpenClawBootPhase("before-start", input);
   await runOpenClawBootPhase("healthy", input);
@@ -90,11 +83,9 @@ it("uses the installed build identity when in-place recovery retains the old pod
   expect(client.completeOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "new-build-sha", openclawBuild: "c".repeat(40) });
 });
 
-it("fails the pre-start phase when the claimed canonical repair fails", async () => {
+it("fails the pre-start phase on a Doctor claim without a source request rather than repairing the home", async () => {
   const client = { claimOpenClawBoot: vi.fn().mockResolvedValue({ action: "doctor" }), completeOpenClawDoctor: vi.fn(async () => undefined),
       completeOpenClawBoot: vi.fn() };
-  const run = vi.fn().mockRejectedValue(new Error("canonical repair failed"));
-  await expect(runOpenClawBootPhase("before-start", { client, run, log: () => {}, installedOpenClawBuild: async () => "c".repeat(40), env: { GATEWAY_ID: "shared-fixture", BUILD_SHA: "build-sha" } })).rejects.toThrow("canonical repair failed");
-  expect(run).toHaveBeenCalledWith("/usr/local/bin/openclaw", ["doctor", "--fix", "--yes", "--non-interactive"]);
+  await expect(runOpenClawBootPhase("before-start", { client, log: () => {}, installedOpenClawBuild: async () => "c".repeat(40), env: { GATEWAY_ID: "shared-fixture", BUILD_SHA: "build-sha" } })).rejects.toThrow("OpenClaw boot claim requested Doctor without a source request");
   expect(client.completeOpenClawBoot).not.toHaveBeenCalled();
 });

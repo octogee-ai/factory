@@ -83,5 +83,5 @@ export async function prepareGatewayStateStore(input: {
   const waitForOwner = input.waitForOwner ?? waitForGatewayOwnerRelease;
   await waitForOwner(ownerInput);
   if (fs.existsSync(clientCredentialStorePath(stateRoot))) return;
-  input.log("[state-store] local client credentials are missing; trying normal startup before the one-shot boot Doctor");
+  input.log("[state-store] local client credentials are missing; OpenClaw prepares new local client identities at startup");
 }

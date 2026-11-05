@@ -128,8 +128,9 @@ const OPENCLAW_BINARY = "/usr/local/bin/openclaw";
 // Detached: OpenClaw leads its own process group so a stop can reap the whole
 // tree and a supervisor restart can reap an orphaned group by recorded pid.
 export function openClawProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  if (!isPerUserControlIdentity(env)) return { ...env };
-  const { OPENCLAW_GATEWAY_TOKEN: podToken, ...rest } = env;
+  const withFailureStacks: NodeJS.ProcessEnv = { ...env, OPENCLAW_DEBUG: "1" };
+  if (!isPerUserControlIdentity(env)) return withFailureStacks;
+  const { OPENCLAW_GATEWAY_TOKEN: podToken, ...rest } = withFailureStacks;
   if ((env.GATEWAY_RUNTIME_KIND === "gce-vm" ||
     (env.GATEWAY_CLASS === "builder" && env.GATEWAY_RUNTIME_KIND === "cluster" && env.GATEWAY_COMPUTER_DESKTOP === "x11")) && podToken) {
     return { ...rest, OPENCLAW_GATEWAY_PASSWORD: podToken };
@@ -875,7 +876,6 @@ export function createSurgeOpenClawBootWatcher(input: {
   releaseKey: string;
   log: (message: string) => void;
   env?: NodeJS.ProcessEnv;
-  run?: (command: string, args: readonly string[]) => Promise<void>;
   installedOpenClawBuild?: () => Promise<string>;
 }): OpenClawBootWatcher {
   const env = input.env ?? process.env;

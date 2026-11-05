@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { FieldValue, type DocumentData, type DocumentReference, type Firestore, type Transaction } from "firebase-admin/firestore";
+import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
 
 import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
@@ -117,49 +117,6 @@ function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sour
     schedulerStateRecovery: context.schedulerStateRecovery, postgresAgentStores: context.postgresAgentStores };
 }
 
-function claimReleaseSentinel(
-  txn: Transaction,
-  runtimeRef: DocumentReference,
-  runtime: DocumentData | undefined,
-  input: OpenClawBootInput,
-  at: number,
-): FleetBrokerOpenClawBootClaim {
-  const sentinel = runtime?.openclawBootSentinel as
-    | Record<string, unknown>
-    | undefined;
-  if (sentinel?.releaseKey === input.releaseKey && sentinel.state === "starting") {
-    txn.update(runtimeRef, {
-      openclawBootSentinel: {
-        releaseKey: input.releaseKey,
-        state: "doctor-attempted",
-        podUid: input.podUid,
-        updatedAt: at,
-      },
-    });
-    return { action: "doctor" };
-  }
-  if (sentinel?.releaseKey !== input.releaseKey) {
-    txn.update(runtimeRef, {
-      openclawBootSentinel: {
-        releaseKey: input.releaseKey,
-        state: "starting",
-        podUid: input.podUid,
-        updatedAt: at,
-      },
-    });
-
-  } else if (
-    sentinel.state === "doctor-attempted"
-    && sentinel.podUid !== input.podUid
-  ) {
-    txn.update(runtimeRef, {
-      "openclawBootSentinel.podUid": input.podUid,
-      "openclawBootSentinel.updatedAt": at,
-    });
-  }
-  return { action: "start" };
-}
-
 export function createOpenClawBootSentinelStore(
   db: Firestore,
   now: () => number,
@@ -182,8 +139,7 @@ export function createOpenClawBootSentinelStore(
           });
           return { action: "doctor" as const, sourceDoctor };
         }
-        const runtime = runtimeSnap.data();
-        return claimReleaseSentinel(txn, runtimeRef, runtime, input, now());
+        return { action: "start" as const };
       });
     },
     async assertDoctor(input) {
@@ -220,18 +176,7 @@ export function createOpenClawBootSentinelStore(
         if (!runtimeSnap.exists) return false;
         const context = await sourceDoctorContext(db, txn, input);
         if (context && !sourceDoctorCompleted(context, input)) throw new Error("source Doctor success acknowledgement is required before health");
-        const sentinel = runtimeSnap.data()?.openclawBootSentinel as
-          | Record<string, unknown>
-          | undefined;
-        const update: DocumentData = {};
-        if (
-          sentinel?.releaseKey === input.releaseKey
-          && sentinel.podUid === input.podUid
-        ) {
-          update.openclawBootSentinel = FieldValue.delete();
-        }
-        if (input.openclawBuild) update.openclawHealthyBuild = input.openclawBuild;
-        if (Object.keys(update).length > 0) txn.update(runtimeRef, update);
+        if (input.openclawBuild) txn.update(runtimeRef, { openclawHealthyBuild: input.openclawBuild });
         return true;
       });
     },

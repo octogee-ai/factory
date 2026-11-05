@@ -55,4 +55,11 @@ describe("surge OpenClaw supervisor process environment", () => {
 
     expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_PASSWORD");
   });
+
+  it.each([
+    ["shared-operator", { OPENCLAW_CONTROL_IDENTITY: "shared-operator" }],
+    ["per-user", { OPENCLAW_CONTROL_IDENTITY: "per-user", GATEWAY_RUNTIME_KIND: "gce-vm" }],
+  ])("asks OpenClaw to print its failure stack for the %s identity", (_identity, source) => {
+    expect(openClawProcessEnv({ ...source, OPENCLAW_GATEWAY_TOKEN: "pod-token" }).OPENCLAW_DEBUG).toBe("1");
+  });
 });

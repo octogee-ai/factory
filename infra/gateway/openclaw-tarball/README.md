@@ -42,8 +42,9 @@ canonical recut, not a parallel runtime update path.
    Materialize both gateway classes through their real policy/pre-boot writers,
    including generated agents, and validate them against the exact built gateway.
    An isolated Doctor comparison must not need to translate default config keys;
-   correct their writers during this recut instead. Keep full Doctor off healthy
-   boots, without removing bounded failed-boot recovery or driver-artifact checks.
+   correct their writers during this recut instead. Keep Doctor off every boot:
+   Octogee runs no automatic failed-boot repair. Explicit source repair and
+   driver-artifact checks stay.
 4. Commit the final source and run the full build. `pnpm build package` adds
    `clean:dist` before the same full-build steps, removing E2E/QA artifact residue. Verify
    `dist/build-info.json.commit` equals the clean checkout's HEAD. Use the

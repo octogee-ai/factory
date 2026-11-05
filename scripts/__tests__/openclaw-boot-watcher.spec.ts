@@ -5,7 +5,6 @@ import { createOpenClawBootWatcher } from "../lib/openclaw-boot-watcher.js";
 
 describe("OpenClaw boot watcher", () => {
   it("records an ordinary first start without running Doctor", async () => {
-    const run = vi.fn(async () => undefined);
     const client = {
       claimOpenClawBoot: vi.fn(async () => ({ action: "start" as const })),
       completeOpenClawDoctor: vi.fn(async () => undefined),
@@ -15,49 +14,25 @@ describe("OpenClaw boot watcher", () => {
       client,
       releaseKey: "release@sha256:abc",
       log: () => undefined,
-      run,
     });
 
     await watcher.beforeStart();
 
     expect(client.claimOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc" });
-    expect(run).not.toHaveBeenCalled();
   });
 
-  it("runs the claimed Doctor repair exactly once with the requested command", async () => {
-    const run = vi.fn(async () => undefined);
-    const client = {
-      claimOpenClawBoot: vi.fn(async () => ({ action: "doctor" as const })),
-      completeOpenClawDoctor: vi.fn(async () => undefined),
-      completeOpenClawBoot: vi.fn(async () => undefined),
-    };
-    const watcher = createOpenClawBootWatcher({
-      client,
-      releaseKey: "release@sha256:abc",
-      log: () => undefined,
-      run,
-    });
-
-    await watcher.beforeStart();
-
-    expect(run).toHaveBeenCalledOnce();
-    expect(run).toHaveBeenCalledWith("openclaw", ["doctor", "--fix", "--yes", "--non-interactive"]);
-  });
-
-  it("propagates a failed one-shot Doctor attempt", async () => {
-    const failure = new Error("doctor failed");
+  it("refuses a Doctor claim that names no source request instead of repairing the home", async () => {
     const watcher = createOpenClawBootWatcher({
       client: {
         claimOpenClawBoot: vi.fn(async () => ({ action: "doctor" as const })),
         completeOpenClawDoctor: vi.fn(async () => undefined),
-      completeOpenClawBoot: vi.fn(async () => undefined),
+        completeOpenClawBoot: vi.fn(async () => undefined),
       },
       releaseKey: "release@sha256:abc",
       log: () => undefined,
-      run: vi.fn(async () => { throw failure; }),
     });
 
-    await expect(watcher.beforeStart()).rejects.toBe(failure);
+    await expect(watcher.beforeStart()).rejects.toThrow("OpenClaw boot claim requested Doctor without a source request");
   });
 
   it("clears the sentinel after health", async () => {
@@ -79,7 +54,6 @@ describe("OpenClaw boot watcher", () => {
 
   it("starts normally when the platform release does not have the sentinel route", async () => {
     const log = vi.fn();
-    const run = vi.fn(async () => undefined);
     const watcher = createOpenClawBootWatcher({
       client: {
         claimOpenClawBoot: vi.fn(async () => {
@@ -90,12 +64,10 @@ describe("OpenClaw boot watcher", () => {
       },
       releaseKey: "release@sha256:abc",
       log,
-      run,
     });
 
     await watcher.beforeStart();
 
-    expect(run).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("starting normally"));
   });
 
@@ -159,16 +131,14 @@ describe("operator-requested source Doctor", () => {
       completeOpenClawBoot: vi.fn(),
       completeOpenClawDoctor: vi.fn(async () => { order.push("ack"); }),
     };
-    const run = vi.fn(async () => { order.push("doctor"); });
     const repairSourceDoctor = vi.fn(async () => { order.push("doctor"); });
-    return { client: { ...client, assertOpenClawDoctor: vi.fn(async () => {}) }, run, repairSourceDoctor, order };
+    return { client: { ...client, assertOpenClawDoctor: vi.fn(async () => {}) }, repairSourceDoctor, order };
   }
   it("rejects an explicit repair without PostgreSQL authority before Native effects", async () => {
     const f = fixture();
     f.client.claimOpenClawBoot.mockResolvedValue({ action: "doctor", sourceDoctor: { requestId: "repair", agentIds: sourceDoctor.agentIds } });
     await expect(createOpenClawBootWatcher({ ...f, releaseKey: "qualified", log: () => {} }).beforeStart()).rejects.toThrow("invalid source Doctor request");
     expect(f.repairSourceDoctor).not.toHaveBeenCalled();
-    expect(f.run).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
   it.each([false, true])("uses the exact PostgreSQL owner roster and rechecks broker authority, scheduler repair=%s", async scheduler => {
@@ -184,7 +154,6 @@ describe("operator-requested source Doctor", () => {
       diagnostics: { requestId: sourceDoctor.requestId, releaseKey: "qualified", log: expect.any(Function) },
     });
     expect(assertOpenClawDoctor).toHaveBeenCalledWith({ releaseKey: "qualified", requestId: sourceDoctor.requestId });
-    expect(f.run).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).toHaveBeenCalledOnce();
   });
   it("keeps PostgreSQL startup fenced after authority loss during maintenance", async () => {
@@ -194,7 +163,6 @@ describe("operator-requested source Doctor", () => {
     const repairSourceDoctor = vi.fn(async (_ids, options) => { await options.assertCurrent(); });
     await expect(createOpenClawBootWatcher({ ...f, repairSourceDoctor, client: { ...f.client,
       assertOpenClawDoctor: vi.fn().mockRejectedValue(new Error("custody changed")) }, releaseKey: "qualified", log: () => {} }).beforeStart()).rejects.toThrow("custody changed");
-    expect(f.run).not.toHaveBeenCalled();
     expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
   it("acknowledges the requested repair only after the PostgreSQL repair completes", async () => {
@@ -224,24 +192,22 @@ describe("operator-requested source Doctor", () => {
     const f = fixture(); f.client.claimOpenClawBoot.mockResolvedValue({ action: "wait", sourceDoctor });
     let now = 0;
     await expect(createOpenClawBootWatcher({ ...f, now: () => now, wait: async (ms) => { now += ms; }, releaseKey: "observed-image-build", log: () => {} }).beforeStart()).rejects.toThrow("image proof wait timed out");
-    expect(f.run).not.toHaveBeenCalled(); expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
+    expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
 
   it("does not fall back to ordinary startup if the broker route disappears after an explicit request", async () => {
     const f = fixture(); f.client.claimOpenClawBoot.mockResolvedValueOnce({ action: "wait", sourceDoctor }).mockRejectedValue(new Error("fleet-broker POST /internal/fleet/openclaw-boot/claim → 404"));
     await expect(createOpenClawBootWatcher({ ...f, wait: async () => {}, releaseKey: "observed-image-build", log: () => {} }).beforeStart()).rejects.toThrow("source Doctor claim failed");
-    expect(f.run).not.toHaveBeenCalled(); expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
+    expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
   });
 
 });
 
 describe("OpenClaw build reporting during platform rollout", () => {
   const installed = "b".repeat(40);
-  const upgradeClaim = { action: "doctor" as const, openclawUpgrade: { replacesBuild: "a".repeat(40) } };
-
-  function upgradeFixture(
+  function buildReportFixture(
     claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>,
-    { run = vi.fn(async () => undefined), configured = true }: { run?: ReturnType<typeof vi.fn>; configured?: boolean } = {},
+    { configured = true }: { configured?: boolean } = {},
   ) {
     const client = {
       claimOpenClawBoot: vi.fn(async () => claim),
@@ -252,41 +218,21 @@ describe("OpenClaw build reporting during platform rollout", () => {
       client,
       releaseKey: "release@sha256:abc",
       log: () => undefined,
-      run,
       ...(configured ? { openclaw: { binary: "/opt/fixture/openclaw", installedBuild: async () => installed } } : {}),
     });
-    return { client, run, watcher };
+    return { client, watcher };
   }
 
-  it("tries normal startup when an older platform requests proactive upgrade Doctor", async () => {
-    const f = upgradeFixture(upgradeClaim);
-
-    await f.watcher.beforeStart();
-
-    expect(f.client.claimOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc", openclawBuild: installed });
-    expect(f.run).not.toHaveBeenCalled();
-    expect(f.client.completeOpenClawDoctor).not.toHaveBeenCalled();
-  });
-
-  it("tries normal startup when the platform has no healthy build on record", async () => {
-    const f = upgradeFixture({ action: "doctor", openclawUpgrade: {} });
-
-    await f.watcher.beforeStart();
-
-    expect(f.run).not.toHaveBeenCalled();
-  });
-
   it("starts without Doctor whenever the platform says start, so a failed upgrade is not retried on every boot", async () => {
-    const f = upgradeFixture({ action: "start" });
+    const f = buildReportFixture({ action: "start" });
 
     await f.watcher.beforeStart();
 
     expect(f.client.claimOpenClawBoot).toHaveBeenCalledWith({ releaseKey: "release@sha256:abc", openclawBuild: installed });
-    expect(f.run).not.toHaveBeenCalled();
   });
 
   it("reports the installed OpenClaw build with health", async () => {
-    const f = upgradeFixture({ action: "start" });
+    const f = buildReportFixture({ action: "start" });
 
     await f.watcher.healthy();
 

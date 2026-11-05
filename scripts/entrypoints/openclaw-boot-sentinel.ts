@@ -7,16 +7,15 @@ type BootInput = {
   env?: NodeJS.ProcessEnv;
   client?: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor">;
   log?: (message: string) => void;
-  run?: Parameters<typeof createOpenClawBootWatcher>[0]["run"];
   openclawBinary?: string;
   installedOpenClawBuild?: () => Promise<string>;
 };
 
 function bootIdentity(env: NodeJS.ProcessEnv) {
   const gatewayId = env.GATEWAY_ID?.trim();
-  if (!gatewayId) throw new Error("GATEWAY_ID is required for OpenClaw boot repair");
+  if (!gatewayId) throw new Error("GATEWAY_ID is required for the OpenClaw boot claim");
   const releaseKey = env.BUILD_SHA?.trim() || env.GATEWAY_IMAGE_TAG?.trim();
-  if (!releaseKey) throw new Error("BUILD_SHA or GATEWAY_IMAGE_TAG is required for OpenClaw boot repair");
+  if (!releaseKey) throw new Error("BUILD_SHA or GATEWAY_IMAGE_TAG is required for the OpenClaw boot claim");
   return { gatewayId, revisionId: env.GATEWAY_REVISION_ID?.trim() || gatewayId, releaseKey };
 }
 
@@ -30,7 +29,6 @@ export async function runOpenClawBootPhase(phase: string | undefined, input: Boo
     client: input.client ?? createFleetBrokerClient(gatewayId, revisionId),
     releaseKey,
     log: input.log ?? ((message) => process.stderr.write(`${message}\n`)),
-    run: input.run,
     openclaw: { binary: input.openclawBinary ?? PLATFORM_OPENCLAW_BINARY, installedBuild: input.installedOpenClawBuild },
   });
   if (phase === "before-start") await watcher.beforeStart();

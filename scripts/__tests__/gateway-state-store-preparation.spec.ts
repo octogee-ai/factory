@@ -159,7 +159,7 @@ describe("prepareGatewayStateStore", () => {
     const logs: string[] = [];
     await prepareGatewayStateStore({ log: message => logs.push(message), env: builderEnv(stateRoot("anchor", false)), waitForOwner });
     expect(waitForOwner).toHaveBeenCalledOnce();
-    expect(logs.join("\n")).toContain("trying normal startup");
+    expect(logs.join("\n")).toContain("OpenClaw prepares new local client identities at startup");
   });
 
   it("does not run Doctor or rebind credentials while a foreign owner remains", async () => {

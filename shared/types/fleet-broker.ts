@@ -235,7 +235,6 @@ export type FleetBrokerOpenClawBootAction = "start" | "doctor" | "wait";
 
 export interface FleetBrokerOpenClawBootClaim {
   action: FleetBrokerOpenClawBootAction;
-  openclawUpgrade?: { replacesBuild?: string };
   sourceDoctor?: { requestId: string; agentIds: string[]; schedulerStateRecovery?: true; postgresAgentStores?: Array<{ agentId: string; storeId: string; schema: string }> };
 }
 

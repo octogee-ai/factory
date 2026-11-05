@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-
 import { readInstalledOpenClawBuild } from "./openclaw-installed-build.js";
 import { repairSourceDoctorAgentStores } from "./openclaw-source-doctor.js";
 import type { FleetBrokerClient } from "./fleet-broker-client.js";
@@ -8,8 +6,6 @@ export interface OpenClawBootWatcher {
   beforeStart(): Promise<void>;
   healthy(): Promise<void>;
 }
-
-type RunCommand = (command: string, args: readonly string[]) => Promise<void>;
 
 interface InstalledOpenClaw {
   binary: string;
@@ -22,21 +18,6 @@ const HEALTHY_PATH = "/internal/fleet/openclaw-boot/healthy";
 function missingBrokerRoute(error: unknown, path: string): boolean {
   return error instanceof Error
     && error.message.includes(`fleet-broker POST ${path} → 404`);
-}
-
-function runCommand(command: string, args: readonly string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "inherit" });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const outcome = signal ? `with ${signal}` : `with exit ${code}`;
-      reject(new Error(`${command} ${args.join(" ")} failed ${outcome}`));
-    });
-  });
 }
 
 function sourceDoctorRequest(claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>) {
@@ -52,14 +33,12 @@ export function createOpenClawBootWatcher(input: {
   client: Pick<FleetBrokerClient, "claimOpenClawBoot" | "completeOpenClawBoot" | "completeOpenClawDoctor"> & Partial<Pick<FleetBrokerClient, "assertOpenClawDoctor">>;
   releaseKey: string;
   log: (message: string) => void;
-  run?: RunCommand;
   repairSourceDoctor?: typeof repairSourceDoctorAgentStores;
   inspectBuilderStores?: () => Promise<"exact">;
   openclaw?: InstalledOpenClaw;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }): OpenClawBootWatcher {
-  const run = input.run ?? runCommand;
   const now = input.now ?? (() => performance.now());
   const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const openclaw = input.openclaw;
@@ -101,19 +80,13 @@ export function createOpenClawBootWatcher(input: {
       if (claim.action !== "start" && claim.action !== "doctor") {
         throw new Error(`invalid OpenClaw boot claim action: ${String(claim.action)}`);
       }
+      if (claim.action === "doctor" && !claim.sourceDoctor) throw new Error("OpenClaw boot claim requested Doctor without a source request");
       await input.inspectBuilderStores?.();
-      if (claim.action === "start") return;
-      if (claim.openclawUpgrade && !claim.sourceDoctor) {
-        input.log("[openclaw-boot] ignoring proactive upgrade Doctor from the previous platform release; trying normal startup");
-        return;
-      }
-      if (claim.sourceDoctor) input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
-      else input.log("[openclaw-boot] prior boot did not become healthy; running openclaw doctor --fix once");
-      await runClaimedDoctor(input, claim, run);
-      if (claim.sourceDoctor) {
-        await input.client.completeOpenClawDoctor({ releaseKey: input.releaseKey, requestId: claim.sourceDoctor.requestId,
-          verifiedAgentIds: claim.sourceDoctor.agentIds });
-      }
+      if (claim.action === "start" || !claim.sourceDoctor) return;
+      input.log("[openclaw-boot] running explicitly requested source Doctor before gateway startup");
+      await runSourceDoctor(input, claim.sourceDoctor);
+      await input.client.completeOpenClawDoctor({ releaseKey: input.releaseKey, requestId: claim.sourceDoctor.requestId,
+        verifiedAgentIds: claim.sourceDoctor.agentIds });
     },
     async healthy() {
       try {
@@ -126,13 +99,9 @@ export function createOpenClawBootWatcher(input: {
   };
 }
 
-async function runClaimedDoctor(input: Parameters<typeof createOpenClawBootWatcher>[0],
-  claim: Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>, run: RunCommand): Promise<void> {
-  if (!claim.sourceDoctor) {
-    await run(input.openclaw?.binary ?? "openclaw", ["doctor", "--fix", "--yes", "--non-interactive"]);
-    return;
-  }
-  const request = claim.sourceDoctor, assertDoctor = input.client.assertOpenClawDoctor;
+async function runSourceDoctor(input: Parameters<typeof createOpenClawBootWatcher>[0],
+  request: NonNullable<Awaited<ReturnType<FleetBrokerClient["claimOpenClawBoot"]>>["sourceDoctor"]>): Promise<void> {
+  const assertDoctor = input.client.assertOpenClawDoctor;
   if (!assertDoctor) throw new Error("PostgreSQL source Doctor authority checks are unavailable");
   await (input.repairSourceDoctor ?? repairSourceDoctorAgentStores)(request.agentIds, {
     diagnostics: { requestId: request.requestId, releaseKey: input.releaseKey, log: input.log },
