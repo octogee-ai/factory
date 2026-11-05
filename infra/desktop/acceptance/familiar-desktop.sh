@@ -17,6 +17,12 @@ config_errors() {
   errors="$(hyprctl configerrors 2>/dev/null || true)"
   [[ -z "$errors" || "$errors" == "no errors" ]] || fail "hyprctl configerrors after $1: $errors"
 }
+hyprland_pid() { pgrep -xu "$(id -u)" Hyprland | head -n1; }
+familiar_title_bars_loaded() { grep -qF "$share/hyprbars.so" "/proc/$(hyprland_pid)/maps"; }
+title_bar_plugins() {
+  printf 'plugins: %s; mapped: %s' "$(hyprctl plugins list | tr '\n' ' ')" \
+    "$(grep -oE '/[^ ]*(hyprbars|titlebars)[^ ]*\.so' "/proc/$(hyprland_pid)/maps" | sort -u | tr '\n' ' ')"
+}
 expect_style() {
   local style
   style="$(octo-desktop-style status)"
@@ -26,7 +32,7 @@ expect_style() {
 expect_style familiar
 config_errors "boot"
 grep -Fq 'require("octo-desktop.familiar")' "$HOME/.config/hypr/hyprland.lua" || fail "hyprland.lua does not require octo-desktop.familiar"
-hyprctl plugins list | grep -q hyprbars || fail "hyprbars is not loaded: $(hyprctl plugins list | tr '\n' ' ')"
+familiar_title_bars_loaded || fail "Familiar's hyprbars.so is not loaded in Hyprland ($(title_bar_plugins))"
 [[ "$(cat "$HOME/.local/state/omarchy/current/theme.name")" == octogee ]] || fail "theme is $(cat "$HOME/.local/state/omarchy/current/theme.name"), expected octogee"
 readlink -f "$HOME/.local/state/omarchy/current/background" | grep -q '/[0-9]*-quattro\.' || fail "background is not the Quattro wallpaper: $(readlink -f "$HOME/.local/state/omarchy/current/background")"
 for id in rdf.dock community.window-switcher; do
@@ -47,7 +53,7 @@ config_errors "switching to omarchy"
 grep -Fq 'octo-desktop.familiar' "$HOME/.config/hypr/hyprland.lua" && fail "hyprland.lua still requires octo-desktop.familiar after switching to omarchy"
 [[ "$(cat "$HOME/.local/state/omarchy/current/theme.name")" == tokyo-night ]] || fail "theme after omarchy is $(cat "$HOME/.local/state/omarchy/current/theme.name")"
 jq -e 'all(.plugins[]; .id != "rdf.dock" and .id != "community.window-switcher")' "$shell_json" >/dev/null || fail "shell.json still enables the Familiar plugins"
-hyprctl plugins list | grep -q hyprbars && fail "hyprbars is still loaded after switching to omarchy"
+! familiar_title_bars_loaded || fail "Familiar's hyprbars.so is still loaded after switching to omarchy ($(title_bar_plugins))"
 
 octo-desktop-style familiar || fail "octo-desktop-style familiar failed"
 expect_style familiar
