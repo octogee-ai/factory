@@ -2059,11 +2059,12 @@ async function writeBuilderPrelaunchConfig(
   openclawDir: string, config: UnknownRecord, acceptedAgentIds: string[], env: NodeJS.ProcessEnv, run: OpenClawCommand,
 ): Promise<void> {
   const agents = asRecord(config.agents)!;
+  delete config.meta;
   const current = readTrackedConfigObject(fs.readFileSync(systemConfigPath(openclawDir), "utf8"));
   if (!current) throw new Error("Builder prelaunch requires a readable current config");
   const entries = asRecord(agents.entries)!;
   for (const id of new Set([...acceptedAgentIds, ...agentIdsFromConfig(current)])) if (id !== SAFE_DEFAULT_AGENT_ID) entries[id] = null;
-  for (const key of Object.keys(current)) if (!(key in config)) config[key] = null;
+  for (const key of Object.keys(current)) if (key !== "meta" && !(key in config)) config[key] = null;
   for (const key of Object.keys(asRecord(current.agents) ?? {})) {
     if (key !== "list" && !(key in agents)) agents[key] = null;
   }

@@ -2077,7 +2077,8 @@ describe("Builder prelaunch config", () => {
     const env = withBuilderClaim({ OPENCLAW_DIR: root, GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api-test.octogee.com" }, "alice");
     const config = { agents: { entries: { "octogee-alice-coach": { workspace: path.join(root, "customers/alice"), model: "custom/model" } } },
       channels: { mattermost: { enabled: true, baseUrl: "${MM_URL}", accounts: { "alice-coach": {} } } },
-      bindings: [{ agentId: "octogee-alice-coach" }], cron: { enabled: true } };
+      bindings: [{ agentId: "octogee-alice-coach" }], cron: { enabled: true },
+      meta: { lastTouchedVersion: "2026.11.1", migrations: { modelPolicyAllowlist: true } } };
     writeJson(path.join(repo, "openclaw.json"), config);
     execFileSync("git", ["init", "-b", "main"], { cwd: repo });
     execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
@@ -2091,9 +2092,11 @@ describe("Builder prelaunch config", () => {
       const patchFile = args[args.indexOf("--file") + 1];
       expect(fs.statSync(patchFile).mode & 0o777).toBe(0o600);
       const patch = JSON.parse(fs.readFileSync(patchFile, "utf8"));
+      expect(patch).not.toHaveProperty("meta");
+      expect(args).not.toContain("meta");
       if (nativeWrite.mock.calls.length === 1) expect(patch.agents.entries["octogee-alice-coach"]).toBeNull();
       for (const id of Object.keys(patch.agents.entries)) if (patch.agents.entries[id] === null) delete patch.agents.entries[id];
-      writeJson(path.join(repo, "openclaw.json"), patch);
+      writeJson(path.join(repo, "openclaw.json"), { ...patch, meta: config.meta });
       return { code: 0, stdout: "" };
     });
     try {
