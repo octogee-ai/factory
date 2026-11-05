@@ -77,7 +77,7 @@ and take over the desktop.
 Every Builder's desktop starts in the **Familiar** style: windows float and
 overlap with traffic-light title bars (hyprbars, built in `customize.sh`
 against the image's Hyprland), a bottom dock, Super+Tab window switching, and
-the light `octogee` theme on the Quattro wallpaper (`1-quattro.*` from Tokyo Night). The stock Omarchy desktop
+the light `octogee` theme on the Quattro wallpaper (`*-quattro.*` from Tokyo Night; Omarchy renumbers its bundled backgrounds between releases). The stock Omarchy desktop
 is one command away and both styles are stock Omarchy underneath:
 
 ```bash

@@ -20,7 +20,13 @@ OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu --noconfirm --needed \
   || { tail -20 /tmp/pacman.log; exit 1; }
 
 log "Omarchy migrations"
-sudo -H -u octo bash -lc 'omarchy migrate'
+octo_uid="$(id -u octo)"
+loginctl enable-linger octo
+systemctl start "user@${octo_uid}.service"
+runtime_dir="$(loginctl show-user octo --property=RuntimePath --value)"
+for _ in $(seq 1 30); do [[ -S "${runtime_dir}/bus" ]] && break; sleep 1; done
+[[ -S "${runtime_dir}/bus" ]] || { echo "octo's user session bus never appeared at ${runtime_dir}/bus; migrations that reach systemctl --user would abort" >&2; exit 1; }
+sudo -H -u octo env "XDG_RUNTIME_DIR=${runtime_dir}" "DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" bash -lc 'omarchy migrate'
 
 log "wlrctl ${WLRCTL_REF}"
 rm -rf /tmp/wlrctl
@@ -73,8 +79,8 @@ printf 'hyprbars=%s\nhyprland=%s\n' "$HYPRBARS_COMMIT" "$(pacman -Q hyprland | c
 rm -rf /tmp/hyprland-plugins /tmp/hyprbars.log
 
 log "Familiar theme background"
-quattro="$(find /usr/share/omarchy/themes/tokyo-night/backgrounds -maxdepth 1 -name '1-quattro.*' | head -n1)"
-[[ -n "$quattro" ]] || { echo "Omarchy ${OMARCHY_VERSION} ships no 1-quattro.* wallpaper in /usr/share/omarchy/themes/tokyo-night/backgrounds" >&2; exit 1; }
+quattro="$(find /usr/share/omarchy/themes/tokyo-night/backgrounds -maxdepth 1 -name '*-quattro.*' | head -n1)"
+[[ -n "$quattro" ]] || { echo "Omarchy ${OMARCHY_VERSION} ships no *-quattro.* wallpaper in /usr/share/omarchy/themes/tokyo-night/backgrounds" >&2; exit 1; }
 install -D -m 0644 "$quattro" "/usr/share/omarchy/octo-desktop/theme/backgrounds/${quattro##*/}"
 
 log "boot: limine timeout, machine identity, services"
@@ -84,7 +90,6 @@ rm -f /tmp/limine-update.log
 sed -i -E 's/^#?timeout:.*/timeout: 0/' /boot/limine.conf
 grep -q '^timeout: 0' /boot/limine.conf || printf 'timeout: 0\n' >> /boot/limine.conf
 systemctl unmask NetworkManager-wait-online.service
-loginctl enable-linger octo
 systemctl enable octo-grow-root.service octo-limine-enroll.service octo-home-disk.service octo-seatd.service octo-desktop.service octo-desktop-lifecycle.service octo-metadata-ssh-keys.timer octo-gateway-agent.service sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
 systemctl disable sddm.service
 systemctl mask sddm.service

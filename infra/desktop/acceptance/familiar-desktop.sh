@@ -28,7 +28,7 @@ config_errors "boot"
 grep -Fq 'require("octo-desktop.familiar")' "$HOME/.config/hypr/hyprland.lua" || fail "hyprland.lua does not require octo-desktop.familiar"
 hyprctl plugins list | grep -q hyprbars || fail "hyprbars is not loaded: $(hyprctl plugins list | tr '\n' ' ')"
 [[ "$(cat "$HOME/.local/state/omarchy/current/theme.name")" == octogee ]] || fail "theme is $(cat "$HOME/.local/state/omarchy/current/theme.name"), expected octogee"
-readlink -f "$HOME/.local/state/omarchy/current/background" | grep -q '/1-quattro\.' || fail "background is not the Quattro wallpaper: $(readlink -f "$HOME/.local/state/omarchy/current/background")"
+readlink -f "$HOME/.local/state/omarchy/current/background" | grep -q '/[0-9]*-quattro\.' || fail "background is not the Quattro wallpaper: $(readlink -f "$HOME/.local/state/omarchy/current/background")"
 for id in rdf.dock community.window-switcher; do
   [[ "$(readlink "$HOME/.config/omarchy/plugins/$id")" == "$share/plugins/$id" ]] || fail "plugin $id is not linked from the image"
   jq -e --arg id "$id" 'any(.plugins[]; .id == $id)' "$shell_json" >/dev/null || fail "shell.json does not enable $id"
