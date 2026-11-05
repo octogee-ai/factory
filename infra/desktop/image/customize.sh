@@ -26,6 +26,8 @@ systemctl start "user@${octo_uid}.service"
 runtime_dir="$(loginctl show-user octo --property=RuntimePath --value)"
 for _ in $(seq 1 30); do [[ -S "${runtime_dir}/bus" ]] && break; sleep 1; done
 [[ -S "${runtime_dir}/bus" ]] || { echo "octo's user session bus never appeared at ${runtime_dir}/bus; migrations that reach systemctl --user would abort" >&2; exit 1; }
+install -m 0440 /dev/stdin /etc/sudoers.d/zz-octo-build <<< 'Defaults:octo !authenticate'
+visudo -cf /etc/sudoers.d/zz-octo-build >/dev/null
 sudo -H -u octo env "XDG_RUNTIME_DIR=${runtime_dir}" "DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" bash -lc 'omarchy migrate'
 
 log "wlrctl ${WLRCTL_REF}"
@@ -52,7 +54,7 @@ cp -R --no-preserve=all "$HERE/rootfs/." /
 chown -R root:root /usr/local/bin/octo-shims /usr/share/omarchy/octo-desktop /etc/systemd/system/octo-*.service /etc/systemd/system/octo-*.timer /etc/systemd/logind.conf.d/octo-desktop.conf /etc/modules-load.d/octo-desktop.conf /etc/sudoers.d/octo-desktop /usr/local/bin/octo-desktop-* /usr/local/bin/octo-metadata-ssh-keys
 chmod 0755 /usr/local/bin/octo-desktop-* /usr/local/bin/octo-shims/* /usr/local/bin/octo-metadata-ssh-keys /usr/local/bin/octo-gateway-agent /usr/local/bin/octo-gateway-firewall /usr/local/bin/octo-grow-root /usr/local/bin/octo-home-disk /usr/local/bin/octo-home-migrate /usr/local/bin/octo-home-recovery /usr/local/bin/octo-scratch-storage /usr/local/bin/octo-limine-enroll /usr/local/bin/octo-desktop-tool-storage
 chmod 0440 /etc/sudoers.d/octo-desktop
-rm -f /etc/sudoers.d/zz-octo-nopasswd
+rm -f /etc/sudoers.d/zz-octo-nopasswd /etc/sudoers.d/zz-octo-build
 visudo -cf /etc/sudoers.d/octo-desktop >/dev/null
 
 log "SSH authentication"

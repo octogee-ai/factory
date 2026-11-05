@@ -35,7 +35,7 @@ function listenOn(socketPath: string): Promise<Server> {
   });
 }
 
-function stageMigrationRun(dir: string, extraStubs: Record<string, string> = {}) {
+function stageMigrationRun(dir: string) {
   const runtimeDir = path.join(dir, 'run-user-1000');
   mkdirSync(runtimeDir);
   const stubs = {
@@ -44,10 +44,11 @@ function stageMigrationRun(dir: string, extraStubs: Record<string, string> = {})
     loginctl: 'printf "%s\\n" "$@" >> "$SESSION_PROBE"\n[ "$1" = show-user ] && printf "%s\\n" "$RUNTIME_DIR"\nexit 0',
     systemctl: 'printf "%s\\n" "$@" >> "$SESSION_PROBE"\nexit 0',
     sleep: 'exit 0',
+    install: 'printf "%s\\n" "$@" >> "$SESSION_PROBE"\ncat > "$SUDOERS_PROBE"',
+    visudo: 'exit 0',
     sudo: 'printf "%s\\n" "${OMARCHY_ALLOW_DIRECT_PACMAN:-}" "$@" > "$MIGRATION_PROBE"\nexit "$MIGRATION_STATUS"',
     rm: 'exit 0',
     git: 'touch "$CONTINUATION_PROBE"\nexit 42',
-    ...extraStubs,
   };
   for (const [name, body] of Object.entries(stubs)) {
     writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
@@ -55,19 +56,22 @@ function stageMigrationRun(dir: string, extraStubs: Record<string, string> = {})
   const source = readFileSync(path.resolve('../infra/desktop/image/customize.sh'), 'utf8');
   const script = path.join(dir, 'customize.sh');
   writeFileSync(script, source.replaceAll('/tmp/pacman.log', path.join(dir, 'pacman.log')));
-  const probes = { migration: path.join(dir, 'migration'), continued: path.join(dir, 'continued'), session: path.join(dir, 'session') };
+  const probes = {
+    migration: path.join(dir, 'migration'), continued: path.join(dir, 'continued'),
+    session: path.join(dir, 'session'), sudoers: path.join(dir, 'sudoers'),
+  };
   const run = (migrationStatus: number) => spawnSync('bash', [script], {
     env: {
       ...process.env, PATH: `${dir}:${process.env.PATH}`, OMARCHY_VERSION: 'test', IMAGE_NAME: 'test',
       OMARCHY_ALLOW_DIRECT_PACMAN: '', MIGRATION_PROBE: probes.migration, MIGRATION_STATUS: String(migrationStatus),
-      CONTINUATION_PROBE: probes.continued, SESSION_PROBE: probes.session, RUNTIME_DIR: runtimeDir,
+      CONTINUATION_PROBE: probes.continued, SESSION_PROBE: probes.session, SUDOERS_PROBE: probes.sudoers, RUNTIME_DIR: runtimeDir,
     },
     encoding: 'utf8',
   });
   return { runtimeDir, probes, run };
 }
 
-it.each([0, 37])('runs migrations inside the desktop user\'s session and propagates migration status %s', async (migrationStatus) => {
+it.each([0, 37])('runs migrations inside the desktop user\'s session without sudo prompts and propagates migration status %s', async (migrationStatus) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'computer-migration-'));
   let bus: Server | undefined;
   try {
@@ -78,7 +82,9 @@ it.each([0, 37])('runs migrations inside the desktop user\'s session and propaga
       'enable-linger', 'octo',
       'start', 'user@1000.service',
       'show-user', 'octo', '--property=RuntimePath', '--value',
+      '-m', '0440', '/dev/stdin', '/etc/sudoers.d/zz-octo-build',
     ]);
+    expect(readFileSync(probes.sudoers, 'utf8')).toBe('Defaults:octo !authenticate\n');
     expect(readFileSync(probes.migration, 'utf8').trimEnd().split('\n')).toEqual([
       '', '-H', '-u', 'octo', 'env', `XDG_RUNTIME_DIR=${runtimeDir}`, `DBUS_SESSION_BUS_ADDRESS=unix:path=${runtimeDir}/bus`, 'bash', '-lc', 'omarchy migrate',
     ]);
@@ -97,6 +103,7 @@ it('refuses to migrate when the desktop user\'s session bus never appears', () =
     const result = run(0);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`octo's user session bus never appeared at ${runtimeDir}/bus`);
+    expect(existsSync(probes.sudoers)).toBe(false);
     expect(existsSync(probes.migration)).toBe(false);
     expect(existsSync(probes.continued)).toBe(false);
   } finally {
