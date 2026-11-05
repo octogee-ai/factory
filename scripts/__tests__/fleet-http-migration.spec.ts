@@ -2467,6 +2467,74 @@ describe("queued-rsync migration control handlers", () => {
     });
   });
 
+  describe("push pre-copy against a permanently refused source mount", () => {
+    const refusalReason = "config.patch would remove entries from array path(s): agents.entries.octogee-unmatched-route.tools.deny";
+    const manifest = {
+      version: 2 as const, slug: "livefixture", appliedFingerprint: "fp-livefixture",
+      agentId: "octogee-livefixture-coach", accountId: "livefixture-coach",
+      agent: { id: "octogee-livefixture-coach", workspace: path.join(process.env.OPENCLAW_STATE_DIR || OPENCLAW_DIR, "customers", "livefixture") },
+      projectAgents: [], mattermostAccount: { botToken: "coach-pat" }, bindings: [],
+    };
+    const sources = [{ cwd: "/state", path: "agents/octogee-livefixture-coach" }];
+    function push(deps: Partial<MigrationHandlerDeps>, mode: "pre" | "final" = "pre") {
+      const body: PushRsyncStateRequestBody = {
+        migrationId: "mig-refused-source", slug: "livefixture", rpcPhase: "push-rsync-state", mode,
+        targetHost: TARGET_POD_IP, targetPort: 30873, targetCertificatePem: TARGET_CERTIFICATE_PEM,
+        transferUser: "migration", transferKey: "b".repeat(64), includeActivationManifest: true,
+      };
+      const response = mkResponse();
+      const handler = createPushRsyncStateHandler(mkDeps(deps));
+      return { ...response, work: handler(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn()) };
+    }
+
+    it("refuses the pre-copy at once when the source has no converged configuration for the customer", async () => {
+      const listExportPaths = vi.fn(async () => sources);
+      const exportManifest = vi.fn(async () => manifest);
+      const log = vi.fn();
+      const result = push({
+        adapter: mkAdapter({ listExportPaths, exportOpenClawActivationManifest: exportManifest }),
+        log,
+        sourceMountRefusal: vi.fn(() => ({ reason: refusalReason, converged: false })),
+      });
+      await result.work;
+      expect(result.getStatus()).toBe(409);
+      expect(result.getBody()).toEqual({
+        error: "source mount refused",
+        message: expect.stringContaining("source has no converged configuration for livefixture"),
+      });
+      expect((result.getBody() as { message: string }).message).toContain(refusalReason);
+      expect(exportManifest).not.toHaveBeenCalled();
+      expect(listExportPaths).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("source has no converged configuration for livefixture"), { status: "failed" });
+    });
+
+    it("exports the converged configuration without waiting when the source refuses only the pending one", async () => {
+      const exportManifest = vi.fn(async () => manifest);
+      spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+      const result = push({
+        adapter: mkAdapter({ listExportPaths: vi.fn(async () => sources), exportOpenClawActivationManifest: exportManifest }),
+        sourceMountRefusal: () => ({ reason: refusalReason, converged: true }),
+      });
+      await result.work;
+      expect(result.getStatus()).toBe(200);
+      expect(exportManifest).toHaveBeenCalledWith("livefixture", expect.objectContaining({ convergeSource: false }));
+      expect(spawnMock).toHaveBeenCalledOnce();
+    });
+
+    it("consults the source mount only for the pre-copy", async () => {
+      const sourceMountRefusal = vi.fn(() => ({ reason: refusalReason, converged: false }));
+      spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
+      const result = push({
+        adapter: mkAdapter({ listExportPaths: vi.fn(async () => sources), exportOpenClawActivationManifest: vi.fn(async () => manifest) }),
+        sourceMountRefusal,
+      }, "final");
+      await result.work;
+      expect(result.getStatus()).toBe(200);
+      expect(sourceMountRefusal).not.toHaveBeenCalled();
+    });
+  });
+
   it("createPushRsyncStateHandler runs rsync directly to the target pod with the one-time key", async () => {
     const adapter = mkAdapter({
       listExportPaths: vi.fn(async () => [

@@ -150,6 +150,11 @@ const SYSTEM_CONFIG_COMMIT = /^[0-9a-f]{40,64}$/;
 const BUILDER_SYSTEM_CONFIG_TRANSFER = "configured-builder-system-config" as const;
 const ACTIVATION_MANIFEST_TRANSFER = "activation-manifest" as const;
 
+export interface SourceMountRefusal {
+  reason: string;
+  converged: boolean;
+}
+
 export interface MigrationHandlerDeps {
   voiceMigration?: (input: VoiceMigrationInput) => Promise<{ activeCalls: number }>;
   voiceDrainWaitMs?: number;
@@ -166,6 +171,8 @@ export interface MigrationHandlerDeps {
 getMountedCustomers?: () => readonly string[];
 
 customerAttachPending?: (slug: string) => Promise<boolean>;
+
+sourceMountRefusal?: (slug: string) => SourceMountRefusal | null;
 
 fetch?: typeof globalThis.fetch;
 
@@ -1959,6 +1966,25 @@ function validateRsyncPushTarget(body: PushRsyncStateRequestBody, res: Response)
   return { targetHost, targetPort, targetCertificatePem: body.targetCertificatePem, ...credentials };
 }
 
+function sourcePushConvergence(
+  deps: MigrationHandlerDeps,
+  body: PushRsyncStateRequestBody,
+  mode: MigrationTransferMode,
+  log: (msg: string, fields?: LogContext) => void,
+): { convergeSource: boolean; refused?: string } {
+  if (mode !== "pre") return { convergeSource: false };
+  const refusal = deps.sourceMountRefusal?.(body.slug) ?? null;
+  if (!refusal) return { convergeSource: true };
+  if (refusal.converged) {
+    log(`[migration-activation:${body.slug}] exporting the converged configuration; the pending configuration is permanently refused: ${refusal.reason}`);
+    return { convergeSource: false };
+  }
+  const refused = `[migration-activation:${body.slug}] source has no converged configuration for ${body.slug}: its configuration was permanently refused (${refusal.reason}); ` +
+    "nothing converged to carry; park and release the customer so placement mounts it fresh, or erase it";
+  log(`[migration-rsync] 🔴 push-state migrationId=${body.migrationId} slug=${body.slug}: ${refused}`, { status: "failed" });
+  return { convergeSource: false, refused };
+}
+
 export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): RequestHandler {
   const log = deps.log ?? provisionerLog;
   const timeoutMs = deps.pushStateTimeoutMs ?? MIGRATION_TRANSFER_TIMEOUT_MS;
@@ -1981,6 +2007,11 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
     }
     const target = validateRsyncPushTarget(body, res);
     if (!target) return;
+    const convergence = sourcePushConvergence(deps, body, mode, log);
+    if (convergence.refused) {
+      res.status(409).json({ error: "source mount refused", message: convergence.refused });
+      return;
+    }
     const { targetHost, targetPort, targetCertificatePem, transferUser, transferKey } = target;
     const deadline = Date.now() + timeoutMs;
 
@@ -2007,7 +2038,7 @@ export function createPushRsyncStateHandler(deps: MigrationHandlerDeps): Request
             timeoutMs: remainingTransferTimeout(deadline, controller.signal),
             preserveForRollback: postgresHandoff,
             sourceHeld,
-            convergeSource: mode === "pre",
+            convergeSource: convergence.convergeSource,
           });
       cleanupActivationManifest = activationManifest.cleanup;
       if (mode === "final") {

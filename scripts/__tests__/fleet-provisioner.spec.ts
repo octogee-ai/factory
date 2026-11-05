@@ -21,6 +21,7 @@ import {
   createBuilderSurgeGateWiring,
   createVerifyAttachPending,
   permanentConfigPatchRetryReady,
+  createMountRefusalReader,
   ensureCustomerCheckoutsOnly,
   NEEDS_FULL_ATTACH_FINGERPRINT,
   evictLocalCustomer,
@@ -527,14 +528,14 @@ describe("customerEnsureRetryReady", () => {
       cloneRetry: undefined,
       desiredFingerprint: "fp1",
       now: 5_000,
-      permanentConfigPatchRetry: { fingerprint: "fp1", nextAt: 60_000 },
+      permanentConfigPatchRetry: { fingerprint: "fp1", nextAt: 60_000, reason: "invalid patch" },
     })).toBe(false);
   });
 });
 
 describe("permanentConfigPatchRetryReady", () => {
   it("retries an unchanged failure when its bounded backoff expires", () => {
-    const prior = { fingerprint: "same", nextAt: 60_000 };
+    const prior = { fingerprint: "same", nextAt: 60_000, reason: "invalid patch" };
     expect(permanentConfigPatchRetryReady(prior, "same", 59_999)).toBe(false);
     expect(permanentConfigPatchRetryReady(prior, "same", 60_000)).toBe(true);
   });
@@ -542,8 +543,45 @@ describe("permanentConfigPatchRetryReady", () => {
   it("holds an unchanged invalid patch and immediately re-enables it for a changed desired fingerprint", () => {
     const unchanged = "customer-fp1";
     const changed = "customer-fp2";
-    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000 }, unchanged, 0)).toBe(false);
-    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000 }, changed, 0)).toBe(true);
+    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000, reason: "invalid patch" }, unchanged, 0)).toBe(false);
+    expect(permanentConfigPatchRetryReady({ fingerprint: unchanged, nextAt: 60_000, reason: "invalid patch" }, changed, 0)).toBe(true);
+  });
+});
+
+describe("createMountRefusalReader", () => {
+  const reason = "config.patch would remove entries from array path(s): agents.entries.octogee-unmatched-route.tools.deny";
+  function reader(input: { refused?: boolean; desired?: string; applied?: string }) {
+    const appliedFingerprints = new Map<string, string>();
+    if (input.applied !== undefined) {
+      createReconcileConvergenceHooks({
+        customerSource: async () => new Map(), appliedFp: appliedFingerprints, cloneRetry: new Map(), persistAppliedFp: () => undefined,
+      }).recordApplied("alice", input.applied);
+    }
+    return createMountRefusalReader({
+      permanentConfigPatchRetry: new Map(input.refused === false ? [] : [["alice", { fingerprint: "customer-fp1", nextAt: 60_000, reason }]]),
+      desiredFingerprints: new Map([["alice", input.desired ?? "customer-fp1"]]),
+      appliedFingerprints,
+    });
+  }
+
+  it("reports nothing while no ensure has been permanently refused", () => {
+    expect(reader({ refused: false })("alice")).toBeNull();
+  });
+
+  it("reports nothing once the desired fingerprint moved past the refused one", () => {
+    expect(reader({ desired: "customer-fp2" })("alice")).toBeNull();
+  });
+
+  it("reports an unconverged refusal when nothing was ever applied", () => {
+    expect(reader({})("alice")).toEqual({ reason, converged: false });
+  });
+
+  it("reports an unconverged refusal after the add's publication invalidated the fingerprint", () => {
+    expect(reader({ applied: NEEDS_FULL_ATTACH_FINGERPRINT })("alice")).toEqual({ reason, converged: false });
+  });
+
+  it("reports a converged refusal when an earlier configuration applied", () => {
+    expect(reader({ applied: "customer-fp0" })("alice")).toEqual({ reason, converged: true });
   });
 });
 

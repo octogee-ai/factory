@@ -16,6 +16,9 @@ import {
   verifiedDeletionCompletion,
 } from "../operation-retry";
 
+const UNCONVERGED_SOURCE_ERROR =
+  '/push-rsync-state/shared-45b73f50e990: 409 {"error":"source mount refused","message":"[migration-activation:livefixture] source has no converged configuration for livefixture: its configuration was permanently refused (config.patch would remove entries from array path(s): agents.entries.octogee-unmatched-route.tools.deny); nothing converged to carry; park and release the customer so placement mounts it fresh, or erase it"}';
+
 describe("PostgreSQL source recovery health retries", () => {
   const error = "source management health unconfirmed; outcome remains fenced";
   it("retains the owned source recovery beyond the attempt cap only for its exact unavailable health result", () => {
@@ -276,6 +279,10 @@ describe("classifyOperationFailure", () => {
     ).toBe("transient");
   });
 
+  it("classifies a source with no converged configuration for the customer as terminal", () => {
+    expect(classifyOperationFailure(UNCONVERGED_SOURCE_ERROR)).toBe("terminal");
+  });
+
   it("classifies validation and the #2137 fail-fast target-state guard as terminal", () => {
     expect(classifyOperationFailure("missing gatewayId in op.input")).toBe("terminal");
     expect(classifyOperationFailure("glmGateways/bender-green not found — cannot roll out")).toBe(
@@ -333,6 +340,33 @@ describe("classifyOperationFailure", () => {
 
   it("treats a missing error message as terminal", () => {
     expect(classifyOperationFailure(undefined)).toBe("terminal");
+  });
+});
+
+describe("drain migration whose source has no converged configuration for the customer", () => {
+  const now = 2_000_000;
+
+  it("fails terminally instead of re-queuing the level-triggered placement move", () => {
+    const steps = [
+      { name: "keys-sync-state", status: "done" as const },
+      { name: "pre-sync-state", status: "failed" as const, error: UNCONVERGED_SOURCE_ERROR },
+      { name: "rollback:unmount-target", status: "done" as const },
+    ];
+    const update = buildOperationCompletionUpdate({
+      op: {
+        id: `placement-${"c".repeat(32)}`,
+        kind: "migrate-customer",
+        origin: "automatic",
+        input: { fromGatewayId: "shared-45b73f50e990", toGatewayId: "shared-dd0b28702186", source: "continuous-placement-policy" },
+        attempts: 0,
+        attemptHistory: [],
+      },
+      result: { steps, success: false, rolledBack: true, error: UNCONVERGED_SOURCE_ERROR },
+      steps,
+      now,
+    });
+    expect(update).toMatchObject({ status: "failed", rolledBack: true, error: UNCONVERGED_SOURCE_ERROR, attempts: 1 });
+    expect(update.nextAttemptAt).toEqual(FieldValue.delete());
   });
 });
 

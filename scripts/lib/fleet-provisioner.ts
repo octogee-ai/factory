@@ -56,6 +56,7 @@ import {
   migrationImportBusy,
   ownsFinalMigrationImport,
   type MigrationHandlerDeps,
+  type SourceMountRefusal,
 } from "./fleet-http-migration.js";
 import {
   createSurgeReadinessGate,
@@ -137,6 +138,7 @@ export interface CloneRetryState {
 export interface PermanentConfigPatchRetryState {
   nextAt: number;
   fingerprint: string;
+  reason: string;
 }
 
 export function permanentConfigPatchRetryReady(
@@ -295,6 +297,19 @@ export const NEEDS_FULL_ATTACH_FINGERPRINT = "";
 function requireFullAttachNextConverge(slug: string, hooks: ConvergenceHooks): void {
   hooks.forgetRetry(slug);
   hooks.recordApplied(slug, NEEDS_FULL_ATTACH_FINGERPRINT);
+}
+
+export function createMountRefusalReader(state: {
+  permanentConfigPatchRetry: ReadonlyMap<string, PermanentConfigPatchRetryState>;
+  desiredFingerprints: ReadonlyMap<string, string>;
+  appliedFingerprints: ReadonlyMap<string, string>;
+}): (slug: string) => SourceMountRefusal | null {
+  return (slug) => {
+    const refusal = state.permanentConfigPatchRetry.get(slug);
+    if (!refusal || (state.desiredFingerprints.get(slug) ?? "") !== refusal.fingerprint) return null;
+    const applied = state.appliedFingerprints.get(slug);
+    return { reason: refusal.reason, converged: applied !== undefined && applied !== NEEDS_FULL_ATTACH_FINGERPRINT };
+  };
 }
 
 export async function ensureCustomerCheckoutsOnly(
@@ -728,6 +743,7 @@ export async function runProvisioningWork<T>(input: {
 interface FleetRuntime extends ProvisioningCounter {
   activeProvisioning: number;
   mountedCustomers: string[];
+  mountRefusal: (slug: string) => SourceMountRefusal | null;
   status: "booting" | "ready";
   waitForProvisioningDrain: () => Promise<void>;
 }
@@ -737,6 +753,7 @@ function createFleetRuntime(): FleetRuntime {
   const runtime: FleetRuntime = {
     activeProvisioning: 0,
     mountedCustomers: [],
+    mountRefusal: () => null,
     status: "booting",
     beginProvisioning: () => {
       runtime.activeProvisioning += 1;
@@ -1759,6 +1776,7 @@ function startMaybeReconcileLoop(params: {
     permanentConfigPatchRetry.delete(slug);
     if (appliedFp.delete(slug)) persistAppliedFp();
   };
+  runtime.mountRefusal = createMountRefusalReader({ permanentConfigPatchRetry, desiredFingerprints: desiredFp, appliedFingerprints: appliedFp });
   const readDesired = createDesiredRosterReader({
     opts,
     customerSource,
@@ -1881,6 +1899,7 @@ function startMaybeReconcileLoop(params: {
         permanentConfigPatchRetry.set(slug, {
           fingerprint: desiredFp.get(slug) ?? "",
           nextAt: Date.now() + 60_000,
+          reason: message,
         });
       }
       recordReconcileError(opts, slug, message);
@@ -2988,6 +3007,7 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     adapter: wrappedAdapter,
     log: opts.log,
     getMountedCustomers: () => runtime.mountedCustomers,
+    sourceMountRefusal: (slug: string) => runtime.mountRefusal(slug),
     customerAttachPending: createVerifyAttachPending({ provision: caps.provision, opts }),
     flushLocalState: opts.flushLocalState,
     prepareSurgeTarget: surgeGate.prepareSurgeTarget,
