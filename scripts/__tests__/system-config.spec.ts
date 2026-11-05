@@ -2070,7 +2070,7 @@ describe("system_config restore", () => {
 
 
 describe("Builder prelaunch config", () => {
-  it("boots only the gateway-local agent while keeping the accepted customer config intact", async () => {
+  it.each([false, true])("boots only the gateway-local agent and preserves accepted config (already detached=%s)", async detached => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "builder-prelaunch-config-"));
     const repo = path.join(root, "system_config");
     fs.mkdirSync(repo);
@@ -2082,8 +2082,25 @@ describe("Builder prelaunch config", () => {
     execFileSync("git", ["init", "-b", "main"], { cwd: repo });
     execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
     execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], { cwd: repo });
+    if (detached) writeJson(path.join(repo, "openclaw.json"), { ...config, agents: { entries: {} }, bindings: [] });
+    const nativeWrite = vi.fn(async (args: string[], options: { env: NodeJS.ProcessEnv }) => {
+      expect(args.slice(0, 2)).toEqual(["config", "patch"]);
+      expect(args).toContain("--allow-size-drop");
+      expect(options.env.OPENCLAW_CONFIG_PATH).toBe(path.join(repo, "openclaw.json"));
+      expect(options.env.OPENCLAW_STATE_DIR).toBe(root);
+      const patchFile = args[args.indexOf("--file") + 1];
+      expect(fs.statSync(patchFile).mode & 0o777).toBe(0o600);
+      const patch = JSON.parse(fs.readFileSync(patchFile, "utf8"));
+      if (nativeWrite.mock.calls.length === 1) expect(patch.agents.entries["octogee-alice-coach"]).toBeNull();
+      for (const id of Object.keys(patch.agents.entries)) if (patch.agents.entries[id] === null) delete patch.agents.entries[id];
+      writeJson(path.join(repo, "openclaw.json"), patch);
+      return { code: 0, stdout: "" };
+    });
     try {
-      await prepareBuilderPrelaunchConfig(root, "alice", env);
+      const before = fs.readFileSync(path.join(repo, "openclaw.json"), "utf8");
+      await expect(prepareBuilderPrelaunchConfig(root, "alice", env, async () => ({ code: 1, stdout: "" }))).rejects.toThrow("Native Builder prelaunch config write failed");
+      expect(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8")).toBe(before);
+      await prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite);
       const live = JSON.parse(fs.readFileSync(path.join(repo, "openclaw.json"), "utf8"));
       expect(Object.keys(live.agents.entries)).toEqual(["octogee-unmatched-route"]);
       expect(live.channels.mattermost.enabled).toBe(false);
@@ -2098,8 +2115,10 @@ describe("Builder prelaunch config", () => {
       expect(accepted.agents).toMatchObject({ entries: config.agents.entries });
       expect(accepted.cron).toEqual({ enabled: true });
       expect(accepted.channels).toMatchObject({ mattermost: { enabled: true } });
-      await prepareBuilderPrelaunchConfig(root, "alice", env);
+      await prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite);
       expect(readAcceptedBuilderConfig(root, env).agents).toMatchObject({ entries: config.agents.entries });
+      expect(nativeWrite).toHaveBeenCalledTimes(2);
+      expect(fs.readdirSync(root).filter(name => name.startsWith(".prelaunch-config-"))).toEqual([]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

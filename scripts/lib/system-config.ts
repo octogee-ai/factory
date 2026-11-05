@@ -1,3 +1,5 @@
+import { agentIdsFromConfig } from "@octogee/core/byosub-restore";
+import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { clearMountedMarker } from "./local-coach-wired.js";
 import { disableSystemConfigWatch, isSystemConfigRuntimeProjection } from "./system-config-watch-state.js";
 import { createHash } from "node:crypto";
@@ -2023,10 +2025,13 @@ export function readAcceptedBuilderConfig(openclawDir: string, env: NodeJS.Proce
   return config;
 }
 
-export async function prepareBuilderPrelaunchConfig(openclawDir: string, slug: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function prepareBuilderPrelaunchConfig(
+  openclawDir: string, slug: string, env: NodeJS.ProcessEnv = process.env, run: OpenClawCommand = runOpenClaw,
+): Promise<void> {
   await disableSystemConfigWatch(openclawDir, slug, { runtimeProjection: true });
   clearMountedMarker(path.join(openclawDir, "customers"), slug);
   const config = readAcceptedBuilderConfig(openclawDir, env);
+  const acceptedAgentIds = agentIdsFromConfig(config);
   const { id: _id, ...agent } = buildSafeDefaultAgent({ ...env, OPENCLAW_DIR: openclawDir });
   const agents = asRecord(config.agents) ?? {};
   delete agents.list;
@@ -2047,5 +2052,34 @@ export async function prepareBuilderPrelaunchConfig(openclawDir: string, slug: s
   }
   config.cron = { ...asRecord(config.cron), enabled: false };
   if (asRecord(config.talk)) config.talk = { ...asRecord(config.talk), agentId: SAFE_DEFAULT_AGENT_ID };
-  atomicWrite(systemConfigPath(openclawDir), `${JSON.stringify(config, null, 2)}\n`);
+  await writeBuilderPrelaunchConfig(openclawDir, config, acceptedAgentIds, env, run);
+}
+
+async function writeBuilderPrelaunchConfig(
+  openclawDir: string, config: UnknownRecord, acceptedAgentIds: string[], env: NodeJS.ProcessEnv, run: OpenClawCommand,
+): Promise<void> {
+  const agents = asRecord(config.agents)!;
+  const current = readTrackedConfigObject(fs.readFileSync(systemConfigPath(openclawDir), "utf8"));
+  if (!current) throw new Error("Builder prelaunch requires a readable current config");
+  const entries = asRecord(agents.entries)!;
+  for (const id of new Set([...acceptedAgentIds, ...agentIdsFromConfig(current)])) if (id !== SAFE_DEFAULT_AGENT_ID) entries[id] = null;
+  for (const key of Object.keys(current)) if (!(key in config)) config[key] = null;
+  for (const key of Object.keys(asRecord(current.agents) ?? {})) {
+    if (key !== "list" && !(key in agents)) agents[key] = null;
+  }
+  const replacePaths = [
+    ...Object.keys(config).filter(key => key !== "agents" && config[key] !== null),
+    ...Object.keys(agents).filter(key => key !== "entries" && agents[key] !== null).map(key => `agents.${key}`),
+    `agents.entries.${SAFE_DEFAULT_AGENT_ID}`,
+  ];
+  const temporary = fs.mkdtempSync(path.join(openclawDir, ".prelaunch-config-"));
+  try {
+    const patchFile = path.join(temporary, "patch.json");
+    fs.writeFileSync(patchFile, JSON.stringify(config), { mode: 0o600 });
+    const result = await run(["config", "patch", "--file", patchFile, "--allow-size-drop",
+      ...replacePaths.flatMap(key => ["--replace-path", key])], {
+      env: { ...env, OPENCLAW_STATE_DIR: openclawDir, OPENCLAW_CONFIG_PATH: systemConfigPath(openclawDir) },
+    });
+    if (result.code !== 0) throw new Error(`Native Builder prelaunch config write failed (exit ${result.code})`);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }

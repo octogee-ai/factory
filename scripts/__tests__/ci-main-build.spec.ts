@@ -82,20 +82,27 @@ describe("Ship TEST main build selection", () => {
       build: vi.fn(async () => undefined),
     };
   }
-  it("deploys an existing manifest without looking for or starting a build", async () => {
+  it("reuses a completed image family when no build is running", async () => {
     const deps = ship();
     deps.manifest.mockResolvedValue({ sourceSha: sha });
     await ensureMainBuild(sha, deps);
-    expect(deps.active).not.toHaveBeenCalled();
+    expect(deps.active).toHaveBeenCalledWith(sha);
     expect(deps.build).not.toHaveBeenCalled();
   });
-  it("waits for the in-flight Build main run instead of starting a competing build", async () => {
+  it("waits for Desktop even when the container manifest is already published", async () => {
     const deps = ship();
     deps.active.mockResolvedValue(9);
-    deps.manifest.mockResolvedValueOnce(null).mockResolvedValueOnce({ sourceSha: sha });
+    deps.manifest.mockResolvedValue({ sourceSha: sha });
     await ensureMainBuild(sha, deps);
     expect(deps.watch).toHaveBeenCalledWith(9);
     expect(deps.build).not.toHaveBeenCalled();
+  });
+  it("refuses a failed Desktop job after container publication", async () => {
+    const deps = ship();
+    deps.active.mockResolvedValue(9);
+    deps.manifest.mockResolvedValue({ sourceSha: sha });
+    deps.watch.mockResolvedValue({ ...run, conclusion: "failure" });
+    await expect(ensureMainBuild(sha, deps)).rejects.toThrow("concluded failure");
   });
   it("starts a build only when no manifest or in-flight run exists", async () => {
     const deps = ship();
@@ -120,6 +127,6 @@ describe("Ship TEST main build selection", () => {
   });
   it("fails when a finished build published no manifest", async () => {
     const deps = ship();
-    await expect(ensureMainBuild(sha, deps)).rejects.toThrow(`Build main for ${sha} published no release-digest manifest`);
+    await expect(ensureMainBuild(sha, deps)).rejects.toThrow(`Build main for ${sha} published no complete image family`);
   });
 });

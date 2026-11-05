@@ -19,3 +19,9 @@ function validRelease(sha, { value, digest }) {
 export function resolveDesktopRelease(build, fetchAuthenticated = request) {
   return readDesktopRelease(build, fetchAuthenticated);
 }
+
+export async function findCompleteRelease(sha, fetchAuthenticated = request) {
+  const build = await findRelease(sha, fetchAuthenticated);
+  if (!build) return null;
+  return await resolveDesktopRelease(build, fetchAuthenticated) ? build : null;
+}

@@ -15,7 +15,6 @@ export async function mainBuild(options, deps) {
 }
 
 export async function ensureMainBuild(sha, deps) {
-  if (await deps.manifest(sha)) return;
   const active = await deps.active(sha);
   if (active) {
     const run = await deps.watch(active);
@@ -24,12 +23,13 @@ export async function ensureMainBuild(sha, deps) {
     if (await deps.manifest(sha)) return;
     console.log(`Build main run ${run.url} was cancelled before publishing ${sha}; starting a build`);
   }
+  if (await deps.manifest(sha)) return;
   await deps.build();
   return requireManifest(sha, deps);
 }
 
 async function requireManifest(sha, deps) {
-  if (!await deps.manifest(sha)) throw new Error(`Build main for ${sha} published no release-digest manifest`);
+  if (!await deps.manifest(sha)) throw new Error(`Build main for ${sha} published no complete image family`);
 }
 
 export function trackSubmission(submit, activeBuilds) {

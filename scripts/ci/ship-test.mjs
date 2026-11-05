@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { releaseOptions } from './release-plan.mjs';
 import { ensureMainBuild } from './main-build.mjs';
-import { findRelease } from './release-source.mjs';
+import { findCompleteRelease } from './release-source.mjs';
 import { awaitRun, dispatchWorkflow, findRunningRun } from './actions-dispatch.mjs';
 
 const args = process.argv.slice(2);
@@ -13,10 +13,10 @@ const options = releaseOptions(releaseArgs);
 const run = (values, env = process.env) => execFileSync(process.execPath, values, { stdio: 'inherit', env });
 if (local) {
   await ensureMainBuild(sha, {
-    manifest: findRelease,
+    manifest: findCompleteRelease,
     active: value => findRunningRun('build-main.yml', value),
     watch: id => awaitRun(id),
-    build: async () => run(['scripts/ci/main.mjs', ...(force ? ['--force'] : [])], { ...process.env, CI_SOURCE_SHA: sha, CI_BRANCH: 'main' }),
+    build: () => dispatchWorkflow('build-main.yml', { source_sha: sha, force: String(force) }),
   });
   run(['scripts/ci/deploy.mjs', ...releaseArgs, '--local']);
   run(['scripts/ci/end-to-end-tests.mjs'], { ...process.env, CI_LIVE_RESTART: 'true' });

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { expect, it, vi } from 'vitest';
-import { findRelease, resolveRelease, resolveDesktopRelease } from '../ci/release-source.mjs';
+import { findRelease, findCompleteRelease, resolveRelease, resolveDesktopRelease } from '../ci/release-source.mjs';
 
 const sha = 'a'.repeat(40);
 const digest = (bytes: Buffer) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -121,4 +121,15 @@ it('verifies the indexed child size as well as its digest', async () => {
   const fixture = indexedRegistry();
   fixture.descriptor.size += 1;
   await expect(resolveDesktopRelease(build, fixture.request)).rejects.toThrow('index size mismatch');
+});
+
+it.each([200, 404, 403])('requires the accepted Desktop companion before reporting a complete build (status %s)', async status => {
+  const main = registry();
+  const desktop = registry({ ...companion, manifestDigest: digest(main.image) }, 'desktop-image-manifest.json');
+  const request = async (url: string) => url.includes('/desktop-image-manifest/')
+    ? status === 200 ? desktop.request(url) : new Response('', { status })
+    : main.request(url);
+  if (status === 403) await expect(findCompleteRelease(sha, request)).rejects.toThrow('lookup failed: 403');
+  else if (status === 404) await expect(findCompleteRelease(sha, request)).resolves.toBeNull();
+  else expect((await findCompleteRelease(sha, request))?.manifest).toEqual(manifest);
 });
