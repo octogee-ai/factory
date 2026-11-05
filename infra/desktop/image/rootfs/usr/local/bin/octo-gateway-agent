@@ -25,10 +25,9 @@ install -d -m 0755 "$STATE_ROOT" "$STATE_ROOT/volumes" "$STATE_ROOT/tokens"
 ensure_image() {
   local image="$1"
   if ! docker image inspect "$image" >/dev/null 2>&1; then
-    local registry="${image%%/*}"
-    meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
-      | docker login -u oauth2accesstoken --password-stdin "$registry" >/dev/null || return 1
-    docker pull -q "$image" >/dev/null || return 1
+    local token
+    token="$(meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')" || return 1
+    OCTOGEE_REGISTRY_TOKEN="$token" docker pull -q "$image" >/dev/null || return 1
     echo "octo-gateway-agent: cached gateway image $image"
   fi
   local previous=""

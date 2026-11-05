@@ -19,9 +19,10 @@ elif command == 'ufw':
     with (root/'events').open('a') as out: out.write(json.dumps(['ufw', *args])+'\\n')
 elif command == 'docker':
     with (root/'events').open('a') as out: out.write(json.dumps(args)+'\\n')
-    if args[0] == 'login': sys.stdin.read()
     if args[:2] == ['image', 'inspect']: sys.exit(0 if (root/'cached').exists() and (root/'cached').read_text() == args[-1] else 1)
-    if args[0] == 'pull': (root/'cached').write_text(args[-1])
+    if args[0] == 'pull':
+        (root/'cached').write_text(args[-1])
+        (root/'pull-token').write_text(os.environ.get('OCTOGEE_REGISTRY_TOKEN', ''))
     if args[:2] == ['image', 'prune']: print('Total reclaimed space: 38.2GB')
     if args[0] == 'run':
         while not (root/'stopped').exists(): time.sleep(0.02)
@@ -60,7 +61,10 @@ describe("native VM bootstrap supervision", () => {
       expect(events.find((args) => args[0] === "run")).toContain(`/home/octo:${root}/state/desktop-home`);
       expect(events.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "octo-gateway-agent"]]);
       const dockerVerbs = events.filter((args) => args[0] !== "ufw").map((args) => args.slice(0, 2).join(" "));
-      expect(dockerVerbs.slice(0, 3)).toEqual(["image inspect", "login -u", "pull -q"]);
+      expect(dockerVerbs.slice(0, 2)).toEqual(["image inspect", "pull -q"]);
+      expect(events.some((args) => args[0] === "login" || args[0] === "logout")).toBe(false);
+      expect(await readFile(`${root}/pull-token`, "utf8")).toBe("fixture-token");
+      expect(output).not.toContain("fixture-token");
       expect(events.some((args) => args[0] === "image" && args[1] === "prune")).toBe(false);
     } finally {
       clearTimeout(timer);

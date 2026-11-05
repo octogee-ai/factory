@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import socket
@@ -119,8 +120,9 @@ guest_ssh() {
   if [[ "$*" == *bash\ /tmp/customize/customize.sh* ]]; then
     touch "$WORK/home-required"
   fi
-  if [[ "$*" == *password-stdin* ]]; then
-    cat > "$WORK/login-input"
+  if [[ "$*" == */root/.docker/config.json* ]]; then cat > "$WORK/docker-config"; fi
+  if [[ "$*" == *docker\ pull* ]]; then
+    cat > "$WORK/pull-input"
     [[ "$TEST_FAIL" == 0 ]] || return 37
   fi
 }
@@ -134,39 +136,44 @@ echo PRELOAD_DONE
                     'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64,
                     'TEST_SCRATCH_FAIL': str(int(scratch_fail)), 'TEST_FAIL': str(int(fail)), 'TEST_CUSTOMIZE': str(int(customize))}, capture_output=True, text=True, timeout=10)
             commands = (Path(directory) / 'commands').read_text() if (Path(directory) / 'commands').exists() else ''
-            login = (Path(directory) / 'login-input').read_text() if (Path(directory) / 'login-input').exists() else ''
-            return result, commands, login
+            token = (Path(directory) / 'pull-input').read_text() if (Path(directory) / 'pull-input').exists() else ''
+            config = (Path(directory) / 'docker-config').read_text() if (Path(directory) / 'docker-config').exists() else ''
+            return result, commands, token, config
 
-    def test_preloads_the_digest_after_starting_docker_with_an_unbaked_stdin_credential(self):
-        result, commands, login = self.preload()
+    def test_preloads_the_digest_through_the_credential_helper_without_a_stored_login(self):
+        result, commands, token, config = self.preload()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PRELOAD_DONE', result.stdout)
         self.assertIn('systemctl start docker.service', commands)
-        self.assertIn('docker pull', commands)
+        self.assertLess(commands.index('install -D -m 0755 /dev/stdin /usr/local/bin/docker-credential-octogee'), commands.index('docker pull'))
+        self.assertLess(commands.index('install -D -m 0644 /dev/stdin /root/.docker/config.json'), commands.index('docker pull'))
+        self.assertEqual(json.loads(config), {'credHelpers': {'us-central1-docker.pkg.dev': 'octogee'}})
+        self.assertIn('OCTOGEE_REGISTRY_TOKEN="$(cat)" docker pull', commands)
         self.assertIn('octogee-gateway-builder@sha256:' + 'a' * 64, commands)
         self.assertIn('docker image inspect', commands)
-        self.assertIn('docker logout', commands)
         self.assertIn('/etc/octogee-gateway-image', commands)
-        self.assertEqual(login, 'fixture-access-token')
+        self.assertNotIn('docker login', commands)
+        self.assertNotIn('docker logout', commands)
+        self.assertEqual(token, 'fixture-access-token')
         self.assertNotIn('fixture-access-token', commands + result.stdout + result.stderr)
 
     def test_factory_preloads_before_customization_requires_an_owner_home_disk(self):
-        result, commands, login = self.preload(customize=True)
+        result, commands, token, _ = self.preload(customize=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PRELOAD_DONE', result.stdout)
         self.assertIn('bash /tmp/customize/customize.sh', commands)
         self.assertIn('docker image inspect', commands)
-        self.assertEqual(login, 'fixture-access-token')
+        self.assertEqual(token, 'fixture-access-token')
 
     def test_unbounded_scratch_blocks_docker_and_preload(self):
-        result, commands, login = self.preload(scratch_fail=True)
+        result, commands, token, _ = self.preload(scratch_fail=True)
         self.assertEqual(result.returncode, 1)
         self.assertNotIn('systemctl start docker.service', commands)
-        self.assertEqual(login, '')
+        self.assertEqual(token, '')
         self.assertIn('could not bound disposable scratch', result.stdout)
 
     def test_failed_preload_stops_the_image_pipeline(self):
-        result, _, _ = self.preload(fail=True)
+        result, _, _, _ = self.preload(fail=True)
         self.assertEqual(result.returncode, 1)
         self.assertNotIn('PRELOAD_DONE', result.stdout)
         self.assertIn('gateway preload failed', result.stdout)
