@@ -18,6 +18,7 @@ if args[:3] == ['compute', 'instances', 'create'] and os.environ.get('BUILD_CASE
 if args[:3] == ['compute', 'instances', 'create'] and os.environ.get('BUILD_CASE') == 'create-failed':
     print('quota exceeded', file=sys.stderr); sys.exit(1)
 if 'ssh' in args and 'tail -n' in args[-1]: print('PIPELINE_DONE')
+if 'ssh' in args and 'cat ~/image-build/omarchy-version' in args[-1]: print('4.5.0-2')
 '''
 
 
@@ -32,7 +33,7 @@ class CandidateBuildTests(unittest.TestCase):
         key.touch()
         (root / "key.pub").write_text("ssh-ed25519 fixture")
         return subprocess.run(['bash', str(Path(__file__).with_name('build.sh')), '--project', 'fixture', *extra_args],
-            env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'OCTOGEE_GCE_SSH_KEY': str(key), 'BUILD_CALLS': str(root / 'calls'), 'OCTOGEE_IMAGE_RUN_ID': run_id, 'BUILD_CASE': case, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64}, capture_output=True, text=True, timeout=10)
+            env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'OCTOGEE_GCE_SSH_KEY': str(key), 'BUILD_CALLS': str(root / 'calls'), 'OCTOGEE_IMAGE_RUN_ID': run_id, 'BUILD_CASE': case, 'OCTOGEE_DESKTOP_EDGE_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + 'b' * 64, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64}, capture_output=True, text=True, timeout=10)
 
     def test_exhausted_zone_falls_back_and_addresses_the_builder_there(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -90,6 +91,8 @@ class CandidateBuildTests(unittest.TestCase):
             image = calls[registration]
             self.assertEqual(image[image.index('--source-disk') + 1], 'builder-x-image')
             self.assertEqual(image[image.index('--source-disk-zone') + 1], 'us-central1-b')
+            self.assertIn('omarchy=4-5-0-2', image[image.index('--labels') + 1])
+            self.assertIn('omarchy-iso=4-5-0', image[image.index('--labels') + 1])
             self.assertNotIn('--source-uri', image)
             delete = calls.index(['compute', 'instances', 'delete', 'builder-x', '--zone', 'us-central1-b', '--project', 'fixture', '--quiet'])
             self.assertGreater(delete, registration)

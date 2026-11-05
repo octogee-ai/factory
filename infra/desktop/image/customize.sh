@@ -12,6 +12,13 @@ HYPRBARS_COMMIT="${HYPRBARS_COMMIT:-7644cecdb947060682891a0db2a0cdc5c0b9e704}"
 
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S) [customize]" "$*"; }
 
+record_image_identity() {
+  local installed
+  installed="$(omarchy version)" || return 1
+  [[ "${installed%-*}" == "$OMARCHY_VERSION" && "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "installed Omarchy $installed does not match ISO $OMARCHY_VERSION" >&2; return 1; }
+  printf 'OMARCHY_ISO_VERSION=%s\nOMARCHY_VERSION=%s\nIMAGE_NAME=%s\n' "$OMARCHY_VERSION" "$installed" "$IMAGE_NAME" > /etc/octogee-computer.env
+}
+
 log "packages"
 OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu --noconfirm --needed \
   at-spi2-core wayvnc x11vnc grim wtype wl-clipboard slurp jq python python-pip python-websocket-client bc \
@@ -102,7 +109,7 @@ log "desktop tool storage outside the Builder home"
 
 log "identity reset + cleanup"
 printf '%s\n' "$IMAGE_NAME" > /etc/octogee-computer-image
-printf 'OMARCHY_VERSION=%s\nIMAGE_NAME=%s\n' "$OMARCHY_VERSION" "$IMAGE_NAME" > /etc/octogee-computer.env
+record_image_identity
 : > /etc/machine-id
 rm -f /var/lib/dbus/machine-id
 rm -f /etc/ssh/ssh_host_*

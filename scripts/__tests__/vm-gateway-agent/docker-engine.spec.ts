@@ -10,6 +10,7 @@ import {
   createDockerEngine,
   imagePullPath,
   inspectContainer,
+  hasImmutableImage,
   pullImage,
   registryAuthHeader,
   registryHostOf,
@@ -141,4 +142,21 @@ describe("engine helpers", () => {
     await expect(removeContainer(engine([{ status: 404, body: {} }]), "octogee-gateway")).resolves.toBeUndefined();
     await expect(removeContainer(engine([{ status: 500, body: { message: "boom" } }]), "octogee-gateway")).rejects.toThrow(/boom/);
   });
+});
+
+it.each([200, 404, 500])("checks preloaded digest identity without treating Docker errors as cache misses (%s)", async status => {
+  const reference = `registry.example/image@sha256:${"a".repeat(64)}`;
+  const request = vi.fn(async () => ({ status, body: { RepoDigests: [reference], message: "unavailable" } }));
+  const result = hasImmutableImage({ request } as DockerEngine, reference.replace("@", ":deadbee@"));
+  if (status === 500) await expect(result).rejects.toThrow("HTTP 500");
+  else await expect(result).resolves.toBe(status === 200);
+  expect(request).toHaveBeenCalledExactlyOnceWith("GET", `/images/${encodeURIComponent(reference)}/json`);
+});
+
+it("refuses a mismatched local digest and refreshes mutable tags", async () => {
+  const request = vi.fn(async () => ({ status: 200, body: { RepoDigests: [] } }));
+  const engine = { request } as DockerEngine;
+  await expect(hasImmutableImage(engine, "registry.example/image:latest")).resolves.toBe(false);
+  expect(request).not.toHaveBeenCalled();
+  await expect(hasImmutableImage(engine, `registry.example/image@sha256:${"a".repeat(64)}`)).rejects.toThrow("does not match");
 });

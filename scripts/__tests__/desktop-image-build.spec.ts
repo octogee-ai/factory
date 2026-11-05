@@ -3,7 +3,7 @@ import { ensureDesktopImage, desktopFingerprint, resolveDesktopGatewayImage } fr
 const fingerprint = 'b'.repeat(64), sourceSha = 'a'.repeat(40);
 const name = `octogee-computer-${fingerprint.slice(0, 24)}`;
 const image = { name, id: '123', status: 'READY', labels: { source: sourceSha, 'input-a': fingerprint.slice(0, 32), 'input-b': fingerprint.slice(32) } };
-const artifact = { project: 'octogee-test', name, id: '123', sourceSha, inputFingerprint: fingerprint, acceptance: 'resize-reboot-v1' };
+const artifact = { project: 'octogee-test', name, id: '123', sourceSha, inputFingerprint: fingerprint, acceptance: 'boot-smoke-v1' };
 it('reuses a tested input fingerprint without another build or test VM', async () => {
   const build = vi.fn(), accept = vi.fn(), save = vi.fn();
   expect(await ensureDesktopImage({ fingerprint, sourceSha: 'c'.repeat(40), cached: artifact, readImage: async () => image, build, accept, save })).toEqual(artifact);
@@ -68,11 +68,13 @@ it('abandoned-run cleanup preserves recent VMs and rejects unexpected purposes',
 
 const repository = 'us-central1-docker.pkg.dev/octogee/octogee';
 const gatewayDigest = `sha256:${'e'.repeat(64)}`;
+const edgeImage = `${repository}/gateway-edge@sha256:${'d'.repeat(64)}`;
 it('includes the immutable gateway digest in the desktop fingerprint', () => {
   const files = () => '../infra/desktop/image/rootfs/usr/local/bin/octo-home-disk\0';
-  const first = desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, files);
-  expect(first).toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, files));
-  expect(first).not.toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@sha256:${'f'.repeat(64)}`, files));
+  const first = desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, edgeImage, files);
+  expect(first).toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, edgeImage, files));
+  expect(first).not.toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@${gatewayDigest}`, `${repository}/gateway-edge@sha256:${'f'.repeat(64)}`, files));
+  expect(first).not.toBe(desktopFingerprint(`${repository}/octogee-gateway-builder@sha256:${'f'.repeat(64)}`, edgeImage, files));
 });
 it('resolves the exact main Builder image after gateway builds finish', () => {
   const lookup = vi.fn(() => gatewayDigest);

@@ -25,7 +25,8 @@ try {
     lookup: resolveDesktopRelease,
     desktop: async build => {
       cleaned = false;
-      const desktopEnv = { ...env, OCTOGEE_DESKTOP_GATEWAY_IMAGE: `${env.AR_REPO}/octogee-gateway-builder@${build.manifest.surfaces.gateway['octogee-gateway-builder']}` };
+      const desktopEnv = { ...env, OCTOGEE_DESKTOP_GATEWAY_IMAGE: `${env.AR_REPO}/octogee-gateway-builder@${build.manifest.surfaces.gateway['octogee-gateway-builder']}`,
+        OCTOGEE_DESKTOP_EDGE_IMAGE: `${env.AR_REPO}/gateway-edge@${build.manifest.surfaces.gateway['gateway-edge']}` };
       try {
         run('node', ['.github/actions/release-digest-manifest/build-desktop-image.mjs'], { env: desktopEnv, stdio: 'inherit' });
         return JSON.parse(readFileSync(join(temporary, 'desktop-image.json'), 'utf8'));

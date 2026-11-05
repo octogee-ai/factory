@@ -51,6 +51,12 @@ elif name == 'ssh':
         if case == 'missing-resize': sys.exit(22)
         if case == 'resize-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists(): sys.exit(22)
         print('display resize verified: 1440x900')
+    elif '/etc/octogee-gateway-edge-image' in command:
+        if case == 'edge-cache-missing' or (case == 'edge-cache-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists()): sys.exit(1)
+        print('us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + ('c' if case == 'edge-cache-wrong' else 'b') * 64)
+    elif '/etc/octogee-computer.env' in command:
+        if case == 'installed-version-mismatch': sys.exit(1)
+        print('ISO=4.5.0 installed=4.5.0-2')
     elif '/etc/octogee-gateway-image' in command:
         if case == 'gateway-cache-missing' or (case == 'gateway-cache-lost-after-reboot' and pathlib.Path(os.environ['ACCEPTANCE_MARKER']).exists()): sys.exit(1)
         print('us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + ('b' if case == 'gateway-cache-wrong' else 'a') * 64)
@@ -87,7 +93,7 @@ elif name == 'ssh':
 
 
 class ImageAcceptanceTests(unittest.TestCase):
-    def run_acceptance(self, case, ci=False, expected_zone='us-central1-a'):
+    def run_acceptance(self, case, ci=False, expected_zone='us-central1-a', smoke=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ('gcloud', 'scp', 'ssh'):
@@ -95,12 +101,30 @@ class ImageAcceptanceTests(unittest.TestCase):
                 path.write_text(MOCK)
                 path.chmod(0o755)
             return subprocess.run(
-                ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', '--stop-start', '--zone', 'us-central1-a', '--fallback-zones', 'us-central1-b,us-central1-c'],
+                ['bash', str(Path(__file__).with_name('test.sh')), '--project', 'fixture', *(['--smoke'] if smoke else ['--stop-start']), '--zone', 'us-central1-a', '--fallback-zones', 'us-central1-b,us-central1-c'],
                 env={**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
                      'ACCEPTANCE_CASE': case, 'OCTOGEE_IMAGE_RUN_ID': '123-1' if ci else 'manual', 'ACCEPTANCE_MARKER': str(root / 'marker'),
-                     'ACCEPTANCE_EXPECTED_ZONE': expected_zone, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64},
+                     'ACCEPTANCE_EXPECTED_ZONE': expected_zone, 'OCTOGEE_DESKTOP_EDGE_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + 'b' * 64, 'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64},
                 capture_output=True, text=True, timeout=15,
             )
+
+    def test_smoke_checks_boot_and_images_without_ui_or_restart_suite(self):
+        for case in ['success', 'familiar-broken', 'missing-resize', 'missing-profile']:
+            with self.subTest(case=case):
+                result = self.run_acceptance(case, smoke=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('boot smoke passed', result.stdout)
+                self.assertNotIn('Home survives stop/start', result.stdout)
+        for case in ['inactive-unit', 'inactive-agent', 'edge-cache-missing', 'gateway-cache-wrong', 'installed-version-mismatch']:
+            with self.subTest(case=case):
+                result = self.run_acceptance(case, smoke=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_wrong_or_lost_edge_image_and_version_mismatch_fail_acceptance(self):
+        for case in ['edge-cache-missing', 'edge-cache-wrong', 'edge-cache-lost-after-reboot', 'installed-version-mismatch']:
+            with self.subTest(case=case):
+                result = self.run_acceptance(case)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_current_browser_profile_survives_restart(self):
         result = self.run_acceptance('success')

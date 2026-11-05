@@ -427,6 +427,22 @@ describe("convergeOnce", () => {
     expect(docker.log).not.toContain("POST /volumes/create");
   });
 
+  it.each(["bundle", "services"])("starts preloaded immutable images without a registry pull (%s)", async kind => {
+    const docker = fakeDocker();
+    const bundle = bundleFixture();
+    const image = `registry.example/actual:deadbee@sha256:${"a".repeat(64)}`;
+    bundle.init!.image = image;
+    for (const container of bundle.containers) container.image = image;
+    const h = deps(docker, () => runtimeReply(bundle), { now: 1000 });
+    const token = vi.spyOn(h.d.metadata, "accessToken").mockRejectedValue(new Error("registry token unavailable"));
+    const plan = planBundle(bundle, { stateRoot: h.d.stateRoot, instanceId: "4242", desktopAuth: true });
+    if (kind === "bundle") await applyBundle(h.d, bundle, plan);
+    else await applyServices(h.d, bundle, plan.services);
+    expect(token).not.toHaveBeenCalled();
+    expect(docker.log.some(line => line.startsWith("POST /images/create"))).toBe(false);
+    expect(docker.containers.get("octogee-gateway")?.running).toBe(true);
+  });
+
   it("waits while the bundle is unrendered, then writes tokens, prepares volumes, runs init, and starts the services", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };

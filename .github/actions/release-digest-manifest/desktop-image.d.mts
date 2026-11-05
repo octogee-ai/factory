@@ -4,7 +4,7 @@ export interface DesktopImageArtifact {
   id: string;
   sourceSha: string;
   inputFingerprint: string;
-  acceptance: 'resize-reboot-v1';
+  acceptance: 'boot-smoke-v1' | 'resize-reboot-v1';
 }
 export function validateDesktopImage(value: unknown): DesktopImageArtifact;
 export function assertDesktopImageIdentity(artifact: unknown, image: unknown): DesktopImageArtifact;

@@ -22,15 +22,19 @@ infra/desktop/image/build.sh --project octogee-test
    guest overlay in `rootfs/`, and the shared session scripts from
    `../rootfs`.
 2. `pipeline.sh` (on the builder) downloads the ISO, verifies it against the
-   checksum pinned in `build.sh`, renders the `cidata` drive (archinstall
+   checksum pinned in `build.sh`, renders the `cidata` drive (native installer
    layout for `/dev/vda`, a throwaway build password, a one-build SSH key),
    and runs Omarchy's unattended install in QEMU/KVM directly onto the
    attached image disk.
-3. `customize.sh` (inside the guest, as root) installs the session packages,
+3. The factory preloads the release's digest-addressed Gateway Builder and gateway-edge
+   images into Docker on the boot disk, then verifies both are present.
+   `customize.sh` (inside the guest, as root) installs the session packages,
    builds `wlrctl`, installs pinned noVNC and websockify, copies the overlay
    and session scripts, enables the units, sets Limine's timeout to zero,
    cleans the kernel command line, resets the machine identity and SSH host
    keys, and records the image name in `/etc/octogee-computer-image`.
+   `/etc/octogee-computer.env` records both the ISO version and installed Omarchy
+   package version; the build refuses a different installed release.
 4. The build key is removed and the guest powers off. The serial log goes to
    `gs://<project>-octogee-computer-images/images/`, as does failure evidence
    (serial log, screen) when the install fails.
@@ -205,7 +209,7 @@ home being replaced; the lifecycle start action removes that hold.
 
 | Input | Where |
 | --- | --- |
-| Omarchy ISO version + sha256 | `build.sh` (`ISO_SHA256`) |
+| Omarchy 4.5.0 x86 ISO + sha256 | `build.sh` (`ISO_SHA256`); [official download](https://omarchy.org/) |
 | Package set | Omarchy's stable mirror at build time; the image name carries the build stamp |
 | wlrctl, noVNC, websockify | `customize.sh` |
 | hyprbars (hyprwm/hyprland-plugins commit) | `customize.sh` (`HYPRBARS_COMMIT`) |
@@ -267,9 +271,14 @@ Check `fleet --help` before running an operator command.
 
 The `desktop-image` job in `build-main.yml` calls these same build and acceptance
 scripts. A fingerprint covers the rootfs, ISO and tool pins, installer,
-acceptance scripts, and build driver. Unchanged inputs reuse the accepted GCE
+acceptance scripts, build driver, and both runtime image digests. Unchanged inputs reuse the accepted GCE
 image; a cache miss builds a candidate without changing the image family,
-then runs acceptance on a disposable VM, including resize and stop/start.
+then runs a boot smoke check on a disposable VM: installed-version verification,
+both preloaded image digests, required services, home storage, and desktop health.
+UI, resize, and stop/start tests remain explicit operator qualification through
+`test.sh --stop-start`; they do not run in normal builds. The VM agent starts matching
+local immutable images without a registry request; an explicit later runtime
+update can fetch a missing image through the existing owner.
 Only successful acceptance creates an immutable descriptor in
 `gs://octogee-test-octogee-computer-images/accepted/`.
 

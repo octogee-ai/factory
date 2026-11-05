@@ -14,17 +14,19 @@ RESOLUTION="1440x900"
 NAME="octogee-computer-test-$(date -u +%H%M%S)"
 KEEP=0
 STOP_START=0
+SMOKE=0
 SERVICE_ACCOUNT=""
 
 usage() {
   cat <<EOF
 usage: $0 --project <gcp-project> [--zone $ZONE] [--fallback-zones <zone,zone>] [--image <name> | --family $FAMILY]
-          [--machine-type $MACHINE] [--stop-start] [--keep] [--service-account <email>]
+          [--machine-type $MACHINE] [--stop-start | --smoke] [--keep] [--service-account <email>]
 
 Boots a VM from the image, waits for SSH (key delivered through instance
 metadata), checks the desktop session, drives Chromium through the control API,
 optionally stops and starts the VM to prove the home persists, prints a results
-block, and deletes the VM.
+block, and deletes the VM. --smoke checks boot health and baked image identities
+without the UI or restart suite.
 EOF
 }
 
@@ -37,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --family) FAMILY="$2"; shift 2 ;;
     --machine-type) MACHINE="$2"; shift 2 ;;
     --stop-start) STOP_START=1; shift ;;
+    --smoke) SMOKE=1; shift ;;
     --keep) KEEP=1; shift ;;
     --service-account) SERVICE_ACCOUNT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -44,6 +47,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$PROJECT" ]] || { usage >&2; exit 2; }
+[[ "$SMOKE:$STOP_START" != 1:1 ]] || { echo "--smoke and --stop-start are mutually exclusive" >&2; exit 2; }
 
 service_account_args=()
 [[ -z "$SERVICE_ACCOUNT" ]] || service_account_args=(--service-account "$SERVICE_ACCOUNT")
@@ -109,6 +113,15 @@ check_gateway_image() {
   [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ && "$image" == "${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}" ]] || { echo "gateway image preload does not match the requested digest" >&2; return 1; }
 }
 check_gateway_image
+check_edge_image() {
+  local image
+  image="$(vssh 'set -e; image="$(cat /etc/octogee-gateway-edge-image)"; sudo docker image inspect "$image" >/dev/null; printf "%s\n" "$image"')" || { echo "gateway-edge image preload is missing" >&2; return 1; }
+  [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/gateway-edge@sha256:[a-f0-9]{64}$ && "$image" == "${OCTOGEE_DESKTOP_EDGE_IMAGE:?immutable gateway-edge image is required}" ]] || { echo "gateway-edge image preload does not match the requested digest" >&2; return 1; }
+}
+check_edge_image
+omarchy_versions="$(vssh 'set -eu; . /etc/octogee-computer.env; installed="$(omarchy version)"; test "$installed" = "$OMARCHY_VERSION"; printf "ISO=%s installed=%s\n" "$OMARCHY_ISO_VERSION" "$installed"')"
+[[ "$omarchy_versions" =~ ^ISO=[0-9]+\.[0-9]+\.[0-9]+\ installed=[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "invalid installed Omarchy version: $omarchy_versions" >&2; exit 1; }
+log "Omarchy $omarchy_versions"
 vssh 'sudo /usr/local/bin/octo-scratch-storage; sudo test -r "/srv/octogee/.home-checkpoint/pre-migration/$(cat /etc/octogee-computer-image)-$(cat /etc/machine-id)/.home-checkpoint/recovery-image"'
 image_id="$(vssh 'cat /etc/octogee-computer-image 2>/dev/null || echo unknown')"
 vssh 'sudo systemd-analyze verify /etc/systemd/system/octo-*.service'
@@ -127,6 +140,10 @@ grow_root="$(vssh 'systemctl show octo-grow-root.service --property=Result --val
 [[ "$grow_root" == success ]] || { echo "octo-grow-root did not succeed: $grow_root" >&2; vssh 'journalctl -u octo-grow-root --no-pager | tail -20' >&2 || true; exit 1; }
 wait_desktop
 t_desktop=$(date +%s)
+if [[ "$SMOKE" == 1 ]]; then
+  log "boot smoke passed: ${image_id}, desktop ready after $((t_desktop - t_create)) s, both runtime images present"
+  exit 0
+fi
 vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
 accessibility="$(vssh 'bash -s' < "$HERE/../acceptance/accessibility-bus.sh")" \
   || { echo "desktop accessibility bus does not serve Chromium" >&2; exit 1; }
@@ -154,6 +171,7 @@ if [[ "$STOP_START" == 1 ]]; then
   wait_ssh 300
   t_back=$(date +%s)
   check_gateway_image
+  check_edge_image
   wait_desktop
   vssh 'python3 -' < "$HERE/../acceptance/display-resize.py"
   after="$(vssh 'cat ~/persist-marker 2>/dev/null; if test -f ~/.config/octogee-chromium/Default/Cookies; then echo profile-present; fi')"

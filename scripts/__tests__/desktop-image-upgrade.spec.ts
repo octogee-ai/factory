@@ -110,3 +110,24 @@ it('refuses to migrate when the desktop user\'s session bus never appears', () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it.each(["4.5.0-2", "4.0.6-1", ""])("records the installed Omarchy version and refuses a stale or missing result (%s)", version => {
+  const dir = mkdtempSync(path.join(tmpdir(), "computer-version-"));
+  try {
+    const source = readFileSync(path.resolve("../infra/desktop/image/customize.sh"), "utf8");
+    const fn = source.match(/^record_image_identity\(\) \{[\s\S]*?^\}/m)?.[0] ?? "";
+    const envFile = path.join(dir, "computer.env");
+    const result = spawnSync("bash", ["-c", `${fn.replaceAll("/etc/octogee-computer.env", envFile)}
+omarchy() { printf '%s\\n' "$TEST_VERSION"; }
+record_image_identity`], {
+      env: { ...process.env, OMARCHY_VERSION: "4.5.0", IMAGE_NAME: "candidate", TEST_VERSION: version }, encoding: "utf8",
+    });
+    if (version === "4.5.0-2") {
+      expect(result.status).toBe(0);
+      expect(readFileSync(envFile, "utf8")).toBe("OMARCHY_ISO_VERSION=4.5.0\nOMARCHY_VERSION=4.5.0-2\nIMAGE_NAME=candidate\n");
+    } else {
+      expect(result.status).not.toBe(0);
+      expect(existsSync(envFile)).toBe(false);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

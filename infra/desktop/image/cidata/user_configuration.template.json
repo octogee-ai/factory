@@ -3,7 +3,14 @@
   "archinstall-language": "English",
   "auth_config": {},
   "audio_config": { "audio": "pipewire" },
-  "bootloader": "Limine",
+  "bootloader_config": { "bootloader": "Limine", "uki": false, "removable": false },
+  "omarchy_install": {
+    "mode": "full_disk",
+    "defer_provisioning": false,
+    "target_mount": "/mnt",
+    "boot": { "esp_mount": "/boot", "esp_path": "/EFI/limine", "efi_binary": "limine_x64.efi", "enable_fallback": true },
+    "storage": { "kernel": "linux-omarchy" }
+  },
   "custom_commands": [],
   "disk_config": {
     "btrfs_options": { "snapshot_config": { "type": "Snapper" } },

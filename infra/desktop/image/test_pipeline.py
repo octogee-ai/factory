@@ -133,6 +133,7 @@ echo PRELOAD_DONE
 '''], env={**os.environ, 'OMARCHY_VERSION': 'fixture', 'OMARCHY_ISO_SHA256': 'fixture',
                     'IMAGE_NAME': 'candidate', 'IMAGE_BUCKET': 'gs://fixture', 'DISK_GB': '40',
                     'IMAGE_DEVICE': '/dev/fixture', 'EVIDENCE_WORK': directory, 'TEST_PAYLOAD': str(Path(__file__).resolve().parent),
+                    'OCTOGEE_DESKTOP_EDGE_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + 'b' * 64,
                     'OCTOGEE_DESKTOP_GATEWAY_IMAGE': 'us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder@sha256:' + 'a' * 64,
                     'TEST_SCRATCH_FAIL': str(int(scratch_fail)), 'TEST_FAIL': str(int(fail)), 'TEST_CUSTOMIZE': str(int(customize))}, capture_output=True, text=True, timeout=10)
             commands = (Path(directory) / 'commands').read_text() if (Path(directory) / 'commands').exists() else ''
@@ -148,8 +149,10 @@ echo PRELOAD_DONE
         self.assertLess(commands.index('install -D -m 0755 /dev/stdin /usr/local/bin/docker-credential-octogee'), commands.index('docker pull'))
         self.assertLess(commands.index('install -D -m 0644 /dev/stdin /root/.docker/config.json'), commands.index('docker pull'))
         self.assertEqual(json.loads(config), {'credHelpers': {'us-central1-docker.pkg.dev': 'octogee'}})
-        self.assertIn('OCTOGEE_REGISTRY_TOKEN="$(cat)" docker pull', commands)
+        self.assertIn('export OCTOGEE_REGISTRY_TOKEN="$(cat)";', commands)
         self.assertIn('octogee-gateway-builder@sha256:' + 'a' * 64, commands)
+        self.assertIn('docker pull --quiet us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + 'b' * 64, commands)
+        self.assertIn('/etc/octogee-gateway-edge-image', commands)
         self.assertIn('docker image inspect', commands)
         self.assertIn('/etc/octogee-gateway-image', commands)
         self.assertNotIn('docker login', commands)
@@ -162,6 +165,8 @@ echo PRELOAD_DONE
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PRELOAD_DONE', result.stdout)
         self.assertIn('bash /tmp/customize/customize.sh', commands)
+        self.assertIn('docker pull --quiet us-central1-docker.pkg.dev/octogee/octogee/gateway-edge@sha256:' + 'b' * 64, commands)
+        self.assertIn('/etc/octogee-gateway-edge-image', commands)
         self.assertIn('docker image inspect', commands)
         self.assertEqual(token, 'fixture-access-token')
 

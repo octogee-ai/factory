@@ -7,7 +7,7 @@ source "$HERE/zones.sh"
 PROJECT=""
 ZONE="us-west1-b"
 FALLBACK_ZONES=""
-OMARCHY_VERSION="4.0.6"
+OMARCHY_VERSION="4.5.0"
 BUCKET=""
 BUILDER="octogee-computer-image-builder"
 KEEP_BUILDER=0
@@ -20,8 +20,7 @@ IMAGE_DEVICE_NAME="octogee-image"
 
 iso_sha256_for() {
   case "$1" in
-    4.0.6) echo "b542db5fecc37395d9af6654a8146ebed225f275ae4d5a6fcf432e40afe7bb88" ;;
-    4.0.4) echo "ddeded2758c48318d201dfdac905ecb28f570441883f0c052ea3cd5d05acf92d" ;;
+    4.5.0) echo "5d6288bc57f96f6231719830457582c846a2291985201c36a9a7d1216978b00f" ;;
     *) echo "" ;;
   esac
 }
@@ -60,6 +59,8 @@ done
 [[ -n "$PROJECT" ]] || { usage >&2; exit 2; }
 GATEWAY_IMAGE="${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}"
 [[ "$GATEWAY_IMAGE" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ ]] || { echo "invalid immutable Builder gateway image" >&2; exit 2; }
+EDGE_IMAGE="${OCTOGEE_DESKTOP_EDGE_IMAGE:?immutable gateway-edge image is required}"
+[[ "$EDGE_IMAGE" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/gateway-edge@sha256:[a-f0-9]{64}$ ]] || { echo "invalid immutable gateway-edge image" >&2; exit 2; }
 ISO_SHA256="$(iso_sha256_for "$OMARCHY_VERSION")"
 [[ -n "$ISO_SHA256" ]] || { echo "no pinned checksum for Omarchy $OMARCHY_VERSION; add it to iso_sha256_for" >&2; exit 2; }
 BUCKET="${BUCKET:-gs://${PROJECT}-octogee-computer-images}"
@@ -67,7 +68,7 @@ IMAGE_DISK="${BUILDER}-image"
 SOURCE_SHA="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 IMAGE_NAME="${REQUESTED_IMAGE_NAME:-octogee-computer-${OMARCHY_VERSION//./-}-$(date -u +%Y%m%d-%H%M)}"
 [[ "$IMAGE_NAME" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "invalid image name" >&2; exit 2; }
-image_labels="omarchy=${OMARCHY_VERSION//./-},source=${SOURCE_SHA},purpose=octogee-computer,home-admission=retained-v1"
+image_labels="omarchy-iso=${OMARCHY_VERSION//./-},source=${SOURCE_SHA},purpose=octogee-computer,home-admission=retained-v1"
 if [[ -n "${OCTOGEE_IMAGE_FINGERPRINT:-}" ]]; then
   [[ "$OCTOGEE_IMAGE_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]] || { echo "invalid image fingerprint" >&2; exit 2; }
   image_labels+=",input-a=${OCTOGEE_IMAGE_FINGERPRINT:0:32},input-b=${OCTOGEE_IMAGE_FINGERPRINT:32:32}"
@@ -129,7 +130,7 @@ gssh true || { echo "builder never answered ssh" >&2; exit 1; }
 
 gcloud compute scp --zone "$ZONE" --project "$PROJECT" --quiet --ssh-key-file "$SSH_KEY" "$payload.tgz" "imagebuilder@$BUILDER:~/image-payload.tgz" 2>/dev/null
 gssh "rm -rf ~/image-payload && mkdir -p ~/image-payload && tar -C ~/image-payload -xzf ~/image-payload.tgz && chmod +x ~/image-payload/*.sh"
-gssh "rm -f ~/pipeline.log; nohup env OCTOGEE_DESKTOP_GATEWAY_IMAGE='$GATEWAY_IMAGE' OMARCHY_VERSION='$OMARCHY_VERSION' OMARCHY_ISO_SHA256='$ISO_SHA256' IMAGE_NAME='$IMAGE_NAME' IMAGE_BUCKET='$BUCKET' IMAGE_DEVICE='/dev/disk/by-id/google-${IMAGE_DEVICE_NAME}' DISK_GB='$IMAGE_DISK_GB' ~/image-payload/pipeline.sh >~/pipeline.log 2>&1 </dev/null & echo \$! > ~/pipeline.pid; echo started"
+gssh "rm -f ~/pipeline.log; nohup env OCTOGEE_DESKTOP_GATEWAY_IMAGE='$GATEWAY_IMAGE' OCTOGEE_DESKTOP_EDGE_IMAGE='$EDGE_IMAGE' OMARCHY_VERSION='$OMARCHY_VERSION' OMARCHY_ISO_SHA256='$ISO_SHA256' IMAGE_NAME='$IMAGE_NAME' IMAGE_BUCKET='$BUCKET' IMAGE_DEVICE='/dev/disk/by-id/google-${IMAGE_DEVICE_NAME}' DISK_GB='$IMAGE_DISK_GB' ~/image-payload/pipeline.sh >~/pipeline.log 2>&1 </dev/null & echo \$! > ~/pipeline.pid; echo started"
 
 log "pipeline running on ${BUILDER}; log follows"
 seen=0
@@ -153,6 +154,10 @@ while :; do
   sleep 20
 done
 
+installed_omarchy="$(gssh 'cat ~/image-build/omarchy-version')"
+[[ "${installed_omarchy%-*}" == "$OMARCHY_VERSION" && "$installed_omarchy" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "unexpected installed Omarchy version: $installed_omarchy" >&2; exit 1; }
+image_labels+=",omarchy=${installed_omarchy//./-}"
+log "installed Omarchy ${installed_omarchy} from ISO ${OMARCHY_VERSION}"
 family_args=()
 if [[ "$CANDIDATE" == 0 ]]; then family_args=(--family "$FAMILY"); fi
 log "stopping builder to release ${IMAGE_DISK}"

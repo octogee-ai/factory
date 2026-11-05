@@ -7,7 +7,7 @@ export function validateDesktopImage(value) {
   if (['project', 'name', 'id', 'sourceSha', 'inputFingerprint'].some(key => typeof value[key] !== 'string')) throw new Error('desktop image fields must be strings');
   if (!NAME.test(value.project) || !NAME.test(value.name) || !/^\d+$/.test(value.id)) throw new Error('desktop image identity is invalid');
   if (!SHA.test(value.sourceSha) || !HASH.test(value.inputFingerprint)) throw new Error('desktop image provenance is invalid');
-  if (value.acceptance !== 'resize-reboot-v1') throw new Error('desktop image acceptance is missing');
+  if (!['boot-smoke-v1', 'resize-reboot-v1'].includes(value.acceptance)) throw new Error('desktop image acceptance is missing');
   return { project: value.project, name: value.name, id: value.id, sourceSha: value.sourceSha, inputFingerprint: value.inputFingerprint, acceptance: value.acceptance };
 }
 

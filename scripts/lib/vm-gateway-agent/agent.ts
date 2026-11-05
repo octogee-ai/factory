@@ -17,6 +17,7 @@ import {
   containerPathExists,
   createContainer,
   inspectContainer,
+  hasImmutableImage,
   pruneUnusedImages,
   pullImage,
   removeContainer,
@@ -315,12 +316,18 @@ export async function writeBundleBuilderClaim(deps: VmAgentDeps, bundle: Gateway
   await deps.fs.chown(file, RUNTIME_UID, RUNTIME_GID);
 }
 
-export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, plan: BundlePlan): Promise<void> {
-  const accessToken = await deps.metadata.accessToken();
-  for (const image of imagesToPull(bundle)) {
+async function ensureImages(deps: VmAgentDeps, images: string[]): Promise<void> {
+  let accessToken: string | undefined;
+  for (const image of images) {
+    if (await hasImmutableImage(deps.engine, image)) continue;
+    accessToken ??= await deps.metadata.accessToken();
     deps.log(`[vm-agent] pulling ${image}`);
     await pullImage(deps.engine, image, accessToken);
   }
+}
+
+export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, plan: BundlePlan): Promise<void> {
+  await ensureImages(deps, imagesToPull(bundle));
   await holdGatewayForReplacement(deps, bundle, plan.services);
   for (const service of plan.services) await removeContainer(deps.engine, service.name);
   await restoreHomeIfEmpty(deps, bundle);
@@ -339,11 +346,7 @@ export async function applyBundle(deps: VmAgentDeps, bundle: GatewayVmRuntimeBun
 }
 
 export async function applyServices(deps: VmAgentDeps, bundle: GatewayVmRuntimeBundle, services: DockerContainerSpec[]): Promise<void> {
-  const accessToken = await deps.metadata.accessToken();
-  for (const image of new Set(services.map((service) => service.config.Image as string))) {
-    deps.log(`[vm-agent] pulling ${image}`);
-    await pullImage(deps.engine, image, accessToken);
-  }
+  await ensureImages(deps, [...new Set(services.map((service) => service.config.Image as string))]);
   await holdGatewayForReplacement(deps, bundle, services);
   for (const service of services) {
     deps.log(`[vm-agent] replacing ${service.name} (${bundle.version})`);

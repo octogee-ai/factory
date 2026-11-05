@@ -42,7 +42,11 @@ done
 for entry in $(jq -r '.plugins[] | select(.id == "rdf.dock") | .items[] | .desktop // empty' "$shell_json"); do
   [[ -f "/usr/share/applications/$entry.desktop" || -f "$HOME/.local/share/applications/$entry.desktop" ]] || fail "dock pins $entry but no desktop entry exists"
 done
-reserved_bottom="$(hyprctl -j monitors | jq '.[0].reserved[3]')"
+for _ in $(seq 1 30); do
+  reserved_bottom="$(hyprctl -j monitors | jq '.[0].reserved[3]')"
+  [[ "$reserved_bottom" =~ ^[0-9]+$ && "$reserved_bottom" -gt 0 ]] && break
+  sleep 1
+done
 [[ "$reserved_bottom" =~ ^[0-9]+$ && "$reserved_bottom" -gt 0 ]] || fail "the dock reserves no space at the bottom edge (reserved: $(hyprctl -j monitors | jq -c '.[0].reserved'))"
 chromium="$(hyprctl -j clients | jq -c '[.[] | select(.class | test("chrom"; "i"))][0] | {class, floating, size}')"
 [[ "$chromium" == *'"floating":true'* ]] || fail "Chromium is not floating: $chromium"

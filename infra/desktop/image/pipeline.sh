@@ -90,12 +90,14 @@ wait_guest_down() {
 preload_gateway_image() {
   local image="${OCTOGEE_DESKTOP_GATEWAY_IMAGE:?immutable Builder gateway image is required}"
   [[ "$image" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/octogee-gateway-builder@sha256:[a-f0-9]{64}$ ]] || die "invalid immutable Builder gateway image"
+  local edge="${OCTOGEE_DESKTOP_EDGE_IMAGE:?immutable gateway-edge image is required}"
+  [[ "$edge" =~ ^us-central1-docker\.pkg\.dev/octogee/octogee/gateway-edge@sha256:[a-f0-9]{64}$ ]] || die "invalid immutable gateway-edge image"
   guest_ssh 'sudo -n systemctl stop docker.service docker.socket' || die "gateway preload could not stop factory Docker"
   guest_ssh 'sudo -n bash -s -- --initialize-factory' < "$PAYLOAD/rootfs/usr/local/bin/octo-scratch-storage" || die "gateway preload could not bound disposable scratch"
   guest_ssh 'sudo -n systemctl start docker.service' || die "gateway preload could not start Docker"
   guest_ssh 'sudo -n install -D -m 0755 /dev/stdin /usr/local/bin/docker-credential-octogee' < "$PAYLOAD/rootfs/usr/local/bin/docker-credential-octogee" || die "gateway preload could not install the registry credential helper"
   guest_ssh 'sudo -n install -D -m 0644 /dev/stdin /root/.docker/config.json' < "$PAYLOAD/rootfs/root/.docker/config.json" || die "gateway preload could not route the registry to its credential helper"
-  if ! gcloud auth print-access-token | guest_ssh "sudo -n sh -c 'set -eu; OCTOGEE_REGISTRY_TOKEN=\"\$(cat)\" docker pull --quiet $image >/dev/null; docker image inspect $image >/dev/null; printf \"%s\\n\" $image > /etc/octogee-gateway-image'"; then
+  if ! gcloud auth print-access-token | guest_ssh "sudo -n sh -c 'set -eu; export OCTOGEE_REGISTRY_TOKEN=\"\$(cat)\"; docker pull --quiet $image >/dev/null; docker pull --quiet $edge >/dev/null; docker image inspect $image $edge >/dev/null; printf \"%s\\n\" $image > /etc/octogee-gateway-image; printf \"%s\\n\" $edge > /etc/octogee-gateway-edge-image'"; then
     die "gateway preload failed"
   fi
 }
@@ -122,7 +124,7 @@ prepare_image_disk
 
 log "iso ${OMARCHY_VERSION}"
 if [[ ! -f "$ISO" ]] || ! printf '%s  %s\n' "$OMARCHY_ISO_SHA256" "$ISO" | sha256sum -c --quiet - 2>/dev/null; then
-  curl -fsSL -o "$ISO" "https://iso.omarchy.org/omarchy-${OMARCHY_VERSION}.iso"
+  curl -fsSL -o "$ISO" "https://iso.omarchy.org/omarchy-${OMARCHY_VERSION}-x86.iso"
   printf '%s  %s\n' "$OMARCHY_ISO_SHA256" "$ISO" | sha256sum -c --quiet - || die "iso checksum mismatch"
 fi
 
@@ -169,6 +171,7 @@ until guest_ssh 'sudo -n true' 2>/dev/null; do
   sleep 20
 done
 customize_guest
+guest_ssh 'omarchy version' > "$WORK/omarchy-version"
 
 log "seal"
 guest_ssh 'sudo -n bash -c "rm -f /home/octo/.ssh/authorized_keys /root/.ssh/authorized_keys; rm -rf /tmp/customize /tmp/customize-payload.tgz; sync; systemctl --no-block poweroff"' >/dev/null 2>&1 || true

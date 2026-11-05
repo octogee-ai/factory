@@ -91,6 +91,19 @@ function assertOk(res: DockerResponse<unknown>, what: string, allowed: number[] 
   throw new DockerEngineError(res.status, `${what}: HTTP ${res.status} ${message}`);
 }
 
+export async function hasImmutableImage(engine: DockerEngine, imageRef: string): Promise<boolean> {
+  const match = /^(.*)@(sha256:[a-f0-9]{64})$/.exec(imageRef);
+  if (!match) return false;
+  const tag = match[1].lastIndexOf(":");
+  const repository = tag > match[1].lastIndexOf("/") ? match[1].slice(0, tag) : match[1];
+  const reference = `${repository}@${match[2]}`;
+  const res = await engine.request<{ RepoDigests?: string[] }>("GET", `/images/${encodeURIComponent(reference)}/json`);
+  if (res.status === 404) return false;
+  assertOk(res, `inspect ${reference}`);
+  if (!res.body.RepoDigests?.includes(reference)) throw new Error(`Local image does not match ${reference}`);
+  return true;
+}
+
 export async function pullImage(engine: DockerEngine, imageRef: string, accessToken: string): Promise<void> {
   const res = await engine.request("POST", imagePullPath(imageRef), undefined, {
     "X-Registry-Auth": registryAuthHeader(registryHostOf(imageRef), accessToken),
