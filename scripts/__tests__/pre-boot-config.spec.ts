@@ -11,6 +11,7 @@ import {
   applyPreBootPatches,
   platformBrokerCatalogOpts,
   applyTypingModeDefault,
+  applyVerboseDefault,
   shouldMaterializeAnthropicBrokerProfiles,
   applyMattermostPreBootPatches,
   applyMemorySearchSchemaPatch,
@@ -1299,7 +1300,7 @@ describe("applyPreBootPatches — no-change reporting", () => {
       agents: {
         defaults: {
           models: Object.fromEntries(modelCatalogForProvider("anthropic").map(({ id }) => [id, {}])),
-          verboseDefault: "on",
+          verboseDefault: "off",
           typingMode: "instant",
           toolProgressDetail: "raw",
           skipOptionalBootstrapFiles: ["IDENTITY.md"],
@@ -1543,6 +1544,31 @@ describe("applyTypingModeDefault — typing starts when the message arrives", ()
       const config: any = { agents: { defaults: {} } };
       expect(applyPreBootPatches(config, env)).toBe(true);
       expect(config.agents.defaults.typingMode).toBe("instant");
+    }
+  });
+});
+
+describe("applyVerboseDefault — native tool summaries stay out of chat", () => {
+  it("converges agents.defaults.verboseDefault to off from a durable config that still says on", () => {
+    const config: any = { agents: { defaults: { verboseDefault: "on" } } };
+    const log = vi.fn();
+    expect(applyVerboseDefault(config, log)).toBe(true);
+    expect(config.agents.defaults.verboseDefault).toBe("off");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("agents.defaults.verboseDefault"));
+    expect(applyVerboseDefault(config, vi.fn())).toBe(false);
+  });
+
+  it("creates agents.defaults when the config has none", () => {
+    const config: any = {};
+    expect(applyVerboseDefault(config, vi.fn())).toBe(true);
+    expect(config.agents.defaults.verboseDefault).toBe("off");
+  });
+
+  it("runs as part of the pre-boot patch set on every gateway class", () => {
+    for (const env of [{}, { GATEWAY_CLASS: "shared" }, { GATEWAY_CLASS: "builder" }]) {
+      const config: any = { agents: { defaults: { verboseDefault: "full" } } };
+      expect(applyPreBootPatches(config, env)).toBe(true);
+      expect(config.agents.defaults.verboseDefault).toBe("off");
     }
   });
 });

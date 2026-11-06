@@ -85,7 +85,7 @@ describe("applyGatewayDefaults", () => {
     expect(config.channels).toEqual({});
     expect(config.agents?.defaults).toMatchObject({
       maxConcurrent: 8,
-      verboseDefault: "on",
+      verboseDefault: "off",
       subagents: {
         maxConcurrent: 8,
         model: "anthropic/claude-haiku-4-5",
@@ -114,7 +114,7 @@ describe("applyGatewayDefaults", () => {
       agents: {
         defaults: {
           maxConcurrent: 8,
-          verboseDefault: "on",
+          verboseDefault: "off",
           subagents: { maxConcurrent: 8, runTimeoutSeconds: 900 },
         },
         list: [

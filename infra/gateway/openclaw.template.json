@@ -79,7 +79,7 @@
           }
         }
       },
-      "verboseDefault": "on",
+      "verboseDefault": "off",
       "typingMode": "instant",
       "toolProgressDetail": "raw",
       "workspace": "/home/node/.openclaw/workspace",

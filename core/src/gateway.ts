@@ -128,8 +128,8 @@ function applyAgentDefaults(defaults: AgentDefaults): boolean {
     setStringDefault(
       defaults,
       "verboseDefault",
-      "on",
-      'Set agents.defaults.verboseDefault = "on" (Activity Stream Phase 1)',
+      "off",
+      'Set agents.defaults.verboseDefault = "off"',
     ),
     raiseNumber(
       subagents,

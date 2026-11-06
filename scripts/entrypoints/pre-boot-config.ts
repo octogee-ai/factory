@@ -715,6 +715,22 @@ export function applyTypingModeDefault(
   return true;
 }
 
+export function applyVerboseDefault(
+  config: OpenClawConfig,
+  logFn: (msg: string) => void,
+): boolean {
+  const agents = ensureNullishObjectProperty(config, "agents");
+  const defaults = agents ? ensureNullishObjectProperty(agents, "defaults") : null;
+  if (!defaults) {
+    logFn("left agents.defaults.verboseDefault unset because agents.defaults is not an object");
+    return false;
+  }
+  if (defaults.verboseDefault === "off") return false;
+  defaults.verboseDefault = "off";
+  logFn('set agents.defaults.verboseDefault = "off" (the Mattermost draft and Activity carry tool progress)');
+  return true;
+}
+
 function applyWorkspaceIdentityBootstrapPolicy(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -757,6 +773,7 @@ export function applyPreBootPatches(
     applyMemorySearchPlatformEmbeddingsPatch(config, env, logFn),
     applyMemorySearchSchemaPatch(config, logFn),
     applyTypingModeDefault(config, logFn),
+    applyVerboseDefault(config, logFn),
   ].some(Boolean);
 }
 

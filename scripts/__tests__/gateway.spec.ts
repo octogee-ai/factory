@@ -68,7 +68,7 @@ describe("ensureGatewayDefaults — config transformation", () => {
     expect(config.channels).toEqual({});
     expect(config.agents?.defaults).toMatchObject({
       maxConcurrent: 8,
-      verboseDefault: "on",
+      verboseDefault: "off",
       subagents: {
         maxConcurrent: 8,
         model: "anthropic/claude-haiku-4-5",
@@ -97,7 +97,7 @@ describe("ensureGatewayDefaults — config transformation", () => {
       agents: {
         defaults: {
           maxConcurrent: 8,
-          verboseDefault: "on",
+          verboseDefault: "off",
           subagents: {
             maxConcurrent: 8,
             model: "anthropic/claude-haiku-4-5",
@@ -160,7 +160,7 @@ it("sets maxConcurrent to 8 when missing", () => {
   it("preserves exec/process deny lists because gateway class policy owns tool access", () => {
     const config: OpenClawConfig = {
       agents: {
-        defaults: { maxConcurrent: 8, verboseDefault: "on", subagents: { maxConcurrent: 8, runTimeoutSeconds: 900 } },
+        defaults: { maxConcurrent: 8, verboseDefault: "off", subagents: { maxConcurrent: 8, runTimeoutSeconds: 900 } },
         list: [
           {
             id: "octogee-biz-coach",

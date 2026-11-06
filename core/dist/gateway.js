@@ -82,7 +82,7 @@ function applyAgentDefaults(defaults) {
     return [
         raiseNumber(defaults, "maxConcurrent", MIN_AGENT_CONCURRENCY, "Set agents.defaults.maxConcurrent = 8"),
         raiseNumber(subagents, "maxConcurrent", MIN_AGENT_CONCURRENCY, "Set agents.defaults.subagents.maxConcurrent = 8"),
-        setStringDefault(defaults, "verboseDefault", "on", 'Set agents.defaults.verboseDefault = "on" (Activity Stream Phase 1)'),
+        setStringDefault(defaults, "verboseDefault", "off", 'Set agents.defaults.verboseDefault = "off"'),
         raiseNumber(subagents, "runTimeoutSeconds", MIN_SUBAGENT_RUN_TIMEOUT_SECONDS, "Set agents.defaults.subagents.runTimeoutSeconds = 900"),
     ].some(Boolean);
 }
