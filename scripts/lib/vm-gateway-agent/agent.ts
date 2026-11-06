@@ -63,6 +63,7 @@ export const PREEMPTION_WATCH_RETRY_MS = 5_000;
 export const RUNTIME_UID = 1000;
 export const RUNTIME_GID = 1000;
 export const AGENT_CONTAINER = "octo-gateway-agent";
+const VM_RUNTIME_ROUTE = "vm-runtime";
 export const HOST_PROBE_CONTAINER = "octogee-host-probe";
 export const HOST_OPENCLAW_VNC_REFLECTOR = "/usr/local/bin/octo-desktop-openclaw-vnc";
 const HOST_PROBE_BIN = "/octogee-host-bin";
@@ -126,11 +127,19 @@ async function imageReport(deps: VmAgentDeps): Promise<GatewayVmRuntimeRequest> 
   }
 }
 
+async function publishImageReport(deps: VmAgentDeps): Promise<void> {
+  const report = await imageReport(deps);
+  if (!report.images) return;
+  const response = await brokerPost(deps, VM_RUNTIME_ROUTE, { images: report.images });
+  if (!response.ok) throw await brokerFailure("vm-runtime image report", response);
+  await response.body?.cancel();
+}
+
 export async function fetchRuntimeBundle(deps: VmAgentDeps): Promise<BundleFetch> {
   const [disk, images, recovery] = await Promise.all([diskReport(deps), imageReport(deps), bootRecoveryReport(deps)]);
-  const res = await brokerPost(deps, "vm-runtime", { ...disk, ...images, ...recovery });
+  const res = await brokerPost(deps, VM_RUNTIME_ROUTE, { ...disk, ...images, ...recovery });
   if (res.status === 404) return { kind: "not-rendered" };
-  if (!res.ok) throw await brokerFailure("vm-runtime", res);
+  if (!res.ok) throw await brokerFailure(VM_RUNTIME_ROUTE, res);
   const body = (await res.json()) as Partial<GatewayVmRuntimeResponse>;
   if (!isGatewayVmRuntimeBundle(body.bundle) || body.bundle.gatewayId !== deps.gatewayId) {
     throw new Error("vm-runtime: response is not this gateway's runtime bundle");
@@ -403,6 +412,12 @@ export async function checkpointHomeIfDue(
     deps.log(`[vm-agent] home checkpoint skipped${requested}: bundle ${bundle.version} carries no Builder home (data emptyDir + Builder identity)`);
     return { ...state, homeCheckpointCheckedAt: now };
   }
+  let reporting: Promise<void> | undefined;
+  const timer = setInterval(() => {
+    reporting ??= publishImageReport(deps)
+      .catch(error => deps.log(`[vm-agent] checkpoint image report failed: ${String(error)}`))
+      .finally(() => { reporting = undefined; });
+  }, 30_000);
   try {
     const result = await checkpointHome(homeDeps(deps, bundle, force), scope, { force, requestedAt: signal.requestedAt });
     if (result.status === "uploaded") {
@@ -410,6 +425,9 @@ export async function checkpointHomeIfDue(
     }
   } catch (err) {
     deps.log(`[vm-agent] home checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    clearInterval(timer);
+    await reporting;
   }
   return { ...state, homeCheckpointCheckedAt: now };
 }
@@ -530,8 +548,8 @@ export function decideConvergence(plan: BundlePlan, running: ContainerInspection
 }
 
 async function reportPreemption(deps: VmAgentDeps): Promise<void> {
-  const res = await brokerPost(deps, "vm-runtime", { preempted: true });
-  if (!res.ok) throw await brokerFailure("vm-runtime", res);
+  const res = await brokerPost(deps, VM_RUNTIME_ROUTE, { preempted: true });
+  if (!res.ok) throw await brokerFailure(VM_RUNTIME_ROUTE, res);
   deps.log("[vm-agent] Cowboy has this computer's preemption notice");
 }
 

@@ -834,6 +834,44 @@ describe("convergeOnce", () => {
     expect(uploads()).toBe(3);
   });
 
+  it("reports live images throughout slow checkpoint compression", async () => {
+    const h = deps(fakeDocker(), () => runtimeReply(homeBundle()), { now: 1_000 }, { home: { dirty: true } });
+    const state = await convergeOnce(h.d, initialAgentState());
+    const compressing = Promise.withResolvers<void>();
+    const compressed = Promise.withResolvers<void>();
+    const run = h.d.home.shell.run;
+    h.d.home.shell.run = async (command, args) => {
+      if (command === "tar" && args[0] === "--create") {
+        compressing.resolve();
+        await compressed.promise;
+      }
+      return run(command, args);
+    };
+    const reports = () => calls(h.fetchImpl, "/vm-runtime").map(([, init]) => JSON.parse(String(init.body)));
+
+    vi.useFakeTimers();
+    const convergence = convergeOnce(h.d, state);
+    try {
+      await compressing.promise;
+      const before = reports().length;
+      await vi.advanceTimersByTimeAsync(180_000);
+      const during = reports().slice(before);
+      expect(during).toHaveLength(6);
+      for (const report of during) {
+        expect(report.images.containers).toEqual([
+          expect.objectContaining({ name: "gateway", running: true }),
+          expect.objectContaining({ name: "gateway-edge", running: true }),
+        ]);
+      }
+      expect(calls(h.fetchImpl, "/computer-home/commit")).toHaveLength(0);
+    } finally {
+      compressed.resolve();
+      await convergence;
+      vi.useRealTimers();
+    }
+    expect(calls(h.fetchImpl, "/computer-home/commit")).toHaveLength(1);
+  });
+
   it("holds final-checkpoint writers through upload and controller handoff, releasing them when replacement is cancelled", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
