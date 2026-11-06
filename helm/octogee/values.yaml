@@ -328,7 +328,6 @@ llmBroker:
   upstream:
     anthropicBaseUrl: "https://api.anthropic.com"
     openrouterBaseUrl: "https://openrouter.ai/api"
-  prepaidCreditMarkupMultiplier: "1.25"
   vertex:
     enabled: false
     projectId: ""

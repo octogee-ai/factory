@@ -53,6 +53,7 @@ import {
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
 import { addCustomerAssignmentRefusal } from "../lib/fleet-add-customer.js";
 import { runFleetLogsCommand } from "../lib/fleet-logs-command.js";
+import { requireOperatorEmail } from "../lib/operator-email.js";
 import { resolveForcedGatewayRestart } from "./fleet-resolve-forced-restart.js";
 
 const COLOR_ENABLED =
@@ -1110,12 +1111,6 @@ function initializeFleetCli(argv: string[]): void {
   KUBE_NS = target.namespace;
 }
 
-const FLEET_OPERATOR_EMAIL = "christopher.k.eckert@gmail.com";
-
-export function resolveFleetOperatorEmail(env: NodeJS.ProcessEnv): string {
-  return env.OPERATOR_EMAIL || FLEET_OPERATOR_EMAIL;
-}
-
 export function resolveExplicitFleetOperatorUid(input: {
   uid: string;
   role: unknown;
@@ -1138,7 +1133,7 @@ export async function resolveFleetOperatorUid(
 ): Promise<string> {
   const authUser = env.OPERATOR_UID
     ? await lookups.getUser(env.OPERATOR_UID)
-    : await lookups.getUserByEmail(resolveFleetOperatorEmail(env));
+    : await lookups.getUserByEmail(requireOperatorEmail(env));
   return resolveExplicitFleetOperatorUid({
     uid: authUser.uid,
     role: await lookups.readRole(authUser.uid),

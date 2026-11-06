@@ -81,6 +81,8 @@ octogee-api:
     OCTOGEE_KMS_KEY_NAME: "__KMS_KEY_NAME__"
     API_PUBLIC_URL: "https://octogee-test.web.app"
     MM_INTERNAL_URL: "http://mattermost.__NAMESPACE__.svc.cluster.local:8065"
+    PLATFORM_CREDIT_MARKUP_MULTIPLIER: "1.25"
+    PLATFORM_WEB_MARKUP_MULTIPLIER: "1.25"
 
 gateway:
   cloudArmor:
@@ -116,6 +118,7 @@ llmBroker:
   image:
     repository: __AR_REPOSITORY__/octogee-api
   gcpServiceAccount: octogee-llm-broker@__FIREBASE_PROJECT__.iam.gserviceaccount.com
+  prepaidCreditMarkupMultiplier: "1.25"
 
 artifactWorker:
   image:

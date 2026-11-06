@@ -42,7 +42,6 @@ import {
   resolveFleetVerb,
   resolveFleetDeploymentTarget,
   resolveExplicitFleetOperatorUid,
-  resolveFleetOperatorEmail,
   resolveFleetOperatorUid,
 } from "../ops/fleet.js";
 import { withBuilderClaim } from "./helpers/builder-claim.js";
@@ -1280,15 +1279,24 @@ describe("fleet CLI args", () => {
     );
   });
 
-  it("acts as Chris's admin account on every environment unless OPERATOR_EMAIL names another", () => {
-    expect(resolveFleetOperatorEmail({})).toBe("christopher.k.eckert@gmail.com");
-    expect(resolveFleetOperatorEmail({ OPERATOR_EMAIL: "" })).toBe("christopher.k.eckert@gmail.com");
-    expect(resolveFleetOperatorEmail({ OPERATOR_EMAIL: "ops@example.com" })).toBe("ops@example.com");
+  it("refuses to act as anyone until OPERATOR_UID or OPERATOR_EMAIL names the operator", async () => {
+    const lookups = {
+      getUser: async (): Promise<{ uid: string; disabled: boolean }> => {
+        throw new Error("getUser must not be called without an operator");
+      },
+      getUserByEmail: async (): Promise<{ uid: string; disabled: boolean }> => {
+        throw new Error("getUserByEmail must not be called without an operator");
+      },
+      readRole: async () => "admin",
+    };
+
+    await expect(resolveFleetOperatorUid({}, lookups)).rejects.toThrow(/OPERATOR_EMAIL must name/);
+    await expect(resolveFleetOperatorUid({ OPERATOR_EMAIL: " " }, lookups)).rejects.toThrow(/OPERATOR_EMAIL must name/);
   });
 
   it("validates every operator source as an enabled admin before the token is minted", async () => {
     const users: Record<string, { uid: string; email: string; disabled: boolean; role: string }> = {
-      chris: { uid: "chris", email: "christopher.k.eckert@gmail.com", disabled: false, role: "admin" },
+      operator: { uid: "operator", email: "operator@example.com", disabled: false, role: "admin" },
       builder: { uid: "builder", email: "builder@example.com", disabled: false, role: "builder" },
       retired: { uid: "retired", email: "retired@example.com", disabled: true, role: "admin" },
     };
@@ -1298,8 +1306,8 @@ describe("fleet CLI args", () => {
       readRole: async (uid: string) => users[uid]!.role,
     };
 
-    await expect(resolveFleetOperatorUid({}, lookups)).resolves.toBe("chris");
-    await expect(resolveFleetOperatorUid({ OPERATOR_UID: "chris" }, lookups)).resolves.toBe("chris");
+    await expect(resolveFleetOperatorUid({ OPERATOR_EMAIL: "operator@example.com" }, lookups)).resolves.toBe("operator");
+    await expect(resolveFleetOperatorUid({ OPERATOR_UID: "operator" }, lookups)).resolves.toBe("operator");
     await expect(resolveFleetOperatorUid({ OPERATOR_UID: "builder" }, lookups)).rejects.toThrow(/admin role/);
     await expect(resolveFleetOperatorUid({ OPERATOR_UID: "retired" }, lookups)).rejects.toThrow(/disabled/);
     await expect(resolveFleetOperatorUid({ OPERATOR_EMAIL: "builder@example.com" }, lookups))

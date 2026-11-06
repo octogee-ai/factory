@@ -134,7 +134,7 @@ import {
 } from "@octogee/core/gateway-live-release";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
-import { prepaidCreditMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
+import { prepaidCreditMarkupMultiplierFromEnv, webMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
 import {
   WebResearchError,
   createWebResearchService,
@@ -436,11 +436,7 @@ function createDefaultWebResearch(
       0.008,
       "TAVILY_COST_PER_CREDIT_USD",
     ),
-    markupMultiplier: positiveConfigNumber(
-      process.env.PLATFORM_WEB_MARKUP_MULTIPLIER,
-      1.25,
-      "PLATFORM_WEB_MARKUP_MULTIPLIER",
-    ),
+    markupMultiplier: webMarkupMultiplierFromEnv(),
     onError: (error) => logger.error("web research usage recording failed", { error }),
     onSignupOfferBudgetInterruption,
   });

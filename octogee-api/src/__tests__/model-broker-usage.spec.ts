@@ -13,7 +13,7 @@ import {
   usageWindowStartMs,
   windowOwnerKey,
 } from "../lib/model-broker-usage.js";
-import { prepaidCreditMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
+import { prepaidCreditMarkupMultiplierFromEnv, webMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
 
 const baseRecord = {
   requestId: "req",
@@ -620,9 +620,11 @@ describe("prepaid credit debits", () => {
 });
 
 describe("prepaid credit markup config", () => {
-  it("defaults to 1.25 when the env var is unset or blank", () => {
-    expect(prepaidCreditMarkupMultiplierFromEnv({})).toBe(1.25);
-    expect(prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: " " })).toBe(1.25);
+  it("fails loud when the env var is unset or blank instead of shipping a default", () => {
+    expect(() => prepaidCreditMarkupMultiplierFromEnv({}))
+      .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER is required/);
+    expect(() => prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: " " }))
+      .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER is required/);
   });
 
   it("reads a configured multiplier", () => {
@@ -632,5 +634,12 @@ describe("prepaid credit markup config", () => {
   it.each(["abc", "0", "0.9", "-1", "Infinity"])("throws on %s rather than defaulting", (raw) => {
     expect(() => prepaidCreditMarkupMultiplierFromEnv({ PLATFORM_CREDIT_MARKUP_MULTIPLIER: raw }))
       .toThrow(/PLATFORM_CREDIT_MARKUP_MULTIPLIER must be a finite number >= 1/);
+  });
+
+  it("reads the web research markup from its own env var with the same rules", () => {
+    expect(webMarkupMultiplierFromEnv({ PLATFORM_WEB_MARKUP_MULTIPLIER: "1.3" })).toBe(1.3);
+    expect(() => webMarkupMultiplierFromEnv({})).toThrow(/PLATFORM_WEB_MARKUP_MULTIPLIER is required/);
+    expect(() => webMarkupMultiplierFromEnv({ PLATFORM_WEB_MARKUP_MULTIPLIER: "0.5" }))
+      .toThrow(/PLATFORM_WEB_MARKUP_MULTIPLIER must be a finite number >= 1/);
   });
 });

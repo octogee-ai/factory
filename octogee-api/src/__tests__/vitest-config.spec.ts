@@ -23,6 +23,7 @@ describe("octogee-api vitest configs", () => {
     expect(cfg.test?.setupFiles).toEqual([
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/firebase-offline.ts",
+      "./src/test-setup/markup-env.ts",
     ]);
     expect(cfg.test?.fileParallelism).toBe(false);
     expect(cfg.test?.testTimeout).toBe(15_000);
@@ -37,9 +38,10 @@ describe("octogee-api vitest configs", () => {
     expect(cfg.test?.testTimeout).toBe(15_000);
   });
 
-  it("loads the loopback listen shim in both run modes", () => {
+  it("loads the loopback listen shim and the markup env in both run modes", () => {
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
       "./src/test-setup/loopback-listen.ts",
+      "./src/test-setup/markup-env.ts",
     ]);
   });
 });
