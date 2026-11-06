@@ -172,8 +172,8 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 The operator selected and froze OpenClaw main
 `c4d8a5ae1715744c0e4f91bab96f5f7d8fd6a6c3` for independent qualification.
 The clean built overlay is
-`7e0ec3e59fad329618c43314d796529cf3ed59cc` on
-`ceckert/openclaw:codex/gateway-refresh-20261105`. Its hosted islands and
+`636cff64f7b83879d597c0936452745a3d900c34` on
+`ceckert/openclaw:codex/pg-resume-recovery-20261105`. Its hosted islands and
 PostgreSQL routine catalog are regenerated from that source. Complete Shared/Builder
 image qualification and final-head CI are separate merge gates recorded in the PR.
 
@@ -241,6 +241,32 @@ this source, preserving store identity, full history, live reads and session
 creation before restart, and writes after restart. Existing staged-auth commit,
 rollback, close-failure and post-publication bookkeeping tests also pass.
 Core typecheck, scoped lint and independent review cover the source change.
+
+### PostgreSQL idle recovery after suspension
+
+A suspended Builder can resume with dead PostgreSQL sockets while OpenClaw still
+retains its shared-state and update-writer connections. Native idle validation
+previously applied only when a connection was checked out of the pool. Its first
+resumed `agents.create` failed even though a later operation could reopen the
+worker; that first failure aborts Builder activation.
+
+The existing PostgreSQL transport now applies the same pre-query reconnect and
+validation to retained connections whose last completed response was idle. The
+one-second idle threshold uses wall time, which includes guest suspension.
+Transactions, uncertain outcomes and already dispatched SQL are never replayed.
+Cowboy still suspends computers; no startup repair or restart path is added.
+The focused contribution is [OpenClaw #193875](https://github.com/openclaw/openclaw/pull/193875).
+Remove this patch when the selected upstream source supplies equivalent behavior.
+The transport owners remain unchanged on independently inspected upstream main
+`938a72d4c1e4136d07f32156ed633f2f86a524a1`; the runtime retains its frozen base.
+
+A disposable compiled Gateway reproduces the first-RPC failure on the previous
+source and passes on this source after process freeze and termination of its 17
+idle PostgreSQL backends. Existing bootstrap/coach configuration, session ID and
+exact transcript messages survive. This is local process/socket-loss proof;
+actual GCE suspend/resume acceptance remains a separate TEST check. The candidate
+also logs an ancillary cron-maintenance closing-resource warning during agent
+creation, without failing creation or history checks.
 
 ### Native adoption and retained product boundaries
 
@@ -492,40 +518,34 @@ permission, handoff and recovery controls pass.
 ### Qualification and publication
 
 The final source built cleanly with pinned pnpm 12.15.0 and the frozen lockfile
-using `pnpm build package`; build-info matches its source. Production types and
-scoped typed lint pass. The final config-CLI test-type leaf retains an inherited
-`command-path-policy.test.ts:66` array-to-string error. The build emits the same
-nonfatal chat-boot gzip advisory as the prior candidate: 1264.1 KiB against a
+using `pnpm build package`; build-info matches its source. All 55 affected
+transport/shared-state tests pass against disposable PostgreSQL, including lost
+transaction refusal and historical schema upgrades. Production core types and
+scoped typed lint pass. The state test-type leaf retains an unrelated error in
+`sqlite-file-copy.test.ts:142` (a callback passed where options are required).
+The build retains the nonfatal chat-boot gzip advisory: 1264.1 KiB against a
 1264.0 KiB budget. These are not aggregate type/check passes.
 
-The overlay before the final authoring fixes passed 717 affected tests and 191
-selected CI-failure replays. Final authoring validation adds 157 CLI cases,
-15 health/promotion cases, 166 affected observation/recovery/writer cases,
-20 early-bootstrap process cases and eight PostgreSQL inventory cases. New
-regressions began red. Two UI replays pass 12 tests on macOS/Node, without claiming
-Linux/Bun parity. Aggregate checks retain 65 inherited changelog attribution
-failures and 19 inherited file-length lint errors in byte-identical native files.
-
-Sequential root/Mattermost packaging, the native archive checker, a fresh isolated
-installed pair, both patched npm copies and the actual Linux amd64
-`openclaw-full-plugin-installer` pass on the final source. Installed source-matched
-Parallel/Codex companions and three native hook imports pass. The PostgreSQL
-routine catalog is regenerated against disposable PG16/pgvector 0.8.7.
+Hosted islands and the PostgreSQL routine catalog are regenerated from the same
+source; the catalog uses disposable PG16/pgvector 0.8.7. Sequential packaging,
+the native archive checker, isolated installed pair, both patched npm copies and
+the actual Linux amd64 full-plugin installer pass. Installed Parallel/Codex
+companions match the source and all three native-hook imports pass. Complete-image
+qualification and final-head CI remain merge gates recorded in the runtime-fix PR.
 
 Published with generation-zero preconditions, then downloaded by exact generation
 and checked against the complete local SHA-256:
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-bd3c7072.tgz` | `1793903646103247` | `bd3c70728e1ac3549f66d0e6776062f400738c04fdedbfa1f32ebfdd6ad2f774` |
-| `openclaw-mattermost-bd358ccc.tgz` | `1793903658107319` | `bd358ccc8fa265b77b5ff63bfb4c61dc776aaa5837394f79b79f80014ad3e7ff` |
+| `openclaw-fork-70fb20b6.tgz` | `1793929509826051` | `70fb20b61e2aa22e793a442f46a545a6a914f1046fbd42c10d3669c9ce84a272` |
+| `openclaw-mattermost-a0f6040d.tgz` | `1793929522271030` | `a0f6040dd17c8d0a1f99b51f202392d0448a0961604f4bf7b0dde2c1a8e40526` |
 
 Complete Shared/Builder image qualification through real writers and strict
 isolated Doctor comparisons, installed Memory/Skills workers, published image
 digests and final-head CI are required before merge. Their results are recorded
-in [#5073](https://github.com/octogee-ai/octogee/pull/5073), keeping image evidence
-out of its own build inputs. Building and package publication do not deploy TEST
-or PROD.
+in the runtime-fix PR, keeping image evidence out of its own build inputs.
+Building and package publication do not deploy TEST or PROD.
 
 ### Upstream contributions
 
