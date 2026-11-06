@@ -10,7 +10,7 @@ const exec = promisify(execFile);
 const container = process.env.OCTOGEE_NATIVE_SYSTEMD_CONTAINER;
 
 describe.skipIf(!container)("native retained-home service admission", () => {
-  it.each(["docker.service", "user@1000.service"].flatMap(service => [{ service, post: false }, { service, post: true }]))("blocks $service when mount/native post-admission fails (post=$post)", async ({ service, post }) => {
+  it.each(["docker.service", "user@1000.service"].flatMap(service => [{ service, post: false }, { service, post: true }]))("blocks $service when its required home stage fails (post=$post)", async ({ service, post }) => {
     const id = `octogee-home-${randomUUID()}`;
     const directory = await mkdtemp(join(tmpdir(), `${id}-`));
     const remote = `/opt/${id}`;
@@ -20,7 +20,7 @@ describe.skipIf(!container)("native retained-home service admission", () => {
     let installed = false;
     try {
       const dropIn = resolve(import.meta.dirname, `../../../infra/desktop/image/rootfs/etc/systemd/system/${service}.d/10-octogee-home.conf`);
-      await writeFile(join(directory, "admission.conf"), (await readFile(dropIn, "utf8")).replaceAll("octo-home-disk.service", homeUnit));
+      await writeFile(join(directory, "admission.conf"), (await readFile(dropIn, "utf8")).replaceAll(service === "docker.service" ? "octo-home-migrate.service" : "octo-home-disk.service", homeUnit));
       await writeFile(join(directory, "actor.service"), `[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sh -c 'printf written > ${remote}/fallback-write'\n`);
       await writeFile(join(directory, "home.service"), `[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=${post ? "/bin/true\nExecStartPost=/bin/false" : "/bin/false"}\n`);
       await exec("docker", ["cp", directory, `${container}:${remote}`]);
@@ -43,4 +43,49 @@ describe.skipIf(!container)("native retained-home service admission", () => {
       } finally { await rm(directory, { recursive: true, force: true }); }
     }
   });
+  it.each([false, true])("requires a ready user manager at boot and survives its later stop (failedUserStart=%s)", async (failedUserStart) => {
+    const id = `octogee-migration-${randomUUID()}`;
+    const directory = await mkdtemp(join(tmpdir(), `${id}-`));
+    const remote = `/opt/${id}`;
+    const names = { home: `${id}-home.service`, user: `${id}-user.service`, migration: `${id}-migration.service`, runtime: `${id}-runtime.service` };
+    const docker = async (...args: string[]) => exec("docker", ["exec", container!, ...args], { timeout: 10_000 });
+    const units = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/etc/systemd/system");
+    const map = (text: string) => text.replaceAll("octo-home-disk.service", names.home).replaceAll("user@1000.service", names.user)
+      .replaceAll("octo-home-migrate.service", names.migration).replaceAll("docker.service", names.runtime);
+    try {
+      await writeFile(join(directory, names.home), "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n");
+      await writeFile(join(directory, names.user), map(await readFile(join(units, "user@1000.service.d/10-octogee-home.conf"), "utf8")) +
+        `[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=${failedUserStart ? "/bin/false" : `/usr/bin/touch ${remote}/user-ready`}\n`);
+      await writeFile(join(directory, names.migration), map(await readFile(join(units, "octo-home-migrate.service"), "utf8"))
+        .replace("ExecStart=/usr/local/bin/octo-home-migrate", `ExecStart=/bin/sh -c 'test -f ${remote}/user-ready && test -f ${remote}/migration-ok'`));
+      await writeFile(join(directory, names.runtime), map(await readFile(join(units, "docker.service.d/10-octogee-home.conf"), "utf8")) +
+        `[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/touch ${remote}/runtime-ready\n`);
+      await exec("docker", ["cp", directory, `${container}:${remote}`]);
+      await docker("sh", "-c", `cp '${remote}/'*.service /run/systemd/system/; systemctl daemon-reload`);
+      await expect(docker("systemctl", "start", names.runtime)).rejects.toMatchObject({ code: 1 });
+      if (failedUserStart) {
+        await expect(docker("test", "-f", `${remote}/user-ready`)).rejects.toMatchObject({ code: 1 });
+        await expect(docker("test", "-f", `${remote}/runtime-ready`)).rejects.toMatchObject({ code: 1 });
+        await docker("sh", "-c", `sed -i 's|ExecStart=/bin/false|ExecStart=/usr/bin/touch ${remote}/user-ready|' '/run/systemd/system/${names.user}'; systemctl daemon-reload; systemctl reset-failed '${names.user}'`);
+        await expect(docker("systemctl", "start", names.runtime)).rejects.toMatchObject({ code: 1 });
+      }
+      await docker("test", "-f", `${remote}/user-ready`);
+      await expect(docker("test", "-f", `${remote}/runtime-ready`)).rejects.toMatchObject({ code: 1 });
+      await docker("touch", `${remote}/migration-ok`);
+      await docker("systemctl", "reset-failed", names.migration);
+      await docker("systemctl", "start", names.runtime);
+      await docker("test", "-f", `${remote}/runtime-ready`);
+      await docker("systemctl", "stop", names.user);
+      for (const unit of [names.migration, names.runtime]) {
+        expect((await docker("systemctl", "is-active", unit)).stdout.trim()).toBe("active");
+      }
+      await docker("systemctl", "start", names.user);
+      expect((await docker("systemctl", "is-active", names.runtime)).stdout.trim()).toBe("active");
+    } finally {
+      await docker("systemctl", "stop", ...Object.values(names)).catch(() => undefined);
+      await docker("sh", "-c", `rm -f /run/systemd/system/${id}-*.service; rm -rf '${remote}'; systemctl daemon-reload`);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
 });

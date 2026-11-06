@@ -116,6 +116,15 @@ it("preserves a project replaced by a symlink during empty removal", async () =>
   expect(await readFile(path.join(target, "foreign.txt"), "utf8")).toBe("keep foreign work");
   expect(await readdir(`${location}-retained`)).toEqual([]);
 });
+it.each([false, true])("recreates writable mount parents when reusing scratch after runtime cleanup: %s", async (keepGeneration) => {
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  await rm(path.join(home, keepGeneration ? ".openclaw/customers" : ".openclaw"), { recursive: true });
+  await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
+  const customer = path.join(home, ".openclaw/customers/alice");
+  await mkdir(path.join(customer, ".system"));
+  expect((await fs.lstat(path.join(customer, "projects"))).isDirectory()).toBe(true);
+  expect((await fs.lstat(customer)).uid).toBe(process.getuid!());
+});
 it("invalidates a retained working set when the home returns from another project mount", async () => {
   await prepareBuilderProjectStorage({ home, projects, slug: "alice" }, mounted);
   await mkdir(path.join(projects, "projects/demo"));

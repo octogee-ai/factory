@@ -50,6 +50,7 @@ if [[ "$*" == *--pending* ]]; then
   echo 123-native-home.sh
   exit 0
 fi
+if [[ "$TEST_SCENARIO" == user-session && ( "$*" != *"XDG_RUNTIME_DIR=/run/user/1000"* || "$*" != *"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"* ) ]]; then echo "native migration cannot contact the user service manager" >&2; exit 23; fi
 if [[ "$TEST_SCENARIO" == failed || "$TEST_SCENARIO" == failed-with-older ]]; then exit 3; fi
 if [[ "$TEST_SCENARIO" != still-pending ]]; then touch "$TEST_ROOT/migrated"; fi
 `);
@@ -75,6 +76,11 @@ describe("native home migration admission", () => {
     const result = await run("pending");
     expect(result.code).toBe(0);
     expect(result.calls.trim().split("\n")).toHaveLength(3);
+  });
+  it("runs migrations that contact the native user service manager", async () => {
+    const result = await run("user-session");
+    expect(result.code).toBe(0);
+    expect(await readFile(join(result.root, "migrated"), "utf8")).toBe("");
   });
   it("takes a fresh pre-admission point for a replacement machine using the same image", async () => {
     const result = await run("complete");

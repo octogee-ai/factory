@@ -99,7 +99,7 @@ rm -f /tmp/limine-update.log
 sed -i -E 's/^#?timeout:.*/timeout: 0/' /boot/limine.conf
 grep -q '^timeout: 0' /boot/limine.conf || printf 'timeout: 0\n' >> /boot/limine.conf
 systemctl unmask NetworkManager-wait-online.service
-systemctl enable octo-grow-root.service octo-limine-enroll.service octo-home-disk.service octo-seatd.service octo-desktop.service octo-desktop-lifecycle.service octo-metadata-ssh-keys.timer octo-gateway-agent.service sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
+systemctl enable octo-grow-root.service octo-limine-enroll.service octo-home-disk.service octo-home-migrate.service octo-seatd.service octo-desktop.service octo-desktop-lifecycle.service octo-metadata-ssh-keys.timer octo-gateway-agent.service sshd.service NetworkManager.service NetworkManager-wait-online.service docker.service
 systemctl disable sddm.service
 systemctl mask sddm.service
 systemctl disable --now cups.service cups.path avahi-daemon.service bluetooth.service >/dev/null 2>&1 || true

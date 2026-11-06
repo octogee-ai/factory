@@ -1,3 +1,5 @@
+import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js";
+import { localStateStoreKind, localStateStorePath } from "./openclaw-state-store.js";
 import { agentIdsFromConfig } from "@octogee/core/byosub-restore";
 import { runOpenClaw, type OpenClawCommand } from "./openclaw-cli.js";
 import { clearMountedMarker } from "./local-coach-wired.js";
@@ -707,6 +709,43 @@ function retryRetainedInitialSeedPush(
   return true;
 }
 
+function restoreBuilderRuntimeProjection(
+  slug: string, dir: string, env: NodeJS.ProcessEnv, sshKey: string, log: (msg: string) => void,
+): boolean {
+  if (env.GATEWAY_CLASS !== "builder" || builderClaimSlug(env) !== slug ||
+      !isSystemConfigRuntimeProjection(path.dirname(dir), slug)) return true;
+  if (gitExec(dir, ["merge-base", "--is-ancestor", "HEAD", "origin/main"], sshKey) === null ||
+      gitExec(dir, ["restore", "--source=HEAD", "--staged", "--worktree", "--", OPENCLAW_CONFIG_FILENAME, SYSTEM_CONFIG_METADATA_FILENAME], sshKey) === null) {
+    log(`[system_config] could not restore accepted config over runtime projection for ${slug}`);
+    return false;
+  }
+  return true;
+}
+
+function refreshSystemConfigRepo(
+  slug: string, dir: string, templatePath: string, env: NodeJS.ProcessEnv, log: (msg: string) => void,
+): boolean {
+  setRepoSshCommand(dir, slug);
+  const sshKey = customerSshKeyPath(slug);
+  if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
+    if (retryRetainedInitialSeedPush(slug, dir, templatePath, env, log)) return true;
+    if (
+      gitExec(dir, ["ls-remote", "origin", MAIN_REF], sshKey) === "" &&
+      gitExec(dir, ["rev-parse", "--verify", "HEAD"], sshKey) === null
+    ) {
+      return true;
+    }
+    log(`[system_config] fetch failed for ${slug}/${systemConfigRepoName()}`);
+    return false;
+  }
+  if (!restoreBuilderRuntimeProjection(slug, dir, env, sshKey, log)) return false;
+  if (gitExec(dir, ["merge", "--ff-only", "origin/main"], sshKey) === null) {
+    log(`[system_config] reused checkout is not a fast-forward for ${slug}/${systemConfigRepoName()}`);
+    return false;
+  }
+  return true;
+}
+
 function cloneOrReuseSystemConfigRepo(
   slug: string,
   dir: string,
@@ -715,24 +754,7 @@ function cloneOrReuseSystemConfigRepo(
   log: (msg: string) => void,
 ): boolean {
   if (fs.existsSync(path.join(dir, ".git"))) {
-    setRepoSshCommand(dir, slug);
-    const sshKey = customerSshKeyPath(slug);
-    if (gitExec(dir, ["fetch", "origin", "main"], sshKey) === null) {
-      if (retryRetainedInitialSeedPush(slug, dir, templatePath, env, log)) return true;
-      if (
-        gitExec(dir, ["ls-remote", "origin", MAIN_REF], sshKey) === "" &&
-        gitExec(dir, ["rev-parse", "--verify", "HEAD"], sshKey) === null
-      ) {
-        return true;
-      }
-      log(`[system_config] fetch failed for ${slug}/${systemConfigRepoName()}`);
-      return false;
-    }
-    if (gitExec(dir, ["merge", "--ff-only", "origin/main"], sshKey) === null) {
-      log(`[system_config] reused checkout is not a fast-forward for ${slug}/${systemConfigRepoName()}`);
-      return false;
-    }
-    return true;
+    return refreshSystemConfigRepo(slug, dir, templatePath, env, log);
   }
   if (fs.existsSync(dir)) {
     log(`[system_config] ${dir} exists but is not a git repo; leaving it untouched`);
@@ -776,7 +798,7 @@ function readRosterEntries(agents: UnknownRecord): { form: "entries" | "list"; r
     const { id, ...rest } = record;
     return typeof id === "string" && id ? [{ id, entry: rest }] : [];
   });
-  return { form: Array.isArray(agents.list) ? "list" : "entries", roster };
+  return { form: roster.length > 0 ? "list" : "entries", roster };
 }
 
 function writeRosterEntries(agents: UnknownRecord, form: "entries" | "list", roster: RosterEntry[]): void {
@@ -2031,6 +2053,7 @@ export async function prepareBuilderPrelaunchConfig(
   await disableSystemConfigWatch(openclawDir, slug, { runtimeProjection: true });
   clearMountedMarker(path.join(openclawDir, "customers"), slug);
   const config = readAcceptedBuilderConfig(openclawDir, env);
+  applyAgentStoreDatabasePatch(config, env, localStateStoreKind(localStateStorePath(openclawDir)));
   const acceptedAgentIds = agentIdsFromConfig(config);
   const { id: _id, ...agent } = buildSafeDefaultAgent({ ...env, OPENCLAW_DIR: openclawDir });
   const agents = asRecord(config.agents) ?? {};

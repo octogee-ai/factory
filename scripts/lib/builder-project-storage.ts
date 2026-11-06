@@ -110,6 +110,8 @@ export async function prepareBuilderProjectStorage(input: { home: string; projec
   try { state = JSON.parse(await readFile(marker, "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   assertStorageState(state, input.slug);
+  await mkdir(source, { recursive: true });
+  if (!(await lstat(source)).isDirectory()) throw new Error("home projects are not a directory");
   const fingerprintFile = path.join(input.home, ".openclaw/applied-fingerprints.json");
   const fingerprints = loadAppliedFingerprints(fingerprintFile);
   if (fingerprints.delete(input.slug)) saveAppliedFingerprints(fingerprintFile, fingerprints);
@@ -131,8 +133,6 @@ export async function prepareBuilderProjectStorage(input: { home: string; projec
   if (state.previousGeneration) {
     await retainPreviousWorkingSet(input.projects, destination, state.previousGeneration);
   } else {
-    await mkdir(source, { recursive: true });
-    if (!(await lstat(source)).isDirectory()) throw new Error("home projects are not a directory");
     await importProjectTree(source, destination, input.projects);
     await preserveHomeProjects(source, preserved);
   }

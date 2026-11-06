@@ -358,6 +358,26 @@ describe("system_config restore", () => {
     },
   );
 
+  it("restores an empty legacy Builder roster using keyed entries for native prelaunch", async () => {
+    writeJson(path.join(repoDir, "openclaw.json"), { agents: { list: [] } });
+    writeJson(path.join(repoDir, ".octogee.json"), {
+      schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION,
+      lastMigration: "initial",
+    });
+    const env = withBuilderClaim({
+      GATEWAY_CLASS: "builder", GATEWAY_ID: "pipio-builder", API_PUBLIC_URL: "https://api.octogee.com",
+    }, "pipio");
+
+    await restoreSystemConfigForSlug("pipio", { openclawDir, env, log: () => {} });
+
+    const restored = JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"));
+    expect(restored.agents).not.toHaveProperty("list");
+    expect(Object.keys(restored.agents.entries)).toEqual(["octogee-pipio-coach", "octogee-unmatched-route"]);
+    expect(restored.agents.ownership).toBe("explicit");
+    expect(restored.agents.defaults.authInheritance).toEqual({ agentId: "octogee-unmatched-route" });
+    expect(restored.agents.defaults.systemAgent).toEqual({ agentId: "octogee-pipio-coach" });
+  });
+
   it("seeds a Builder roster that leads with the configured coach and keeps the anchor last", async () => {
     vi.mocked(gitExec).mockImplementation((_cwd: string, argv: string[]) =>
       argv.join(" ") === "rev-parse --verify HEAD" ? null : "ok"
@@ -665,6 +685,37 @@ describe("system_config restore", () => {
 
     expect(gitExec).toHaveBeenCalledWith(repoDir, ["fetch", "origin", "main"], "/tmp/customer-keys/acme/id_ed25519");
     expect(gitExec).toHaveBeenCalledWith(repoDir, ["merge", "--ff-only", "origin/main"], "/tmp/customer-keys/acme/id_ed25519");
+  });
+
+  it.each([
+    ["acme", true, true, true],
+    ["other", true, true, false],
+    [null, true, true, false],
+    ["acme", false, true, false],
+    ["acme", true, false, false],
+  ])("restores only a fenced runtime projection before fast-forward (%s, %s, %s)", async (fenceSlug, ancestor, restoreSucceeds, restored) => {
+    writeJson(path.join(repoDir, "openclaw.json"), { projected: true, agents: { entries: {} } });
+    writeJson(path.join(repoDir, ".octogee.json"), { schemaVersion: CURRENT_SYSTEM_CONFIG_SCHEMA_VERSION, lastMigration: "initial" });
+    if (fenceSlug) writeJson(path.join(openclawDir, "system_config.watch.disabled"), { slug: fenceSlug, generation: "projection", runtimeProjection: true });
+    let cleared = false;
+    vi.mocked(gitExec).mockImplementation((_cwd, argv) => {
+      if (argv.join(" ") === "merge-base --is-ancestor HEAD origin/main") return ancestor ? "" : null;
+      if (argv[0] === "restore") {
+        if (!restoreSucceeds) return null;
+        cleared = true;
+        writeJson(path.join(repoDir, "openclaw.json"), { accepted: true, agents: { entries: {} } });
+        return "";
+      }
+      if (argv.join(" ") === "merge --ff-only origin/main") return cleared ? "ok" : null;
+      return "ok";
+    });
+    const result = await restoreSystemConfigForSlug("acme", { openclawDir, templatePath, log: () => {},
+      env: withBuilderClaim({ GATEWAY_CLASS: "builder", API_PUBLIC_URL: "https://api.octogee.com" }, "acme") });
+    expect(result.restored).toBe(restored);
+    if (restored) {
+      expect(gitExec).toHaveBeenCalledWith(repoDir, ["restore", "--source=HEAD", "--staged", "--worktree", "--", "openclaw.json", ".octogee.json"], "/tmp/customer-keys/acme/id_ed25519");
+      expect(JSON.parse(fs.readFileSync(path.join(repoDir, "openclaw.json"), "utf8"))).toHaveProperty("accepted", true);
+    } else expect(cleared).toBe(false);
   });
 
   it("one-time cleanup removes only the historical Mac lane and preserves customer identities", () => {
@@ -2109,6 +2160,7 @@ describe("Builder prelaunch config", () => {
       expect(live.channels.mattermost.enabled).toBe(false);
       expect(live.bindings).toEqual([]);
       expect(live.cron.enabled).toBe(false);
+      expect(live.database).toMatchObject({ engine: "postgres", postgres: { connection: { source: "env", provider: "default", id: "OPENCLAW_AGENT_STORE_DSN" } } });
       const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
       const sync = vi.fn();
       await disableSystemConfigWatch(root, "alice");
@@ -2120,6 +2172,11 @@ describe("Builder prelaunch config", () => {
       expect(accepted.channels).toMatchObject({ mattermost: { enabled: true } });
       await prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite);
       expect(readAcceptedBuilderConfig(root, env).agents).toMatchObject({ entries: config.agents.entries });
+      expect(nativeWrite).toHaveBeenCalledTimes(2);
+      writeJson(path.join(repo, "openclaw.json"), { ...config, database: { engine: "sqlite" } });
+      execFileSync("git", ["add", "openclaw.json"], { cwd: repo });
+      execFileSync("git", ["-c", "user.name=Synthetic Test", "-c", "user.email=test@example.invalid", "commit", "-m", "retained sqlite"], { cwd: repo });
+      await expect(prepareBuilderPrelaunchConfig(root, "alice", env, nativeWrite)).rejects.toThrow("Retained SQLite-configured Gateway stores cannot start");
       expect(nativeWrite).toHaveBeenCalledTimes(2);
       expect(fs.readdirSync(root).filter(name => name.startsWith(".prelaunch-config-"))).toEqual([]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }

@@ -9,7 +9,6 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/octo-home-disk
 ExecStartPost=/usr/local/bin/octo-desktop-tool-storage --reconcile
-ExecStartPost=/usr/local/bin/octo-home-migrate
 ExecStartPost=/usr/local/bin/octo-scratch-storage
 TimeoutStartSec=20min
 StandardOutput=journal+console

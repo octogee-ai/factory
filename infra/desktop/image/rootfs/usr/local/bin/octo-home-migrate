@@ -32,7 +32,8 @@ fi
 [[ "$(btrfs property get -ts "$point" ro)" == 'ro=true' ]] || { echo "octo-home-migrate: pre-migration home point is not read-only" >&2; exit 1; }
 
 native_migrate() {
-  setpriv --reuid=octo --regid=octo --init-groups env HOME=/home/octo USER=octo LOGNAME=octo OMARCHY_PATH=/usr/share/omarchy \
+  setpriv --reuid=octo --regid=octo --init-groups env HOME=/home/octo USER=octo LOGNAME=octo XDG_RUNTIME_DIR=/run/user/1000 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus OMARCHY_PATH=/usr/share/omarchy \
     PATH=/usr/share/omarchy/bin:/usr/bin:/bin /usr/share/omarchy/bin/omarchy migrate "$@"
 }
 pending_migrations() {

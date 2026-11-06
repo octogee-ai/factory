@@ -308,10 +308,11 @@ class BootReconciliation(ToolStorage):
         self.assertTrue((self.home / ".config/octogee/mise-installs.json").is_file())
         unit = (Path(__file__).parent / "rootfs/etc/systemd/system/octo-home-disk.service").read_text()
         self.assertIn("ExecStartPost=/usr/local/bin/octo-desktop-tool-storage --reconcile", unit)
-        self.assertLess(unit.index("tool-storage --reconcile"), unit.index("octo-home-migrate"))
+        migration = (Path(__file__).parent / "rootfs/etc/systemd/system/octo-home-migrate.service").read_text()
+        self.assertIn("After=octo-home-disk.service user@1000.service", migration)
         for file in ("sshd.service.d/10-octogee-home-authorization.conf", "user@1000.service.d/10-octogee-home.conf", "octo-desktop.service"):
             value = (Path(__file__).parent / "rootfs/etc/systemd/system" / file).read_text()
-            self.assertIn("octo-home-disk.service", value)
+            self.assertIn("octo-home-migrate.service" if file == "octo-desktop.service" else "octo-home-disk.service", value)
 
     def test_active_ssh_or_owner_process_blocks_boot_copy_without_mutation(self):
         reconcile = SCRIPT.get("reconcile_boot", lambda *_args, **_kwargs: None)
