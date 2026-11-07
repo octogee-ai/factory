@@ -18,7 +18,6 @@ import automationsRoutes from "./routes/automations.js";
 import gitRoutes from "./routes/workspace/git.js";
 import byosubHealthRoutes from "./routes/byosub-health.js";
 import { createByosubAuthRouter } from "./routes/byosub-auth.js";
-import internalBillingRoutes from "./routes/internal/billing.js";
 import internalAgentMessageRoutes from "./routes/internal/agent-message.js";
 import { createInternalConnectorApprovalRouter } from "./routes/internal/connector-approvals.js";
 
@@ -33,8 +32,7 @@ import { createAgentImportsRouter } from "./routes/agent-imports.js";
 import { createAgentExportsRouter } from "./routes/agent-exports.js";
 import { createAgentImportRuntime, invokeLocalOpenClaw } from "./lib/agent-import-runtime.js";
 import { startDesktopNodePairing } from "./lib/desktop-node-pairing.js";
-import { mountClusterRoutes } from "./routes/mount-cluster-routes.js";
-import { createSharingRoutes } from "./routes/sharing/index.js";
+import { mountClusterRoutes, type ClusterRouteTable } from "./routes/mount-cluster-routes.js";
 import { createProjectCreateRoutes } from "./routes/projects/create.js";
 import { createProjectRepoSourceRoutes } from "./routes/projects/repo-source.js";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
@@ -161,6 +159,7 @@ export function installRollRosterGate(gate: RequestHandler): void {
 
 export interface CreateAppOptions {
   surface?: GatewayEdgeSurface;
+  productRoutes?: ClusterRouteTable;
   // Route tests inject an enabling policy to exercise the workspace sharing
   // paths; unset means the flag is off, which is what the pod surface wants.
   featurePolicy?: FeaturePolicy;
@@ -254,7 +253,7 @@ if (surface === "sidecar") {
 }
 
 if (surface === "cluster") {
-  mountClusterSurface(app, opts.featurePolicy);
+  mountClusterSurface(app, opts);
 }
 
 mountSidecarLocalitySurface(app, {
@@ -268,8 +267,7 @@ app.use(errorHandler);
 return app;
 }
 
-function mountClusterSurface(app: Express, featurePolicy?: FeaturePolicy): void {
-  app.use("/internal/billing", internalBillingRoutes);
+function mountClusterSurface(app: Express, opts: CreateAppOptions): void {
   // Legacy in-process Gitea broker surface. The durable broker lives on octogee-api;
   // the gateway-edge sidecar surface intentionally does not mount this.
   app.use("/internal/gitea", internalGiteaAdminRoutes);
@@ -278,11 +276,14 @@ function mountClusterSurface(app: Express, featurePolicy?: FeaturePolicy): void 
   // (readme) and explicit-auth sequencing aren't shadowed by the locality
   // routers. Express tries handlers in mount order; locality routers are
   // gateway-edge-only and only match their specific paths.
-  mountClusterRoutes(app, featurePolicy ? {
-    sharingRoutes: createSharingRoutes({ featurePolicy }),
-    projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
-    projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
-  } : {});
+  const featurePolicy = opts.featurePolicy;
+  mountClusterRoutes(app, {
+    ...(featurePolicy ? {
+      projectsCreateRoutes: createProjectCreateRoutes({ featurePolicy }),
+      projectsRepoSourceRoutes: createProjectRepoSourceRoutes({ featurePolicy }),
+    } : {}),
+    productRoutes: opts.productRoutes ?? [],
+  });
 }
 
 let nativeMobileGateway: ReturnType<typeof createMobileGateway> | undefined;

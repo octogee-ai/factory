@@ -97,13 +97,32 @@ describe("mountClusterRoutes", () => {
 
     mountClusterRoutes(app);
 
-    const tail = app.calls.slice(-4).map((c) => c.path);
-    expect(tail).toEqual([
-      "/internal/agents",
-      "/internal/notifications",
-      "/internal/notifications",
-      "/internal/workspace",
-    ]);
+    const tail = app.calls.slice(-2).map((c) => c.path);
+    expect(tail).toEqual(["/internal/agents", "/internal/workspace"]);
+  });
+
+  it("mounts injected product routes after the platform table and before the internal tail", () => {
+    const app = recordingApp();
+    const billing = Router();
+    const posts = Router();
+
+    mountClusterRoutes(app, { productRoutes: [["/api/billing", billing], ["/api/posts", posts]] });
+
+    const paths = app.calls.map((c) => c.path);
+    expect(paths.slice(-4)).toEqual(["/api/billing", "/api/posts", "/internal/agents", "/internal/workspace"]);
+    expect(useCalls(app, "/api/billing")[0].handlers).toEqual([billing]);
+    expect(paths.indexOf("/api/voice")).toBeLessThan(paths.indexOf("/api/billing"));
+  });
+
+  it("mounts no product route when none is injected", () => {
+    const app = recordingApp();
+
+    mountClusterRoutes(app);
+
+    const paths = app.calls.map((c) => c.path);
+    for (const path of ["/api/billing", "/api/sharing", "/api/posts", "/api/profile", "/api/notifications", "/internal/notifications"]) {
+      expect(paths).not.toContain(path);
+    }
   });
 
   it("mounts the public API table in the intended order", () => {
@@ -136,34 +155,20 @@ describe("mountClusterRoutes", () => {
       "/api/projects",
       "/api/projects",
       "/api/projects",
-      "/api/auth/email",
-      "/api/sharing",
-      "/api/email/unsubscribe",
-      "/api/email",
       "/api/entities",
       "/api/mattermost",
       "/api/openclaw",
       "/api/agent-models",
       "/api/channel-session-models",
-      "/api/billing",
       "/api/model-credentials",
-      "/api/legal",
       "/api/admin",
-      "/api/invites",
       "/api/integrations",
       "/api/connect",
-      "/api/notifications",
-      "/api/profile",
-      "/api/account",
-      "/api/onboarding",
-      "/api/posts",
       "/api/agents",
       "/api/builder",
       "/api/productivity-approvals",
       "/api/voice",
       "/internal/agents",
-      "/internal/notifications",
-      "/internal/notifications",
       "/internal/workspace",
     ]);
   });
