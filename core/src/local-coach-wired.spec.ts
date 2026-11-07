@@ -10,6 +10,7 @@ import {
   hasMountedMarker,
   clearMountedMarker,
   assertConfiguredBuilderPortableStatePlanOnDisk,
+  configuredBuilderPortableStatePlan,
   configuredBuilderPortableStatePlanFromConfig,
   configuredBuilderStatePlanAllowsEntry,
   configuredSafeAgentIdsFromConfig,
@@ -217,6 +218,41 @@ describe("configuredBuilderPortableStatePlanFromConfig", () => {
     expect(() => configuredBuilderPortableStatePlanFromConfig({
       agents: { list: [{ id: "octogee-ceckert-coach", workspace: `${stateDir}/customers/other` }] },
     }, stateDir)).toThrow(/canonical workspace root/);
+  });
+
+  it.each(["list", "entries"])("reads the exact private project workspace from a configured Builder %s roster", (shape) => {
+    const id = "octogee-ceckert-proj-site-coach";
+    const relativePath = "customers/ceckert/.system/project-coaches/site";
+    const agent = { workspace: `${stateDir}/${relativePath}`, agentDir: `${stateDir}/agents/${id}/agent` };
+    const configPath = writeConfig({ agents: shape === "list" ? { list: [{ id, ...agent }] } : { entries: { [id]: agent } } });
+
+    const plan = configuredBuilderPortableStatePlan(configPath, stateDir);
+
+    expect(plan.agentIds).toEqual([id]);
+    expect(plan.agentDirs).toEqual([`agents/${id}/agent`]);
+    expect(plan.sessionStorePaths).toEqual([`agents/${id}/sessions/sessions.json`]);
+    expect(plan.paths).toContainEqual({ relativePath, kind: "directory" });
+    expect(configuredBuilderStatePlanAllowsEntry(`${relativePath}/IDENTITY.md`, plan)).toBe(true);
+    expect(configuredBuilderStatePlanAllowsEntry("customers/ceckert/.system/project-coaches/other/IDENTITY.md", plan)).toBe(false);
+  });
+
+  it.each([
+    "customers/other/.system/project-coaches/site",
+    "customers/ceckert/.system/project-coaches/other",
+    "customers/ceckert/.system/project-coaches",
+    "customers/ceckert/.system/project-coaches/site/nested",
+    "customers/ceckert/.system/other/site",
+    "customers/ceckert/.system/project-coaches/site/../other",
+  ])("refuses private project workspace outside the exact owner and project: %s", (workspace) => {
+    expect(() => configuredBuilderPortableStatePlan(writeConfig({ agents: { entries: {
+      "octogee-ceckert-proj-site-coach": { workspace: `${stateDir}/${workspace}` },
+    } } }), stateDir)).toThrow();
+  });
+
+  it.each(["octogee-ceckert-coach", "custom-agent"])("does not grant %s a private project workspace", (id) => {
+    expect(() => configuredBuilderPortableStatePlan(writeConfig({ agents: { entries: {
+      [id]: { workspace: `${stateDir}/customers/ceckert/.system/project-coaches/site` },
+    } } }), stateDir)).toThrow(/canonical workspace root/);
   });
 
   it("uses keyed entries as the active roster when a stale list is also present", () => {

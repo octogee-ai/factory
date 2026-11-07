@@ -241,6 +241,16 @@ vi.mock('../lib/surge-openclaw-process-gate.js', async importOriginal => ({
   ...await importOriginal<typeof import('../lib/surge-openclaw-process-gate.js')>(),
   createSurgeOpenClawProcessSupervisorClient: () => ({ status: supervisorMocks.status }),
 }));
+const restoreCoachWorkspaces = vi.hoisted(() => vi.fn());
+vi.mock("@octogee/core/project-coach-workspaces", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@octogee/core/project-coach-workspaces")>();
+  return { ...actual, restoreProjectCoachWorkspaces: restoreCoachWorkspaces };
+});
+vi.mock("../lib/gitea-admin-broker-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/gitea-admin-broker-client.js")>();
+  return { ...actual, ensureProjectCoachRepo: vi.fn(async () => undefined) };
+});
+
 const gitMocks = vi.hoisted(() => ({
   cloneProjectRepo: vi.fn(),
   customerRepositoryHasCanonicalRemote: vi.fn(),
@@ -1174,6 +1184,83 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       expect(f.rpc.agentsCreate).toHaveBeenCalledTimes(2);
       for (const [dir, bytes] of f.originals) expect(await fs.readFile(path.join(dir, "IDENTITY.md"))).toEqual(bytes);
       await expect(fs.access(path.join(testRuntime.dir, activationManifestTarPath("tester10")))).rejects.toThrow();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each([true, false])("moves an existing Shared project coach in place when GitHub backing is %s", async githubBacked => {
+    try {
+      const f = await assignedPersonaFixture();
+      f.snapshot.projectAgents![0].githubBacked = githubBacked ? true : undefined;
+      const privateWorkspace = path.join(f.workspace, ".system", "project-coaches", "persona");
+      const desired = githubBacked ? privateWorkspace : f.project;
+      const before = githubBacked ? f.project : privateWorkspace;
+      const privateIdentity = "Private project persona";
+      await fs.mkdir(privateWorkspace, { recursive: true });
+      await fs.writeFile(path.join(privateWorkspace, "IDENTITY.md"), privateIdentity);
+      await fs.writeFile(path.join(privateWorkspace, "AGENTS.md"), "Private coach instructions");
+      const config = assignedPersonaRoster(f, [f.coachId, f.projectId]).config;
+      config.agents.entries[f.projectId].workspace = before;
+      vi.mocked(f.rpc.configGet).mockResolvedValue(configSnapshot(config));
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async ({ name }) => {
+        throw new OpenclawWireError("rpc-error", `agent "${name}" already exists`);
+      });
+      patchMocks.applyConfigPatch.mockImplementationOnce(async args => {
+        const patch = args.buildPatch(config) as typeof config;
+        expect(patch.agents.entries[f.projectId]).toMatchObject({
+          workspace: desired, agentDir: config.agents.entries[f.projectId].agentDir,
+        });
+        return { mode: "rpc", attempts: 1 };
+      });
+
+      await f.mount();
+
+      expect(patchMocks.applyConfigPatch).toHaveBeenCalledOnce();
+      expect(f.rpc.agentsDelete).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.project, "IDENTITY.md"))).toEqual(f.originals.get(f.project));
+      expect(await fs.readFile(path.join(privateWorkspace, "IDENTITY.md"), "utf8")).toBe(privateIdentity);
+      await expect(fs.access(path.join(testRuntime.dir, activationManifestTarPath("tester10")))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux").each(["foreign workspace", "agent directory", "duplicate", "pending manifest"])("rejects a Shared project relocation with %s", async invalid => {
+    try {
+      const f = await assignedPersonaFixture();
+      f.snapshot.projectAgents![0].githubBacked = true;
+      const keyed = assignedPersonaRoster(f, [f.coachId, f.projectId]).config;
+      const entry = keyed.agents.entries[f.projectId];
+      if (invalid === "foreign workspace") entry.workspace = path.join(testRuntime.dir, "customers/foreign/projects/persona");
+      if (invalid === "agent directory") entry.agentDir = path.join(testRuntime.dir, "agents/foreign/agent");
+      if (invalid === "pending manifest") await writeActivationManifest(testRuntime.dir, f.manifest);
+      const list = Object.entries(keyed.agents.entries).map(([id, agent]) => ({ ...agent, id }));
+      const current = invalid === "duplicate" ? { ...keyed, agents: { list: [...list, { ...entry, id: f.projectId }] } } : keyed;
+      vi.mocked(f.rpc.configGet).mockResolvedValue(configSnapshot(current));
+
+      await expect(f.mount()).rejects.toThrow("Assigned Shared Native roster identity changed");
+      expect(f.rpc.agentsCreate).not.toHaveBeenCalled();
+      expect(f.rpc.agentsDelete).not.toHaveBeenCalled();
+      expect(patchMocks.applyConfigPatch).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.skipIf(process.platform !== "linux")("refuses a Shared project relocation when the latest config changes its workspace", async () => {
+    try {
+      const f = await assignedPersonaFixture();
+      f.snapshot.projectAgents![0].githubBacked = true;
+      const current = assignedPersonaRoster(f, [f.coachId, f.projectId]);
+      vi.mocked(f.rpc.configGet).mockResolvedValue(current);
+      vi.mocked(f.rpc.agentsCreate).mockImplementation(async ({ name }) => {
+        throw new OpenclawWireError("rpc-error", `agent "${name}" already exists`);
+      });
+      patchMocks.applyConfigPatch.mockImplementationOnce(async args => {
+        const latest = structuredClone(current.config);
+        latest.agents.entries[f.projectId].workspace = path.join(f.workspace, "arbitrary");
+        args.buildPatch(latest);
+        return { mode: "rpc", attempts: 1 };
+      });
+
+      await expect(f.mount()).rejects.toThrow("Assigned Shared Native roster identity changed");
+      expect(f.rpc.agentsDelete).not.toHaveBeenCalled();
+      expect(routingActivationMocks.activateAfterPatch).not.toHaveBeenCalled();
     } finally { vi.unstubAllEnvs(); }
   });
 
@@ -2631,6 +2718,53 @@ describe("broker migration admission", () => {
     expect(rpc.cronJobCount).not.toHaveBeenCalled();
     expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "handoff-1", phase: "hold", agentIds: ["octogee-migrationqa-coach"], retainNonportable: true });
   });
+  it.each([false, true])("validates a configured Builder private workspace before export and scheduler hold (foreign: %s)", async (foreign) => {
+    const previousConfig = await fs.readFile(OPENCLAW_CONFIG).catch(() => null);
+    const stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "broker-private-return-")));
+    boundedStopDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    stubBuilderClaim("migrationqa");
+    const agentId = "octogee-migrationqa-proj-site-coach";
+    const relativeWorkspace = `customers/${foreign ? "other" : "migrationqa"}/.system/project-coaches/site`;
+    const workspace = path.join(stateDir, relativeWorkspace);
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "IDENTITY.md"), "private coach identity");
+    await fs.mkdir(path.join(stateDir, "agents", agentId, "agent"), { recursive: true });
+    await fs.writeFile(OPENCLAW_CONFIG, JSON.stringify({ agents: { entries: {
+      [agentId]: { workspace, agentDir: path.join(stateDir, "agents", agentId, "agent") },
+    } } }));
+    const rpc = mkGatewayRpc();
+    const adapter = buildBrokeredLifecycleAdapter({ client: mkClient(), rpc, log: vi.fn() });
+    try {
+      const hold = { operationId: "private-return", phase: "hold" as const };
+      if (foreign) {
+        await expect(adapter.listExportPaths("migrationqa")).rejects.toThrow(/canonical workspace root/);
+        await expect(Promise.resolve().then(() => adapter.schedulerMigration!("migrationqa", hold))).rejects.toThrow(/canonical workspace root/);
+        expect(rpc.schedulerMigration).not.toHaveBeenCalled();
+        expect(rpc.channelsStop).not.toHaveBeenCalled();
+      } else {
+        expect(await adapter.listExportPaths("migrationqa")).toEqual(expect.arrayContaining([
+          { cwd: stateDir, path: relativeWorkspace },
+          { cwd: stateDir, path: `agents/${agentId}` },
+        ]));
+        await adapter.schedulerMigration!("migrationqa", hold);
+        expect(rpc.schedulerMigration).toHaveBeenCalledWith({ ...hold, agentIds: [agentId] });
+        await adapter.schedulerMigration!("migrationqa", { operationId: "private-return", phase: "export", resolveAgentScope: true });
+        expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "private-return", phase: "export", agentIds: [agentId] });
+        await adapter.schedulerMigration!("migrationqa", { operationId: "private-return", phase: "abort", agentIds: [agentId] });
+        expect(rpc.schedulerMigration).toHaveBeenCalledWith({ operationId: "private-return", phase: "abort", agentIds: [agentId] });
+        await expect(adapter.quiesceCustomer("migrationqa", 0, { stopMattermost: true, schedulerMigrationId: "private-return" }))
+          .resolves.toEqual({ drained: true, runningCount: 0 });
+        expect(rpc.sessionsAbort).not.toHaveBeenCalled();
+        expect(await fs.readFile(path.join(workspace, "IDENTITY.md"), "utf8")).toBe("private coach identity");
+      }
+    } finally {
+      clearBuilderClaim();
+      if (previousConfig) await fs.writeFile(OPENCLAW_CONFIG, previousConfig);
+      else await fs.rm(OPENCLAW_CONFIG, { force: true });
+    }
+  });
+
   it("proves scheduler readiness with a read-only gateway RPC and surfaces why it is not ready", async () => {
     const ready = mkGatewayRpc({ configGet: vi.fn(async () => configSnapshot({})) });
     await expect(buildBrokeredLifecycleAdapter({ client: mkClient(), rpc: ready, log: vi.fn() }).schedulerReady()).resolves.toBeUndefined();
@@ -3716,23 +3850,30 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
     if (preCutover) stubBuilderClaim("alice");
     const projectId = "latecheckout";
     const agentId = `octogee-alice-proj-${projectId}-coach`;
-    const workspace = path.join(testRuntime.dir, "customers/alice/projects", projectId);
+    const github = source === "deferred GitHub";
+    const customerDir = path.join(testRuntime.dir, "customers", "alice");
+    const checkout = path.join(customerDir, "projects", projectId);
+    const workspace = github ? path.join(customerDir, ".system", "project-coaches", projectId) : checkout;
     await fs.rm(workspace, { recursive: true, force: true });
+    if (github) restoreCoachWorkspaces.mockImplementationOnce(async () => {
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(path.join(workspace, "AGENTS.md"), "Private coach instructions");
+    });
     vi.stubEnv("OPENCLAW_STATE_DIR", await fs.realpath(testRuntime.dir));
     const initial = aliceSnapshot({ status: "complete", projectAgents: undefined });
     const latest = aliceSnapshot({
       status: "complete",
       projects: [{ projectSlug: projectId, giteaRepoName: source === "gitea" ? "alice-late-checkout" : null,
         ...(source === "gitea" ? {} : { repoSource: { provider: "github" as const, owner: "qa", repo: "late-checkout" } }), provisioningState: "active" }],
-      projectAgents: [{ projectId, enabled: true, mmUserId: "bot-late", token: "late-pat", activationId: "late-activation", status: "provisioning" }],
+      projectAgents: [{ projectId, enabled: true, mmUserId: "bot-late", token: "late-pat", activationId: "late-activation", status: "provisioning", ...(github ? { githubBacked: true } : {}) }],
       channels: [{ scope: "project", projectId, kind: "general", channelId: "late-general" }],
     });
-    gitMocks.projectCheckoutMatchesSource.mockImplementation((_slug, id) => id !== projectId || fsSync.existsSync(path.join(workspace, "README.md")));
+    gitMocks.projectCheckoutMatchesSource.mockImplementation((_slug, id) => id !== projectId || fsSync.existsSync(path.join(checkout, "README.md")));
     gitMocks.customerRepositoryHasCanonicalRemote.mockReturnValue(true);
     gitMocks.cloneProjectRepo.mockImplementation(async (_slug, id) => {
       expect(id).toBe(projectId);
-      await fs.mkdir(workspace, { recursive: true });
-      await fs.writeFile(path.join(workspace, "README.md"), "# Repository source\n");
+      await fs.mkdir(checkout, { recursive: true });
+      await fs.writeFile(path.join(checkout, "README.md"), "# Repository source\n");
       return true;
     });
     let config: Record<string, any> = { agents: { entries: {} }, channels: { mattermost: { accounts: {} } }, bindings: [] };
@@ -3743,7 +3884,7 @@ describe("buildBrokeredLifecycleAdapter add config patch", () => {
       agentsCreate: vi.fn(async ({ name, workspace: nativeWorkspace }) => {
         if (name === agentId) {
           if (source === "gitea") expect(await fs.readFile(path.join(nativeWorkspace, "README.md"), "utf8")).toBe("# Repository source\n");
-          else expect(await fs.readFile(path.join(nativeWorkspace, "AGENTS.md"), "utf8")).toContain("checked out on alice's own");
+          else expect(await fs.readFile(path.join(nativeWorkspace, "AGENTS.md"), "utf8")).toBe("Private coach instructions");
         }
         return { ok: true as const, agentId: name, name, workspace: nativeWorkspace };
       }),

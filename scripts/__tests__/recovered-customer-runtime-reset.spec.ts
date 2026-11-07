@@ -194,6 +194,22 @@ describe("recovered customer runtime reset", () => {
     expect(peers.every((peer) => fs.existsSync(agentDatabasePath(openclawDir, peer)))).toBe(true);
   });
 
+  it("clears only the selected private workspace's stale setup state for a GitHub-backed coach", () => {
+    const openclawDir = temporaryOpenClawDir();
+    const state = stateDatabase(openclawDir);
+    const customerDir = path.join(openclawDir, "customers", "ceckert-test");
+    const checkout = path.join(customerDir, "projects", "orbit");
+    const workspace = path.join(customerDir, ".system", "project-coaches", "orbit");
+    attestWorkspace(state, "checkout", checkout);
+    attestWorkspace(state, "private", workspace);
+    state.close();
+    const result = resetRecoveredCustomerRuntime({
+      openclawDir, uid: "uid-ceckert", slug: "ceckert-test",
+      agentIds: ["octogee-ceckert-test-proj-orbit-coach"], githubProjectIds: new Set(["orbit"]), procRoot: procRootHolding([]),
+    });
+    expect(result.clearedWorkspaceAttestations).toEqual([workspace]);
+  });
+
   it("keeps a PostgreSQL agent anchor and its registration, since the agent's content lives in PostgreSQL", () => {
     const openclawDir = temporaryOpenClawDir();
     const state = stateDatabase(openclawDir);

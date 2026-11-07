@@ -63,15 +63,19 @@ export async function queueProjectHandoff(uid: string, workspaceId: string, proj
 
 function deliveryMessage(project: OnboardingProject, kind: DeliveryKind, workspaceId: string, projectSlug: string): string {
   const { agent } = project;
+  const privateWorkspace = project.repoSource?.provider === "github";
   if (kind === "handoff") {
     if (!agent.identity || !project.handoffMessage) throw new Error("Project handoff identity is missing");
-    return `@${projectAgentMmUsername(workspaceId, projectSlug)} ${project.handoffMessage}\n\nYou are ${agent.identity.name} ${agent.identity.emoji}. ${agent.identity.persona}\nBefore starting, save this handoff in BRIEF.md, update IDENTITY.md and SOUL.md with your assigned identity, and record relevant Builder context in USER.md in your project checkout. Preserve existing project instructions and decisions, read runbook/ and DECISIONS.md when present, and commit these files together with your work using octogee_project_commit. Create a fitting avatar and set your chat identity with octogee_chat_set_identity.`;
+    const workspace = privateWorkspace
+      ? "in your private coach workspace. Keep those coach files there. Use the GitHub checkout, when available, for source and repository-owned instructions."
+      : "in your project checkout. Preserve existing project instructions and decisions, read runbook/ and DECISIONS.md when present, and commit these files together with your work using octogee_project_commit.";
+    return `@${projectAgentMmUsername(workspaceId, projectSlug)} ${project.handoffMessage}\n\nYou are ${agent.identity.name} ${agent.identity.emoji}. ${agent.identity.persona}\nBefore starting, save this handoff in BRIEF.md, update IDENTITY.md and SOUL.md with your assigned identity, and record relevant Builder context in USER.md ${workspace} Create a fitting avatar and set your chat identity with octogee_chat_set_identity.`;
   }
   const identityHint = agent.requestedName ? `Your name is ${agent.requestedName}.` : "Choose your own fitting name.";
   const task = project.tagline?.trim()
     ? `The Builder's starting idea: ${project.tagline}\nIntroduce yourself and start with this idea.`
     : "Greet the Builder, ask what they would like to create, and wait for their direction.";
-  return `@${projectAgentMmUsername(workspaceId, projectSlug)} You are the new agent for “${project.name}”. ${identityHint} Choose a fitting personality, emoji, and avatar, and set your chat identity with octogee_chat_set_identity. Keep your chosen identity files in the project repo.\n${task}`;
+  return `@${projectAgentMmUsername(workspaceId, projectSlug)} You are the new agent for “${project.name}”. ${identityHint} Choose a fitting personality, emoji, and avatar, and set your chat identity with octogee_chat_set_identity. Keep your chosen identity files in your ${privateWorkspace ? "private coach workspace" : "project repo"}.\n${task}`;
 }
 
 async function prepareHandoff({ uid, projectSlug, project }: { uid: string; projectSlug: string; project: OnboardingProject }): Promise<void> {

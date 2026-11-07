@@ -77,6 +77,17 @@ describe("configuredBuilderWorkspacePatch", () => {
 });
 
 describe("configuredBuilderProjectAgentPatch", () => {
+  it.each(["list", "entries"] as const)("moves the managed coach without changing the owner sandbox or model (%s)", representation => {
+    const old = { ...desired.projectAgentEntries[0], cwd: "/customers/alice/projects/launch", sandbox: { mode: "all" }, model: "custom" };
+    const current = currentConfig(representation, [old]);
+    const privateWorkspace = "/customers/alice/.system/project-coaches/launch";
+    const patch = configuredBuilderProjectAgentPatch(current, { ...desired, activationProjectIds: [],
+      projectAgentEntries: [{ ...desired.projectAgentEntries[0], workspace: privateWorkspace }] }).patch.agents;
+    const entry = "entries" in patch ? patch.entries[agentId] : patch.list.find((entry: any) => entry.id === agentId);
+    expect(entry).toMatchObject({ workspace: privateWorkspace, sandbox: { mode: "all" }, model: "custom" });
+    expect((entry as Record<string, unknown>).cwd).toBe(representation === "entries" ? null : undefined);
+  });
+
   it.each(["list", "entries"] as const)("binds new sessions of a ready project without replacing its account or existing routes (%s)", (representation) => {
     const current = currentConfig(representation, desired.projectAgentEntries);
     const customAccount = { baseUrl: "https://builder-mattermost.example", botToken: "owner-managed-token", allowFrom: ["custom-owner"], groupPolicy: "allowlist" };

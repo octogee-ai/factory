@@ -5,7 +5,8 @@ import {
   SIGNATURE_HEADER,
 } from "@octogee/shared/types/fleet-controller";
 
-import { createFleetStateFetcher } from "../fleet-state-client.js";
+import { resolveMigrationRecoveryUrl } from "../lib/migration-rsync-transfer.js";
+import { createFleetStateFetcher, readPrivateProjectCoachWorkspace } from "../fleet-state-client.js";
 import { FLEET_KEY_PAIR, OTHER_FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 
 const STATE_BODY = {
@@ -37,6 +38,34 @@ function fetcherWith(
     newRequestId: () => requestId,
   });
 }
+
+it("reads workspace support from the addressed running pod, including a held target", async () => {
+  const gatewayId = STATE_BODY.gatewayId;
+  const pod = (name: string, podIP: string, ready: boolean) => ({ metadata: { name }, status: {
+    phase: "Running", podIP, conditions: [{ type: "Ready", status: ready ? "True" : "False" }],
+  } });
+  const old = pod("old-serving", "10.10.0.1", true), held = pod("new-held", "10.10.0.2", false);
+  const runCommand = vi.fn(async () => ({ stdout: JSON.stringify({ items: [old, held] }), stderr: "", code: 0 }));
+  const resolve = () => resolveMigrationRecoveryUrl({ namespace: "test", gatewayId, port: "3003", runCommand, resolveGatewayVm: async () => null });
+  const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+    const rawBody = init?.body as string;
+    expect(JSON.parse(rawBody)).toMatchObject({ gatewayId, privateProjectCoachSlug: "jack" });
+    expect(verifyFleetRequest(FLEET_KEY_PAIR.publicKey, "compat", rawBody, new Headers(init?.headers).get(SIGNATURE_HEADER)!)).toBe(true);
+    const body = String(url).includes("10.10.0.2")
+      ? { ...STATE_BODY, podUid: "held-uid", status: "booting", privateProjectCoachWorkspace: false }
+      : STATE_BODY;
+    return okResponse(body);
+  });
+  const read = async () => readPrivateProjectCoachWorkspace({
+    baseUrl: await resolve(), gatewayId, privateKey: FLEET_KEY_PAIR.privateKey,
+    privateProjectCoachSlug: "jack", timeoutMs: 5_000, fetchImpl, newRequestId: () => "compat",
+  });
+
+  await expect(read()).resolves.toBeUndefined();
+  runCommand.mockResolvedValue({ stdout: JSON.stringify({ items: [held] }), stderr: "", code: 0 });
+  await expect(read()).resolves.toBe(false);
+  expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).hostname)).toEqual(["10.10.0.1", "10.10.0.2"]);
+});
 
 describe("createFleetStateFetcher", () => {
   it("reads the roster over a request signed by the fleet controller key", async () => {

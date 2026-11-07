@@ -1,3 +1,5 @@
+import { withPinnedDirectory } from "./pinned-directory.js";
+import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -313,13 +315,23 @@ function validateWorkspaceIdentityFiles(rawFiles: unknown, agents: readonly { ag
 
 }
 
-function targetIdentityAgents(slug: string, agentIds: readonly string[], stateDir: string) {
+function identityWorkspaceParts(slug: string, agentId: string, privateWorkspace = false): string[] {
+  const parsed = parseAgentId(agentId);
+  if (parsed.kind === "unknown" || parsed.username !== slug) throw new Error("Source workspace identity agent is foreign");
+  return ["customers", slug, ...(parsed.kind === "project" ? [...(privateWorkspace ? PROJECT_COACH_WORKSPACE_PARTS : ["projects"]), parsed.project] : [])];
+}
+
+export function privateProjectWorkspaceAgentIds(manifest: MigrationActivationManifest): Set<string> {
+  const root = manifest.agent.workspace;
+  if (typeof root !== "string" || !path.isAbsolute(root)) return new Set();
+  return new Set(manifest.projectAgents.filter(entry =>
+    entry.agent.workspace === path.join(root, ...identityWorkspaceParts(manifest.slug, entry.agentId, true).slice(2)),
+  ).map(entry => entry.agentId));
+}
+
+function targetIdentityAgents(slug: string, agentIds: readonly string[], stateDir: string, privateWorkspaces?: ReadonlySet<string>) {
   if (agentIds.length === 0 || agentIds.length > 16_384 || new Set(agentIds).size !== agentIds.length) throw new Error("Target workspace identity coverage is invalid");
-  return agentIds.map(agentId => {
-    const parsed = parseAgentId(agentId);
-    if (parsed.kind === "unknown" || parsed.username !== slug) throw new Error("Target workspace identity agent is foreign");
-    return { agentId, agent: { workspace: path.join(stateDir, "customers", slug, ...(parsed.kind === "project" ? ["projects", parsed.project] : [])) } };
-  });
+  return agentIds.map(agentId => ({ agentId, agent: { workspace: path.join(stateDir, ...identityWorkspaceParts(slug, agentId, privateWorkspaces?.has(agentId))) } }));
 }
 
 export function assertTargetIdentityCustody(expected: MigrationTargetIdentityCustody, actual: MigrationTargetIdentityCustody): void {
@@ -348,12 +360,12 @@ export function validateTargetWorkspaceIdentities(value: unknown, slug: string, 
   return { ...(custody.migrationId === undefined ? {} : { migrationId: custody.migrationId }), ...(custody.assignmentEpoch === undefined ? {} : { assignmentEpoch: custody.assignmentEpoch }), uid: custody.uid, gatewayId: custody.gatewayId, podUid: custody.podUid, files };
 }
 
-export async function captureTargetWorkspaceIdentities(slug: string, agentIds: readonly string[], stateDir: string, custody: MigrationTargetIdentityCustody): Promise<TargetWorkspaceIdentities> {
+export async function captureTargetWorkspaceIdentities(slug: string, agentIds: readonly string[], stateDir: string, custody: MigrationTargetIdentityCustody, privateWorkspaces?: ReadonlySet<string>): Promise<TargetWorkspaceIdentities> {
   assertTargetIdentityCustody(custody, custody);
   if (await fs.realpath(stateDir) !== stateDir) throw new Error("Target workspace identity root is not canonical");
   const files: SourceWorkspaceIdentity[] = [];
   let bytesCaptured = 0;
-  for (const agent of targetIdentityAgents(slug, agentIds, stateDir)) {
+  for (const agent of targetIdentityAgents(slug, agentIds, stateDir, privateWorkspaces)) {
     let bytes: Buffer | null = null;
     try { await withIdentityWorkspace(stateDir, slug, agent, async location => { bytes = await readSourceIdentity(location); }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -366,12 +378,12 @@ export async function captureTargetWorkspaceIdentities(slug: string, agentIds: r
   return validateTargetWorkspaceIdentities({ ...custody, files }, slug, agentIds);
 }
 
-export async function restoreTargetWorkspaceIdentities(value: TargetWorkspaceIdentities, slug: string, agentIds: readonly string[], stateDir: string, options: { custody: MigrationTargetIdentityCustody; assertCurrent: () => Promise<void> }): Promise<void> {
+export async function restoreTargetWorkspaceIdentities(value: TargetWorkspaceIdentities, slug: string, agentIds: readonly string[], stateDir: string, options: { custody: MigrationTargetIdentityCustody; assertCurrent: () => Promise<void>; privateWorkspaces?: ReadonlySet<string> }): Promise<void> {
   const { custody, assertCurrent } = options;
   const capture = validateTargetWorkspaceIdentities(value, slug, agentIds);
   assertTargetIdentityCustody(capture, custody);
   await assertCurrent();
-  await restoreIdentityFiles(targetIdentityAgents(slug, capture.files.map(file => file.agentId), stateDir), slug, stateDir, capture.files, { assertCurrent, allowAbsentWorkspace: true });
+  await restoreIdentityFiles(targetIdentityAgents(slug, capture.files.map(file => file.agentId), stateDir, options.privateWorkspaces), slug, stateDir, capture.files, { assertCurrent, allowAbsentWorkspace: true });
   await assertCurrent();
 }
 
@@ -385,29 +397,11 @@ export function assertSourceIdentityCustody(expected: MigrationSourceIdentityCus
 }
 
 async function withIdentityWorkspace<T>(stateDir: string, slug: string, agent: { agentId: string; agent: Record<string, unknown> }, use: (location: string, assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> {
-  const parsed = parseAgentId(agent.agentId);
-  if (parsed.kind === "unknown" || parsed.username !== slug) throw new Error("Source workspace identity agent is foreign");
-  const parts = ["customers", slug, ...(parsed.kind === "project" ? ["projects", parsed.project] : [])];
+  const privateParts = identityWorkspaceParts(slug, agent.agentId, true);
+  const parts = agent.agent.workspace === path.join(stateDir, ...privateParts) ? privateParts : identityWorkspaceParts(slug, agent.agentId);
   const workspace = path.join(stateDir, ...parts);
   if (agent.agent.workspace !== workspace || await fs.realpath(stateDir) !== stateDir) throw new Error("Source workspace identity path is not canonical");
-  const handles: fs.FileHandle[] = [];
-  const fdRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
-  try {
-    handles.push(await fs.open(stateDir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
-    for (const part of parts) handles.push(await fs.open(`${fdRoot}/${handles.at(-1)!.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
-    const directory = handles.at(-1)!;
-    const identity = await directory.stat();
-    const assertCurrent = async () => {
-      const current = await fs.lstat(workspace);
-      if (!current.isDirectory() || current.dev !== identity.dev || current.ino !== identity.ino || await fs.realpath(workspace) !== workspace) {
-        throw new Error("Source workspace identity directory changed");
-      }
-    };
-    await assertCurrent();
-    const result = await use(`${fdRoot}/${directory.fd}/IDENTITY.md`, assertCurrent);
-    await assertCurrent();
-    return result;
-  } finally { for (const handle of handles.reverse()) await handle.close(); }
+  return withPinnedDirectory(stateDir, parts, (location, assertCurrent) => use(`${location}/IDENTITY.md`, assertCurrent));
 }
 
 async function readSourceIdentity(location: string): Promise<Buffer | null> {
@@ -726,6 +720,14 @@ function ownerCommandsSection(
   return commands ? { commands } : {};
 }
 
+function privateProjectAgentForImport(agent: Record<string, unknown>, keyed: boolean, cwd?: string): Record<string, unknown> {
+  if (cwd !== undefined) return { ...agent, cwd };
+  const entry = { ...agent };
+  if (keyed) entry.cwd = null;
+  else delete entry.cwd;
+  return entry;
+}
+
 export async function applyOpenClawActivationManifest(
   manifest: MigrationActivationManifest,
   opts: {
@@ -740,6 +742,7 @@ export async function applyOpenClawActivationManifest(
       agent: Record<string, unknown>;
     };
     ownerCommandsPatch?: OwnerCommandsPatch;
+    projectCheckoutCwd?: (agent: Record<string, unknown>, current: unknown) => string | undefined;
   },
 ): Promise<{
   elapsedMs: number;
@@ -747,6 +750,7 @@ export async function applyOpenClawActivationManifest(
   restartExistingAccountIds: string[];
   configNoop: boolean;
 }> {
+  const privateProjects = privateProjectWorkspaceAgentIds(manifest);
   const authInheritanceAnchor = opts.authInheritanceAnchor;
   const reconcileAgent = opts.gatewayClass === "builder"
     ? reconcileBuilderAgentEntry
@@ -782,17 +786,17 @@ export async function applyOpenClawActivationManifest(
         const currentBindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
         const agents = (current as { agents?: Record<string, unknown> } | undefined)?.agents;
         const targetUsesKeyedEntries = isRecord(agents?.entries);
-        const activationAgents = manifestAgents(manifest).map((entry) => ({
-          ...entry,
-          agent: reconcileAgent(
-            entry.agentId,
-            activationAgentForTarget(
-              entry.agent,
-              currentActivationAgent(current, entry.agentId),
-              targetUsesKeyedEntries,
-            ),
-          ),
-        }));
+        const activationAgents = manifestAgents(manifest).map(entry => {
+          const existing = currentActivationAgent(current, entry.agentId);
+          let agent = entry.agent;
+          if (privateProjects.has(entry.agentId)) {
+            if (opts.gatewayClass === "builder" && existing?.sandbox !== undefined) agent = { ...agent, sandbox: existing.sandbox };
+            const defaults = isRecord(agents?.defaults) ? agents.defaults : undefined;
+            const cwd = opts.projectCheckoutCwd?.(agent, current) ?? (defaults?.cwd && typeof agent.workspace === "string" ? agent.workspace : undefined);
+            agent = privateProjectAgentForImport(agent, targetUsesKeyedEntries, cwd);
+          }
+          return { ...entry, agent: reconcileAgent(entry.agentId, activationAgentForTarget(agent, existing, targetUsesKeyedEntries)) };
+        });
         const currentAccounts = (current as {
           channels?: { mattermost?: { accounts?: Record<string, unknown> } };
         } | undefined)?.channels?.mattermost?.accounts ?? {};

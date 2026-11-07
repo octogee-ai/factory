@@ -106,6 +106,7 @@ vi.mock("../lib/gitea-admin.js", () => ({
   readGiteaUserPubKeys: vi.fn(async () => ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"]),
   ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
   ensureWorkspaceRepo: vi.fn(async () => {}),
+  ensureProjectCoachRepo: vi.fn(async () => {}),
   ensureSystemConfigRepo: vi.fn(async () => {}),
   ensureProjectRepo: vi.fn(async () => {}),
   repoExists: vi.fn(async () => true),
@@ -433,6 +434,18 @@ describe("internal gitea-admin route", () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-system-config-repo")).send({ slug: "acme" });
     expect(res.status).toBe(204);
     expect(giteaAdmin.ensureSystemConfigRepo).toHaveBeenCalledWith("acme");
+  });
+
+  it("provisions the private coach repository only through its owner-scoped route", async () => {
+    const server = request(app());
+    const denied = await authed(server.post("/internal/gitea/ensure-project-coach-repo")).send({ slug: "other" });
+    expect(denied.status).toBe(403);
+    const ordinary = await authed(server.post("/internal/gitea/ensure-project-repo")).send({ slug: "acme", projectName: "project_coaches" });
+    expect(ordinary.status).toBe(400);
+    const allowed = await authed(server.post("/internal/gitea/ensure-project-coach-repo")).send({ slug: "acme" });
+    expect(allowed.status).toBe(204);
+    expect(giteaAdmin.ensureProjectCoachRepo).toHaveBeenCalledExactlyOnceWith("acme");
+    expect(giteaAdmin.ensureProjectRepo).not.toHaveBeenCalled();
   });
 
   it("ensure-project-repo → 204 with slug + projectName", async () => {

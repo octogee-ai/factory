@@ -1,3 +1,4 @@
+import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { Router, type Request, type Response } from "express";
 import {
   resolveCustomerDir,
@@ -74,7 +75,7 @@ async function divertBinaries(
 ): Promise<{ diverted: Array<{ path: string; size: number }>; failures: string[]; failedPaths: string[] }> {
   const result = project
     ? await divertWorktreeBinaries(dir, blobTarget(slug, project), undefined, { retainLocalFiles: true })
-    : await divertWorktreeBinaries(dir, blobTarget(slug, project));
+    : await divertWorktreeBinaries(dir, blobTarget(slug, project), undefined, { excludePaths: [PROJECT_COACH_WORKSPACE_PARTS.join("/")] });
   if (result.failures.length > 0) {
     logger.warn(
       `internal/workspace/commit: blob diversion incomplete slug=${slug}: ${result.failures.join("; ")}`,

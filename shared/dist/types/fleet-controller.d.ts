@@ -59,8 +59,10 @@ export interface FleetHealthResponse {
 export interface FleetStateRequestBody {
     requestId: string;
     gatewayId: string;
+    privateProjectCoachSlug?: string;
 }
 export interface FleetStateResponse {
+    privateProjectCoachWorkspace?: boolean;
     status: string;
     gatewayId: string;
     podUid: string | null;

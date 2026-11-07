@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentReference } from "firebase-admin/firestore";
-import { projectAgentConfigured, type ProjectAgentConfig } from "@octogee/shared/types/project";
+import { projectAgentConfigured, type ProjectAgentConfig, type ProjectRepoSource } from "@octogee/shared/types/project";
 import { db, FieldValue } from "./db.js";
 import { mmApi } from "./mattermost.js";
 
 export type DeliveryKind = "handoff" | "kickoff";
-export type OnboardingProject = { name: string; tagline?: string; agent: ProjectAgentConfig; handoffMessage?: string };
+export type OnboardingProject = { name: string; tagline?: string; agent: ProjectAgentConfig; repoSource?: ProjectRepoSource; handoffMessage?: string };
 export interface DeliveryClaim {
   project: OnboardingProject;
   kind: DeliveryKind;

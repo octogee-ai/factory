@@ -1,10 +1,11 @@
+import type { FleetBrokerProjectAgent } from "@octogee/shared/types/fleet-broker";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const logger = createServiceLogger("provisioner");
 import type { UserSnapshot } from "./customer-lifecycle.js";
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectAgentConfigured, type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
+import { projectAgentConfigured, projectRepoSourceFromDoc, type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
 
 type ChannelBinding = UserSnapshot["channels"][number];
 
@@ -68,7 +69,7 @@ export function mapProjectAgentState(
   projectId: string,
   projectData: Record<string, unknown>,
   secretData: Record<string, unknown> | undefined,
-): ({ projectId: string; enabled: boolean; mmUserId: string | null; token: string | null } & ReturnType<typeof projectAgentRuntimeState>) | null {
+): FleetBrokerProjectAgent | null {
   const agent = projectData.agent;
   const requestedEnabled = projectAgentConfigured(agent);
   const enabled = requestedEnabled && !projectAgentArchived(projectData);
@@ -80,7 +81,10 @@ export function mapProjectAgentState(
       : null;
   if (!enabled && mmUserId === null && token === null) return null;
   try {
-    return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
+    return {
+      projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent),
+      ...(projectRepoSourceFromDoc(projectData.repoSource)?.provider === "github" ? { githubBacked: true } : {}),
+    };
   } catch (error) {
     if (!(error instanceof ProjectAgentIdentityError)) throw error;
     logger.error("Project agent identity rejected", { projectId, error: error.message });

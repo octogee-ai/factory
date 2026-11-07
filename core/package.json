@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    "./project-coach-workspaces": {
+      "types": "./dist/project-coach-workspaces.d.ts",
+      "default": "./dist/project-coach-workspaces.js"
+    },
     "./disposable-builder-prelaunch": {
       "types": "./dist/disposable-builder-prelaunch.d.ts",
       "default": "./dist/disposable-builder-prelaunch.js"

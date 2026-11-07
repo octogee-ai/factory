@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_RE, parseAgentId, } from "@octogee/shared/types/identity";
+import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 // Mirrors customerCoachAgentId in fleet-http-migration.ts — the coach agent-id convention.
 // Inlined to keep this module node:fs-only (importable into gateway-edge + scripts alike).
 const customerCoachAgentId = (slug) => `octogee-${slug}-coach`;
@@ -169,24 +170,23 @@ function assertPortableAgentDir(relativePath, agentId) {
         throw new Error(`configured Builder agent ${agentId}.agentDir is outside its canonical agent root`);
     }
 }
-// Platform-managed coach and project agents work inside the customer tree the
-// platform provisions (`customers/<slug>` and `customers/<slug>/projects/<id>`);
-// that tree already rides every carry as a durable prefix, so it is portable too.
-function platformManagedWorkspace(agentId) {
+function platformManagedWorkspaces(agentId) {
     const parsed = parseAgentId(agentId);
     if (parsed.kind === "coach")
-        return `customers/${parsed.username}`;
+        return [`customers/${parsed.username}`];
     if (parsed.kind === "project")
-        return `customers/${parsed.username}/projects/${parsed.project}`;
-    return null;
+        return [
+            `customers/${parsed.username}/projects/${parsed.project}`,
+            ["customers", parsed.username, ...PROJECT_COACH_WORKSPACE_PARTS, parsed.project].join("/"),
+        ];
+    return [];
 }
 function assertPortableWorkspace(relativePath, agentId, isDefault) {
-    const platformWorkspace = platformManagedWorkspace(agentId);
     const allowed = new Set([
         `workspace-${agentId}`,
         `workspaces/${agentId}`,
         ...(isDefault || agentId === "main" ? ["workspace"] : []),
-        ...(platformWorkspace ? [platformWorkspace] : []),
+        ...platformManagedWorkspaces(agentId),
     ]);
     if (!allowed.has(relativePath)) {
         throw new Error(`configured Builder agent ${agentId}.workspace is outside its canonical workspace root`);

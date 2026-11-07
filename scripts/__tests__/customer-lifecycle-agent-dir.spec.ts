@@ -32,6 +32,16 @@ vi.mock("../lib/mattermost-account-secrets.js", async (importOriginal) => {
   return { ...actual, updateMattermostAccountSecrets: vi.fn(async () => ({ changed: true })) };
 });
 
+const coachGit = vi.hoisted(() => ({ restore: vi.fn(), ensure: vi.fn(async () => undefined) }));
+vi.mock("@octogee/core/project-coach-workspaces", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@octogee/core/project-coach-workspaces")>();
+  return { ...actual, restoreProjectCoachWorkspaces: coachGit.restore };
+});
+vi.mock("../lib/gitea-admin-broker-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/gitea-admin-broker-client.js")>();
+  return { ...actual, ensureProjectCoachRepo: coachGit.ensure };
+});
+
 interface RuntimeMock {
   tempRoot: string;
   agentsDir: string;
@@ -270,17 +280,25 @@ describe("customer lifecycle config patch agent directories", () => {
 
   // Project checkouts clone AFTER the mount patch, so agents.create would
   // otherwise be handed a workspace path that does not exist yet.
-  it("broker adapter creates each new agent's workspace before agents.create", async () => {
+  it.each([false, true])("broker prepares the project workspace before agents.create (GitHub=%s)", async github => {
     await withRuntimeMock(async ({ tempRoot }) => {
       const { buildBrokeredLifecycleAdapter } = await import(
         "../lib/customer-lifecycle-broker-adapter.js"
       );
       const workspaces: string[] = [];
+      if (github) coachGit.restore.mockImplementationOnce(async ({ customerDir }) => {
+        const workspace = path.join(customerDir, ".system", "project-coaches", "orbit");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "AGENTS.md"), "saved coach instructions");
+      });
       const channelsStatus = vi.fn(async () => ({ channelAccounts: { mattermost: [] } }));
       const agentsCreate = vi.fn(
         async ({ name, workspace }: { name: string; workspace: string }) => {
           expect(fsSync.existsSync(workspace)).toBe(true);
           workspaces.push(workspace);
+          if (github && name.endsWith("-proj-orbit-coach")) {
+            expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe("saved coach instructions");
+          }
           return { ok: true as const, agentId: name, name, workspace };
         },
       );
@@ -288,8 +306,9 @@ describe("customer lifecycle config patch agent directories", () => {
         client: mkClient({
           ...brokerSnapshot,
           status: "provisioning",
+          projects: github ? [{ projectSlug: "orbit", giteaRepoName: "orbit", checkoutEnabled: false, repoSource: { provider: "github", owner: "alice", repo: "orbit" } }] : [],
           projectAgents: [
-            { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit" },
+            { projectId: "orbit", enabled: true, mmUserId: "mm-orbit", token: "pat-orbit", ...(github ? { githubBacked: true } : {}) },
           ],
         }),
         rpc: {
@@ -309,8 +328,13 @@ describe("customer lifecycle config patch agent directories", () => {
 
       expect(workspaces).toEqual([
         path.join(tempRoot, "customers", "alice"),
-        path.join(tempRoot, "customers", "alice", "projects", "orbit"),
+        path.join(tempRoot, "customers", "alice", ...(github ? [".system", "project-coaches"] : ["projects"]), "orbit"),
       ]);
+      if (github) {
+        expect(coachGit.ensure).toHaveBeenCalledWith("alice");
+        expect(coachGit.restore.mock.invocationCallOrder.at(-1)).toBeLessThan(agentsCreate.mock.invocationCallOrder.at(-1)!);
+        expect(fsSync.existsSync(path.join(tempRoot, "customers", "alice", "projects", "orbit"))).toBe(false);
+      }
       expect(agentsCreate.mock.invocationCallOrder.at(-1)).toBeLessThan(
         channelsStatus.mock.invocationCallOrder[0]!,
       );

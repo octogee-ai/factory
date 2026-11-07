@@ -4,6 +4,7 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 
 import { signFleetRequest } from "../lib/fleet-signature.js";
+import { fleetStatePrivateProjectCoachWorkspace } from "../lib/fleet-provisioner.js";
 import { createFleetStateHandler } from "../lib/fleet-state-http.js";
 import {
   FLEET_STATE_PATH,
@@ -31,6 +32,7 @@ const STATE: FleetStateResponse = {
   startedAt: 42,
   customers: ["alice", "bob"],
   migratingIn: ["carol"],
+  configuredBuilder: null,
 };
 
 function appWith(gatewayId = "shared-a"): express.Express {
@@ -45,7 +47,12 @@ function appWith(gatewayId = "shared-a"): express.Express {
     createFleetStateHandler({
       publicKey: COWBOY.publicKey,
       gatewayId,
-      readState: () => ({ ...STATE, gatewayId }),
+      readState: ({ privateProjectCoachSlug }) => ({ ...STATE, gatewayId,
+        ...(privateProjectCoachSlug ? { privateProjectCoachWorkspace: fleetStatePrivateProjectCoachWorkspace({
+          agents: { entries: { "octogee-alice-proj-orbit-coach": { workspace: "/openclaw/customers/alice/.system/project-coaches/orbit" },
+            "octogee-bob-proj-orbit-coach": { workspace: "/openclaw/customers/bob/projects/orbit" } } },
+        }, "/openclaw", privateProjectCoachSlug) } : {}),
+      }),
       log: () => undefined,
     }),
   );
@@ -75,6 +82,17 @@ describe("signed fleet state endpoint", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(STATE);
+  });
+
+  it("reports the addressed tenant's configured workspace only to Cowboy", async () => {
+    const body = { requestId: "req-private", gatewayId: "shared-a", privateProjectCoachSlug: "alice" };
+    const own = await signedPost(appWith(), "shared-a", body);
+    expect(own.body.privateProjectCoachWorkspace).toBe(true);
+    const other = await signedPost(appWith(), "shared-a", { ...body, privateProjectCoachSlug: "bob" });
+    expect(other.body.privateProjectCoachWorkspace).toBe(false);
+    const unsigned = await signedPost(appWith(), "shared-a", body, IMPOSTOR.privateKey);
+    expect(unsigned.status).toBe(401);
+    expect(unsigned.body).not.toHaveProperty("privateProjectCoachWorkspace");
   });
 
   it("rejects an unsigned request without confirming which gateway answered", async () => {

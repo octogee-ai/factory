@@ -54,6 +54,7 @@ export interface FleetBrokerProjectAgentReadiness {
     channelIds: string[];
 }
 export interface FleetBrokerProjectAgent {
+    githubBacked?: true;
     identity?: ProjectAgentIdentity;
     deliveryPending?: boolean;
     projectId: string;

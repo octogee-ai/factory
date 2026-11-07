@@ -1,3 +1,4 @@
+import { projectCoachWorkspace } from "@octogee/core/project-coach-workspaces";
 import { assertSafeStagedSymlinks, RSYNC_DAEMON_SYMLINK_POLICY, STAGED_RSYNC_COPY_OPTIONS } from "./rsync-staged-symlinks.js";
 import { isDeepStrictEqual } from "node:util";
 import { projectCheckoutEnabled } from "../../shared/types/project.js";
@@ -113,6 +114,7 @@ import {
   assertSourceIdentityCustody,
   captureSourceWorkspaceIdentities,
   captureTargetWorkspaceIdentities,
+  privateProjectWorkspaceAgentIds,
   restoreTargetWorkspaceIdentities,
   validateTargetWorkspaceIdentities,
   assertTargetIdentityCustody,
@@ -2398,7 +2400,7 @@ async function sharedManifestWorkspaceRestore({ deps, body, importDir, signal, s
     capture = validateTargetWorkspaceIdentities(prior, body.slug, agentIds);
   } else {
     if (!stageDir) throw new Error("Shared target requires original workspace identity retransmission");
-    capture = await captureTargetWorkspaceIdentities(body.slug, agentIds, stageDir, custody);
+    capture = await captureTargetWorkspaceIdentities(body.slug, agentIds, stageDir, custody, privateProjectWorkspaceAgentIds(incoming));
   }
   const retained = { ...incoming, targetWorkspaceIdentities: capture };
   if (stageDir) {
@@ -2413,7 +2415,7 @@ async function sharedManifestWorkspaceRestore({ deps, body, importDir, signal, s
     signal.throwIfAborted();
   };
   await assertCurrent();
-  return () => restoreTargetWorkspaceIdentities(capture, body.slug, agentIds, importDir, { custody, assertCurrent });
+  return () => restoreTargetWorkspaceIdentities(capture, body.slug, agentIds, importDir, { custody, assertCurrent, privateWorkspaces: privateProjectWorkspaceAgentIds(incoming) });
 }
 
 async function activateFinishedRsyncImport(input: {
@@ -2499,7 +2501,8 @@ async function carriedBuilderWorkspace(input: StagedImportInput, agentId: string
   const workspace = path.join(input.session.importDir, "customers", input.slug);
   if (parsed.kind === "coach") return workspace;
   if (!activeAgentProjectIds(snapshot.projectAgents ?? []).has(parsed.project)) return null;
-  return path.join(workspace, "projects", parsed.project);
+  const privateWorkspace = snapshot.projectAgents?.some(agent => agent.projectId === parsed.project && agent.githubBacked);
+  return privateWorkspace ? projectCoachWorkspace(workspace, parsed.project) : path.join(workspace, "projects", parsed.project);
 }
 
 async function heldBuilderImport(input: StagedImportInput): Promise<BuilderImportTarget | null> {

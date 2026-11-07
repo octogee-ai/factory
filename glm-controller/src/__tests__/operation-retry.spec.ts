@@ -67,6 +67,18 @@ describe("Gateway credential retirement drain", () => {
 });
 
 describe("migration retry queue position", () => {
+  it("keeps an untouched compatibility wait pending past the normal retry cap", () => {
+    const update = buildOperationCompletionUpdate({
+      op: { kind: "migrate-customer", attempts: MAX_OPERATION_ATTEMPTS },
+      result: { success: false, steps: [], error: "gateway compatibility pending: status 503: old target", output: { gatewayCompatibilityPending: true } },
+      steps: [], now: 10_000,
+    });
+    expect(update).toMatchObject({
+      status: "pending", attempts: MAX_OPERATION_ATTEMPTS + 1,
+      nextAttemptAt: 490_000, output: { gatewayCompatibilityPending: true },
+    });
+  });
+
   it("requeues a fully rolled-back migration at the time of each failed attempt", () => {
     const update = buildOperationCompletionUpdate({
       op: { kind: "migrate-customer", attempts: 1 },

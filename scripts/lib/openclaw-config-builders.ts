@@ -1,4 +1,4 @@
-import type { ProjectAgentIdentity } from "../../shared/types/project.js";
+import { PROJECT_COACH_WORKSPACE_PARTS, type ProjectAgentIdentity } from "../../shared/types/project.js";
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { PLATFORM_MATTERMOST_BASE_URL } from "../../shared/types/openclaw-mattermost-accounts.js";
 import { platformOpenAiEmbeddingSecretId } from "@octogee/core/platform-embedding-refs";
@@ -514,6 +514,19 @@ export interface ProjectAgentsBuildInput {
   projectAgents: ReadonlyArray<ProjectAgentState>;
   ownerMmUserId?: string | null;
   hostCode?: AgentHostCodePolicy;
+  githubWorkspaces?: ReadonlyMap<string, { checkoutReady: boolean; sandboxMode?: unknown; sandbox?: Record<string, unknown>; defaultCwd?: unknown }>;
+}
+
+function projectAgentLocation(input: ProjectAgentsBuildInput, projectId: string): Record<string, unknown> {
+  const checkout = `${input.customerDir}/projects/${projectId}`;
+  const github = input.githubWorkspaces?.get(projectId);
+  if (!github) return { workspace: checkout };
+  const workspace = `${input.customerDir}/${PROJECT_COACH_WORKSPACE_PARTS.join("/")}/${projectId}`;
+  const location: Record<string, unknown> = { workspace };
+  if (github.checkoutReady && input.hostCode === "builder-full" && github.sandboxMode === "off") location.cwd = checkout;
+  else if (github.defaultCwd) location.cwd = workspace;
+  if (github.sandbox) location.sandbox = github.sandbox;
+  return location;
 }
 
 export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record<string, unknown>> {
@@ -527,7 +540,7 @@ export function buildProjectAgents(input: ProjectAgentsBuildInput): Array<Record
       return {
         id: agentId,
         name: `${identity.name} (${input.slug}/${p.projectId})`,
-        workspace: `${input.customerDir}/projects/${p.projectId}`,
+        ...projectAgentLocation(input, p.projectId),
         agentDir: `${input.agentsDir}/${agentId}/agent`,
         model: input.coach.model,
         identity,

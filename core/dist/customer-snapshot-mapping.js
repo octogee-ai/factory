@@ -3,7 +3,7 @@ const logger = createServiceLogger("provisioner");
 import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
-import { projectAgentConfigured } from "@octogee/shared/types/project";
+import { projectAgentConfigured, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 export function mapWorkspaceChannelDoc(data) {
     const channelId = data.mattermost?.channelId;
     if (!channelId)
@@ -65,7 +65,10 @@ export function mapProjectAgentState(projectId, projectData, secretData) {
     if (!enabled && mmUserId === null && token === null)
         return null;
     try {
-        return { projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent) };
+        return {
+            projectId, enabled, mmUserId, token, ...projectAgentRuntimeState(agent),
+            ...(projectRepoSourceFromDoc(projectData.repoSource)?.provider === "github" ? { githubBacked: true } : {}),
+        };
     }
     catch (error) {
         if (!(error instanceof ProjectAgentIdentityError))

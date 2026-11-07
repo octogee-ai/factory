@@ -40,6 +40,16 @@ describe("snapshotConfigFingerprint", () => {
     expect(snapshotConfigFingerprint(snap())).toBe(snapshotConfigFingerprint(snap()));
   });
 
+  it("reconciles a legacy GitHub-backed coach after import even when checkout stays disabled", () => {
+    const snapshot = snap({
+      projects: [{ projectSlug: "orbit", giteaRepoName: "orbit", checkoutEnabled: false, repoSource: { provider: "github", owner: "alice", repo: "orbit" } }],
+      projectAgents: [{ projectId: "orbit", enabled: true, mmUserId: "bot", token: "pat" }],
+    });
+    const before = snapshotConfigFingerprint(snapshot);
+    snapshot.projectAgents![0].githubBacked = true;
+    expect(snapshotConfigFingerprint(snapshot)).not.toBe(before);
+  });
+
   it("ignores fields that do not affect the generated gateway config", () => {
     const base = snapshotConfigFingerprint(snap());
     expect(snapshotConfigFingerprint(snap({ status: "provisioning" }))).toBe(base);

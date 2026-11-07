@@ -699,6 +699,22 @@ describe("buildProjectAgents", () => {
     expect(agent).toMatchObject({ name: "Chip (chris/fairway)", identity: { name: "Chip", emoji: "⛳" } });
   });
 
+  it.each([
+    { hostCode: "builder-full", checkoutEnabled: true, sandboxMode: "off", cwd: "/customers/chris/projects/orbit" },
+    { hostCode: "builder-full", checkoutEnabled: false, sandboxMode: "off" },
+    { hostCode: "builder-full", checkoutEnabled: true, sandboxMode: "all" },
+    { hostCode: "customer-restricted", checkoutEnabled: true, sandboxMode: "off" },
+  ] as const)("keeps GitHub coach files private with $hostCode, checkout=$checkoutEnabled, sandbox=$sandboxMode", row => {
+    const [agent] = buildProjectAgents({ slug: "chris", customerDir: "/customers/chris", agentsDir: "/agents",
+      coach: { name: "Piper", emoji: "🧭", model: "house" }, hostCode: row.hostCode,
+      projectAgents: [{ projectId: "orbit", enabled: true, token: "pat", mmUserId: "bot" }],
+      githubWorkspaces: new Map([["orbit", { checkoutReady: row.checkoutEnabled, sandboxMode: row.sandboxMode }]]),
+    });
+    expect(agent.workspace).toBe("/customers/chris/.system/project-coaches/orbit");
+    expect(agent.cwd).toBe("cwd" in row ? row.cwd : undefined);
+    expect(agent.agentDir).toBe("/agents/octogee-chris-proj-orbit-coach/agent");
+  });
+
   const projectAgents = [
     { projectId: "orbit", enabled: true, token: "pat-1", mmUserId: "bot-1" },
     { projectId: "unminted", enabled: true, token: null, mmUserId: null },

@@ -248,6 +248,7 @@ function hasLevelTriggeredFence(input: OperationCompletionInput): boolean {
   return recordOutput(result.output?.retirementFencePending) ||
     recordOutput(result.output?.deletionFencePending) ||
     recordOutput(result.output?.deletionCleanupRetry) ||
+    op.kind === MIGRATE_CUSTOMER_KIND && result.output?.gatewayCompatibilityPending === true ||
     op.kind === "suspend-customer" ||
     op.kind === "erase-customer";
 }

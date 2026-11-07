@@ -816,6 +816,72 @@ describe("abandoned Shared migration recovery", () => {
   });
 });
 
+describe("private project coach workspace rollout", () => {
+  it.each(["wake", "idle return"] as const)("keeps the source serving during %s until the running target supports the workspace", async direction => {
+    const h = mkDeps();
+    const wake = direction === "wake";
+    const source = wake ? "shared-blue" : "builder-blue";
+    const target = wake ? "builder-green" : "shared-green";
+    vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: source });
+    vi.mocked(h.deps.resolveSourcePlacement).mockResolvedValue({ release: 1, gatewayClass: wake ? "shared" : "builder" });
+    vi.mocked(h.deps.resolveTargetPlacement).mockResolvedValue({ ok: true, release: 2, gatewayClass: wake ? "builder" : "shared" });
+    const native = mockNativeReturn();
+    if (!wake) vi.mocked(h.deps.prepareNativeComputerReturn).mockResolvedValue(native);
+    const readWorkspace = vi.fn(async (gatewayId: string): Promise<boolean | undefined> => gatewayId === source ? true : undefined);
+    h.deps.readPrivateProjectCoachWorkspace = readWorkspace;
+    const operation = mkOp({ origin: "automatic", input: { uid: "uid-alice", fromGatewayId: source, toGatewayId: target } });
+    const handler = createMigrateCustomerHandler(h.deps);
+
+    expect(await handler(operation, h.ctx)).toMatchObject({
+      success: false,
+      error: expect.stringContaining("gateway compatibility pending: status 503"),
+      output: { gatewayCompatibilityPending: true },
+    });
+    expect(readWorkspace.mock.calls).toEqual([[source, "alice"], [target, "alice"]]);
+    expect(h.deps.setMigrationPhase).not.toHaveBeenCalled();
+    expect(h.deps.prepareNativeComputerReturn).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+    expect(h.client.transferState).not.toHaveBeenCalled();
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+
+    readWorkspace.mockImplementation(async gatewayId => gatewayId === source);
+    expect(await handler(operation, h.ctx)).toMatchObject({ success: true });
+    expect(h.client.quiesce).toHaveBeenCalledWith(expect.objectContaining({ gatewayId: source }));
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, false])("allows an older or ineligible source to move normally (%s)", async workspace => {
+    const h = mkDeps();
+    const readWorkspace = vi.fn(async (gatewayId: string) => gatewayId === "gw-blue" ? workspace : undefined);
+    h.deps.readPrivateProjectCoachWorkspace = readWorkspace;
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    expect(readWorkspace).toHaveBeenCalledExactlyOnceWith("gw-blue", "alice");
+    expect(h.deps.commitCutover).toHaveBeenCalledOnce();
+  });
+  it("waits when a GitHub-backed coach is eligible to adopt the private path before source quiesce", async () => {
+    const h = mkDeps();
+    h.deps.readPrivateProjectCoachWorkspace = vi.fn(async gatewayId => gatewayId === "gw-blue" ? false : undefined);
+    vi.mocked(h.deps.readUserSnapshot).mockResolvedValue({ ...SNAPSHOT, projectAgents: [
+      { projectId: "orbit", githubBacked: true, enabled: true, mmUserId: "bot", token: "pat", status: "provisioning" },
+    ] });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: false, output: { gatewayCompatibilityPending: true } });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.setAssignmentState).not.toHaveBeenCalled();
+  });
+
+  it("keeps source custody when the running source cannot verify its workspace", async () => {
+    const h = mkDeps();
+    h.deps.readPrivateProjectCoachWorkspace = vi.fn(async () => { throw new Error("Gateway config could not be read"); });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining("Gateway config could not be read"),
+      output: { gatewayCompatibilityPending: true } });
+    expect(h.client.quiesce).not.toHaveBeenCalled();
+    expect(h.deps.commitCutover).not.toHaveBeenCalled();
+  });
+});
+
 describe("native computer return", () => {
   function nativeReturn(h: ReturnType<typeof mkDeps>) {
     const native = mockNativeReturn();
@@ -1962,14 +2028,29 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
     expect(h.deps.retireNativeSchedulerBeforeStage).not.toHaveBeenCalled();
   });
 
-  it("still restores the schedules when the deferred native retirement fails", async () => {
-    const h = heldActivation();
+  it.each([false, true])("keeps native retirement failure pending before schedule restore (postcutover retry: %s)", async retry => {
+    const h = heldActivation(retry ? { sourceGatewayId: "gw-green" } : {});
+    if (retry) h.transfers.set("uid-alice/mig-op-1", PENDING_SCHEDULES);
+    vi.mocked(h.deps.commitCutover).mockImplementation(async () => {
+      h.order.push("cutover");
+      vi.mocked(h.deps.readUser).mockResolvedValue({ slug: "alice", currentGatewayId: "gw-green" });
+    });
     vi.mocked(h.deps.retireNativeSchedulerBeforeStage).mockRejectedValue(new Error("native scheduler retirement authority changed"));
+    const op = mkOp(retry ? { schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 } : {});
 
-    expect(await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx)).toMatchObject({ success: true });
+    const result = await createMigrateCustomerHandler(h.deps)(op, h.ctx);
 
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toContain("status 503");
+    expect(result.error).toContain("native scheduler retirement authority changed");
+    expect(h.order).not.toContain("gw-green:restore");
+    expect(h.order).not.toContain("unmount:gw-blue");
+    expect(h.transfers.get("uid-alice/mig-op-1")?.restoredTo).toBeUndefined();
+    vi.mocked(h.deps.retireNativeSchedulerBeforeStage).mockResolvedValue(undefined);
+    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 }), h.ctx))
+      .toMatchObject({ success: true, rolledBack: false });
     expect(h.order).toContain("gw-green:restore");
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("native scheduler retirement authority changed"));
+    expect(h.order).toContain("unmount:gw-blue");
   });
 
   it("restores the persisted snapshot when a retry finds the cutover committed", async () => {
@@ -2027,7 +2108,7 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("schedule restore on gw-green failed"));
   });
 
-  it("completes a committed cutover when the target cannot be resolved for the restore", async () => {
+  it("keeps native activation pending when the target cannot be reached for scheduler retirement", async () => {
     const h = heldActivation({ sourceGatewayId: "gw-green" });
     h.transfers.set("uid-alice/mig-op-1", PENDING_SCHEDULES);
     vi.mocked(h.deps.resolveGatewayUrl).mockImplementation(async (gatewayId) => {
@@ -2035,10 +2116,12 @@ describe("migrate-customer — Builder activation onto a held computer", () => {
       return `http://${gatewayId}.svc:3003`;
     });
 
-    expect(await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1 }), h.ctx)).toMatchObject({ success: true });
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({ schedulerHandoff: deferred, attempts: 1, cutoverCommittedAt: 4_000 }), h.ctx);
 
-    expect(h.order).toEqual(["unmount:gw-blue"]);
-    expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("schedule restore skipped after durable cutover"));
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.error).toContain("status 503: gateway not registered in glmGateways: gw-green");
+    expect(h.order).toEqual([]);
+    expect(h.transfers.get("uid-alice/mig-op-1")?.restoredTo).toBeUndefined();
   });
 
   it("resumes only the source when a retry follows a pre-cutover failure: the held computer never received anything", async () => {
@@ -2391,6 +2474,45 @@ describe("migrate-customer — durable V2 migration", () => {
 
     expect(order).toEqual(["gw-blue:export", "cutover", "gw-blue:export", "gw-green:stage", "gw-blue:retire", "gw-green:activate"]);
     expect(h.persisted.find((state) => state.phase === "cutover" && state.schedulerStagedAt !== undefined)).toBeDefined();
+  });
+
+  it.each([false, true])("retires the completed native return before V2 stage (cleanup fails: %s)", async fails => {
+    const h = mkDeps({ durable: true });
+    const order: string[] = [];
+    vi.mocked(h.deps.commitV2Cutover).mockImplementation(async () => { order.push("cutover"); });
+    const scheduler = vi.mocked(h.client.scheduler).getMockImplementation()!;
+    vi.mocked(h.client.scheduler).mockImplementation(async request => {
+      order.push(`${request.gatewayId}:${request.phase}`);
+      return scheduler(request);
+    });
+    vi.mocked(h.deps.retireNativeSchedulerBeforeStage).mockImplementation(async (input, retire) => {
+      expect(input).toEqual({ uid: "uid-alice", slug: "alice", gatewayId: "gw-green", operationId: "op-1", claimedStartedAt: 4_000 });
+      expect(order).toContain("cutover");
+      order.push("retire-completed-return");
+      if (fails) throw new Error("native scheduler retirement authority changed");
+      await retire({ migrationId: "completed-return", slug: "alice", gatewayId: "gw-green", phase: "retire" });
+    });
+
+    const result = await createMigrateCustomerHandler(h.deps)(mkOp({}), h.ctx);
+
+    expect(result).toMatchObject({ success: !fails, rolledBack: false });
+    expect(h.deps.retireNativeSchedulerBeforeStage).toHaveBeenCalledOnce();
+    if (fails) {
+      expect(result.error).toContain("status 503");
+      expect(order).not.toContain("gw-green:stage");
+      expect(order).not.toContain("gw-green:activate");
+      expect(h.client.unmount).not.toHaveBeenCalled();
+      expect(h.persisted.at(-1)).toMatchObject({ phase: "cutover" });
+      expect(h.persisted.at(-1)?.schedulerStagedAt).toBeUndefined();
+      vi.mocked(h.deps.retireNativeSchedulerBeforeStage).mockResolvedValue(undefined);
+      expect(await createMigrateCustomerHandler(h.deps)(mkOp({ customerMigrationV2: h.persisted.at(-1), cutoverCommittedAt: 5_000 }), h.ctx))
+        .toMatchObject({ success: true, rolledBack: false });
+      expect(order.filter(value => value === "gw-green:stage")).toHaveLength(1);
+      expect(order.filter(value => value === "cutover")).toHaveLength(1);
+    } else {
+      expect(order.indexOf("gw-green:retire")).toBeLessThan(order.indexOf("gw-green:stage"));
+      expect(order.indexOf("gw-green:stage")).toBeLessThan(order.indexOf("gw-green:activate"));
+    }
   });
 
   it("refuses initialization when the source root ownership changed", async () => {

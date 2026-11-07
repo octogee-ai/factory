@@ -1,20 +1,9 @@
+import type { FleetBrokerProjectAgent } from "@octogee/shared/types/fleet-broker";
 import type { UserSnapshot } from "./customer-lifecycle.js";
-import { type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
 type ChannelBinding = UserSnapshot["channels"][number];
 export declare function mapWorkspaceChannelDoc(data: Record<string, unknown>): ChannelBinding | null;
 export declare function mapProjectChannelDoc(projectId: string, data: Record<string, unknown>): ChannelBinding | null;
-declare function projectAgentRuntimeState(value: unknown): {
-    identity?: ProjectAgentIdentity | undefined;
-    deliveryPending?: boolean | undefined;
-    activationId: string | null;
-    status: ProjectAgentStatus | null;
-};
-export declare function mapProjectAgentState(projectId: string, projectData: Record<string, unknown>, secretData: Record<string, unknown> | undefined): ({
-    projectId: string;
-    enabled: boolean;
-    mmUserId: string | null;
-    token: string | null;
-} & ReturnType<typeof projectAgentRuntimeState>) | null;
+export declare function mapProjectAgentState(projectId: string, projectData: Record<string, unknown>, secretData: Record<string, unknown> | undefined): FleetBrokerProjectAgent | null;
 interface SnapshotDocSnap {
     id: string;
     data(): Record<string, unknown> | undefined;

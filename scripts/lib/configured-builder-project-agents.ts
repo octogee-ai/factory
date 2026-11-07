@@ -1,3 +1,4 @@
+import { PROJECT_COACH_WORKSPACE_PARTS } from "../../shared/types/project.js";
 import { isValidProjectId, projectAgentId } from "../../shared/types/identity.js";
 import { customerAgentRosterPatch, customerConfigReplacePaths } from "./apply-config-patch.js";
 import { buildCustomerBindings, type BindingChannelInput } from "./openclaw-config-builders.js";
@@ -196,7 +197,17 @@ export function configuredBuilderProjectAgentPatch(current: unknown, input: Conf
   const entries = input.projectAgentEntries.map((entry) => {
     const existing = existingAgents.get(String(entry.id));
     const retained = existing && !activating.has(String(entry.id)) ? existing : { ...entry, ...existing };
-    return { ...retained, id: entry.id, name: entry.name, identity: entry.identity };
+    const result: ConfigEntry = { ...retained, id: entry.id, name: entry.name, identity: entry.identity };
+    const workspaceSuffix = `/${PROJECT_COACH_WORKSPACE_PARTS.join("/")}/${managed.get(String(entry.id))}`;
+    if ([existing?.workspace, entry.workspace].some(workspace => typeof workspace === "string" && workspace.endsWith(workspaceSuffix))) {
+      result.workspace = entry.workspace;
+      if (entry.cwd !== undefined) result.cwd = entry.cwd;
+      else if (result.cwd !== undefined) {
+        if (record(record(current).agents).entries !== undefined) result.cwd = null;
+        else delete result.cwd;
+      }
+    }
+    return result;
   });
   const desiredAgents = new Map(entries.map((entry) => [String(entry.id), entry]));
   const fullRoster = [...roster.map((entry) => desiredAgents.get(String(entry.id)) ?? entry), ...entries.filter((entry) => !existingAgents.has(String(entry.id)))];

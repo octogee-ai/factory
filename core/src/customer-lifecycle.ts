@@ -215,7 +215,7 @@ restoreByosubForAgent: (slug: string) => Promise<{ restored: boolean; present: b
     opts?: ProjectCloneOptions,
   ) => Promise<boolean>;
 
-  seedDeferredProjectWorkspace: (customerSlug: string, projectSlug: string) => Promise<void>;
+  seedDeferredProjectWorkspace?: (customerSlug: string, projectSlug: string) => Promise<void>;
 
   provisionMattermostUser: (ctx: CustomerContext) => Promise<MmUpdate>;
 
@@ -1296,7 +1296,7 @@ export async function cloneMissingProjects(
     }
     if (githubRepoSourceOf(p) && !ownerRuntime) {
       deferred.add(p.projectSlug);
-      await adapter.seedDeferredProjectWorkspace(slug, p.projectSlug);
+      await adapter.seedDeferredProjectWorkspace?.(slug, p.projectSlug);
       throwIfAborted(options.signal, slug);
       adapter.log(
         options.githubCheckouts === "defer"

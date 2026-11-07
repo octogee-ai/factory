@@ -80,3 +80,5 @@ export interface Project {
     createdAt: unknown;
     updatedAt: unknown;
 }
+export declare const PROJECT_COACH_WORKSPACE_PARTS: readonly [".system", "project-coaches"];
+export declare const PROJECT_COACH_REPO = "project_coaches";

@@ -40,3 +40,5 @@ export function projectRepoSourceFromDoc(value) {
         return null;
     return { provider: 'github', owner, repo };
 }
+export const PROJECT_COACH_WORKSPACE_PARTS = [".system", "project-coaches"];
+export const PROJECT_COACH_REPO = "project_coaches";

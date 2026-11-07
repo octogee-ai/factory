@@ -366,7 +366,7 @@ describe("binary diversion on the commit path", () => {
       slug: "acme",
       projectSlug: null,
       gcsPrefix: "customers/acme",
-    });
+    }, undefined, { excludePaths: [".system/project-coaches"] });
     expect(res.body.divertedBlobs).toBe(1);
   });
 
@@ -400,7 +400,7 @@ describe("binary diversion on the commit path", () => {
       slug: "acme",
       projectSlug: null,
       gcsPrefix: "customers/acme",
-    });
+    }, undefined, { excludePaths: [".system/project-coaches"] });
   });
 
   it("aborts without committing when a binary cannot be rehomed", async () => {

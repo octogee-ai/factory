@@ -218,6 +218,32 @@ function buildDeps(
 }
 
 describe("gateway operation queue — enqueue instead of reject (glmOperations wiring)", () => {
+  it.each(["wake", "idle return"] as const)("lets a target rollout release a compatibility-blocked %s", async direction => {
+    const wake = direction === "wake";
+    const fromGatewayId = wake ? "shared-a" : "builder-a", toGatewayId = wake ? "builder-a" : "shared-a";
+    const migrationId = wake ? "builder-activate-builder-a-g2" : "builder-return-builder-a-g2";
+    const waiting = baseOp({ id: migrationId, kind: "migrate-customer", origin: "automatic", createdAt: 1,
+      input: { uid: "alice", source: "builder-activation-lease", fromGatewayId, toGatewayId },
+      output: { gatewayCompatibilityPending: true } });
+    const rollout = baseOp({ id: "target-roll", origin: "operator", createdAt: 2, input: { gatewayId: toGatewayId } });
+    const events: string[] = [];
+    const { db, store } = createFakeGlmOperationsDb({ [migrationId]: waiting, "target-roll": rollout }, {
+      gateways: { "builder-a": { gatewayId: "builder-a", gatewayClass: "builder" }, "shared-a": { gatewayId: "shared-a", gatewayClass: "shared" } },
+      runtimes: { "builder-a": { runtime: "cluster" }, "shared-a": { runtime: "cluster" } },
+    });
+    const deps = buildDeps(db, {
+      rollout: async () => { events.push("rollout"); return { success: true, steps: [] }; },
+      "migrate-customer": async () => { events.push("migration"); return { success: true, steps: [] }; },
+    });
+    const operations = db.collection(GLM_OPERATIONS_COLLECTION);
+    await processOperation(waiting as unknown as Operation, operations.doc(migrationId), deps);
+    expect(events).toEqual([]);
+    expect(store.get(migrationId)?.status).toBe("pending");
+    await processOperation(rollout as unknown as Operation, operations.doc("target-roll"), deps);
+    await processOperation(waiting as unknown as Operation, operations.doc(migrationId), deps);
+    expect(events).toEqual(["rollout", "migration"]);
+  });
+
   it("rolls a Builder ahead of its untouched idle return blocked by another Shared migration", async () => {
     const returnId = "builder-return-builder-a-g2";
     const blockedReturn = baseOp({ id: returnId, kind: "migrate-customer", origin: "automatic",

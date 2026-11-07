@@ -75,6 +75,16 @@ it('waits for readiness, then delivers the complete handoff once without writing
   await deliverProjectAgentOnboarding('u', 'alice', 'golf');
   expect(h.mm.mock.calls.filter(c => c[0] === '/posts')).toHaveLength(1);
 });
+it('sends GitHub-backed coaches to their private workspace for persona files', async () => {
+  h.docs.get(projectPath).repoSource = { provider: 'github', owner: 'alice', repo: 'golf' };
+  await queueProjectHandoff('u', 'alice', 'golf', handoff);
+  await deliverProjectAgentOnboarding('u', 'alice', 'golf');
+  const message = h.mm.mock.calls.find(call => call[0] === '/posts')[2].message;
+  expect(message).toContain('private coach workspace');
+  expect(message).toContain('Use the GitHub checkout, when available, for source');
+  expect(message).not.toContain('octogee_project_commit');
+  expect(h.seed).not.toHaveBeenCalled();
+});
 it('recovers an acknowledged post after a lost delivery receipt without reposting', async () => {
   await queueProjectHandoff('u', 'alice', 'golf', handoff);
   h.docs.set(`${projectPath}/agentState/handoffDelivery`, { startedAt: Date.now() - 5_000, postAttempted: true });

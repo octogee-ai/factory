@@ -63,7 +63,7 @@ import {
   startGatewayHeartbeatPoller,
   type GatewayHeartbeatPollerDeps,
 } from "./gateway-heartbeat-poller.js";
-import { createFleetStateFetcher, requestFleetState } from "./fleet-state-client.js";
+import { createFleetStateFetcher, readPrivateProjectCoachWorkspace, requestFleetState } from "./fleet-state-client.js";
 import {
   createHelmSubprocessRunner,
   createLoggingHelmRunner,
@@ -1873,6 +1873,7 @@ async function attemptClaimOrQueueOperation(
             kind: pendingOperation.kind,
             origin: pendingOperation.origin,
             unstartedBuilderReturn: isUnstartedBuilderReturn({ ...pendingOperation, id: d.id }),
+            gatewayCompatibilityPending: pendingOperation.output?.gatewayCompatibilityPending === true,
             input: pendingOperation.input,
             output: pendingOperation.output,
             schedulerHandoff: pendingOperation.schedulerHandoff,
@@ -1897,6 +1898,7 @@ async function attemptClaimOrQueueOperation(
           status: freshOperation.status,
           origin: freshOperation.origin,
           unstartedBuilderReturn: isUnstartedBuilderReturn({ ...freshOperation, id: op.id }),
+          gatewayCompatibilityPending: freshOperation.output?.gatewayCompatibilityPending === true,
           createdAt: freshOperation.createdAt,
           queuedAt: freshOperation.queuedAt,
           nextAttemptAt: freshOperation.nextAttemptAt,
@@ -3366,6 +3368,11 @@ async function buildHandlers(
       return { slug, currentGatewayId };
     },
     readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
+    readPrivateProjectCoachWorkspace: async (gatewayId, slug) => readPrivateProjectCoachWorkspace({
+      baseUrl: await resolveGatewayUrlFromFirestore(db, gatewayId, { allowUnready: true }),
+      gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
+      fetchImpl: fetch, newRequestId: randomUUID,
+    }),
     readScheduleTransfer: (uid, migrationId) => readScheduleTransfer(db, uid, migrationId),
     saveScheduleTransfer: (uid, doc) => saveScheduleTransfer(db, uid, doc),
     recordScheduleRestore: (uid, migrationId, restore) => recordScheduleRestore(db, uid, migrationId, restore),

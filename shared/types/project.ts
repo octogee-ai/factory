@@ -133,3 +133,6 @@ canvasFile: string;
   createdAt: unknown; 
   updatedAt: unknown; 
 }
+
+export const PROJECT_COACH_WORKSPACE_PARTS = [".system", "project-coaches"] as const;
+export const PROJECT_COACH_REPO = "project_coaches";

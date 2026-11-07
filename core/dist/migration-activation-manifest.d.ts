@@ -50,12 +50,14 @@ export interface MigrationActivationManifest {
     targetWorkspaceIdentities?: TargetWorkspaceIdentities;
 }
 export declare function activationManifestTarPath(slug: string): string;
+export declare function privateProjectWorkspaceAgentIds(manifest: MigrationActivationManifest): Set<string>;
 export declare function assertTargetIdentityCustody(expected: MigrationTargetIdentityCustody, actual: MigrationTargetIdentityCustody): void;
 export declare function validateTargetWorkspaceIdentities(value: unknown, slug: string, agentIds: readonly string[]): TargetWorkspaceIdentities;
-export declare function captureTargetWorkspaceIdentities(slug: string, agentIds: readonly string[], stateDir: string, custody: MigrationTargetIdentityCustody): Promise<TargetWorkspaceIdentities>;
+export declare function captureTargetWorkspaceIdentities(slug: string, agentIds: readonly string[], stateDir: string, custody: MigrationTargetIdentityCustody, privateWorkspaces?: ReadonlySet<string>): Promise<TargetWorkspaceIdentities>;
 export declare function restoreTargetWorkspaceIdentities(value: TargetWorkspaceIdentities, slug: string, agentIds: readonly string[], stateDir: string, options: {
     custody: MigrationTargetIdentityCustody;
     assertCurrent: () => Promise<void>;
+    privateWorkspaces?: ReadonlySet<string>;
 }): Promise<void>;
 export declare function assertSourceIdentityCustody(expected: MigrationSourceIdentityCustody, actual: MigrationSourceIdentityCustody): void;
 export declare function captureSourceWorkspaceIdentities(manifest: MigrationActivationManifest, stateDir: string, custody: MigrationSourceIdentityCustody): Promise<MigrationActivationManifest>;
@@ -93,6 +95,7 @@ export declare function applyOpenClawActivationManifest(manifest: MigrationActiv
         agent: Record<string, unknown>;
     };
     ownerCommandsPatch?: OwnerCommandsPatch;
+    projectCheckoutCwd?: (agent: Record<string, unknown>, current: unknown) => string | undefined;
 }): Promise<{
     elapsedMs: number;
     routingActivationRequired: boolean;

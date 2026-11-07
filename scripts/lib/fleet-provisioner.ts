@@ -1,3 +1,5 @@
+import { isValidUsername, parseAgentId } from "@octogee/shared/types/identity";
+import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import type { ProjectBlobHydrator } from "./project-blob-materialization.js";
 import { unassignedConfiguredAgents, stagedSecretOwnersOnly, unmaterializedProjectAccountIds } from "./shared-broker-profile-readiness.js";
 import { createAgentAnchorReporter } from "./agent-anchor-record.js";
@@ -449,6 +451,7 @@ export async function consumeRecoveredCustomerRuntimeReset(input: {
     uid: input.uid,
     slug: input.slug,
     agentIds: snapshot.agentIds,
+    githubProjectIds: new Set(snapshot.projectAgents?.filter(agent => agent.githubBacked).map(agent => agent.projectId)),
     log: input.log,
   });
   await input.acknowledge(input.uid, marker.operationId, marker.generation);
@@ -658,6 +661,16 @@ export function buildFleetHealthResponse(input: {
     startedAt: input.startedAt,
     rsyncAttemptFencing: true,
   };
+}
+
+export function fleetStatePrivateProjectCoachWorkspace(config: unknown, stateDir: string, slug: string): boolean {
+  const agents = (config as { agents?: { entries?: Record<string, { workspace?: unknown }>; list?: Array<{ id?: string; workspace?: unknown }> } })?.agents;
+  const entries = agents?.entries ? Object.entries(agents.entries) : (agents?.list ?? []).map(agent => [agent.id, agent] as const);
+  return entries.some(([id, entry]) => {
+    const parsed = parseAgentId(id ?? "");
+    return parsed.kind === "project" && parsed.username === slug &&
+      entry?.workspace === path.join(stateDir, "customers", slug, ...PROJECT_COACH_WORKSPACE_PARTS, parsed.project);
+  });
 }
 
 export function buildFleetStateResponse(input: {
@@ -2938,16 +2951,21 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
     publicKey: opts.publicKey,
     gatewayId: opts.gatewayId,
     log: opts.log,
-    readState: () => buildFleetStateResponse({
-      status: runtime.status,
-      gatewayId: opts.gatewayId,
-      podUid: process.env.POD_UID ?? null,
-      version: opts.version,
-      openclawVersion: opts.openclawVersion,
-      startedAt: PROCESS_STARTED_AT_MS,
-      customers: getMountObservedSlugs(adapter),
-      migratingIn: adapter.listMigratingInSlugs?.() ?? [],
-      configuredBuilder: (opts.configuredBuilderReport ?? configuredBuilderReport)(),
+    readState: ({ privateProjectCoachSlug }) => ({
+      ...buildFleetStateResponse({
+        status: runtime.status,
+        gatewayId: opts.gatewayId,
+        podUid: process.env.POD_UID ?? null,
+        version: opts.version,
+        openclawVersion: opts.openclawVersion,
+        startedAt: PROCESS_STARTED_AT_MS,
+        customers: getMountObservedSlugs(adapter),
+        migratingIn: adapter.listMigratingInSlugs?.() ?? [],
+        configuredBuilder: (opts.configuredBuilderReport ?? configuredBuilderReport)(),
+      }),
+      ...(isValidUsername(privateProjectCoachSlug) ? {
+        privateProjectCoachWorkspace: fleetStatePrivateProjectCoachWorkspace(readOpenClawConfig(), openclawDir, privateProjectCoachSlug),
+      } : {}),
     }),
   }));
 

@@ -3,6 +3,7 @@ import { lstatSync, promises as fs, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 import { acquireWorkspaceMutationLeaseSync, projectMutationLeaseGitDir } from "@octogee/core/workspace-mutation-lease";
+import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 import { findUnsafeGitMetadataEntry } from "@octogee/core/git-metadata";
 import { isDuplicateAssetUpload } from "./workspace-manifest-conflict.js";
 
@@ -175,7 +176,9 @@ export async function gitCommit(
     return { ok: false, error: { code: "INTERNAL", message: "commit message empty or too long" } };
   }
 
-  const excluded = options.excludePaths ?? [];
+  const identity = customerGitIdentity(customerDir);
+  const workspace = identity && path.resolve(customerDir) === path.join(identity.customersRoot, identity.slug);
+  const excluded = [...new Set([...(options.excludePaths ?? []), ...(workspace ? [PROJECT_COACH_WORKSPACE_PARTS.join("/")] : [])])];
   const staged = await stageWorkspaceChanges(customerDir, excluded);
   if (!staged.ok) return staged;
 

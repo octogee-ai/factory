@@ -1,3 +1,4 @@
+import { initializeRelocatedProjectCoach, projectCoachWorkspace, restoreProjectCoachWorkspaces } from "@octogee/core/project-coach-workspaces";
 import { enableSystemConfigWatch } from "./system-config-watch-state.js";
 import { readAcceptedBuilderConfig } from "./system-config.js";
 import { parseAgentId, projectAgentId } from "@octogee/shared/types/identity";
@@ -112,10 +113,10 @@ import {
   removePartialWorkspace,
   setRepoSshCommand,
 } from "./git.js";
-import { seedDeferredProjectWorkspace } from "./deferred-project-workspace.js";
 import {
   ensureGiteaOrgForWorkspace,
   ensureSystemConfigRepo,
+  ensureProjectCoachRepo,
   releaseGiteaUserKey,
 } from "./gitea-admin-broker-client.js";
 import {
@@ -186,6 +187,7 @@ import {
   restoreSourceWorkspaceIdentities,
   captureSourceWorkspaceIdentities,
   captureTargetWorkspaceIdentities,
+  privateProjectWorkspaceAgentIds,
   restoreTargetWorkspaceIdentities,
   assertTargetIdentityCustody,
   writeActivationManifest,
@@ -628,11 +630,52 @@ async function projectsNeedingClone(ctx: BrokerCtx, slug: string, projects: read
   }))).flat();
 }
 
+async function restoreGithubCoachWorkspaces(slug: string, projects: readonly string[], signal?: AbortSignal): Promise<void> {
+  if (projects.length === 0) return;
+  signal?.throwIfAborted();
+  await ensureProjectCoachRepo(slug);
+  await restoreProjectCoachWorkspaces({ customerDir: path.join(CUSTOMERS_DIR, slug), slug, projects, assertCurrent: async () => {
+    signal?.throwIfAborted();
+  } });
+}
+
+type ProjectRosterEntry = { id?: string; workspace?: unknown; cwd?: unknown; sandbox?: Record<string, unknown> };
+
+function projectRosterConfig(current: unknown) {
+  return (current as { agents?: { defaults?: ProjectRosterEntry; entries?: Record<string, ProjectRosterEntry>; list?: ProjectRosterEntry[] } })?.agents;
+}
+
+function currentProjectEntry(current: unknown, id: string): ProjectRosterEntry | undefined {
+  const agents = projectRosterConfig(current);
+  return agents?.entries?.[id] ?? agents?.list?.find(agent => agent.id === id);
+}
+
+function githubCheckoutReady(snapshot: FleetBrokerUserSnapshot, projectId: string): boolean {
+  const project = snapshot.projects.find(row => row.projectSlug === projectId);
+  return snapshot.projectCheckoutScope === "workspace-and-projects" && project?.repoSource?.provider === "github" &&
+    projectCheckoutEnabled(project.checkoutEnabled) &&
+    projectCheckoutMatchesSource(snapshot.slug, projectId, project.giteaRepoName ?? "", project.repoSource) &&
+    customerRepositoryHasCanonicalRemote(path.join(CUSTOMERS_DIR, snapshot.slug, "projects", projectId));
+}
+
+async function initializeRelocatedGithubCoaches(slug: string, projectAgents: readonly Record<string, unknown>[], current: unknown): Promise<void> {
+  const customerDir = path.join(CUSTOMERS_DIR, slug);
+  for (const entry of projectAgents) {
+    const id = String(entry.id), parsed = parseAgentId(id);
+    if (parsed.kind !== "project" || entry.workspace !== projectCoachWorkspace(customerDir, parsed.project)) continue;
+    if (currentProjectEntry(current, id)?.workspace !== path.join(customerDir, "projects", parsed.project)) continue;
+    const identity = entry.identity as { name: string; emoji: string };
+    await initializeRelocatedProjectCoach({ customerDir, project: parsed.project, ...identity });
+  }
+}
+
 async function prepareBrokerProjectWorkspaces(ctx: BrokerCtx, snapshot: FleetBrokerUserSnapshot,
   projectAgents: NonNullable<UserSnapshot["projectAgents"]>,
   options: { signal?: AbortSignal; migrationId?: string }): Promise<void> {
-  if (snapshot.projectCheckoutScope !== "workspace-and-projects") return;
   const selected = activeAgentProjectIds(projectAgents);
+  const githubCoaches = projectAgents.filter(agent => agent.githubBacked && selected.has(agent.projectId)).map(agent => agent.projectId);
+  await restoreGithubCoachWorkspaces(snapshot.slug, githubCoaches, options.signal);
+  if (snapshot.projectCheckoutScope !== "workspace-and-projects") return;
   if (selected.size === 0) return;
   const projects = snapshot.projects.filter(project => selected.has(project.projectSlug));
   const missing = [...selected].filter(id => !projects.some(project => project.projectSlug === id));
@@ -640,7 +683,6 @@ async function prepareBrokerProjectWorkspaces(ctx: BrokerCtx, snapshot: FleetBro
   const { pending } = await cloneMissingProjects({
     listProjectsNeedingClone: slug => projectsNeedingClone(ctx, slug, projects),
     cloneProjectRepo: (slug, project, repo, opts) => cloneProjectRepoForTarget(ctx, slug, project, repo, opts),
-    seedDeferredProjectWorkspace: async (slug, project) => { seedDeferredProjectWorkspace(slug, project); },
     isBuilderGateway: ctx.isBuilderGateway,
     isConfiguredBuilderCustomer: isConfiguredGatewayBuilder,
     log: ctx.log,
@@ -1028,18 +1070,28 @@ function mountSafeModelRef(snapshot: UserSnapshot): string {
 }
 
 function buildCustomerProjectAgents(
-  snapshot: UserSnapshot,
+  snapshot: FleetBrokerUserSnapshot,
   projectAgents: NonNullable<UserSnapshot["projectAgents"]>,
   identity: ReturnType<typeof resolveCoachIdentity>,
-  ownerMmUserId: string | null | undefined,
-  builderGateway: boolean,
+  options: { ownerMmUserId?: string | null; builderGateway: boolean; currentConfig?: unknown },
 ): Array<Record<string, unknown>> {
+  const { ownerMmUserId, builderGateway, currentConfig } = options;
+  const githubWorkspaces = new Map(projectAgents.filter(agent => agent.githubBacked).map(agent => {
+    const sandbox = currentProjectEntry(currentConfig, projectAgentId(snapshot.slug, agent.projectId))?.sandbox;
+    return [agent.projectId, {
+      checkoutReady: builderGateway && githubCheckoutReady(snapshot, agent.projectId),
+      sandboxMode: sandbox?.mode ?? projectRosterConfig(currentConfig)?.defaults?.sandbox?.mode ?? "off",
+      sandbox,
+      defaultCwd: projectRosterConfig(currentConfig)?.defaults?.cwd,
+    }] as const;
+  }));
   return buildProjectAgents({
     slug: snapshot.slug,
     customerDir: path.join(CUSTOMERS_DIR, snapshot.slug),
     agentsDir: AGENTS_DIR,
     coach: { name: identity.name, emoji: identity.emoji, model: DEFAULT_COACH.model },
     projectAgents,
+    githubWorkspaces,
     ownerMmUserId,
     hostCode: builderGateway ? "builder-full" : "customer-restricted",
   });
@@ -1099,16 +1151,41 @@ function buildCoachAgentEntry(
   return agentEntry;
 }
 
-async function missingAssignedIdentityAgents(ctx: BrokerCtx, expected: readonly Record<string, unknown>[]): Promise<string[]> {
-  const current = await freshRosterConfig(ctx) as { agents?: { entries?: Record<string, Record<string, unknown>>; list?: Array<Record<string, unknown>> } };
-  const roster = current.agents?.entries ? Object.entries(current.agents.entries).map(([id, agent]): Record<string, unknown> => ({ ...agent, id })) : current.agents?.list ?? [];
+const ASSIGNED_ROSTER_IDENTITY_CHANGED = "Assigned Shared Native roster identity changed";
+
+function isManagedAssignedWorkspaceRelocation(slug: string | undefined, agent: Record<string, unknown>, workspace: unknown): boolean {
+  if (slug === undefined) return false;
+  const parsed = parseAgentId(String(agent.id));
+  if (parsed.kind !== "project" || parsed.username !== slug) return false;
+  const customerDir = path.join(CUSTOMERS_DIR, slug);
+  const checkout = path.join(customerDir, "projects", parsed.project);
+  const privateWorkspace = projectCoachWorkspace(customerDir, parsed.project);
+  return (workspace === checkout && agent.workspace === privateWorkspace) ||
+    (workspace === privateWorkspace && agent.workspace === checkout);
+}
+
+function inspectAssignedIdentityAgents(current: unknown, expected: readonly Record<string, unknown>[], relocationSlug?: string) {
+  const agents = (current as { agents?: { entries?: Record<string, Record<string, unknown>>; list?: Array<Record<string, unknown>> } })?.agents;
+  const roster = agents?.entries ? Object.entries(agents.entries).map(([id, agent]): Record<string, unknown> => ({ ...agent, id })) : agents?.list ?? [];
   const missing: string[] = [];
+  const relocating: Record<string, unknown>[] = [];
   for (const agent of expected) {
     const matches = roster.filter(value => value.id === agent.id);
-    if (matches.length === 0) missing.push(String(agent.id));
-    else if (matches.length !== 1 || matches[0].workspace !== agent.workspace || agent.agentDir !== undefined && matches[0].agentDir !== agent.agentDir) throw new Error("Assigned Shared Native roster identity changed");
+    if (matches.length === 0) {
+      missing.push(String(agent.id));
+      continue;
+    }
+    if (matches.length !== 1 || agent.agentDir !== undefined && matches[0].agentDir !== agent.agentDir) throw new Error(ASSIGNED_ROSTER_IDENTITY_CHANGED);
+    if (matches[0].workspace === agent.workspace) continue;
+    if (!isManagedAssignedWorkspaceRelocation(relocationSlug, agent, matches[0].workspace)) throw new Error(ASSIGNED_ROSTER_IDENTITY_CHANGED);
+    relocating.push(agent);
   }
-  return missing;
+  return { missing, relocating };
+}
+
+function verifyAssignedIdentityRelocations(current: unknown, relocating: readonly Record<string, unknown>[], slug: string): void {
+  if (relocating.length === 0) return;
+  if (inspectAssignedIdentityAgents(current, relocating, slug).missing.length > 0) throw new Error(ASSIGNED_ROSTER_IDENTITY_CHANGED);
 }
 
 interface AssignedWorkspaceIdentityInput {
@@ -1196,29 +1273,33 @@ async function retainAssignedIdentityCapture(ctx: BrokerCtx, input: AssignedWork
     return previous;
   }
   if (previous) throw new Error("Assigned Shared identity capture cannot replace an unfinished migration manifest");
-  const retained = { ...assignedWorkspaceIdentityManifest(input), targetWorkspaceIdentities: await captureTargetWorkspaceIdentities(input.snapshot.slug, missing, resolveOpenClawStateDir(), authority.custody) };
+  const manifest = assignedWorkspaceIdentityManifest(input);
+  const retained = { ...manifest, targetWorkspaceIdentities: await captureTargetWorkspaceIdentities(input.snapshot.slug, missing, resolveOpenClawStateDir(), authority.custody, privateProjectWorkspaceAgentIds(manifest)) };
   await assignedIdentityCurrent(ctx, input, authority, null)();
   await writeActivationManifest(OPENCLAW_DIR, retained);
   return retained;
 }
 
-async function assignedWorkspaceIdentityRestore(ctx: BrokerCtx, input: Omit<AssignedWorkspaceIdentityInput, "brokerSnapshot"> & { brokerSnapshot: FleetBrokerUserSnapshot | null }): Promise<{ restore: () => Promise<void>; complete: () => Promise<void> } | undefined> {
+async function assignedWorkspaceIdentityRestore(ctx: BrokerCtx, input: Omit<AssignedWorkspaceIdentityInput, "brokerSnapshot"> & { brokerSnapshot: FleetBrokerUserSnapshot | null }): Promise<{ restore: () => Promise<void>; complete: () => Promise<void>; verifyRoster: (current: unknown) => void } | undefined> {
   if (ctx.isBuilderGateway() || input.callOpts?.beforeRuntimePublish || input.brokerSnapshot?.status !== "complete") return undefined;
   const scoped = { ...input, brokerSnapshot: input.brokerSnapshot };
   const authority = await readAssignedWorkspaceIdentityAuthority(ctx, scoped);
   const ids = [String(input.agentEntry.id), ...input.projectAgentEntries.map(agent => String(agent.id))];
   const previous = await optionalAssignedIdentityManifest(input.snapshot.slug), capture = previous?.targetWorkspaceIdentities;
-  const missing = input.callOpts?.migrationId ? ids : await missingAssignedIdentityAgents(ctx, [input.agentEntry, ...input.projectAgentEntries]);
+  const relocationSlug = previous === null ? input.snapshot.slug : undefined;
+  const { missing, relocating } = input.callOpts?.migrationId ? { missing: ids, relocating: [] }
+    : inspectAssignedIdentityAgents(await freshRosterConfig(ctx), [input.agentEntry, ...input.projectAgentEntries], relocationSlug);
+  const verifyRoster = (current: unknown) => verifyAssignedIdentityRelocations(current, relocating, input.snapshot.slug);
   if (capture) assertAssignedCaptureBinding(capture, authority);
   const sameMount = assignedCaptureIsCurrentMount(capture, authority.custody);
   if (!input.callOpts?.migrationId && missing.length === 0 && !sameMount) {
     const assertCurrent = assignedIdentityCurrent(ctx, scoped, authority, previous);
-    return { restore: assertCurrent, complete: async () => { await assertCurrent(); if (previous) await removeActivationManifest(OPENCLAW_DIR, input.snapshot.slug); } };
+    return { restore: assertCurrent, verifyRoster, complete: async () => { await assertCurrent(); if (previous) await removeActivationManifest(OPENCLAW_DIR, input.snapshot.slug); } };
   }
   const retained = await retainAssignedIdentityCapture(ctx, scoped, { authority, previous, missing });
   const assertCurrent = assignedIdentityCurrent(ctx, scoped, authority, retained);
   await assertCurrent();
-  return { restore: () => restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, input.snapshot.slug, ids, resolveOpenClawStateDir(), { custody: retained.targetWorkspaceIdentities!, assertCurrent }),
+  return { verifyRoster, restore: () => restoreTargetWorkspaceIdentities(retained.targetWorkspaceIdentities!, input.snapshot.slug, ids, resolveOpenClawStateDir(), { custody: retained.targetWorkspaceIdentities!, assertCurrent, privateWorkspaces: privateProjectWorkspaceAgentIds(retained) }),
     complete: async () => { await assertCurrent(); await removeActivationManifest(OPENCLAW_DIR, input.snapshot.slug); } };
 }
 
@@ -1273,8 +1354,11 @@ async function applyAddCustomerConfigPatch(
     builderGateway,
     modelSelection: coachModelSelection,
   });
-  const projectAgentEntries = buildCustomerProjectAgents(snapshot, projectAgents, identity,
-    brokerCustomerMattermostUserId(brokerSnapshot, snapshot), builderGateway);
+  const projectAgentEntries = buildCustomerProjectAgents(brokerSnapshot, projectAgents, identity,
+    { ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot), builderGateway });
+  if (projectAgents.some(agent => agent.githubBacked)) {
+    await initializeRelocatedGithubCoaches(snapshot.slug, projectAgentEntries, await freshRosterConfig(ctx));
+  }
   const brokerAgentIds = [agentId, ...agentIdsFromEntries(projectAgentEntries)];
   await Promise.all(
     brokerAgentIds.map((id) => fsp.mkdir(path.join(AGENTS_DIR, id, "agent"), { recursive: true })),
@@ -1320,8 +1404,7 @@ async function applyAddCustomerConfigPatch(
   );
   await reportSharedAnchors?.();
   await materializeCustomerBrokerProfiles(brokerAgentIds, snapshot.slug, ctx.log, secretMaterial);
-  const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await
-    captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
+  const { accountIds: affectedAccountIds, baseline: routingActivationBaseline } = await captureRoutingActivationBaseline(ctx, accountId, projectAccounts);
   const pendingProjectAccountIds = pendingProjectActivationAccountIds(snapshot.slug, projectAgents);
   routingActivationRequired = markPendingProjectActivations(routingActivationReason, pendingProjectAccountIds, routingActivationBaseline)
     || routingActivationRequired;
@@ -1331,6 +1414,7 @@ async function applyAddCustomerConfigPatch(
   const configPatch = await applyConfigPatch(
     {
       buildPatch: (current) => {
+        assignedIdentity?.verifyRoster(current);
         configBefore = current;
         const currentCfg = current as { bindings?: Array<{ agentId?: unknown }> };
         const currentBindings = Array.isArray(currentCfg.bindings) ? currentCfg.bindings : [];
@@ -1351,7 +1435,7 @@ async function applyAddCustomerConfigPatch(
         const roster = customerGatewayAgentRoster(
           current,
           snapshot.slug,
-          customerAgentEntries,
+          builderGateway ? [agentEntry, ...buildCustomerProjectAgents(brokerSnapshot, projectAgents, identity, { ownerMmUserId: brokerCustomerMattermostUserId(brokerSnapshot, snapshot), builderGateway: true, currentConfig: current })] : customerAgentEntries,
           builderGateway,
         );
         const ownerCommands = builderGateway
@@ -1495,7 +1579,7 @@ async function reconcileConfiguredBuilderProjectAgents(
     return { elapsedMs: Date.now() - startedAt, appliedFingerprint };
   }
   const identity = resolveCoachIdentity(brokerSnapshot.coachIdentity, DEFAULT_COACH);
-  const projectAgentEntries = buildCustomerProjectAgents(snapshot, projectAgents, identity, brokerSnapshot.customerMmUserId, true);
+  const projectAgentEntries = buildCustomerProjectAgents(brokerSnapshot, projectAgents, identity, { ownerMmUserId: brokerSnapshot.customerMmUserId, builderGateway: true, currentConfig: current });
   const projectAccounts = buildProjectAgentAccounts(snapshot.slug, projectAgents, brokerSnapshot.customerMmUserId);
   const patchInput = {
     slug: snapshot.slug, managedProjectIds, projectAgentEntries, projectAccounts, channels: brokerSnapshot.channels,
@@ -1503,6 +1587,7 @@ async function reconcileConfiguredBuilderProjectAgents(
     activationProjectIds: preparedProjectAgents.filter((agent) => agent.status === "provisioning" && agent.activationId).map((agent) => agent.projectId),
   };
   const logPrefix = `[project-agents:${snapshot.slug}]`;
+  await initializeRelocatedGithubCoaches(snapshot.slug, projectAgentEntries, current);
   const { retiredAgentIds } = configuredBuilderProjectAgentPatch(current, patchInput);
   await ensureCustomerRosterAgents(ctx, projectAgentEntries.filter(entry => !pendingAgentIds.has(String(entry.id))), logPrefix);
   const agentIds = agentIdsFromEntries(projectAgentEntries);
@@ -1521,7 +1606,7 @@ async function reconcileConfiguredBuilderProjectAgents(
   const configPatch = await applyConfigPatch({
     buildPatch: (current) => {
       configBefore = current;
-      return configuredBuilderProjectAgentPatch(current, patchInput).patch;
+      return configuredBuilderProjectAgentPatch(current, { ...patchInput, projectAgentEntries: buildCustomerProjectAgents(brokerSnapshot, projectAgents, identity, { ownerMmUserId: brokerSnapshot.customerMmUserId, builderGateway: true, currentConfig: current }) }).patch;
     },
     buildReplacePaths: (current) => configuredBuilderProjectAgentPatch(current, patchInput).replacePaths,
     logPrefix,
@@ -1879,7 +1964,7 @@ async function restoreSourceIdentityAfterRoster(ctx: BrokerCtx, manifest: Awaite
     await restoreSourceWorkspaceIdentities(safeManifest, resolveOpenClawStateDir(), custody, assertCurrent);
   } else {
     const capture = assignedCaptureForSourceResume(manifest, custody);
-    if (capture) await restoreTargetWorkspaceIdentities(capture, manifest.slug, activationManifestAgentIds(manifest), resolveOpenClawStateDir(), { custody: capture, assertCurrent });
+    if (capture) await restoreTargetWorkspaceIdentities(capture, manifest.slug, activationManifestAgentIds(manifest), resolveOpenClawStateDir(), { custody: capture, assertCurrent, privateWorkspaces: privateProjectWorkspaceAgentIds(manifest) });
   }
 }
 
@@ -1918,6 +2003,18 @@ async function prepareImportControlRuntime(ctx: BrokerCtx, slug: string, signal?
   return { configuredBuilder, ownerMmUserId };
 }
 
+async function prepareImportedProjectCoaches(ctx: BrokerCtx, manifest: MigrationActivationManifest, signal?: AbortSignal) {
+  const { slug } = manifest;
+  const githubCoaches = manifest.projectAgents.flatMap(entry => {
+    const agent = parseAgentId(entry.agentId);
+    return agent.kind === "project" && entry.agent.workspace === projectCoachWorkspace(path.join(CUSTOMERS_DIR, slug), agent.project) ? [agent.project] : [];
+  });
+  await restoreGithubCoachWorkspaces(slug, githubCoaches, signal);
+  const control = await prepareImportControlRuntime(ctx, slug, signal);
+  const projectSnapshot = control.configuredBuilder && githubCoaches.length > 0 ? await snapshotForSlug(ctx, slug) : null;
+  return { ...control, projectSnapshot };
+}
+
 async function activateImportedCustomer(
   ctx: BrokerCtx,
   slug: string,
@@ -1929,7 +2026,7 @@ async function activateImportedCustomer(
   }
   const manifest = await readActivationManifest(OPENCLAW_DIR, slug);
   const sourceIdentity = await sourceIdentityForResume(ctx, manifest, opts);
-  const { configuredBuilder, ownerMmUserId } = await prepareImportControlRuntime(ctx, slug, opts.signal);
+  const { configuredBuilder, ownerMmUserId, projectSnapshot } = await prepareImportedProjectCoaches(ctx, manifest, opts.signal);
   const secretMaterial = ctx.pendingRuntimeSecrets.get(slug) ?? createSecretMaterialLedger();
   ctx.pendingRuntimeSecrets.set(slug, secretMaterial);
   const { manifest: safeManifest, secretsChanged } = await materializeActivationManifestSecret(
@@ -1998,6 +2095,12 @@ async function activateImportedCustomer(
           agent: buildSafeDefaultAgent(),
         },
         ownerCommandsPatch: (current: unknown) => builderOwnerCommandsPatch(current, slug, ownerMmUserId),
+        projectCheckoutCwd: (agent: Record<string, unknown>, current: unknown) => {
+          const parsed = parseAgentId(String(agent.id));
+          if (parsed.kind !== "project" || !projectSnapshot || !githubCheckoutReady(projectSnapshot, parsed.project)) return undefined;
+          const sandbox = (agent.sandbox as ProjectRosterEntry["sandbox"])?.mode ?? projectRosterConfig(current)?.defaults?.sandbox?.mode ?? "off";
+          return sandbox === "off" ? path.join(CUSTOMERS_DIR, slug, "projects", parsed.project) : undefined;
+        },
       }
       : {}),
     onRoutingActivationRequired: (accountIds) => {
@@ -2490,9 +2593,6 @@ export function buildBrokeredLifecycleAdapter(
     },
     listProjectsNeedingClone: (slug) => listProjectsNeedingClone(ctx, slug),
     cloneProjectRepo: (slug, project, repo, options) => cloneProjectRepoForTarget(ctx, slug, project, repo, options),
-    seedDeferredProjectWorkspace: async (slug, projectSlug) => {
-      seedDeferredProjectWorkspace(slug, projectSlug);
-    },
     provisionMattermostUser: (customerCtx) => opts.client.provisionMattermost(customerCtx.uid),
     reconcileCommunityMembership: (customerCtx) => opts.client.ensureCommunityMembership(customerCtx.uid),
     ...runtimeUpdateOperations(ctx),

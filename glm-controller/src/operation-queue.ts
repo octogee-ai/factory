@@ -19,6 +19,7 @@ export function isSeriallyExclusiveKind(kind: string): boolean {
 export interface OperationRef {
   origin?: string;
   unstartedBuilderReturn?: boolean;
+  gatewayCompatibilityPending?: boolean;
   schedulerHandoff?: unknown;
   id: string;
   kind: string;
@@ -152,9 +153,15 @@ function rolloutWaitsForBuilderActivation(rollout: OperationRef, activation: Ope
     activation.kind === MIGRATE_CUSTOMER_KIND &&
     activation.input?.source === "builder-activation-lease" &&
     isBuilderActivateOperationIdFor(activation.id, target) &&
+    !compatibilityWaitYieldsToRoll(activation, rollout) &&
     !recoveryYieldsToTargetRoll(activation, rollout) &&
     typeof activation.cutoverCommittedAt !== "number" &&
     rollout.input?.gatewayId === target;
+}
+
+function compatibilityWaitYieldsToRoll(waiting: OperationRef, rollout: OperationRef): boolean {
+  return waiting.kind === MIGRATE_CUSTOMER_KIND && waiting.gatewayCompatibilityPending === true &&
+    rollout.kind === "rollout" && operationsConflict(waiting, rollout);
 }
 
 function recoveryYieldsToTargetRoll(recovery: OperationRef, rollout: OperationRef): boolean {
@@ -207,7 +214,7 @@ function returnMatchesOperatorRoll(returning: OperationRef, rollout: OperationRe
 
 function blocksOperatorPriorityRoll(rollout: PendingOperationRef, pending: PendingOperationRef, now: number): boolean {
   if (rolloutWaitsForBuilderActivation(rollout, pending)) return true;
-  return !returnMatchesOperatorRoll(pending, rollout) && !recoveryYieldsToTargetRoll(pending, rollout) &&
+  return !compatibilityWaitYieldsToRoll(pending, rollout) && !returnMatchesOperatorRoll(pending, rollout) && !recoveryYieldsToTargetRoll(pending, rollout) &&
     !isBackingOffReleasedOperation(pending, now) && operationsConflict(rollout, pending) &&
     compareOperationQueueOrder(pending, rollout) < 0;
 }
@@ -260,6 +267,7 @@ function findOlderPendingSameScope(
         !rolloutWaitsForBuilderActivation(pending, candidate) &&
         !postCutoverReturnBlocksRollout(pending, candidate) &&
         !recoveryYieldsToTargetRoll(pending, candidate) &&
+        !compatibilityWaitYieldsToRoll(pending, candidate) &&
         !unstartedReturnYieldsToOperatorRoll(pending, candidate, eligibleRolls) &&
         !placementMoveYieldsToBuilderActivation(pending, candidate) &&
         !isBackingOffReleasedOperation(pending, now) &&
@@ -294,7 +302,7 @@ export function decideOperationClaim(
   const eligibleRolls = eligibleOperatorPriorityRolls(input);
   const activation = pendingOpsSameKind.find((pending) =>
     rolloutWaitsForBuilderActivation(op, pending) || placementMoveYieldsToBuilderActivation(op, pending) ||
-    recoveryYieldsToTargetRoll(op, pending) || unstartedReturnYieldsToOperatorRoll(op, pending, eligibleRolls));
+    recoveryYieldsToTargetRoll(op, pending) || compatibilityWaitYieldsToRoll(op, pending) || unstartedReturnYieldsToOperatorRoll(op, pending, eligibleRolls));
   if (activation) return { outcome: "queue", waitingOn: describeWaitingOn(activation) };
   const olderPending = findOlderPendingSameScope(op, pendingOpsSameKind, now, eligibleRolls);
   if (olderPending) return { outcome: "queue", waitingOn: olderPending.waitingOn };

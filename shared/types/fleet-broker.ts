@@ -70,6 +70,7 @@ export interface FleetBrokerProjectAgentReadiness {
 }
 
 export interface FleetBrokerProjectAgent {
+  githubBacked?: true;
   identity?: ProjectAgentIdentity;
   deliveryPending?: boolean;
   projectId: string;

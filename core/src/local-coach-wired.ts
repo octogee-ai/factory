@@ -6,6 +6,7 @@ import {
   USERNAME_RE,
   parseAgentId,
 } from "@octogee/shared/types/identity";
+import { PROJECT_COACH_WORKSPACE_PARTS } from "@octogee/shared/types/project";
 
 // Mirrors customerCoachAgentId in fleet-http-migration.ts — the coach agent-id convention.
 // Inlined to keep this module node:fs-only (importable into gateway-edge + scripts alike).
@@ -235,14 +236,14 @@ function assertPortableAgentDir(relativePath: string, agentId: string): void {
   }
 }
 
-// Platform-managed coach and project agents work inside the customer tree the
-// platform provisions (`customers/<slug>` and `customers/<slug>/projects/<id>`);
-// that tree already rides every carry as a durable prefix, so it is portable too.
-function platformManagedWorkspace(agentId: string): string | null {
+function platformManagedWorkspaces(agentId: string): string[] {
   const parsed = parseAgentId(agentId);
-  if (parsed.kind === "coach") return `customers/${parsed.username}`;
-  if (parsed.kind === "project") return `customers/${parsed.username}/projects/${parsed.project}`;
-  return null;
+  if (parsed.kind === "coach") return [`customers/${parsed.username}`];
+  if (parsed.kind === "project") return [
+    `customers/${parsed.username}/projects/${parsed.project}`,
+    ["customers", parsed.username, ...PROJECT_COACH_WORKSPACE_PARTS, parsed.project].join("/"),
+  ];
+  return [];
 }
 
 function assertPortableWorkspace(
@@ -250,12 +251,11 @@ function assertPortableWorkspace(
   agentId: string,
   isDefault: boolean,
 ): void {
-  const platformWorkspace = platformManagedWorkspace(agentId);
   const allowed = new Set([
     `workspace-${agentId}`,
     `workspaces/${agentId}`,
     ...(isDefault || agentId === "main" ? ["workspace"] : []),
-    ...(platformWorkspace ? [platformWorkspace] : []),
+    ...platformManagedWorkspaces(agentId),
   ]);
   if (!allowed.has(relativePath)) {
     throw new Error(`configured Builder agent ${agentId}.workspace is outside its canonical workspace root`);

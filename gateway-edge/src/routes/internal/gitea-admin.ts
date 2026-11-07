@@ -25,6 +25,7 @@ import {
   ensureGiteaOrgForWorkspace,
   ensureGiteaUser,
   ensureProjectRepo,
+  ensureProjectCoachRepo,
   ensureSystemConfigRepo,
   ensureWorkspaceRepo,
   readGiteaUserPubKey,
@@ -296,6 +297,13 @@ router.post("/ensure-system-config-repo", async (req: Request, res: Response) =>
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
   await broker(res, "ensure-system-config-repo", () => ensureSystemConfigRepo(slug));
+});
+
+router.post("/ensure-project-coach-repo", async (req: Request, res: Response) => {
+  const { slug } = (req.body ?? {}) as { slug?: unknown };
+  if (!validSlug(res, slug)) return;
+  if (!(await requireAssignedHere(req, res, slug))) return;
+  await broker(res, "ensure-project-coach-repo", () => ensureProjectCoachRepo(slug));
 });
 
 router.post("/ensure-project-repo", async (req: Request, res: Response) => {

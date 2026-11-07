@@ -101,6 +101,8 @@ export interface MigrateCustomerDeps {
     toGatewayId: string,
   ) => Promise<FleetBrokerUserSnapshot | null>;
 
+  readPrivateProjectCoachWorkspace?: (gatewayId: string, slug: string) => Promise<boolean | undefined>;
+
   readGatewaySystemConfigCommit: (gatewayId: string) => Promise<string | null>;
   readOpenClawBuild?: (gatewayId: string, release: number) => Promise<string | null>;
 
@@ -517,13 +519,14 @@ async function buildV2DriverDeps(
   await Promise.all([...transportIds].map(async (transportId) => {
     urls.set(transportId, await deps.resolveGatewayUrl(transportId));
   }));
-  const client = deps.buildClient((transportId) => {
+  const client = schedulerRetirementClient(deps.buildClient((transportId) => {
     const url = urls.get(transportId);
     if (!url) {
       throw new Error(`migration client called with unexpected gatewayId: ${transportId}`);
     }
     return url;
-  }, op.input.sourceTransferMode === RETAINED_POD ? {op,state} : undefined);
+  }, op.input.sourceTransferMode === RETAINED_POD ? {op,state} : undefined), deps,
+  { uid: state.uid, slug: state.slug, gatewayId: state.targetGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   return {
     client,
     setMigrationPhase: (phase: "preparing" | "waiting" | "transferring" | "connecting") => deps.setMigrationPhase?.({ uid: state.uid, sourceGatewayId: state.sourceGatewayId, operationId: state.operationId, phase }) ?? Promise.resolve(),
@@ -986,19 +989,15 @@ async function gatewayClient(deps: MigrateCustomerDeps, gatewayIds: string[]): P
 }
 
 function schedulerRetirementClient(client: MigrationClient, deps: MigrateCustomerDeps, target: NativeSchedulerRetirementInput): MigrationClient {
-  const schedules = async (request: Parameters<MigrationClient["schedules"]>[0]) => {
-    if (request.op === "restore" && request.gatewayId === target.gatewayId) await retireNativeSchedulerBeforeRestore(deps, client, target);
-    return client.schedules(request);
+  const scheduler: MigrationClient["scheduler"] = async request => {
+    if (request.phase === "stage" && request.gatewayId === target.gatewayId) await retireTargetNativeScheduler(deps, client, target);
+    return client.scheduler(request);
   };
-  return { ...client, schedules: schedules as MigrationClient["schedules"] };
+  return { ...client, scheduler };
 }
 
-async function retireNativeSchedulerBeforeRestore(deps: MigrateCustomerDeps, client: MigrationClient, input: NativeSchedulerRetirementInput): Promise<void> {
-  try {
-    await deps.retireNativeSchedulerBeforeStage(input, params => client.scheduler(params));
-  } catch (error) {
-    deps.log(`[migrate-customer] ⚠ ${input.slug}: exported native schedules on ${input.gatewayId} were not retired before the schedule restore: ${errorMessage(error)}`);
-  }
+async function retireTargetNativeScheduler(deps: MigrateCustomerDeps, client: MigrationClient, input: NativeSchedulerRetirementInput): Promise<void> {
+  await deps.retireNativeSchedulerBeforeStage(input, params => client.scheduler(params));
 }
 
 function retainedJobIds(snapshot: unknown): string[] {
@@ -1476,21 +1475,27 @@ async function completeSchedulerHandoff(
       return failure(`migration cutover committed; destination recovery pending: status 503: ${errorMessage(error)}`, false);
     }
   }
-  if (handoff.scheduleTransfer) await restoreSchedulesAfterCutover(deps, op, handoff, migrationId);
-  else await finishLegacySchedulerHandoff(deps, op, handoff);
+  try {
+    if (handoff.scheduleTransfer) await restoreSchedulesAfterCutover(deps, op, handoff, migrationId);
+    else await finishLegacySchedulerHandoff(deps, op, handoff);
+  } catch (error) {
+    return failure(`migration cutover committed; destination recovery pending: status 503: ${errorMessage(error)}`, false);
+  }
   await unmountSourceAfterCutover(deps, { migrationId, slug: handoff.slug, gatewayId: handoff.fromGatewayId });
   return { steps: [], success: true, rolledBack: false };
 }
 
 function legacySchedulerHandoffDeps(deps: MigrateCustomerDeps, op: Operation, handoff: SchedulerHandoffState): Pick<MigrationRunnerDeps, "finishLegacySchedulerHandoff"> {
-  return handoff.scheduleTransfer ? {} : { finishLegacySchedulerHandoff: () => finishLegacySchedulerHandoff(deps, op, handoff) };
+  return { finishLegacySchedulerHandoff: () => handoff.scheduleTransfer
+    ? restoreSchedulesAfterCutover(deps, op, handoff, deps.genMigrationId(op.id))
+    : finishLegacySchedulerHandoff(deps, op, handoff) };
 }
 
 async function finishLegacySchedulerHandoff(deps: MigrateCustomerDeps, op: Operation, handoff: SchedulerHandoffState): Promise<void> {
   const { migrationId, slug, uid, fromGatewayId, toGatewayId } = handoff;
+  const client = await gatewayClient(deps, [fromGatewayId, toGatewayId]);
+  await retireTargetNativeScheduler(deps, client, { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   try {
-    const client = schedulerRetirementClient(await gatewayClient(deps, [fromGatewayId, toGatewayId]), deps,
-      { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
     if (handoff.stageAfterCutover && handoff.stagedAt === undefined) {
       const exported = await client.scheduler({ migrationId, slug, gatewayId: fromGatewayId, phase: "export" });
       await client.scheduler({ migrationId, slug, gatewayId: toGatewayId, phase: "stage",
@@ -1510,17 +1515,8 @@ async function restoreSchedulesAfterCutover(
   migrationId: string,
 ): Promise<void> {
   const { uid, slug, toGatewayId } = handoff;
-  let client: MigrationClient;
-  try {
-    client = schedulerRetirementClient(await gatewayClient(deps, [toGatewayId]), deps,
-      { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
-  } catch (error) {
-    deps.log(
-      `[migrate-customer] ⚠ schedule restore skipped after durable cutover migrationId=${migrationId} ` +
-      `slug=${slug} target=${toGatewayId}: ${errorMessage(error)}`,
-    );
-    return;
-  }
+  const client = await gatewayClient(deps, [toGatewayId]);
+  await retireTargetNativeScheduler(deps, client, { uid, slug, gatewayId: toGatewayId, operationId: op.id, claimedStartedAt: op.startedAt });
   await restoreScheduleTransfer({ client, log: deps.log, now: deps.now, ...scheduleTransferDeps(deps, uid) },
     { migrationId, slug, gatewayId: toGatewayId });
 }
@@ -1833,6 +1829,32 @@ function terminalMigrationPreparationError(
   return null;
 }
 
+class GatewayCompatibilityPendingError extends Error {}
+
+async function sourceCanAdoptPrivateProjectCoach(deps: MigrateCustomerDeps, uid: string, slug: string, targets: MigrationTargets): Promise<boolean> {
+  const customer = await deps.readUserSnapshot(uid, targets.toGatewayId);
+  if (!customer || customer.uid !== uid || customer.slug !== slug || customer.gatewayId !== targets.fromGatewayId) {
+    throw new Error("Could not verify project coach eligibility on the current source");
+  }
+  return customer.projectAgents?.some(agent => agent.githubBacked && agent.enabled && agent.status !== "error" && Boolean(agent.token)) ?? false;
+}
+
+async function assertPrivateProjectCoachCompatibility(deps: MigrateCustomerDeps, op: Operation, targets: MigrationTargets, customer: { uid: string; slug: string }): Promise<void> {
+  const readWorkspace = deps.readPrivateProjectCoachWorkspace;
+  if (!readWorkspace || op.schedulerHandoff?.forwardRecovery) return;
+  const { uid, slug } = customer;
+  let reason = `gateway ${targets.toGatewayId} has not reported private project coach workspace support`;
+  try {
+    const sourceWorkspace = await readWorkspace(targets.fromGatewayId, slug);
+    if (sourceWorkspace === undefined) return;
+    if (!sourceWorkspace && !await sourceCanAdoptPrivateProjectCoach(deps, uid, slug, targets)) return;
+    if (await readWorkspace(targets.toGatewayId, slug) !== undefined) return;
+  } catch (error) {
+    reason = errorMessage(error);
+  }
+  throw new GatewayCompatibilityPendingError(`gateway compatibility pending: status 503: ${reason}`);
+}
+
 async function prepareMigration(
   deps: MigrateCustomerDeps,
   op: Operation,
@@ -1880,6 +1902,7 @@ async function prepareMigration(
         rolledBack: false,
       };
     }
+    await assertPrivateProjectCoachCompatibility(deps, op, resolved.targets, { uid: request.uid, slug: user.slug });
     await assertForwardRecoveryBeforePreparation(op, resolved.targets, user.slug, request.uid, ctx);
     const automatic = resolveOperationOrigin(op.origin) === "automatic";
     const nativeReturn = await deps.prepareNativeComputerReturn({
@@ -1979,7 +2002,10 @@ async function prepareLegacyMigration(input: {
   };
 }
 
-function migrationPreparationFailure(error: unknown, op: Operation): { error: string; rolledBack?: false } {
+function migrationPreparationFailure(error: unknown, op: Operation): { error: string; rolledBack?: false } | { result: OperationResult } {
+  if (error instanceof GatewayCompatibilityPendingError) {
+    return { result: { ...failure(error.message), output: { gatewayCompatibilityPending: true } } };
+  }
   return { error: errorMessage(error), ...(op.schedulerHandoff?.forwardRecovery ? { rolledBack: false as const } : {}) };
 }
 

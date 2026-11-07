@@ -701,6 +701,19 @@ describe("schedule transfer", () => {
       .toBeLessThan(vi.mocked(h.client.unmount).mock.invocationCallOrder[0]!);
   });
 
+  it("keeps a strict schedule handoff failure pending after cutover without unmounting the source", async () => {
+    const h = harness();
+    h.deps.commitCutover = vi.fn(async () => { h.deps.readCurrentGateway = async () => "gw-green"; });
+    h.deps.finishLegacySchedulerHandoff = vi.fn(async () => { throw new Error("native scheduler retirement authority changed"); });
+
+    const result = await runMigration({ ...h.input, resumeForwardRecovery: {} }, h.deps);
+
+    expect(result).toMatchObject({ success: false, rolledBack: false });
+    expect(result.errorAt?.error).toContain("migration cutover committed; destination recovery pending: status 503");
+    expect(result.errorAt?.error).toContain("native scheduler retirement authority changed");
+    expect(h.client.unmount).not.toHaveBeenCalled();
+  });
+
   it("moves no schedules when the customer stays on the same gateway", async () => {
     const h = harness({ toGatewayId: "gw-blue" });
 

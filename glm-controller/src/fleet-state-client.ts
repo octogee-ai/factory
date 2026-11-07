@@ -58,6 +58,7 @@ export interface FleetStateRequest {
   timeoutMs: number;
   fetchImpl: typeof fetch;
   newRequestId: () => string;
+  privateProjectCoachSlug?: string;
 }
 
 // Cowboy is the only holder of the fleet controller private key, so this signed
@@ -68,6 +69,7 @@ export async function requestFleetState(input: FleetStateRequest): Promise<Respo
   const body: FleetStateRequestBody = {
     requestId: input.newRequestId(),
     gatewayId: input.gatewayId,
+    ...(input.privateProjectCoachSlug ? { privateProjectCoachSlug: input.privateProjectCoachSlug } : {}),
   };
   const rawBody = JSON.stringify(body);
   return input.fetchImpl(`${input.baseUrl}${FLEET_STATE_PATH}/${input.gatewayId}`, {
@@ -79,6 +81,16 @@ export async function requestFleetState(input: FleetStateRequest): Promise<Respo
     body: rawBody,
     signal: AbortSignal.timeout(input.timeoutMs),
   });
+}
+
+export async function readPrivateProjectCoachWorkspace(input: FleetStateRequest & { privateProjectCoachSlug: string }): Promise<boolean | undefined> {
+  const response = await requestFleetState(input);
+  if (!response.ok) throw new Error(`Fleet state refused the workspace check: HTTP ${response.status}`);
+  const state = await response.json() as { gatewayId?: unknown; privateProjectCoachWorkspace?: unknown } | null;
+  if (state?.gatewayId !== input.gatewayId) throw new Error("Fleet state answered for a different gateway");
+  const workspace = state.privateProjectCoachWorkspace;
+  if (workspace !== undefined && typeof workspace !== "boolean") throw new Error("Fleet state returned an invalid workspace capability");
+  return workspace;
 }
 
 export function createFleetStateFetcher(

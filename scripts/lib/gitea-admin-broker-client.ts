@@ -61,6 +61,10 @@ export async function ensureSystemConfigRepo(slug: string): Promise<void> {
   await postVoid("/internal/gitea/ensure-system-config-repo", { slug });
 }
 
+export async function ensureProjectCoachRepo(slug: string): Promise<void> {
+  await postVoid("/internal/gitea/ensure-project-coach-repo", { slug });
+}
+
 export async function ensureProjectRepo(slug: string, projectName: string): Promise<void> {
   await postVoid("/internal/gitea/ensure-project-repo", { slug, projectName });
 }

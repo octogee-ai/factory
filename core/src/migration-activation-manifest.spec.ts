@@ -19,10 +19,12 @@ import {
   writeActivationManifest,
   captureSourceWorkspaceIdentities,
   captureTargetWorkspaceIdentities,
+  privateProjectWorkspaceAgentIds,
   restoreTargetWorkspaceIdentities,
   restoreSourceWorkspaceIdentities,
   type MigrationActivationManifest,
 } from "./migration-activation-manifest";
+import { initializeRelocatedProjectCoach, projectCoachWorkspace } from "./project-coach-workspaces.js";
 import { platformOpenAiEmbeddingSecretId } from "./platform-embedding-refs";
 import {
   CUSTOMER_CODE_DENIED_TOOLS,
@@ -1335,6 +1337,42 @@ describe.skipIf(process.platform !== "linux")("source rollback workspace identit
       mattermostAccount: { botToken: "project-pat" }, bindings: [{ agentId: projectId, match: { channel: "mattermost", accountId: "alice-proj-orbit" } }] }];
     return { root, workspace, project, value };
   }
+
+  it("preserves the private coach identity in a transfer without opening the checkout identity", async () => {
+    const f = await source();
+    const project = path.join(f.workspace, ".system", "project-coaches", "orbit");
+    await fs.mkdir(project, { recursive: true });
+    await fs.writeFile(path.join(project, "IDENTITY.md"), "private persona");
+    await fs.writeFile(path.join(f.project, "IDENTITY.md"), "repo persona");
+    f.value.projectAgents[0].agent.workspace = project;
+
+    const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    await writeActivationManifest(f.root, captured);
+    const manifest = await readActivationManifest(f.root, "alice");
+    const agentIds = activationManifestAgentIds(manifest);
+    const privateWorkspaces = privateProjectWorkspaceAgentIds(manifest);
+    const target = { migrationId: custody.migrationId, uid: custody.uid, gatewayId: "shared-target", podUid: "target-pod" };
+    const targetCapture = await captureTargetWorkspaceIdentities("alice", agentIds, f.root, target, privateWorkspaces);
+    await fs.writeFile(path.join(project, "IDENTITY.md"), "transient native rewrite");
+    await restoreTargetWorkspaceIdentities(targetCapture, "alice", agentIds, f.root, { custody: target, privateWorkspaces, assertCurrent: async () => undefined });
+    expect(await fs.readFile(path.join(project, "IDENTITY.md"), "utf8")).toBe("private persona");
+    expect(await fs.readFile(path.join(f.project, "IDENTITY.md"), "utf8")).toBe("repo persona");
+  });
+
+  it("accepts legacy project custody during rollout and seeds a separate workspace after mount", async () => {
+    const f = await source();
+    const oldIdentity = path.join(f.project, "IDENTITY.md");
+    await fs.writeFile(oldIdentity, "legacy repo identity");
+    const captured = await captureSourceWorkspaceIdentities(f.value, f.root, custody);
+    await writeActivationManifest(f.root, captured);
+    const incoming = await readActivationManifest(f.root, "alice");
+    expect(privateProjectWorkspaceAgentIds(incoming).size).toBe(0);
+    await restoreSourceWorkspaceIdentities(incoming, f.root, custody, async () => undefined);
+    await initializeRelocatedProjectCoach({ customerDir: f.workspace, project: "orbit", name: "Private Persona", emoji: "🐙" });
+    const privateIdentity = path.join(projectCoachWorkspace(f.workspace, "orbit"), "IDENTITY.md");
+    expect(await fs.readFile(privateIdentity, "utf8")).toContain("Private Persona");
+    expect(await fs.readFile(oldIdentity, "utf8")).toBe("legacy repo identity");
+  });
 
   it("durably retains exact Unicode/CRLF bytes and intentional absence across retry without recapturing Native drift", async () => {
     const f = await source(), file = path.join(f.project, "IDENTITY.md");

@@ -1,3 +1,4 @@
+import { saveProjectCoachWorkspaces } from "@octogee/core/project-coach-workspaces";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { readProjectRestoreReady, readProjectRestoreState } from "@octogee/core/project-asset-state";
@@ -12,9 +13,9 @@ import { gatewayCredentialHeaders, internalFetch } from "@octogee/core/internal-
 import type { FleetBrokerAssignmentRosterEntry, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import type { WorkspaceBlobTarget } from "./workspace-blob.js";
-import { projectCheckoutEnabled } from "@octogee/shared/types/project";
+import { PROJECT_COACH_WORKSPACE_PARTS, projectCheckoutEnabled } from "@octogee/shared/types/project";
 
-type PersistenceCustomer = Pick<FleetBrokerUserSnapshot, "uid" | "slug" | "gatewayId" | "status" | "projects"> & { checkpointEpoch: number };
+type PersistenceCustomer = Pick<FleetBrokerUserSnapshot, "uid" | "slug" | "gatewayId" | "status" | "projects" | "projectAgents"> & { checkpointEpoch: number };
 
 interface ProjectPersistenceDeps {
   readCustomer: (slug: string) => Promise<PersistenceCustomer>;
@@ -154,9 +155,27 @@ async function assertCheckpointDirectory(input: { root: string; slug: string }, 
   }
 }
 
+function githubCoachProjects(customer: PersistenceCustomer): string[] {
+  return (customer.projectAgents ?? []).filter(agent =>
+    agent.githubBacked && agent.enabled && agent.status !== "error" && agent.token,
+  ).map(agent => agent.projectId).sort();
+}
+
+async function saveGithubProjectCoaches(input: { root: string; slug: string }, customer: PersistenceCustomer, readCustomer: SharedPersistenceDeps["readCustomer"]): Promise<void> {
+  const projects = githubCoachProjects(customer);
+  await saveProjectCoachWorkspaces({ customerDir: path.join(input.root, input.slug), slug: input.slug, projects, checkpointEpoch: customer.checkpointEpoch, assertCurrent: async () => {
+    const current = await readCustomer(input.slug);
+    if (current.uid !== customer.uid || current.gatewayId !== customer.gatewayId || current.checkpointEpoch !== customer.checkpointEpoch ||
+        JSON.stringify(githubCoachProjects(current)) !== JSON.stringify(projects)) {
+      throw new Error("Project coach checkpoint authority changed");
+    }
+  } });
+}
+
 export async function persistSharedCustomerFiles(input: { root: string; slug: string }, deps: SharedPersistenceDeps = sharedDefaults): Promise<{ projects: number }> {
   return serializePersistence(input, async () => {
     const customer = await deps.readCustomer(input.slug);
+    await saveGithubProjectCoaches(input, customer, deps.readCustomer);
     const projects = sharedGiteaProjects(customer);
     for (const [project, repo] of [[null, "workspace"], ...projects] as Array<[string | null, string]>) {
       const assertCurrent = async () => {
@@ -175,7 +194,7 @@ export async function persistSharedCustomerFiles(input: { root: string; slug: st
         assertCurrent,
         beforeCommit: async () => {
           await assertCurrent();
-          const excludePaths = project === null ? ["projects"] : [];
+          const excludePaths = project === null ? ["projects", PROJECT_COACH_WORKSPACE_PARTS.join("/")] : [];
           const gcsPrefix = project ? `customers/${input.slug}/projects/${project}` : `customers/${input.slug}`;
           const result = await deps.divert(dir, { slug: input.slug, projectSlug: project, gcsPrefix }, { excludePaths });
           return result.failures.length ? { ok: false, error: { code: "BLOB_DIVERSION_FAILED", cwd: dir, paths: result.failedPaths } }
@@ -193,6 +212,7 @@ export async function persistSharedCustomerFiles(input: { root: string; slug: st
 async function persistProjectsOnce(input: { root: string; slug: string }, deps: ProjectPersistenceDeps): Promise<{ projects: number }> {
   const customer = await deps.readCustomer(input.slug);
   if (customer.slug !== input.slug) throw new Error("Project persistence owner differs");
+  await saveGithubProjectCoaches(input, customer, deps.readCustomer);
   const projects = builderProjectCheckouts(customer);
   for (const [project, source] of projects) {
     const assertCurrent = async () => {

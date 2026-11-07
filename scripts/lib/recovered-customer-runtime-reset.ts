@@ -1,3 +1,4 @@
+import { projectCoachWorkspace } from "@octogee/core/project-coach-workspaces";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,13 +43,14 @@ function agentDatabasePath(openclawDir: string, agentId: string): string {
   return path.join(openclawDir, "agents", agentId, "agent", AGENT_DB_FILE);
 }
 
-function expectedWorkspacePath(openclawDir: string, slug: string, agentId: string): string {
+function expectedWorkspacePath(openclawDir: string, slug: string, agentId: string, githubProjectIds: ReadonlySet<string> | undefined): string {
   const parsed = parseAgentId(agentId);
   if (parsed.kind === "coach" && parsed.username === slug) {
     return path.join(openclawDir, "customers", slug);
   }
   if (parsed.kind === "project" && parsed.username === slug) {
-    return path.join(openclawDir, "customers", slug, "projects", parsed.project);
+    const customerDir = path.join(openclawDir, "customers", slug);
+    return githubProjectIds?.has(parsed.project) ? projectCoachWorkspace(customerDir, parsed.project) : path.join(customerDir, "projects", parsed.project);
   }
   throw new Error(`runtime reset cannot derive workspace for agent: ${agentId}`);
 }
@@ -264,6 +266,7 @@ export function resetRecoveredCustomerRuntime(options: {
   uid: string;
   slug: string;
   agentIds: readonly string[];
+  githubProjectIds?: ReadonlySet<string>;
   log?: (message: string) => void;
   procRoot?: string;
 }): RecoveredCustomerRuntimeResetResult {
@@ -285,7 +288,7 @@ export function resetRecoveredCustomerRuntime(options: {
   const workspacePaths = new Map(
     agentIds.map((agentId) => [
       agentId,
-      path.resolve(expectedWorkspacePath(openclawDir, options.slug, agentId)),
+      path.resolve(expectedWorkspacePath(openclawDir, options.slug, agentId, options.githubProjectIds)),
     ]),
   );
   const staleWorkspaces = new Set(

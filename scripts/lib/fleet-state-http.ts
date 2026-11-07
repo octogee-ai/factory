@@ -10,7 +10,7 @@ import {
 export interface FleetStateHandlerDeps {
   publicKey: string;
   gatewayId: string;
-  readState: () => FleetStateResponse;
+  readState: (request: FleetStateRequestBody) => FleetStateResponse;
   log: (message: string) => void;
 }
 
@@ -59,6 +59,6 @@ export function createFleetStateHandler(deps: FleetStateHandlerDeps): RequestHan
       res.status(400).json({ error: "gatewayId does not address this gateway" });
       return;
     }
-    res.status(200).json(deps.readState());
+    res.status(200).json(deps.readState(body));
   };
 }

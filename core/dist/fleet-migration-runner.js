@@ -190,12 +190,6 @@ async function executeStep(params) {
             }
             return;
         case "unmount-gateway":
-            if (crossGateway && step.role === "source") {
-                if (deps.finishLegacySchedulerHandoff)
-                    await deps.finishLegacySchedulerHandoff();
-                else
-                    await restoreScheduleTransfer(deps, { migrationId, slug: step.slug, gatewayId: params.targetGatewayId, doc: params.schedules.doc });
-            }
             await deps.client.unmount({
                 migrationId,
                 gatewayId: step.gateway,
@@ -312,6 +306,24 @@ function migrationComplete(execution) {
         rolledBack: false,
     };
 }
+async function finishPostCutoverScheduleHandoff(execution, step) {
+    if (!isPostCutoverSourceCleanup(execution.state, step) || !execution.crossGateway)
+        return null;
+    const { deps, input, state } = execution;
+    try {
+        if (deps.finishLegacySchedulerHandoff)
+            await deps.finishLegacySchedulerHandoff();
+        else
+            await restoreScheduleTransfer(deps, { migrationId: input.migrationId, slug: input.slug, gatewayId: input.toGatewayId, doc: execution.schedules.doc });
+        return null;
+    }
+    catch (error) {
+        const message = `migration cutover committed; destination recovery pending: status 503: ${errorText(error)}`;
+        await report(deps, { name: reportName(step), status: "failed", error: message });
+        deps.log(`[migration-runner] ${message} migrationId=${input.migrationId} slug=${input.slug}`);
+        return { success: false, finalPhase: state.phase, rolledBack: false, errorAt: { phase: state.phase, error: message } };
+    }
+}
 async function runNextMigrationStep(execution) {
     const step = nextMigrationStep(execution.state);
     if (step.action === "complete")
@@ -329,6 +341,9 @@ async function runNextMigrationStep(execution) {
             return deferred;
     }
     await report(execution.deps, { name, status: "running" });
+    const handoffPending = await finishPostCutoverScheduleHandoff(execution, step);
+    if (handoffPending)
+        return handoffPending;
     try {
         if (step.action === "sync-state" && step.mode === "keys")
             await execution.deps.setMigrationPhase?.("preparing");
