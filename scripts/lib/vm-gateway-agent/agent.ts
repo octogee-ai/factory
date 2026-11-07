@@ -329,6 +329,10 @@ async function ensureImages(deps: VmAgentDeps, images: string[]): Promise<void> 
   let accessToken: string | undefined;
   for (const image of images) {
     if (await hasImmutableImage(deps.engine, image)) continue;
+    const boot = await deps.fs.diskUsage("/");
+    if (!Number.isFinite(boot.freeBytes) || boot.freeBytes < 16 * 1024 ** 3) {
+      throw new Error("boot disk needs at least 16 GiB free before pulling an image");
+    }
     accessToken ??= await deps.metadata.accessToken();
     deps.log(`[vm-agent] pulling ${image}`);
     await pullImage(deps.engine, image, accessToken);

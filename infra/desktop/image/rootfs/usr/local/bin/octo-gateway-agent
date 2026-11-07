@@ -25,6 +25,12 @@ install -d -m 0755 "$STATE_ROOT" "$STATE_ROOT/volumes" "$STATE_ROOT/tokens"
 ensure_image() {
   local image="$1"
   if ! docker image inspect "$image" >/dev/null 2>&1; then
+    local available
+    available="$(df -Pk /var/lib/docker | awk 'NR == 2 { print $4 }')" || return 1
+    if [[ ! "$available" =~ ^[0-9]+$ ]] || (( available < 16 * 1024 * 1024 )); then
+      echo "octo-gateway-agent: boot disk needs at least 16 GiB free before pulling a gateway image" >&2
+      return 1
+    fi
     local token
     token="$(meta 'instance/service-accounts/default/token' | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')" || return 1
     OCTOGEE_REGISTRY_TOKEN="$token" docker pull -q "$image" >/dev/null || return 1

@@ -185,7 +185,7 @@ and Chromium actually showing the Desk.
 | `octo-desktop.service` | as `octo`, on the user manager's session bus `/run/user/1000/bus` with AT-SPI running: Hyprland on the `vkms` output at 1440x900, wayvnc, noVNC over websockify, the control API, Chromium with its accessibility tree exposed; everything bound to 127.0.0.1 |
 | `octo-desktop-lifecycle.service` | root-only Unix socket for checkpoint freeze/thaw and restore stop/start of the desktop plus applications in `user@1000.service` |
 | `octo-metadata-ssh-keys.service` | installs `octo:` keys from GCE metadata before sshd |
-| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set, then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket |
+| `octo-gateway-agent.service` | blocks the metadata server for uid 1000, polls instance metadata until `gateway-id`, `gateway-image`, and `octogee-api-url` are set, then pulls the gateway image with the VM's service account and runs the registration agent (`scripts/lib/vm-gateway-agent`) from that image against the host Docker socket. A new image pull requires at least 16 GiB free on the Docker boot filesystem; an already-cached image can start below that threshold |
 | `docker.service` | hosts the gateway and gateway-edge containers the agent manages |
 
 Power: `HandlePowerKey=poweroff`, so a GCE stop completes on the ACPI signal
@@ -265,6 +265,9 @@ After acceptance, publication assigns that exact image to the environment's
 operations journal. Existing boot disks do not change when a family advances;
 Cowboy moves a parked computer to the current image on its next boot. Replace
 a computer immediately with `fleet --env=test gw replace-computer <gateway-id> --apply` when requested. This checkpoints and restores home.
+New Builder computers have 80 GiB boot disks. Enlarge an existing smaller boot disk
+and cold-start the computer to apply that capacity; a suspended computer does not
+run `octo-grow-root` until a cold boot.
 Check `fleet --help` before running an operator command.
 
 ## CI/CD

@@ -1707,7 +1707,7 @@ describe("runtime policy and stamping", () => {
   });
 
   it.each([
-    ["s", "e2-medium", 40, "pd-balanced", 10, "x11"], ["m", "e2-standard-2", 50, "pd-ssd", 50, "omarchy"], ["l", "e2-standard-4", 50, "pd-ssd", 100, "omarchy"],
+    ["s", "e2-medium", 80, "pd-balanced", 10, "x11"], ["m", "e2-standard-2", 80, "pd-ssd", 50, "omarchy"], ["l", "e2-standard-4", 80, "pd-ssd", 100, "omarchy"],
   ] as const)("stamps new %s Builders as on-demand computers with their tier's machine, boot disk, desktop and home", async (sizingTier, machineType, diskSizeGb, bootDiskType, homeDiskSizeGb, desktop) => {
     const { db, docs } = fakeDb({});
     expect(await stampGatewayRuntime({ db, gatewayId: "b-new", gatewayClass: "builder", sizingTier, vmSpec: spec, log: vi.fn() })).toBe("gce-vm");
@@ -1740,14 +1740,14 @@ describe("runtime policy and stamping", () => {
     const persisted = { ...spec, machineType: "e2-medium", diskSizeGb: 40, bootDiskType: "pd-balanced" as const, homeDiskSizeGb: 10, provisioningModel: "STANDARD" as const, desktop: "omarchy" as const };
     const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
     await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "s", vmSpec: spec, log: vi.fn() });
-    expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, desktop: "x11" });
+    expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, desktop: "x11", diskSizeGb: 80 });
   });
 
   it("moves a persisted Spot computer spec to its tier's on-demand capacity", async () => {
     const persisted = { ...spec, machineType: "e2-standard-2", diskSizeGb: 50, homeDiskSizeGb: 50, provisioningModel: "SPOT" as const };
     const { db, docs } = fakeDb({ "glmGateways/b-x": { runtime: "gce-vm", vmSpec: persisted } });
     await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "m", vmSpec: spec, log: vi.fn() });
-    expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, provisioningModel: "STANDARD" });
+    expect(docs["glmGateways/b-x"].vmSpec).toEqual({ ...persisted, provisioningModel: "STANDARD", diskSizeGb: 80 });
   });
 
   const deployedCluster = {
@@ -1802,7 +1802,7 @@ describe("runtime policy and stamping", () => {
     const { db, docs, writes } = fakeDb({});
     const log = vi.fn();
     expect(await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "l", vmSpec: spec, log })).toBe("gce-vm");
-    expect(docs["glmGateways/b-x"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, machineType: "e2-standard-4", diskSizeGb: 50, homeDiskSizeGb: 100, provisioningModel: "STANDARD" } });
+    expect(docs["glmGateways/b-x"]).toEqual({ runtime: "gce-vm", vmSpec: { ...spec, machineType: "e2-standard-4", diskSizeGb: 80, homeDiskSizeGb: 100, provisioningModel: "STANDARD" } });
     expect(await stampGatewayRuntime({ db, gatewayId: "b-x", gatewayClass: "builder", sizingTier: "s", vmSpec: null, log })).toBe("gce-vm");
     expect(writes).toHaveLength(1);
     expect(await stampGatewayRuntime({ db, gatewayId: "shared-1", gatewayClass: "shared", sizingTier: "l", vmSpec: spec, log })).toBe("cluster");

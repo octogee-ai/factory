@@ -51,7 +51,7 @@ class CredentialHelperTests(unittest.TestCase):
 
 
 class GatewayAgentImagePullTests(unittest.TestCase):
-    def ensure_image(self, cached=False, token_fails=False):
+    def ensure_image(self, cached=False, token_fails=False, free_kib=20 * 1024 * 1024):
         body = AGENT.read_text().split('ensure_image() {', 1)[1].split('\nwaiting=0', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -60,13 +60,16 @@ class GatewayAgentImagePullTests(unittest.TestCase):
             docker.write_text('#!/bin/bash\nprintf "%s\\t%s\\n" "$*" "${OCTOGEE_REGISTRY_TOKEN:-}" >> "$RECORD"\n'
                               'if [[ "$1 $2" == "image inspect" && "$TEST_CACHED" == 0 ]]; then exit 1; fi\nexit 0\n')
             docker.chmod(0o755)
+            df = root / 'df'
+            df.write_text('#!/bin/bash\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted\\nfixture 0 0 %s 0%% /\\n" "$TEST_FREE_KIB"\n')
+            df.chmod(0o755)
             script = ('set -euo pipefail\nSTATE_ROOT="$TEST_STATE_ROOT"\n'
                       'meta() { [[ "$TEST_TOKEN_FAILS" == 0 ]] || return 7; printf \'{"access_token":"fixture-token"}\'; }\n'
                       'ensure_image() {' + body + '\nensure_image "$TEST_IMAGE" && echo ENSURED\n')
             result = subprocess.run(['bash', '-c', script], env={
                 **os.environ, 'PATH': f'{root}:{os.environ["PATH"]}', 'RECORD': str(root / 'calls'),
                 'TEST_STATE_ROOT': str(root / 'state'), 'TEST_IMAGE': IMAGE,
-                'TEST_CACHED': str(int(cached)), 'TEST_TOKEN_FAILS': str(int(token_fails))}, capture_output=True, text=True, timeout=10)
+                'TEST_CACHED': str(int(cached)), 'TEST_TOKEN_FAILS': str(int(token_fails)), 'TEST_FREE_KIB': str(free_kib)}, capture_output=True, text=True, timeout=10)
             calls = [line.split('\t') for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
             cache = (root / 'state/gateway-image-cache').read_text() if (root / 'state/gateway-image-cache').exists() else ''
             return result, calls, cache
@@ -91,6 +94,16 @@ class GatewayAgentImagePullTests(unittest.TestCase):
         self.assertNotIn('ENSURED', result.stdout)
         self.assertEqual([args for args, _ in calls], [f'image inspect {IMAGE}'])
         self.assertEqual(cache, '')
+
+    def test_low_boot_space_refuses_a_new_image_without_affecting_cached_images(self):
+        result, calls, cache = self.ensure_image(free_kib=1024 * 1024)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('boot disk', result.stderr)
+        self.assertEqual([args for args, _ in calls], [f'image inspect {IMAGE}'])
+        self.assertEqual(cache, '')
+        cached, calls, _ = self.ensure_image(cached=True, free_kib=0)
+        self.assertEqual(cached.returncode, 0, cached.stderr)
+        self.assertEqual(calls, [[f'image inspect {IMAGE}', '']])
 
 
 if __name__ == '__main__':

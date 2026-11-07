@@ -15,6 +15,9 @@ args=sys.argv[1:]
 if command == 'curl':
     key=args[-1].split('/')[-1]
     print({'id':'4242','token':'{"access_token":"fixture-token"}'}.get(key, (root/key).read_text() if (root/key).exists() else ''))
+elif command == 'df':
+    print('Filesystem 1024-blocks Used Available Capacity Mounted')
+    print('fixture 0 0 33554432 0% /')
 elif command == 'ufw':
     with (root/'events').open('a') as out: out.write(json.dumps(['ufw', *args])+'\\n')
 elif command == 'docker':
@@ -34,7 +37,7 @@ describe("native VM bootstrap supervision", () => {
     const root = await mkdtemp(`${tmpdir()}/octogee-bootstrap-`);
     roots.push(root);
     await mkdir(`${root}/bin`);
-    for (const name of ["curl", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+    for (const name of ["curl", "df", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
     const assignment = { "gateway-id": "b-fixture", "gateway-image": "registry.invalid/gateway@sha256:old", "octogee-api-url": "https://api.invalid" };
     for (const [key, value] of Object.entries(assignment)) await writeFile(`${root}/${key}`, value);
     const binaries = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin");
@@ -78,7 +81,7 @@ it("prefetches before assignment, refreshes a changed image, and reuses it witho
   const root = await mkdtemp(`${tmpdir()}/octogee-bootstrap-prefetch-`);
   roots.push(root);
   await mkdir(`${root}/bin`);
-  for (const name of ["curl", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
+  for (const name of ["curl", "df", "docker", "iptables", "ufw"]) await writeFile(`${root}/bin/${name}`, mock, { mode: 0o755 });
   const binaries = resolve(import.meta.dirname, "../../../infra/desktop/image/rootfs/usr/local/bin");
   await writeFile(`${root}/bin/octo-gateway-firewall`, await readFile(`${binaries}/octo-gateway-firewall`), { mode: 0o755 });
   const script = `${root}/bootstrap`;

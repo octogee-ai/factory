@@ -23,7 +23,7 @@ import { createSurgeOpenClawProcessSupervisorClient } from "../../lib/surge-open
 import { startSurgeOpenClawSupervisor } from "../../entrypoints/surge-openclaw-supervisor.js";
 
 const SHA = "c".repeat(64);
-const DISK = { sizeBytes: 42_949_672_960, freeBytes: 3_221_225_472 };
+const DISK = { sizeBytes: 85_899_345_920, freeBytes: 32_212_254_720 };
 const CHECKPOINT = { name: "20260905T101500Z.tar.gz", size: 2048, sha256: SHA, completedAt: 5, download: { url: "https://storage.example/download", method: "GET", gcsPath: "p", expiresAt: "e" } };
 
 interface FakeDocker {
@@ -412,6 +412,9 @@ describe("convergeOnce", () => {
   it.each([false, true])("restarts stopped services below boot headroom with no new scratch allocation: existing scratch %s", async (scratch) => {
     const docker = fakeDocker();
     const bundle = bundleFixture();
+    const image = `registry.example/actual:deadbee@sha256:${"a".repeat(64)}`;
+    bundle.init!.image = image;
+    for (const container of bundle.containers) container.image = image;
     if (scratch) {
       bundle.volumes.push({ name: "builder-cache", kind: "ephemeral" });
       const Name = scratchVolumeName("4242", "builder-cache");
@@ -441,6 +444,18 @@ describe("convergeOnce", () => {
     expect(token).not.toHaveBeenCalled();
     expect(docker.log.some(line => line.startsWith("POST /images/create"))).toBe(false);
     expect(docker.containers.get("octogee-gateway")?.running).toBe(true);
+  });
+
+  it("preserves running services and refuses image pulls when the boot disk lacks headroom", async () => {
+    const docker = fakeDocker();
+    const bundle = bundleFixture();
+    const h = deps(docker, () => runtimeReply(bundle), { now: 1000 }, {
+      diskUsage: async () => ({ ...DISK, freeBytes: 1024 ** 3 }),
+    });
+    const plan = planBundle(bundle, { stateRoot: h.d.stateRoot, instanceId: "4242", desktopAuth: true });
+    await expect(applyBundle(h.d, bundle, plan)).rejects.toThrow(/boot disk.*free/);
+    expect(docker.log.some(line => line.startsWith("POST /images/create"))).toBe(false);
+    expect(docker.log.some(line => line.startsWith("DELETE /containers/"))).toBe(false);
   });
 
   it("waits while the bundle is unrendered, then writes tokens, prepares volumes, runs init, and starts the services", async () => {
@@ -875,8 +890,12 @@ describe("convergeOnce", () => {
   it("holds final-checkpoint writers through upload and controller handoff, releasing them when replacement is cancelled", async () => {
     const docker = fakeDocker();
     const clock = { now: 1_000 };
+    const bundle = homeBundle();
+    const image = `registry.example/actual:deadbee@sha256:${"a".repeat(64)}`;
+    bundle.init!.image = image;
+    for (const container of bundle.containers) container.image = image;
     let signal = { requestedAt: null as number | null, completedAt: null as number | null };
-    const h = deps(docker, () => runtimeReply(homeBundle(), signal), clock, { diskUsage: async path => path === "/" ? { ...DISK, freeBytes: 1024 ** 3 } : DISK });
+    const h = deps(docker, () => runtimeReply(bundle, signal), clock, { diskUsage: async path => path === "/" ? { ...DISK, freeBytes: 1024 ** 3 } : DISK });
     let state = await convergeOnce(h.d, initialAgentState());
     signal = { requestedAt: 1_000, completedAt: null };
     const original = h.d.fetchImpl;
