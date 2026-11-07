@@ -1,11 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 
-import {
-  resolveBillingProfile,
-  signupOfferBudgetForOwner,
-  type BillingRail,
-  type OwnedSignupOfferBudget,
-} from "@octogee/shared/types/billing";
+import type { OwnedSignupOfferBudget } from "@octogee/shared/types/billing";
 import {
   readGatewayAuthorization,
   type GatewayAuthorization,
@@ -16,13 +11,12 @@ import {
   type ModelBrokerTokenLimits,
   type ModelBrokerTokenPolicy,
 } from "./model-broker-tokens.js";
+import type { ModelBrokerRailRegistry, OwnerRailProfile } from "./model-broker-rails.js";
 
 export interface OwnerModelBrokerGrant {
   limits: ModelBrokerTokenLimits;
   policy: ModelBrokerTokenPolicy;
-  // Which rail bills platform calls: subscription = window budgets; Builders
-  // ride prepaid_credits (their credit balance is the gate, not a window).
-  rail: BillingRail;
+  rail: string;
   signupOfferBudget?: OwnedSignupOfferBudget | null;
 }
 
@@ -48,34 +42,17 @@ export function envDefaultModelBrokerLimits(
   };
 }
 
-async function readOwnerTier(
+async function readOwnerProfile(
   db: ModelBrokerFirestore | undefined,
   ownerUid: string | undefined,
   now: number,
-): Promise<{
-  spendWindowUsd: number;
-  spendWeekUsd: number;
-  freeTier: boolean;
-  houseFallback: boolean;
-  rail: BillingRail;
-  signupOfferBudget: OwnedSignupOfferBudget | null;
-} | null> {
+  rails: ModelBrokerRailRegistry,
+): Promise<OwnerRailProfile | null> {
   if (!db || !ownerUid) return null;
   const snap = await db.collection("users").doc(ownerUid).get();
   const data = snap.data() as Record<string, unknown> | undefined;
   if (!data) return null;
-  const profile = resolveBillingProfile(data, new Date(now));
-  return {
-    spendWindowUsd: profile.windowBudgetUsd,
-    spendWeekUsd: profile.weeklyBudgetUsd,
-    // "freeTier" on the wire = the house-only policy: always degrade to the
-    // house model, never billed. Personal Free (and lapsed trials) land here.
-    freeTier: profile.modelAccess === "house_only",
-    // Builders with no live paid token path get denied instead of degraded.
-    houseFallback: profile.houseFallback,
-    rail: profile.rail,
-    signupOfferBudget: signupOfferBudgetForOwner(data, ownerUid, new Date(now)),
-  };
+  return rails.resolveOwnerProfile(data, ownerUid, now);
 }
 
 async function readGatewayLimitOverrides(
@@ -106,18 +83,18 @@ export async function resolveOwnerModelBrokerGrant(input: {
   now: number;
   defaults?: Partial<ModelBrokerTokenLimits> | null;
   gatewayAuthorization?: GatewayAuthorization;
+  rails: ModelBrokerRailRegistry;
 }): Promise<OwnerModelBrokerGrant> {
-  const tier = await readOwnerTier(input.db, input.ownerUid, input.now);
+  const tier = await readOwnerProfile(input.db, input.ownerUid, input.now, input.rails);
   const overrides = await readGatewayLimitOverrides(
     input.db,
     input.gatewayId,
     input.gatewayAuthorization,
   );
-  const rail: BillingRail = tier?.rail ?? "subscription";
+  const rail = tier?.rail ?? input.rails.defaultRailId;
   const limits = normalizeModelBrokerTokenLimits({
     ...(input.defaults ?? {}),
-    // Prepaid-rail owners carry no window/week budget — the credit balance gates.
-    ...(tier === null || rail === "prepaid_credits" || rail === "signup_offer"
+    ...(tier === null || !tier.windowBudgets
       ? {}
       : { spendWindowUsd: tier.spendWindowUsd, spendWeekUsd: tier.spendWeekUsd }),
     ...overrides,
@@ -167,6 +144,7 @@ function mutableLimitFingerprint(authorization: GatewayAuthorization): string {
 
 export function createCachedOwnerModelBrokerGrantResolver(opts: {
   db: ModelBrokerFirestore;
+  rails: ModelBrokerRailRegistry;
   defaults?: Partial<ModelBrokerTokenLimits> | null;
   ttlMs?: number;
   maxEntries?: number;
@@ -214,6 +192,7 @@ export function createCachedOwnerModelBrokerGrantResolver(opts: {
       now,
       defaults: opts.defaults,
       gatewayAuthorization: authorization,
+      rails: opts.rails,
     });
     cache.set(key, { grant, resolvedAt: now });
     opts.log?.("llm-broker grant resolved", {

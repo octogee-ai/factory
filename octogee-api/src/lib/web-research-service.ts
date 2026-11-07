@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 
 import type { LiveOwnerGrantResolver, OwnerModelBrokerGrant } from "./model-broker-limits.js";
+import type { ModelBrokerRailRegistry, RailAllowanceResult } from "./model-broker-rails.js";
 import type { ModelBrokerUsageStore } from "./model-broker-usage.js";
 import type {
   BraveSearchInput,
@@ -11,27 +12,7 @@ import type {
   TavilySearchOutput,
 } from "./web-provider-clients.js";
 import { WebProviderError } from "./web-provider-clients.js";
-import { readPlatformSpendState } from "./platform-usage-allowance.js";
-
-export type WebResearchErrorCode =
-  | "allowance_exhausted"
-  | "credits_exhausted"
-  | "billing_unavailable"
-  | "rate_limited"
-  | "provider_unconfigured"
-  | "provider_rate_limited"
-  | "provider_error";
-
-export class WebResearchError extends Error {
-  constructor(
-    public readonly code: WebResearchErrorCode,
-    public readonly status: 402 | 429 | 502 | 503,
-    message: string,
-  ) {
-    super(message);
-    this.name = "WebResearchError";
-  }
-}
+import { WebResearchError } from "./web-research-error.js";
 
 interface AttributedCall {
   gatewayId: string;
@@ -48,6 +29,7 @@ export type WebResearchExtractInput = AttributedCall & TavilyExtractInput;
 interface WebResearchServiceOptions {
   usageStore: ModelBrokerUsageStore;
   resolveGrant: LiveOwnerGrantResolver;
+  rails: ModelBrokerRailRegistry;
   braveSearch?: (input: BraveSearchInput) => Promise<BraveSearchOutput>;
   tavilySearch?: (input: TavilySearchInput) => Promise<TavilySearchOutput>;
   tavilyExtract?: (input: TavilyExtractInput) => Promise<TavilyExtractOutput>;
@@ -68,103 +50,6 @@ const EMPTY_USAGE = {
   cacheCreationInputTokens: 0,
   cacheReadInputTokens: 0,
 };
-
-interface AllowanceInput {
-  usageStore: ModelBrokerUsageStore;
-  grant: OwnerModelBrokerGrant;
-  gatewayId: string;
-  ownerUid: string;
-  now: number;
-  onSignupOfferBudgetInterruption?: WebResearchServiceOptions["onSignupOfferBudgetInterruption"];
-  onError?: (error: unknown) => void;
-}
-
-interface AllowanceResult {
-  debitsCreditBalance: boolean;
-  countsTowardSpendWindow: boolean;
-  signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
-}
-
-async function requireCreditBalance(input: AllowanceInput): Promise<AllowanceResult> {
-  if (!input.usageStore.readCreditBalance) {
-    throw new WebResearchError("billing_unavailable", 503, "Platform Credit gate unavailable");
-  }
-  const balance = await input.usageStore.readCreditBalance(input.ownerUid);
-  if (balance <= 0) {
-    throw new WebResearchError("credits_exhausted", 402, "Platform Credits exhausted");
-  }
-  return { debitsCreditBalance: true, countsTowardSpendWindow: false };
-}
-
-async function reportSignupOfferInterruption(
-  input: AllowanceInput,
-  reason: "waiting_for_unlock" | "hard_cap_exhausted",
-): Promise<void> {
-  try {
-    await input.onSignupOfferBudgetInterruption?.({ uid: input.ownerUid, reason });
-  } catch (error) {
-    input.onError?.(error);
-  }
-}
-
-async function requireSignupOfferAllowance(input: AllowanceInput): Promise<AllowanceResult> {
-  const budget = input.grant.signupOfferBudget;
-  if (!budget || !input.usageStore.readSignupOfferBudget) {
-    throw new WebResearchError("billing_unavailable", 503, "Signup Offer budget gate unavailable");
-  }
-  const ledger = await input.usageStore.readSignupOfferBudget(budget);
-  if (!ledger) {
-    throw new WebResearchError("billing_unavailable", 503, "Signup Offer budget ledger unavailable");
-  }
-  if (ledger.chargeUsd < budget.unlockedCapUsd) {
-    return {
-      debitsCreditBalance: false,
-      countsTowardSpendWindow: false,
-      signupOfferBudget: budget,
-    };
-  }
-  if (input.usageStore.readCreditBalance) {
-    const balance = await input.usageStore.readCreditBalance(input.ownerUid);
-    if (balance > 0) {
-      return { debitsCreditBalance: true, countsTowardSpendWindow: false };
-    }
-  }
-  const reason = budget.nextUnlockAtMs !== null && ledger.chargeUsd < budget.hardCapUsd
-    ? "waiting_for_unlock"
-    : "hard_cap_exhausted";
-  await reportSignupOfferInterruption(input, reason);
-  const message = reason === "waiting_for_unlock"
-    ? "Signup Offer capacity unlocks again soon"
-    : "Signup Offer model allowance is complete";
-  throw new WebResearchError("allowance_exhausted", 402, message);
-}
-
-async function requireSubscriptionAllowance(input: AllowanceInput): Promise<AllowanceResult> {
-  const state = await readPlatformSpendState({
-    usageStore: input.usageStore,
-    gatewayId: input.gatewayId,
-    ownerUid: input.ownerUid,
-    now: input.now,
-    spendWindowUsd: input.grant.limits.spendWindowUsd,
-    spendWeekUsd: input.grant.limits.spendWeekUsd,
-  });
-  if (!state.available) {
-    throw new WebResearchError("billing_unavailable", 503, "Platform allowance gate unavailable");
-  }
-  if (state.exhausted) {
-    if (input.grant.policy.houseFallback === false) {
-      return requireCreditBalance(input);
-    }
-    throw new WebResearchError("allowance_exhausted", 429, "Platform allowance exhausted");
-  }
-  return { debitsCreditBalance: false, countsTowardSpendWindow: true };
-}
-
-async function requireAllowance(input: AllowanceInput): Promise<AllowanceResult> {
-  if (input.grant.rail === "prepaid_credits") return requireCreditBalance(input);
-  if (input.grant.rail === "signup_offer") return requireSignupOfferAllowance(input);
-  return requireSubscriptionAllowance(input);
-}
 
 async function requireRequestRate(input: {
   usageStore: ModelBrokerUsageStore;
@@ -218,7 +103,7 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
         ownerUid: input.ownerUid,
         now: at,
       });
-      const billing = await requireAllowance({
+      const billing = await options.rails.rail(grant.rail).allowance({
         usageStore: options.usageStore,
         grant,
         gatewayId: input.gatewayId,
@@ -250,11 +135,7 @@ export function createWebResearchService(options: WebResearchServiceOptions) {
     model: string;
     costUsd: number;
     at: number;
-    billing: {
-      debitsCreditBalance: boolean;
-      countsTowardSpendWindow: boolean;
-      signupOfferBudget?: NonNullable<OwnerModelBrokerGrant["signupOfferBudget"]>;
-    };
+    billing: RailAllowanceResult;
     metadata: Record<string, unknown>;
   }): Promise<void> {
     try {

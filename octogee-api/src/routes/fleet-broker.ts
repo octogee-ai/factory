@@ -133,14 +133,11 @@ import {
   type GatewayMutableConfig,
 } from "@octogee/core/gateway-live-release";
 import { createCachedOwnerModelBrokerGrantResolver } from "../lib/model-broker-limits.js";
+import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import { createFirestoreModelBrokerUsageStore } from "../lib/model-broker-usage.js";
 import { prepaidCreditMarkupMultiplierFromEnv, webMarkupMultiplierFromEnv } from "../lib/prepaid-credit-markup.js";
-import {
-  WebResearchError,
-  createWebResearchService,
-  type WebResearchExtractInput,
-  type WebResearchSearchInput,
-} from "../lib/web-research-service.js";
+import { createWebResearchService, type WebResearchExtractInput, type WebResearchSearchInput } from "../lib/web-research-service.js";
+import { WebResearchError } from "../lib/web-research-error.js";
 import { createBraveSearchClient, createTavilyClient } from "../lib/web-provider-clients.js";
 import { isPublicIp } from "../lib/link-unfurl.js";
 import { recordRevisionSystemConfigStatus } from "../lib/revision-system-config-status.js";
@@ -291,6 +288,7 @@ interface FleetBrokerRouteDeps {
   resolveChatIdentity?: ResolveChatIdentity;
   verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
   webResearch?: Pick<ReturnType<typeof createWebResearchService>, "search" | "extract">;
+  modelBrokerRails?: ModelBrokerRailRegistry;
   onSignupOfferBudgetInterruption?: (input: {
     uid: string;
     reason: "waiting_for_unlock" | "hard_cap_exhausted";
@@ -409,6 +407,7 @@ function positiveConfigNumber(raw: string | undefined, fallback: number, name: s
 
 function createDefaultWebResearch(
   db: Firestore,
+  rails: ModelBrokerRailRegistry,
   onSignupOfferBudgetInterruption?: FleetBrokerRouteDeps["onSignupOfferBudgetInterruption"],
 ) {
   const braveKey = process.env.BRAVE_API_KEY?.trim();
@@ -421,8 +420,10 @@ function createDefaultWebResearch(
     }),
     resolveGrant: createCachedOwnerModelBrokerGrantResolver({
       db,
+      rails,
       log: (message, fields) => logger.info(message, fields),
     }),
+    rails,
     braveSearch: brave?.search,
     tavilySearch: tavily?.search,
     tavilyExtract: tavily?.extract,
@@ -1944,6 +1945,7 @@ function resolveFleetBrokerRouteDeps(
     verifyOwnerWorkspaceTurn: ownerWorkspaceTurnVerifier(opts),
     webResearch: opts.webResearch ?? createDefaultWebResearch(
       opts.db,
+      opts.modelBrokerRails ?? operatorRailRegistry(),
       opts.onSignupOfferBudgetInterruption,
     ),
     now: opts.now ?? Date.now,

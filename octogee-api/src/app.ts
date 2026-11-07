@@ -45,6 +45,7 @@ import { createVoiceConversationRoutes } from "./routes/voice-conversation.js";
 import { createToolConversationRoutes, createWorkspaceNativeAccessRoutes } from "./routes/workspace-native-access.js";
 import { createAgentImportBrokerRoutes } from "./routes/agent-import-broker.js";
 import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
+import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
 import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
 import { FeaturePolicy } from "./lib/feature-policy.js";
@@ -199,6 +200,7 @@ export interface ProductExtension {
   clusterRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   apiRoutes(deps: ProductRouteDeps): ClusterRouteTable;
   internalRoutes(deps: ProductRouteDeps): ClusterRouteTable;
+  modelBrokerRails?: ModelBrokerRailRegistry;
 }
 
 export interface PlatformAppOptions {
@@ -550,6 +552,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     observability: product.observability,
   };
   const featurePolicy = product.featurePolicy;
+  const modelBrokerRails = opts.product?.modelBrokerRails ?? operatorRailRegistry();
   app.locals.postHogShutdown = product.postHog.shutdown;
   const tenantBindingMetrics = createTenantBindingMetrics(metricsRegistry);
   const tenantBindingReviewer = opts.tenantBindingReviewer ?? createGatewayIdentityReviewer({
@@ -717,6 +720,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // and assigned-scoped mutation endpoints for its own KSA-bound identity.
   app.use("/internal/fleet", createFleetBrokerRoutes({
     db,
+    modelBrokerRails,
     onSignupOfferBudgetInterruption: ({ uid, reason }) => recordProductEvent(product, uid, {
       name: "model_budget_interrupted",
       properties: { reason },
@@ -730,7 +734,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach
   // Secret Manager — BYOSUB OAuth (scoped to the caller's user integration) and
   // byok-* API keys (roster-scoped to the gateway's assigned slugs).
-  app.use("/internal/byok", createByokBrokerRoutes({ db }));
+  app.use("/internal/byok", createByokBrokerRoutes({ db, rails: modelBrokerRails }));
   // octogee-api-only: agent project CRUD — roster-scoped like /internal/byok;
   // the owner + workspace derive from the pod's assignment, and plan
   // entitlements are enforced by the same service the UI create uses.
@@ -860,6 +864,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     "/internal/model-keys",
     createModelKeyIssuerRoutes({
       db,
+      rails: modelBrokerRails,
       store: opts.modelKeyTokenStore,
       bearerToken:
         opts.modelKeyIssuerBearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN,

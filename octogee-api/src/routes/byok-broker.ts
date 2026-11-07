@@ -38,6 +38,7 @@ import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
 } from "../lib/model-broker-limits.js";
+import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import {
   agentModelTokenIssueKey,
   createAgentModelTokenIssueCoordinator,
@@ -748,6 +749,7 @@ function registerAgentModelTokenRoute(
   router: Router,
   db: Firestore,
   now: () => number,
+  rails: ModelBrokerRailRegistry,
 ): void {
   const coordinator = createAgentModelTokenIssueCoordinator({ now });
   const tokenStore = createFirestoreModelBrokerTokenStore(db);
@@ -826,6 +828,7 @@ function registerAgentModelTokenRoute(
                 ownerUid: assigned.uid,
                 now: now(),
                 defaults: envDefaultModelBrokerLimits(),
+                rails,
               });
         const issued = await tokenStore.issueToken({
           gatewayId: bound.gatewayId,
@@ -876,6 +879,7 @@ export function createByokBrokerRoutes(opts: {
   readSecret?: (name: string, version?: string) => Promise<string>;
   writeByosubCredential?: (name: string, value: string) => Promise<SubscriptionSecretVersionResult>;
   verifyOwnerWorkspaceTurn?: OwnerWorkspaceTurnVerifier;
+  rails?: ModelBrokerRailRegistry;
 }): Router {
   const router = Router();
   const { db } = opts;
@@ -884,7 +888,7 @@ export function createByokBrokerRoutes(opts: {
   const writeByosubCredential = opts.writeByosubCredential ?? addSecretVersionKeepingLatest;
 
   registerCredentialMaterializationRoutes(router, db, readCredentialSecret, writeByosubCredential);
-  registerAgentModelTokenRoute(router, db, now);
+  registerAgentModelTokenRoute(router, db, now, opts.rails ?? operatorRailRegistry());
   registerPrivateBrokerInspection(router, db, now);
 
   registerAgentUsageStatusRoute(

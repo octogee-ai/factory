@@ -36,7 +36,16 @@ import {
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
-import { meterExhausted, readPlatformSpendState } from "./lib/platform-usage-allowance.js";
+import { meterExhausted } from "./lib/platform-usage-allowance.js";
+import {
+  spendWindowGate,
+  type DegradeOutcome,
+  type GateDecision,
+  type GateDecisionAllowed,
+  type GateDecisionDenied,
+  type RailGateContext,
+} from "./lib/model-broker-gate.js";
+import { operatorRailRegistry, type ModelBrokerRail, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
 import type { ModelBrokerOwnerAccessResolver } from "./lib/model-broker-owner-access.js";
 import { modelCatalogForProvider } from "@octogee/shared/types/model-catalog";
 import {
@@ -85,6 +94,13 @@ export interface LlmBrokerAppDeps {
     uid: string;
     reason: "waiting_for_unlock" | "hard_cap_exhausted";
   }) => void | Promise<void>;
+  rails?: ModelBrokerRailRegistry;
+}
+
+const OPERATOR_RAILS = operatorRailRegistry();
+
+function railsFor(deps: LlmBrokerAppDeps): ModelBrokerRailRegistry {
+  return deps.rails ?? OPERATOR_RAILS;
 }
 
 const DEFAULT_ANTHROPIC_UPSTREAM_BASE_URL = "https://api.anthropic.com";
@@ -628,32 +644,6 @@ function finishSseUsageCollection(
   }
 }
 
-interface GateDecisionAllowed {
-  allowed: true;
-  // Serve the house model on the house key, uncounted. True when the builder is
-  // over their weekly ledger or burst window, or on the free tier. Spend
-  // exhaustion degrades — it never rejects — so the builder keeps working on
-  // the house model.
-  degrade: boolean;
-  degradeReason: "free" | "budget" | "credits" | null;
-  windowCostUsd: number | null;
-  weekCostUsd: number | null;
-  creditBalanceUsd: number | null;
-  offerFunded: boolean;
-  offerChargeUsd: number | null;
-}
-
-interface GateDecisionDenied {
-  allowed: false;
-  status: 402 | 429 | 503;
-  error: string;
-  retryAfterSeconds?: number;
-  signupOfferReason?: "waiting_for_unlock" | "hard_cap_exhausted";
-  offerChargeUsd?: number;
-}
-
-type GateDecision = GateDecisionAllowed | GateDecisionDenied;
-
 interface MeteringContext {
   req: Request;
   url: URL;
@@ -771,35 +761,11 @@ interface PreflightGateInput {
   url: URL;
   record: ModelBrokerTokenRecord;
   grant: OwnerModelBrokerGrant;
+  rail: ModelBrokerRail;
   source: ModelBrokerProviderKeySource;
   usageStore?: ModelBrokerUsageStore;
   now: () => number;
   onMeteringError: (err: unknown) => void;
-}
-
-async function spendWindowGate(
-  input: PreflightGateInput,
-  spendWindowUsd: number | null,
-  spendWeekUsd: number | null,
-): Promise<
-  { degrade: boolean; windowCostUsd: number | null; weekCostUsd: number | null } | GateDecisionDenied
-> {
-  const state = await readPlatformSpendState({
-    usageStore: input.usageStore,
-    gatewayId: input.record.gatewayId,
-    ownerUid: input.record.ownerUid,
-    now: input.now(),
-    spendWindowUsd,
-    spendWeekUsd,
-  });
-  if (!state.available) {
-    return { allowed: false, status: 503, error: "model broker spend gate unavailable" };
-  }
-  return {
-    degrade: state.exhausted,
-    windowCostUsd: state.windowChargeUsd,
-    weekCostUsd: state.weekChargeUsd,
-  };
 }
 
 async function rateWindowDenial(
@@ -865,7 +831,7 @@ async function grantForRecord(
     return {
       limits: record.limits,
       policy: record.policy,
-      rail: "subscription",
+      rail: railsFor(deps).defaultRailId,
       signupOfferBudget: null,
     };
   }
@@ -887,19 +853,6 @@ const GATE_PASS: GateDecisionAllowed = {
   offerChargeUsd: null,
 };
 
-type DegradeOutcome =
-  | { kind: "denied"; decision: GateDecision }
-  | {
-      kind: "state";
-      degrade: boolean;
-      degradeReason: GateDecisionAllowed["degradeReason"];
-      windowCostUsd: number | null;
-      weekCostUsd: number | null;
-      creditBalanceUsd: number | null;
-      offerFunded?: boolean;
-      offerChargeUsd?: number | null;
-    };
-
 // Free tier rides the house model against the same weekly-ledger + burst
 // machinery as paid plans — but it is already on the floor model, so an
 // exhausted allowance locks until the meter refills instead of degrading.
@@ -918,7 +871,7 @@ async function freeTierGateOutcome(
       creditBalanceUsd: null,
     };
   }
-  const spend = await spendWindowGate(input, spendWindowUsd, spendWeekUsd);
+  const spend = await spendWindowGate(railGateContext(input), spendWindowUsd, spendWeekUsd);
   if ("allowed" in spend) return { kind: "denied", decision: spend };
   if (spend.degrade) {
     const now = input.now();
@@ -949,137 +902,32 @@ async function freeTierGateOutcome(
   };
 }
 
-function deniedNoTokenPath(): DegradeOutcome {
+function railGateContext(input: PreflightGateInput): RailGateContext {
   return {
-    kind: "denied",
-    decision: {
-      allowed: false,
-      status: 402,
-      error:
-        "no active token path — upgrade to a paid Personal plan, add prepaid credits, or bring your own subscription",
-    },
-  };
-}
-
-async function signupOfferGateOutcome(input: PreflightGateInput): Promise<DegradeOutcome> {
-  const budget = input.grant.signupOfferBudget;
-  if (!budget || !input.usageStore?.readSignupOfferBudget) {
-    return {
-      kind: "denied",
-      decision: { allowed: false, status: 503, error: "signup offer budget gate unavailable" },
-    };
-  }
-  const ledger = await input.usageStore.readSignupOfferBudget(budget);
-  if (!ledger) {
-    throw new Error("signup offer budget ledger missing or does not match the active receipt");
-  }
-  if (ledger.chargeUsd < budget.unlockedCapUsd) {
-    return {
-      kind: "state",
-      degrade: false,
-      degradeReason: null,
-      windowCostUsd: null,
-      weekCostUsd: null,
-      creditBalanceUsd: null,
-      offerFunded: true,
-      offerChargeUsd: ledger.chargeUsd,
-    };
-  }
-  if (input.record.ownerUid && input.usageStore.readCreditBalance) {
-    const creditBalanceUsd = await input.usageStore.readCreditBalance(input.record.ownerUid);
-    if (creditBalanceUsd > 0) {
-      return {
-        kind: "state",
-        degrade: false,
-        degradeReason: null,
-        windowCostUsd: null,
-        weekCostUsd: null,
-        creditBalanceUsd,
-        offerFunded: false,
-        offerChargeUsd: ledger.chargeUsd,
-      };
-    }
-  }
-  const waiting = budget.nextUnlockAtMs !== null && ledger.chargeUsd < budget.hardCapUsd;
-  return {
-    kind: "denied",
-    decision: {
-      allowed: false,
-      status: 402,
-      error: waiting
-        ? "Signup Offer capacity unlocks again soon — add prepaid credits, upgrade Personal, or connect your own subscription to continue now"
-        : "Signup Offer model allowance is complete — add prepaid credits, upgrade Personal, or connect your own subscription to continue",
-      ...(waiting
-        ? { retryAfterSeconds: Math.max(1, Math.ceil((budget.nextUnlockAtMs! - input.now()) / 1000)) }
-        : {}),
-      signupOfferReason: waiting ? "waiting_for_unlock" : "hard_cap_exhausted",
-      offerChargeUsd: ledger.chargeUsd,
-    },
-  };
-}
-
-async function purchasedCreditOutcome(input: PreflightGateInput): Promise<DegradeOutcome> {
-  if (!input.usageStore?.readCreditBalance) {
-    return {
-      kind: "denied",
-      decision: { allowed: false, status: 503, error: "model broker credit gate unavailable" },
-    };
-  }
-  const creditBalanceUsd = await input.usageStore.readCreditBalance(
-    input.record.ownerUid as string,
-  );
-  if (creditBalanceUsd <= 0) return deniedNoTokenPath();
-  return {
-    kind: "state",
-    degrade: false,
-    degradeReason: null,
-    windowCostUsd: null,
-    weekCostUsd: null,
-    creditBalanceUsd,
+    grant: input.grant,
+    gatewayId: input.record.gatewayId,
+    ownerUid: input.record.ownerUid ?? null,
+    usageStore: input.usageStore,
+    now: input.now,
   };
 }
 
 async function degradeStateForGrant(
   input: PreflightGateInput,
-  prepaid: boolean,
   spendWindowUsd: number | null,
   spendWeekUsd: number | null,
 ): Promise<DegradeOutcome> {
-  if (input.grant.rail === "signup_offer") return signupOfferGateOutcome(input);
+  const ctx = railGateContext(input);
+  const railOutcome = await input.rail.gate(ctx, { spendWindowUsd, spendWeekUsd });
+  if (railOutcome) return railOutcome;
   if (input.grant.policy.freeTier) {
     return freeTierGateOutcome(input, spendWindowUsd, spendWeekUsd);
   }
-  if (prepaid) {
-    if (!input.usageStore?.readCreditBalance) {
-      return {
-        kind: "denied",
-        decision: { allowed: false, status: 503, error: "model broker credit gate unavailable" },
-      };
-    }
-    const creditBalanceUsd = await input.usageStore.readCreditBalance(
-      input.record.ownerUid as string,
-    );
-    const dry = creditBalanceUsd <= 0;
-    // Builders paying for infrastructure have no house fallback: a dry balance
-    // (and no attached paid Personal plan or BYOSUB) is a hard deny, not a
-    // degrade — pricing v3's "paying customers pay for tokens" rule.
-    if (dry && input.grant.policy.houseFallback === false) {
-      return deniedNoTokenPath();
-    }
-    return {
-      kind: "state",
-      degrade: dry,
-      degradeReason: dry ? "credits" : null,
-      windowCostUsd: null,
-      weekCostUsd: null,
-      creditBalanceUsd,
-    };
-  }
   if (spendWindowUsd !== null || spendWeekUsd !== null) {
-    const spend = await spendWindowGate(input, spendWindowUsd, spendWeekUsd);
+    const spend = await spendWindowGate(ctx, spendWindowUsd, spendWeekUsd);
     if ("allowed" in spend) return { kind: "denied", decision: spend };
     if (spend.degrade && input.grant.policy.houseFallback === false) {
-      return purchasedCreditOutcome(input);
+      return input.rail.budgetExhausted(ctx);
     }
     return {
       kind: "state",
@@ -1107,9 +955,7 @@ function requiresPreflightGate(input: PreflightGateInput): boolean {
   const spendWindowUsd = grant.limits.spendWindowUsd;
   const spendWeekUsd = grant.limits.spendWeekUsd;
   const requestsPerMinute = grant.limits.requestsPerMinute;
-  const prepaid = grant.rail === "prepaid_credits" && Boolean(input.record.ownerUid);
-  const signupOffer = grant.rail === "signup_offer" && Boolean(input.record.ownerUid);
-  return prepaid || signupOffer || grant.policy.freeTier ||
+  return input.rail.requiresGate(grant, input.record.ownerUid ?? null) || grant.policy.freeTier ||
     spendWindowUsd !== null || spendWeekUsd !== null || requestsPerMinute !== null;
 }
 
@@ -1119,9 +965,8 @@ async function preflightGate(input: PreflightGateInput): Promise<GateDecision> {
   const spendWindowUsd = grant.limits.spendWindowUsd;
   const spendWeekUsd = grant.limits.spendWeekUsd;
   const requestsPerMinute = grant.limits.requestsPerMinute;
-  const prepaid = grant.rail === "prepaid_credits" && Boolean(input.record.ownerUid);
   try {
-    const outcome = await degradeStateForGrant(input, prepaid, spendWindowUsd, spendWeekUsd);
+    const outcome = await degradeStateForGrant(input, spendWindowUsd, spendWeekUsd);
     if (outcome.kind === "denied") return outcome.decision;
     if (requestsPerMinute !== null) {
       const denial = await rateWindowDenial(input, requestsPerMinute);
@@ -1258,7 +1103,8 @@ async function logAndForwardAllowed(args: {
   resolveFreeTierModel: LlmBrokerAppDeps["resolveFreeTierModel"];
   requestModel: string | null;
   logGate: GateLogger;
-  rail: OwnerModelBrokerGrant["rail"];
+  rail: ModelBrokerRail;
+  grant: OwnerModelBrokerGrant;
   signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
   usageStore?: ModelBrokerUsageStore;
   upstreamHeaderTimeoutMs: number;
@@ -1448,7 +1294,8 @@ async function forwardAllowed(args: {
   upstreamBaseUrl: string;
   vertex?: VertexBrokerConfig;
   houseModel: string;
-  rail: OwnerModelBrokerGrant["rail"];
+  rail: ModelBrokerRail;
+  grant: OwnerModelBrokerGrant;
   signupOfferBudget: OwnerModelBrokerGrant["signupOfferBudget"];
   usageStore?: ModelBrokerUsageStore;
   upstreamHeaderTimeoutMs: number;
@@ -1457,8 +1304,7 @@ async function forwardAllowed(args: {
   log?: (msg: string, fields?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { req, res, url, record, providerKey, gate } = args;
-  const prepaid = args.rail === "prepaid_credits" && Boolean(record.ownerUid);
-  const usingCredits = prepaid || gate.creditBalanceUsd !== null;
+  const usingCredits = args.rail.usingCredits(args.grant, gate, record.ownerUid ?? null);
   const rewrittenBody = rewriteRequestBody({
     body: req.body,
     degradeModel: degradeModelForRequest(gate, url, args.houseModel),
@@ -1656,6 +1502,7 @@ async function resolveGrantForBrokerRequest(
 
 interface BrokerRequestHandlerOptions {
   deps: LlmBrokerAppDeps;
+  rails: ModelBrokerRailRegistry;
   fetchImpl: typeof fetch;
   upstreamBaseUrls: Record<ModelBrokerProvider, string>;
   houseModels: Record<ModelBrokerProvider, string>;
@@ -1669,6 +1516,7 @@ interface ResolvedBrokerRequest {
   requestModel: string | null;
   providerKey: ModelBrokerProviderKey;
   grant: OwnerModelBrokerGrant;
+  rail: ModelBrokerRail;
 }
 
 async function authorizeBrokerCredential(
@@ -1762,7 +1610,16 @@ async function resolveBrokerRequest(
     return null;
   }
   const grant = await resolveGrantForBrokerRequest(deps, record, now(), res);
-  return grant ? { url, record, requestModel, providerKey, grant } : null;
+  if (!grant) return null;
+  let rail: ModelBrokerRail;
+  try {
+    rail = options.rails.rail(grant.rail);
+  } catch (error) {
+    reportBrokerResolutionError(deps, error);
+    res.status(503).json({ error: "model broker rail unavailable" });
+    return null;
+  }
+  return { url, record, requestModel, providerKey, grant, rail };
 }
 
 function brokerGateLogger(
@@ -1784,14 +1641,7 @@ function brokerGateLogger(
       requestsPerMinute: grant.limits.requestsPerMinute,
       freeTier: grant.policy.freeTier,
       rail: grant.rail,
-      offerId: grant.signupOfferBudget?.offerId,
-      offerVersion: grant.signupOfferBudget?.offerVersion,
-      receiptConfigHash: grant.signupOfferBudget?.receiptConfigHash,
-      budgetSchemaVersion: grant.signupOfferBudget?.budgetSchemaVersion,
-      offerDayIndex: grant.signupOfferBudget?.offerDayIndex,
-      unlockedCapUsd: grant.signupOfferBudget?.unlockedCapUsd,
-      hardCapUsd: grant.signupOfferBudget?.hardCapUsd,
-      nextUnlockAtMs: grant.signupOfferBudget?.nextUnlockAtMs,
+      ...context.rail.logFields(grant),
       requestModel,
       ...extra,
     });
@@ -1827,6 +1677,7 @@ function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
         url,
         record,
         grant,
+        rail: context.rail,
         source: providerKey.source,
         usageStore: deps.usageStore,
         now,
@@ -1851,7 +1702,8 @@ function createBrokerRequestHandler(options: BrokerRequestHandlerOptions) {
         resolveFreeTierModel: deps.resolveFreeTierModel,
         requestModel,
         logGate,
-        rail: grant.rail,
+        rail: context.rail,
+        grant,
         signupOfferBudget: grant.signupOfferBudget,
         usageStore: deps.usageStore,
         upstreamHeaderTimeoutMs,
@@ -1935,6 +1787,7 @@ export function createLlmBrokerApp(deps: LlmBrokerAppDeps): express.Express {
     express.raw({ type: "*/*", limit: deps.bodyLimit ?? DEFAULT_BODY_LIMIT }),
     createBrokerRequestHandler({
       deps,
+      rails: railsFor(deps),
       fetchImpl,
       upstreamBaseUrls,
       houseModels,

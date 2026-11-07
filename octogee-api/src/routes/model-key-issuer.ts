@@ -10,6 +10,7 @@ import {
   envDefaultModelBrokerLimits,
   resolveOwnerModelBrokerGrant,
 } from "../lib/model-broker-limits.js";
+import { operatorRailRegistry, type ModelBrokerRailRegistry } from "../lib/model-broker-rails.js";
 import type { Firestore } from "firebase-admin/firestore";
 import {
   GATEWAY_ID_REQUIREMENT,
@@ -22,6 +23,7 @@ export interface ModelKeyIssuerRouteDeps {
   bearerToken?: string;
   ttlSeconds?: number | null;
   defaultLimits?: Partial<ModelBrokerTokenLimits> | null;
+  rails?: ModelBrokerRailRegistry;
   now?: () => number;
   randomBytes?: (size: number) => Buffer;
 }
@@ -111,6 +113,7 @@ function parseOptionalTtlSeconds(raw: string | undefined): number | null {
 }
 
 export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): Router {
+  const rails = deps.rails ?? operatorRailRegistry();
   const router = Router();
   let store = deps.store;
   const bearerToken = deps.bearerToken ?? process.env.GATEWAY_MODEL_KEY_ISSUER_BEARER_TOKEN;
@@ -148,6 +151,7 @@ export function createModelKeyIssuerRoutes(deps: ModelKeyIssuerRouteDeps = {}): 
         now: issuedAt,
         defaults:
           deps.defaultLimits === undefined ? envDefaultModelBrokerLimits() : deps.defaultLimits,
+        rails,
       });
       const issued = await activeStore.issueToken({
         ...parsed,
