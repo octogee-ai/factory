@@ -343,6 +343,8 @@ spec:
               value: {{ .Values.env.apiPublicUrl | quote }}
             - name: APP_URL
               value: {{ .Values.gatewayEdge.env.APP_URL | default .Values.env.appUrl | default "https://app.octogee.com" | quote }}
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "gatewayEdge.publicAppOrigins is required" .Values.gatewayEdge.publicAppOrigins) | quote }}
             - name: OPENCLAW_LOG_LEVEL
               value: {{ .Values.env.openclawLogLevel | default "info" | quote }}
             - name: FLEET_CONTROLLER_PORT

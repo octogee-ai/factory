@@ -1,8 +1,8 @@
 import cors from "cors";
-import { publicAppOrigins } from "@octogee/core/deployment-environment";
+import { publicAppOriginsFromEnv } from "@octogee/core/public-app-origins";
 import { isAllowedLocalhostOrigin } from "../lib/dev-origins.js";
 
-const ALLOWED_ORIGINS = new Set(publicAppOrigins());
+const ALLOWED_ORIGINS = new Set(publicAppOriginsFromEnv());
 
 function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.has(origin) || isAllowedLocalhostOrigin(origin);

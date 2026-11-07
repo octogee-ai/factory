@@ -9,6 +9,7 @@ export default defineConfig({
   resolve: { dedupe: ["firebase-admin", "@google-cloud/firestore"] },
   test: {
     env: { K8S_NAMESPACE: "octogee-test" },
+    setupFiles: ["./src/test-setup/public-app-origins.ts"],
     server: { deps: { inline: [/@octogee\/core/] } },
     include: ["src/__tests__/**/*.emulator.spec.ts", "integration-tests/**/*.emulator.spec.ts"],
     fileParallelism: false,

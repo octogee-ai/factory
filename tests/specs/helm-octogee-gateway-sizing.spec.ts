@@ -21,6 +21,7 @@ const REQUIRED_VALUES: Record<string, string> = {
   "gatewayEdge.image.repository": "registry.example/gateway-edge",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",
+  "gatewayEdge.publicAppOrigins[0]": "https://app-test.octogee.com",
 };
 
 function helmTemplate(setValues: Record<string, string> = {}): string {

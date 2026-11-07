@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
 
@@ -10,7 +13,10 @@ import {
   deploymentTargetForFirebaseProject,
   deploymentTargetSettings,
   deploymentTargetsForEnvironment,
-  publicAppOrigins,
+  DEPLOYMENT_TARGETS_ENV,
+  loadDeploymentTargetsDocument,
+  publicAppOriginsForTarget,
+  resetDeploymentTargetsForTests,
   validateDeploymentTargetsDocument,
 } from "./deployment-environment.js";
 
@@ -271,14 +277,53 @@ describe("deployment environment registry", () => {
     }
   });
 
-  it("publishes every browser origin used by CORS and redirects", () => {
-    const settings = deploymentEnvironmentSettings("test");
-    expect(publicAppOrigins()).toEqual(expect.arrayContaining([
-      settings.siteOrigin,
-      settings.appOrigin,
+  it("derives one target's browser origins for its values file", () => {
+    const test = deploymentEnvironmentSettings("test");
+    expect(publicAppOriginsForTarget(test)).toEqual([
+      test.siteOrigin,
+      test.appOrigin,
+      "https://app-octogee-test.web.app",
       "https://octogee-test.firebaseapp.com",
       "https://app-octogee-test.firebaseapp.com",
-    ]));
-    expect(publicAppOrigins()).toContain("https://app-octogee-test.web.app");
+    ]);
+    const prod = deploymentEnvironmentSettings("prod");
+    expect(publicAppOriginsForTarget(prod)).toContain("https://www.octogee.com");
+    expect(publicAppOriginsForTarget(prod)).not.toContain(test.appOrigin);
+  });
+});
+
+describe("deployment targets manifest location", () => {
+  const original = process.env[DEPLOYMENT_TARGETS_ENV];
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[DEPLOYMENT_TARGETS_ENV];
+    else process.env[DEPLOYMENT_TARGETS_ENV] = original;
+    resetDeploymentTargetsForTests();
+  });
+
+  function manifestWith(mutate: (document: typeof deploymentTargetsDocument) => void): string {
+    const document = structuredClone(deploymentTargetsDocument);
+    mutate(document);
+    const path = join(mkdtempSync(join(tmpdir(), "deployment-targets-")), "deployment-targets.json");
+    writeFileSync(path, JSON.stringify(document));
+    return path;
+  }
+
+  it("reads the manifest named by OCTOGEE_DEPLOYMENT_TARGETS instead of the bundled file", () => {
+    process.env[DEPLOYMENT_TARGETS_ENV] = manifestWith((document) => {
+      document.targets["test-central"].namespace = "octogee-elsewhere";
+    });
+    resetDeploymentTargetsForTests();
+    expect(deploymentEnvironmentSettings("test").namespace).toBe("octogee-elsewhere");
+    expect(deploymentEnvironmentForNamespace("octogee-test")).toBe("unknown");
+  });
+
+  it("fails loud when the named manifest is missing or invalid", () => {
+    expect(() => loadDeploymentTargetsDocument("/nonexistent/deployment-targets.json"))
+      .toThrow(/not readable at \/nonexistent\/deployment-targets\.json \(set OCTOGEE_DEPLOYMENT_TARGETS/);
+    const invalid = manifestWith((document) => {
+      document.activeTargets.test = "missing-target";
+    });
+    expect(() => loadDeploymentTargetsDocument(invalid)).toThrow(/Active deployment target does not exist/);
   });
 });

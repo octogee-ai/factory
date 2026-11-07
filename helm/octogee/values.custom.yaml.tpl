@@ -9,6 +9,12 @@
 global:
   deploymentTargetId: "__TARGET_ID__"
   deploymentProjectId: "__FIREBASE_PROJECT__"
+  publicAppOrigins:
+    - https://octogee-test.web.app
+    - https://app-test.octogee.com
+    - https://app-octogee-test.web.app
+    - https://octogee-test.firebaseapp.com
+    - https://app-octogee-test.firebaseapp.com
 
 npmCacheProxy:
   enabled: false

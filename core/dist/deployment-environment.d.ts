@@ -1,3 +1,4 @@
+export declare const DEPLOYMENT_TARGETS_ENV = "OCTOGEE_DEPLOYMENT_TARGETS";
 export type DeploymentEnvironment = "prod" | "test";
 export type ResolvedDeploymentEnvironment = DeploymentEnvironment | "unknown";
 export type DeploymentTargetLifecycle = "active" | "candidate" | "frozen";
@@ -117,6 +118,8 @@ export interface DeploymentEnvironmentSettings {
     pinEnvironment: string;
 }
 export declare function validateDeploymentTargetsDocument(document: unknown): asserts document is DeploymentTargetsDocument;
+export declare function loadDeploymentTargetsDocument(path: string): DeploymentTargetsDocument;
+export declare function resetDeploymentTargetsForTests(): void;
 export declare function deploymentEnvironmentSettings(environment: DeploymentEnvironment): DeploymentEnvironmentSettings;
 export declare function deploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings;
 export declare function deploymentSettingsForRuntime(input: {
@@ -127,6 +130,5 @@ export declare function deploymentTargetForFirebaseProject(projectId: string): D
 export declare function deploymentTargetsForEnvironment(environment: DeploymentEnvironment): DeploymentEnvironmentSettings[];
 export declare function deploymentEnvironmentForNamespace(namespace: string): ResolvedDeploymentEnvironment;
 export declare function deploymentEnvironmentForProject(projectId: string): ResolvedDeploymentEnvironment;
-export declare function publicAppOrigins(): string[];
-export declare function publicAppHosts(): string[];
+export declare function publicAppOriginsForTarget(settings: DeploymentEnvironmentSettings): string[];
 export {};

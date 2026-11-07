@@ -66,6 +66,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: DEPLOYMENT_TARGET_ID
               value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "global.publicAppOrigins is required" (.Values.global).publicAppOrigins) | quote }}
             # GATEWAY_CHART tells the controller where the standalone
             # per-instance chart is baked in the image (Dockerfile copies
             # helm/octogee-gateway/ → /charts/octogee-gateway). The

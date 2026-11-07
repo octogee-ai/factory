@@ -70,6 +70,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: DEPLOYMENT_TARGET_ID
               value: {{ required "global.deploymentTargetId is required" (.Values.global).deploymentTargetId | quote }}
+            - name: PUBLIC_APP_ORIGINS
+              value: {{ join "," (required "global.publicAppOrigins is required" (.Values.global).publicAppOrigins) | quote }}
             - name: GCLOUD_PROJECT
               value: {{ required "global.deploymentProjectId is required" (.Values.global).deploymentProjectId | quote }}
             - name: GCP_PROJECT_ID

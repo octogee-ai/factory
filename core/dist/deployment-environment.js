@@ -1,4 +1,6 @@
-import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+export const DEPLOYMENT_TARGETS_ENV = "OCTOGEE_DEPLOYMENT_TARGETS";
 const DEPLOYMENT_ENVIRONMENTS = [
     "prod",
     "test",
@@ -204,8 +206,28 @@ export function validateDeploymentTargetsDocument(document) {
         }
     }
 }
-validateDeploymentTargetsDocument(deploymentTargetsDocument);
-const MANIFEST = deploymentTargetsDocument;
+function deploymentTargetsPath(env) {
+    const configured = env[DEPLOYMENT_TARGETS_ENV]?.trim();
+    return configured ? configured : fileURLToPath(new URL("./deployment-targets.json", import.meta.url));
+}
+export function loadDeploymentTargetsDocument(path) {
+    let raw;
+    try {
+        raw = readFileSync(path, "utf8");
+    }
+    catch (error) {
+        throw new Error(`deployment targets manifest is not readable at ${path} (set ${DEPLOYMENT_TARGETS_ENV} to its location): ${error instanceof Error ? error.message : String(error)}`);
+    }
+    let document;
+    try {
+        document = JSON.parse(raw);
+    }
+    catch (error) {
+        throw new Error(`deployment targets manifest at ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    validateDeploymentTargetsDocument(document);
+    return document;
+}
 function settings(targetId, target) {
     return {
         name: target.environment,
@@ -256,19 +278,30 @@ function settings(targetId, target) {
         pinEnvironment: target.pinEnvironment,
     };
 }
-const TARGETS = Object.fromEntries(Object.entries(MANIFEST.targets).map(([targetId, target]) => [
-    targetId,
-    settings(targetId, target),
-]));
-const ENVIRONMENTS = Object.fromEntries(DEPLOYMENT_ENVIRONMENTS.map((environment) => [
-    environment,
-    TARGETS[MANIFEST.activeTargets[environment]],
-]));
+function buildRegistry(manifest) {
+    const targets = Object.fromEntries(Object.entries(manifest.targets).map(([targetId, target]) => [
+        targetId,
+        settings(targetId, target),
+    ]));
+    const environments = Object.fromEntries(DEPLOYMENT_ENVIRONMENTS.map((environment) => [
+        environment,
+        targets[manifest.activeTargets[environment]],
+    ]));
+    return { targets, environments };
+}
+let registry;
+function loadRegistry() {
+    registry ??= buildRegistry(loadDeploymentTargetsDocument(deploymentTargetsPath(process.env)));
+    return registry;
+}
+export function resetDeploymentTargetsForTests() {
+    registry = undefined;
+}
 export function deploymentEnvironmentSettings(environment) {
-    return ENVIRONMENTS[environment];
+    return loadRegistry().environments[environment];
 }
 export function deploymentTargetSettings(targetId) {
-    const target = TARGETS[targetId];
+    const target = loadRegistry().targets[targetId];
     if (!target) {
         throw new Error(`Unknown deployment target: ${targetId}`);
     }
@@ -289,24 +322,24 @@ export function deploymentSettingsForRuntime(input) {
     return deploymentEnvironmentSettings(environment);
 }
 export function deploymentTargetForFirebaseProject(projectId) {
-    const target = Object.values(TARGETS).find((candidate) => candidate.firebaseProjectId === projectId);
+    const target = Object.values(loadRegistry().targets).find((candidate) => candidate.firebaseProjectId === projectId);
     if (!target) {
         throw new Error(`Unknown Firebase deployment project: ${projectId}`);
     }
     return target;
 }
 export function deploymentTargetsForEnvironment(environment) {
-    return Object.values(TARGETS).filter((target) => target.name === environment);
+    return Object.values(loadRegistry().targets).filter((target) => target.name === environment);
 }
 export function deploymentEnvironmentForNamespace(namespace) {
-    const entry = Object.values(TARGETS).find((value) => value.namespace === namespace);
+    const entry = Object.values(loadRegistry().targets).find((value) => value.namespace === namespace);
     return entry?.name ?? "unknown";
 }
 export function deploymentEnvironmentForProject(projectId) {
-    const entry = Object.values(TARGETS).find((value) => value.firebaseProjectId === projectId);
+    const entry = Object.values(loadRegistry().targets).find((value) => value.firebaseProjectId === projectId);
     return entry?.name ?? "unknown";
 }
-function hostingOrigins(settings) {
+export function publicAppOriginsForTarget(settings) {
     const project = settings.firebaseProjectId;
     if (settings.name === "prod") {
         return [
@@ -326,10 +359,4 @@ function hostingOrigins(settings) {
         `https://${project}.firebaseapp.com`,
         `https://app-${project}.firebaseapp.com`,
     ];
-}
-export function publicAppOrigins() {
-    return [...new Set(DEPLOYMENT_ENVIRONMENTS.flatMap((environment) => hostingOrigins(ENVIRONMENTS[environment])))];
-}
-export function publicAppHosts() {
-    return publicAppOrigins().map((origin) => new URL(origin).hostname);
 }

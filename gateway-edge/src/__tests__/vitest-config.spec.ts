@@ -25,9 +25,11 @@ describe("gateway-edge vitest config", () => {
   it("loads the loopback listen shim in both run modes", () => {
     expect((config as VitestConfig).test?.setupFiles).toEqual([
       "./src/test-setup/loopback-listen.ts",
+      "./src/test-setup/public-app-origins.ts",
     ]);
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
       "./src/test-setup/loopback-listen.ts",
+      "./src/test-setup/public-app-origins.ts",
     ]);
   });
 

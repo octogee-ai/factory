@@ -1,4 +1,7 @@
-import deploymentTargetsDocument from "./deployment-targets.json" with { type: "json" };
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+export const DEPLOYMENT_TARGETS_ENV = "OCTOGEE_DEPLOYMENT_TARGETS";
 
 export type DeploymentEnvironment = "prod" | "test";
 export type ResolvedDeploymentEnvironment = DeploymentEnvironment | "unknown";
@@ -404,9 +407,31 @@ export function validateDeploymentTargetsDocument(document: unknown): asserts do
   }
 }
 
-validateDeploymentTargetsDocument(deploymentTargetsDocument);
+function deploymentTargetsPath(env: NodeJS.ProcessEnv): string {
+  const configured = env[DEPLOYMENT_TARGETS_ENV]?.trim();
+  return configured ? configured : fileURLToPath(new URL("./deployment-targets.json", import.meta.url));
+}
 
-const MANIFEST = deploymentTargetsDocument as DeploymentTargetsDocument;
+export function loadDeploymentTargetsDocument(path: string): DeploymentTargetsDocument {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    throw new Error(
+      `deployment targets manifest is not readable at ${path} (set ${DEPLOYMENT_TARGETS_ENV} to its location): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let document: unknown;
+  try {
+    document = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `deployment targets manifest at ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  validateDeploymentTargetsDocument(document);
+  return document;
+}
 
 function settings(
   targetId: string,
@@ -462,28 +487,46 @@ function settings(
   };
 }
 
-const TARGETS = Object.fromEntries(
-  Object.entries(MANIFEST.targets).map(([targetId, target]) => [
-    targetId,
-    settings(targetId, target),
-  ]),
-) as Record<string, DeploymentEnvironmentSettings>;
+interface DeploymentTargetRegistry {
+  targets: Record<string, DeploymentEnvironmentSettings>;
+  environments: Record<DeploymentEnvironment, DeploymentEnvironmentSettings>;
+}
 
-const ENVIRONMENTS = Object.fromEntries(
-  DEPLOYMENT_ENVIRONMENTS.map((environment) => [
-    environment,
-    TARGETS[MANIFEST.activeTargets[environment]],
-  ]),
-) as Record<DeploymentEnvironment, DeploymentEnvironmentSettings>;
+function buildRegistry(manifest: DeploymentTargetsDocument): DeploymentTargetRegistry {
+  const targets = Object.fromEntries(
+    Object.entries(manifest.targets).map(([targetId, target]) => [
+      targetId,
+      settings(targetId, target),
+    ]),
+  ) as Record<string, DeploymentEnvironmentSettings>;
+  const environments = Object.fromEntries(
+    DEPLOYMENT_ENVIRONMENTS.map((environment) => [
+      environment,
+      targets[manifest.activeTargets[environment]],
+    ]),
+  ) as Record<DeploymentEnvironment, DeploymentEnvironmentSettings>;
+  return { targets, environments };
+}
+
+let registry: DeploymentTargetRegistry | undefined;
+
+function loadRegistry(): DeploymentTargetRegistry {
+  registry ??= buildRegistry(loadDeploymentTargetsDocument(deploymentTargetsPath(process.env)));
+  return registry;
+}
+
+export function resetDeploymentTargetsForTests(): void {
+  registry = undefined;
+}
 
 export function deploymentEnvironmentSettings(
   environment: DeploymentEnvironment,
 ): DeploymentEnvironmentSettings {
-  return ENVIRONMENTS[environment];
+  return loadRegistry().environments[environment];
 }
 
 export function deploymentTargetSettings(targetId: string): DeploymentEnvironmentSettings {
-  const target = TARGETS[targetId];
+  const target = loadRegistry().targets[targetId];
   if (!target) {
     throw new Error(`Unknown deployment target: ${targetId}`);
   }
@@ -514,7 +557,7 @@ export function deploymentSettingsForRuntime(input: {
 export function deploymentTargetForFirebaseProject(
   projectId: string,
 ): DeploymentEnvironmentSettings {
-  const target = Object.values(TARGETS).find(
+  const target = Object.values(loadRegistry().targets).find(
     (candidate) => candidate.firebaseProjectId === projectId,
   );
   if (!target) {
@@ -526,26 +569,26 @@ export function deploymentTargetForFirebaseProject(
 export function deploymentTargetsForEnvironment(
   environment: DeploymentEnvironment,
 ): DeploymentEnvironmentSettings[] {
-  return Object.values(TARGETS).filter((target) => target.name === environment);
+  return Object.values(loadRegistry().targets).filter((target) => target.name === environment);
 }
 
 export function deploymentEnvironmentForNamespace(
   namespace: string,
 ): ResolvedDeploymentEnvironment {
-  const entry = Object.values(TARGETS).find((value) => value.namespace === namespace);
+  const entry = Object.values(loadRegistry().targets).find((value) => value.namespace === namespace);
   return entry?.name ?? "unknown";
 }
 
 export function deploymentEnvironmentForProject(
   projectId: string,
 ): ResolvedDeploymentEnvironment {
-  const entry = Object.values(TARGETS).find(
+  const entry = Object.values(loadRegistry().targets).find(
     (value) => value.firebaseProjectId === projectId,
   );
   return entry?.name ?? "unknown";
 }
 
-function hostingOrigins(settings: DeploymentEnvironmentSettings): string[] {
+export function publicAppOriginsForTarget(settings: DeploymentEnvironmentSettings): string[] {
   const project = settings.firebaseProjectId;
   if (settings.name === "prod") {
     return [
@@ -565,14 +608,4 @@ function hostingOrigins(settings: DeploymentEnvironmentSettings): string[] {
     `https://${project}.firebaseapp.com`,
     `https://app-${project}.firebaseapp.com`,
   ];
-}
-
-export function publicAppOrigins(): string[] {
-  return [...new Set(
-    DEPLOYMENT_ENVIRONMENTS.flatMap((environment) => hostingOrigins(ENVIRONMENTS[environment])),
-  )];
-}
-
-export function publicAppHosts(): string[] {
-  return publicAppOrigins().map((origin) => new URL(origin).hostname);
 }

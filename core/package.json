@@ -137,6 +137,10 @@
       "types": "./dist/deployment-environment.d.ts",
       "default": "./dist/deployment-environment.js"
     },
+    "./public-app-origins": {
+      "types": "./dist/public-app-origins.d.ts",
+      "default": "./dist/public-app-origins.js"
+    },
     "./customer-migration-v2": {
       "types": "./dist/customer-migration-v2.d.ts",
       "default": "./dist/customer-migration-v2.js"

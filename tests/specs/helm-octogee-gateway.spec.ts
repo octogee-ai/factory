@@ -14,7 +14,7 @@ beforeAll(() => {
     throw new Error(`octogee-gateway chart not found at ${CHART_PATH}`);
   }
 
-spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "imageTag=warmup", "--set", "image.repository=registry.example/octogee-gateway", "--set", "gatewayEdge.image.repository=registry.example/gateway-edge", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example"], { encoding: "utf-8" });
+spawnSync("helm", ["template", "warmup", CHART_PATH, "--set", "gatewayId=warmup", "--set", "imageTag=warmup", "--set", "image.repository=registry.example/octogee-gateway", "--set", "gatewayEdge.image.repository=registry.example/gateway-edge", "--set", "env.mmSiteUrl=https://example.com", "--set", "env.mmInternalUrl=http://example", "--set", "gatewayEdge.publicAppOrigins[0]=https://app-test.octogee.com"], { encoding: "utf-8" });
 }, 60_000);
 
 const REQUIRED_VALUES: Record<string, string> = {
@@ -24,6 +24,7 @@ const REQUIRED_VALUES: Record<string, string> = {
   "gatewayEdge.image.repository": "registry.example/gateway-edge",
   "env.mmSiteUrl": "https://mm-test.example.com",
   "env.mmInternalUrl": "http://mattermost.octogee-test.svc.cluster.local:8065",
+  "gatewayEdge.publicAppOrigins[0]": "https://app-test.octogee.com",
 };
 
 function helmTemplate(
@@ -1889,6 +1890,8 @@ describe("helm/octogee-gateway/ — platform secret render assertions", () => {
       "--set",
       "env.mmInternalUrl=http://x",
       "--set",
+      "gatewayEdge.publicAppOrigins[0]=https://app-test.octogee.com",
+      "--set",
       "env.mmSiteUrl=https://x",
       // Legacy footgun: the chart no longer owns or renders gatewayEdge.secrets.
       "--set-json",
@@ -1931,6 +1934,8 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
       "--set",
       "env.mmInternalUrl=http://x",
       "--set",
+      "gatewayEdge.publicAppOrigins[0]=https://app-test.octogee.com",
+      "--set",
       "env.mmSiteUrl=https://x",
       "--set-json",
       'gatewayEdge.env="not-an-object"',
@@ -1953,6 +1958,8 @@ describe("helm/octogee-gateway/ — values.schema.json", () => {
       "imageTag=abc",
       "--set",
       "env.mmInternalUrl=http://x",
+      "--set",
+      "gatewayEdge.publicAppOrigins[0]=https://app-test.octogee.com",
       "--set",
       "env.mmSiteUrl=https://x",
       "--set",
