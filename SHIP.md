@@ -2,7 +2,7 @@
 
 The shapes of the commands that move a build of Octogee from `main` to a running
 fleet. Every project id, host, identity, and environment name is a placeholder.
-The implementation lives in the platform repository under `scripts/ci/`; the
+The implementation lands in this repository with the platform, under `scripts/ci/`; the
 workflows live under `.github/workflows/`. Command behavior is the same hosted
 and local.
 
