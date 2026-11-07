@@ -2,7 +2,7 @@
 
 ## Monorepo commit this targets
 
-`.factory-source.json` pins the monorepo commit this tree was published from. Name the commit the change targets, or write "none" when it touches only the templates, the workflows, or another file the pin does not list.
+`.factory-source.json` pins the monorepo commit this tree was published from. Name the commit your change targets.
 
 ## Checklist
 
