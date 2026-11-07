@@ -172,8 +172,9 @@ selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-
 The operator selected and froze OpenClaw main
 `c4d8a5ae1715744c0e4f91bab96f5f7d8fd6a6c3` for independent qualification.
 The clean built overlay is
-`636cff64f7b83879d597c0936452745a3d900c34` on
-`ceckert/openclaw:codex/pg-resume-recovery-20261105`. Its hosted islands and
+`ef40315f468f28a4e4687567840c0cab9ee4b7f0` on
+`ceckert/openclaw:codex/model-auth-startup-recovery`, based on
+`636cff64f7b83879d597c0936452745a3d900c34`. Its hosted islands and
 PostgreSQL routine catalog are regenerated from that source. Complete Shared/Builder
 image qualification and final-head CI are separate merge gates recorded in the PR.
 
@@ -195,6 +196,22 @@ Android/iOS screenshots and release e2e, iOS screenshot evidence, PR failure
 report and release-child sealing. That older run does not qualify this tip.
 Local replays of selected failed cron, model, HTTP and UI cases pass; they do
 not establish that the original Linux/Bun failures are fixed.
+
+### Deferred agent model preparation
+
+A deferred project agent can finish database admission after its early model
+publication is withdrawn by a concurrent Gateway refresh. The agent remains
+connected while model-auth status and reply dispatch are unavailable. The
+native startup owner now checks its prepared model after migration and republishes
+only when missing, joining any affecting publication and honoring cancellation.
+The existing config, deletion, secret and database admission checks remain in
+force. Remove this overlay when the selected OpenClaw source contains an
+equivalent fix.
+
+A Gateway regression withdraws the early publication while migration is held.
+It fails on the previous source and passes with this change, including native
+model-auth status and chat admission. Focused startup tests cover an unrelated
+publication and shutdown during the replacement wait.
 
 ### Retained-home boot and prelaunch authoring
 
@@ -538,7 +555,7 @@ and checked against the complete local SHA-256:
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-70fb20b6.tgz` | `1793929509826051` | `70fb20b61e2aa22e793a442f46a545a6a914f1046fbd42c10d3669c9ce84a272` |
+| `openclaw-fork-48260b56.tgz` | `1794034998689346` | `48260b56f18ded246da428e408d3ba2857be6aae3c4509a53ea4396532441c85` |
 | `openclaw-mattermost-a0f6040d.tgz` | `1793929522271030` | `a0f6040dd17c8d0a1f99b51f202392d0448a0961604f4bf7b0dde2c1a8e40526` |
 
 Complete Shared/Builder image qualification through real writers and strict
