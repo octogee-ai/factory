@@ -1,15 +1,16 @@
-# The Octogee factory
+# Octogee Cloud
 
-Octogee is a personal AI partner platform. This repository is the factory that
-builds it: the files my agents load at the start of every session and the checks
-they run before a change reaches `main`. I am publishing it on launch day so
-that "read the factory" is something you can do, not a claim you take on trust.
+Octogee Cloud is the open platform under Octogee, the personal AI partner. It
+is the software factory that builds Octogee: the files my agents load at the
+start of every session, the checks they run before a change reaches `main`,
+and the commands that ship a build. You can read the factory yourself instead
+of taking my word for it.
 
-Published from the Octogee monorepo at `91b43c0405fb0a20351d6a1c79f55648eaa0c98a`. The pin in
+Published from the Octogee monorepo at `5fc418033c0527f625dedfcec9333120064758e2`. The pin in
 `.factory-source.json` carries that commit, its date, and the exported source
 paths.
 
-## What is here
+## What is here today
 
 - `AGENTS.md` is the contract every agent loads. It is the file that runs in the
   Octogee monorepo today, renamed from `CLAUDE.md`.
@@ -22,15 +23,16 @@ paths.
 - `SHIP.md` shows the shape of the four commands that move a build to TEST, to
   PROD, and to a single Builder gateway. Identities are placeholders.
 
-## What is not here yet
+## What lands next
 
-This is not the platform repository. The platform itself, the credential walls,
-the LLM broker, Cowboy (the fleet manager), Builder state on PostgreSQL, the
-CI/CD workflows, and the rest of the handbook follow in December under this
-same organization. Links that point past this folder point at that.
+The rest of the platform lands here as the split from the private product
+completes: the credential walls, the LLM broker, Cowboy (the fleet manager),
+Builder state on PostgreSQL, the CI/CD workflows, and the operations chapters
+of the handbook. The Octogee product keeps its own private repository and
+builds on top of this one.
 
-Every file here will move into the platform repository unchanged, apart from
-environment identities replaced by placeholders.
+Every file here is published from the monorepo at the pinned commit, apart
+from environment identities replaced by placeholders.
 
 ## License
 
