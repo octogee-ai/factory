@@ -5,7 +5,7 @@ builds it: the files my agents load at the start of every session and the checks
 they run before a change reaches `main`. I am publishing it on launch day so
 that "read the factory" is something you can do, not a claim you take on trust.
 
-Published from the Octogee monorepo at `7f4dedc0df03f3fde8ec19ee24eaac01d559b882`. The pin in
+Published from the Octogee monorepo at `91b43c0405fb0a20351d6a1c79f55648eaa0c98a`. The pin in
 `.factory-source.json` carries that commit, its date, and the exported source
 paths.
 
