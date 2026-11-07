@@ -89,3 +89,15 @@ half-documented repo-settings API workarounds. Code-owned config (workflow YAMLs
 `dependabot.yml`) is fair game to edit directly.
 
 Related: [10 — Engineering Principles](10-engineering-principles.md), [11 — Testing](11-testing.md), [12 — PR & Effort Workflow](12-pr-and-effort-workflow.md).
+
+## Platform boundary
+
+`scripts/lib/platform-boundary.json` names the platform entrypoints, the
+product modules, and a ratchet of product modules the platform still reaches.
+`scripts/__tests__/platform-boundary.spec.ts` walks the import graph from every
+entrypoint: a new product import fails the build, and a ratchet entry that is
+no longer reached must be removed. Product routes enter the platform only
+through `createPlatformApp({ product })` in `octogee-api/src/app.ts` and the
+`productRoutes` option of `mountClusterRoutes`; `octogee-api/src/index.ts` and
+`octogee-api/src/product.ts` are the product composition roots. The split is
+specified in `docs/specs/PLATFORM-PRODUCT-SPLIT.md`.
