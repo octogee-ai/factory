@@ -167,35 +167,15 @@ Run focused artifact/base-image tests, evaluate feedback and wait for final-head
 CI. After merge, Build main produces images, not a deployment. Environment
 selection and rollout follow [Handbook 21](../../../docs/handbook/21-deploy-and-cicd.md).
 
-## Current overlay: November 5 daily runtime refresh
+## Current overlay: November 7 daily runtime refresh
 
-The operator selected and froze OpenClaw main
-`c4d8a5ae1715744c0e4f91bab96f5f7d8fd6a6c3` for independent qualification.
-The clean built overlay is
-`ef40315f468f28a4e4687567840c0cab9ee4b7f0` on
-`ceckert/openclaw:codex/model-auth-startup-recovery`, based on
-`636cff64f7b83879d597c0936452745a3d900c34`. Its hosted islands and
-PostgreSQL routine catalog are regenerated from that source. Complete Shared/Builder
-image qualification and final-head CI are separate merge gates recorded in the PR.
+The operator selected OpenClaw main `1c848332c84faf8b382302369959ce0d2872bfb0` for independent qualification. The clean built overlay is `eca28b466aecb1af8d4a2a03c56b07e48668d95d` on `ceckert/openclaw:codex/gateway-refresh-20261107`.
 
-Native contains the browser-panel repair (#192868) and npm 12.2.1 pin
-(#189746), so their duplicate overlay changes are dropped. The separately
-patched npm distribution, minimatch 11.0.4/glob 14.0.3 and approved CUA 0.38.0
-remain necessary. Native reload transaction ownership, bounded CLI owner
-identity, mention ranking, deferred cron admission and prepared schema repair
-remain alongside the retained authorization, membership, stop and recovery
-boundaries below. Native dependency updates remain intact.
+Upstream [#194541](https://github.com/openclaw/openclaw/pull/194541) fixes draining retained subagent sessions without reentering closed admission; [#194567](https://github.com/openclaw/openclaw/pull/194567) bounds idle-session drain fan-out. The earlier PostgreSQL cron enabled-value overlay is removed: native `jsonValue` now owns both engine expressions. Upstream moved voice provider request types; the retained gateway relay follows that owner. The retry wrapper retains Octogee's native detach option and existing journal custody.
 
-The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/42054909252)
-executed only security-fast. Its [full CI](https://github.com/openclaw/openclaw/actions/runs/42056118625/attempts/1)
-failed across 263 jobs; the latest rerun failed to start. Neither supplies an
-aggregate pass. The prior successful [scheduled run](https://github.com/openclaw/openclaw/actions/runs/41377849337)
-is on `d1d45068a49bc85eb2a1eff077678b3a87a68621`, with 11 skipped jobs:
-check-plan, Node 24 compatibility, shared SDK declarations, Control UI i18n,
-Android/iOS screenshots and release e2e, iOS screenshot evidence, PR failure
-report and release-child sealing. That older run does not qualify this tip.
-Local replays of selected failed cron, model, HTTP and UI cases pass; they do
-not establish that the original Linux/Bun failures are fixed.
+The frozen tip's [push CI](https://github.com/openclaw/openclaw/actions/runs/42378844452) passed security-fast and skipped 42 jobs, including PostgreSQL conformance and build artifacts. The latest successful [scheduled full CI](https://github.com/openclaw/openclaw/actions/runs/42225420585) was on `d4ae77eae296fd8eb1f90f7a4ebb5d77fa2e6ad9`: 150 jobs passed and 11 were skipped, including Node 24 compatibility, screenshots and mobile release e2e. It does not qualify the frozen tip.
+
+The retained authorization, membership, strict-stop and recovery boundaries below remain subject to the corresponding affected tests and deployed-image qualification. Earlier evidence in this assessment identifies the behaviors and removal conditions; it is not proof of this new build.
 
 ### Deferred agent model preparation
 
@@ -441,7 +421,6 @@ behavior is present in the selected base and the affected consumer controls pass
 | Cron migration custody | Held/exported/staged/activated ownership, retired fences, hash-bound chunks and drain are beyond ordinary native CRUD. Projection identity includes effective agent plus declaration. | Native migration provides equivalent activation, rollback, drain and two-engine round trip. |
 | Retained legacy cron/state inputs | Fingerprints/order/schema checks admit only recognized retained formats and refuse unknown partial schemas; native canonical schemas remain authoritative. | The supported retained restore/move inputs are retired, or native adopts their exact migration. Historical fixtures alone do not prove a deployed inventory; no deployed old-format inventory was inspected in this recut. |
 | PostgreSQL web-secret index reads | Cold GLOBAL state makes native's synchronous installed-index read fail during Builder `secrets.reload`; the existing async reader owns worker access and validation. | Native awaits the worker-backed reader here and the same cold-GLOBAL/provider conformance control passes without this overlay. |
-| PostgreSQL cron enabled JSON | Native's SQLite JSON-value assumption fails PG bound enabled updates; the codec uses each engine's existing JSON expression. | Native equivalent passes both-engine false/true transitions without losing authored fields. |
 | Memory shadow database retirement | Physical admission must retire before unlinking shadow files, preventing writes through live descriptors. | Native owns equivalent descriptor/late-owner retirement. |
 | Voice relay and computer authority | Approved public broker transport retains native session/media ownership; desktop control release, observation/token lifetime and node execution remain bounded. | Native public contracts preserve transport validation, cancellation, fresh observation and late-dispatch refusal. |
 | Final-reply notification | Activity tools require terminal final-content classification, not agent-completion inference. Only the public observer flag is retained; delivery custody is native. | Native supplies equivalent classification or the observer is removed. |
@@ -534,35 +513,16 @@ permission, handoff and recovery controls pass.
 
 ### Qualification and publication
 
-The final source built cleanly with pinned pnpm 12.15.0 and the frozen lockfile
-using `pnpm build package`; build-info matches its source. All 55 affected
-transport/shared-state tests pass against disposable PostgreSQL, including lost
-transaction refusal and historical schema upgrades. Production core types and
-scoped typed lint pass. The state test-type leaf retains an unrelated error in
-`sqlite-file-copy.test.ts:142` (a callback passed where options are required).
-The build retains the nonfatal chat-boot gzip advisory: 1264.1 KiB against a
-1264.0 KiB budget. These are not aggregate type/check passes.
+The exact clean source built with pinned pnpm 12.15.0 and the frozen lockfile; `dist/build-info.json` matches the source SHA. Production type checks, channel metadata, the native detach reproduction, startup lifecycle, voice relay and PostgreSQL reattachment controls pass. Native `pnpm check` fails its changelog attribution guard on unchanged upstream files; its remaining reported guards, including the npm lock and SQLite worker ratchets, pass. The frozen upstream tip has not passed full upstream CI.
 
-Hosted islands and the PostgreSQL routine catalog are regenerated from the same
-source; the catalog uses disposable PG16/pgvector 0.8.7. Sequential packaging,
-the native archive checker, isolated installed pair, both patched npm copies and
-the actual Linux amd64 full-plugin installer pass. Installed Parallel/Codex
-companions match the source and all three native-hook imports pass. Complete-image
-qualification and final-head CI remain merge gates recorded in the runtime-fix PR.
+Root and Mattermost packages were packed sequentially from that build, checked with the native archive checker, and exercised by the actual Linux amd64 full-plugin installer. Hosted islands and the PostgreSQL routine catalog were regenerated from the same source; the catalog used disposable PostgreSQL 16 with pgvector 0.8.7. Complete Gateway-image qualification, TEST deployment and final-head CI are recorded separately and are not implied by package checks.
 
-Published with generation-zero preconditions, then downloaded by exact generation
-and checked against the complete local SHA-256:
+Published with generation-zero preconditions and verified by exact-generation readback:
 
 | Object | Generation | SHA-256 |
 | --- | --- | --- |
-| `openclaw-fork-48260b56.tgz` | `1794034998689346` | `48260b56f18ded246da428e408d3ba2857be6aae3c4509a53ea4396532441c85` |
-| `openclaw-mattermost-a0f6040d.tgz` | `1793929522271030` | `a0f6040dd17c8d0a1f99b51f202392d0448a0961604f4bf7b0dde2c1a8e40526` |
-
-Complete Shared/Builder image qualification through real writers and strict
-isolated Doctor comparisons, installed Memory/Skills workers, published image
-digests and final-head CI are required before merge. Their results are recorded
-in the runtime-fix PR, keeping image evidence out of its own build inputs.
-Building and package publication do not deploy TEST or PROD.
+| `openclaw-fork-d98b3178.tgz` | `1794061707610803` | `d98b3178d69cb272837262d67230b76c4d7158c6980b4d1156e1802fe0f65e08` |
+| `openclaw-mattermost-9deb4557.tgz` | `1794061721182952` | `9deb4557ff3abd20bccdd04d8623b8684a0e28dea564637dd8c0e53639979e12` |
 
 ### Upstream contributions
 

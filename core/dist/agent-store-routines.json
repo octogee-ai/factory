@@ -1,5 +1,5 @@
 {
-    "sourceSha": "ef40315f468f28a4e4687567840c0cab9ee4b7f0",
+    "sourceSha": "eca28b466aecb1af8d4a2a03c56b07e48668d95d",
     "routines": {
         "memory_index_chunks_search_sync": [
             "2d8d1fc22ff8f8d631ea85fa92758c3ce290f085bac3ded62f2995fe1361d9cd"
@@ -381,6 +381,15 @@
         ],
         "constraint:session_suggestions:session_suggestions_state_check": [
             "7515f28ff02aef46abf073835a16dda732d73fe72fccab8d6b069ba28a839f4b"
+        ],
+        "constraint:session_transcript_active_event_facts:session_transcript_active_event_facts_pkey": [
+            "deb9176c7449458598b4fcca1a3ec3801d799ec80309454b69d04414f9e5d43c"
+        ],
+        "constraint:session_transcript_active_event_facts:session_transcript_active_event_facts_serialized_bytes_check": [
+            "40f029813afd9119e3ce4d6bc3a7c5441ddccd632f735fd06f80e71daa49d830"
+        ],
+        "constraint:session_transcript_active_event_facts:session_transcript_active_event_facts_session_id_seq_fkey": [
+            "4af1daa58dd68b816c5f497e8ec17f47d6546e0a8b30b62133d26d67b996e111"
         ],
         "constraint:session_transcript_active_events:session_transcript_active_events_active_position_check": [
             "a66943725d93299732384c0a5307d20a1003a6518c3fe5956e65c7d5ec31f096"
@@ -953,6 +962,9 @@
         ],
         "index:session_suggestions:session_suggestions_pkey": [
             "98921f8d8ed1a0b1303361e510f4efa3d1837b944c0507141e0423ad1a1fb4c9"
+        ],
+        "index:session_transcript_active_event_facts:session_transcript_active_event_facts_pkey": [
+            "32fe67219379feea546561847302229c2203d28f297a460c0d1d8c9a4c6c5415"
         ],
         "index:session_transcript_active_events:idx_agent_transcript_active_event_seq": [
             "9ba5e79ba583b1ed1859abdc11fae9ec9afbee255e268902bb72d054e24c8fd3",
