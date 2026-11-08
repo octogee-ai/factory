@@ -30,24 +30,6 @@ export {
 } from './project-retention.js';
 
 export type {
-  LegalDocId,
-  LegalDoc,
-  LegalAcceptanceContext,
-  LegalAcceptanceMethod,
-  LegalAcceptanceRecord,
-  LegalAcceptanceClaim,
-} from './legal.js';
-export {
-  LEGAL_DOCS,
-  ALL_LEGAL_DOC_IDS,
-  REGISTRATION_DOCS,
-  isLegalDocId,
-  currentVersion,
-  isCurrentVersion,
-  acceptanceDocId,
-} from './legal.js';
-
-export type {
   Agent,
   AgentMattermost,
 } from './agent.js';

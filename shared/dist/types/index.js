@@ -1,6 +1,5 @@
 export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId, projectAgentConfigured, } from './project.js';
 export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
-export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export { AGENT_IMPORT_FORMAT_VERSION, AGENT_IMPORT_AUTHORIZATION_INTENTS, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, isAgentImportAuthorizationIntent, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
 export { FEATURE_FLAGS, FEATURE_FLAG_KEYS, USER_VISIBLE_FEATURE_FLAG_KEYS, isFeatureFlagKey, } from './feature-flags.js';
 export { TALK_INPUT_SAMPLE_RATE, TALK_OUTPUT_SAMPLE_RATE, TALK_PROTOCOL_VERSION, TALK_SETTINGS_DEFAULTS, TALK_TICKET_PURPOSE, VOICE_TALK_FLAG, parseTalkClientMessage, parseTalkServerEvent, parseTalkSettings, resolveTalkSettings, } from './voice.js';

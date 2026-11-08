@@ -2,8 +2,6 @@ export type { Project, ProjectAgentConfig, ProjectAgentStatus, ProjectRecipeId, 
 export { DEFAULT_PROJECT_RECIPE, PROJECT_RECIPE_IDS, isProjectRecipeId, projectAgentConfigured, } from './project.js';
 export type { ProjectRetentionPlan, ProjectRetentionState, ProjectRetentionStatus, } from './project-retention.js';
 export { PROJECT_ARCHIVE_DAYS, PROJECT_ARCHIVE_WARNING_DAYS, parseProjectRetention, planProjectRetention, projectArchiveWarningDue, } from './project-retention.js';
-export type { LegalDocId, LegalDoc, LegalAcceptanceContext, LegalAcceptanceMethod, LegalAcceptanceRecord, LegalAcceptanceClaim, } from './legal.js';
-export { LEGAL_DOCS, ALL_LEGAL_DOC_IDS, REGISTRATION_DOCS, isLegalDocId, currentVersion, isCurrentVersion, acceptanceDocId, } from './legal.js';
 export type { Agent, AgentMattermost, } from './agent.js';
 export type { AgentImportApprovalFields, AgentImportAuthorizationIntent, AgentImportConfigArtifacts, AgentImportConfigDecision, AgentImportConfigDisposition, AgentImportConfigInventoryEntry, AgentImportConfigPlan, AgentImportDoctorOutcome, AgentImportInventoryClassification, AgentImportModelHint, AgentImportPortableAgent, } from './agent-import.js';
 export { AGENT_IMPORT_FORMAT_VERSION, AGENT_IMPORT_AUTHORIZATION_INTENTS, AgentImportConfigError, buildAgentImportApprovalInput, buildAgentImportConfigArtifacts, classifyAgentImportArchivePath, isAgentImportAuthorizationIntent, planAgentImportConfig, validateAgentImportConfigArtifacts, } from './agent-import.js';
