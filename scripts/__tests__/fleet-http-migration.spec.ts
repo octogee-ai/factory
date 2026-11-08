@@ -3555,7 +3555,7 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     expect(snapshotCarried).toBe(true);
   });
 
-  it.each(["complete", "running", "missing authority", "foreign custody", "foreign anchor", "missing anchor", "authority changed"])("carries the retained roster after current source roster shrinks (%s)", async (scenario) => {
+  it.each(["complete", "running", "archived", "archived missing anchor", "archived directory symlink", "foreign extra anchor", "missing authority", "foreign custody", "foreign anchor", "missing anchor", "authority changed"])("carries the retained roster after current source roster shrinks (%s)", async (scenario) => {
     const stateDir = await mkTempRoot(), migrationId = "held-roster-retry";
     vi.stubEnv("POD_UID", "source-pod");
     const ids = ["octogee-chris-coach", "octogee-chris-proj-one-coach", "octogee-chris-proj-two-coach"];
@@ -3564,25 +3564,36 @@ describe("PostgreSQL agent anchors across an rsync carry", () => {
     const manifest = await adapter.exportOpenClawActivationManifest!("chris");
     manifest.projectAgents = ids.slice(1).map((agentId, index) => ({ agentId, accountId: agentId.replace(/^octogee-/, "").replace(/-coach$/, ""), agent: { id: agentId, workspace: path.join(stateDir, "customers/chris/projects", index ? "two" : "one") }, mattermostAccount: { botToken: "synthetic-project-token" }, bindings: [{ agentId, match: { channel: "mattermost", accountId: agentId.replace(/^octogee-/, "").replace(/-coach$/, "") } }] }));
     for (const project of manifest.projectAgents) await fs.mkdir(String(project.agent.workspace), { recursive: true });
-    manifest.sourceWorkspaceIdentities = { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4, files: ids.map(agentId => ({ agentId, content: null, sha256: null })) };
+    if (scenario.startsWith("archived") || scenario === "foreign extra anchor") manifest.projectAgents = [];
+    manifest.sourceWorkspaceIdentities = { migrationId, uid: "uid-chris", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4,
+      files: [manifest.agentId, ...manifest.projectAgents.map(agent => agent.agentId)].map(agentId => ({ agentId, content: null, sha256: null })) };
     await writeActivationManifest(OPENCLAW_DIR, manifest);
     Object.assign(adapter, { sourceMigrationAgentAnchors: async () => ids.map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" })) });
     if (scenario === "missing authority") delete adapter.sourceMigrationAgentAnchors;
     if (scenario === "foreign custody") adapter.sourceMigrationIdentityCustody = async () => ({ migrationId, uid: "foreign", gatewayId: GATEWAY_ID, podUid: "source-pod", epoch: 4 });
     if (scenario === "foreign anchor") adapter.sourceMigrationAgentAnchors = async () => ids.map(agentId => ({ agentId, storeId: "foreign", schema: "octogee_agent_fixture" }));
-    if (scenario === "missing anchor") await fs.rm(path.join(stateDir, `agents/${ids[2]}/agent/openclaw-agent.sqlite`));
+    if (scenario === "foreign extra anchor") adapter.sourceMigrationAgentAnchors = async () => [...ids, "octogee-alice-proj-private-coach"].map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" }));
+    if (scenario === "missing anchor" || scenario === "archived missing anchor") await fs.rm(path.join(stateDir, `agents/${ids[2]}/agent/openclaw-agent.sqlite`));
+    if (scenario === "archived directory symlink") {
+      const directory = path.join(stateDir, "agents", ids[2]!);
+      await fs.rm(directory, { recursive: true });
+      await fs.symlink(path.join(stateDir, "agents", ids[0]!), directory, "dir");
+    }
     if (scenario === "authority changed") {
       let reads = 0;
       adapter.sourceMigrationAgentAnchors = async () => ++reads === 1 ? ids.map(agentId => ({ agentId, storeId: "1514f000-4540-4f4e-92a1-831adeac3d5b", schema: "octogee_agent_fixture" })) : [];
     }
     spawnMock.mockReturnValueOnce(mkFakeChild({ exitCode: 0 }));
     const response = mkResponse(); await handler(req, response.res, vi.fn());
-    if (scenario !== "complete" && scenario !== "running") {
+    if (scenario !== "complete" && scenario !== "running" && scenario !== "archived") {
       const errors = {
         "missing authority": "Retained source requires current migration anchor authority",
         "foreign custody": "Source workspace identity custody changed",
         "foreign anchor": "Retained source agent anchor does not match migration authority",
         "missing anchor": "Retained source is missing an authorized agent anchor",
+        "archived missing anchor": "Retained source is missing an authorized agent anchor",
+        "archived directory symlink": "Retained agent directory is not canonical",
+        "foreign extra anchor": "Retained source manifest roster does not match migration anchor authority",
         "authority changed": "Retained source migration export authority changed",
       };
       expect(response.getBody()).toMatchObject({ message: expect.stringContaining(errors[scenario]) });

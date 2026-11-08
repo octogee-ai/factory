@@ -1070,12 +1070,24 @@ export function createActivateImportHandler(deps: MigrationHandlerDeps): Request
   });
 }
 
-async function retainedSourcePaths(plan: ConfiguredBuilderPortableStatePlan, stateDir: string, slug: string) {
+async function retainedSourcePaths(plan: ConfiguredBuilderPortableStatePlan, stateDir: string, slug: string, authority: FleetBrokerAgentAnchor[]) {
   const sources = [];
   for (const item of plan.paths.filter(item => !isSafeDefaultAgentPortableStatePath(item.relativePath))) {
     const file = path.join(stateDir, item.relativePath);
     try { await fs.lstat(file); sources.push({ cwd: stateDir, path: item.relativePath }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  for (const anchor of authority) {
+    const relative = path.join("agents", anchor.agentId);
+    if (sources.some(item => item.cwd === stateDir && (item.path === relative || item.path.startsWith(relative + path.sep)))) continue;
+    const file = path.join(stateDir, relative);
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!stat) continue;
+    if (!stat.isDirectory() || await fs.realpath(file) !== file) throw new Error(`Retained agent directory is not canonical: ${anchor.agentId}`);
+    sources.push({ cwd: stateDir, path: relative });
   }
   for (const source of await customerFileStatePaths(OPENCLAW_DIR, slug)) {
     if (!sources.some(item => item.cwd === source.cwd && item.path === source.path)) sources.push(source);
@@ -1106,14 +1118,15 @@ async function retainedSourceExport(deps: MigrationHandlerDeps, body: MigrationR
   if (custody.gatewayId !== deps.gatewayId || custody.podUid !== process.env.POD_UID) throw new Error("Retained source custody addresses another allocation");
   const agents = [{ agentId: manifest.agentId, agent: manifest.agent }, ...manifest.projectAgents];
   const authority = await readAnchors(body.slug, body.migrationId);
-  if (new Set(authority.map(anchor => anchor.agentId)).size !== agents.length || authority.length !== agents.length ||
+  if (new Set(authority.map(anchor => anchor.agentId)).size !== authority.length ||
+      authority.some(anchor => { const parsed = parseAgentId(anchor.agentId); return parsed.kind === "unknown" || parsed.username !== body.slug; }) ||
       agents.some(agent => !authority.some(anchor => anchor.agentId === agent.agentId))) {
     throw new Error("Retained source manifest roster does not match migration anchor authority");
   }
   const stateDir = resolveOpenClawStateDir();
   const plan = configuredBuilderPortableStatePlanFromConfig({ agents: { entries: Object.fromEntries(agents.map(agent => [agent.agentId, agent.agent])) } }, stateDir);
   assertConfiguredBuilderPortableStatePlanOnDisk(stateDir, plan);
-  const sources = await retainedSourcePaths(plan, stateDir, body.slug);
+  const sources = await retainedSourcePaths(plan, stateDir, body.slug, authority);
   await assertRetainedSourceAnchors(sources, authority);
   const assertCurrent = async () => {
     signal.throwIfAborted();
