@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import "../lib/octogee-entitlements.js";
 import { parseArgs } from "node:util";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";

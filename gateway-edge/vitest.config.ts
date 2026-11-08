@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     exclude: ['dist/**', 'node_modules/**'],
-    setupFiles: ['./src/test-setup/loopback-listen.ts', './src/test-setup/public-app-origins.ts'],
+    setupFiles: ["./src/test-setup/octogee-entitlements.ts", './src/test-setup/loopback-listen.ts', './src/test-setup/public-app-origins.ts'],
     // Subprocess-heavy specs (real git, tsx boot) fit 5s only on an idle
     // machine; parallel suites on a loaded Mac starve them into timeouts.
     testTimeout: 60_000,

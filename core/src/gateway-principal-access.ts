@@ -1,4 +1,4 @@
-import { resolveBuilderTier, type TierResolvable } from "@octogee/shared/types/billing";
+import { userEntitlements, type UserEntitlementInputs } from "@octogee/shared/types/user-entitlements";
 export const GATEWAY_ACCESS_AUDIT_COLLECTION = "gatewayAccessAudit";
 
 export interface GatewayPrincipalGateway {
@@ -48,6 +48,6 @@ export function resolveGatewayPrincipalAccess(input: {
   return { kind: "member", dashboard: true, workspaceManagement: false };
 }
 
-export function workspacePermissionsEnabled(config: { gatewayClass?: string; builderAccess?: { controlIdentity?: string } | null }, owner: TierResolvable, now = new Date()): boolean {
-  return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user" && resolveBuilderTier(owner, now) !== null;
+export function workspacePermissionsEnabled(config: { gatewayClass?: string; builderAccess?: { controlIdentity?: string } | null }, owner: UserEntitlementInputs, now = new Date()): boolean {
+  return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user" && userEntitlements().sizingKey(owner, now) !== null;
 }

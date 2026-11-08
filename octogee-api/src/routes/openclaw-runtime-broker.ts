@@ -14,7 +14,7 @@ import { resolveActivityConversation, type ActivityConversation } from '../../..
 import { Router, type Request, type Response } from "express";
 import type { Firestore } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 
 import {
   isValidCustomChannelName,
@@ -131,7 +131,7 @@ function interactiveBuilder(builder: BuilderRecord | null | undefined): builder 
 
 async function projectOwnerEntitled(db: Firestore, ownerUid: string): Promise<boolean> {
   const owner = await db.doc(`users/${ownerUid}`).get();
-  return resolveCommercialEntitlements(owner.data() ?? {}).projectMode === "active";
+  return userEntitlements().projectMode(owner.data() ?? {}) === "active";
 }
 
 async function previewTarget(

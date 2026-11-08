@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import {
   catalogEntryForModelRef,
   OPENAI_PLATFORM_PROVIDER_ID,
@@ -436,7 +436,7 @@ function freeTierCoachModelInput(
   slug: string,
   userData: Parameters<typeof deriveDesiredByotState>[0],
 ): FreeTierCoachModelInput | null {
-  const plan = resolveBillingProfile(userData);
+  const plan = userEntitlements().plan(userData);
   return plan.modelAccess === "house_only"
     ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "free-tier" }
     : null;

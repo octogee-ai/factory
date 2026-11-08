@@ -1,3 +1,4 @@
+import { installDefaultUserEntitlements } from "@octogee/shared/types/user-entitlements";
 import { createBuilderActivationRollRecoveryOwner } from './builder-activation-roll-recovery-owner.js';
 import { hasBuilderActivationTargetRollback, readBuilderActivationRollRecoveryCustody } from './builder-activation-roll-recovery.js';
 import { createMigrationAgentStorePreparer, readBuilderAgentStoreInventory, type PrepareMigrationAgentStores } from "./migration-agent-stores.js";
@@ -2680,6 +2681,7 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
 }
 
 export async function main(product: { addAdminRoutes?: ProductAdminRoutes; placementAdmission?: PlacementAdmissionPolicy } = {}): Promise<void> {
+  installDefaultUserEntitlements();
   const controllerStartedAt = Date.now();
   initializeApp({
     credential: applicationDefault(),

@@ -1,4 +1,4 @@
-import { resolveBuilderTier } from "./billing.js";
+import { userEntitlements } from "./user-entitlements.js";
 import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 import type { DisposableBuilderGatewayAllocation } from "./gateway-mutable-config.js";
 
@@ -39,7 +39,7 @@ export function resolveLiveActivationTargetGatewayId(input: Pick<
   "userData" | "now"
 >): string | null {
   if (!accountAllowsInteractiveAccess(input.userData)) return null;
-  if (resolveBuilderTier(input.userData, input.now) === null) return null;
+  if (userEntitlements().sizingKey(input.userData, input.now) === null) return null;
   const provisioning = input.userData.provisioning;
   if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return null;
   const openclaw = (provisioning as Record<string, unknown>).openclaw;

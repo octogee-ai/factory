@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { resolveBuilderTier, type TierResolvable } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import type { BuilderActivationLease, BuilderRecord } from "./platform-state/builders.js";
 import { isolatedSizingTier, type GatewaySizingProfile } from "./platform-state/config.js";
 import type { GatewayAssignment } from "./platform-state/gateways.js";
@@ -24,7 +24,7 @@ export type BuilderTierReader = (uid: string, now: number) => Promise<string | n
 export function firestoreBuilderTierReader(db: Pick<Firestore, "doc">): BuilderTierReader {
   return async (uid, now) => {
     const snapshot = await db.doc(`users/${uid}`).get();
-    return snapshot.exists ? resolveBuilderTier(snapshot.data() as TierResolvable, new Date(now)) : null;
+    return snapshot.exists ? userEntitlements().sizingKey(snapshot.data() ?? {}, new Date(now)) : null;
   };
 }
 

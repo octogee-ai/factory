@@ -1,5 +1,5 @@
 import { buildCustomerSummary, isoMillis, toISODate, } from "./admin-shape.js";
-import { getTierConfig } from "@octogee/shared/types/billing-tiers";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { placementReceiptDocId } from "@octogee/shared/types/placement-receipts";
 import { builderAccountFromData, firestoreBuilderAccountReader, } from "./builder-account.js";
@@ -525,8 +525,8 @@ export function addAdminCustomerRoutes(router, deps) {
             const onboardingSnap = await userRef.collection("onboarding").get();
             const subscription = objectValue(account.planInputs.subscription) ?? {};
             const usage = account.usage;
-            const tier = (subscription.tier || "trial");
-            const tierConfig = getTierConfig(tier);
+            const tier = String(subscription.tier || "trial");
+            const monthlyPriceUsd = userEntitlements().monthlyPriceUsd(tier);
             const now = Date.now();
             const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
                 readBrokerCustomerUsage(db, [uid], now),
@@ -581,7 +581,7 @@ export function addAdminCustomerRoutes(router, deps) {
                     canceledAt: toISODate(subscription.canceledAt),
                 },
                 tierConfig: {
-                    monthlyPrice: tierConfig.monthlyPrice,
+                    monthlyPrice: monthlyPriceUsd,
                 },
                 usage: {
                     totalTokensUsed: usage.totalTokensUsed || 0,

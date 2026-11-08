@@ -1,4 +1,4 @@
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 export const GATEWAY_ACCESS_AUDIT_COLLECTION = "gatewayAccessAudit";
 function record(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -27,5 +27,5 @@ export function resolveGatewayPrincipalAccess(input) {
     return { kind: "member", dashboard: true, workspaceManagement: false };
 }
 export function workspacePermissionsEnabled(config, owner, now = new Date()) {
-    return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user" && resolveBuilderTier(owner, now) !== null;
+    return config.gatewayClass === "builder" && config.builderAccess?.controlIdentity === "per-user" && userEntitlements().sizingKey(owner, now) !== null;
 }

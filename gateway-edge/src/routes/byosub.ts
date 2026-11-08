@@ -53,7 +53,7 @@ import {
   type ModelCredentialOAuthCatalogEntry,
   type ModelCredentialOAuthProviderId,
 } from "@octogee/shared/types/model-credentials";
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 
@@ -359,7 +359,7 @@ function tierFieldsFromRequest(req: Request): Record<string, unknown> {
   const user = req.user ?? {};
   return {
     ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-    ...pickPlanInputs(user as Record<string, unknown>),
+    ...userEntitlements().pickInputs(user as Record<string, unknown>),
     ...(typeof user.trialExpired === "boolean" ? { trialExpired: user.trialExpired } : {}),
   };
 }

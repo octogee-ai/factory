@@ -4,7 +4,7 @@ const logger = createServiceLogger("provisioner");
 import type { UserSnapshot } from "./customer-lifecycle.js";
 import type { MattermostTokenSecret, SecretsRepository } from "./platform-state/secrets.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { projectAgentConfigured, projectRepoSourceFromDoc, type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
 
 type ChannelBinding = UserSnapshot["channels"][number];
@@ -262,6 +262,6 @@ export function mapUserDocToSnapshot(
     byotActive: Boolean(data.byotActive),
     ...snapshotIdentity(data, slug),
     ...snapshotProvisioning(data),
-    ...pickPlanInputs(data),
+    ...userEntitlements().pickInputs(data),
   };
 }

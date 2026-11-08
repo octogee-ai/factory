@@ -70,7 +70,7 @@ import {
   projectAgentId,
 } from "@octogee/shared/types/identity";
 import { MANIFEST_OBJECT_SUFFIX } from "@octogee/core/workspace-manifest";
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { projectAgentConfigured, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 import {
   createCachedBuilderAgentDefaultResolver,
@@ -1596,7 +1596,7 @@ function snapshotBaseFields(
     repoUrl: builder.provisioning.gitRepoUrl ?? "",
     mattermostUserId,
     customerMmUserId: mattermostUserId,
-    ...pickPlanInputs(account),
+    ...userEntitlements().pickInputs(account),
     ownerName: stringAt(account, "displayName") || stringAt(account, "username") || slug,
     email: stringAt(account, "email"),
     displayName: stringAt(account, "displayName"),

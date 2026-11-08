@@ -1,7 +1,7 @@
 import { withLogContext, setLogContext } from "@octogee/shared/server/service-logger";
 import { projectCheckoutEnabled } from "@octogee/shared/types/project";
 import { ADD_CUSTOMER_DEADLINE_MS, VERIFY_ACCOUNT_TIMEOUT_MS, } from "@octogee/shared/types/fleet-controller";
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { UNKNOWN_TIME_ZONE } from "./context-file-convergence.js";
 const VERIFY_CHANNEL_READY = "verify-channel-ready";
 const CONFIG_PATCH = "config-patch";
@@ -571,7 +571,7 @@ function byotUserDataFromSnapshot(snapshot) {
         // Full plan-input set: the reassert's resolveBillingProfile must see the same
         // plan the trusted side resolved, or a trial/builder user's agent-model picks
         // defer to house_only on every mount/roll.
-        ...pickPlanInputs(snapshot),
+        ...userEntitlements().pickInputs(snapshot),
         provisioning: { openclaw: { status: "complete" } },
     };
 }

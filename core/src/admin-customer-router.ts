@@ -13,7 +13,7 @@ import {
   type BrokerCustomerUsage,
   type CustomerSummary,
 } from "./admin-shape.js";
-import { getTierConfig, type TierName } from "@octogee/shared/types/billing-tiers";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { placementReceiptDocId, type PlacementReceipt } from "@octogee/shared/types/placement-receipts";
 import {
@@ -739,8 +739,8 @@ router.get(
 
         const subscription = objectValue(account.planInputs.subscription) ?? {};
         const usage = account.usage;
-        const tier = (subscription.tier || "trial") as TierName;
-        const tierConfig = getTierConfig(tier);
+        const tier = String(subscription.tier || "trial");
+        const monthlyPriceUsd = userEntitlements().monthlyPriceUsd(tier);
 
         const now = Date.now();
         const [brokerUsage, brokerDaily, brokerRollupSnap] = await Promise.all([
@@ -805,7 +805,7 @@ router.get(
             canceledAt: toISODate(subscription.canceledAt),
           },
           tierConfig: {
-            monthlyPrice: tierConfig.monthlyPrice,
+            monthlyPrice: monthlyPriceUsd,
           },
           usage: {
             totalTokensUsed: usage.totalTokensUsed || 0,

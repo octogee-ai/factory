@@ -16,7 +16,7 @@ import {
 } from "@octogee/shared/types/agent-models";
 import { resolveUserByosubCredentialRefs } from "@octogee/shared/types/model-credentials";
 import { agentModelCatalog } from "../lib/agent-model-catalog.js";
-import { pickPlanInputs, resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import {
   builderAgentModelDefaultFromDoc,
   type BuilderAgentModelDefault,
@@ -119,7 +119,7 @@ function triggerAgentModelSync(args: {
       username: args.slug,
       provisioning: { openclaw: { status: "complete" } },
       ...(typeof user.tier === "string" ? { tier: user.tier } : {}),
-      ...pickPlanInputs(user as Record<string, unknown>),
+      ...userEntitlements().pickInputs(user as Record<string, unknown>),
       systemConfig: projection.systemConfig,
     },
   });
@@ -133,12 +133,12 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
       platformAgentModelDefault((m) => logger.warn(m)),
       readSubscriptionProviders(uid),
     ]);
-    const plan = resolveBillingProfile(req.user ?? {});
+    const plan = userEntitlements().plan(req.user ?? {});
     const slug = slugFromRequest(req);
     res.json({
       modelAccess: plan.modelAccess,
-      tier: plan.tier,
-      builderTools: plan.builderTools,
+      tier: plan.planId,
+      builderTools: plan.toolAccess,
       ...(slug ? { coachAgentId: `octogee-${slug}-coach` } : {}),
       byosub: subscriptionProviders.length > 0 && await isBuilderRuntime(req),
       subscriptionProviders,
@@ -164,7 +164,7 @@ async function gateSelectionRequest(
   if (!agentIdBelongsToSlug(agentId, slug)) {
     return { ok: false, status: 403, error: `Agent ${agentId} is not yours` };
   }
-  const plan = resolveBillingProfile(req.user ?? {});
+  const plan = userEntitlements().plan(req.user ?? {});
   if (plan.modelAccess === "house_only") {
     return { ok: false, status: 402, error: "The model picker is available on paid plans" };
   }

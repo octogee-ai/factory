@@ -11,6 +11,11 @@ import { errorHandler } from "../../gateway-edge/src/middleware/errors.js";
 import { helmetMiddleware } from "../../gateway-edge/src/middleware/security.js";
 
 import { mountClusterRoutes, type ClusterRouteTable } from "../../gateway-edge/src/routes/mount-cluster-routes.js";
+import {
+  installUserEntitlements,
+  staticUserEntitlements,
+  type UserEntitlementResolver,
+} from "@octogee/shared/types/user-entitlements";
 import internalGiteaAdminRoutes from "../../gateway-edge/src/routes/internal/gitea-admin.js";
 import { installBodyParsers } from "../../gateway-edge/src/middleware/body-parsers.js";
 import { createMattermostMintRoutes, createMmRestProxyHandler } from "./routes/mattermost-proxy.js";
@@ -199,6 +204,7 @@ export interface ProductRuntime {
 }
 
 export interface ProductExtension {
+  entitlements: UserEntitlementResolver;
   validateBoot(): void;
   createRuntime(input: { metricsRegistry: Registry }): ProductRuntime;
   modelBrokerRails?: ModelBrokerRailRegistry;
@@ -438,6 +444,7 @@ async function authorizeVoiceRelayUpgrade(
 
 // eslint-disable-next-line max-lines-per-function, complexity -- application assembly keeps route ownership and dependency wiring explicit
 export function createPlatformApp(opts: PlatformAppOptions = {}) {
+  installUserEntitlements(opts.product?.entitlements ?? staticUserEntitlements);
   opts.product?.validateBoot();
 
   const app = express();

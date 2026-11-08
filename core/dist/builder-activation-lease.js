@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isolatedSizingTier } from "./platform-state/config.js";
 export function firestoreBuilderTierReader(db) {
     return async (uid, now) => {
         const snapshot = await db.doc(`users/${uid}`).get();
-        return snapshot.exists ? resolveBuilderTier(snapshot.data(), new Date(now)) : null;
+        return snapshot.exists ? userEntitlements().sizingKey(snapshot.data() ?? {}, new Date(now)) : null;
     };
 }
 const BUILDER_TIER_READ_ATTEMPTS = 3;

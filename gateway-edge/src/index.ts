@@ -1,3 +1,4 @@
+import { installDefaultUserEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isBuilderComputer } from "./lib/builder-computer.js";
 import { createChannelAgentReadinessRouter } from "./routes/channel-agent-readiness.js";
 import express, { Express, Request, RequestHandler, Response, Router } from "express";
@@ -164,6 +165,7 @@ export interface CreateAppOptions {
 }
 
 export function createApp(opts: CreateAppOptions = {}) {
+installDefaultUserEntitlements();
 // Keep createApp() as the legacy cluster harness for route tests; the module
 // entrypoint below explicitly boots the production sidecar surface.
 const surface = opts.surface ?? "cluster";

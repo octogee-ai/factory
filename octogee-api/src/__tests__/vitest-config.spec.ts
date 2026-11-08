@@ -21,6 +21,7 @@ describe("octogee-api vitest configs", () => {
     const cfg = unitConfig as VitestConfig;
 
     expect(cfg.test?.setupFiles).toEqual([
+      "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/firebase-offline.ts",
       "./src/test-setup/runtime-env.ts",
@@ -40,6 +41,7 @@ describe("octogee-api vitest configs", () => {
 
   it("loads the loopback listen shim and the runtime env in both run modes", () => {
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
+      "./src/test-setup/octogee-entitlements.ts",
       "./src/test-setup/loopback-listen.ts",
       "./src/test-setup/runtime-env.ts",
     ]);

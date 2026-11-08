@@ -12,11 +12,7 @@ import { isSafeAgentId } from "@octogee/core/byosub-restore";
 import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { firestoreBuilderAccountReader, type BuilderAccount, type BuilderAccountReader } from "@octogee/core/builder-account";
 import type { BuilderRecord, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
-import {
-  resolveBillingProfile,
-  type BillingProfile,
-  signupOfferBudgetForOwner,
-} from "@octogee/shared/types/billing";
+import { userEntitlements, type UserPlan } from "@octogee/shared/types/user-entitlements";
 import {
   spendWindowPercentUsed,
   MODEL_BROKER_CREDITS_COLLECTION,
@@ -181,7 +177,7 @@ function credentialPathFor(
 }
 
 function deriveSpendStatus(input: {
-  plan: BillingProfile;
+  plan: UserPlan;
   railId: string;
   rails: ModelBrokerRailRegistry;
   credentialPath: string;
@@ -202,9 +198,9 @@ function deriveSpendStatus(input: {
   const throttle = input.rails.rail(input.railId).throttle({
     modelAccess: plan.modelAccess,
     windowCostUsd,
-    windowBudgetUsd: plan.windowBudgetUsd,
+    windowBudgetUsd: plan.spendWindowUsd,
     weekCostUsd,
-    weekBudgetUsd: plan.weeklyBudgetUsd,
+    weekBudgetUsd: plan.spendWeekUsd,
     onOwnerCredential,
     houseFallback: plan.houseFallback,
     creditBalanceUsd,
@@ -253,7 +249,7 @@ async function agentUsageStatusPayload(
       db.collection(MODEL_BROKER_CREDITS_COLLECTION).doc(assigned.uid).get(),
     ]);
 
-  const plan = resolveBillingProfile(assigned.account.planInputs, new Date(nowMs));
+  const plan = userEntitlements().plan(assigned.account.planInputs, new Date(nowMs));
   const railId = rails.resolveOwnerProfile({ ...assigned.account.planInputs }, assigned.uid, nowMs)?.rail ?? rails.defaultRailId;
   if (!authorization) {
     throw new Error(
@@ -276,13 +272,13 @@ async function agentUsageStatusPayload(
 
   return {
     gatewayClass: authorization.config.gatewayClass,
-    tier: plan.tier,
-    effectiveTier: plan.effectiveTier,
-    trialDaysRemaining: plan.trialDaysRemaining,
+    tier: plan.planId,
+    effectiveTier: plan.activePlanId,
+    trialDaysRemaining: plan.introductoryDaysRemaining,
     week: {
       percentUsed: spend.onOwnerCredential
         ? 0
-        : spendWindowPercentUsed(spend.weekCostUsd, plan.weeklyBudgetUsd),
+        : spendWindowPercentUsed(spend.weekCostUsd, plan.spendWeekUsd),
       resetAt: new Date(
         weekStartMs + MODEL_BROKER_WEEK_WINDOW_MS,
       ).toISOString(),
@@ -290,7 +286,7 @@ async function agentUsageStatusPayload(
     window: {
       percentUsed: spend.onOwnerCredential
         ? 0
-        : spendWindowPercentUsed(spend.windowCostUsd, plan.windowBudgetUsd),
+        : spendWindowPercentUsed(spend.windowCostUsd, plan.spendWindowUsd),
       nextRefillAt: new Date(
         windowStartMs + MODEL_BROKER_USAGE_WINDOW_MS,
       ).toISOString(),
@@ -638,7 +634,7 @@ async function privateBrokerInspectionPayload(
   nowMs: number,
 ): Promise<Record<string, unknown>> {
   const status = await agentUsageStatusPayload(readers, gatewayId, assigned, nowMs);
-  const offer = signupOfferBudgetForOwner(assigned.account.planInputs, assigned.uid, new Date(nowMs));
+  const offer = userEntitlements().ownedPromotionBudget(assigned.account.planInputs, assigned.uid, new Date(nowMs));
   let signupOffer: Record<string, unknown> | null = null;
   if (offer) {
     const snapshot = await readers.db.collection(MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION).doc(offer.budgetKey).get();

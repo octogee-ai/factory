@@ -15,8 +15,7 @@ import { isValidGithubRepoSource } from "./github.js";
 import type { RepoSourceAccess } from "../routes/projects/repo-source.js";
 import { defaultProjectRecipe, type ProjectRecipeId } from "@octogee/shared/types/project";
 import { requestedProjectRecipe } from "./project-recipe.js";
-import { resolveEntitlements } from "@octogee/shared/types/billing";
-import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import type { FleetBrokerProjectCreateInput } from "@octogee/shared/types/fleet-broker";
 import { provisionProjectAgent } from "./project-agent-service.js";
 
@@ -209,12 +208,12 @@ async function prewarmProjectCapacity(plan: ProjectCreatePlan, prewarm: () => Pr
 async function enforceProjectLimit(
   plan: ProjectCreatePlan,
 ): Promise<ProjectCreateResult | null> {
-  if (resolveCommercialEntitlements(plan.userData ?? {}).projectMode !== "active") {
+  if (userEntitlements().projectMode(plan.userData ?? {}) !== "active") {
     return bad(402, "Projects are available on paid plans — upgrade to start building", {
       maxProjects: 0,
     });
   }
-  const maxProjects = resolveEntitlements(plan.userData ?? {}).maxProjects;
+  const maxProjects = userEntitlements().maxProjects(plan.userData ?? {});
   if (maxProjects === "unlimited") return null;
 
   // Personal Free (0) can never create — 402 without the count read.

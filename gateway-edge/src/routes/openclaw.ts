@@ -7,7 +7,7 @@ import { mintTicket } from "../lib/gateway-ticket.js";
 import { resolveActivityConversation } from "../lib/activity-conversation.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import {
   requestBuilderActivationLease,
@@ -41,7 +41,7 @@ async function activationGatewayId(
   userData: Record<string, unknown> | undefined,
 ): Promise<string | null> {
   if (!userData) return null;
-  const builderTier = resolveBuilderTier(userData);
+  const builderTier = userEntitlements().sizingKey(userData);
   if (!builderTier) return null;
   const sizingProfile = await platformStateStore.config.orchestrator.getSizingProfile(builderTier);
   if (sizingProfile.isolation !== "isolated") return null;

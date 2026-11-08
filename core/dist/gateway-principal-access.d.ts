@@ -1,4 +1,4 @@
-import { type TierResolvable } from "@octogee/shared/types/billing";
+import { type UserEntitlementInputs } from "@octogee/shared/types/user-entitlements";
 export declare const GATEWAY_ACCESS_AUDIT_COLLECTION = "gatewayAccessAudit";
 export interface GatewayPrincipalGateway {
     perUserIdentity?: boolean;
@@ -27,4 +27,4 @@ export declare function workspacePermissionsEnabled(config: {
     builderAccess?: {
         controlIdentity?: string;
     } | null;
-}, owner: TierResolvable, now?: Date): boolean;
+}, owner: UserEntitlementInputs, now?: Date): boolean;

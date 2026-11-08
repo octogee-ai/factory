@@ -1,3 +1,4 @@
+import "../lib/octogee-entitlements.js";
 import { getFirestore } from "firebase-admin/firestore";
 import { pathToFileURL } from "node:url";
 import {

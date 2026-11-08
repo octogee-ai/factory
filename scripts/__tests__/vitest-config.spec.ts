@@ -17,9 +17,11 @@ interface VitestConfig {
 describe("scripts vitest configs", () => {
   it("loads the loopback listen shim in both run modes", () => {
     expect((unitConfig as VitestConfig).test?.setupFiles).toEqual([
+      "./test-setup/octogee-entitlements.ts",
       "./test-setup/loopback-listen.ts",
     ]);
     expect((emulatorConfig as VitestConfig).test?.setupFiles).toEqual([
+      "./test-setup/octogee-entitlements.ts",
       "./test-setup/loopback-listen.ts",
     ]);
   });

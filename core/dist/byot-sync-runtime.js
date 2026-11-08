@@ -13,7 +13,7 @@ import { applyConfigPatch } from "./apply-config-patch.js";
 import { AGENTS_DIR, OPENCLAW_DIR, isBuilderGateway, isSharedGateway, log, readOpenClawConfig, usesLlmBrokerToken, } from "./config.js";
 import { openAiCatalogInputForBaseUrl, vertexCatalogInputForBaseUrl, openRouterCatalogInputForBaseUrl, openRouterBrokerCatalogJson, openRouterBrokerModelConfig, materializeBrokerProfilesForAgents, } from "./agent-model-token-materializer.js";
 import { agentIdBelongsToSlug, catalogEntryForModelRef, canonicalCustomerModelDefinition, parseAgentModelSelections, platformModelRefs, } from "@octogee/shared/types/agent-models";
-import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 import { customerModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } from "./system-config-invariants.js";
 import { DEFAULT_FREE_TIER_MODEL_REF, parseBuilderAgentModelDefault, } from "@octogee/shared/types/platform-config";
@@ -1499,7 +1499,7 @@ export async function syncByotForCustomer(userData, deps) {
     const logFn = deps?.logFn ?? log;
     const customerGate = customerByotGate(builder, shared, desired, userData, logFn);
     const effectiveDesired = customerGate.desired;
-    const houseOnly = resolveBillingProfile(userData).modelAccess === "house_only";
+    const houseOnly = userEntitlements().plan(userData).modelAccess === "house_only";
     const oauthPurge = await purgeCustomerOauthIfRequired(builder, slug, safeCustomerModelRef(userData, houseOnly), customerGate.suppressed, actions);
     await syncByotStateForClass({
         slug,

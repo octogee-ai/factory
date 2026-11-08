@@ -66,7 +66,7 @@ import {
   platformModelRefs,
   type AgentModelSelections,
 } from "@octogee/shared/types/agent-models";
-import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { configuredPlatformVertexBaseUrl } from "./platform-vertex-env.js";
 import { customerModelProviderDeclarationsMatch, platformBrokerProviderDeclarations } from "./system-config-invariants.js";
 import {
@@ -2091,7 +2091,7 @@ export async function syncByotForCustomer(
   const logFn = deps?.logFn ?? log;
   const customerGate = customerByotGate(builder, shared, desired, userData, logFn);
   const effectiveDesired = customerGate.desired;
-  const houseOnly = resolveBillingProfile(userData).modelAccess === "house_only";
+  const houseOnly = userEntitlements().plan(userData).modelAccess === "house_only";
   const oauthPurge = await purgeCustomerOauthIfRequired(
     builder,
     slug,

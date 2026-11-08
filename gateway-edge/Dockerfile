@@ -13,7 +13,7 @@ RUN npm install --global npm@${NPM_VERSION} --ignore-scripts --no-audit --no-fun
 #
 # WORKDIR must be /gateway-edge (not /app) so that tsc's emit paths — which
 # mirror each source file's location relative to rootDir ("..", the container
-# root /) — produce dist/gateway-edge/src/index.js, matching package.json
+# root /) — produce dist/gateway-edge/src/product-main.js, matching package.json
 # main + CMD.
 FROM node:26.13.0-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS builder
 RUN rm -rf /usr/local/lib/node_modules/npm
@@ -73,4 +73,4 @@ COPY gateway-edge/agent-import-gitleaks.toml ./agent-import-gitleaks.toml
 USER node
 EXPOSE 3001
 ENV PORT=3001
-CMD ["node", "dist/gateway-edge/src/index.js"]
+CMD ["node", "dist/gateway-edge/src/product-main.js"]

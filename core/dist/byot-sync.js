@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { catalogEntryForModelRef, OPENAI_PLATFORM_PROVIDER_ID, VERTEX_PLATFORM_PROVIDER_ID, OPENROUTER_PLATFORM_PROVIDER_ID, } from "@octogee/shared/types/agent-models";
 import { DEFAULT_FREE_TIER_MODEL_REF } from "@octogee/shared/types/platform-config";
 import { buildModelCredentialConfigForProvider, claudeCliRuntimeConfig, codexRuntimeConfig, isModelCredentialOauthProvider, MODEL_CREDENTIAL_MATERIALIZER_PROVIDERS, } from "./model-credential-materializer.js";
@@ -301,7 +301,7 @@ export function platformCoachModelInputForUser(slug, userData) {
 // house model. The broker would degrade anyway; pinning keeps the config
 // honest so /status and the agent's self-report agree with the wire.
 function freeTierCoachModelInput(slug, userData) {
-    const plan = resolveBillingProfile(userData);
+    const plan = userEntitlements().plan(userData);
     return plan.modelAccess === "house_only"
         ? { slug, model: houseModelRefFrom(userData.freeTierModelRef), source: "free-tier" }
         : null;

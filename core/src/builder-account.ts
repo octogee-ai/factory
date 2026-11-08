@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Firestore } from "firebase-admin/firestore";
-import { pickPlanInputs, type TierResolvable } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 
 export interface BuilderAccount {
   readonly uid: string;
@@ -7,7 +7,7 @@ export interface BuilderAccount {
   readonly email: string | null;
   readonly displayName: string | null;
   readonly lastActive: number | null;
-  readonly planInputs: TierResolvable;
+  readonly planInputs: Readonly<Record<string, unknown>>;
   readonly byotActive: boolean;
   readonly usage: Readonly<Record<string, unknown>>;
   readonly mattermostUsername: string | null;
@@ -55,7 +55,7 @@ export function builderAccountFromData(uid: string, data: Data): BuilderAccount 
     email: nonEmptyString(data.email),
     displayName: nonEmptyString(data.displayName),
     lastActive: millis(data.lastActive),
-    planInputs: { ...pickPlanInputs(data), ...(data.tier === undefined ? {} : { tier: data.tier }) },
+    planInputs: { ...userEntitlements().pickInputs(data), ...(data.tier === undefined ? {} : { tier: data.tier }) },
     byotActive: data.byotActive === true,
     usage: map(data.usage),
     mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,

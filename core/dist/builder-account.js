@@ -1,4 +1,4 @@
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 function map(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -27,7 +27,7 @@ export function builderAccountFromData(uid, data) {
         email: nonEmptyString(data.email),
         displayName: nonEmptyString(data.displayName),
         lastActive: millis(data.lastActive),
-        planInputs: { ...pickPlanInputs(data), ...(data.tier === undefined ? {} : { tier: data.tier }) },
+        planInputs: { ...userEntitlements().pickInputs(data), ...(data.tier === undefined ? {} : { tier: data.tier }) },
         byotActive: data.byotActive === true,
         usage: map(data.usage),
         mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,

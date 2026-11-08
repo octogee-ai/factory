@@ -5,7 +5,7 @@ import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { readConnectorAccessToken } from "./connector-tokens.js";
 import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "@octogee/core/gitea-naming";
 import { logger } from "../middleware/logging.js";
-import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 
 export interface FileTarget {
@@ -113,7 +113,7 @@ async function projectMutationIsBlocked(
   if (project.commercialLifecycle?.status === "archived") return true;
   const owner = await db.doc(`users/${project.ownerUid}`).get();
   const ownerData = owner.exists ? owner.data() ?? {} : {};
-  return resolveCommercialEntitlements(ownerData).projectMode !== "active";
+  return userEntitlements().projectMode(ownerData) !== "active";
 }
 
 function giteaProjectTarget(

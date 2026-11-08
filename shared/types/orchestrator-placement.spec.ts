@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
+import { octogeeUserEntitlements } from "./octogee-entitlements.js";
 import {
   resolveContinuousBuilderPlacement,
   resolveOnboardingPlacementEligibility,
 } from "./orchestrator-placement.js";
+import { installUserEntitlements } from "./user-entitlements.js";
+
+beforeEach(() => installUserEntitlements(octogeeUserEntitlements));
 
 describe("onboarding placement eligibility", () => {
   it("accepts only completed identity onboarding with a server-started provisioning state", () => {

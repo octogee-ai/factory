@@ -1,4 +1,4 @@
-import type { ProjectCommercialMode } from "./commercial-entitlements.js";
+import type { ProjectAccessMode } from "./user-entitlements.js";
 
 export const PROJECT_ARCHIVE_DAYS = 90;
 export const PROJECT_ARCHIVE_WARNING_DAYS = 7;
@@ -104,7 +104,7 @@ function deletingState(state: ProjectRetentionState): ProjectRetentionState {
 
 export function planProjectRetention(
   current: ProjectRetentionState | null | undefined,
-  projectMode: ProjectCommercialMode,
+  projectMode: ProjectAccessMode,
   now: Date = new Date(),
 ): ProjectRetentionPlan {
   if (current?.status === "deleting") {

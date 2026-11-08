@@ -1,7 +1,7 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const logger = createServiceLogger("provisioner");
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
-import { pickPlanInputs } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { projectAgentConfigured, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
 export function mapWorkspaceChannelDoc(data) {
     const channelId = data.mattermost?.channelId;
@@ -186,6 +186,6 @@ export function mapUserDocToSnapshot(uid, data, channels) {
         byotActive: Boolean(data.byotActive),
         ...snapshotIdentity(data, slug),
         ...snapshotProvisioning(data),
-        ...pickPlanInputs(data),
+        ...userEntitlements().pickInputs(data),
     };
 }

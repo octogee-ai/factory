@@ -1,4 +1,4 @@
-import type { OwnedSignupOfferBudget } from "@octogee/shared/types/billing";
+import type { OwnedSignupOfferBudget } from "@octogee/shared/types/signup-offer";
 
 import {
   exhaustedSpendBudget,

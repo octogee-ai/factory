@@ -1,5 +1,5 @@
 import type { BuilderAccountReader } from "@octogee/core/builder-account";
-import type { OwnedSignupOfferBudget } from "@octogee/shared/types/billing";
+import type { OwnedSignupOfferBudget } from "@octogee/shared/types/signup-offer";
 import {
   readGatewayAuthorizationInStore,
   type GatewayAuthorization,

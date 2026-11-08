@@ -16,7 +16,7 @@ import {
   isAgentImportAuthorizationIntent,
   type AgentImportAuthorizationIntent,
 } from "@octogee/shared/types/agent-import";
-import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import type { FeaturePolicy } from "@octogee/shared/types/feature-flags";
 import { isValidGatewayId } from "@octogee/shared/types/glm";
 import { isValidUsername } from "@octogee/shared/types/identity";
@@ -138,7 +138,7 @@ async function ownerContext(
     isAdmin: builder?.role === "admin",
     ...(typeof planInputs.selectedTier === "string" ? { planTier: planInputs.selectedTier } : {}),
     workspacePolicy: {
-      preserveConvergedContextFiles: resolveBillingProfile(planInputs, deps.now()).modelAccess === "house_only",
+      preserveConvergedContextFiles: userEntitlements().plan(planInputs, deps.now()).modelAccess === "house_only",
     },
   };
 }

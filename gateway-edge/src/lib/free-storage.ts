@@ -1,15 +1,14 @@
-import type { TierResolvable } from "@octogee/shared/types/billing";
-import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { userEntitlements, type UserEntitlementInputs } from "@octogee/shared/types/user-entitlements";
 import type { PlatformFreeConfig } from "@octogee/shared/types/platform-config";
 
 export function freeWorkspaceStorageLimitBytes(
-  userData: TierResolvable,
+  userData: UserEntitlementInputs,
   projectStorage: boolean,
   config: PlatformFreeConfig,
 ): number | undefined {
   if (
     projectStorage ||
-    resolveCommercialEntitlements(userData).projectMode === "active"
+    userEntitlements().projectMode(userData) === "active"
   ) {
     return undefined;
   }

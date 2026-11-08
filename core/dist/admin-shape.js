@@ -1,5 +1,4 @@
-import { getTierConfig } from "@octogee/shared/types/billing-tiers";
-import { resolveBillingProfile, spendDegradeState } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { MODEL_BROKER_USAGE_WINDOW_MS, MODEL_BROKER_WEEK_WINDOW_MS, spendWindowPercentUsed, usageWindowStartMs, weekWindowStartMs, } from "@octogee/shared/types/model-broker-usage";
 export function toISODate(val) {
     if (!val)
@@ -44,8 +43,8 @@ function builderSummaryFields(builder) {
 export function buildCustomerSummary(builder, account, broker = {}) {
     const subscription = objectAt(account.planInputs, "subscription");
     const now = broker.now ?? Date.now();
-    const plan = resolveBillingProfile(account.planInputs, new Date(now));
-    const tierConfig = getTierConfig(plan.tier);
+    const plan = userEntitlements().plan(account.planInputs, new Date(now));
+    const monthlyPriceUsd = userEntitlements().monthlyPriceUsd(plan.planId);
     const subscriptionStatus = stringAt(subscription, "status", "trial");
     const usage = account.usage;
     const windowCostUsd = broker.windowCostUsd ?? 0;
@@ -55,33 +54,29 @@ export function buildCustomerSummary(builder, account, broker = {}) {
     // percentage against a zero budget would misleadingly read 100% — mirror the
     // customer surfaces and show 0. The broker never throttles them either.
     const onOwnerCredential = account.byotActive;
-    const degraded = spendDegradeState({
-        modelAccess: plan.modelAccess,
+    const degraded = userEntitlements().spendThrottle(plan, {
         windowCostUsd,
-        windowBudgetUsd: plan.windowBudgetUsd,
         weekCostUsd,
-        weekBudgetUsd: plan.weeklyBudgetUsd,
         onOwnerCredential,
-        houseFallback: plan.houseFallback,
     }).degraded;
     const revenueUsd = isActiveStatus(subscriptionStatus)
-        ? tierConfig.monthlyPrice
+        ? monthlyPriceUsd
         : 0;
     return {
         uid: builder.uid,
         displayName: displayNameFor(account),
         email: account.email ?? "",
         username: account.username ?? "",
-        tier: plan.tier,
-        effectiveTier: plan.effectiveTier,
-        trialDaysRemaining: plan.trialDaysRemaining,
+        tier: plan.planId,
+        effectiveTier: plan.activePlanId,
+        trialDaysRemaining: plan.introductoryDaysRemaining,
         subscriptionStatus,
         byotActive: account.byotActive,
         windowCostUsd,
-        windowBudgetUsd: plan.windowBudgetUsd,
+        windowBudgetUsd: plan.spendWindowUsd,
         weekCostUsd,
-        weekBudgetUsd: plan.weeklyBudgetUsd,
-        weekPercentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(weekCostUsd, plan.weeklyBudgetUsd),
+        weekBudgetUsd: plan.spendWeekUsd,
+        weekPercentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(weekCostUsd, plan.spendWeekUsd),
         weekResetAt: new Date(weekWindowStartMs(now) + MODEL_BROKER_WEEK_WINDOW_MS).toISOString(),
         nextRefillAt: new Date(usageWindowStartMs(now) + MODEL_BROKER_USAGE_WINDOW_MS).toISOString(),
         totalTokensUsed: numberAt(usage, "totalTokensUsed", numberAt(usage, "tokensUsed")),
@@ -90,7 +85,7 @@ export function buildCustomerSummary(builder, account, broker = {}) {
         degraded,
         lastActive: toISODate(usage.lastUpdated),
         mattermostUsername: account.mattermostUsername,
-        percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
+        percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.spendWindowUsd),
         revenueUsd,
         marginUsd: revenueUsd - costUsd,
         ...builderSummaryFields(builder),

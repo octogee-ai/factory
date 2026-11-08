@@ -5,7 +5,7 @@ import { readProject } from "./firestoreReads.js";
 import { logger } from "../middleware/logging.js";
 import { mapMattermostMembershipError } from "./channel-lifecycle.js";
 import { isValidProjectId, USERNAME_RE } from "@octogee/shared/types/identity";
-import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 
 export type ProjectCtx = {
   projectRef: FirebaseFirestore.DocumentReference;
@@ -45,7 +45,7 @@ export async function projectIsArchived(project: Project): Promise<boolean> {
   if (project.commercialLifecycle?.status === "archived") return true;
   const owner = await db.doc(`users/${project.ownerUid}`).get();
   const ownerData = owner.exists ? owner.data() ?? {} : {};
-  return resolveCommercialEntitlements(ownerData).projectMode !== "active";
+  return userEntitlements().projectMode(ownerData) !== "active";
 }
 
 function respondToHandlerError(res: Response, err: unknown, fallbackErrorMessage: string): void {

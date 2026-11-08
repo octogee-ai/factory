@@ -1,3 +1,4 @@
+import "../lib/octogee-entitlements.js";
 import { createBrokeredProjectBlobHydrator } from "../lib/project-blob-materialization.js";
 import { persistBuilderProjects, persistSharedCustomerFiles, persistAssignedSharedCustomers, startProjectAutosave } from "../lib/project-persistence.js";
 import { createServiceLogger } from "@octogee/shared/server/service-logger";

@@ -1,3 +1,4 @@
+import "../lib/octogee-entitlements.js";
 
 
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";

@@ -1,3 +1,4 @@
+import { installUserEntitlements, staticUserEntitlements, userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -239,4 +240,16 @@ describe("gateway-edge sidecar surface", () => {
     expect(res.status).toBe(404);
     expect(reviewer).not.toHaveBeenCalled();
   });
+});
+
+it("initializes bare platform entitlements when constructing the edge app", () => {
+  const previous = userEntitlements();
+  const slot = Symbol.for("octogee.userEntitlements");
+  try {
+    Reflect.deleteProperty(globalThis, slot);
+    createApp({ surface: "sidecar" });
+    expect(userEntitlements()).toBe(staticUserEntitlements);
+  } finally {
+    installUserEntitlements(previous);
+  }
 });

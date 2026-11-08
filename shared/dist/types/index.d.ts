@@ -19,10 +19,6 @@ export type { DeveloperToolchainStatus, DeveloperToolchainStatusArtifact, } from
 export { DEVELOPER_TOOLCHAIN_STATUS_FILE_RELATIVE_PATH, DEVELOPER_TOOLCHAIN_STATUS_SCHEMA_VERSION, DEVELOPER_TOOLCHAIN_STATUSES, isDeveloperToolchainStatus, parseDeveloperToolchainStatusArtifact, } from './developer-toolchain.js';
 export type { Channel, ChannelKind, ChannelMattermost, } from './channel.js';
 export type { Member, MemberRole, } from './member.js';
-export { WINDOWS_PER_DAY, WINDOWS_PER_WEEK, WINDOW_BURST_MULTIPLIER, planWeeklyBudgetUsd, planWindowBudgetUsd, resolveEffectivePlan, resolveBuilderTier, resolvePaidBuilderTier, resolvePaidPersonalTier, resolveTier, resolveSignupOfferBudget, signupOfferBudgetForOwner, signupOfferDayIndex, } from './billing.js';
-export type { BillingProfile, BillingRail, EffectivePlan, PlanInputs, TierResolvable, TrialGrant, LegacyTrialGrant, ParsedTrialGrant, ResolvedSignupOfferBudget, OwnedSignupOfferBudget, } from './billing.js';
-export type { CommercialEntitlements, ProjectCommercialMode, } from './commercial-entitlements.js';
-export { resolveCommercialEntitlements } from './commercial-entitlements.js';
 export type { PlatformFreeConfig, } from './platform-config.js';
 export { DEFAULT_SIGNUP_OFFER_BUDGET_POLICY, MODEL_BROKER_SIGNUP_OFFER_BUDGETS_COLLECTION, SIGNUP_OFFER_LEDGER_RETENTION_MS, modelBrokerSignupOfferBudgetDocId, parseModelBrokerSignupOfferBudget, parseSignupOfferBudgetPolicy, } from './signup-offer.js';
 export type { ModelBrokerSignupOfferBudget, SignupOfferBudgetIdentity, SignupOfferBudgetPolicy, } from './signup-offer.js';

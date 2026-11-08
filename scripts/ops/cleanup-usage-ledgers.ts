@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../lib/octogee-entitlements.js";
 
 // One-shot for the usage-ledger TTL retrofit. Run ONCE per project after the
 // Terraform-owned TTL policies converge:

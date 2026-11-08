@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { parseTimeZone } from "@octogee/shared/types/time-zone";
 import * as path from "path";
-import { resolveBillingProfile } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import { PLATFORM_CONVERGED_CONTEXT_FILES, readTierTemplateFile, } from "./tier-template-files.js";
 import { CUSTOMERS_DIR, log } from "./config.js";
 // The seed tier and the converged tier are deliberately different concepts: a
@@ -9,16 +9,6 @@ import { CUSTOMERS_DIR, log } from "./config.js";
 // converges from then on onto whatever their plan resolves to today. A
 // trial-boosted signup seeds tiers/trial/ and converges onto tiers/free/ when
 // the boost lapses, onto tiers/paid/ when they subscribe.
-// Trial state is checked before model access on purpose: a Signup Offer whose
-// Personal plan is personal_free still resolves modelAccess "house_only", and
-// that customer is mid-onboarding on a trial, not a lapsed free user.
-function convergedContextTemplateTier(plan) {
-    if (plan.rail === "signup_offer" || plan.trialDaysRemaining !== null)
-        return "trial";
-    if (plan.modelAccess === "house_only")
-        return "free";
-    return "paid";
-}
 // Files the platform REMOVES for customers on the free template: they are already
 // bootstrapped by platform onboarding by the time the coach runs, so a seeded
 // BOOTSTRAP.md (pre-removal seeds, or a Gitea boot-sync resurrection) is dead
@@ -70,8 +60,8 @@ export function reassertUserTimeZoneLine(customerDir, timeZone) {
     return true;
 }
 export function reassertConvergedContextFiles(slug, customerDir, userData, vars = {}) {
-    const plan = resolveBillingProfile(userData);
-    const templateTier = convergedContextTemplateTier(plan);
+    const plan = userEntitlements().plan(userData);
+    const templateTier = plan.contextTemplate;
     const changed = [];
     if (reassertUserTimeZoneLine(customerDir, parseTimeZone(userData.timeZone))) {
         changed.push("USER.md");

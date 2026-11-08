@@ -17,7 +17,7 @@ import {
   claimGatewayRetirementInStore,
 } from "@octogee/core/gateway-retirement-claim";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
+import { userEntitlements } from "@octogee/shared/types/user-entitlements";
 import {
   GATEWAY_UNREACHABLE_AFTER_MS,
   parseConfiguredBuilderReport,
@@ -911,7 +911,7 @@ function entitledComputerSizing(
   user: PlacementPolicyUser,
 ): SizingTier | null {
   if (!accountAllowsInteractiveAccess(user.data)) return null;
-  const tier = resolveBuilderTier(user.data, new Date(context.deps.now()));
+  const tier = userEntitlements().sizingKey(user.data, new Date(context.deps.now()));
   if (tier === null) return null;
   const profile = requireSizingProfile(context.state.sizingProfiles, tier);
   return profile.isolation === "isolated" && profile.computer.runtime === "gce-vm" ? profile.sizingTier : null;
@@ -1565,7 +1565,7 @@ async function cleanupUnauthorizedProvisioningTarget(
 ): Promise<boolean> {
   const { context, user, lease, target } = input;
   const authorized = accountAllowsInteractiveAccess(user.data) &&
-    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+    userEntitlements().sizingKey(user.data, new Date(context.deps.now())) !== null;
   if (authorized) return false;
   if (!await retireProvisioningTarget(input, "builder-authorization-ended", {
     code: "provisioning-authorization-cleanup-pending",
@@ -1787,7 +1787,7 @@ async function reconcileActivatingLease(
     target,
   })) return;
   const authorized = accountAllowsInteractiveAccess(user.data) &&
-    resolveBuilderTier(user.data, new Date(context.deps.now())) !== null;
+    userEntitlements().sizingKey(user.data, new Date(context.deps.now())) !== null;
   if (!authorized && current !== lease.targetGatewayId) {
     blockPlacement(context, {
       uid: user.uid,
@@ -1994,7 +1994,7 @@ async function reconcileActiveLease(
     });
     return;
   }
-  const tier = resolveBuilderTier(user.data, new Date(context.deps.now()));
+  const tier = userEntitlements().sizingKey(user.data, new Date(context.deps.now()));
   const authorized = accountAllowsInteractiveAccess(user.data) && tier !== null;
   if (!authorized) {
     await queueLeaseReturn(context, user, builderSlug, lease);

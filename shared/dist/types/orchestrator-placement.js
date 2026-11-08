@@ -1,4 +1,4 @@
-import { resolveBuilderTier } from "./billing.js";
+import { userEntitlements } from "./user-entitlements.js";
 import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
 function nonEmptyString(value) {
     return typeof value === "string" && value.length > 0 ? value : null;
@@ -6,7 +6,7 @@ function nonEmptyString(value) {
 export function resolveLiveActivationTargetGatewayId(input) {
     if (!accountAllowsInteractiveAccess(input.userData))
         return null;
-    if (resolveBuilderTier(input.userData, input.now) === null)
+    if (userEntitlements().sizingKey(input.userData, input.now) === null)
         return null;
     const provisioning = input.userData.provisioning;
     if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning))

@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import "../lib/octogee-entitlements.js";
 
 import {
   applicationDefault,
