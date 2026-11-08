@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    "./platform-state": {
+      "types": "./dist/platform-state/index.d.ts",
+      "default": "./dist/platform-state/index.js"
+    },
     "./project-coach-workspaces": {
       "types": "./dist/project-coach-workspaces.d.ts",
       "default": "./dist/project-coach-workspaces.js"
