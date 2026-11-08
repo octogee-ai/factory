@@ -1,29 +1,5 @@
 import { type OperationAuditAliasOutcome, type OperationAuditAliasPlan, type OperationAuditPartialOutcome, type OperationAuditRecord, type OperationAuditReleaseRolloutLinkage, type OperationAuditTestProvenance } from "@octogee/shared/types/glm";
 import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/store.js";
-export interface OperationsDocSnapshot {
-    exists: boolean;
-    id: string;
-    data(): Record<string, unknown> | undefined;
-}
-export interface OperationsDocRef {
-    id: string;
-    get(): Promise<OperationsDocSnapshot>;
-}
-export interface OperationsCollection {
-    add(data: Record<string, unknown>): Promise<{
-        id: string;
-    }>;
-    doc(id: string): OperationsDocRef;
-}
-export interface OperationsDb {
-    collection(name: string): OperationsCollection;
-    runTransaction<T>(body: (transaction: OperationsTransaction) => Promise<T>): Promise<T>;
-}
-export interface OperationsTransaction {
-    get(ref: OperationsDocRef): Promise<OperationsDocSnapshot>;
-    create(ref: OperationsDocRef, data: Record<string, unknown>): void;
-    update(ref: OperationsDocRef, data: Record<string, unknown>): void;
-}
 export interface OperationAuditIntentInput {
     actor: string;
     forced: boolean;

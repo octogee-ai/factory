@@ -1,5 +1,5 @@
-import type { Firestore, Transaction } from 'firebase-admin/firestore';
-import { assertGatewayRuntimeMutationUnfenced } from '@octogee/core/gateway-retirement-claim';
+import type { PlatformStateStore, PlatformStateTransaction } from '@octogee/core/platform-state';
+import { assertGatewayRuntimeMutationUnfencedInStore } from '@octogee/core/gateway-retirement-claim';
 
 let runtimeMutationTail: Promise<unknown> = Promise.resolve();
 
@@ -10,13 +10,13 @@ export function runGatewayRuntimeExclusive<T>(work: () => Promise<T>): Promise<T
 }
 
 export async function withGatewayRuntimeMutation<T>(
-  db: Firestore,
+  store: PlatformStateStore,
   gatewayId: string,
-  mutation: (transaction: Transaction) => Promise<T>,
+  mutation: (transaction: PlatformStateTransaction) => Promise<T>,
   allowedComputerRecoveryOperationId?: string,
 ): Promise<T> {
-  return db.runTransaction(async transaction => {
-    await assertGatewayRuntimeMutationUnfenced(db,transaction,gatewayId,allowedComputerRecoveryOperationId);
+  return store.transaction({ label: 'gateway-runtime-mutation' }, async transaction => {
+    await assertGatewayRuntimeMutationUnfencedInStore(transaction, gatewayId, allowedComputerRecoveryOperationId);
     return mutation(transaction);
   });
 }

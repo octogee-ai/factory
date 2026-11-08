@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import type { Operation } from "@octogee/shared/types/glm";
 import { attemptNeverHeldSource, rearmOwnedLegacyMigration } from "./legacy-migration-recovery.js";
 
@@ -9,44 +9,39 @@ function fixture(migrationId: string, operationId = "op-1") {
     completedAt: 2_000, error: "reaped: controller restarted mid-op", input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     steps, schedulerHandoff: { migrationId, uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
   } as Operation;
-  const records: Record<string, unknown> = {
-    [`glmOperations/${operationId}`]: operation,
+  const path = `glmOperations/${operationId}`;
+  const records: Record<string, Record<string, unknown>> = {
+    [path]: operation as unknown as Record<string, unknown>,
     "users/alice": { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "preparing", phase: "preparing", startedAt: 1_000, operationId } } } },
-    "gateways/shared-a/assignments/alice": { uid: "alice", gatewayId: "shared-a", state: "serving", epoch: 4 },
+    "gateways/shared-a/assignments/alice": { uid: "alice", slug: "alice", gatewayId: "shared-a", source: "migrate-customer", state: "serving", epoch: 4,
+      createdAt: 500, updatedAt: 500, updatedByOperationId: null },
   };
-  const ref = (path: string) => ({ id: path.split("/").at(-1), path, collection: (name: string) => ({ doc: (id: string) => ref(`${path}/${name}/${id}`) }) });
-  let patch: Record<string, unknown> | undefined;
-  const db = {
-    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-    runTransaction: async (body: (tx: unknown) => Promise<unknown>) => body({
-      get: async (doc: { path: string }) => ({ exists: records[doc.path] !== undefined, data: () => records[doc.path] }),
-      update: (_doc: unknown, update: Record<string, unknown>) => { patch = update; },
-    }),
-  } as unknown as Firestore;
-  return { operation, records, db, ref: ref(`glmOperations/${operationId}`) as unknown as FirebaseFirestore.DocumentReference, patch: () => patch };
+  const store = createDocumentFixtureStore(records);
+  const rearm = () => rearmOwnedLegacyMigration({ store, operationId, now: 3_000, admitted: () => true });
+  return { operation, records, rearm, stored: () => records[path] === operation ? undefined : records[path] };
 }
 
 describe("claimed scheduler recovery evidence", () => {
   it.each(["mig-op-1:scheduler:1:claim:1000"])("recovers %s without inflating attempts or losing steps", async id => {
     const h = fixture(id);
     expect(attemptNeverHeldSource(h.operation)).toBe(true);
-    expect(await rearmOwnedLegacyMigration({ db: h.db, ref: h.ref, now: 3_000, admitted: () => true })).toBe(true);
-    expect(h.patch()).toMatchObject({ attempts: 1, schedulerHandoff: { migrationId: id, sourceRecovery: { steps: h.operation.steps } },
+    expect(await h.rearm()).toBe(true);
+    expect(h.stored()).toMatchObject({ attempts: 1, schedulerHandoff: { migrationId: id, sourceRecovery: { steps: h.operation.steps } },
       attemptHistory: [{ attempt: 1, startedAt: 1_000, steps: h.operation.steps }] });
   });
   it.each([false, true])("rejects unqualified custody even with persisted source recovery=%s", async recovery => {
     const h = fixture("mig-op-1:scheduler:1");
     if (recovery) h.operation.schedulerHandoff!.sourceRecovery = { migrationId: h.operation.schedulerHandoff!.migrationId, sourceEpoch: 4, steps: h.operation.steps };
     expect(attemptNeverHeldSource(h.operation)).toBe(false);
-    expect(await rearmOwnedLegacyMigration({ db: h.db, ref: h.ref, now: 3_000, admitted: () => true })).toBe(false);
-    expect(h.patch()).toBeUndefined();
+    expect(await h.rearm()).toBe(false);
+    expect(h.stored()).toBeUndefined();
   });
 
   it("does not attribute current steps to a different claim of the same failure attempt", async () => {
     const h = fixture("mig-op-1:scheduler:1:claim:999");
     expect(attemptNeverHeldSource(h.operation)).toBe(false);
-    expect(await rearmOwnedLegacyMigration({ db: h.db, ref: h.ref, now: 3_000, admitted: () => true })).toBe(false);
-    expect(h.patch()).toBeUndefined();
+    expect(await h.rearm()).toBe(false);
+    expect(h.stored()).toBeUndefined();
   });
 });
 
@@ -62,14 +57,14 @@ describe("released forward-only Builder activation recovery admission", () => {
     h.records["users/alice"] = { provisioning: { openclaw: { gatewayId: scenario === "source-moved" ? target : "shared-a",
       migration: { state: "moving", phase: "transferring", startedAt: 1_000, operationId: id }, activationLease: { leaseId: "lease-one", generation: 1, status: "activating",
         sourceGatewayId: "shared-a", sourceAssignmentEpoch: 4, targetGatewayId: target } } } };
-    h.records[`gateways/${target}`] = { gatewayId: target, gatewayClass: scenario === "shared-target" ? "shared" : "builder", ownerUid: "alice",
+    h.records[`gateways/${target}`] = { gatewayId: target, desiredRelease: 1, latestRelease: 1, desiredStatus: "running", gatewayClass: scenario === "shared-target" ? "shared" : "builder", ownerUid: "alice",
       allocation: { kind: "disposable-builder", leaseId: "lease-one", generation: scenario === "wrong-generation" ? 2 : 1, claimedByUid: "alice" } };
     if (scenario === "history-evicted") Object.assign(h.operation, { attempts: 50, startedAt: 8_000, attemptHistory: [] });
     if (scenario === "committed") h.operation.cutoverCommittedAt = 2_000;
-    const admitted = await rearmOwnedLegacyMigration({ db: h.db, ref: h.ref, now: 3_000, admitted: () => true });
+    const admitted = await h.rearm();
     expect(admitted).toBe(scenario === "released" || scenario === "history-evicted");
-    if (admitted) expect(h.patch()).toMatchObject({ status: "pending", "input.recoverSourceOnly": true,
+    if (admitted) expect(h.stored()).toMatchObject({ status: "pending", input: { recoverSourceOnly: true },
       schedulerHandoff: { forwardRecovery: { targetReleased: true }, sourceRecovery: { sourceEpoch: 4, steps: h.operation.steps } } });
-    else expect(h.patch()).toBeUndefined();
+    else expect(h.stored()).toBeUndefined();
   });
 });

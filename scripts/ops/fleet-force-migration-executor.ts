@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore } from "@octogee/core/platform-state";
+import type { GatewayRuntimeRestartFenceValue, PlatformStateStore } from "@octogee/core/platform-state";
 import {
   readForceMigrationPlan, readForceMigrationPlanInTransaction, readForceMigrationSource,
   type ForceMigrationTarget, type OwnedMigrationRestart,
@@ -18,12 +17,12 @@ function result(target: ForceMigrationTarget, request: Record<string, unknown>):
   return { operationId: target.operationId, auditId: String(request.auditId), sourceEpoch: Number(request.sourceEpoch), completedAt: Number(request.completedAt) };
 }
 
-export async function readForcedMigrationRecovery(db: Firestore, target: ForceMigrationTarget): Promise<{
+export async function readForcedMigrationRecovery(store: PlatformStateStore, target: ForceMigrationTarget): Promise<{
   owned?: OwnedMigrationRestart;
   completed?: ForceMigrationResult;
 }> {
-  await readForceMigrationSource(db, target);
-  const operation = (await db.collection("glmOperations").doc(target.operationId).get()).data();
+  await readForceMigrationSource(store, target);
+  const operation = await store.journal.operations.get(target.operationId);
   if (operation?.forceDrainRequest === undefined) return {};
   const request = record(operation.forceDrainRequest);
   if (typeof request.auditId !== "string" || !request.auditId || request.uid !== target.uid ||
@@ -33,7 +32,7 @@ export async function readForcedMigrationRecovery(db: Firestore, target: ForceMi
     if (!Number.isSafeInteger(request.completedAt) || Number(request.completedAt) < 1) throw new Error("force migration completion is malformed");
     return { completed: result(target, request) };
   }
-  const fence = record((await db.collection("gateways").doc(target.fromGatewayId).get()).data()?.runtimeRestartFence);
+  const fence = record((await store.gateways.roots.get(target.fromGatewayId))?.runtimeRestartFence);
   if (fence.kind !== "process" || fence.auditId !== request.auditId || fence.attemptId !== request.auditId ||
     fence.gatewayId !== target.fromGatewayId || fence.operationId !== target.operationId ||
     !["reserved", "dispatched"].includes(String(fence.phase))) throw new Error("force migration restart fence ownership changed");
@@ -55,16 +54,20 @@ function verifyReceipt(receipt: ForceMigrationReceipt, fence: Record<string, unk
     !/^[A-Za-z0-9_-]{1,128}$/.test(receipt.afterBootId) || receipt.afterBootId === beforeBootId) throw new Error("force migration restart completion unverified");
 }
 
+function restartFence(fence: Record<string, unknown>): GatewayRuntimeRestartFenceValue {
+  return fence as GatewayRuntimeRestartFenceValue;
+}
+
 export async function runForcedMigration(input: {
-  db: Firestore; target: ForceMigrationTarget; actor: string; transport: ForceMigrationTransport; now?: () => number;
+  store: PlatformStateStore; target: ForceMigrationTarget; actor: string; transport: ForceMigrationTransport; now?: () => number;
 }): Promise<ForceMigrationResult> {
-  const { db, target, actor, transport } = input;
+  const { store, target, actor, transport } = input;
   const now = input.now ?? Date.now;
-  const recovery = await readForcedMigrationRecovery(db, target);
+  const recovery = await readForcedMigrationRecovery(store, target);
   if (recovery.completed) return recovery.completed;
-  const plan = await readForceMigrationPlan(db, target, recovery.owned);
+  const plan = await readForceMigrationPlan(store, target, recovery.owned);
   const pod = recovery.owned ? boundPod(recovery.owned.fence) : await transport.capture(target.fromGatewayId);
-  return runNormalFleetMutation(createFirestorePlatformStateStore({ db }), {
+  return runNormalFleetMutation(store, {
     actor, forced: true, what: recovery.owned ? "Observe forced migration recovery" : "Force source gateway restart for blocked migration",
     why: "Operator accepts interruption of the dedicated Builder gateway while preserving its pod, disk, and existing migration",
     target: { ...target, sourceEpoch: plan.sourceEpoch }, preActionStatus: { ...plan },
@@ -77,21 +80,23 @@ export async function runForcedMigration(input: {
           sourceGatewayId: target.fromGatewayId, targetGatewayId: target.toGatewayId, sourceEpoch: plan.sourceEpoch };
         const fence = { kind: "process", attemptId: claim.auditId, auditId: claim.auditId, gatewayId: target.fromGatewayId,
           operationId: target.operationId, phase: "reserved", startedAt: requestedAt, target: pod, plan };
-        await db.runTransaction(async txn => {
-          const fresh = await readForceMigrationPlanInTransaction(db, txn, target);
+        await store.transaction({ label: "fleet-force-migration.reserve" }, async tx => {
+          const fresh = await readForceMigrationPlanInTransaction(tx, target);
           if (!isDeepStrictEqual(fresh, plan)) throw new Error("force migration authority changed before reservation");
-          txn.update(db.collection("gateways").doc(target.fromGatewayId), { runtimeRestartFence: fence });
-          txn.update(db.collection("glmOperations").doc(target.operationId), { forceDrainRequest: request });
+          await tx.gateways.roots.compareAndSetRuntimeRestartFence(target.fromGatewayId, null, restartFence(fence));
+          await tx.journal.operations.patch(target.operationId, { forceDrainRequest: request });
         });
         owned = { fence, request };
       }
       const save = async (next: Record<string, unknown> | null, receipt?: ForceMigrationReceipt): Promise<void> => {
         const current = owned!;
-        await db.runTransaction(async txn => {
-          const fresh = await readForceMigrationPlanInTransaction(db, txn, target, current);
+        await store.transaction({ label: "fleet-force-migration.save" }, async tx => {
+          const fresh = await readForceMigrationPlanInTransaction(tx, target, current);
           if (!isDeepStrictEqual(fresh, current.fence.plan)) throw new Error("force migration authority changed during restart");
-          txn.update(db.collection("gateways").doc(target.fromGatewayId), { runtimeRestartFence: next ?? FieldValue.delete() });
-          if (!next) txn.update(db.collection("glmOperations").doc(target.operationId), {
+          await tx.gateways.roots.compareAndSetRuntimeRestartFence(
+            target.fromGatewayId, restartFence(current.fence), next ? restartFence(next) : null,
+          );
+          if (!next) await tx.journal.operations.patch(target.operationId, {
             forceDrainRequest: { ...current.request, completedAt: now(), podUid: pod.podUid, containerImage: pod.containerImage, receipt },
             nextAttemptAt: now(),
           });

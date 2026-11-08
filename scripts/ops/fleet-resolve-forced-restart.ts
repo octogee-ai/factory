@@ -1,15 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Firestore } from "firebase-admin/firestore";
 import { updateRuntimeRestart, type RuntimeRestartFence } from "@octogee/core/gateway-runtime-restart";
 import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import { createRestartDriverDeps } from "@octogee/core/gateway-restart-probe";
 import { runNormalFleetMutation, type NormalFleetMutationInput } from "@octogee/core/normal-fleet-mutation";
-import {
-  createFirestorePlatformStateStore,
-  type GatewayRelease,
-  type GatewayRoot,
-  type OperationAuditRow,
-  type PlatformStateTransaction,
+import type {
+  GatewayRelease,
+  GatewayRoot,
+  OperationAuditRow,
+  PlatformStateStore,
+  PlatformStateTransaction,
 } from "@octogee/core/platform-state";
 import { isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash } from "../../shared/types/gateway-releases.js";
 import type { FleetKubectlRunner } from "./fleet.js";
@@ -116,7 +115,7 @@ export function nativeProbeSource(packagePath = "/octogee/scripts/package.json")
 }
 
 interface Input {
-  db: Firestore;
+  store: PlatformStateStore;
   gatewayId: string;
   forceAuditId: string;
   kubeContext: string;
@@ -168,7 +167,7 @@ function observeReplacement(input: Input, authority: Authority) {
 
 export async function resolveForcedGatewayRestart(input: Input) {
   if (!validId(input.gatewayId) || !validId(input.forceAuditId)) throw new Error("restart resolution requires exact gateway and force audit IDs");
-  const store = createFirestorePlatformStateStore({ db: input.db });
+  const { store } = input;
   const authority = await store.transaction({ label: "fleet-resolve-forced-restart.read", readOnly: true }, transaction =>
     readAuthority(transaction, input.gatewayId, input.forceAuditId));
   const replacement = observeReplacement(input, authority);
@@ -183,10 +182,12 @@ export async function resolveForcedGatewayRestart(input: Input) {
     mutation: { kind: "resolve-forced-restart", forceAuditId: input.forceAuditId, restartAttemptId: authority.fence.attemptId, replacementPodUid: replacement.podUid },
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     action: async claim => {
+      if (!isDeepStrictEqual(observeReplacement(input, authority), replacement)) throw new Error("restart resolution authority changed");
       await updateRuntimeRestart(store, authority.fence, null, async (transaction, root) => {
         const current = await readAuthority(transaction, input.gatewayId, input.forceAuditId);
-        if (!isDeepStrictEqual(withoutRevision(root), authority.root) || !isDeepStrictEqual(current, authority) ||
-          !isDeepStrictEqual(observeReplacement(input, current), replacement)) throw new Error("restart resolution authority changed");
+        if (!isDeepStrictEqual(withoutRevision(root), authority.root) || !isDeepStrictEqual(current, authority)) {
+          throw new Error("restart resolution authority changed");
+        }
       });
       return { auditId: claim.auditId, forceAuditId: input.forceAuditId, restartAttemptId: authority.fence.attemptId, replacementPodUid: replacement.podUid };
     },

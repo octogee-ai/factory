@@ -234,11 +234,15 @@ function decodeControlSession(snapshot: DocumentSnapshot): Stored<ControlSession
 
 function decodeModelBrokerToken(snapshot: DocumentSnapshot): Stored<ModelBrokerToken> | null {
   if (!snapshot.exists) return null;
-  const key = modelBrokerTokenKey(snapshot.id);
-  const fields = new FirestoreFields(key, decodeDocumentData(snapshot));
+  return withStoredRevision(snapshot, modelBrokerTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+
+export function modelBrokerTokenFromData(tokenHash: string, data: PlainObject): ModelBrokerToken {
+  const key = modelBrokerTokenKey(tokenHash);
+  const fields = new FirestoreFields(key, data);
   if (fields.value("capped") !== true) throw new MalformedRecordError(key, "capped must be true");
-  return withStoredRevision<ModelBrokerToken>(snapshot, {
-    tokenHash: snapshot.id,
+  return {
+    tokenHash,
     gatewayId: fields.string("gatewayId"),
     ownerUid: fields.nullableString("ownerUid"),
     provider: fields.oneOf("provider", MODEL_BROKER_PROVIDERS),
@@ -255,21 +259,25 @@ function decodeModelBrokerToken(snapshot: DocumentSnapshot): Stored<ModelBrokerT
     trace: fields.nullableMap("trace"),
     revoked: fields.value("revoked") === true,
     revokedAt: fields.nullableNumber("revokedAt"),
-  });
+  };
 }
 
 function decodeModelBrokerGatewayToken(snapshot: DocumentSnapshot): Stored<ModelBrokerGatewayToken> | null {
   if (!snapshot.exists) return null;
-  const fields = new FirestoreFields(modelBrokerPointerKey(snapshot.id), decodeDocumentData(snapshot));
-  return withStoredRevision<ModelBrokerGatewayToken>(snapshot, {
-    pointerKey: snapshot.id,
+  return withStoredRevision(snapshot, modelBrokerGatewayTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+
+export function modelBrokerGatewayTokenFromData(pointerKey: string, data: PlainObject): ModelBrokerGatewayToken {
+  const fields = new FirestoreFields(modelBrokerPointerKey(pointerKey), data);
+  return {
+    pointerKey,
     gatewayId: fields.string("gatewayId"),
     ownerUid: fields.nullableString("ownerUid"),
     provider: fields.oneOf("provider", MODEL_BROKER_PROVIDERS),
     secretName: fields.string("secretName"),
     tokenHash: fields.string("tokenHash"),
     updatedAt: fields.number("updatedAt"),
-  });
+  };
 }
 
 export function gatewayAccessDenialAuditId(gatewayId: string, granteeUid: string, reason: string, at: number): string {

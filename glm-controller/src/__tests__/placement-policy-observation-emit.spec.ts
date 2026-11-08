@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import { persistKubernetesObservations } from "../placement-policy-reconciler.js";
 
@@ -11,40 +12,43 @@ function runtimeDoc(kubernetes: Record<string, unknown>) {
     gatewayId: "shared-a",
     release: 1,
     lifecycle: "serving",
+    createdAt: 1,
+    createdByOperationId: null,
+    helm: {},
     heartbeat: { status: "ready", mountedCustomers: [] },
+    lastError: { message: null, at: null },
     kubernetes,
   };
 }
 
-// firebase-admin re-invokes the transaction callback on contention. The
-// callback must therefore be free of side effects: the structured record feeds
-// a DELTA log metric that would count every retry as another loss.
-function contendedFirestore(stored: Record<string, unknown>, attempts: number) {
-  const writes: unknown[] = [];
-  const ref = { path: "glmGateways/shared-a" };
-  const db = {
-    runTransaction: vi.fn(async (callback: (transaction: unknown) => Promise<unknown>) => {
-      let result: unknown = null;
-      for (let attempt = 0; attempt < attempts; attempt += 1) {
-        result = await callback({
-          get: async () => ({ exists: true, data: () => stored }),
-          set: (_ref: unknown, value: unknown) => writes.push(value),
-        });
-      }
-      return result;
-    }),
-  };
-  const snapshot = { id: "shared-a", ref, data: () => stored };
-  return {
-    db: db as unknown as Firestore,
-    documents: [snapshot as unknown as QueryDocumentSnapshot],
-    writes,
-  };
+// The store re-runs a transaction body on contention. The body must therefore
+// be free of side effects: the structured record feeds a DELTA log metric that
+// would count every retry as another loss.
+function contendedStore(stored: Record<string, unknown>, attempts: number) {
+  const documents = new Map<string, Record<string, unknown>>([["glmGateways/shared-a", stored]]);
+  const committed = createDocumentFixtureStore(documents);
+  const bodies = vi.fn();
+  const store = new Proxy(committed, {
+    get(target, property, receiver) {
+      if (property !== "transaction") return Reflect.get(target, property, receiver);
+      return async (...[options, body]: Parameters<PlatformStateStore["transaction"]>) => {
+        const counted: typeof body = (transaction) => {
+          bodies();
+          return body(transaction);
+        };
+        for (let attempt = 1; attempt < attempts; attempt += 1) {
+          await createDocumentFixtureStore(structuredClone(documents)).transaction(options, counted);
+        }
+        return target.transaction(options, counted);
+      };
+    },
+  });
+  return { store, documents, bodies, scanned: [{ gatewayId: "shared-a", kubernetes: stored.kubernetes }] };
 }
 
 describe("persistKubernetesObservations — emission is outside the transaction", () => {
   it("emits exactly one record for a lost pod even when the transaction callback is retried", async () => {
-    const { db, documents, writes } = contendedFirestore(runtimeDoc({
+    const { store, documents, bodies, scanned } = contendedStore(runtimeDoc({
       status: "ready",
       totalPods: 1,
       readyPods: 1,
@@ -61,18 +65,19 @@ describe("persistKubernetesObservations — emission is outside the transaction"
     const emitted: unknown[] = [];
     const log = vi.fn();
 
-    await persistKubernetesObservations(db, documents, {
+    await persistKubernetesObservations(store, scanned, {
       "shared-a": { status: "missing", totalPods: 0, readyPods: 0, pods: [], replicaSets: [RS] },
     }, 25_000, { emitReplacement: (record) => emitted.push(record), log, namespace: "octogee-test" });
 
-    expect(writes).toHaveLength(3);
+    expect(bodies).toHaveBeenCalledTimes(3);
+    expect(documents.get("glmGateways/shared-a")).toMatchObject({ podReplacements: { total: 1 } });
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({ vacatedPodUid: "uid-a", instanceId: "111", total: 1 });
     expect(log.mock.calls.filter(([line]) => /lost pod/.test(String(line)))).toHaveLength(1);
   });
 
   it("emits nothing when the transaction never commits an observation", async () => {
-    const { db, documents } = contendedFirestore(runtimeDoc({
+    const { store, scanned } = contendedStore(runtimeDoc({
       status: "ready",
       totalPods: 1,
       readyPods: 1,
@@ -81,7 +86,7 @@ describe("persistKubernetesObservations — emission is outside the transaction"
     }), 1);
     const emitted: unknown[] = [];
 
-    await persistKubernetesObservations(db, documents, {
+    await persistKubernetesObservations(store, scanned, {
       "shared-a": { status: "missing", totalPods: 0, readyPods: 0, pods: [], replicaSets: [RS] },
     }, 20_000, { emitReplacement: (record) => emitted.push(record) });
 

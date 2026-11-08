@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { readForceMigrationPlan, readForceMigrationSource } from "../ops/fleet-force-migration.js";
 import { parseFleetArgs, resolveFleetMigrationForce } from "../ops/fleet.js";
-import { forceMigrationHarness as harness, forceMigrationTarget as target } from "./fleet-force-migration.test-support.js";
+import { forceMigrationAssignment, forceMigrationHarness as harness, forceMigrationTarget as target } from "./fleet-force-migration.test-support.js";
 
 describe("Fleet force migration request", () => {
   it("denies an authoritative Shared source even when its gateway ID looks like a Builder", async () => {
     const h = harness();
     h.docs.get("gateways/builder-a")!.gatewayClass = "shared";
-    await expect(readForceMigrationPlan(h.db, target)).rejects.toThrow("Shared");
+    await expect(readForceMigrationPlan(h.store, target)).rejects.toThrow("Shared");
     expect(h.writes).toEqual([]);
   });
 
   it("uses the authoritative class rather than the gateway name", async () => {
     const h = harness();
-    h.docs.set("gateways/shared-named-builder", h.docs.get("gateways/builder-a")!);
-    await expect(readForceMigrationSource(h.db, { ...target, fromGatewayId: "shared-named-builder" })).resolves.toBeUndefined();
+    h.docs.set("gateways/shared-named-builder", { ...h.docs.get("gateways/builder-a")!, gatewayId: "shared-named-builder" });
+    await expect(readForceMigrationSource(h.store, { ...target, fromGatewayId: "shared-named-builder" })).resolves.toBeUndefined();
     expect(h.writes).toEqual([]);
   });
 
@@ -26,14 +26,14 @@ describe("Fleet force migration request", () => {
   ])("refuses %s before mutation", async (_name, changes, error) => {
     const h = harness();
     Object.assign(h.docs.get("gateways/builder-a")!, changes);
-    await expect(readForceMigrationPlan(h.db, target)).rejects.toThrow(error);
+    await expect(readForceMigrationPlan(h.store, target)).rejects.toThrow(error);
     expect(h.writes).toEqual([]);
   });
 
   it("identifies the existing blocked drain without changing its history or custody", async () => {
     const h = harness();
     const before = structuredClone(h.op());
-    const result = await readForceMigrationPlan(h.db, target);
+    const result = await readForceMigrationPlan(h.store, target);
     expect(result).toMatchObject({ operationId: "move-1", sourceEpoch: 75 });
     expect(h.op()).toEqual(before);
     expect([...h.docs.values()].filter((doc) => doc.kind === "migrate-customer")).toHaveLength(1);
@@ -43,14 +43,14 @@ describe("Fleet force migration request", () => {
   it("plans without writes and permits unrelated pending migrations", async () => {
     const h = harness();
     h.docs.set("glmOperations/queued", { kind: "migrate-customer", status: "pending", input: { uid: "u2", fromGatewayId: "builder-a", toGatewayId: "shared-b" } });
-    expect(await readForceMigrationPlan(h.db, target)).toMatchObject({ sourceEpoch: 75, attempts: 3 });
+    expect(await readForceMigrationPlan(h.store, target)).toMatchObject({ sourceEpoch: 75, attempts: 3 });
     expect(h.writes).toEqual([]);
   });
 
   it("recognizes the normal graceful drain waiting state without rewriting its steps", async () => {
     const h = harness();
     Object.assign(h.op(), { waitingOn: "builder-idle", attempts: 0, attemptHistory: [], steps: [{ name: "quiesce-source", status: "skipped" }] });
-    expect(await readForceMigrationPlan(h.db, target)).toMatchObject({ sourceEpoch: 75, attempts: 0 });
+    expect(await readForceMigrationPlan(h.store, target)).toMatchObject({ sourceEpoch: 75, attempts: 0 });
   });
 
   it("permits observation under only its exact runtime fence and retains customer custody checks", async () => {
@@ -59,10 +59,10 @@ describe("Fleet force migration request", () => {
     const fence = { auditId: "audit-force", gatewayId: "builder-a", attemptId: "attempt-1", phase: "dispatched" };
     h.op().forceDrainRequest = request;
     h.docs.get("gateways/builder-a")!.runtimeRestartFence = fence;
-    expect(await readForceMigrationPlan(h.db, target, { request, fence })).toMatchObject({ sourceEpoch: 75 });
+    expect(await readForceMigrationPlan(h.store, target, { request, fence })).toMatchObject({ sourceEpoch: 75 });
     expect(h.writes).toEqual([]);
     h.docs.set("users/u2", { provisioning: { openclaw: { gatewayId: "builder-a", restoreFence: {} } } });
-    await expect(readForceMigrationPlan(h.db, target, { request, fence })).rejects.toThrow("custody fences");
+    await expect(readForceMigrationPlan(h.store, target, { request, fence })).rejects.toThrow("custody fences");
   });
 
   it.each(["fence", "request", "epoch"])("rejects changed %s during restart observation", async (changed) => {
@@ -74,7 +74,7 @@ describe("Fleet force migration request", () => {
     if (changed === "fence") h.docs.get("gateways/builder-a")!.runtimeRestartFence.attemptId = "other";
     if (changed === "request") h.op().forceDrainRequest.auditId = "other";
     if (changed === "epoch") h.docs.get("gateways/builder-a/assignments/u1")!.epoch = 76;
-    await expect(readForceMigrationPlan(h.db, target, { request, fence })).rejects.toThrow("restart authority changed");
+    await expect(readForceMigrationPlan(h.store, target, { request, fence })).rejects.toThrow("restart authority changed");
     expect(h.writes).toEqual([]);
   });
 
@@ -93,7 +93,7 @@ describe("Fleet force migration request", () => {
     ["different migration owner", (h: ReturnType<typeof harness>) => { h.docs.get("users/u1")!.provisioning.openclaw.migration.operationId = "other"; }],
     ["changed source assignment", (h: ReturnType<typeof harness>) => { h.docs.get("gateways/builder-a/assignments/u1")!.uid = "u2"; }],
     ["missing epoch", (h: ReturnType<typeof harness>) => { delete h.docs.get("gateways/builder-a/assignments/u1")!.epoch; }],
-    ["target assignment", (h: ReturnType<typeof harness>) => { h.docs.set("gateways/shared-b/assignments/u1", { state: "serving" }); }],
+    ["target assignment", (h: ReturnType<typeof harness>) => { h.docs.set("gateways/shared-b/assignments/u1", forceMigrationAssignment("shared-b", "u1", "alice")); }],
     ["cutover", (h: ReturnType<typeof harness>) => { h.op().cutoverCommittedAt = 500; }],
     ["accepted restore", (h: ReturnType<typeof harness>) => { h.op().restoreAttempt = { phase: "dispatched" }; }],
     ["accepted transfer", (h: ReturnType<typeof harness>) => { h.op().sourceTransferExecution = { status: "dispatched" }; }],
@@ -112,7 +112,7 @@ describe("Fleet force migration request", () => {
   ])("rejects %s without creating or changing any journal entry", async (_name, mutate) => {
     const h = harness();
     mutate(h);
-    await expect(readForceMigrationPlan(h.db, target)).rejects.toThrow();
+    await expect(readForceMigrationPlan(h.store, target)).rejects.toThrow();
     expect(h.writes).toEqual([]);
   });
 

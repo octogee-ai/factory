@@ -2,9 +2,12 @@
 
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
+import { createFirestorePlatformStateStore, type ServerNow } from "@octogee/core/platform-state";
 import { mmApiCall, revokeAndMintBuilderPat } from "../lib/mattermost.js";
 import { pathToFileURL } from "node:url";
+
+const SERVER_NOW: ServerNow = { serverNow: true };
 
 export interface RotateBuilderMmPatArgs {
   project: string;
@@ -36,7 +39,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     initializeApp({ credential: applicationDefault(), projectId: project });
   }
   const auth = getAuth();
-  const db = getFirestore();
+  const store = createFirestorePlatformStateStore({ db: getFirestore() });
   let uid: string;
   let email: string;
   if (target.includes("@")) {
@@ -49,33 +52,34 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     email = user.email ?? "(no email)";
   }
 
-  const userDoc = await db.doc(`users/${uid}`).get();
-  if (!userDoc.exists) {
+  const builder = await store.builders.records.get(uid);
+  if (builder === null) {
     console.error(`❌ No user doc at users/${uid}.`);
     process.exit(1);
   }
-  const userData = userDoc.data() ?? {};
-  const builderMmUserId =
-    typeof userData.mattermost === "object" && userData.mattermost !== null
-      ? String((userData.mattermost as { userId?: unknown }).userId ?? "")
-      : "";
+  const builderMmUserId = builder.mattermostUserId ?? "";
   if (!builderMmUserId) {
     console.error(`❌ users/${uid} has no mattermost.userId — has this user been provisioned?`);
     process.exit(1);
   }
 
+  const current = await store.secrets.get(uid, "mattermost");
+  const createdAt = current?.kind === "builder-mattermost" ? current.createdAt : null;
   const result = await revokeAndMintBuilderPat(
     {
       mmApiCall,
       writeBuilderSecret: async (targetUid, data) => {
-        await db
-          .collection("users")
-          .doc(targetUid)
-          .collection("secrets")
-          .doc("mattermost")
-          .set(data);
+        await store.secrets.put(targetUid, {
+          kind: "builder-mattermost",
+          secretId: "mattermost",
+          projectId: null,
+          personalToken: data.personalToken,
+          mattermostUserId: builderMmUserId,
+          createdAt,
+          rotatedAt: SERVER_NOW,
+        });
       },
-      now: () => FieldValue.serverTimestamp(),
+      now: () => SERVER_NOW,
       log: (msg) => console.log(msg),
     },
     uid,

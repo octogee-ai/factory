@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
+import { createFirestorePlatformStateStore, type PlatformStateStore } from "@octogee/core/platform-state";
 
-import { BUILDER_COMPUTER_INSTANCE_PREFIX, GLM_GATEWAYS_COLLECTION } from "../../shared/types/glm.js";
+import { BUILDER_COMPUTER_INSTANCE_PREFIX } from "../../shared/types/glm.js";
 
 const FIRESTORE_PROJECT_BY_ENV = { test: "octogee-test", prod: "octogee" } as const;
 const COMPUTE_PROJECT = "octogee";
@@ -89,16 +90,14 @@ function listTerminatedComputers(args: SweepOrphanedComputersArgs): TerminatedCo
   return raw.map(terminatedComputerFromGcloud);
 }
 
-async function readComputerReferences(db: Firestore, computers: readonly TerminatedComputer[]): Promise<ComputerReferences> {
+export async function readComputerReferences(store: PlatformStateStore, computers: readonly TerminatedComputer[]): Promise<ComputerReferences> {
   const parkedInstanceIds = new Set<string>();
   const gatewayInstanceIds = new Set<string>();
   const existingOwnerUids = new Set<string>();
   for (const computer of computers) {
-    const parked = await db.collection("users").where("provisioning.computer.instanceId", "==", computer.instanceId).limit(1).get();
-    if (!parked.empty) parkedInstanceIds.add(computer.instanceId);
-    const gateways = await db.collection(GLM_GATEWAYS_COLLECTION).where("vm.instanceId", "==", computer.instanceId).limit(1).get();
-    if (!gateways.empty) gatewayInstanceIds.add(computer.instanceId);
-    if (computer.ownerUid && (await db.collection("users").doc(computer.ownerUid).get()).exists) existingOwnerUids.add(computer.ownerUid);
+    if (await store.builders.records.findByComputerInstanceId(computer.instanceId) !== null) parkedInstanceIds.add(computer.instanceId);
+    if (await store.fleetRegistry.findByVmInstanceId(computer.instanceId) !== null) gatewayInstanceIds.add(computer.instanceId);
+    if (computer.ownerUid && await store.builders.records.get(computer.ownerUid) !== null) existingOwnerUids.add(computer.ownerUid);
   }
   return { parkedInstanceIds, gatewayInstanceIds, existingOwnerUids };
 }
@@ -106,10 +105,10 @@ async function readComputerReferences(db: Firestore, computers: readonly Termina
 async function main(): Promise<void> {
   const args = parseSweepOrphanedComputersArgs(process.argv.slice(2));
   if (getApps().length === 0) initializeApp({ credential: applicationDefault(), projectId: args.firestoreProjectId });
-  const db = getFirestore();
+  const store = createFirestorePlatformStateStore({ db: getFirestore() });
   const computers = listTerminatedComputers(args);
   console.log(`${computers.length} TERMINATED ${BUILDER_COMPUTER_INSTANCE_PREFIX}${args.environment}-* instance(s) in ${args.computeProjectId}`);
-  const refs = await readComputerReferences(db, computers);
+  const refs = await readComputerReferences(store, computers);
   let deleted = 0;
   for (const computer of computers) {
     const verdict = classifyTerminatedComputer(computer, refs);

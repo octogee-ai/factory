@@ -12,7 +12,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, MissingRecordError, type PlatformStateStore, type SecretsRepository } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, MissingRecordError, type GatewayRootPatch, type PlatformStateStore, type SecretsRepository } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -27,7 +27,6 @@ import { createNativeReturnSourceRecoveryOwner } from "./native-return-source-re
 import { createNativeReturnTargetRetirementVerifier } from "./lib/native-return-target-retirement.js";
 import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./lib/native-computer-return.js";
 import { retireNativeSchedulerBeforeStage } from "./lib/native-scheduler-retirement.js";
-import { readScheduleTransfer, recordScheduleRestore, saveScheduleTransfer } from "./lib/schedule-transfers.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS } from "@octogee/shared/types/platform-config";
 import { randomUUID } from "node:crypto";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
@@ -220,6 +219,7 @@ import {
   verifyCustomerStorageErasure,
 } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
+import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
 import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
 import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
@@ -266,6 +266,7 @@ import {
 import {
   gatewayAuthorizationFromRootDocument,
   readGatewayArtifact,
+  readGatewayAuthorizationInStore,
   type GatewayArtifact,
 } from "@octogee/core/gateway-live-release";
 import { getStorage } from "firebase-admin/storage";
@@ -291,7 +292,6 @@ import {
   assertWorkspaceMigrationSourcePreparationAuthority,
   type CutoverDeps,
   type FleetStateDeps,
-  type FleetStateFirestore,
 } from "@octogee/core/fleet-state";
 import { firestoreBuilderTierReader } from "@octogee/core/builder-activation-lease";
 import {
@@ -354,7 +354,6 @@ import {
 import { applyVmDiskChanges, type VmDiskSample } from "./lib/vm-disk-usage.js";
 import { startDisruptionObserver } from "./disruption-observer.js";
 import { createLogger, debugFromEnv } from "./lib/logger.js";
-import { startOrphanHeartbeatReaper } from "./orphan-heartbeat-reaper.js";
 import {
   assignedSlugsFromUserMirror,
   createFleetInformer,
@@ -505,12 +504,12 @@ function createGatewayPersistentVolumeClaimDeleter(
 }
 
 function createGatewayDeploymentRestarter(
-  db: Firestore,
+  store: PlatformStateStore,
   runKubectl: KubectlSubprocess,
   logFn: (msg: string) => void,
 ): (revisionId: string) => Promise<void> {
   return async gatewayId => {
-    await restartGatewayDeployment({db,namespace:NAMESPACE,runKubectl},gatewayId);
+    await restartGatewayDeployment({store,namespace:NAMESPACE,runKubectl},gatewayId);
     logFn(`[glm-controller] deployment restart completed gateway=${gatewayId}`);
   };
 }
@@ -776,14 +775,9 @@ async function gatewayDesiredRootPresent(db: Firestore, gatewayId: string): Prom
   return root !== null && snap.data()?.runtimeRestartFence === undefined;
 }
 
-async function gatewayRuntimeMutationAllowed(db: Firestore, gatewayId: string): Promise<boolean> {
-  return withGatewayRuntimeMutation(db, gatewayId, async transaction => {
-    const snap = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gatewayId));
-    return projectGatewayDesiredRootForGateway(
-      snap.exists ? snap.data() : undefined,
-      gatewayId,
-    ) !== null;
-  });
+async function gatewayRuntimeMutationAllowed(store: PlatformStateStore, gatewayId: string): Promise<boolean> {
+  return withGatewayRuntimeMutation(store, gatewayId, async transaction =>
+    (await readGatewayAuthorizationInStore(transaction, gatewayId)) !== null);
 }
 
 async function syncFleetIngressIfConfigured(
@@ -1180,10 +1174,9 @@ async function convergeOneGateway(
   instances: HelmInstancesMap,
   runtimeById: Map<string, GatewayRuntimeDoc>,
 ): Promise<void> {
-  const { db } = passDeps;
   if (isDisposableBuilderGateway(gateway) && gateway.liveRelease !== null && gateway.liveRelease < gateway.desiredRelease) {
-    const recovery = await readBuilderActivationRollRecoveryCustody({ db, gatewayId: gateway.gatewayId });
-    if (recovery && hasBuilderActivationTargetRollback({ id: recovery.recovery.operationId, ...recovery.operation }, recovery.recovery)) {
+    const recovery = await readBuilderActivationRollRecoveryCustody({ state: passDeps.store, gatewayId: gateway.gatewayId });
+    if (recovery && hasBuilderActivationTargetRollback(recovery.operation, recovery.recovery)) {
       passDeps.log(`[converge-gateway] ${gateway.gatewayId} retained target rollout while source recovery ${recovery.recovery.operationId} owns custody`);
       return;
     }
@@ -1266,11 +1259,11 @@ async function uninstallGateway(
   passDeps: GatewayConvergencePassDeps,
   gateway: DurableGateway,
 ): Promise<void> {
-  const { db, helm, log } = passDeps;
-  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
+  const { db, store, helm, log } = passDeps;
+  if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   log(`[converge-gateway] ${gateway.gatewayId} retired — uninstalling stable release`);
   await helm.removeInstance({ namespace: NAMESPACE, gatewayId: gateway.gatewayId });
-  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
+  if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).delete();
 }
 
@@ -1284,38 +1277,38 @@ async function upsertGateway(
     replicas: number;
   },
 ): Promise<void> {
-  const { db, helm, log } = passDeps;
+  const { db, store, helm, log } = passDeps;
   const { gateway, artifact, runtime, desiredOpts, replicas } = input;
   if (!desiredOpts) throw new Error(`gateway ${gateway.gatewayId} has no deployable intent`);
-  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
+  if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   log(
     `[converge-gateway] ${gateway.gatewayId} → release ${gateway.desiredRelease} ` +
       `(${desiredOpts.imageTag}, replicas=${replicas})`,
   );
+  const runtimeDoc = provisioningRuntimeDoc({
+    gateway,
+    artifact: artifact as ReleasePayload,
+    existing: runtime ?? null,
+    now: Date.now(),
+  });
+  const { docKind: _docKind, ...initialRuntime } = runtimeDoc;
   await stampGatewayRuntime({
-    db,
+    store,
     gatewayId: gateway.gatewayId,
+    initial: initialRuntime,
     gatewayClass: gateway.gatewayClass,
     sizingTier: gateway.sizingTier,
     vmSpec: BUILDER_VM_SPEC,
     assertStorage: gateway.gatewayClass === "builder" && replicas > 0
-      ? (runtime) => assertBuilderRuntimeStorage({ db, runtime, ownerUid: gateway.ownerUid })
+      ? (runtime) => assertBuilderRuntimeStorage({ store, runtime, ownerUid: gateway.ownerUid })
       : undefined,
     log,
   });
   await db
     .collection(GLM_GATEWAYS_COLLECTION)
     .doc(gateway.gatewayId)
-    .set(
-      provisioningRuntimeDoc({
-        gateway,
-        artifact: artifact as ReleasePayload,
-        existing: runtime ?? null,
-        now: Date.now(),
-      }) as unknown as Record<string, unknown>,
-      { merge: true },
-    );
-  if (!(await gatewayRuntimeMutationAllowed(db, gateway.gatewayId))) return;
+    .set(runtimeDoc as unknown as Record<string, unknown>, { merge: true });
+  if (!(await gatewayRuntimeMutationAllowed(store, gateway.gatewayId))) return;
   await helm.upsertInstance({ ...desiredOpts, ...runtimeBuilderIdentity(gateway) });
 }
 
@@ -2424,25 +2417,17 @@ function startControllerBackgroundTasks({
     buildGatewayHeartbeatPollerDeps(db, log, fleetControllerPrivateKey, informer),
     GATEWAY_HEARTBEAT_POLL_MS,
   );
-  const stopReaper = startOrphanHeartbeatReaper({
-    db,
-    informer,
-    log,
-    intervalMs: 60_000,
-    stalenessMs: 5 * 60 * 1000,
-    now: () => Date.now(),
-  });
   const stopStuckOpReaper = startStuckOpReaper({
-    db,
+    store: deps.store,
     log,
     intervalMs: 60_000,
     stalenessMs: 15 * 60 * 1000,
     now: () => Date.now(),
     controllerStartedAt,
   });
-  const migrationClient = createMigrationClientBuilder(db, fleetControllerPrivateKey, log);
+  const migrationClient = createMigrationClientBuilder(db, deps.store, fleetControllerPrivateKey, log);
   const stopSchedulerHandoffRelease = startSchedulerHandoffRelease({
-    db,
+    store: deps.store,
     log,
     intervalMs: 60_000,
     now: () => Date.now(),
@@ -2456,7 +2441,7 @@ function startControllerBackgroundTasks({
     },
   });
   const stopNativeReturnHoldReaper = startNativeReturnHoldReaper({
-    db,
+    store: deps.store,
     vm: createGatewayComputeClient(log),
     informer,
     log,
@@ -2494,7 +2479,7 @@ function startControllerBackgroundTasks({
     listPending: () => helm.listPendingReleases({ namespace: NAMESPACE }),
     isRecoverableRevision: (gatewayId) => isRecoverableGatewayRelease(db, gatewayId),
     recover: (gatewayId) => runGatewayRuntimeExclusive(async () => {
-      if (!(await isRecoverableGatewayRelease(db, gatewayId)) || !(await gatewayRuntimeMutationAllowed(db, gatewayId))) {
+      if (!(await isRecoverableGatewayRelease(db, gatewayId)) || !(await gatewayRuntimeMutationAllowed(deps.store, gatewayId))) {
         throw new Error('gateway Helm recovery authority unavailable');
       }
       return helm.recoverRelease({ namespace: NAMESPACE, gatewayId });
@@ -2506,7 +2491,7 @@ function startControllerBackgroundTasks({
   });
   const homeServices = BUILDER_VM_SPEC ? createBuilderHomeServices(db, log) : undefined;
   const prepareBuilderHome = homeServices ? createBuilderHomeMigrator({
-    db, environment: COMPUTER_ENVIRONMENT, now: Date.now, subnetwork: BUILDER_VM_SPEC!.subnetwork, nativeZones: BUILDER_VM_SPEC!.zones, log,
+    store: deps.store, readBuilderTier: firestoreBuilderTierReader(db), environment: COMPUTER_ENVIRONMENT, now: Date.now, subnetwork: BUILDER_VM_SPEC!.subnetwork, nativeZones: BUILDER_VM_SPEC!.zones, log,
     ...homeServices.provider, copy: homeServices.copy,
   }) : undefined;
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
@@ -2520,6 +2505,7 @@ function startControllerBackgroundTasks({
       platformArtifact,
       now: () => Date.now(),
       log,
+      readBuilderTier: firestoreBuilderTierReader(db),
       debug: (message) => logger.debug(message),
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
@@ -2565,7 +2551,6 @@ function startControllerBackgroundTasks({
     stopWorker,
     stopOperationQueueDrain,
     stopPoller,
-    stopReaper,
     stopStuckOpReaper,
     stopSchedulerHandoffRelease,
     stopNativeReturnHoldReaper,
@@ -2595,11 +2580,8 @@ interface ControllerRuntime {
   chartFingerprint: string;
 }
 
-function progressJournalDeps(db: Firestore, logFn: (message: string) => void): ProgressJournalDeps {
-  return {
-    db: db as unknown as FleetStateFirestore,
-    log: logFn,
-  };
+function progressJournalDeps(store: PlatformStateStore, logFn: (message: string) => void): ProgressJournalDeps {
+  return { store, log: logFn };
 }
 
 function buildSurgeHandoffDeps(input: {
@@ -2615,7 +2597,7 @@ function buildSurgeHandoffDeps(input: {
       log,
     }),
     recordMigrationProgress: ({ gatewayId, uid, event }) =>
-      journalHandoffProgress(progressJournalDeps(db, log), { gatewayId, uid }, event),
+      journalHandoffProgress(progressJournalDeps(store, log), { gatewayId, uid }, event),
     listPods: createSurgeEndpointLister({
       readRuntimeDoc: async (gatewayId) =>
         (await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get()).data(),
@@ -2629,7 +2611,7 @@ function buildSurgeHandoffDeps(input: {
     deleteCancelledTarget: ({ pod }) => deleteCancelledSurgePod(runKubectl, NAMESPACE, pod),
     deleteCrashLoopingPod: ({ pod }) => deleteSurgePod(runKubectl, NAMESPACE, pod),
     claimCrashLoopEviction: ({ gatewayId, imageTag, pod }) =>
-      claimCrashLoopEviction(db, { gatewayId, imageTag, pod, now: Date.now() }),
+      claimCrashLoopEviction(store, { gatewayId, imageTag, pod, now: Date.now() }),
     readAssignments: async (gatewayId) => {
       const [assignments, userSnapshot] = await Promise.all([
         readAssignmentDocsForGateway(db, gatewayId),
@@ -2652,7 +2634,7 @@ function buildSurgeHandoffDeps(input: {
         return { uid: doc.id, slug };
       });
       const retained = await pruneSurgeOrphanAssignments({
-        db,
+        store,
         gatewayId,
         assignments: projected,
         users: assignedUsers,
@@ -2679,11 +2661,11 @@ function buildSurgeHandoffDeps(input: {
   };
 }
 
-function buildNativeReturnSourceRecoveryOwner(db: Firestore, kubeOps: KubeOps, privateKey: string, prepareMigrationAgentStores: PrepareMigrationAgentStores) {
+function buildNativeReturnSourceRecoveryOwner(db: Firestore, store: PlatformStateStore, kubeOps: KubeOps, privateKey: string, prepareMigrationAgentStores: PrepareMigrationAgentStores) {
   return createNativeReturnSourceRecoveryOwner({
-    db, now: Date.now, log, prepareSourceStores: prepareMigrationAgentStores,
+    store, now: Date.now, log, prepareSourceStores: prepareMigrationAgentStores,
     verifyRetiredTarget: createNativeReturnTargetRetirementVerifier({
-      db, credentialsRetired: createAgentStoreCredentialRetirementVerifier(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "native return recovery requires PostgreSQL retirement proof")),
+      store, credentialsRetired: createAgentStoreCredentialRetirementVerifier(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "native return recovery requires PostgreSQL retirement proof")),
       runtimeAbsent: async gatewayId => {
         if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
         const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
@@ -2691,11 +2673,11 @@ function buildNativeReturnSourceRecoveryOwner(db: Firestore, kubeOps: KubeOps, p
         return !pvc.stdout.trim();
       },
     }),
-    releaseSourceHold: input => releaseNativeReturnSourceRecoveryHold({ db, vm: createGatewayComputeClient(log), now: Date.now,
+    releaseSourceHold: input => releaseNativeReturnSourceRecoveryHold({ store, vm: createGatewayComputeClient(log), now: Date.now,
       wait: ms => new Promise(resolve => setTimeout(resolve, ms)) }, input),
     sourceClient: async (gatewayId, authority) => {
       const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
-      return createMigrationClientBuilder(db, privateKey, log,
+      return createMigrationClientBuilder(db, store, privateKey, log,
         (id, slug) => prepareMigrationAgentStores(id, slug, authority))(id => {
           if (id !== gatewayId) throw new Error("native return recovery source transport changed");
           return url;
@@ -2715,14 +2697,13 @@ async function readBuilderAgentStoreInventory(db: Firestore, builder: { uid: str
   });
 }
 
-function createBootUpgradeJournal(db: Firestore): VmGatewayRuntimeDeps["journalBootUpgrade"] {
+function createBootUpgradeJournal(store: PlatformStateStore): VmGatewayRuntimeDeps["journalBootUpgrade"] {
   return async (input, work) => {
-    const assertAuthority = () => withGatewayRuntimeMutation(db, input.gatewayId, async (transaction) => {
-      const root = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId));
-      const desired = projectGatewayDesiredRootForGateway(root.data(), input.gatewayId);
-      if (desired?.desiredStatus !== "running" || desired.ownerUid !== input.ownerUid) throw new Error("gateway is no longer starting for this computer owner");
+    const assertAuthority = () => withGatewayRuntimeMutation(store, input.gatewayId, async (transaction) => {
+      const authorization = await readGatewayAuthorizationInStore(transaction, input.gatewayId);
+      if (authorization?.gateway.desiredStatus !== "running" || authorization.config.ownerUid !== input.ownerUid) throw new Error("gateway is no longer starting for this computer owner");
     });
-    await runNormalFleetMutation(createFirestorePlatformStateStore({ db }), {
+    await runNormalFleetMutation(store, {
       actor: "cowboy", forced: false, what: "upgrade-builder-boot", why: "Use the current computer image on boot while retaining the Builder home",
       target: { gatewayId: input.gatewayId }, preActionStatus: { instanceId: input.instanceId }, mutation: { imageId: input.imageId },
       action: () => work(assertAuthority),
@@ -2814,7 +2795,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
         });
   const vmRuntime = BUILDER_VM_SPEC
     ? createVmGatewayRuntime({
-      db,
+      store,
       namespace: NAMESPACE,
       environment: COMPUTER_ENVIRONMENT,
       runHelm: spawnHelm,
@@ -2836,7 +2817,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
         const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
         return projectGatewayDesiredRootForGateway(snap.exists ? snap.data() : undefined, gatewayId)?.desiredStatus ?? null;
       },
-      journalBootUpgrade: createBootUpgradeJournal(db),
+      journalBootUpgrade: createBootUpgradeJournal(store),
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       onComputerCreationSettled: (gatewayId) => convergeSettledComputer(gatewayId),
       now: () => Date.now(),
@@ -2906,7 +2887,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     }, gatewayIds);
   const convergeGateways = serializeGatewayConvergence(runGatewayConvergence);
   const convergeSettledComputer = convergeAfterComputerCreation(convergeGateways, log);
-  const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(db, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
+  const nativeReturnRecovery = buildNativeReturnSourceRecoveryOwner(db, store, kubeOps, fleetControllerPrivateKey, prepareMigrationAgentStores);
   const handlers = await buildHandlers(db, log, helm, kubeOps, {
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
@@ -2921,7 +2902,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     kubeOps,
     modelKeySourceIssuer,
     modelKeySecretEnsurer,
-    restartGatewayDeployment: createGatewayDeploymentRestarter(db,runKubectl, log),
+    restartGatewayDeployment: createGatewayDeploymentRestarter(store,runKubectl, log),
     handlers,
     requestNativeReturnSourceRecovery: nativeReturnRecovery.request,
     log,
@@ -2931,7 +2912,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     chartFingerprint,
     ensureGatewayAuthSecret,
     startDisruptionObserver: () => startDisruptionObserver({
-      db,
+      store,
       runKubectl,
       environment: ENVIRONMENT_SETTINGS.name,
       cluster: ENVIRONMENT_SETTINGS.clusterName,
@@ -2961,7 +2942,7 @@ async function main(): Promise<void> {
   const sharedPoolBounds = sharedPoolReplicaBoundsFromEnvironment();
   const platformArtifact = platformGatewayArtifactFromEnvironment();
   await writePlatformReleaseRecord({
-    db,
+    store: deps.store,
     artifact: platformArtifact,
     now: () => Date.now(),
     log,
@@ -2972,7 +2953,7 @@ async function main(): Promise<void> {
   );
   try {
     await completeHealthySharedPoolAddGatewayOperations({
-      db,
+      store: deps.store,
       log,
       now: () => Date.now(),
     });
@@ -2988,11 +2969,11 @@ async function main(): Promise<void> {
   // pool; it runs before the stuck-op reaper's first tick so the re-adopt heartbeat
   // protects the resumed run from being reaped.
   resumeOrphanedRunningOps({
-    db,
+    store: deps.store,
     log,
     resumableKinds: RESUMABLE_OP_KINDS,
     resumableOperation: operationIsRestartResumable,
-    redrive: (op, ref) => reAdoptAndRunOperation(op, ref, deps),
+    redrive: (op) => reAdoptAndRunOperation(op, db.collection(GLM_OPERATIONS_COLLECTION).doc(op.id), deps),
   }).catch((err) =>
     log(
       `[glm-controller] ⚠ resume-orphaned-ops sweep failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -3000,7 +2981,7 @@ async function main(): Promise<void> {
   );
 
   try {
-    await recoverControllerOrphanedOperations({ db, log, now: () => Date.now(), controllerStartedAt });
+    await recoverControllerOrphanedOperations({ store: deps.store, log, now: () => Date.now(), controllerStartedAt });
   } catch (err) {
     log(
       `[glm-controller] ⚠ boot orphan recovery failed; the stuck-op reaper recovers them after its budget: ${err instanceof Error ? err.message : String(err)}`,
@@ -3017,7 +2998,7 @@ async function main(): Promise<void> {
   });
   stoppers.push(
     startSharedPoolScaler({
-      db,
+      store: deps.store,
       bounds: sharedPoolBounds,
       platformArtifact,
       log,
@@ -3034,19 +3015,20 @@ export async function bootstrapGlmGateways(deps: ControllerDeps): Promise<void> 
   deps.log("[glm-controller] legacy Helm bootstrap disabled; durable roots and revisions own recovery");
 }
 
-function retainedSourceRunner(db: Firestore, context: RetainedSourceContext) {
+function retainedSourceRunner(store: PlatformStateStore, context: RetainedSourceContext) {
   const artifact = platformGatewayArtifactFromEnvironment();
   const digest = artifact.imageTag.split('@')[1];
   if (!digest) throw new Error('retained source helper image has no digest');
-  return createRetainedSourceTransfer({db,namespace:NAMESPACE,image:`${artifact.imageRepository}@${digest}`,runCommand:createSubprocessCommandRunner(),now:Date.now},context);
+  return createRetainedSourceTransfer({store,namespace:NAMESPACE,image:`${artifact.imageRepository}@${digest}`,runCommand:createSubprocessCommandRunner(),now:Date.now},context);
 }
 
-async function cleanupRetainedSource(db: Firestore, privateKey:string, context:RetainedSourceContext): Promise<void> {
-  await abortRetainedSourceImport({db,namespace:NAMESPACE,privateKey,fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:()=>'',resolveGatewayVm:transportId=>readGatewayVmAddress(db,transportId),retainedSource:retainedSourceRunner(db,context)}, {migrationId:context.state.migrationId,slug:context.state.slug,toGatewayId:context.state.targetGatewayId});
+async function cleanupRetainedSource(db: Firestore, store: PlatformStateStore, privateKey:string, context:RetainedSourceContext): Promise<void> {
+  await abortRetainedSourceImport({store,namespace:NAMESPACE,privateKey,fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:()=>'',resolveGatewayVm:transportId=>readGatewayVmAddress(db,transportId),retainedSource:retainedSourceRunner(store,context)}, {migrationId:context.state.migrationId,slug:context.state.slug,toGatewayId:context.state.targetGatewayId});
 }
 
 function createMigrationClientBuilder(
   db: Firestore,
+  store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
   prepareAgentStores?: PrepareMigrationAgentStores,
@@ -3057,13 +3039,13 @@ function createMigrationClientBuilder(
       resolveGatewayUrl: resolveSync,
       log: logFn,
       prepareAgentStores,
-      resolveTransferAttemptForCleanup: input => readTransferAttemptForCleanup({ db, namespace: NAMESPACE, now: Date.now, runCommand: createSubprocessCommandRunner() }, input),
+      resolveTransferAttemptForCleanup: input => readTransferAttemptForCleanup({ store, namespace: NAMESPACE, now: Date.now, runCommand: createSubprocessCommandRunner() }, input),
       transferState: async (request) => {
         if (request.mode === "final" && !prepareAgentStores) throw new Error("Final agent-store transfer requires ownership preparation");
         return createRsyncMigrationTransfer({
         prepareAgentStores,
-        ...(retainedSource ? {retainedSource: retainedSourceRunner(db,retainedSource)} : {}),
-        db,
+        ...(retainedSource ? {retainedSource: retainedSourceRunner(store,retainedSource)} : {}),
+        store,
         namespace: NAMESPACE,
         privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -3341,14 +3323,14 @@ async function buildHandlers(
       await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);
     },
     recordMigrationProgress: ({ operation, event }) =>
-      journalOperationProgress(progressJournalDeps(db, logFn), operation, event),
+      journalOperationProgress(progressJournalDeps(store, logFn), operation, event),
     recoverNativeReturnSource: fleetOps.nativeReturnRecovery.recover,
     prepareNativeComputerReturn: (input) => prepareNativeComputerReturn({
-      db, vm: createGatewayComputeClient(logFn),
+      store, vm: createGatewayComputeClient(logFn),
       now: Date.now, wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }, input),
     retireNativeSchedulerBeforeStage: (input, scheduler) => retireNativeSchedulerBeforeStage({
-      db, vm: createGatewayComputeClient(logFn), log: logFn,
+      store, vm: createGatewayComputeClient(logFn), log: logFn,
     }, input, scheduler),
     readUser: async (uid) => {
       const doc = await db.collection("users").doc(uid).get();
@@ -3368,9 +3350,9 @@ async function buildHandlers(
       gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
       fetchImpl: fetch, newRequestId: randomUUID,
     }),
-    readScheduleTransfer: (uid, migrationId) => readScheduleTransfer(db, uid, migrationId),
-    saveScheduleTransfer: (uid, doc) => saveScheduleTransfer(db, uid, doc),
-    recordScheduleRestore: (uid, migrationId, restore) => recordScheduleRestore(db, uid, migrationId, restore),
+    readScheduleTransfer: (uid, migrationId) => store.builders.scheduleTransfers.get(uid, migrationId),
+    saveScheduleTransfer: (uid, doc) => store.builders.scheduleTransfers.put(uid, doc),
+    recordScheduleRestore: (uid, migrationId, restore) => store.builders.scheduleTransfers.patch(uid, migrationId, restore),
     readGatewaySystemConfigCommit: (gatewayId) =>
       readGatewaySystemConfigCommitFromFirestore(db, gatewayId),
     readOpenClawBuild: async (gatewayId, release) =>
@@ -3397,13 +3379,14 @@ async function buildHandlers(
       const fresh = (await db.collection(GLM_OPERATIONS_COLLECTION).doc(op.id).get()).data() as Operation | undefined;
       if (!fresh?.customerMigrationV2) return undefined;
       const context={op,state:fresh.customerMigrationV2};
-      const observed=await retainedSourceRunner(db,context).observe();
-      if (observed?.status==='failed' && observed.targetCleanup==='pending') await cleanupRetainedSource(db,privateKey,context);
-      return retainedSourceRunner(db,context).observe();
+      const observed=await retainedSourceRunner(store,context).observe();
+      if (observed?.status==='failed' && observed.targetCleanup==='pending') await cleanupRetainedSource(db,store,privateKey,context);
+      return retainedSourceRunner(store,context).observe();
     },
-    cleanupSourceTransfer: (op,state)=>cleanupRetainedSource(db,privateKey,{op,state}),
+    cleanupSourceTransfer: (op,state)=>cleanupRetainedSource(db,store,privateKey,{op,state}),
     buildClient: createMigrationClientBuilder(
       db,
+      store,
       privateKey,
       logFn,
       fleetOps.prepareMigrationAgentStores,
@@ -3532,7 +3515,7 @@ async function buildHandlers(
   const retireGateway = createRetireGatewayHandler({
     revokeAgentStoreCredentials: createAgentStoreCredentialRevoker(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "Gateway retirement requires the controller-only administration URL")),
     isPausedNativeSourceFencedOff: (input) => pausedNativeRetirementSourceFencedOff({
-      db,
+      store,
       describe: (name, zone) => createGatewayComputeClient(logFn).describe(name, zone),
     }, input),
     verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
@@ -3552,7 +3535,7 @@ async function buildHandlers(
     },
     helmUninstallGateway: async (gatewayId) => {
       await runGatewayRuntimeExclusive(async () => {
-        if (!(await gatewayRuntimeMutationAllowed(db, gatewayId))) throw new Error('gateway retirement runtime unavailable');
+        if (!(await gatewayRuntimeMutationAllowed(store, gatewayId))) throw new Error('gateway retirement runtime unavailable');
         await helm.removeInstance({ namespace: NAMESPACE, gatewayId });
       });
     },
@@ -3627,7 +3610,7 @@ async function buildHandlers(
 
   const rollbackTransport = createSurgePodTransport({ privateKey, log: logFn });
   const rollbackUnadmittedActivationTarget = createBuilderActivationRollRecoveryOwner({
-    db, namespace: NAMESPACE, helm, chartFingerprint: fleetOps.chartFingerprint,
+    store, namespace: NAMESPACE, helm, chartFingerprint: fleetOps.chartFingerprint,
     runExclusive: fleetOps.runRuntimeRecovery,
     readRelease: (gatewayId, release) => readGatewayArtifact(db, gatewayId, release),
     prepareIntent: async (gateway, artifact) => {
@@ -3661,13 +3644,8 @@ async function buildHandlers(
       return vmRuntime.readDeploymentPrerequisiteError(gatewayId);
     },
     activateDesiredRelease: async ({ gatewayId, targetRelease, operationId }) =>
-      withGatewayRuntimeMutation(db,gatewayId,async (transaction) => {
-        const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-        const snapshot = await transaction.get(gatewayRef);
-        const gateway = durableRolloutGateway(
-          snapshot.exists ? snapshot.data() : undefined,
-          gatewayId,
-        );
+      withGatewayRuntimeMutation(store,gatewayId,async (transaction) => {
+        const gateway = (await readGatewayAuthorizationInStore(transaction, gatewayId))?.gateway;
         if (!gateway) {
           return {
             success: false as const,
@@ -3681,7 +3659,7 @@ async function buildHandlers(
           operationId,
         );
         if (!activation.success || activation.patch === null) return activation;
-        transaction.update(gatewayRef, activation.patch);
+        await transaction.gateways.roots.patch(gatewayId, activation.patch as GatewayRootPatch);
         return { success: true as const };
       }),
     requestReconcileTick: (gatewayId) => requestReconcileTickRef.fire?.(gatewayId),
@@ -3695,25 +3673,27 @@ async function buildHandlers(
 
   const deprovisionCustomer = buildDeprovisionCustomerHandler(
     db,
+    store,
     privateKey,
     logFn,
     kubeOps,
   );
   const suspendCustomer = buildSuspendCustomerHandler(
     db,
+    store,
     privateKey,
     logFn,
     kubeOps,
   );
-  const eraseCustomer = buildEraseCustomerHandler(db, logFn, kubeOps, privateKey);
+  const eraseCustomer = buildEraseCustomerHandler(db, store, logFn, kubeOps, privateKey);
 
   const restartGateway = createRestartGatewayHandler({
-    recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
+    recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ store, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
     recoverSource: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedSourceRuntime({ store, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
     kubeOps: {...kubeOps,restartOpenClawInPlace: async ({name}) => {
       const gatewayId=name.slice('octogee-gateway-'.length);
       if(name!==deploymentNameForInstance(gatewayId))throw new Error('gateway restart deployment identity mismatch');
-      await restartGatewayProcess({db,namespace:NAMESPACE,runKubectl:spawnKubectl},gatewayId);
+      await restartGatewayProcess({store,namespace:NAMESPACE,runKubectl:spawnKubectl},gatewayId);
     }},
     namespace: NAMESPACE,
     resolveLiveRevisionId: async (gatewayId) => {
@@ -3737,10 +3717,9 @@ async function buildHandlers(
       return authorization ? authorization.gateway.desiredStatus : null;
     },
     setDesiredStatus: async (gatewayId, status) => {
-      await withGatewayRuntimeMutation(db,gatewayId,async transaction => {
-        transaction.set(db.collection(GATEWAYS_COLLECTION).doc(gatewayId),
-          { desiredStatus: status, updatedAt: Date.now(), updatedBy: "cowboy-recycle-gateway" },
-          { merge: true });
+      await withGatewayRuntimeMutation(store,gatewayId,async transaction => {
+        await transaction.gateways.roots.patch(gatewayId,
+          { desiredStatus: status, updatedAt: Date.now(), updatedBy: "cowboy-recycle-gateway" });
       });
     },
     readServingRevisionId: async (gatewayId) => {
@@ -3769,7 +3748,7 @@ async function buildHandlers(
       if (!runtime) throw new Error("retained-home boot replacement requires configured GCE runtime");
       const assertCurrent = async () => {
         await assertAuthority();
-        await withGatewayRuntimeMutation(db, gatewayId, async () => undefined, options?.forceOwnerUid ? operationId : undefined);
+        await withGatewayRuntimeMutation(store, gatewayId, async () => undefined, options?.forceOwnerUid ? operationId : undefined);
       };
       return runNormalFleetMutation(store, {
         actor: "cowboy", forced: !!options?.forceOwnerUid, what: "replace-builder-platform-boot", why: options?.forceOwnerUid ? "Operator accepted possible boot data loss for retained computer recovery" : "Replace a stopped platform image while retaining the exact Builder home and pinned recovery images",
@@ -3787,16 +3766,16 @@ async function buildHandlers(
     writeVmState: async (gatewayId, vm) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ vm });
     },
-    requestHomeCheckpoint: (gatewayId, requestedAt) => requestHomeCheckpoint(db, gatewayId, requestedAt),
-    readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(db, gatewayId),
+    requestHomeCheckpoint: (gatewayId, requestedAt) => requestHomeCheckpoint(store, gatewayId, requestedAt),
+    readHomeCheckpointCompletedAt: (gatewayId) => readHomeCheckpointCompletedAt(store, gatewayId),
     clearHomeCheckpointRequest: async (gatewayId) => {
       await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).update({ "vmHome.checkpointRequestedAt": FieldValue.delete() });
     },
     clearVmForReplacement: async (gatewayId) => {
-      await clearReplacedComputer({ db, log: logFn }, gatewayId);
+      await clearReplacedComputer({ store, log: logFn }, gatewayId);
     },
-    readParkedComputer: (ownerUid) => readParkedComputer(db, ownerUid),
-    clearParkedComputer: (ownerUid) => clearParkedComputer(db, ownerUid),
+    readParkedComputer: (ownerUid) => readParkedComputer(store, ownerUid),
+    clearParkedComputer: (ownerUid) => clearParkedComputer(store, ownerUid),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
     log: logFn,
@@ -3902,8 +3881,8 @@ async function ensureAnonymousDeletionArchive(
 
 const FIRESTORE_DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void, kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">, privateKey: string) {
-  const cloudCleanup = buildCustomerCloudCleanupDeps(db, logFn);
+function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, logFn: (msg: string) => void, kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">, privateKey: string) {
+  const cloudCleanup = buildCustomerCloudCleanupDeps(db, store, logFn);
   const clusterAbsent = async (gatewayId: string) => {
     if (!await retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, gatewayId, deploymentNameForInstance(gatewayId))) return false;
     const pvc = await spawnKubectl(["-n", NAMESPACE, "get", `pvc/octogee-gateway-${gatewayId}-data`, "--ignore-not-found=true", "-o", "name"]);
@@ -3911,9 +3890,9 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void, 
     return !pvc.stdout.trim();
   };
   const eraseAgentStores = createCustomerAgentStoreErasure({
-    db, now: Date.now,
+    store, now: Date.now,
     eraseStores: (cleanup, custody) => eraseBuilderAgentStores(requireEnv("OPENCLAW_AGENT_STORE_ADMIN_DSN", "account erasure requires the PostgreSQL agent-store administration URL"), cleanup, custody),
-    sharedGatewayRetired: gatewayId => isRetiredSharedGateway(db, gatewayId, clusterAbsent),
+    sharedGatewayRetired: gatewayId => isRetiredSharedGateway(store, gatewayId, clusterAbsent),
     runtimeAbsent: async (gatewayId, runtime) => runtime === "cluster" ? clusterAbsent(gatewayId) :
       !await createGatewayComputeClient(logFn).findByLabels({ "octogee-gateway-id": gatewayId.toLowerCase(), "octogee-environment": COMPUTER_ENVIRONMENT }),
     ownerHomeAbsent: async uid => {
@@ -4026,11 +4005,12 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void, 
     },
     ensureOwnedGatewayRetired: (cleanup, deletionId) =>
       ensureOwnedGatewaysRetired({
+        store,
         db,
         uid: cleanup.uid,
         deletionId,
         now: Date.now(),
-        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(db, cleanup.uid, deletionId, proof),
+        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(store, cleanup.uid, deletionId, proof),
       }),
     findUndrainedArtifactIds: async (artifactIds) => {
       const snapshots = await Promise.all(
@@ -4055,7 +4035,7 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void, 
     },
     verifyErasure: async (cleanup, currentOperationId) => {
       const remaining = await verifyCustomerFirestoreErasure(
-        db,
+        { store, db },
         cleanup.uid,
         cleanup.slug,
         cleanup.email,
@@ -4104,13 +4084,14 @@ function buildEraseCustomerHandler(db: Firestore, logFn: (msg: string) => void, 
 
 function buildSuspendCustomerHandler(
   db: Firestore,
+  store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
   kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   return createSuspendCustomerHandler({
-    assertRestoreNotInProgress: (uid) => assertCustomerRestoreNotInProgress(db, uid),
+    assertRestoreNotInProgress: (uid) => assertCustomerRestoreNotInProgress(store, uid),
     loadDeletionJob: async (deletionId) => {
       const snap = await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).get();
       if (!snap.exists) return null;
@@ -4136,7 +4117,7 @@ function buildSuspendCustomerHandler(
             : null,
       };
     },
-    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
+    loadCleanupContext: (uid) => loadCustomerCleanupContext({ store, accounts: firestoreBuilderAccountReader(db), db }, uid),
     persistCleanupContext: async (deletionId, cleanupContext) => {
       await db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId).set(
         { cleanupContext, status: "suspending", updatedAt: Date.now() },
@@ -4145,11 +4126,11 @@ function buildSuspendCustomerHandler(
     },
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     cancelCustomerMigrations: (uid, deletionId) =>
-      cancelCustomerMigrationsForSuspension(db, uid, deletionId, Date.now()),
-    deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(db, uid),
+      cancelCustomerMigrationsForSuspension(store, uid, deletionId, Date.now()),
+    deactivateCustomerVisibility: (uid) => deactivateCustomerVisibility(store, db, uid),
     invalidatePendingCredentialFlows: (uid) => invalidatePendingCredentialFlows(db, uid),
-    unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
-    releasePlacement: (uid, gatewayId) => releaseCustomerPlacement(db, uid, gatewayId),
+    unmountFromGateway: createCustomerDeletionUnmount(db, store, privateKey, logFn, kubeOps),
+    releasePlacement: (uid, gatewayId) => releaseCustomerPlacement(store, uid, gatewayId),
     cancelStripeSubscription: (subscriptionId) =>
       cancelStripeSubscription(
         fetch,
@@ -4194,7 +4175,7 @@ function buildSuspendCustomerHandler(
         logger: { warn: logFn },
       }),
     revokeModelBrokerAccess: (uid) =>
-      revokeOwnerModelBrokerTokens(db, uid, Date.now()),
+      revokeOwnerModelBrokerTokens(store, uid, Date.now()),
     disableAutoTopUp: (uid) => disableCreditAutoTopUp(db, uid, Date.now()),
     deleteCredentialSecrets: async (secretNames) => {
       for (const secretName of secretNames) await deleteSecret(secretName);
@@ -4214,25 +4195,27 @@ function buildSuspendCustomerHandler(
     },
     ensureOwnedGatewaysRetired: (uid, deletionId) =>
       ensureOwnedGatewaysRetired({
+        store,
         db,
         uid,
         deletionId,
         now: Date.now(),
-        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(db, uid, deletionId, proof),
+        preserveRetirementProof: proof => preserveCustomerGatewayRetirement(store, uid, deletionId, proof),
       }),
-    markSuspended: (deletionId) => markSuspendedAndReleaseErasure(db, deletionId, Date.now()),
+    markSuspended: (deletionId) => markSuspendedAndReleaseErasure(store, deletionId, Date.now()),
     now: () => Date.now(),
   });
 }
 
 function createCustomerDeletionUnmount(
   db: Firestore,
+  store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
   kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   return createUnmountFromGateway({
-    isRetiredSharedGateway: (gatewayId) => isRetiredSharedGateway(db, gatewayId,
+    isRetiredSharedGateway: (gatewayId) => isRetiredSharedGateway(store, gatewayId,
       (id) => retiredSharedGatewayRuntimeAbsent(kubeOps, NAMESPACE, id, deploymentNameForInstance(id))),
     isGatewayAbsent: async (gatewayId) => {
       const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
@@ -4282,14 +4265,15 @@ function requireEnv(name: string, why: string): string {
 
 function buildDeprovisionCustomerHandler(
   db: Firestore,
+  store: PlatformStateStore,
   privateKey: string,
   logFn: (msg: string) => void,
   kubeOps: Pick<KubeOps, "readAvailableReplicas" | "readGatewayPodDiagnostics">,
 ) {
   return createDeprovisionCustomerHandler({
-    loadCleanupContext: (uid) => loadCustomerCleanupContext({ db }, uid),
-    unmountFromGateway: createCustomerDeletionUnmount(db, privateKey, logFn, kubeOps),
-    cloudCleanup: buildCustomerCloudCleanupDeps(db, logFn),
+    loadCleanupContext: (uid) => loadCustomerCleanupContext({ store, accounts: firestoreBuilderAccountReader(db), db }, uid),
+    unmountFromGateway: createCustomerDeletionUnmount(db, store, privateKey, logFn, kubeOps),
+    cloudCleanup: buildCustomerCloudCleanupDeps(db, store, logFn),
     now: () => Date.now(),
     log: logFn,
   });
@@ -4302,10 +4286,11 @@ function createBuilderHomeServices(db: Firestore, log: (message: string) => void
     const result = await client.request({ url, method, ...(body === undefined ? {} : { data: body }) });
     return { status: result.status, data: result.data };
   };
-  const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(createFirestorePlatformStateStore({ db }), {
+  const store = createFirestorePlatformStateStore({ db });
+  const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(store, {
     actor: "cowboy", forced: false, what, why: "Migrate the Builder home without removing its verified source", target: { ownerUid: uid }, preActionStatus: {}, mutation: { action: what }, action,
   });
-  const provider = createBuilderHomeProvider({ db, projectId: gatewayComputeProjectId(), environment: COMPUTER_ENVIRONMENT,
+  const provider = createBuilderHomeProvider({ store, projectId: gatewayComputeProjectId(), environment: COMPUTER_ENVIRONMENT,
     request: homeCopyRequest, vm: createGatewayComputeClient(log), journal: homeJournal });
   return {
     provider,
@@ -4313,7 +4298,7 @@ function createBuilderHomeServices(db: Firestore, log: (message: string) => void
   };
 }
 
-function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => void) {
+function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore, logFn: (msg: string) => void) {
   const cleanupEnv = (name: string) =>
     requireEnv(name, "customer erasure cloud cleanup requires it");
   const gitea = createGiteaCleanupClient({
@@ -4337,7 +4322,7 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
       slug: string,
       email: string | null,
       currentOperationId: string,
-    ) => eraseCustomerFirestore(db, uid, slug, email, currentOperationId),
+    ) => eraseCustomerFirestore({ store, db }, uid, slug, email, currentOperationId),
     deleteCustomerStorage: (
       uid: string,
       slug: string,
@@ -4362,7 +4347,7 @@ function buildCustomerCloudCleanupDeps(db: Firestore, logFn: (msg: string) => vo
             if (!runtime) throw new Error("the VM gateway runtime is not initialised; cannot delete the Builder's computer");
             const deleted = await runtime.deleteComputer(uid);
             const homes = createBuilderHomeServices(db, logFn);
-            if (!await eraseBuilderHomeMigrationStorage({ db, removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
+            if (!await eraseBuilderHomeMigrationStorage({ store: createFirestorePlatformStateStore({ db }), removeStoppedHome: homes.provider.removeStoppedHome, copy: homes.copy, remainingOwnerHomes: homes.provider.remainingOwnerHomes, log: logFn }, uid)) {
               throw new Error("Builder home cleanup is still converging; erasure tracking retained for retry");
             }
             return deleted;

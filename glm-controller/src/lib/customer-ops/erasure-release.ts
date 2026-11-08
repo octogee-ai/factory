@@ -1,25 +1,24 @@
-import type { Firestore } from "firebase-admin/firestore";
-import { CUSTOMER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
-import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 
 export async function markSuspendedAndReleaseErasure(
-  db: Firestore,
+  store: PlatformStateStore,
   deletionId: string,
   now: number,
 ): Promise<void> {
-  const jobRef = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-  await db.runTransaction(async (txn) => {
-    const job = (await txn.get(jobRef)).data() as Record<string, unknown> | undefined;
+  await store.transaction({ label: "customer-deletion.release-erasure" }, async (transaction) => {
+    const job = await transaction.jobs.deletions.get(deletionId);
     const erasureOperationId = job?.erasureOperationId;
-    const eraseAfter = job?.eraseAfter;
-    if (typeof erasureOperationId !== "string" || typeof eraseAfter !== "number") {
+    if (job === null || erasureOperationId === undefined) {
       throw new Error(`deletion job ${deletionId} has no erasure operation to release`);
     }
-    const erasureRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(erasureOperationId);
-    const erasure = (await txn.get(erasureRef)).data() as { status?: unknown } | undefined;
-    txn.set(jobRef, { status: "hibernating", suspendedAt: now, updatedAt: now }, { merge: true });
+    const erasure = await transaction.journal.operations.get(erasureOperationId);
+    await transaction.jobs.deletions.patch(deletionId, { status: "hibernating", suspendedAt: now, updatedAt: now });
     if (erasure?.status === "pending") {
-      txn.update(erasureRef, { nextAttemptAt: Math.max(now, eraseAfter) });
+      await transaction.journal.operations.patch(
+        erasureOperationId,
+        { nextAttemptAt: Math.max(now, job.eraseAfter) },
+        { status: ["pending"] },
+      );
     }
   });
 }

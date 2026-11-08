@@ -2,11 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { runForcedMigration } from "../ops/fleet-force-migration-executor.js";
 import { forceMigrationHarness, forceMigrationTarget as target } from "./fleet-force-migration.test-support.js";
 
-vi.mock("@octogee/core/platform-state", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
-  createFirestorePlatformStateStore: (await import("./journal-fixture-store.test-support.js")).journalFixtureStoreFor,
-}));
-
 function setup() {
   const h = forceMigrationHarness();
   const bound = { podName: "shared-pod", podUid: "pod-uid", containerImage: "retained-recovery-image", beforeBootId: "boot-before" };
@@ -20,7 +15,7 @@ function setup() {
       version: 1 as const, attemptId, beforeBootId: bound.beforeBootId, afterBootId: "boot-after", ready: true as const,
     })),
   };
-  const run = () => runForcedMigration({ db: h.db, target, actor: "operator", transport, now: () => 1000 });
+  const run = () => runForcedMigration({ store: h.store, target, actor: "operator", transport, now: () => 1000 });
   return { ...h, bound, transport, run };
 }
 

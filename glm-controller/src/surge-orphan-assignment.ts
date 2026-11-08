@@ -1,56 +1,25 @@
-import type { Firestore } from "firebase-admin/firestore";
-import { userAssignmentMatchesGateway } from "@octogee/core/assigned-roster";
+import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import type { FleetRegistryRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
-import {
-  GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
-} from "@octogee/shared/types/glm";
 import type { SurgeAssignment } from "./surge-customer-handoff.js";
 
 type AssignedUser = { uid: string; slug: string };
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function millis(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  const timestamp = record(value);
-  if (typeof timestamp?.seconds === "number") {
-    return timestamp.seconds * 1_000 +
-      (typeof timestamp.nanoseconds === "number" ? timestamp.nanoseconds / 1_000_000 : 0);
-  }
-  if (value && typeof value === "object" && "toMillis" in value) {
-    try {
-      const result = (value as { toMillis: () => unknown }).toMillis();
-      return typeof result === "number" && Number.isFinite(result) ? result : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 function runtimeProvesAbsent(
-  value: unknown,
+  runtime: FleetRegistryRecord | null,
   gatewayId: string,
   slug: string,
   now: number,
 ): boolean {
-  const runtime = record(value);
-  const heartbeat = record(runtime?.heartbeat);
+  const heartbeat = runtime?.heartbeat;
   const mounted = heartbeat?.mountedCustomers;
-  const observedAt = millis(heartbeat?.lastHeartbeatAt);
+  const observedAt = heartbeat?.lastHeartbeatAt;
   return runtime?.gatewayId === gatewayId &&
     heartbeat?.status === "ready" &&
     Array.isArray(mounted) &&
     mounted.every((item) => typeof item === "string") &&
     !mounted.includes(slug) &&
-    observedAt !== null &&
+    typeof observedAt === "number" &&
     observedAt <= now &&
     now - observedAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
@@ -60,58 +29,31 @@ function operationId(gatewayId: string, assignment: SurgeAssignment): string {
 }
 
 async function pruneOne(input: {
-  db: Firestore;
+  store: PlatformStateStore;
   gatewayId: string;
   assignment: SurgeAssignment;
   now: number;
 }): Promise<boolean | "restore-fenced"> {
-  const { db, gatewayId, assignment, now } = input;
-  const assignmentRef = db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(gatewayId)
-    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-    .doc(assignment.uid);
-  const userRef = db.collection("users").doc(assignment.uid);
-  const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
+  const { store, gatewayId, assignment, now } = input;
   const id = operationId(gatewayId, assignment);
-  const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(id);
-  return db.runTransaction(async (transaction) => {
-    const [assignmentSnapshot, userSnapshot, runtimeSnapshot, operationSnapshot] =
-      await Promise.all([
-        transaction.get(assignmentRef),
-        transaction.get(userRef),
-        transaction.get(runtimeRef),
-        transaction.get(operationRef),
-      ]);
-    if (!assignmentSnapshot.exists) return true;
-    if (customerRuntimeMutationFenced(userSnapshot.data())) return "restore-fenced";
-    const stored = record(assignmentSnapshot.data());
-    if (
-      !stored ||
-      stored.slug !== assignment.slug ||
-      stored.gatewayId !== gatewayId ||
-      stored.epoch !== assignment.epoch
-    ) {
-      return false;
-    }
-    if (
-      userSnapshot.exists &&
-      userAssignmentMatchesGateway(
-        userSnapshot.data() as Record<string, unknown> | undefined,
-        gatewayId,
-        assignment.slug,
-      )
-    ) {
-      return false;
-    }
-    if (!runtimeProvesAbsent(runtimeSnapshot.data(), gatewayId, assignment.slug, now)) {
-      return false;
-    }
-    if (operationSnapshot.exists) {
+  return store.transaction({ label: "surge-orphan-assignment.prune" }, async (tx) => {
+    const [stored, owner, runtime, journal] = await Promise.all([
+      tx.gateways.assignments.get(gatewayId, assignment.uid),
+      tx.builders.records.get(assignment.uid),
+      tx.fleetRegistry.get(gatewayId),
+      tx.journal.operations.get(id),
+    ]);
+    if (!stored) return true;
+    if (owner && builderRuntimeMutationFenced(owner)) return "restore-fenced";
+    if (stored.slug !== assignment.slug || stored.epoch !== assignment.epoch) return false;
+    if (owner?.gateway?.gatewayId === gatewayId && owner.slug === assignment.slug) return false;
+    if (!runtimeProvesAbsent(runtime, gatewayId, assignment.slug, now)) return false;
+    if (journal) {
       throw new Error(`orphan assignment repair journal ${id} already exists while assignment remains`);
     }
-    transaction.delete(assignmentRef);
-    transaction.set(operationRef, {
+    await tx.gateways.assignments.delete(gatewayId, assignment.uid, { epoch: stored.epoch, updatedAt: stored.updatedAt });
+    await tx.journal.operations.create({
+      id,
       kind: "deprovision-customer",
       status: "succeeded",
       origin: "automatic",
@@ -135,7 +77,7 @@ async function pruneOne(input: {
 }
 
 export async function pruneSurgeOrphanAssignments(input: {
-  db: Firestore;
+  store: PlatformStateStore;
   gatewayId: string;
   assignments: readonly SurgeAssignment[];
   users: readonly AssignedUser[];
@@ -150,7 +92,7 @@ export async function pruneSurgeOrphanAssignments(input: {
       continue;
     }
     const removed = await pruneOne({
-      db: input.db,
+      store: input.store,
       gatewayId: input.gatewayId,
       assignment,
       now: input.now,

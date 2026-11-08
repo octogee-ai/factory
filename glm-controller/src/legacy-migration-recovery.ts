@@ -1,8 +1,7 @@
 import { isBuilderActivateOperationIdFor } from "@octogee/core/builder-activation-lease";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
-import { customerRuntimeMutationFenced, GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
-import { GLM_OPERATIONS_COLLECTION, readSchedulerMigrationIdentity, type Operation, type SchedulerHandoffState } from "@octogee/shared/types/glm";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
+import type { BuilderRecord, GatewayAssignment, OperationPatch, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import { readSchedulerMigrationIdentity, type Operation, type SchedulerHandoffState } from "@octogee/shared/types/glm";
 import { readWorkspaceMigrationMarker } from "@octogee/shared/types/workspace-migration";
 import { builderActivationRecoveryTargetMatches } from "@octogee/core/fleet-state";
 import { classifyOperationFailure, retryBackoffMs } from "./operation-retry.js";
@@ -122,13 +121,12 @@ function recoverableLegacyScope(operation: Operation & { cancellationRequestedAt
   ].every(Boolean);
 }
 
-function ownsLegacySource(operation: Operation, user: FirebaseFirestore.DocumentData | undefined, assignment: FirebaseFirestore.DocumentData | undefined, targetExists: boolean): boolean {
-  const openclaw = user?.provisioning?.openclaw;
-  if (!assignment || !openclaw) return false;
+function ownsLegacySource(operation: Operation, owner: Stored<BuilderRecord> | null, assignment: Stored<GatewayAssignment> | null, targetExists: boolean): boolean {
+  if (!assignment || !owner?.gateway) return false;
   return [
-    !customerRuntimeMutationFenced(user), !targetExists, openclaw.gatewayId === operation.input.fromGatewayId,
-    readWorkspaceMigrationMarker(openclaw)?.operationId === operation.id ||
-      openclaw.migration === undefined && assignment.state === "serving" && assignment.updatedByOperationId === operation.id,
+    !builderRuntimeMutationFenced(owner), !targetExists, owner.gateway.gatewayId === operation.input.fromGatewayId,
+    readWorkspaceMigrationMarker({ migration: owner.fences.migration })?.operationId === operation.id ||
+      owner.fences.migration === undefined && assignment.state === "serving" && assignment.updatedByOperationId === operation.id,
     assignment.uid === operation.input.uid, assignment.gatewayId === operation.input.fromGatewayId,
     Number.isSafeInteger(assignment.epoch), assignment.epoch >= 0,
     assignment.state === "serving" || assignment.state === "quiescing" && assignment.updatedByOperationId === operation.id,
@@ -157,16 +155,18 @@ function recoveryIntent(operation: Operation, sourceEpoch: number): NonNullable<
   return { migrationId: handoff.migrationId, sourceEpoch, steps };
 }
 
-function recoveryRearmPatch(operation: Operation, intent: NonNullable<SchedulerHandoffState["sourceRecovery"]>, now: number) {
+const CLEAR = { clear: true } as const;
+
+function recoveryRearmPatch(operation: Operation, intent: NonNullable<SchedulerHandoffState["sourceRecovery"]>, now: number): OperationPatch {
   const { attempt, history } = recoveryAttemptHistory(operation, now);
   return {
     status: "pending", startedAt: null, completedAt: null, steps: [],
-    "input.recoverSourceOnly": true, schedulerHandoffReleased: false,
-    schedulerHandoff: { ...operation.schedulerHandoff, sourceRecovery: intent },
+    input: { ...operation.input, recoverSourceOnly: true }, schedulerHandoffReleased: false,
+    schedulerHandoff: { ...operation.schedulerHandoff!, sourceRecovery: intent },
     attempts: Math.max(operation.attempts ?? 0, attempt), attemptHistory: history,
-    error: FieldValue.delete(), expireAt: FieldValue.delete(), lastProgressAt: FieldValue.delete(),
-    nextAttemptAt: operation.schedulerHandoff!.sourceRecovery ? now + retryBackoffMs(attempt) : FieldValue.delete(),
-    waitingOn: FieldValue.delete(), rolledBack: FieldValue.delete(),
+    error: CLEAR, expireAt: CLEAR, lastProgressAt: CLEAR,
+    nextAttemptAt: operation.schedulerHandoff!.sourceRecovery ? now + retryBackoffMs(attempt) : CLEAR,
+    waitingOn: CLEAR, rolledBack: CLEAR,
   };
 }
 
@@ -182,44 +182,44 @@ function failedRecoveryAdmitted(operation: Operation): boolean {
 }
 
 export async function rearmOwnedLegacyMigration(input: {
-  db: Firestore;
-  ref: FirebaseFirestore.DocumentReference;
+  store: PlatformStateStore;
+  operationId: string;
   now: number;
   admitted: (operation: Operation) => boolean;
 }): Promise<boolean> {
-  return input.db.runTransaction(async (txn) => {
-    const snapshot = await txn.get(input.ref);
-    const operation = { ...snapshot.data(), id: input.ref.id } as Operation;
-    if (!snapshot.exists || operation.kind !== "migrate-customer" || !operation.input ||
+  return input.store.transaction({ label: "legacy-migration-recovery.rearm" }, async (tx) => {
+    const operation = await tx.journal.operations.get(input.operationId);
+    if (!operation || operation.kind !== "migrate-customer" || !operation.input ||
         !input.admitted(operation) || !recoverableLegacyScope(operation)) return false;
     if (operation.input.recoverSourceOnly === true && operation.schedulerHandoffReleased === true) return false;
     const { uid, fromGatewayId, toGatewayId } = operation.input as { uid: string; fromGatewayId: string; toGatewayId: string };
-    const [user, source, target] = await Promise.all([
-      txn.get(input.db.collection("users").doc(uid)),
-      txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(uid)),
-      txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(uid)),
+    const [owner, source, target] = await Promise.all([
+      tx.builders.records.get(uid),
+      tx.gateways.assignments.get(fromGatewayId, uid),
+      tx.gateways.assignments.get(toGatewayId, uid),
     ]);
-    if (!ownsLegacySource(operation, user.data(), source.data(), target.exists)) return false;
-    const intent = recoveryIntent(operation, source.data()!.epoch);
+    if (!ownsLegacySource(operation, owner, source, target !== null)) return false;
+    const intent = recoveryIntent(operation, source!.epoch);
     if (!intent || operation.schedulerHandoff!.forwardRecovery && operation.schedulerHandoff!.forwardRecovery.sourceEpoch !== intent.sourceEpoch) return false;
     if (builderActivationSourceRecoveryPending(operation)) {
-      const root = await txn.get(input.db.collection(GATEWAYS_COLLECTION).doc(toGatewayId));
+      const root = await tx.gateways.roots.get(toGatewayId);
       if (!builderActivationRecoveryTargetMatches({ operationId: operation.id, input: operation.input,
-        openclaw: user.data()!.provisioning.openclaw, sourceEpoch: intent.sourceEpoch, targetRoot: root.data() })) return false;
+        openclaw: { activationLease: owner!.activationLease ?? undefined }, sourceEpoch: intent.sourceEpoch, targetRoot: root })) return false;
     }
-    txn.update(input.ref, recoveryRearmPatch(operation, intent, input.now));
+    await tx.journal.operations.patch(operation.id, recoveryRearmPatch(operation, intent, input.now),
+      { status: [operation.status], startedAt: operation.startedAt });
     return true;
   });
 }
 
-export async function recoverFailedLegacyMigrations(deps: { db: Firestore; log: (message: string) => void; now: () => number }): Promise<void> {
-  const snapshot = await deps.db.collection(GLM_OPERATIONS_COLLECTION).where("status", "==", "failed").get();
-  for (const doc of snapshot.docs) {
+export async function recoverFailedLegacyMigrations(deps: { store: PlatformStateStore; log: (message: string) => void; now: () => number }): Promise<void> {
+  const failed = await deps.store.journal.operations.listByStatus(["failed"]);
+  for (const operation of failed) {
     try {
-      const rearmed = await rearmOwnedLegacyMigration({ db: deps.db, ref: doc.ref, now: deps.now(), admitted: failedRecoveryAdmitted });
-      if (rearmed) deps.log(`[migration-recovery] queued native source recovery for ${doc.id}; assignment and marker remain held`);
+      const rearmed = await rearmOwnedLegacyMigration({ store: deps.store, operationId: operation.id, now: deps.now(), admitted: failedRecoveryAdmitted });
+      if (rearmed) deps.log(`[migration-recovery] queued native source recovery for ${operation.id}; assignment and marker remain held`);
     } catch (error) {
-      deps.log(`[migration-recovery] ${doc.id} recovery admission failed: ${String(error)}`);
+      deps.log(`[migration-recovery] ${operation.id} recovery admission failed: ${String(error)}`);
     }
   }
 }

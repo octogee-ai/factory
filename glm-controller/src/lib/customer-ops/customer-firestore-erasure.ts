@@ -1,26 +1,22 @@
 import {
-  FieldValue,
   GrpcStatus,
   type DocumentReference,
   type Firestore,
 } from "firebase-admin/firestore";
+import type { PlatformStateStore, PlatformStateTransaction } from "@octogee/core/platform-state";
 
 export interface CustomerErasureCollectionPolicy {
-  customerKey?: "uid" | "slug" | "email";
+  customerKey?: "uid" | "email";
   ownsSubcollections?: true;
   uidFields?: readonly string[];
   slugFields?: readonly string[];
   emailFields?: readonly string[];
-  uidArrayFields?: readonly string[];
   emailArrayFields?: readonly string[];
 }
 
 export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
-  users: { customerKey: "uid" },
   customerStats: { customerKey: "uid" },
-  agents: { customerKey: "uid" },
   modelBrokerCredits: { customerKey: "uid" },
-  workspaces: { customerKey: "slug" },
   emailSuppressions: { customerKey: "email" },
   opsSupportQuestions: { uidFields: ["ownerUid"] },
   modelBrokerUsageEvents: { uidFields: ["ownerUid"] },
@@ -29,8 +25,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   modelBrokerWeekWindows: { uidFields: ["ownerUid"] },
   modelBrokerSignupOfferBudgets: { uidFields: ["ownerUid"] },
   modelBrokerRateWindows: { uidFields: ["ownerKey"] },
-  modelBrokerTokens: { uidFields: ["ownerUid"] },
-  modelBrokerGatewayTokens: { uidFields: ["ownerUid"] },
   modelBrokerCreditTopups: { uidFields: ["ownerUid"] },
   connectFlows: { uidFields: ["uid"] },
   desktopSignInCodes: { uidFields: ["uid"] },
@@ -51,8 +45,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   },
   channelInvites: { uidFields: ["createdBy"] },
   posts: { uidFields: ["authorUid"] },
-  glmOperations: { uidFields: ["inputUid", "input.uid", "createdBy"] },
-  gatewayRecoveryReceipts: { uidFields: ["inputUid", "input.uid"] },
   feed: { uidFields: ["actorUid", "targetUid"] },
   stars: { uidFields: ["actorUid", "target.ownerUid"] },
   follows: { uidFields: ["actorUid", "target.ownerUid"] },
@@ -65,7 +57,6 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
     slugFields: ["workspaceSlug"],
   },
   cleanupJobs: { slugFields: ["slug"] },
-  gateways: { uidArrayFields: ["coOwnerUids"] },
   email: { emailFields: ["to"], emailArrayFields: ["to"], ownsSubcollections: true },
   gatewayAccessGrants: {
     uidFields: ["ownerUid", "granteeUid", "createdByUid", "updatedByUid", "revokedByUid"],
@@ -82,11 +73,22 @@ export const CUSTOMER_ERASURE_COLLECTION_POLICIES = {
   projectPreviewStates: { uidFields: ["ownerUid"] },
   projectPreviews: { uidFields: ["ownerUid"] },
   agentImports: { uidFields: ["uid"] },
-  glmGateways: {},
-  platformConfig: {},
   revisionTombstones: {},
   systemTypingPhrases: {},
 } as const satisfies Record<string, CustomerErasureCollectionPolicy>;
+
+export const PLATFORM_STATE_ERASURE_COLLECTIONS = [
+  "users",
+  "agents",
+  "workspaces",
+  "glmOperations",
+  "gatewayRecoveryReceipts",
+  "gateways",
+  "glmGateways",
+  "modelBrokerTokens",
+  "modelBrokerGatewayTokens",
+  "platformConfig",
+] as const;
 
 type PolicyEntry = [string, CustomerErasureCollectionPolicy];
 const POLICY_ENTRIES = Object.entries(CUSTOMER_ERASURE_COLLECTION_POLICIES) as PolicyEntry[];
@@ -96,7 +98,7 @@ function policyQueries(key: "uidFields" | "slugFields" | "emailFields") {
     (policy[key] ?? []).map((field) => ({ collection, field })));
 }
 
-function policyArrayQueries(key: "uidArrayFields" | "emailArrayFields") {
+function policyArrayQueries(key: "emailArrayFields") {
   return POLICY_ENTRIES.flatMap(([collection, policy]) =>
     (policy[key] ?? []).map((field) => ({ collection, field })));
 }
@@ -106,18 +108,13 @@ export const CUSTOMER_SLUG_REFERENCE_QUERIES = policyQueries("slugFields");
 
 export const CUSTOMER_GROUP_REFERENCE_QUERIES = [
   { collectionGroup: "members", field: "id" },
-  { collectionGroup: "assignments", field: "uid" },
 ] as const;
 
-export const CUSTOMER_ARRAY_REFERENCE_QUERIES = policyArrayQueries("uidArrayFields");
 export const CUSTOMER_EMAIL_REFERENCE_QUERIES = policyQueries("emailFields");
 export const CUSTOMER_EMAIL_ARRAY_REFERENCE_QUERIES = policyArrayQueries("emailArrayFields");
 
 const CUSTOMER_KEYED_ROOTS = POLICY_ENTRIES
   .filter(([, policy]) => policy.customerKey === "uid")
-  .map(([collection]) => collection);
-const CUSTOMER_SLUG_KEYED_ROOTS = POLICY_ENTRIES
-  .filter(([, policy]) => policy.customerKey === "slug")
   .map(([collection]) => collection);
 const CUSTOMER_EMAIL_KEYED_ROOTS = POLICY_ENTRIES
   .filter(([, policy]) => policy.customerKey === "email")
@@ -135,6 +132,9 @@ const RETRYABLE_LEAF_DELETE_CODES = new Set<number>([
   GrpcStatus.UNAVAILABLE,
 ]);
 const MAX_LEAF_DELETE_ATTEMPTS = 5;
+const PLATFORM_WRITE_BATCH_SIZE = 400;
+
+type PlatformWrite = (transaction: PlatformStateTransaction) => Promise<void>;
 
 type ErasureFirestore = Pick<
   Firestore,
@@ -145,14 +145,11 @@ type VerificationFirestore = Pick<Firestore, "collection" | "collectionGroup">;
 function customerRootRefs(
   db: VerificationFirestore,
   uid: string,
-  slug: string,
   email: string | null,
 ) {
   return [
     ...CUSTOMER_KEYED_ROOTS.map((collection) =>
       db.collection(collection).doc(uid)),
-    ...(slug ? CUSTOMER_SLUG_KEYED_ROOTS.map((collection) =>
-      db.collection(collection).doc(slug)) : []),
     ...(email ? CUSTOMER_EMAIL_KEYED_ROOTS.map((collection) =>
       db.collection(collection).doc(email)) : []),
   ];
@@ -176,16 +173,13 @@ async function referenceDocs(
           db.collection(query.collection).where(query.field, "==", email).get())
       : []),
   ]);
-  return snapshots.flatMap((snapshot) => snapshot.docs);
+  return snapshots.flatMap((snapshot) => snapshot.docs)
+    .filter((doc) => !workspaceMemberPath(doc.ref.path));
 }
 
-async function arrayReferenceDocs(
-  db: VerificationFirestore,
-  uid: string,
-) {
-  const snapshots = await Promise.all(CUSTOMER_ARRAY_REFERENCE_QUERIES.map((query) =>
-    db.collection(query.collection).where(query.field, "array-contains", uid).get()));
-  return snapshots.flatMap((snapshot) => snapshot.docs);
+function workspaceMemberPath(path: string): boolean {
+  const segments = path.split("/");
+  return segments.length === 4 && segments[0] === "workspaces" && segments[2] === "members";
 }
 
 async function emailArrayReferenceDocs(
@@ -198,12 +192,93 @@ async function emailArrayReferenceDocs(
   return snapshots.flatMap((snapshot) => snapshot.docs);
 }
 
-async function ownedGatewayDocs(
-  db: VerificationFirestore,
+async function platformStateReferences(store: PlatformStateStore, uid: string, currentOperationId: string) {
+  const [operations, receipts, assignments, members, tokens, pointers] = await Promise.all([
+    store.journal.operations.listReferencingUid(uid),
+    store.journal.recoveryReceipts.listReferencingUid(uid),
+    store.gateways.assignments.listForUid(uid),
+    store.workspaces.members.listForUid(uid),
+    store.access.modelBrokerTokens.listForOwner(uid),
+    store.access.modelBrokerGatewayTokens.listForOwner(uid),
+  ]);
+  return {
+    operations: operations.filter((operation) => operation.id !== currentOperationId),
+    receipts,
+    assignments,
+    members,
+    tokens,
+    pointers,
+  };
+}
+
+type PlatformStateReferences = Awaited<ReturnType<typeof platformStateReferences>>;
+
+function platformStateReferencePaths(references: PlatformStateReferences): string[] {
+  return [
+    ...references.operations.map((operation) => `glmOperations/${operation.id}`),
+    ...references.receipts.map((receipt) => `gatewayRecoveryReceipts/${receipt.id}`),
+    ...references.assignments.map((assignment) => `gateways/${assignment.gatewayId}/assignments/${assignment.uid}`),
+    ...references.members.map((member) => `workspaces/${member.workspaceSlug}/members/${member.uid}`),
+    ...references.tokens.map((token) => `modelBrokerTokens/${token.tokenHash}`),
+    ...references.pointers.map((pointer) => `modelBrokerGatewayTokens/${pointer.pointerKey}`),
+  ];
+}
+
+function platformStateReferenceDeletes(references: PlatformStateReferences): PlatformWrite[] {
+  return [
+    ...references.operations.map((operation): PlatformWrite => (transaction) =>
+      transaction.journal.operations.delete(operation.id)),
+    ...references.receipts.map((receipt): PlatformWrite => (transaction) =>
+      transaction.journal.recoveryReceipts.delete(receipt.id)),
+    ...references.assignments.map((assignment): PlatformWrite => (transaction) =>
+      transaction.gateways.assignments.delete(assignment.gatewayId, assignment.uid)),
+    ...references.members.map((member): PlatformWrite => (transaction) =>
+      transaction.workspaces.members.delete(member.workspaceSlug, member.uid)),
+    ...references.tokens.map((token): PlatformWrite => (transaction) =>
+      transaction.access.modelBrokerTokens.delete(token.tokenHash)),
+    ...references.pointers.map((pointer): PlatformWrite => (transaction) =>
+      transaction.access.modelBrokerGatewayTokens.delete(pointer.pointerKey)),
+  ];
+}
+
+async function erasePlatformState(
+  store: PlatformStateStore,
   uid: string,
-) {
-  const snapshot = await db.collection("gateways").where("ownerUid", "==", uid).get();
-  return snapshot.docs;
+  slug: string,
+  references: PlatformStateReferences,
+): Promise<void> {
+  const writes = platformStateReferenceDeletes(references);
+  for (let offset = 0; offset < writes.length; offset += PLATFORM_WRITE_BATCH_SIZE) {
+    const chunk = writes.slice(offset, offset + PLATFORM_WRITE_BATCH_SIZE);
+    await store.transaction({ label: "customer-erasure.platform-references" }, async (transaction) => {
+      for (const write of chunk) await write(transaction);
+    });
+  }
+  await store.workspaces.agentIdentities.delete(uid);
+  if (slug) await store.workspaces.records.delete(slug);
+  await store.builders.records.delete(uid);
+}
+
+async function remainingPlatformState(
+  store: PlatformStateStore,
+  uid: string,
+  slug: string,
+  currentOperationId: string,
+): Promise<string[]> {
+  const [builder, agentIdentity, workspace, ownedGateways, references] = await Promise.all([
+    store.builders.records.get(uid),
+    store.workspaces.agentIdentities.get(uid),
+    slug ? store.workspaces.records.get(slug) : null,
+    store.gateways.roots.list({ ownerUid: uid }),
+    platformStateReferences(store, uid, currentOperationId),
+  ]);
+  return [
+    ...(builder === null ? [] : [`users/${uid}`]),
+    ...(agentIdentity === null ? [] : [`agents/${uid}`]),
+    ...(workspace === null ? [] : [`workspaces/${slug}`]),
+    ...ownedGateways.map((root) => `gateways/${root.gatewayId}`),
+    ...platformStateReferencePaths(references),
+  ];
 }
 
 function normalizedEmail(email: string | null): string | null {
@@ -235,29 +310,30 @@ async function deleteLeafRefs(db: ErasureFirestore, refs: DocumentReference[]): 
   );
 }
 
+export interface CustomerFirestoreErasureDeps<Db> {
+  store: PlatformStateStore;
+  db: Db;
+}
+
 export async function eraseCustomerFirestore(
-  db: ErasureFirestore,
+  { store, db }: CustomerFirestoreErasureDeps<ErasureFirestore>,
   uid: string,
   slug: string,
   email: string | null,
   currentOperationId: string,
 ): Promise<void> {
   const normalized = normalizedEmail(email);
-  const roots = customerRootRefs(db, uid, slug, normalized);
-  const refs: DocumentReference[] = [...roots];
-  const [references, arrays, emailArrays] = await Promise.all([
+  const roots = customerRootRefs(db, uid, normalized);
+  const [platformReferences, references, emailArrays] = await Promise.all([
+    platformStateReferences(store, uid, currentOperationId),
     referenceDocs(db, uid, slug, normalized),
-    arrayReferenceDocs(db, uid),
     emailArrayReferenceDocs(db, normalized),
   ]);
-  for (const doc of arrays) {
-    await doc.ref.update({ coOwnerUids: FieldValue.arrayRemove(uid) });
-  }
-  for (const doc of references) {
-    if (doc.ref.path === `glmOperations/${currentOperationId}`) continue;
-    refs.push(doc.ref);
-  }
-  for (const doc of emailArrays) refs.push(doc.ref);
+  const refs: DocumentReference[] = [
+    ...roots,
+    ...references.map((doc) => doc.ref),
+    ...emailArrays.map((doc) => doc.ref),
+  ];
   const rootPaths = new Set(roots.map((ref) => ref.path));
   const uniqueRefs = new Map(refs.map((ref) => [ref.path, ref]));
   const leafRefs: DocumentReference[] = [];
@@ -269,34 +345,29 @@ export async function eraseCustomerFirestore(
     leafRefs.push(ref);
   }
   await deleteLeafRefs(db, leafRefs);
+  await erasePlatformState(store, uid, slug, platformReferences);
 }
 
 export async function verifyCustomerFirestoreErasure(
-  db: VerificationFirestore,
+  { store, db }: CustomerFirestoreErasureDeps<VerificationFirestore>,
   uid: string,
   slug: string,
   email: string | null,
   currentOperationId: string,
 ): Promise<string[]> {
   const normalized = normalizedEmail(email);
-  const refs = customerRootRefs(db, uid, slug, normalized);
-  const [rootSnaps, references, arrays, emailArrays, ownedGateways] = await Promise.all([
+  const refs = customerRootRefs(db, uid, normalized);
+  const [rootSnaps, references, emailArrays, platformState] = await Promise.all([
     Promise.all(refs.map((ref) => ref.get())),
     referenceDocs(db, uid, slug, normalized),
-    arrayReferenceDocs(db, uid),
     emailArrayReferenceDocs(db, normalized),
-    ownedGatewayDocs(db, uid),
+    remainingPlatformState(store, uid, slug, currentOperationId),
   ]);
   const remaining = refs
     .filter((_ref, index) => rootSnaps[index]?.exists)
     .map((ref) => ref.path);
-  for (const doc of references) {
-    if (doc.ref.path !== `glmOperations/${currentOperationId}`) {
-      remaining.push(doc.ref.path);
-    }
-  }
-  for (const doc of arrays) remaining.push(doc.ref.path);
+  for (const doc of references) remaining.push(doc.ref.path);
   for (const doc of emailArrays) remaining.push(doc.ref.path);
-  for (const doc of ownedGateways) remaining.push(doc.ref.path);
+  remaining.push(...platformState);
   return Array.from(new Set(remaining)).sort();
 }

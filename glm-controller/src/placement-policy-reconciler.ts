@@ -5,17 +5,16 @@ const eventLogger = createServiceLogger("cowboy");
 import type {
   Firestore,
   QueryDocumentSnapshot,
-  Transaction,
 } from "firebase-admin/firestore";
-import { isReapedOperationError, rearmedRetireOperationPatch } from "./stuck-op-reaper.js";
+import { isReapedOperationError, REARMED_RETIRE_OPERATION } from "./stuck-op-reaper.js";
 import { sourceRecoveryForwardRetryable } from "./legacy-migration-recovery.js";
 import { schedulerHandoffAwaitingRelease } from "./scheduler-handoff-release.js";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { createHash } from "node:crypto";
 
 import {
   GatewayRetirementConflictError,
-  claimGatewayRetirementAtomic,
+  builderRuntimeMutationFenced,
+  claimGatewayRetirementInStore,
 } from "@octogee/core/gateway-retirement-claim";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
@@ -27,7 +26,6 @@ import {
 } from "@octogee/shared/types/fleet-controller";
 import {
   GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
   isGatewayRuntime,
   resolveGatewayRuntime,
   resolveUserGatewayControlState,
@@ -35,16 +33,14 @@ import {
     type GatewayVmState,
 } from "@octogee/shared/types/glm";
 import {
-  commitPlacementAtomic,
-  GATEWAY_RELEASES_SUBCOLLECTION,
-  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
   isGatewayRuntimeDoc,
+  type GatewayKubernetesObservation,
   type GatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
-  customerRuntimeMutationFenced,
   releasePayloadHash,
-  type PlacementFirestore,
+  type CommitPlacementResult,
+  type PlacementRejectReason,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
 import {
@@ -52,6 +48,7 @@ import {
   isGatewayPodPlacement,
   isGatewayPodReplacements,
   type GatewayPodPlacement,
+  type GatewayPodReplacements,
 } from "@octogee/shared/types/gateway-pod-replacements";
 import {
   nextPodReplacementTransition,
@@ -76,9 +73,8 @@ import {
 } from "@octogee/shared/types/shared-gateway-pool";
 import {
   InvalidSharedGatewayAutoscalingConfigError,
-  readSharedGatewayPoolConfig,
   readSharedGatewayPoolConfigInStore,
-  readSharedGatewayAutoscalingConfig,
+  readSharedGatewayAutoscalingConfigInStore,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
   builderActivateOperationId,
@@ -86,6 +82,7 @@ import {
   builderReturnOperationId,
   isBuilderReturnOperationIdFor,
   placementRetireOperationId,
+  type BuilderTierReader,
 } from "@octogee/core/builder-activation-lease";
 import {
   clearRetiredBuilderActivationPreparation,
@@ -96,7 +93,20 @@ import {
   type UnavailableGatewayRecoveryTargetValidationContext,
 } from "@octogee/core/fleet-state";
 import { supersedeRollingSharedGatewayRoll } from "@octogee/core/shared-gateway-roll-recovery";
-import type { PlatformStateStore } from "@octogee/core/platform-state";
+import {
+  FenceMismatchError,
+  type BuilderRecord,
+  type FleetRegistryRecord,
+  type GatewayAssignment,
+  type GatewayRecoveryReceipt,
+  type GatewayRoot,
+  type OperationPatch,
+  type OperationRecord,
+  type OrchestratorConfig,
+  type PlatformStateStore,
+  type PlatformStateTransaction,
+  type Stored,
+} from "@octogee/core/platform-state";
 import {
   resolveContinuousBuilderPlacement,
   resolveLiveActivationTargetGatewayId,
@@ -131,8 +141,6 @@ export const DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS = 10 * 60_000;
 export const DISPOSABLE_GATEWAY_TOTAL_PROVISION_TIMEOUT_MS =
   DISPOSABLE_GATEWAY_PROVISION_TIMEOUT_MS + DISPOSABLE_GATEWAY_RUNTIME_STARTUP_TIMEOUT_MS;
 export const SHARED_GATEWAY_REBALANCE_STABILITY_MS = 10 * 60_000;
-export const DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION =
-  "gatewayRecoveryReceipts";
 const PLACEMENT_POLICY_ACTOR = "glm-controller-placement-policy";
 const BUILDER_ACTIVATION_LEASE_SOURCE = "builder-activation-lease";
 const DISPOSABLE_BUILDER_ALLOCATION_KIND = "disposable-builder";
@@ -538,9 +546,11 @@ export function leaseJournalOperationIds(userData: Record<string, unknown>): str
 }
 
 function builderActivationLease(data: Record<string, unknown>): BuilderActivationLease | null {
-  const provisioning = record(data.provisioning);
-  const openclaw = record(provisioning?.openclaw);
-  const raw = record(openclaw?.activationLease);
+  return activationLeaseOf(record(record(data.provisioning)?.openclaw)?.activationLease);
+}
+
+function activationLeaseOf(value: unknown): BuilderActivationLease | null {
+  const raw = record(value);
   const leaseId = nonEmptyString(raw?.leaseId);
   const generation = positiveInteger(raw?.generation);
   const status = nonEmptyString(raw?.status);
@@ -2775,8 +2785,8 @@ function placementMigrationSource(
   return null;
 }
 
-function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration | null {
-  const data = doc.data() as Record<string, unknown>;
+function activeMigration(operation: Stored<OperationRecord>): PlacementPolicyMigration | null {
+  const data = operation as unknown as Record<string, unknown>;
   if (data.kind !== MIGRATE_CUSTOMER_KIND) return null;
   const input = record(data.input);
   if (!input) return null;
@@ -2788,7 +2798,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
   const status = placementMigrationStatus(data.status);
   if (!uid || !builderSlug || !fromGatewayId || !toGatewayId || !source || !status) return null;
   return {
-    id: doc.id,
+    id: operation.id,
     uid,
     builderSlug,
     fromGatewayId,
@@ -2796,15 +2806,16 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
     source,
     status,
     ...(typeof data.error === "string" ? { error: data.error } : {}),
-    ...(schedulerHandoffAwaitingRelease({ ...data, id: doc.id }) ? { sourceRecoveryPending: true } : {}),
+    ...(schedulerHandoffAwaitingRelease(data) ? { sourceRecoveryPending: true } : {}),
     ...(millis(data.retryRequestedAt) !== null ? { retryRequested: true } : {}),
-    ...(sharedRevisionPreflightReturnRetryable(data, doc.id) ? { sharedRevisionRetryable: true } : {}),
+    ...(sharedRevisionPreflightReturnRetryable(data, operation.id) ? { sharedRevisionRetryable: true } : {}),
   };
 }
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
   store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
   prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
@@ -2829,46 +2840,42 @@ interface FirestorePlacementPolicyInput {
   }): Promise<Record<string, PlacementPolicyPodDiagnostics>>;
 }
 
-async function readCompletedReturnSnapshots(
-  db: Firestore,
+function completedReturnOperationIds(
   userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
   sharedGatewayIds: readonly string[],
-) {
-  const refs = userDocuments.flatMap((doc) => {
+): string[] {
+  return userDocuments.flatMap((doc) => {
     const userData = doc.data() as Record<string, unknown>;
     const lease = builderActivationLease(userData);
     const onShared = sharedGatewayIds.includes(currentGatewayId(userData) ?? "");
     const returnMayHaveSucceeded = lease?.status === "returning" ||
       (lease?.status === "active" && onShared);
     if (!returnMayHaveSucceeded || !lease?.targetGatewayId) return [];
-    return [
-      db.collection(GLM_OPERATIONS_COLLECTION)
-        .doc(builderReturnOperationId(lease.targetGatewayId, lease.generation)),
-    ];
+    return [builderReturnOperationId(lease.targetGatewayId, lease.generation)];
   });
-  return refs.length === 0 ? [] : db.getAll(...refs);
+}
+
+async function readCompletedReturnOperations(
+  store: PlatformStateStore,
+  userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
+  sharedGatewayIds: readonly string[],
+): Promise<Stored<OperationRecord>[]> {
+  const operations = await store.journal.operations.getMany(completedReturnOperationIds(userDocuments, sharedGatewayIds));
+  return [...operations.values()].filter((operation) => operation.status === "succeeded");
 }
 
 // A failed or rolled-back activation/return operation stays reconcile-relevant
 // until its lease is cleaned up, so it is read by deterministic id rather than
 // left in the tick's collection scan.
-async function readTerminalLeaseOperationSnapshots(
-  db: Firestore,
+async function readTerminalLeaseOperations(
+  store: PlatformStateStore,
   userDocuments: ReadonlyArray<QueryDocumentSnapshot>,
-) {
+): Promise<Stored<OperationRecord>[]> {
   const operationIds = [...new Set(
     userDocuments.flatMap((doc) => leaseJournalOperationIds(doc.data() as Record<string, unknown>)),
   )];
-  if (operationIds.length === 0) return [];
-  const snapshots = await db.getAll(
-    ...operationIds.map((operationId) =>
-      db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId)),
-  );
-  return snapshots.filter((snapshot) => {
-    if (!snapshot.exists) return false;
-    const status = (snapshot.data() as Record<string, unknown> | undefined)?.status;
-    return typeof status === "string" && TERMINAL_LEASE_OPERATION_STATUSES.has(status);
-  });
+  const operations = await store.journal.operations.getMany(operationIds);
+  return [...operations.values()].filter((operation) => TERMINAL_LEASE_OPERATION_STATUSES.has(operation.status));
 }
 
 export function placementPodDiagnosticsScope(
@@ -2888,14 +2895,6 @@ export function placementPodDiagnosticsScope(
     }
   }
   return { clusterGatewayIds, vmDiagnostics };
-}
-
-function placementPolicyIdleMs(value: unknown, fallbackIdleMs: number): number {
-  if (value === undefined) return fallbackIdleMs;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error("config/orchestrator.disposableGatewayIdleMs must be a nonnegative safe integer");
-  }
-  return value;
 }
 
 // Must stay a reconcile tick inside GATEWAY_UNREACHABLE_AFTER_MS.
@@ -3006,7 +3005,7 @@ function persistedKubernetesObservation(input: {
   observed: KubernetesObservation;
   now: number;
   transition: PodReplacementTransition | null;
-}): Record<string, unknown> {
+}): { kubernetes: Record<string, unknown>; podReplacements?: GatewayPodReplacements } {
   const { observed, now, transition } = input;
   if (transition === null) return { kubernetes: { ...observed, observedAt: now } };
   return {
@@ -3090,16 +3089,21 @@ export interface PersistKubernetesObservationsOptions {
   namespace?: string;
 }
 
+export interface ScannedGatewayRuntime {
+  gatewayId: string;
+  kubernetes: unknown;
+}
+
 export async function persistKubernetesObservations(
-  db: Firestore,
-  runtimeDocuments: ReadonlyArray<QueryDocumentSnapshot>,
+  store: PlatformStateStore,
+  runtimes: ReadonlyArray<ScannedGatewayRuntime>,
   kubernetesByGatewayId: Readonly<Record<string, PlacementPolicyPodDiagnostics>>,
   now: number,
   options: PersistKubernetesObservationsOptions = {},
 ): Promise<void> {
-  if (runtimeDocuments.length === 0) return;
-  await Promise.all(runtimeDocuments.map(async (runtimeDocument) => {
-    const diagnostics = kubernetesByGatewayId[runtimeDocument.id];
+  if (runtimes.length === 0) return;
+  await Promise.all(runtimes.map(async (scanned) => {
+    const diagnostics = kubernetesByGatewayId[scanned.gatewayId];
     const observed: KubernetesObservation = {
       status: placementKubernetesStatus(diagnostics),
       totalPods: diagnostics?.totalPods ?? 0,
@@ -3107,40 +3111,39 @@ export async function persistKubernetesObservations(
     };
     const observedPlacements = observedPodPlacements(diagnostics);
     const replicaSets = observedReplicaSets(diagnostics);
-    const scanned = record(runtimeDocument.data());
     if (kubernetesObservationIsCurrent({
-      stored: scanned?.kubernetes,
+      stored: scanned.kubernetes,
       observed,
       observedPlacements,
       now,
     })) return;
-    const outcome = await db.runTransaction(async (transaction): Promise<KubernetesObservationOutcome | null> => {
-      const current = await transaction.get(runtimeDocument.ref);
-      const data = current.data();
-      if (!current.exists || !isGatewayRuntimeDoc(data)) return null;
-      const storedKubernetes = record(data.kubernetes);
-      // Observations must never regress: an overlapping reconcile pass that
-      // started earlier must not overwrite what a later pass already committed.
-      const storedObservedAt = storedKubernetes?.observedAt;
-      if (typeof storedObservedAt === "number" && storedObservedAt > now) return null;
-      const malformedReplacements = data.podReplacements !== undefined &&
-        !isGatewayPodReplacements(data.podReplacements);
-      const transition = nextPodReplacementTransition({
-        previousPlacements: storedPodPlacements(storedKubernetes),
-        previous: isGatewayPodReplacements(data.podReplacements) ? data.podReplacements : null,
-        observedPlacements,
-        replicaSets,
-        now,
-      });
-      transaction.set(
-        runtimeDocument.ref,
-        persistedKubernetesObservation({ observed, now, transition }),
-        { merge: true },
-      );
-      return { transition, malformedReplacements };
-    });
+    const outcome = await store.transaction(
+      { label: "placement-policy.kubernetes-observation" },
+      async (transaction): Promise<KubernetesObservationOutcome | null> => {
+        const current = await transaction.fleetRegistry.get(scanned.gatewayId);
+        if (current === null) return null;
+        const storedKubernetes = record(current.kubernetes);
+        const storedObservedAt = storedKubernetes?.observedAt;
+        if (typeof storedObservedAt === "number" && storedObservedAt > now) return null;
+        const malformedReplacements = current.podReplacements !== undefined &&
+          !isGatewayPodReplacements(current.podReplacements);
+        const transition = nextPodReplacementTransition({
+          previousPlacements: storedPodPlacements(storedKubernetes),
+          previous: isGatewayPodReplacements(current.podReplacements) ? current.podReplacements : null,
+          observedPlacements,
+          replicaSets,
+          now,
+        });
+        const persisted = persistedKubernetesObservation({ observed, now, transition });
+        await transaction.fleetRegistry.patch(scanned.gatewayId, {
+          ...persisted,
+          kubernetes: { ...storedKubernetes, ...persisted.kubernetes } as unknown as GatewayKubernetesObservation,
+        }, { revision: current.revision });
+        return { transition, malformedReplacements };
+      },
+    );
     if (outcome) {
-      reportKubernetesObservationOutcome({ gatewayId: runtimeDocument.id, outcome, now, options });
+      reportKubernetesObservationOutcome({ gatewayId: scanned.gatewayId, outcome, now, options });
     }
   }));
 }
@@ -3288,8 +3291,10 @@ function placementGatewayFromDocument(input: {
   };
 }
 
-function placementBuildersPerGateway(value: unknown): number {
-  const config = parseSharedGatewayAutoscalingConfig(value);
+function placementBuildersPerGateway(orchestrator: OrchestratorConfig | null): number {
+  const config = orchestrator === null
+    ? parseSharedGatewayAutoscalingConfig(undefined)
+    : orchestrator.sharedGatewayAutoscaling;
   if (config === null) throw new InvalidSharedGatewayAutoscalingConfigError();
   return config.buildersPerGateway;
 }
@@ -3300,10 +3305,10 @@ async function readPlatformCurrentSharedGatewayIds(
 ): Promise<string[]> {
   const platformHash = releasePayloadHash(input.platformArtifact);
   const current = await Promise.all(sharedGateways.map(async (gateway) => {
-    const snapshot = await input.db.doc(
-      `${GATEWAYS_COLLECTION}/${gateway.gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${gateway.latestRelease}`,
-    ).get();
-    const payload = snapshot.exists ? record(snapshot.data())?.payload : undefined;
+    const release = gateway.latestRelease === undefined
+      ? null
+      : await input.store.gateways.releases.get(gateway.gatewayId, gateway.latestRelease);
+    const payload = release?.payload;
     if (!isReleasePayload(payload)) {
       throw new Error(
         `shared pool member ${gateway.gatewayId} latest release ${gateway.latestRelease} has no readable payload`,
@@ -3319,19 +3324,17 @@ async function readPlatformCurrentSharedGatewayIds(
 async function readPlacementPolicySnapshot(
   input: FirestorePlacementPolicyInput,
 ): Promise<PlacementPolicySnapshot> {
-  const { db, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
+  const { db, store, idleMs: fallbackIdleMs, now: nowFn, informer } = input;
   const now = nowFn();
-  const [configSnap, userDocs, gatewayDocs, runtimeDocs, opsSnap, assignmentDocs, sharedPoolReplacements] =
+  const [orchestrator, userDocs, gatewayDocs, runtimeDocs, activeOperations, assignmentDocs, sharedPoolReplacements] =
     await Promise.all([
-      db.doc("config/orchestrator").get(),
+      store.config.orchestrator.get(),
       mirroredOrScan(informer.users(), () => db.collection("users").get()),
       mirroredOrScan(informer.gateways(), () => db.collection(GATEWAYS_COLLECTION).get()),
       mirroredOrScan(informer.glmGateways(), () => db.collection(GLM_GATEWAYS_COLLECTION).get()),
-      db.collection(GLM_OPERATIONS_COLLECTION)
-        .where("status", "in", [...PLACEMENT_ACTIVE_OPERATION_STATUSES])
-        .get(),
+      store.journal.operations.listByStatus([...PLACEMENT_ACTIVE_OPERATION_STATUSES]),
       mirroredOrScan(informer.assignments(), () => db.collectionGroup("assignments").get()),
-      readSharedPoolReplacements(db),
+      readSharedPoolReplacements(store),
     ]);
   const pool = deriveSharedGatewayPoolConfig(gatewayDocs.map((doc) => {
     const data = doc.data() as Record<string, unknown>;
@@ -3343,17 +3346,12 @@ async function readPlacementPolicySnapshot(
   }));
   const defaultGatewayId = pool?.defaultGatewayId ?? "";
   const sharedGatewayIds = pool?.sharedGatewayIds ?? [];
-  const [completedReturnSnapshots, terminalLeaseSnapshots] = await Promise.all([
-    readCompletedReturnSnapshots(db, userDocs, sharedGatewayIds),
-    readTerminalLeaseOperationSnapshots(db, userDocs),
+  const [completedReturnOperations, terminalLeaseOperations] = await Promise.all([
+    readCompletedReturnOperations(store, userDocs, sharedGatewayIds),
+    readTerminalLeaseOperations(store, userDocs),
   ]);
-  const idleMs = placementPolicyIdleMs(
-    configSnap.data()?.disposableGatewayIdleMs,
-    fallbackIdleMs,
-  );
-  const buildersPerGateway = placementBuildersPerGateway(
-    configSnap.data()?.sharedGatewayAutoscaling,
-  );
+  const idleMs = orchestrator?.disposableGatewayIdleMs ?? fallbackIdleMs;
+  const buildersPerGateway = placementBuildersPerGateway(orchestrator);
   const runtimes = docsById(runtimeDocs);
   const diagnosticsScope = placementPodDiagnosticsScope(gatewayDocs.map((doc) => doc.id), runtimes);
   const kubernetesByGatewayId = {
@@ -3372,7 +3370,10 @@ async function readPlacementPolicySnapshot(
       }]));
     }),
   };
-  await persistKubernetesObservations(db, runtimeDocs, kubernetesByGatewayId, now, {
+  await persistKubernetesObservations(input.store, runtimeDocs.map((doc) => ({
+    gatewayId: doc.id,
+    kubernetes: record(doc.data())?.kubernetes,
+  })), kubernetesByGatewayId, now, {
     log: input.log,
     namespace: input.namespace,
   });
@@ -3403,12 +3404,10 @@ async function readPlacementPolicySnapshot(
     gateways,
     assignments,
     activeMigrations: [
-      ...opsSnap.docs,
-      ...completedReturnSnapshots.filter(
-        (snapshot) => snapshot.exists && snapshot.data()?.status === "succeeded",
-      ),
-      ...terminalLeaseSnapshots,
-    ].flatMap((doc) => activeMigration(doc as QueryDocumentSnapshot) ?? []),
+      ...activeOperations,
+      ...completedReturnOperations,
+      ...terminalLeaseOperations,
+    ].flatMap((operation) => activeMigration(operation) ?? []),
   };
 }
 
@@ -3428,40 +3427,82 @@ function unavailableRecoveryTargetFence(
   };
 }
 
+async function initialPlacementBuilderRejection(
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
+  request: AssignInitialPlacementInput,
+): Promise<PlacementRejectReason | null> {
+  if (builder?.openclaw.managedBy === "operator") return "builder-operator-managed";
+  if (builder !== null && builderRuntimeMutationFenced(builder)) {
+    return builder.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress";
+  }
+  if (!accountAllowsInteractiveAccess({ accountLifecycle: builder?.accountLifecycle })) return "account-not-interactive";
+  const currentGatewayId = builder?.gateway?.gatewayId;
+  if (
+    currentGatewayId !== undefined && currentGatewayId !== request.gatewayId &&
+    await transaction.gateways.assignments.get(currentGatewayId, request.uid) !== null
+  ) {
+    return "assigned-elsewhere";
+  }
+  return null;
+}
+
+async function sharedInitialPlacementTargetRejection(
+  transaction: PlatformStateTransaction,
+  request: AssignInitialPlacementInput,
+): Promise<PlacementRejectReason | null> {
+  const [config, assignments, operations] = await Promise.all([
+    readSharedGatewayAutoscalingConfigInStore(transaction),
+    transaction.gateways.assignments.list(request.gatewayId),
+    transaction.journal.operations.listByStatus(["pending", "running"]),
+  ]);
+  if (assignments.some((assignment) => assignment.uid === request.uid)) return null;
+  const incoming = operations.filter((operation) =>
+    operation.kind === MIGRATE_CUSTOMER_KIND && record(operation.input)?.toGatewayId === request.gatewayId).length;
+  return assignments.length + incoming < config.buildersPerGateway ? null : "gateway-target-not-accepting";
+}
+
 async function assignInitialPlacementFirestore(
   input: FirestorePlacementPolicyInput,
   request: AssignInitialPlacementInput,
 ): Promise<void> {
   const controlState = resolveUserGatewayControlState(request.gateway, request.uid);
-  const placement = await commitPlacementAtomic(input.db as unknown as PlacementFirestore, {
-    uid: request.uid,
-    slug: request.builderSlug,
-    gatewayId: request.gatewayId,
-    source: "repair",
-    now: input.now(),
-    requireDurableGateway: true,
-    automatic: true,
-    validateTarget: async ({ txn, gateway }) => {
-      if (gateway.gatewayClass !== "shared") return null;
-      const transaction = txn as unknown as Transaction;
-      const [config, assignments, operations] = await Promise.all([
-        readSharedGatewayAutoscalingConfig(input.db, transaction),
-        transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)),
-        transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"])),
-      ]);
-      if (assignments.docs.some(doc => doc.id === request.uid)) return null;
-      const incoming = operations.docs.filter(doc => {
-        const operation = doc.data();
-        return operation.kind === MIGRATE_CUSTOMER_KIND && operation.input?.toGatewayId === request.gatewayId;
-      }).length;
-      return assignments.size + incoming < config.buildersPerGateway ? null : "gateway-target-not-accepting";
+  const now = input.now();
+  const placement = await input.store.transaction(
+    { label: "placement-policy.initial-placement" },
+    async (transaction): Promise<CommitPlacementResult> => {
+      const builder = await transaction.builders.records.get(request.uid);
+      const builderRejection = await initialPlacementBuilderRejection(transaction, builder, request);
+      if (builderRejection !== null) return { kind: "rejected", reason: builderRejection };
+      const stored = await transaction.gateways.roots.get(request.gatewayId);
+      const root = stored === null ? null : projectGatewayDesiredRootForGateway(stored, request.gatewayId);
+      if (root === null) return { kind: "rejected", reason: "gateway-root-invalid" };
+      if (root.desiredStatus !== "running") return { kind: "rejected", reason: "gateway-not-running" };
+      const runtime = await transaction.fleetRegistry.get(request.gatewayId);
+      if (runtime?.lifecycle !== "serving") return { kind: "rejected", reason: "gateway-not-serving" };
+      const targetRejection = root.gatewayClass === "shared"
+        ? await sharedInitialPlacementTargetRejection(transaction, request)
+        : null;
+      if (targetRejection !== null) return { kind: "rejected", reason: targetRejection };
+      await transaction.builders.records.setGatewayMirror(request.uid, {
+        gatewayId: request.gatewayId,
+        gatewayProfile: controlState.gatewayProfile,
+        controlUiEnabled: controlState.controlUiEnabled,
+      });
+      await transaction.gateways.assignments.put({
+        uid: request.uid,
+        slug: request.builderSlug,
+        gatewayId: request.gatewayId,
+        source: "repair",
+        state: "serving",
+        epoch: 0,
+        createdAt: now,
+        updatedAt: now,
+        updatedByOperationId: null,
+      });
+      return { kind: "assigned", release: root.liveRelease };
     },
-    mirrorPatch: {
-      "provisioning.openclaw.gatewayId": request.gatewayId,
-      "provisioning.openclaw.gatewayProfile": controlState.gatewayProfile,
-      "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
-    },
-  });
+  );
   if (placement.kind !== "assigned") {
     const reason = placement.kind === "rejected" ? placement.reason : placement.kind;
     throw new Error(`initial placement onto ${request.gatewayId} failed: ${reason}`);
@@ -3595,29 +3636,39 @@ function sourceOnlyRollbackCompleted(data: Record<string, unknown>, request: Enq
     step?.name === "recover-source" && step.status === "done";
 }
 
-async function assertPreRpcRetryAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput): Promise<FirebaseFirestore.DocumentData> {
-  const [user, source, target] = await Promise.all([
-    transaction.get(input.db.collection("users").doc(request.uid)),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
-  ]);
-  const assignment = source.data();
-  const exact = !customerRuntimeMutationFenced(user.data()) &&
-    currentGatewayId(user.data() ?? {}) === request.fromGatewayId &&
-    user.data()?.provisioning?.openclaw?.migration === undefined && !target.exists &&
-    retrySourceAssignmentMatches(assignment, request) &&
-    continuousPlacementMigrationOperationId({ ...request, sourceAssignmentEpoch: assignment.epoch }) === request.operationId;
-  if (!exact) throw new Error("workspace migration retry authority remains blocked");
-  return assignment!;
+function builderGatewayId(builder: Stored<BuilderRecord> | null): string | null {
+  return nonEmptyString(builder?.gateway?.gatewayId);
 }
 
-function retrySourceAssignmentMatches(assignment: FirebaseFirestore.DocumentData | undefined, request: EnqueuePlacementMigrationInput): assignment is FirebaseFirestore.DocumentData {
+function builderMutationFenced(builder: Stored<BuilderRecord> | null): boolean {
+  return builder !== null && builderRuntimeMutationFenced(builder);
+}
+
+async function assertPreRpcRetryAuthority(
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
+  request: EnqueuePlacementMigrationInput,
+): Promise<GatewayAssignment> {
+  const [source, target] = await Promise.all([
+    transaction.gateways.assignments.get(request.fromGatewayId, request.uid),
+    transaction.gateways.assignments.get(request.toGatewayId, request.uid),
+  ]);
+  const exact = !builderMutationFenced(builder) &&
+    builderGatewayId(builder) === request.fromGatewayId &&
+    builder?.fences.migration === undefined && target === null &&
+    retrySourceAssignmentMatches(source, request) &&
+    continuousPlacementMigrationOperationId({ ...request, sourceAssignmentEpoch: source.epoch }) === request.operationId;
+  if (!exact) throw new Error("workspace migration retry authority remains blocked");
+  return source!;
+}
+
+function retrySourceAssignmentMatches(assignment: GatewayAssignment | null, request: EnqueuePlacementMigrationInput): assignment is GatewayAssignment {
   return assignment?.uid === request.uid && assignment.gatewayId === request.fromGatewayId &&
     assignment.state === "serving" && Number.isSafeInteger(assignment.epoch) && assignment.epoch >= 0;
 }
 
-function startupReturnLeaseMatches(user: FirebaseFirestore.DocumentData | undefined, lease: BuilderActivationLease | null, request: EnqueuePlacementMigrationInput): lease is BuilderActivationLease {
-  return !customerRuntimeMutationFenced(user) && currentGatewayId(user ?? {}) === request.fromGatewayId &&
+function startupReturnLeaseMatches(builder: Stored<BuilderRecord> | null, lease: BuilderActivationLease | null, request: EnqueuePlacementMigrationInput): lease is BuilderActivationLease {
+  return !builderMutationFenced(builder) && builderGatewayId(builder) === request.fromGatewayId &&
     lease?.status === "returning" && lease.targetGatewayId === request.fromGatewayId && lease.raw.returnOperationId === request.operationId;
 }
 
@@ -3628,8 +3679,8 @@ function startupReturnSourceMatches(root: ReturnType<typeof projectGatewayDesire
     allocation.leaseId === lease.leaseId && allocation.generation === lease.generation;
 }
 
-function sharedReturnTargetReady(root: ReturnType<typeof projectGatewayDesiredRootForGateway>, runtime: FirebaseFirestore.DocumentData | undefined, request: EnqueuePlacementMigrationInput, now: number): boolean {
-  if (!root || !isGatewayRuntimeDoc(runtime)) return false;
+function sharedReturnTargetReady(root: ReturnType<typeof projectGatewayDesiredRootForGateway>, runtime: Stored<FleetRegistryRecord> | null, request: EnqueuePlacementMigrationInput, now: number): boolean {
+  if (!root || runtime === null) return false;
   const heartbeatAt = millis(runtime.heartbeat.lastHeartbeatAt);
   return root.gatewayClass === "shared" && root.desiredStatus === "running" && root.liveRelease !== null &&
     root.liveRelease === root.desiredRelease && runtime.gatewayId === request.toGatewayId && runtime.release === root.liveRelease &&
@@ -3637,40 +3688,44 @@ function sharedReturnTargetReady(root: ReturnType<typeof projectGatewayDesiredRo
     heartbeatAt !== null && heartbeatAt <= now && now - heartbeatAt <= GATEWAY_UNREACHABLE_AFTER_MS;
 }
 
-async function assertStartupReturnAuthority(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput) {
-  const [user, assignment, source, target, runtime, pool, targetAssignment] = await Promise.all([
-    transaction.get(input.db.collection("users").doc(request.uid)),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId)),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId)),
-    transaction.get(input.db.collection(GLM_GATEWAYS_COLLECTION).doc(request.toGatewayId)),
-    readSharedGatewayPoolConfig(input.db, transaction),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid)),
+async function assertStartupReturnAuthority(
+  input: PlacementMigrationEnqueueInput,
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
+  request: EnqueuePlacementMigrationInput,
+) {
+  const [assignment, roots, runtime, pool, targetAssignment] = await Promise.all([
+    transaction.gateways.assignments.get(request.fromGatewayId, request.uid),
+    transaction.gateways.roots.getMany([request.fromGatewayId, request.toGatewayId]),
+    transaction.fleetRegistry.get(request.toGatewayId),
+    readSharedGatewayPoolConfigInStore(transaction),
+    transaction.gateways.assignments.get(request.toGatewayId, request.uid),
   ]);
-  const lease = builderActivationLease(user.data() ?? {});
-  const sourceRoot = projectGatewayDesiredRootForGateway(source.data(), request.fromGatewayId);
-  const targetRoot = projectGatewayDesiredRootForGateway(target.data(), request.toGatewayId);
-  const exact = !targetAssignment.exists && startupReturnLeaseMatches(user.data(), lease, request) &&
-    startupReturnSourceMatches(sourceRoot, lease, request) && retrySourceAssignmentMatches(assignment.data(), request) &&
-    pool?.sharedGatewayIds.includes(request.toGatewayId) && sharedReturnTargetReady(targetRoot, runtime.data(), request, input.now());
+  const source = roots.get(request.fromGatewayId) ?? null;
+  const target = roots.get(request.toGatewayId) ?? null;
+  const lease = activationLeaseOf(builder?.activationLease);
+  const sourceRoot = projectGatewayDesiredRootForGateway(source, request.fromGatewayId);
+  const targetRoot = projectGatewayDesiredRootForGateway(target, request.toGatewayId);
+  const exact = targetAssignment === null && startupReturnLeaseMatches(builder, lease, request) &&
+    startupReturnSourceMatches(sourceRoot, lease, request) && retrySourceAssignmentMatches(assignment, request) &&
+    pool?.sharedGatewayIds.includes(request.toGatewayId) && sharedReturnTargetReady(targetRoot, runtime, request, input.now());
   if (!exact) throw new Error("Builder startup return retry authority changed");
-  return { user: user.data(), assignment: assignment.data(), source: source.data(), target: target.data() };
+  return { assignment, source, target };
 }
 
 async function assertSharedRevisionReturnAuthority(
-  input: FirestorePlacementPolicyInput,
-  transaction: Transaction,
+  input: PlacementMigrationEnqueueInput,
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
   request: EnqueuePlacementMigrationInput & { previousTargetGatewayId: string },
 ): Promise<void> {
-  const authority = await assertStartupReturnAuthority(input, transaction, request);
-  const openclaw = record(record(authority.user?.provisioning)?.openclaw);
-  const previousTargetAssignment = await transaction.get(input.db.collection(GATEWAYS_COLLECTION)
-    .doc(request.previousTargetGatewayId).collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(request.uid));
+  const authority = await assertStartupReturnAuthority(input, transaction, builder, request);
+  const previousTargetAssignment = await transaction.gateways.assignments.get(request.previousTargetGatewayId, request.uid);
   const rootsUnfenced = [authority.source, authority.target].every(root =>
     root?.runtimeRestartFence === undefined && root?.retirementClaim === undefined);
   const exact = rootsUnfenced && authority.source?.desiredStatus === "running" &&
-    authority.assignment?.slug === request.builderSlug && openclaw?.migration === undefined &&
-    !previousTargetAssignment.exists;
+    authority.assignment?.slug === request.builderSlug && builder?.fences.migration === undefined &&
+    previousTargetAssignment === null;
   if (!exact) throw new Error("Builder revision return retry authority changed");
 }
 
@@ -3724,20 +3779,28 @@ export function repairedPlacementProofMatches(data: Record<string, unknown>, rep
     completedPostgresImageMatches(source, completed), record(completed.managementHealth)?.attemptId === repair.id,
     record(completed.managementHealth)?.health === true].every(Boolean);
 }
-async function assertCurrentRepairTarget(input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, sourceImage: string): Promise<void> {
-  const [target, runtime, pool, user] = await Promise.all([
-    transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.toGatewayId}`)),
-    transaction.get(input.db.doc(`${GLM_GATEWAYS_COLLECTION}/${request.toGatewayId}`)), readSharedGatewayPoolConfig(input.db, transaction),
-    transaction.get(input.db.doc(`users/${request.uid}`)),
+async function assertCurrentRepairTarget(
+  input: PlacementMigrationEnqueueInput,
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
+  request: EnqueuePlacementMigrationInput,
+  sourceImage: string,
+): Promise<void> {
+  const [target, runtime, pool] = await Promise.all([
+    transaction.gateways.roots.get(request.toGatewayId),
+    transaction.fleetRegistry.get(request.toGatewayId),
+    readSharedGatewayPoolConfigInStore(transaction),
   ]);
-  const root = projectGatewayDesiredRootForGateway(target.data(), request.toGatewayId);
-  const release = root ? await transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.toGatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${root.liveRelease}`)) : null;
-  const payload = release?.data()?.payload;
-  const exact = [sharedReturnTargetReady(root, runtime.data(), request, input.now()), pool?.sharedGatewayIds.includes(request.toGatewayId),
-    target.data()?.runtimeRestartFence === undefined, target.data()?.retirementClaim == null,
+  const root = projectGatewayDesiredRootForGateway(target, request.toGatewayId);
+  const release = root?.liveRelease != null
+    ? await transaction.gateways.releases.get(request.toGatewayId, root.liveRelease)
+    : null;
+  const payload = release?.payload;
+  const exact = [sharedReturnTargetReady(root, runtime, request, input.now()), pool?.sharedGatewayIds.includes(request.toGatewayId),
+    target?.runtimeRestartFence === undefined, target?.retirementClaim == null,
     isReleasePayload(payload) && releasePayloadHash(payload) === releasePayloadHash(input.platformArtifact) &&
       sourceImage.startsWith(payload.imageRepository + ':') && sourceImage.endsWith('@' + payload.imageTag.split('@')[1]),
-    user.data()?.username === request.builderSlug, user.data()?.provisioning?.openclaw?.status === 'complete'].every(Boolean);
+    builder?.slug === request.builderSlug, builder?.openclaw.status === 'complete'].every(Boolean);
   if (!exact) throw new Error('repaired source placement current target authority changed');
 }
 interface RepairedPostgresSourceObservation {
@@ -3782,80 +3845,89 @@ export function repairedPostgresSourceConverged(input: RepairedPostgresSourceObs
     postgresRepairSourcePayloadMatches({ release, captured, runtime, adopted, request })].every(Boolean);
 }
 
-async function assertCurrentPostgresRepairSource(input: FirestorePlacementPolicyInput, transaction: Transaction, repair: Record<string, unknown>, request: EnqueuePlacementMigrationInput): Promise<void> {
+async function assertCurrentPostgresRepairSource(
+  input: PlacementMigrationEnqueueInput,
+  transaction: PlatformStateTransaction,
+  repair: Record<string, unknown>,
+  request: EnqueuePlacementMigrationInput,
+): Promise<void> {
   const completed = record(repair.sourceRuntimeRecovery) ?? {}, adopted = record(completed.release) ?? {};
+  const adoptedRelease = positiveInteger(adopted.release);
   const [source, runtime, release] = await Promise.all([
-    transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.fromGatewayId}`)),
-    transaction.get(input.db.doc(`${GLM_GATEWAYS_COLLECTION}/${request.fromGatewayId}`)),
-    transaction.get(input.db.doc(`${GATEWAYS_COLLECTION}/${request.fromGatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${adopted.release}`)),
+    transaction.gateways.roots.get(request.fromGatewayId),
+    transaction.fleetRegistry.get(request.fromGatewayId),
+    adoptedRelease === null ? null : transaction.gateways.releases.get(request.fromGatewayId, adoptedRelease),
   ]);
-  if (!projectGatewayDesiredRootForGateway(source.data(), request.fromGatewayId) || !isGatewayRuntimeDoc(runtime.data()) ||
-      !repairedPostgresSourceConverged({ source: source.data() ?? {}, runtime: runtime.data() ?? {}, release: release.data() ?? {}, repair, request, now: input.now() })) {
+  if (!projectGatewayDesiredRootForGateway(source, request.fromGatewayId) || runtime === null ||
+      !repairedPostgresSourceConverged({
+        source: source as unknown as Record<string, unknown>,
+        runtime: runtime as unknown as Record<string, unknown>,
+        release: (release ?? {}) as unknown as Record<string, unknown>,
+        repair, request, now: input.now(),
+      })) {
     throw new SharedDrainSupersededError(request.fromGatewayId, "the repaired source release has not converged; retry placement after it is ready");
   }
 }
 
 async function findRepairedSourcePlacement(
-  input: FirestorePlacementPolicyInput, transaction: Transaction, request: EnqueuePlacementMigrationInput, data: Record<string, unknown>,
+  input: PlacementMigrationEnqueueInput,
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
+  request: EnqueuePlacementMigrationInput,
+  data: Record<string, unknown>,
 ): Promise<boolean> {
   if (!isAutomaticRolledBackPlacement(data, request)) return false;
-  const candidates = await transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).where('input.gatewayId', '==', request.fromGatewayId));
-  const repair = candidates.docs.map((row): Record<string, unknown> => ({ ...row.data(), id: row.id }))
+  const candidates = await transaction.journal.operations.listByInputGateway(request.fromGatewayId);
+  const repair = candidates.map((operation) => operation as unknown as Record<string, unknown>)
     .filter(row => repairedPlacementProofMatches(data, row, request))
     .sort((left, right) => Number(record(right.sourceRuntimeRecovery)?.completedAt) - Number(record(left.sourceRuntimeRecovery)?.completedAt))[0];
   if (!repair) return false;
-  const assignment = await assertPreRpcRetryAuthority(input, transaction, request);
+  const assignment = await assertPreRpcRetryAuthority(transaction, builder, request);
   const captured = record(record(repair.input)?.sourceRecovery) ?? {};
   const owner = proofRows(captured.assignments).find(row => row.uid === request.uid);
   if (assignment.epoch !== owner?.assignmentEpoch || assignment.slug !== request.builderSlug) throw new Error('source repair assignment changed');
   const sourceImage = record(record(repair.sourceRuntimeRecovery)?.images)?.gateway;
   if (typeof sourceImage !== 'string') throw new Error('source repair image receipt is unavailable');
   await assertCurrentPostgresRepairSource(input, transaction, repair, request);
-  await assertCurrentRepairTarget(input, transaction, request, sourceImage);
+  await assertCurrentRepairTarget(input, transaction, builder, request, sourceImage);
   return true;
 }
 
-function rearmedPlacementMigrationPatch(): Record<string, unknown> {
+const CLEAR = { clear: true } as const;
+
+function rearmedPlacementMigrationPatch(): OperationPatch {
   return {
     status: "pending",
     startedAt: null,
     completedAt: null,
     steps: [],
-    error: FieldValue.delete(),
-    expireAt: FieldValue.delete(),
-    rolledBack: FieldValue.delete(),
-    output: FieldValue.delete(),
-    lastProgressAt: FieldValue.delete(),
-    waitingOn: FieldValue.delete(),
-    nextAttemptAt: FieldValue.delete(),
+    error: CLEAR,
+    expireAt: CLEAR,
+    rolledBack: CLEAR,
+    output: CLEAR,
+    lastProgressAt: CLEAR,
+    waitingOn: CLEAR,
+    nextAttemptAt: CLEAR,
   };
 }
 
-async function applyTerminalPlacementRearm(input: {
-  transaction: Transaction;
-  ref: FirebaseFirestore.DocumentReference;
-}): Promise<void> {
-  const { transaction, ref } = input;
-  transaction.update(ref, rearmedPlacementMigrationPatch());
-}
-
 async function assertSharedDrainAuthority(
-  input: FirestorePlacementPolicyInput,
-  transaction: Transaction,
+  transaction: PlatformStateTransaction,
   request: EnqueuePlacementMigrationInput & { sharedDrain: { pairedTargetGatewayId: string | null } },
 ): Promise<void> {
-  const [source, target, replacements] = await Promise.all([
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId)),
-    transaction.get(input.db.collection(GATEWAYS_COLLECTION).doc(request.toGatewayId)),
-    readSharedPoolReplacements(input.db, transaction),
+  const [roots, replacements] = await Promise.all([
+    transaction.gateways.roots.getMany([request.fromGatewayId, request.toGatewayId]),
+    readSharedPoolReplacements(transaction),
   ]);
-  if (source.data()?.runtimeRestartFence !== undefined) {
+  const source = roots.get(request.fromGatewayId);
+  const target = roots.get(request.toGatewayId);
+  if (source?.runtimeRestartFence !== undefined) {
     throw new SharedDrainSupersededError(request.fromGatewayId, "the source runtime restart is unresolved");
   }
-  if (source.data()?.desiredStatus !== "draining") {
+  if (source?.desiredStatus !== "draining") {
     throw new SharedDrainSupersededError(request.fromGatewayId, "the source is no longer draining");
   }
-  if (target.data()?.desiredStatus !== "running") {
+  if (target?.desiredStatus !== "running") {
     throw new SharedDrainSupersededError(request.fromGatewayId, `target ${request.toGatewayId} is no longer running`);
   }
   const pairedTargetGatewayId = pairedReplacementTarget(replacements, request.fromGatewayId);
@@ -3905,11 +3977,11 @@ function neverClaimedSharedDrainMove(
 }
 
 function supersedingActivationLeaseHolds(
-  userData: Record<string, unknown> | undefined,
+  builder: Stored<BuilderRecord> | null,
   request: SupersedePendingSharedDrainMoveInput,
 ): boolean {
-  const lease = builderActivationLease(userData ?? {});
-  return currentGatewayId(userData ?? {}) === request.fromGatewayId &&
+  const lease = activationLeaseOf(builder?.activationLease);
+  return builderGatewayId(builder) === request.fromGatewayId &&
     lease?.leaseId === request.leaseId &&
     lease.generation === request.generation &&
     lease.status === "provisioning" &&
@@ -3917,47 +3989,49 @@ function supersedingActivationLeaseHolds(
 }
 
 export async function supersedePendingSharedDrainMove(
-  input: FirestorePlacementPolicyInput,
+  input: Pick<FirestorePlacementPolicyInput, "store" | "now">,
   request: SupersedePendingSharedDrainMoveInput,
 ): Promise<boolean> {
-  const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(request.operationId);
-  const userRef = input.db.collection("users").doc(request.uid);
-  const sourceRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.fromGatewayId);
-  return input.db.runTransaction(async (transaction) => {
-    const [operation, user, source] = await Promise.all([
-      transaction.get(operationRef),
-      transaction.get(userRef),
-      transaction.get(sourceRef),
-    ]);
-    if (
-      !neverClaimedSharedDrainMove(operation.data(), request) ||
-      !supersedingActivationLeaseHolds(user.data(), request) ||
-      source.data()?.desiredStatus !== "draining"
-    ) {
-      return false;
-    }
-    const now = input.now();
-    transaction.update(operationRef, {
-      status: "failed",
-      completedAt: now,
-      expireAt: Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS),
-      rolledBack: false,
-      error: `superseded before claim by Builder activation lease ${request.leaseId} ` +
-        `generation ${request.generation} (operation ${request.activationOperationId})`,
-      supersededBy: {
-        kind: "builder-activation",
-        leaseId: request.leaseId,
-        generation: request.generation,
-        targetGatewayId: request.targetGatewayId,
-        operationId: request.activationOperationId,
-        at: now,
-      },
-      waitingOn: FieldValue.delete(),
-      nextAttemptAt: FieldValue.delete(),
-      queuedAt: FieldValue.delete(),
+  try {
+    return await input.store.transaction({ label: "placement-policy.supersede-shared-drain-move" }, async (transaction) => {
+      const [operation, builder, source] = await Promise.all([
+        transaction.journal.operations.get(request.operationId),
+        transaction.builders.records.get(request.uid),
+        transaction.gateways.roots.get(request.fromGatewayId),
+      ]);
+      if (
+        !neverClaimedSharedDrainMove(operation === null ? undefined : operation as unknown as Record<string, unknown>, request) ||
+        !supersedingActivationLeaseHolds(builder, request) ||
+        source?.desiredStatus !== "draining"
+      ) {
+        return false;
+      }
+      const now = input.now();
+      await transaction.journal.operations.patch(request.operationId, {
+        status: "failed",
+        completedAt: now,
+        expireAt: now + OPERATION_JOURNAL_RETENTION_MS,
+        rolledBack: false,
+        error: `superseded before claim by Builder activation lease ${request.leaseId} ` +
+          `generation ${request.generation} (operation ${request.activationOperationId})`,
+        supersededBy: {
+          kind: "builder-activation",
+          leaseId: request.leaseId,
+          generation: request.generation,
+          targetGatewayId: request.targetGatewayId,
+          operationId: request.activationOperationId,
+          at: now,
+        },
+        waitingOn: CLEAR,
+        nextAttemptAt: CLEAR,
+        queuedAt: CLEAR,
+      }, { status: ["pending"], startedAt: null });
+      return true;
     });
-    return true;
-  });
+  } catch (error) {
+    if (error instanceof FenceMismatchError) return false;
+    throw error;
+  }
 }
 
 function supersededSharedDrainMoveCanRearm(
@@ -3973,26 +4047,89 @@ function supersededSharedDrainMoveCanRearm(
     data.customerMigrationV2 === undefined;
 }
 
-async function assertBuilderPlacementNotHeld(db: Firestore, transaction: Transaction, uid: string): Promise<void> {
-  const owner = await transaction.get(db.collection("users").doc(uid));
-  if (record(record(owner.data()?.provisioning)?.openclaw)?.managedBy === "operator") {
-    throw new HeldBuilderPlacementError(uid);
-  }
+function assertBuilderPlacementNotHeld(builder: Stored<BuilderRecord> | null, uid: string): void {
+  if (builder?.openclaw.managedBy === "operator") throw new HeldBuilderPlacementError(uid);
 }
 
-function nativeReturnRecoveryRearmPatch(data: Record<string, unknown>): Record<string, unknown> {
-  const recovery = record(record(data.input)?.nativeReturnSourceRecovery);
-  if (typeof recovery?.completedAt !== "number" || recovery.completedAt <= 0) return {};
-  return { "input.recoverSourceOnly": FieldValue.delete(), "input.nativeReturnSourceRecovery": FieldValue.delete() };
+function operationInputWithout(
+  operation: Stored<OperationRecord>,
+  removed: readonly string[],
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...operation.input, ...overrides };
+  for (const field of removed) delete next[field];
+  return next;
+}
+
+function nativeReturnRecoveryCompleted(operation: Stored<OperationRecord>): boolean {
+  const recovery = record(operation.input.nativeReturnSourceRecovery);
+  return typeof recovery?.completedAt === "number" && recovery.completedAt > 0;
+}
+
+type PlacementMigrationEnqueueInput = Pick<FirestorePlacementPolicyInput, "store" | "now" | "platformArtifact">;
+
+async function placementMigrationRearm(
+  input: PlacementMigrationEnqueueInput,
+  transaction: PlatformStateTransaction,
+  builder: Stored<BuilderRecord> | null,
+  request: EnqueuePlacementMigrationInput,
+  existing: Stored<OperationRecord>,
+): Promise<OperationPatch | null> {
+  const data = existing as unknown as Record<string, unknown>;
+  const retarget = { input: operationInputWithout(existing, [], { toGatewayId: request.toGatewayId }), gatewayId: request.toGatewayId };
+  if (sharedRevisionReturnMatchesDemand(data, request)) {
+    await assertSharedRevisionReturnAuthority(input, transaction, builder, {
+      ...request, previousTargetGatewayId: existing.input.toGatewayId as string,
+    });
+    return { ...rearmedPlacementMigrationPatch(), ...retarget };
+  }
+  if (startupFailedReturnMatchesDemand(data, request)) {
+    await assertStartupReturnAuthority(input, transaction, builder, request);
+    return { ...rearmedPlacementMigrationPatch(), ...retarget };
+  }
+  if (operatorRetriedBuilderReturnMatchesDemand(data, request)) {
+    const removed = nativeReturnRecoveryCompleted(existing) ? ["recoverSourceOnly", "nativeReturnSourceRecovery"] : [];
+    return {
+      ...rearmedPlacementMigrationPatch(),
+      input: operationInputWithout(existing, removed, { toGatewayId: request.toGatewayId }),
+      gatewayId: request.toGatewayId,
+      retryRequestedAt: CLEAR,
+      retryRequestedBy: CLEAR,
+    };
+  }
+  if (!existingPlacementMigrationMatchesDemand(data, request)) {
+    throw new Error(`migration operation ${request.operationId} does not match activation demand`);
+  }
+  if (placementMigrationIsNonTerminal(data)) return null;
+  if (supersededSharedDrainMoveCanRearm(data, request)) {
+    return { ...rearmedPlacementMigrationPatch(), supersededBy: CLEAR };
+  }
+  if (await findRepairedSourcePlacement(input, transaction, builder, request, data)) {
+    return rearmedPlacementMigrationPatch();
+  }
+  if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {
+    await assertPreRpcRetryAuthority(transaction, builder, request);
+    return {
+      ...rearmedPlacementMigrationPatch(),
+      schedulerHandoff: CLEAR,
+      schedulerHandoffReleased: CLEAR,
+      schedulerHandoffReleasedAt: CLEAR,
+      input: operationInputWithout(existing, ["recoverSourceOnly"]),
+    };
+  }
+  if (!rolledBackTransientPlacementCanRearm(data, request)) {
+    throw new TerminalPlacementMigrationConflictError(request.operationId, String(data.status));
+  }
+  return rearmedPlacementMigrationPatch();
 }
 
 export async function enqueuePlacementMigration(
-  input: FirestorePlacementPolicyInput,
+  input: PlacementMigrationEnqueueInput,
   request: EnqueuePlacementMigrationInput,
 ): Promise<string> {
-  const ref = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(request.operationId);
   const now = input.now();
-  const operation = {
+  const operation: OperationRecord = {
+    id: request.operationId,
     kind: MIGRATE_CUSTOMER_KIND,
     status: "pending",
     origin: "automatic",
@@ -4011,67 +4148,24 @@ export async function enqueuePlacementMigration(
     gatewayId: request.toGatewayId,
     inputUid: request.uid,
   };
-  await input.db.runTransaction(async (transaction) => {
-    await assertBuilderPlacementNotHeld(input.db, transaction, request.uid);
+  await input.store.transaction({ label: "placement-policy.enqueue-migration" }, async (transaction) => {
+    const builder = await transaction.builders.records.get(request.uid);
+    assertBuilderPlacementNotHeld(builder, request.uid);
     const sharedDrain = request.sharedDrain;
-    if (sharedDrain) await assertSharedDrainAuthority(input, transaction, { ...request, sharedDrain });
-    const existing = await transaction.get(ref);
-    if (!existing.exists) {
-      transaction.create(ref, operation);
+    if (sharedDrain) await assertSharedDrainAuthority(transaction, { ...request, sharedDrain });
+    const existing = await transaction.journal.operations.get(request.operationId);
+    if (existing === null) {
+      await transaction.journal.operations.create(operation);
       return;
     }
-    const data = existing.data() as Record<string, unknown>;
-    if (sharedRevisionReturnMatchesDemand(data, request)) {
-      await assertSharedRevisionReturnAuthority(input, transaction, {
-        ...request, previousTargetGatewayId: record(data.input)!.toGatewayId as string,
-      });
-      transaction.update(ref, {
-        ...rearmedPlacementMigrationPatch(), "input.toGatewayId": request.toGatewayId, gatewayId: request.toGatewayId,
-      });
-      return;
-    }
-    if (startupFailedReturnMatchesDemand(data, request)) {
-      await assertStartupReturnAuthority(input, transaction, request);
-      transaction.update(ref, {
-        ...rearmedPlacementMigrationPatch(), "input.toGatewayId": request.toGatewayId, gatewayId: request.toGatewayId,
-      });
-      return;
-    }
-    if (operatorRetriedBuilderReturnMatchesDemand(data, request)) {
-      transaction.update(ref, {
-        ...rearmedPlacementMigrationPatch(),
-        "input.toGatewayId": request.toGatewayId,
-        gatewayId: request.toGatewayId,
-        retryRequestedAt: FieldValue.delete(),
-        retryRequestedBy: FieldValue.delete(),
-        ...nativeReturnRecoveryRearmPatch(data),
-      });
-      return;
-    }
-    if (!existingPlacementMigrationMatchesDemand(data, request)) {
-      throw new Error(`migration operation ${ref.id} does not match activation demand`);
-    }
-    if (placementMigrationIsNonTerminal(data)) return;
-    if (supersededSharedDrainMoveCanRearm(data, request)) {
-      transaction.update(ref, { ...rearmedPlacementMigrationPatch(), supersededBy: FieldValue.delete() });
-      return;
-    }
-    if (await findRepairedSourcePlacement(input, transaction, request, data)) {
-      await applyTerminalPlacementRearm({ transaction, ref }); return;
-    }
-    if (preRpcAuthorityFailure(data, request) || sourceOnlyRollbackCompleted(data, request)) {
-      await assertPreRpcRetryAuthority(input, transaction, request);
-      transaction.update(ref, { ...rearmedPlacementMigrationPatch(), schedulerHandoff: FieldValue.delete(),
-        schedulerHandoffReleased: FieldValue.delete(), schedulerHandoffReleasedAt: FieldValue.delete(),
-        "input.recoverSourceOnly": FieldValue.delete() });
-      return;
-    }
-    if (!rolledBackTransientPlacementCanRearm(data, request)) {
-      throw new TerminalPlacementMigrationConflictError(ref.id, String(data.status));
-    }
-    await applyTerminalPlacementRearm({ transaction, ref });
+    const rearm = await placementMigrationRearm(input, transaction, builder, request, existing);
+    if (rearm === null) return;
+    await transaction.journal.operations.patch(request.operationId, rearm, {
+      status: [existing.status],
+      startedAt: existing.startedAt,
+    });
   });
-  return ref.id;
+  return request.operationId;
 }
 
 function recoveryTargetMatchesRequest(
@@ -4091,16 +4185,14 @@ function recoveryTargetMatchesRequest(
 
 function recoveryTargetBecameReady(input: {
   root: NonNullable<ReturnType<typeof projectGatewayDesiredRootForGateway>>;
-  runtime: Record<string, unknown> | undefined;
+  runtime: Stored<FleetRegistryRecord> | null;
   request: RecoverUnreachableDisposableGatewayInput;
   now: () => number;
 }): boolean {
   const { root, runtime, request, now } = input;
-  const heartbeatAt = isGatewayRuntimeDoc(runtime)
-    ? millis(runtime.heartbeat.lastHeartbeatAt)
-    : null;
+  const heartbeatAt = runtime === null ? null : millis(runtime.heartbeat.lastHeartbeatAt);
   return root.desiredStatus === "running" &&
-    isGatewayRuntimeDoc(runtime) &&
+    runtime !== null &&
     runtime.gatewayId === request.gatewayId &&
     root.liveRelease !== null &&
     runtime.release === root.liveRelease &&
@@ -4111,24 +4203,152 @@ function recoveryTargetBecameReady(input: {
 }
 
 function recoveryAuthorityMatches(input: {
-  userData: Record<string, unknown> | undefined;
-  assignmentExists: boolean;
-  assignment: Record<string, unknown> | undefined;
+  builder: Stored<BuilderRecord> | null;
+  assignment: Stored<GatewayAssignment> | null;
   request: RecoverUnreachableDisposableGatewayInput;
 }): boolean {
-  const { userData, assignmentExists, assignment, request } = input;
-  const lease = builderActivationLease(userData ?? {});
+  const { builder, assignment, request } = input;
+  const lease = activationLeaseOf(builder?.activationLease);
   return (!request.sourceUnavailable || (
     lease?.leaseId === request.leaseId &&
     lease.generation === request.generation &&
     lease.status === "returning" &&
     lease.raw.returnReason === "source-unavailable"
   )) &&
-    currentGatewayId(userData ?? {}) === request.authoritativeGatewayId &&
-    assignmentExists &&
+    builderGatewayId(builder) === request.authoritativeGatewayId &&
     assignment?.uid === request.uid &&
     assignment.gatewayId === request.authoritativeGatewayId &&
     assignment.state === "serving";
+}
+
+async function exactRecoveryState(
+  input: FirestorePlacementPolicyInput,
+  transaction: PlatformStateTransaction,
+  request: RecoverUnreachableDisposableGatewayInput,
+): Promise<Stored<GatewayRoot>> {
+  const [stored, builder, assignment, runtime] = await Promise.all([
+    transaction.gateways.roots.get(request.gatewayId),
+    transaction.builders.records.get(request.uid),
+    transaction.gateways.assignments.get(request.authoritativeGatewayId, request.uid),
+    transaction.fleetRegistry.get(request.gatewayId),
+  ]);
+  const root = projectGatewayDesiredRootForGateway(stored, request.gatewayId);
+  if (stored === null || !recoveryTargetMatchesRequest(root, request)) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${request.gatewayId} no longer matches unreachable recovery demand`,
+    );
+  }
+  if (!request.sourceUnavailable && recoveryTargetBecameReady({ root, runtime, request, now: input.now })) {
+    throw new GatewayRetirementConflictError(
+      `gateway ${request.gatewayId} became ready before recovery`,
+    );
+  }
+  if (!recoveryAuthorityMatches({ builder, assignment, request })) {
+    throw new GatewayRetirementConflictError(
+      `Builder ${request.uid} is no longer authoritative on ${request.authoritativeGatewayId}`,
+    );
+  }
+  return stored;
+}
+
+function assertPendingRecoveryReceiptMatches(
+  receipt: Stored<GatewayRecoveryReceipt>,
+  request: RecoverUnreachableDisposableGatewayInput,
+): void {
+  const receiptInput = receipt.input;
+  if (
+    receipt.kind !== "recover-unreachable-disposable" ||
+    receiptInput.uid !== request.uid ||
+    receiptInput.gatewayId !== request.gatewayId ||
+    receiptInput.leaseId !== request.leaseId ||
+    receiptInput.generation !== request.generation
+  ) {
+    throw new GatewayRetirementConflictError(
+      `recovery operation ${receipt.id} does not match unreachable demand`,
+    );
+  }
+}
+
+function newRecoveryReceipt(
+  operationId: string,
+  request: RecoverUnreachableDisposableGatewayInput,
+  startedAt: number,
+): GatewayRecoveryReceipt {
+  return {
+    id: operationId,
+    kind: "recover-unreachable-disposable",
+    status: "pending",
+    origin: "automatic",
+    createdBy: PLACEMENT_POLICY_ACTOR,
+    createdAt: startedAt,
+    startedAt,
+    firstStartedAt: startedAt,
+    completedAt: null,
+    input: {
+      uid: request.uid,
+      builderSlug: request.builderSlug,
+      gatewayId: request.gatewayId,
+      leaseId: request.leaseId,
+      generation: request.generation,
+      authoritativeGatewayId: request.authoritativeGatewayId,
+    },
+    steps: [],
+    gatewayId: request.gatewayId,
+    inputUid: request.uid,
+  };
+}
+
+async function reserveUnreachableDisposableRecovery(
+  input: FirestorePlacementPolicyInput,
+  request: RecoverUnreachableDisposableGatewayInput,
+  operationId: string,
+): Promise<void> {
+  await input.store.transaction({ label: "placement-policy.recovery-reserve" }, async (transaction) => {
+    const root = await exactRecoveryState(input, transaction, request);
+    const receipt = await transaction.journal.recoveryReceipts.get(operationId);
+    if (receipt !== null) {
+      assertPendingRecoveryReceiptMatches(receipt, request);
+      if (receipt.status === "succeeded") return;
+      if (receipt.status !== "pending") {
+        throw new GatewayRetirementConflictError(
+          `recovery operation ${operationId} ended with ${receipt.status}`,
+        );
+      }
+    } else {
+      await transaction.journal.recoveryReceipts.create(newRecoveryReceipt(operationId, request, input.now()));
+    }
+    await transaction.gateways.roots.patch(request.gatewayId, {
+      desiredStatus: "paused",
+      updatedAt: input.now(),
+      updatedBy: `${PLACEMENT_POLICY_ACTOR}:${operationId}`,
+    }, { updatedAt: root.updatedAt, allocationGeneration: root.allocation?.generation ?? null });
+  });
+}
+
+async function completeUnreachableDisposableRecovery(
+  input: FirestorePlacementPolicyInput,
+  request: RecoverUnreachableDisposableGatewayInput,
+  operationId: string,
+): Promise<void> {
+  await input.store.transaction({ label: "placement-policy.recovery-complete" }, async (transaction) => {
+    await exactRecoveryState(input, transaction, request);
+    const receipt = await transaction.journal.recoveryReceipts.get(operationId);
+    if (receipt?.status !== "pending") {
+      if (receipt?.status === "succeeded") return;
+      throw new GatewayRetirementConflictError(
+        `recovery operation ${operationId} is unavailable`,
+      );
+    }
+    await transaction.journal.recoveryReceipts.patch(operationId, {
+      status: "succeeded",
+      completedAt: input.now(),
+      recoveryReceipt: {
+        schemaVersion: 1,
+        observedAt: input.now(),
+        pods: 0,
+      },
+    }, { revision: receipt.revision });
+  });
 }
 
 async function recoverUnreachableDisposableGatewayFirestore(
@@ -4136,113 +4356,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
   request: RecoverUnreachableDisposableGatewayInput,
 ): Promise<{ recovered: boolean; operationId: string }> {
   const operationId = builderRecoverOperationId(request.gatewayId, request.generation);
-  const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
-  const userRef = input.db.collection("users").doc(request.uid);
-  const assignmentRef = input.db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(request.authoritativeGatewayId)
-    .collection("assignments")
-    .doc(request.uid);
-  const operationRef = input.db
-    .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
-    .doc(operationId);
-  const runtimeRef = input.db.collection(GLM_GATEWAYS_COLLECTION).doc(request.gatewayId);
-  const exactRecoveryState = async (
-    transaction: Transaction,
-  ): Promise<void> => {
-    const [gatewaySnapshot, userSnapshot, assignmentSnapshot, runtimeSnapshot] =
-      await Promise.all([
-      transaction.get(gatewayRef),
-      transaction.get(userRef),
-      transaction.get(assignmentRef),
-      transaction.get(runtimeRef),
-    ]);
-    const root = projectGatewayDesiredRootForGateway(
-      gatewaySnapshot.data(),
-      request.gatewayId,
-    );
-    const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-    const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
-    if (!recoveryTargetMatchesRequest(root, request)) {
-      throw new GatewayRetirementConflictError(
-        `gateway ${request.gatewayId} no longer matches unreachable recovery demand`,
-      );
-    }
-    const runtime = runtimeSnapshot.data() as Record<string, unknown> | undefined;
-    if (!request.sourceUnavailable && recoveryTargetBecameReady({
-      root,
-      runtime,
-      request,
-      now: input.now,
-    })) {
-      throw new GatewayRetirementConflictError(
-        `gateway ${request.gatewayId} became ready before recovery`,
-      );
-    }
-    if (!recoveryAuthorityMatches({
-      userData,
-      assignmentExists: assignmentSnapshot.exists,
-      assignment,
-      request,
-    })) {
-      throw new GatewayRetirementConflictError(
-        `Builder ${request.uid} is no longer authoritative on ${request.authoritativeGatewayId}`,
-      );
-    }
-  };
-  await input.db.runTransaction(async (transaction) => {
-    await exactRecoveryState(transaction);
-    const operationSnapshot = await transaction.get(operationRef);
-    if (operationSnapshot.exists) {
-      const operation = operationSnapshot.data() as Record<string, unknown>;
-      const operationInput = record(operation.input);
-      if (
-        operation.kind !== "recover-unreachable-disposable" ||
-        operationInput?.uid !== request.uid ||
-        operationInput.gatewayId !== request.gatewayId ||
-        operationInput.leaseId !== request.leaseId ||
-        operationInput.generation !== request.generation
-      ) {
-        throw new GatewayRetirementConflictError(
-          `recovery operation ${operationId} does not match unreachable demand`,
-        );
-      }
-      if (operation.status === "succeeded") return;
-      if (operation.status !== "pending") {
-        throw new GatewayRetirementConflictError(
-          `recovery operation ${operationId} ended with ${String(operation.status)}`,
-        );
-      }
-    } else {
-      const startedAt = input.now();
-      transaction.create(operationRef, {
-        kind: "recover-unreachable-disposable",
-        status: "pending",
-        origin: "automatic",
-        createdBy: PLACEMENT_POLICY_ACTOR,
-        createdAt: startedAt,
-        startedAt,
-        firstStartedAt: startedAt,
-        completedAt: null,
-        input: {
-          uid: request.uid,
-          builderSlug: request.builderSlug,
-          gatewayId: request.gatewayId,
-          leaseId: request.leaseId,
-          generation: request.generation,
-          authoritativeGatewayId: request.authoritativeGatewayId,
-        },
-        steps: [],
-        gatewayId: request.gatewayId,
-        inputUid: request.uid,
-      });
-    }
-    transaction.set(gatewayRef, {
-      desiredStatus: "paused",
-      updatedAt: input.now(),
-      updatedBy: `${PLACEMENT_POLICY_ACTOR}:${operationId}`,
-    }, { merge: true });
-  });
+  await reserveUnreachableDisposableRecovery(input, request, operationId);
   const diagnostics = await input.readGatewayPodDiagnostics({
     namespace: input.namespace,
     gatewayId: request.gatewayId,
@@ -4258,26 +4372,7 @@ async function recoverUnreachableDisposableGatewayFirestore(
     );
     return { recovered: false, operationId };
   }
-  await input.db.runTransaction(async (transaction) => {
-    await exactRecoveryState(transaction);
-    const operationSnapshot = await transaction.get(operationRef);
-    const operation = operationSnapshot.data() as Record<string, unknown> | undefined;
-    if (!operationSnapshot.exists || operation?.status !== "pending") {
-      if (operation?.status === "succeeded") return;
-      throw new GatewayRetirementConflictError(
-        `recovery operation ${operationId} is unavailable`,
-      );
-    }
-    transaction.update(operationRef, {
-      status: "succeeded",
-      completedAt: input.now(),
-      recoveryReceipt: {
-        schemaVersion: 1,
-        observedAt: input.now(),
-        pods: 0,
-      },
-    });
-  });
+  await completeUnreachableDisposableRecovery(input, request, operationId);
   return { recovered: true, operationId };
 }
 
@@ -4300,25 +4395,15 @@ function retirementAllocationMatches(
     allocationIdentityMatches;
 }
 
-async function assertRetirementAuthorityFence(input: {
-  db: Firestore;
-  transaction: Transaction;
-  request: RetireOwnedGatewayInput;
-}): Promise<void> {
-  const { db, transaction, request } = input;
+async function assertRetirementAuthorityFence(
+  transaction: PlatformStateTransaction,
+  request: RetireOwnedGatewayInput,
+): Promise<void> {
   if (!request.authoritativeGatewayId) return;
-  const userRef = db.collection("users").doc(request.uid);
-  const assignmentRef = db
-    .collection(GATEWAYS_COLLECTION)
-    .doc(request.authoritativeGatewayId)
-    .collection("assignments")
-    .doc(request.uid);
-  const [userSnapshot, assignmentSnapshot] = await Promise.all([
-    transaction.get(userRef),
-    transaction.get(assignmentRef),
+  const [builder, assignment] = await Promise.all([
+    transaction.builders.records.get(request.uid),
+    transaction.gateways.assignments.get(request.authoritativeGatewayId, request.uid),
   ]);
-  const userData = userSnapshot.data() as Record<string, unknown> | undefined;
-  const assignment = assignmentSnapshot.data() as Record<string, unknown> | undefined;
   if (!retirementAuthorityFenceAllows({
     uid: request.uid,
     authoritativeGatewayId: request.authoritativeGatewayId,
@@ -4326,10 +4411,8 @@ async function assertRetirementAuthorityFence(input: {
     leaseId: request.leaseId,
     generation: request.generation,
     expectedLeaseStatus: request.authoritativeLeaseStatus ?? "returning",
-    userExists: userSnapshot.exists,
-    userData,
-    assignmentExists: assignmentSnapshot.exists,
-    assignmentData: assignment,
+    builder,
+    assignment,
   })) {
     throw new GatewayRetirementConflictError(
       `Builder ${request.uid} is no longer authoritatively returned to ${request.authoritativeGatewayId}`,
@@ -4337,16 +4420,13 @@ async function assertRetirementAuthorityFence(input: {
   }
 }
 
-function zeroWorkloadRecoveryReceiptMatches(input: {
-  recoveryExists: boolean;
-  recovery: Record<string, unknown> | undefined;
-  request: RetireOwnedGatewayInput;
-}): boolean {
-  const { recoveryExists, recovery, request } = input;
-  const recoveryInput = record(recovery?.input);
+function zeroWorkloadRecoveryReceiptMatches(
+  recovery: Stored<GatewayRecoveryReceipt> | null,
+  request: RetireOwnedGatewayInput,
+): boolean {
+  const recoveryInput = recovery?.input;
   const receipt = record(recovery?.recoveryReceipt);
-  return recoveryExists &&
-    recovery?.kind === "recover-unreachable-disposable" &&
+  return recovery?.kind === "recover-unreachable-disposable" &&
     recovery.status === "succeeded" &&
     recoveryInput?.uid === request.uid &&
     recoveryInput.gatewayId === request.gatewayId &&
@@ -4356,28 +4436,38 @@ function zeroWorkloadRecoveryReceiptMatches(input: {
     receipt.pods === 0;
 }
 
-async function assertZeroWorkloadRecoveryReceipt(input: {
-  db: Firestore;
-  transaction: Transaction;
-  request: RetireOwnedGatewayInput;
-}): Promise<void> {
-  const { db, transaction, request } = input;
+async function assertZeroWorkloadRecoveryReceipt(
+  transaction: PlatformStateTransaction,
+  request: RetireOwnedGatewayInput,
+): Promise<void> {
   if (!request.zeroWorkloadRecoveryOperationId) return;
-  const recoverySnapshot = await transaction.get(
-    db
-      .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
-      .doc(request.zeroWorkloadRecoveryOperationId),
-  );
-  const recovery = recoverySnapshot.data() as Record<string, unknown> | undefined;
-  if (!zeroWorkloadRecoveryReceiptMatches({
-    recoveryExists: recoverySnapshot.exists,
-    recovery,
-    request,
-  })) {
+  const recovery = await transaction.journal.recoveryReceipts.get(request.zeroWorkloadRecoveryOperationId);
+  if (!zeroWorkloadRecoveryReceiptMatches(recovery, request)) {
     throw new GatewayRetirementConflictError(
       `gateway ${request.gatewayId} zero-workload recovery receipt is unavailable`,
     );
   }
+}
+
+async function readRetirementTelemetryFence(
+  input: FirestorePlacementPolicyInput,
+  request: RetireOwnedGatewayInput,
+): Promise<{ blocked: true } | { blocked: false; observedAfter?: number }> {
+  if (request.telemetryFenceOperationId === undefined) return { blocked: false };
+  const returnOperationId = request.telemetryFenceOperationId;
+  const returnOperation = await input.store.journal.operations.get(returnOperationId);
+  const completedAt = millis(returnOperation?.completedAt);
+  const terminalStatus = returnOperation?.status;
+  const expectedStatusMatches = request.telemetryFenceStatus === "terminal-failure"
+    ? terminalStatus === "failed" || terminalStatus === ROLLED_BACK_STATUS
+    : terminalStatus === "succeeded";
+  if (returnOperation === null || !expectedStatusMatches || completedAt === null) {
+    input.log(
+      `[placement-policy] retirement blocked for ${request.gatewayId}: return operation ${returnOperationId} is incomplete`,
+    );
+    return { blocked: true };
+  }
+  return { blocked: false, observedAfter: completedAt };
 }
 
 async function retireOwnedGatewayFirestore(
@@ -4386,29 +4476,11 @@ async function retireOwnedGatewayFirestore(
 ): Promise<boolean> {
   const operationId = placementRetireOperationId(request.uid, request.gatewayId, request.generation);
   const now = input.now();
-  let telemetryObservedAfter: number | undefined;
-  if (request.telemetryFenceOperationId !== undefined) {
-    const returnOperationId = request.telemetryFenceOperationId;
-    const returnSnapshot = await input.db
-      .collection(GLM_OPERATIONS_COLLECTION)
-      .doc(returnOperationId)
-      .get();
-    const completedAt = millis(returnSnapshot.data()?.completedAt);
-    const terminalStatus = returnSnapshot.data()?.status;
-    const expectedStatusMatches = request.telemetryFenceStatus === "terminal-failure"
-      ? terminalStatus === "failed" || terminalStatus === ROLLED_BACK_STATUS
-      : terminalStatus === "succeeded";
-    if (!returnSnapshot.exists || !expectedStatusMatches || completedAt === null) {
-      input.log(
-        `[placement-policy] retirement blocked for ${request.gatewayId}: return operation ${returnOperationId} is incomplete`,
-      );
-      return false;
-    }
-    telemetryObservedAfter = completedAt;
-  }
+  const telemetry = await readRetirementTelemetryFence(input, request);
+  if (telemetry.blocked) return false;
   try {
-    await claimGatewayRetirementAtomic({
-      db: input.db,
+    await claimGatewayRetirementInStore({
+      store: input.store,
       gatewayId: request.gatewayId,
       operationId,
       operation: {
@@ -4430,7 +4502,7 @@ async function retireOwnedGatewayFirestore(
       },
       now,
       updatedBy: PLACEMENT_POLICY_ACTOR,
-      ...(telemetryObservedAfter === undefined ? {} : { telemetryObservedAfter }),
+      ...(telemetry.observedAfter === undefined ? {} : { telemetryObservedAfter: telemetry.observedAfter }),
       claimGuard: async ({ transaction, root }) => {
         const rootRecord = root as unknown as Record<string, unknown>;
         if (!retirementAllocationMatches(rootRecord, request)) {
@@ -4438,21 +4510,13 @@ async function retireOwnedGatewayFirestore(
             `gateway ${request.gatewayId} no longer matches disposable allocation for ${request.uid}`,
           );
         }
-        await assertRetirementAuthorityFence({
-          db: input.db,
-          transaction,
-          request,
-        });
-        await assertZeroWorkloadRecoveryReceipt({
-          db: input.db,
-          transaction,
-          request,
-        });
+        await assertRetirementAuthorityFence(transaction, request);
+        await assertZeroWorkloadRecoveryReceipt(transaction, request);
       },
     });
     return true;
   } catch (error) {
-    if (!(error instanceof GatewayRetirementConflictError)) throw error;
+    if (!(error instanceof GatewayRetirementConflictError) && !(error instanceof FenceMismatchError)) throw error;
     input.log(`[placement-policy] retirement blocked for ${request.gatewayId}: ${error.message}`);
     return false;
   }
@@ -4465,41 +4529,28 @@ interface RetirementAuthorityFenceInput {
   leaseId: string | undefined;
   generation: number | undefined;
   expectedLeaseStatus: AuthoritativeLeaseStatus;
-  userExists: boolean;
-  userData: Record<string, unknown> | undefined;
-  assignmentExists: boolean;
-  assignmentData: Record<string, unknown> | undefined;
+  builder: Pick<BuilderRecord, "gateway" | "activationLease"> | null;
+  assignment: Pick<GatewayAssignment, "uid" | "gatewayId" | "state"> | null;
 }
 
-function retirementLeaseFenceAllows(
-  input: RetirementAuthorityFenceInput,
-  openclaw: Record<string, unknown> | null,
-  lease: Record<string, unknown> | null,
-): boolean {
-  return input.userExists &&
-    openclaw?.gatewayId === input.authoritativeGatewayId &&
+function retirementLeaseFenceAllows(input: RetirementAuthorityFenceInput): boolean {
+  const lease = input.builder?.activationLease;
+  return input.builder !== null &&
+    input.builder.gateway?.gatewayId === input.authoritativeGatewayId &&
     lease?.leaseId === input.leaseId &&
     lease?.generation === input.generation &&
     lease?.status === input.expectedLeaseStatus &&
     lease?.targetGatewayId === input.targetGatewayId;
 }
 
-function retirementAssignmentFenceAllows(
-  input: RetirementAuthorityFenceInput,
-): boolean {
-  return input.assignmentExists &&
-    input.assignmentData?.uid === input.uid &&
-    input.assignmentData.gatewayId === input.authoritativeGatewayId &&
-    input.assignmentData.state === "serving";
+function retirementAssignmentFenceAllows(input: RetirementAuthorityFenceInput): boolean {
+  return input.assignment?.uid === input.uid &&
+    input.assignment.gatewayId === input.authoritativeGatewayId &&
+    input.assignment.state === "serving";
 }
 
-export function retirementAuthorityFenceAllows(
-  input: RetirementAuthorityFenceInput,
-): boolean {
-  const openclaw = record(record(input.userData?.provisioning)?.openclaw);
-  const lease = record(openclaw?.activationLease);
-  return retirementLeaseFenceAllows(input, openclaw, lease) &&
-    retirementAssignmentFenceAllows(input);
+export function retirementAuthorityFenceAllows(input: RetirementAuthorityFenceInput): boolean {
+  return retirementLeaseFenceAllows(input) && retirementAssignmentFenceAllows(input);
 }
 
 type RetiredDisposableGatewayVerdict = "delete" | "rearmed" | "handoff-pending" | "skip";
@@ -4509,7 +4560,7 @@ function retiredDisposableGatewayVerdict(input: {
   operationId: string;
   root: ReturnType<typeof projectGatewayDesiredRootForGateway>;
   claimOperationId: unknown;
-  operation: Record<string, unknown> | undefined;
+  operation: Stored<OperationRecord> | null;
   ownerMirrorGatewayId: string | null;
   unreleasedHandoffOperationId: string | null;
 }): RetiredDisposableGatewayVerdict {
@@ -4521,7 +4572,7 @@ function retiredDisposableGatewayVerdict(input: {
     root?.allocation?.kind === DISPOSABLE_BUILDER_ALLOCATION_KIND,
     root?.allocation?.generation === request.generation,
     input.claimOperationId === input.operationId,
-    operation !== undefined,
+    operation !== null,
     operation?.kind === "retire-gateway",
     input.ownerMirrorGatewayId !== request.gatewayId,
   ].every(Boolean);
@@ -4537,79 +4588,87 @@ function isRetryableBuilderRetirementFailure(error: unknown, gatewayId: string):
   return isReapedOperationError(error) || isAgentStoreRetirementSessionDrain(error, gatewayId);
 }
 
-async function deleteRetiredDisposableGatewayFirestore(
-  input: FirestorePlacementPolicyInput,
+interface RetiredDisposableGatewayReading {
+  verdict: RetiredDisposableGatewayVerdict;
+  retirementVersion: number | null;
+  unreleasedHandoffOperationId: string | null;
+}
+
+async function readRetiredDisposableGatewayVerdict(
   store: PlatformStateStore,
   request: DeleteRetiredDisposableGatewayInput,
-): Promise<boolean> {
-  const operationId = placementRetireOperationId(request.ownerUid, request.gatewayId, request.generation);
-  const gatewayRef = input.db.collection(GATEWAYS_COLLECTION).doc(request.gatewayId);
-  const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
-  const ownerRef = input.db.collection("users").doc(request.ownerUid);
-  const recoverOperationId = builderRecoverOperationId(request.gatewayId, request.generation);
-  const handoffOperationRefs = [
+  operationId: string,
+): Promise<RetiredDisposableGatewayReading> {
+  const handoffOperationIds = [
     builderActivateOperationId(request.gatewayId, request.generation),
     builderReturnOperationId(request.gatewayId, request.generation),
-  ].map((id) => input.db.collection(GLM_OPERATIONS_COLLECTION).doc(id));
-  let unreleasedHandoffOperationId: string | null = null;
-  const verdict = await input.db.runTransaction(async (transaction): Promise<RetiredDisposableGatewayVerdict> => {
-    const [rootSnapshot, operationSnapshot, ownerSnapshot, ...handoffSnapshots] = await Promise.all([
-      transaction.get(gatewayRef),
-      transaction.get(operationRef),
-      transaction.get(ownerRef),
-      ...handoffOperationRefs.map((ref) => transaction.get(ref)),
+  ];
+  return store.transaction({ label: "placement-policy.retired-disposable-verdict" }, async (transaction) => {
+    const [stored, operation, owner, handoffs] = await Promise.all([
+      transaction.gateways.roots.get(request.gatewayId),
+      transaction.journal.operations.get(operationId),
+      transaction.builders.records.get(request.ownerUid),
+      transaction.journal.operations.getMany(handoffOperationIds),
     ]);
-    unreleasedHandoffOperationId = handoffSnapshots.find(
-      (snapshot) => schedulerHandoffAwaitingRelease({ ...snapshot.data(), id: snapshot.id }),
-    )?.id ?? null;
-    const root = projectGatewayDesiredRootForGateway(
-      rootSnapshot.exists ? rootSnapshot.data() : undefined,
-      request.gatewayId,
-    );
-    const claim = record(
-      (rootSnapshot.data() as Record<string, unknown> | undefined)?.retirementClaim,
-    );
-    const operation = operationSnapshot.data() as Record<string, unknown> | undefined;
-    // A user mirror still pointing at the runtime would trip the reconciler's
-    // missing-gateway guard after deletion — the record must outlive the pointer.
-    const ownerMirrorGatewayId = ownerSnapshot.exists
-      ? currentGatewayId(ownerSnapshot.data() as Record<string, unknown>)
-      : null;
+    const unreleasedHandoffOperationId = handoffOperationIds.find((id) => {
+      const handoff = handoffs.get(id);
+      return handoff !== undefined && schedulerHandoffAwaitingRelease(handoff as unknown as Record<string, unknown>);
+    }) ?? null;
     const verdict = retiredDisposableGatewayVerdict({
       request,
       operationId,
-      root,
-      claimOperationId: claim?.operationId,
-      operation: operationSnapshot.exists ? operation : undefined,
-      ownerMirrorGatewayId,
+      root: projectGatewayDesiredRootForGateway(stored, request.gatewayId),
+      claimOperationId: record(stored?.retirementClaim)?.operationId,
+      operation,
+      ownerMirrorGatewayId: builderGatewayId(owner),
       unreleasedHandoffOperationId,
     });
-    if (verdict === "rearmed") transaction.update(operationRef, rearmedRetireOperationPatch());
-    return verdict;
+    if (verdict === "rearmed") {
+      await transaction.journal.operations.patch(operationId, REARMED_RETIRE_OPERATION, { status: ["failed"] });
+    }
+    return { verdict, retirementVersion: stored?.retirementVersion ?? null, unreleasedHandoffOperationId };
   });
-  if (verdict === "rearmed") {
+}
+
+async function deleteRetiredDisposableGatewayFirestore(
+  input: FirestorePlacementPolicyInput,
+  request: DeleteRetiredDisposableGatewayInput,
+): Promise<boolean> {
+  const { store } = input;
+  const operationId = placementRetireOperationId(request.ownerUid, request.gatewayId, request.generation);
+  const recoverOperationId = builderRecoverOperationId(request.gatewayId, request.generation);
+  const reading = await readRetiredDisposableGatewayVerdict(store, request, operationId);
+  if (reading.verdict === "rearmed") {
     input.log(
       `[placement-policy] re-armed retirement ${operationId} for ${request.gatewayId}: it failed retryably (reaped after a controller restart or draining PostgreSQL sessions); the op runner re-drives it`,
     );
     return false;
   }
-  if (verdict === "handoff-pending") {
+  if (reading.verdict === "handoff-pending") {
     input.log(
-      `[placement-policy] kept retired disposable runtime ${request.gatewayId}: ${unreleasedHandoffOperationId} has an unreleased scheduler handoff; the handoff release sweep must settle it first`,
+      `[placement-policy] kept retired disposable runtime ${request.gatewayId}: ${reading.unreleasedHandoffOperationId} has an unreleased scheduler handoff; the handoff release sweep must settle it first`,
     );
     return false;
   }
-  if (verdict !== "delete") return false;
+  if (reading.verdict !== "delete") return false;
   const preparationCleared = await clearRetiredBuilderActivationPreparation({ store }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, generation: request.generation, retirementOperationId: operationId });
   if (preparationCleared) input.log(`[placement-policy] cleared failed preparation for retired target ${request.gatewayId}`);
   await Promise.all([
-    input.db.collection(GLM_OPERATIONS_COLLECTION).doc(recoverOperationId).delete(),
-    input.db
-      .collection(DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION)
-      .doc(recoverOperationId)
-      .delete(),
+    store.journal.operations.delete(recoverOperationId),
+    store.journal.recoveryReceipts.delete(recoverOperationId),
   ]);
-  await input.db.recursiveDelete(gatewayRef);
+  try {
+    await store.gateways.roots.delete(request.gatewayId, {
+      retirementVersion: reading.retirementVersion,
+      desiredStatus: ["retired"],
+    });
+  } catch (error) {
+    if (!(error instanceof FenceMismatchError)) throw error;
+    input.log(
+      `[placement-policy] kept retired disposable runtime ${request.gatewayId}: its root changed after the deletion verdict (${error.message})`,
+    );
+    return false;
+  }
   input.log(
     `[placement-policy] deleted retired disposable runtime ${request.gatewayId} for ${request.ownerUid}`,
   );
@@ -4659,7 +4718,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     supersedePendingSharedDrainMove: (request) => supersedePendingSharedDrainMove(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
     deleteRetiredDisposableGateway: (request) =>
-      deleteRetiredDisposableGatewayFirestore(input, store, request),
+      deleteRetiredDisposableGatewayFirestore(input, request),
   };
 }
 

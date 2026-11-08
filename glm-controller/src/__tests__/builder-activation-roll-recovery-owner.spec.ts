@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import type { Firestore } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
 import type { ReleasePayload } from '@octogee/shared/types/gateway-releases';
 import { createBuilderActivationRollRecoveryOwner } from '../builder-activation-roll-recovery-owner.js';
@@ -9,6 +8,11 @@ import { createSurgePodTransport } from '../surge-customer-handoff-runtime.js';
 import { FLEET_KEY_PAIR } from './fixtures/fleet-keys.js';
 import { buildOperationCompletionUpdate, classifyOperationFailure } from '../operation-retry.js';
 import { rearmOwnedLegacyMigration } from '../legacy-migration-recovery.js';
+import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
+
+function runtimeDoc(fields: Record<string, unknown>): Record<string, unknown> {
+  return { docKind: 'runtime', gatewayId: 'builder-a', lifecycle: 'serving', ...fields };
+}
 
 function fixture(scenario = 'success') {
   const events: string[] = []; let applied = scenario === 'post-helm-crash';
@@ -20,31 +24,21 @@ function fixture(scenario = 'success') {
     schedulerHandoff: { migrationId, uid: 'alice', slug: 'alice', fromGatewayId: 'shared-a', toGatewayId: gatewayId, stageAfterCutover: true, sourceRecovery: { migrationId, sourceEpoch: 7, steps: [{ name: 'quiesce-source', status: 'done' }] } } };
   const lease = { leaseId: 'lease-a', generation: 1, status: 'activating', sourceGatewayId: 'shared-a', sourceAssignmentEpoch: 7, targetGatewayId: gatewayId };
   const user = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-a', slug: 'alice', activationLease: lease, migration: { state: 'moving', operationId, startedAt: 1000 } } } };
-  const source = { gatewayId: 'shared-a', gatewayClass: 'shared', desiredStatus: 'running' };
-  const assignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', epoch: 7, state: 'quiescing', updatedByOperationId: operationId };
+  const source = { gatewayId: 'shared-a', gatewayClass: 'shared', desiredStatus: 'running', desiredRelease: 3, latestRelease: 3 };
+  const assignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', source: 'migrate-customer', epoch: 7, state: 'quiescing', createdAt: 500, updatedAt: 500, updatedByOperationId: operationId };
   const roll = { id: 'roll-2', kind: 'rollout', status: 'running', startedAt: 2000, input: { gatewayId, targetRelease: 2 } } as unknown as Operation;
-  const documents = new Map<string, unknown>([
-    [`gateways/${gatewayId}`, gateway], [`glmOperations/${operationId}`, recovery], [`glmOperations/${roll.id}`, roll], ['users/alice', user],
-    ['gateways/shared-a', source], ['gateways/shared-a/assignments/alice', assignment], [`glmGateways/${gatewayId}`, { runtime: 'cluster', release: 2 }],
+  const documents = new Map<string, Record<string, unknown>>([
+    [`gateways/${gatewayId}`, gateway], [`glmOperations/${operationId}`, recovery], [`glmOperations/${roll.id}`, roll as unknown as Record<string, unknown>], ['users/alice', user],
+    ['gateways/shared-a', source], ['gateways/shared-a/assignments/alice', assignment], [`glmGateways/${gatewayId}`, runtimeDoc({ runtime: 'cluster', release: 2 })],
   ]);
-  const snapshot = (path: string) => ({ exists: documents.has(path), data: () => documents.get(path) });
-  interface Ref { path: string; id: string; get: () => Promise<ReturnType<typeof snapshot>>; collection: (name: string) => { doc: (id: string) => Ref } }
-  const doc = (path: string): Ref => ({ path, id: path.split('/').at(-1)!, get: async () => snapshot(path), collection: name => ({ doc: id => doc(`${path}/${name}/${id}`) }) });
-  const query = (path: string, field?: string, value?: unknown) => ({ doc: (id: string) => doc(`${path}/${id}`), limit: () => ({ get: async () => ({ empty: ![...documents].some(([key, entry]) => {
-    if (!key.startsWith(path + '/') || key.slice(path.length + 1).includes('/')) return false;
-    if (!field) return true;
-    return field.split('.').reduce<unknown>((current, part) => typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[part] : undefined, entry) === value;
-  }) }) }), where: (next: string, _operator: string, expected: unknown) => query(path, next, expected) });
-  const db = { doc, collection: (path: string) => query(path), runTransaction: async (run: (transaction: object) => Promise<void>) => {
+  const store = createDocumentFixtureStore(documents);
+  const transaction = store.transaction.bind(store);
+  vi.spyOn(store, 'transaction').mockImplementation((async (options: { label: string }, body: never) => {
     if (scenario === 'epoch-before-proof') assignment.epoch++;
-    return await run({ get: (ref: { get: () => Promise<unknown> }) => ref.get(), update: (ref: { path: string }, patch: Record<string, unknown>) => {
-      events.push('journal-proof'); const current = documents.get(ref.path) as Record<string, unknown>;
-      for (const [field, value] of Object.entries(patch)) {
-        const parts = field.split('.'), key = parts.pop()!;
-        const parent = parts.reduce((entry, part) => entry[part] as Record<string, unknown>, current); parent[key] = value;
-      }
-    } });
-  } } as unknown as Firestore;
+    const result = await transaction(options, body);
+    if (options.label === 'builder-activation-roll-recovery.record-proof') events.push('journal-proof');
+    return result;
+  }) as typeof store.transaction);
   const oldTag = 'abc1234-oc2026@sha256:' + 'a'.repeat(64), newTag = 'def1234-oc2026@sha256:' + 'b'.repeat(64);
   const artifact = (tag: string, edgeTag: string) => ({ imageRepository: 'reg/gateway', imageTag: tag, profileImages: { builder: { imageRepository: 'reg/builder', imageTag: tag } }, gatewayEdgeImage: { imageRepository: 'reg/edge', imageTag: edgeTag } }) as ReleasePayload;
   const liveArtifact = artifact(oldTag, 'abc1234@sha256:' + 'c'.repeat(64)), installedArtifact = artifact(newTag, 'def1234@sha256:' + 'd'.repeat(64));
@@ -63,7 +57,7 @@ function fixture(scenario = 'success') {
   ] };
   if (scenario === 'template-drift') newTemplate.spec.serviceAccountName = 'different';
   const deps = {
-    db, namespace: 'octogee-test', chartFingerprint: 'chart', runExclusive: async (work: () => Promise<void>) => { events.push('exclusive'); await work(); },
+    store, namespace: 'octogee-test', chartFingerprint: 'chart', runExclusive: async (work: () => Promise<void>) => { events.push('exclusive'); await work(); },
     helm: { readDeployedInstance: async () => ({ image: { repository: 'reg/builder', tag: scenario === 'post-helm-crash' ? oldTag : newTag }, chartFingerprint: 'chart', deploymentIntentFingerprint: 'intent' }),
       upsertInstance: vi.fn(async () => { events.push('helm-old-artifact'); applied = true; }) },
     readRelease: async (_gatewayId: string, release: number) => release === 1 ? liveArtifact : installedArtifact,
@@ -75,7 +69,7 @@ function fixture(scenario = 'success') {
     readTemplateObjects: async () => objects, now: () => 5000, wait: async () => undefined, log: vi.fn(),
   } as unknown as Parameters<typeof createBuilderActivationRollRecoveryOwner>[0];
   const ctx = { reportStep: vi.fn(async () => undefined), assertActiveClaim: async () => { if (roll.startedAt !== 2000) throw Error('claim changed'); } };
-  return { run: () => createBuilderActivationRollRecoveryOwner(deps)({ ...roll, startedAt: 2000 }, ctx), events, db, documents, operationId, recovery, assignment, lease, user, deps, ctx };
+  return { run: () => createBuilderActivationRollRecoveryOwner(deps)({ ...roll, startedAt: 2000 }, ctx), events, store, documents, operationId, recovery, assignment, lease, user, deps, ctx };
 }
 
 describe('rollout owner settles a held abandoned activation', () => {
@@ -83,15 +77,15 @@ describe('rollout owner settles a held abandoned activation', () => {
     const h = fixture();
     await expect(h.run()).resolves.toMatchObject({ operationId: h.operationId, retainedPodUid: 'old', discardedPodUid: 'new', rollOperationId: 'roll-2', rollClaimStartedAt: 2000 });
     expect(h.events).toEqual(['exclusive', 'hold', 'unreserve', 'helm-old-artifact', 'journal-proof']);
-    const current = await readBuilderActivationRollRecovery({ db: h.db, gatewayId: 'builder-a' });
+    const current = await readBuilderActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' });
     expect(current?.operation).toMatchObject({ status: 'pending', startedAt: null });
-    expect(hasBuilderActivationTargetRollback({ id: h.operationId, ...current!.operation })).toBe(true);
+    expect(hasBuilderActivationTargetRollback(current!.operation)).toBe(true);
     expect(h.assignment).toMatchObject({ state: 'quiescing', epoch: 7 });
     expect(h.deps.helm.upsertInstance).toHaveBeenCalledWith(expect.objectContaining({ imageTag: expect.stringContaining('abc1234'), builderIdentity: { ownerUid: 'alice', builderSlug: 'alice' } }));
   });
   it('ends a held VM target rollout without Helm work so its exact pending source recovery can run', async () => {
     const h = fixture();
-    h.documents.set('glmGateways/builder-a', { runtime: 'gce-vm', release: 1, vm: { instanceId: 'held-vm' } });
+    h.documents.set('glmGateways/builder-a', runtimeDoc({ runtime: 'gce-vm', release: 1, vm: { instanceId: 'held-vm' } }));
     const readInstalled = vi.spyOn(h.deps.helm, 'readDeployedInstance');
     const error = await h.run().then(() => null, failure => failure as Error);
     expect(error).toBeInstanceOf(Error);
@@ -117,7 +111,7 @@ describe('rollout owner settles a held abandoned activation', () => {
   });
   it.each(['cluster', 'gce-vm'])('does not stop a %s roll after canonical Shared serving is restored', async runtime => {
     const h = fixture(); h.assignment.state = 'serving';
-    h.documents.set('glmGateways/builder-a', { runtime, release: 2 });
+    h.documents.set('glmGateways/builder-a', runtimeDoc({ runtime, release: 2 }));
     await expect(h.run()).resolves.toBeNull(); expect(h.events).toEqual(['exclusive']);
   });
 });
@@ -164,24 +158,24 @@ describe('retained rollback proof fences the entire source-recovery custody peri
   it('continues to defer after pending recovery is claimed and during cleanup, then ends only at canonical settlement', async () => {
     const { readBuilderActivationRollRecoveryCustody } = await import('../builder-activation-roll-recovery.js');
     const h = fixture(); await h.run();
-    const pending = await readBuilderActivationRollRecoveryCustody({ db: h.db, gatewayId: 'builder-a' });
+    const pending = await readBuilderActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
     expect(hasBuilderActivationTargetRollback({ id: h.operationId, ...pending!.operation }, pending!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { status: 'running', startedAt: 6000 });
-    expect(await readBuilderActivationRollRecovery({ db: h.db, gatewayId: 'builder-a' })).toBeNull();
-    const claimed = await readBuilderActivationRollRecoveryCustody({ db: h.db, gatewayId: 'builder-a' });
+    expect(await readBuilderActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' })).toBeNull();
+    const claimed = await readBuilderActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
     expect(hasBuilderActivationTargetRollback({ id: h.operationId, ...claimed!.operation }, claimed!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { steps: [{ name: 'recover-source', status: 'running' }] });
-    h.recovery.schedulerHandoff.sourceRecovery.steps.push({ name: 'rollback:unmount-target', status: 'done' });
-    const cleaning = await readBuilderActivationRollRecoveryCustody({ db: h.db, gatewayId: 'builder-a' });
+    (h.documents.get(`glmOperations/${h.operationId}`) as typeof h.recovery).schedulerHandoff.sourceRecovery.steps.push({ name: 'rollback:unmount-target', status: 'done' });
+    const cleaning = await readBuilderActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
     expect(hasBuilderActivationTargetRollback({ id: h.operationId, ...cleaning!.operation }, cleaning!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { status: 'failed', error: 'target cleanup transport interrupted' });
-    const retrying = await readBuilderActivationRollRecoveryCustody({ db: h.db, gatewayId: 'builder-a' });
+    const retrying = await readBuilderActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' });
     expect(retrying).not.toBeNull();
     expect(hasBuilderActivationTargetRollback({ id: h.operationId, ...retrying!.operation }, retrying!.recovery)).toBe(true);
     Object.assign(h.documents.get(`glmOperations/${h.operationId}`) as object, { schedulerHandoffReleased: true });
     h.assignment.state = 'serving';
     delete (h.user.provisioning.openclaw as { migration?: unknown }).migration;
-    expect(await readBuilderActivationRollRecoveryCustody({ db: h.db, gatewayId: 'builder-a' })).toBeNull();
+    expect(await readBuilderActivationRollRecoveryCustody({ state: h.store, gatewayId: 'builder-a' })).toBeNull();
   });
   it('retains the custody proof through normal failed completion and the existing source-recovery rearm owner', async () => {
     const h = fixture(); await h.run();
@@ -191,14 +185,14 @@ describe('retained rollback proof fences the entire source-recovery custody peri
     Object.assign(operation, completion);
     expect(operation.status).toBe('failed');
     expect(hasBuilderActivationTargetRollback(operation)).toBe(true);
-    expect(await rearmOwnedLegacyMigration({ db: h.db, ref: h.db.doc(`glmOperations/${h.operationId}`), now: 8000, admitted: () => true })).toBe(true);
-    const current = await readBuilderActivationRollRecovery({ db: h.db, gatewayId: 'builder-a' });
+    expect(await rearmOwnedLegacyMigration({ store: h.store, operationId: h.operationId, now: 8000, admitted: () => true })).toBe(true);
+    const current = await readBuilderActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' });
     expect(current!.operation).toMatchObject({ status: 'pending', startedAt: null });
     expect(hasBuilderActivationTargetRollback({ id: h.operationId, ...current!.operation }, current!.recovery)).toBe(true);
   });
   it.each(['lease', 'generation', 'epoch'])('does not consume a rollback proof for another %s', async field => {
     const h = fixture(); await h.run();
-    const current = await readBuilderActivationRollRecovery({ db: h.db, gatewayId: 'builder-a' });
+    const current = await readBuilderActivationRollRecovery({ state: h.store, gatewayId: 'builder-a' });
     const expected = { ...current!.recovery };
     if (field === 'lease') expected.leaseId = 'different';
     if (field === 'generation') expected.generation++;

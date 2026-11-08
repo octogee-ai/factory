@@ -1,9 +1,7 @@
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import type { BuilderRecord, FleetRegistryRecord, PlatformStateStore } from "@octogee/core/platform-state";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
 import type { SizingTier } from "@octogee/shared/types/sizing";
 import {
-  GLM_GATEWAYS_COLLECTION,
-  gatewayVmRuntimeDocPath,
   isGatewayRuntime,
   isGatewayVmBootDiskType,
   isGatewayVmDesktop,
@@ -36,7 +34,7 @@ export interface VmGatewayRuntime extends HelmRunner {
 }
 
 export interface VmGatewayRuntimeDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   namespace: string;
   environment: string;
   runHelm: HelmSubprocess;
@@ -122,21 +120,20 @@ function runtimeRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function hasObservedClusterPods(data: Record<string, unknown>): boolean {
+function hasObservedClusterPods(data: Partial<FleetRegistryRecord>): boolean {
   const observation = runtimeRecord(data.kubernetes);
   return ["ready", "not-ready"].includes(String(observation.status))
     && typeof observation.totalPods === "number" && observation.totalPods > 0;
 }
 
-function hasPriorClusterDeployment(data: Record<string, unknown>, gatewayId: string): boolean {
+function hasPriorClusterDeployment(data: Partial<FleetRegistryRecord>, gatewayId: string): boolean {
   const helm = runtimeRecord(data.helm);
-  return data.docKind === "runtime" && data.gatewayId === gatewayId
-    && helm.releaseName === `octogee-gw-${gatewayId}`
+  return helm.releaseName === `octogee-gw-${gatewayId}`
     && helm.deploymentName === `octogee-gateway-${gatewayId}`
     && typeof helm.lastAppliedAt === "number" && Number.isFinite(helm.lastAppliedAt) && helm.lastAppliedAt > 0;
 }
 
-function validateRuntimeObservation(data: Record<string, unknown>, gatewayId: string): void {
+function validateRuntimeObservation(data: Partial<FleetRegistryRecord>, gatewayId: string): void {
   if (data.runtime !== undefined && !isGatewayRuntime(data.runtime)) {
     throw new Error(`gateway ${gatewayId}: invalid runtime stamp ${String(data.runtime)}`);
   }
@@ -148,8 +145,9 @@ function validateRuntimeObservation(data: Record<string, unknown>, gatewayId: st
 }
 
 interface GatewayRuntimeStampInput {
-  db: Pick<Firestore, "collection">;
+  store: Pick<PlatformStateStore, "fleetRegistry" | "transaction">;
   gatewayId: string;
+  initial: FleetRegistryRecord;
   gatewayClass: string | null | undefined;
   sizingTier?: SizingTier | null;
   vmSpec: GatewayVmSpec | null;
@@ -157,22 +155,25 @@ interface GatewayRuntimeStampInput {
   log: (msg: string) => void;
 }
 
-async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Record<string, unknown>): Promise<void> {
+async function reconcileStampedVmSpec(input: GatewayRuntimeStampInput, data: Partial<FleetRegistryRecord>): Promise<void> {
   if (data.runtime !== "gce-vm" || input.gatewayClass !== "builder" || !input.vmSpec) return;
   const computer = resolveBuilderComputerPolicy(input.sizingTier);
   if (computer.runtime !== "gce-vm") return;
-  const prior = runtimeRecord(data.vmSpec);
   const shape = tierVmShape(computer);
-  if ((Object.keys(shape) as Array<keyof TierVmShape>).every((key) => prior[key] === shape[key])) return;
-  await input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId).set({
-    vmSpec: { ...input.vmSpec, ...prior, ...shape },
-  }, { merge: true });
+  await input.store.transaction({ label: "gateway-runtime.reconcile-vm-spec" }, async (transaction) => {
+    const current = await transaction.fleetRegistry.get(input.gatewayId);
+    if (current?.runtime !== "gce-vm") throw new Error(`gateway ${input.gatewayId}: runtime changed during VM specification reconciliation`);
+    const prior = runtimeRecord(current.vmSpec);
+    if ((Object.keys(shape) as Array<keyof TierVmShape>).every((key) => prior[key] === shape[key])) return;
+    await transaction.fleetRegistry.patch(input.gatewayId, {
+      vmSpec: { ...input.vmSpec, ...prior, ...shape } as GatewayVmSpec,
+    }, { revision: current.revision });
+  });
 }
 
 export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Promise<GatewayRuntime> {
-  const ref = input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
-  const snap = await ref.get();
-  const data = runtimeRecord(snap.data());
+  if (input.initial.gatewayId !== input.gatewayId) throw new Error(`gateway ${input.gatewayId}: initial runtime record names ${input.initial.gatewayId}`);
+  const data: Partial<FleetRegistryRecord> = (await input.store.fleetRegistry.get(input.gatewayId)) ?? {};
   validateRuntimeObservation(data, input.gatewayId);
   if (isGatewayRuntime(data.runtime)) {
     await input.assertStorage?.(data.runtime);
@@ -184,7 +185,9 @@ export async function stampGatewayRuntime(input: GatewayRuntimeStampInput): Prom
   const runtime: GatewayRuntime = computer?.runtime ?? "cluster";
   if (runtime === "gce-vm" && !input.vmSpec) throw new Error(`gateway ${input.gatewayId}: gce-vm runtime needs a vmSpec`);
   await input.assertStorage?.(runtime);
-  await ref.set({ runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec, ...tierVmShape(computer!) } } : {}) }, { merge: true });
+  await input.store.fleetRegistry.upsert(input.gatewayId, input.initial, {
+    runtime, ...(runtime === "gce-vm" ? { vmSpec: { ...input.vmSpec!, ...tierVmShape(computer!) } } : {}),
+  });
   input.log(`[vm-gateway-runtime] ${input.gatewayId}: runtime stamped ${runtime}`);
   return runtime;
 }
@@ -195,22 +198,27 @@ function withoutUndefined<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-export function vmRoutesFromDocs(docs: Array<{ id: string; data: () => Record<string, unknown> | undefined }>): Record<string, string> {
+export function vmRoutesFromRecords(records: readonly FleetRegistryRecord[]): Record<string, string> {
   const routes: Record<string, string> = {};
-  for (const doc of docs) {
-    const data = doc.data();
-    if (resolveGatewayRuntime(data?.runtime) !== "gce-vm") continue;
-    const vm = data?.vm as Partial<GatewayVmState> | null | undefined;
+  for (const record of records) {
+    if (resolveGatewayRuntime(record.runtime) !== "gce-vm") continue;
+    const vm: Partial<GatewayVmState> | null | undefined = record.vm;
     if (vm && typeof vm.internalIp === "string" && vm.internalIp.length > 0 && vm.status === "RUNNING") {
-      routes[doc.id] = vm.internalIp;
+      routes[record.gatewayId] = vm.internalIp;
     }
   }
   return routes;
 }
 
+function homeStorageIdOf(uid: string, builder: BuilderRecord | null): string | undefined {
+  const disk = builder?.home.homeStorage?.disk as { id?: unknown } | undefined;
+  if (disk?.id === undefined) return undefined;
+  if (typeof disk.id !== "string" || disk.id.length === 0) throw new Error(`Builder ${uid}: home storage disk id is malformed`);
+  return disk.id;
+}
+
 export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRuntime {
   const upgradeTimeout = deps.upgradeTimeout ?? "10m";
-  const glm = (gatewayId: string) => deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
   let routesTail: Promise<void> = Promise.resolve();
 
   async function kubectl(args: string[], stdin?: string): Promise<string> {
@@ -250,8 +258,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
   }
 
   async function publishRoutes(): Promise<void> {
-    const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).where("runtime", "==", "gce-vm").get();
-    const routes = vmRoutesFromDocs(snap.docs);
+    const routes = vmRoutesFromRecords(await deps.store.fleetRegistry.list({ runtime: "gce-vm" }));
     const manifest = JSON.stringify({
       apiVersion: "v1",
       kind: "ConfigMap",
@@ -267,7 +274,7 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
   }
 
   const computers = createComputerLifecycle({
-    db: deps.db,
+    store: deps.store,
     vm: deps.vm,
     environment: deps.environment,
     vmSpec: deps.vmSpec,
@@ -286,28 +293,26 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
 
   return {
     async readDeployedInstances() {
-      const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).where("runtime", "==", "gce-vm").get();
       const entries: Array<[string, HelmInstancesMap[string]]> = [];
-      for (const doc of snap.docs) {
-        const instance = (doc.data() as Record<string, unknown>).vmInstance as HelmInstancesMap[string] | undefined;
-        if (instance) entries.push([doc.id, instance]);
+      for (const record of await deps.store.fleetRegistry.list({ runtime: "gce-vm" })) {
+        const instance = record.vmInstance as HelmInstancesMap[string] | undefined;
+        if (instance) entries.push([record.gatewayId, instance]);
       }
       return Object.fromEntries(entries);
     },
 
     async readDeployedInstance({ gatewayId }) {
-      const snap = await glm(gatewayId).get();
-      const instance = snap.exists ? ((snap.data() as Record<string, unknown>).vmInstance as HelmInstancesMap[string] | undefined) : undefined;
+      const instance = (await deps.store.fleetRegistry.get(gatewayId))?.vmInstance as HelmInstancesMap[string] | undefined;
       return instance ?? null;
     },
 
     async upsertInstance(opts) {
       const { gatewayId } = opts;
       if (deps.ensureAuthSecret) await deps.ensureAuthSecret({ namespace: deps.namespace, gatewayId });
-      const desktop = vmSpecDesktop(runtimeRecord((await glm(gatewayId).get()).data()).vmSpec as Partial<GatewayVmSpec> | undefined, deps.vmSpec);
+      const desktop = vmSpecDesktop((await deps.store.fleetRegistry.get(gatewayId))?.vmSpec, deps.vmSpec);
       const [manifests, bridge] = await Promise.all([renderManifests(opts, desktop), bridgeIp()]);
       const ownerUid = opts.builderIdentity?.ownerUid;
-      const homeStorageId = ownerUid ? (await deps.db.collection("users").doc(ownerUid).get()).data()?.provisioning?.homeStorage?.disk?.id : undefined;
+      const homeStorageId = ownerUid ? homeStorageIdOf(ownerUid, await deps.store.builders.records.get(ownerUid)) : undefined;
       const bundle = await renderVmRuntimeBundle({
         ...(homeStorageId ? { homeStorageId } : {}),
         ...(opts.builderIdentity ? { builderIdentity: opts.builderIdentity } : {}),
@@ -347,18 +352,18 @@ export function createVmGatewayRuntime(deps: VmGatewayRuntimeDeps): VmGatewayRun
         await computers.ensureVm(gatewayId, `${opts.imageRepository}:${opts.imageTag}`, ownerUid, bridge);
       }
       if (ownerUid && bundle.volumes.some(volume => volume.name === "project-materializations" && volume.kind === "ephemeral")) {
-        await deps.db.collection("users").doc(ownerUid).set({ provisioning: { projectStorage: { nativeBoot: true } } }, { merge: true });
+        await deps.store.builders.records.patch(ownerUid, { home: { projectStorageNativeBoot: true } });
       }
-      await deps.db.doc(gatewayVmRuntimeDocPath(gatewayId)).set(bundle);
+      await deps.store.gateways.vmRuntime.put(gatewayId, bundle);
       deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime bundle ${bundle.version} rendered (${opts.imageTag})`);
       await reconcileRoutes();
-      await glm(gatewayId).set({ vmInstance: instance }, { merge: true });
+      await deps.store.fleetRegistry.patch(gatewayId, { vmInstance: { ...instance } });
     },
 
     async removeInstance({ gatewayId, awaitHomeCheckpoint }) {
       const parked = await computers.parkComputer(gatewayId, { awaitHomeCheckpoint: awaitHomeCheckpoint === true });
-      await deps.db.doc(gatewayVmRuntimeDocPath(gatewayId)).delete();
-      await recordVmObservation(deps, gatewayId, { vm: parked, vmInstance: FieldValue.delete() }, "park");
+      await deps.store.gateways.vmRuntime.delete(gatewayId);
+      await recordVmObservation(deps, gatewayId, { vm: parked, vmInstance: { clear: true } }, "park");
       await reconcileRoutes();
     },
 

@@ -184,12 +184,15 @@ function decodeControlSession(snapshot) {
 function decodeModelBrokerToken(snapshot) {
     if (!snapshot.exists)
         return null;
-    const key = modelBrokerTokenKey(snapshot.id);
-    const fields = new FirestoreFields(key, decodeDocumentData(snapshot));
+    return withStoredRevision(snapshot, modelBrokerTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+export function modelBrokerTokenFromData(tokenHash, data) {
+    const key = modelBrokerTokenKey(tokenHash);
+    const fields = new FirestoreFields(key, data);
     if (fields.value("capped") !== true)
         throw new MalformedRecordError(key, "capped must be true");
-    return withStoredRevision(snapshot, {
-        tokenHash: snapshot.id,
+    return {
+        tokenHash,
         gatewayId: fields.string("gatewayId"),
         ownerUid: fields.nullableString("ownerUid"),
         provider: fields.oneOf("provider", MODEL_BROKER_PROVIDERS),
@@ -206,21 +209,24 @@ function decodeModelBrokerToken(snapshot) {
         trace: fields.nullableMap("trace"),
         revoked: fields.value("revoked") === true,
         revokedAt: fields.nullableNumber("revokedAt"),
-    });
+    };
 }
 function decodeModelBrokerGatewayToken(snapshot) {
     if (!snapshot.exists)
         return null;
-    const fields = new FirestoreFields(modelBrokerPointerKey(snapshot.id), decodeDocumentData(snapshot));
-    return withStoredRevision(snapshot, {
-        pointerKey: snapshot.id,
+    return withStoredRevision(snapshot, modelBrokerGatewayTokenFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+export function modelBrokerGatewayTokenFromData(pointerKey, data) {
+    const fields = new FirestoreFields(modelBrokerPointerKey(pointerKey), data);
+    return {
+        pointerKey,
         gatewayId: fields.string("gatewayId"),
         ownerUid: fields.nullableString("ownerUid"),
         provider: fields.oneOf("provider", MODEL_BROKER_PROVIDERS),
         secretName: fields.string("secretName"),
         tokenHash: fields.string("tokenHash"),
         updatedAt: fields.number("updatedAt"),
-    });
+    };
 }
 export function gatewayAccessDenialAuditId(gatewayId, granteeUid, reason, at) {
     const bucket = Math.floor(at / ACCESS_DENIAL_BUCKET_MS);

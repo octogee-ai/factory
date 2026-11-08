@@ -1,10 +1,10 @@
-import type {Firestore} from 'firebase-admin/firestore';
+import type {PlatformStateStore} from '@octogee/core/platform-state';
 import type {KubectlSubprocess} from '../fleet-ingress.js';
 import {coordinateRuntimeRestart, type RuntimeRestartFence} from './runtime-restart-coordinator.js';
 import {runtimeRestartDriverSource} from './runtime-restart-driver.js';
 
 interface KubeObject {metadata:{uid:string;name:string;resourceVersion:string;generation?:number;deletionTimestamp?:string;annotations?:Record<string,string>;ownerReferences?:Array<{uid:string}>};spec?:{replicas?:number;template?:{metadata?:{annotations?:Record<string,string>}}};status?:{phase?:string;observedGeneration?:number;updatedReplicas?:number;readyReplicas?:number;availableReplicas?:number;conditions?:Array<{type:string;status:string}>}}
-interface Deps {db:Firestore;namespace:string;runKubectl:KubectlSubprocess;now?:()=>number;wait?:(ms:number)=>Promise<void>}
+interface Deps {store:PlatformStateStore;namespace:string;runKubectl:KubectlSubprocess;now?:()=>number;wait?:(ms:number)=>Promise<void>}
 const TOKEN='octogee.com/runtime-restart-attempt';
 async function json(deps:Deps,args:string[]):Promise<KubeObject> {
   const result=await deps.runKubectl(['-n',deps.namespace,...args,'-o','json'],{timeoutMs:15_000});
@@ -20,7 +20,7 @@ export function validateProcessRestartReceipt(value:unknown,attemptId:string):vo
   if(!receipt || receipt.version!==1 || receipt.attemptId!==attemptId || receipt.ready!==true || typeof receipt.beforeBootId!=='string' || typeof receipt.afterBootId!=='string' || !/^[A-Za-z0-9_-]{1,128}$/.test(receipt.beforeBootId) || !/^[A-Za-z0-9_-]{1,128}$/.test(receipt.afterBootId) || receipt.beforeBootId===receipt.afterBootId)throw new Error('gateway process restart completion unverified');
 }
 export async function restartGatewayProcess(deps:Deps,gatewayId:string):Promise<void> {
-  await coordinateRuntimeRestart(deps.db,gatewayId,'process',async(fence,save)=>{
+  await coordinateRuntimeRestart(deps.store,gatewayId,'process',async(fence,save)=>{
     const pods=await list(deps,'pods',gatewayId);
     if(pods.length!==1 || pods[0]?.metadata.deletionTimestamp || pods[0]?.status?.phase!=='Running')throw new Error('gateway process restart requires one running pod');
     const pod=pods[0]!;
@@ -66,7 +66,7 @@ async function waitForDeployment(deps:Deps,name:string,gatewayId:string,fence:Ru
   throw new Error('gateway deployment restart outcome is unresolved');
 }
 export async function restartGatewayDeployment(deps:Deps,gatewayId:string):Promise<void> {
-  await coordinateRuntimeRestart(deps.db,gatewayId,'deployment',async(fence,save)=>{
+  await coordinateRuntimeRestart(deps.store,gatewayId,'deployment',async(fence,save)=>{
     const name=`octogee-gateway-${gatewayId}`;
     const [deployment,pods]=await Promise.all([json(deps,['get','deployment',name]),list(deps,'pods',gatewayId)]);
     validateDeployment(deployment);

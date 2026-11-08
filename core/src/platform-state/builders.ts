@@ -109,7 +109,7 @@ export interface BuilderHomeState {
   readonly homeMigration?: OpaqueMap;
   readonly homeErasure?: readonly OpaqueMap[];
   readonly homeCapacity?: OpaqueMap;
-  readonly projectStorageNativeBoot?: OpaqueMap;
+  readonly projectStorageNativeBoot?: boolean;
 }
 
 export interface BuilderAgentRoster {

@@ -68,37 +68,20 @@ export class InitialGatewayReleaseConflictError extends Error {
         this.gatewayId = gatewayId;
     }
 }
-export async function writeInitialGatewayRelease(db, args) {
-    const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
-    const releaseRef = gatewayRef
-        .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-        .doc("1");
+export async function writeInitialGatewayReleaseInTransaction(transaction, args) {
     const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
-    await db.runTransaction(async (transaction) => {
-        const existing = await transaction.get(gatewayRef);
-        const releaseExisting = await transaction.get(releaseRef);
-        await args.validateAdditional?.(transaction);
-        if (existing.exists || releaseExisting.exists) {
-            throw new InitialGatewayReleaseConflictError(args.gatewayId);
-        }
-        transaction.set(gatewayRef, gatewayDoc, { merge: true });
-        transaction.set(releaseRef, releaseDoc);
-        args.writeAdditional?.(transaction);
-    });
+    const [existing, releaseExisting] = await Promise.all([
+        transaction.gateways.roots.get(args.gatewayId),
+        transaction.gateways.releases.get(args.gatewayId, 1),
+    ]);
+    if (existing !== null || releaseExisting !== null) {
+        throw new InitialGatewayReleaseConflictError(args.gatewayId);
+    }
+    await transaction.gateways.roots.create(gatewayDoc);
+    await transaction.gateways.releases.createInitial(releaseDoc);
 }
 export async function writeInitialGatewayReleaseInStore(store, args) {
-    const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
-    await store.transaction({ label: "gateway-release.initial" }, async (transaction) => {
-        const [existing, releaseExisting] = await Promise.all([
-            transaction.gateways.roots.get(args.gatewayId),
-            transaction.gateways.releases.get(args.gatewayId, 1),
-        ]);
-        if (existing !== null || releaseExisting !== null) {
-            throw new InitialGatewayReleaseConflictError(args.gatewayId);
-        }
-        await transaction.gateways.roots.create(gatewayDoc);
-        await transaction.gateways.releases.createInitial(releaseDoc);
-    });
+    await store.transaction({ label: "gateway-release.initial" }, (transaction) => writeInitialGatewayReleaseInTransaction(transaction, args));
 }
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);

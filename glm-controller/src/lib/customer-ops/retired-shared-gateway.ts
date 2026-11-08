@@ -1,69 +1,68 @@
-import type { DocumentData, Firestore, QuerySnapshot } from "firebase-admin/firestore";
+import type { GatewayRoot, OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import type { KubeOps } from "../kube-ops.js";
 
 export async function isRetiredSharedGateway(
-  db: Firestore,
+  store: PlatformStateStore,
   gatewayId: string,
   readRuntimeAbsent: (gatewayId: string) => Promise<boolean>,
 ): Promise<boolean> {
   if (!/^shared-[a-z0-9]+$/.test(gatewayId)) return false;
-  const proof = await readRetirementProof(db, gatewayId);
+  const proof = await readRetirementProof(store, gatewayId);
   if (!proof || !(await readRuntimeAbsent(gatewayId))) return false;
-  return await readRetirementProof(db, gatewayId) === proof;
+  return await readRetirementProof(store, gatewayId) === proof;
 }
 
-async function readRetirementProof(db: Firestore, gatewayId: string): Promise<string | null> {
-  return db.runTransaction(async (transaction) => {
-    const rootRef = db.collection("gateways").doc(gatewayId);
-    const operationId = `shared-pool-retire-${gatewayId}`;
-    const [rootSnap, runtime, operationSnap, assignments, users, operations] = await Promise.all([
-      transaction.get(rootRef),
-      transaction.get(db.collection("glmGateways").doc(gatewayId)),
-      transaction.get(db.collection("glmOperations").doc(operationId)),
-      transaction.get(rootRef.collection("assignments")),
-      transaction.get(db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId)),
-      transaction.get(db.collection("glmOperations").where("gatewayId", "==", gatewayId)),
+async function readRetirementProof(store: PlatformStateStore, gatewayId: string): Promise<string | null> {
+  const operationId = `shared-pool-retire-${gatewayId}`;
+  return store.transaction({ label: "retired-shared-gateway.proof", readOnly: true }, async (transaction) => {
+    const [root, runtime, operation, assignmentsEmpty, builders, operations] = await Promise.all([
+      transaction.gateways.roots.get(gatewayId),
+      transaction.fleetRegistry.get(gatewayId),
+      transaction.journal.operations.get(operationId),
+      transaction.gateways.assignments.isEmpty(gatewayId),
+      transaction.builders.records.listByGateway(gatewayId, { limit: 1 }),
+      transaction.journal.operations.listByGateway(gatewayId),
     ]);
-    const operation = operationSnap.data();
-    const version = operation?.input?.retirementClaimVersion;
-    if (runtime.exists || !assignments.empty || !users.empty ||
-      retirementOperationIdentityMismatch(operation, gatewayId) ||
-      retirementOperationRetainedResources(operation!) ||
-      retirementOperationTimingMismatch(operation!, version)) return null;
-    const root = rootSnap.data();
-    if (rootSnap.exists && sharedRootRetirementMismatch(root, operationId, version)) return null;
-    if (gatewayRecreationObserved(operations, operation!)) return null;
-    return JSON.stringify([operationId, version, operation!.createdAt, operation!.completedAt]);
+    if (runtime !== null || !assignmentsEmpty || builders.length > 0 || operation === null ||
+      retirementOperationIdentityMismatch(operation, gatewayId)) return null;
+    const version = operation.input.retirementClaimVersion;
+    if (!isRetirementClaimVersion(version) || retirementOperationRetainedResources(operation) ||
+      retirementOperationTimingMismatch(operation)) return null;
+    if (root !== null && sharedRootRetirementMismatch(root, operationId, version)) return null;
+    if (gatewayRecreationObserved(operations, operation)) return null;
+    return JSON.stringify([operationId, version, operation.createdAt, operation.completedAt]);
   });
 }
 
-function retirementOperationIdentityMismatch(operation: DocumentData | undefined, gatewayId: string): boolean {
-  return operation?.kind !== "retire-gateway" || operation.status !== "succeeded" ||
+function retirementOperationIdentityMismatch(operation: OperationRecord, gatewayId: string): boolean {
+  return operation.kind !== "retire-gateway" || operation.status !== "succeeded" ||
     operation.gatewayId !== gatewayId || operation.input?.gatewayId !== gatewayId ||
     operation.input?.source !== "shared-pool-scaler";
 }
 
-function retirementOperationRetainedResources(operation: DocumentData): boolean {
+function retirementOperationRetainedResources(operation: OperationRecord): boolean {
   return operation.input?.retainData === true || operation.input?.retainServiceAccount === true;
 }
 
-function retirementOperationTimingMismatch(operation: DocumentData, version: number): boolean {
-  return !Number.isInteger(version) || version <= 0 ||
-    typeof operation.createdAt !== "number" || !Number.isFinite(operation.createdAt) ||
+function isRetirementClaimVersion(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) > 0;
+}
+
+function retirementOperationTimingMismatch(operation: OperationRecord): boolean {
+  return typeof operation.createdAt !== "number" || !Number.isFinite(operation.createdAt) ||
     typeof operation.completedAt !== "number" || !Number.isFinite(operation.completedAt) ||
     operation.completedAt < operation.createdAt;
 }
 
-function sharedRootRetirementMismatch(root: DocumentData | undefined, operationId: string, version: number): boolean {
-  return root?.gatewayClass !== "shared" || root.ownerUid != null ||
+function sharedRootRetirementMismatch(root: GatewayRoot, operationId: string, version: number): boolean {
+  return root.gatewayClass !== "shared" || root.ownerUid != null ||
     root.desiredStatus !== "retired" || root.retirementVersion !== version ||
     root.retirementClaim?.operationId !== operationId || root.retirementClaim.version !== version ||
     root.retirementClaim.phase !== "claimed";
 }
 
-function gatewayRecreationObserved(operations: QuerySnapshot, operation: DocumentData): boolean {
-  return operations.docs.some((doc) => {
-    const candidate = doc.data();
+function gatewayRecreationObserved(operations: readonly Stored<OperationRecord>[], operation: OperationRecord): boolean {
+  return operations.some((candidate) => {
     return candidate.kind === "add-gateway" && (
       (candidate.status !== "succeeded" && candidate.status !== "failed") ||
       typeof candidate.createdAt !== "number" || !Number.isFinite(candidate.createdAt) ||

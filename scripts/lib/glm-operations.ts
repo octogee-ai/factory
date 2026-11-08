@@ -1,10 +1,5 @@
-import {
-  GLM_OPERATIONS_COLLECTION,
-  type Operation,
-  type OperationKind,
-  type OperationStatus,
-} from "../../shared/types/glm.js";
-import type { OperationsDb } from "@octogee/core/operation-audit";
+import type { OperationKind, OperationStatus } from "../../shared/types/glm.js";
+import type { OperationRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 
 export * from "@octogee/core/operation-audit";
 
@@ -26,14 +21,14 @@ export interface EnqueueOperationInput {
 }
 
 export async function enqueueOperation(
-  db: OperationsDb,
+  store: PlatformStateStore,
   opts: EnqueueOperationInput,
 ): Promise<string> {
   const now = opts.now ?? Date.now;
   const gatewayId =
     typeof opts.input.gatewayId === "string" ? opts.input.gatewayId : null;
   const inputUid = typeof opts.input.uid === "string" ? opts.input.uid : null;
-  const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add({
+  return store.journal.operations.enqueue({
     kind: opts.kind,
     status: "pending",
     createdBy: opts.createdBy,
@@ -45,32 +40,28 @@ export async function enqueueOperation(
     ...(gatewayId !== null ? { gatewayId } : {}),
     ...(inputUid !== null ? { inputUid } : {}),
   });
-  return ref.id;
 }
 
-export async function readOperation(
-  db: OperationsDb,
+export function readOperation(
+  store: PlatformStateStore,
   opId: string,
-): Promise<Operation | null> {
-  const snap = await db.collection(GLM_OPERATIONS_COLLECTION).doc(opId).get();
-  if (!snap.exists) return null;
-  const data = snap.data() ?? {};
-  return { id: snap.id, ...(data as Omit<Operation, "id">) };
+): Promise<Stored<OperationRecord> | null> {
+  return store.journal.operations.get(opId);
 }
 
 export interface AwaitOperationOptions {
   pollMs?: number;
   timeoutMs?: number;
-  onUpdate?: (op: Operation) => void;
+  onUpdate?: (op: Stored<OperationRecord>) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
 
 export async function awaitOperation(
-  db: OperationsDb,
+  store: PlatformStateStore,
   opId: string,
   opts: AwaitOperationOptions = {},
-): Promise<Operation> {
+): Promise<Stored<OperationRecord>> {
   const pollMs = opts.pollMs ?? 2_000;
   const timeoutMs = opts.timeoutMs ?? 600_000;
   const now = opts.now ?? Date.now;
@@ -80,11 +71,9 @@ export async function awaitOperation(
   let lastStepSig = "";
 
   for (;;) {
-    const op = await readOperation(db, opId);
+    const op = await readOperation(store, opId);
     if (!op) {
-      throw new Error(
-        `operation ${opId} not found in ${GLM_OPERATIONS_COLLECTION}`,
-      );
+      throw new Error(`operation ${opId} not found`);
     }
     if (opts.onUpdate) {
       const sig = JSON.stringify(op.steps ?? []);

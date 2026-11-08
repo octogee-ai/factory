@@ -21,11 +21,8 @@ function optional(key, data, field, accepts) {
 }
 const isString = (value) => typeof value === "string";
 const isNumber = (value) => typeof value === "number" && Number.isFinite(value);
-export function decodeMigrationTransferTask(snapshot) {
-    if (!snapshot.exists)
-        return null;
-    const key = taskKey(snapshot.id);
-    const data = decodeDocumentData(snapshot);
+export function migrationTransferTaskFromData(id, data, revision) {
+    const key = taskKey(id);
     const required = (field, accepts) => {
         const value = data[field];
         if (!accepts(value))
@@ -33,7 +30,7 @@ export function decodeMigrationTransferTask(snapshot) {
         return value;
     };
     return {
-        id: snapshot.id,
+        id,
         kind: required("kind", isString),
         migrationId: required("migrationId", isString),
         slug: required("slug", isString),
@@ -52,8 +49,13 @@ export function decodeMigrationTransferTask(snapshot) {
         startedAt: required("startedAt", isNumber),
         completedAt: optional(key, data, "completedAt", isNumber),
         error: optional(key, data, "error", isString),
-        revision: revisionOf(snapshot),
+        revision,
     };
+}
+export function decodeMigrationTransferTask(snapshot) {
+    if (!snapshot.exists)
+        return null;
+    return migrationTransferTaskFromData(snapshot.id, decodeDocumentData(snapshot), revisionOf(snapshot));
 }
 function encodeTask(task) {
     const present = Object.fromEntries(Object.entries(task).filter(([, value]) => value !== null));

@@ -1,4 +1,11 @@
-import { FieldValue, type Firestore, type Transaction } from "firebase-admin/firestore";
+import type { Firestore, Transaction } from "firebase-admin/firestore";
+import type {
+  BuilderRecord,
+  GatewayAssignment,
+  PlatformStateRepositories,
+  PlatformStateStore,
+  Stored,
+} from "@octogee/core/platform-state";
 
 interface RecoveryIdentity { ownerUid: string; gatewayId: string; instanceId: string; operationId: string }
 
@@ -10,50 +17,52 @@ export async function assertOwnerOperationUnfenced(db: Firestore, tx: Transactio
   if (fence != null && fence.operationId !== operationId) throw new Error("Builder computer recovery is in progress");
 }
 
-function assertFence(data: FirebaseFirestore.DocumentData | undefined, identity: RecoveryIdentity): { gatewayId: string; epoch: number } {
-  const provisioning = data?.provisioning;
-  const fence = provisioning?.computerRecovery;
-  const lease = provisioning?.openclaw?.activationLease;
-  const parked = provisioning?.computer;
-  if (!fence) throw new Error("computer recovery owner fence changed");
+function assertFence(owner: Stored<BuilderRecord> | null, identity: RecoveryIdentity): { gatewayId: string; epoch: number } {
+  const fence = owner?.fences.computerRecovery;
+  if (!owner || !fence) throw new Error("computer recovery owner fence changed");
+  const lease = owner.activationLease;
+  const parked = owner.home.computer;
   const valid = [
     fence.operationId === identity.operationId, fence.gatewayId === identity.gatewayId, fence.instanceId === identity.instanceId,
     typeof fence.sharedGatewayId === "string", !!fence.sharedGatewayId, !String(fence.sharedGatewayId).includes("/"),
-    Number.isSafeInteger(fence.assignmentEpoch), fence.assignmentEpoch >= 0,
-    provisioning?.openclaw?.gatewayId === fence.sharedGatewayId,
-    lease == null || ["failed", "parked"].includes(lease.status),
-    parked == null || (parked.gatewayId === identity.gatewayId && parked.instanceId === identity.instanceId),
+    Number.isSafeInteger(fence.assignmentEpoch), fence.assignmentEpoch! >= 0,
+    owner.gateway?.gatewayId === fence.sharedGatewayId,
+    lease === null || ["failed", "parked"].includes(lease.status),
+    parked === undefined || (parked.gatewayId === identity.gatewayId && parked.instanceId === identity.instanceId),
   ];
   if (!valid.every(Boolean)) {
     throw new Error("computer recovery owner fence changed");
   }
-  return { gatewayId: fence.sharedGatewayId, epoch: fence.assignmentEpoch };
+  return { gatewayId: fence.sharedGatewayId!, epoch: fence.assignmentEpoch! };
 }
 
-function assertAssignment(assignment: FirebaseFirestore.DocumentData | undefined, identity: RecoveryIdentity, shared: { gatewayId: string; epoch: number }): void {
+function assertAssignment(assignment: Stored<GatewayAssignment> | null, identity: RecoveryIdentity, shared: { gatewayId: string; epoch: number }): void {
   if (assignment?.uid !== identity.ownerUid || assignment.gatewayId !== shared.gatewayId || assignment.state !== "serving" || assignment.epoch !== shared.epoch) throw new Error("computer recovery Shared assignment changed");
 }
 
-export async function assertComputerRecoveryFence(db: Firestore, identity: RecoveryIdentity): Promise<void> {
-  const shared = assertFence((await db.doc(`users/${identity.ownerUid}`).get()).data(), identity);
-  const [root, assignment] = await Promise.all([db.doc(`gateways/${shared.gatewayId}`).get(), db.doc(`gateways/${shared.gatewayId}/assignments/${identity.ownerUid}`).get()]);
-  if (root.data()?.gatewayClass !== "shared") throw new Error("computer recovery Shared assignment changed");
-  assertAssignment(assignment.data(), identity, shared);
+async function assertSharedAssignment(state: PlatformStateRepositories, owner: Stored<BuilderRecord> | null, identity: RecoveryIdentity): Promise<void> {
+  const shared = assertFence(owner, identity);
+  const [root, assignment] = await Promise.all([
+    state.gateways.roots.get(shared.gatewayId),
+    state.gateways.assignments.get(shared.gatewayId, identity.ownerUid),
+  ]);
+  if (root?.gatewayClass !== "shared") throw new Error("computer recovery Shared assignment changed");
+  assertAssignment(assignment, identity, shared);
 }
 
-export async function finishComputerRecovery(db: Firestore, identity: RecoveryIdentity): Promise<void> {
-  const ref = db.doc(`users/${identity.ownerUid}`);
-  await db.runTransaction(async tx => {
-    const snapshot = await tx.get(ref);
-    const data = snapshot.data();
-    const shared = assertFence(data, identity);
-    const [root, assignment] = await Promise.all([tx.get(db.doc(`gateways/${shared.gatewayId}`)), tx.get(db.doc(`gateways/${shared.gatewayId}/assignments/${identity.ownerUid}`))]);
-    if (root.data()?.gatewayClass !== "shared") throw new Error("computer recovery Shared assignment changed");
-    assertAssignment(assignment.data(), identity, shared);
-    const parked = data?.provisioning?.computer;
+export async function assertComputerRecoveryFence(store: PlatformStateStore, identity: RecoveryIdentity): Promise<void> {
+  await assertSharedAssignment(store, await store.builders.records.get(identity.ownerUid), identity);
+}
+
+export async function finishComputerRecovery(store: PlatformStateStore, identity: RecoveryIdentity): Promise<void> {
+  await store.transaction({ label: "computer-recovery.finish" }, async tx => {
+    const owner = await tx.builders.records.get(identity.ownerUid);
+    await assertSharedAssignment(tx, owner, identity);
+    const parked = owner!.home.computer;
     if (parked && (parked.gatewayId !== identity.gatewayId || parked.instanceId !== identity.instanceId)) {
       throw new Error("computer recovery parked identity changed");
     }
-    tx.set(ref, { provisioning: { computerRecovery: FieldValue.delete(), ...(parked ? { computer: FieldValue.delete() } : {}) } }, { merge: true });
+    await tx.builders.records.setFence(identity.ownerUid, "computerRecovery", { clear: true }, owner!.fences.computerRecovery);
+    if (parked) await tx.builders.records.patch(identity.ownerUid, { home: { computer: { clear: true } } });
   });
 }

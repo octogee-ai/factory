@@ -1,3 +1,4 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,7 +38,7 @@ const factories = {
     client: {} as FleetBrokerClient, rpc: {} as GatewayRpcClient, log: vi.fn(),
   }),
   production: () => buildProductionLifecycleAdapter({
-    db: {} as Firestore, rpc: {} as GatewayRpcClient, log: vi.fn(),
+    db: {} as Firestore, store: createDocumentFixtureStore(new Map()), rpc: {} as GatewayRpcClient, log: vi.fn(),
   }),
 };
 

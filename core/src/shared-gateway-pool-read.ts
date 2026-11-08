@@ -1,51 +1,17 @@
-import type { Firestore, Query, QuerySnapshot, Transaction } from "firebase-admin/firestore";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
   deriveSharedGatewayPoolConfig,
   parseSharedGatewayAutoscalingConfig,
   type SharedGatewayAutoscalingConfig,
   type SharedGatewayPoolConfig,
-  type SharedPoolMemberRoot,
 } from "@octogee/shared/types/shared-gateway-pool";
-import type { PlatformStateTransaction } from "./platform-state/store.js";
+import type { PlatformStateRepositories } from "./platform-state/store.js";
 
 export const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 
-export function sharedClassGatewayQuery(db: Firestore): Query {
-  return db.collection(GATEWAYS_COLLECTION).where("gatewayClass", "==", "shared");
-}
-
-function sharedPoolMemberRootsFromSnapshot(snapshot: QuerySnapshot): SharedPoolMemberRoot[] {
-  return snapshot.docs.map((doc) => {
-    const data = doc.data() as Record<string, unknown>;
-    return {
-      gatewayId: doc.id,
-      gatewayClass: data.gatewayClass,
-      desiredStatus: data.desiredStatus,
-    };
-  });
-}
-
-async function readSharedPoolMemberRoots(
-  db: Firestore,
-  transaction?: Transaction,
-): Promise<SharedPoolMemberRoot[]> {
-  const query = sharedClassGatewayQuery(db);
-  const snapshot = transaction ? await transaction.get(query) : await query.get();
-  return sharedPoolMemberRootsFromSnapshot(snapshot);
-}
-
-export async function readSharedGatewayPoolConfig(
-  db: Firestore,
-  transaction?: Transaction,
-): Promise<SharedGatewayPoolConfig | null> {
-  return deriveSharedGatewayPoolConfig(await readSharedPoolMemberRoots(db, transaction));
-}
-
 export async function readSharedGatewayPoolConfigInStore(
-  transaction: PlatformStateTransaction,
+  repositories: Pick<PlatformStateRepositories, "gateways">,
 ): Promise<SharedGatewayPoolConfig | null> {
-  const roots = await transaction.gateways.roots.list({ gatewayClass: "shared" });
+  const roots = await repositories.gateways.roots.list({ gatewayClass: "shared" });
   return deriveSharedGatewayPoolConfig(roots.map((root) => ({
     gatewayId: root.gatewayId,
     gatewayClass: root.gatewayClass,
@@ -59,14 +25,13 @@ export class InvalidSharedGatewayAutoscalingConfigError extends Error {
   }
 }
 
-export async function readSharedGatewayAutoscalingConfig(
-  db: Firestore,
-  transaction?: Transaction,
+export async function readSharedGatewayAutoscalingConfigInStore(
+  repositories: Pick<PlatformStateRepositories, "config">,
 ): Promise<SharedGatewayAutoscalingConfig> {
-  const reference = db.doc(ORCHESTRATOR_CONFIG_DOC_PATH);
-  const snapshot = transaction ? await transaction.get(reference) : await reference.get();
-  const data = snapshot.exists ? (snapshot.data() as Record<string, unknown> | undefined) : undefined;
-  const config = parseSharedGatewayAutoscalingConfig(data?.sharedGatewayAutoscaling);
+  const orchestrator = await repositories.config.orchestrator.get();
+  const config = orchestrator === null
+    ? parseSharedGatewayAutoscalingConfig(undefined)
+    : orchestrator.sharedGatewayAutoscaling;
   if (config === null) throw new InvalidSharedGatewayAutoscalingConfigError();
   return config;
 }

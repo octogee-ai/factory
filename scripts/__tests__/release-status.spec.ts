@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 
 import {
@@ -78,98 +80,39 @@ function release(gatewayId: string, number: number, imageTag = "abc1234-oc2026.7
   };
 }
 
-function database(
-  docs: Record<string, DocData>,
-  gatewayIds: readonly string[],
-  readPaths: string[] = [],
-) {
-  return {
-    doc(path: string) {
-      return {
-        get: async () => {
-          readPaths.push(path);
-          return {
-            exists: docs[path] !== undefined,
-            data: () => docs[path],
-          };
-        },
-      };
-    },
-    collection(name: string) {
-      if (name === "gateways") {
-        return {
-          get: async () => {
-            readPaths.push(name);
-            return {
-              docs: gatewayIds.map((id) => ({ id, data: () => docs[`gateways/${id}`] })),
-            };
-          },
-          doc(gatewayId: string) {
-            return {
-              collection(subcollection: string) {
-                if (subcollection !== "releases") {
-                  throw new Error(`unexpected subcollection ${subcollection}`);
-                }
-                return {
-                  doc(releaseNumber: string) {
-                    const path = `gateways/${gatewayId}/releases/${releaseNumber}`;
-                    return {
-                      get: async () => {
-                        readPaths.push(path);
-                        return {
-                          exists: docs[path] !== undefined,
-                          data: () => docs[path],
-                        };
-                      },
-                    };
-                  },
-                };
-              },
-            };
-          },
-        };
-      }
-      if (name === "glmGateways") {
-        return {
-          doc(gatewayId: string) {
-            const path = `glmGateways/${gatewayId}`;
-            return {
-              get: async () => {
-                readPaths.push(path);
-                return {
-                  exists: docs[path] !== undefined,
-                  data: () => docs[path],
-                };
-              },
-            };
-          },
-        };
-      }
-      throw new Error(`unexpected collection ${name}`);
-    },
-  };
+class ReadLog extends Map<string, DocData> {
+  readonly reads: string[] = [];
+
+  override get(path: string): DocData | undefined {
+    this.reads.push(path);
+    return super.get(path);
+  }
+}
+
+function database(docs: Record<string, DocData>) {
+  const records = new ReadLog(Object.entries(docs));
+  return { store: createDocumentFixtureStore(records), reads: records.reads };
 }
 
 describe("release status", () => {
   it("derives the current Shared default from durable roots instead of a retired legacy default", async () => {
-    const readPaths: string[] = [];
-    const db = database({
+    const { store, reads } = database({
       "config/orchestrator": { defaultGatewayId: "shared-a" },
       "gateways/shared-a": gatewayRoot("shared-a", { desiredStatus: "retired" }),
       "gateways/shared-0": gatewayRoot("shared-0"),
       "gateways/shared-0/releases/4": release("shared-0", 4),
       "glmGateways/shared-0": runtime("shared-0"),
-    }, ["shared-a", "shared-0"], readPaths);
-    const status = await readReleaseStatus(db as never, NOW);
+    });
+    const status = await readReleaseStatus(store, NOW);
     expect(status).toMatchObject({ defaultGatewayId: "shared-0", defaultSelection: "selected" });
     expect(summarizeReleaseStatus(status)).toEqual({
       status: "converged", serving: 1, converged: 1, excluded: 1, blockers: [],
     });
-    expect(readPaths).not.toContain("config/orchestrator");
+    expect(reads).not.toContain("config/orchestrator");
   });
 
   it("reports release convergence separately from platform success and excludes paused and retired gateways", async () => {
-    const db = database({
+    const { store } = database({
       "config/orchestrator": { defaultGatewayId: "shared-0" },
       "gateways/shared-0": gatewayRoot("shared-0"),
       "gateways/shared-0/releases/4": release("shared-0", 4),
@@ -181,8 +124,8 @@ describe("release status", () => {
       }),
       "gateways/paused": gatewayRoot("paused", { desiredStatus: "paused" }),
       "gateways/retired": gatewayRoot("retired", { desiredStatus: "retired" }),
-    }, ["shared-0", "builder", "paused", "retired"]);
-    const status = await readReleaseStatus(db as never, NOW);
+    });
+    const status = await readReleaseStatus(store, NOW);
     expect(summarizeReleaseStatus(status)).toEqual({
       status: "incomplete", serving: 2, converged: 1, excluded: 2,
       blockers: ["builder: heartbeat-stale"],
@@ -196,34 +139,33 @@ describe("release status", () => {
   });
 
   it("keeps invalid roots visible even when every readable running gateway converged", async () => {
-    const db = database({
+    const { store } = database({
       "config/orchestrator": { defaultGatewayId: "missing" },
       "gateways/shared-0": gatewayRoot("shared-0"),
       "gateways/shared-0/releases/4": release("shared-0", 4),
       "glmGateways/shared-0": runtime("shared-0"),
-      "gateways/invalid": {},
-    }, ["shared-0", "invalid"]);
-    expect(summarizeReleaseStatus(await readReleaseStatus(db as never, NOW))).toEqual({
+      "gateways/invalid": gatewayRoot("invalid", { configSchemaVersion: 0, gatewayClass: "builder" }),
+    });
+    expect(summarizeReleaseStatus(await readReleaseStatus(store, NOW))).toEqual({
       status: "incomplete", serving: 1, converged: 1, excluded: 0,
       blockers: ["invalid: invalid-root"],
     });
   });
 
   it("blocks convergence on invalid roots or a non-serving default", async () => {
-    const db = database({
+    const { store } = database({
       "config/orchestrator": { defaultGatewayId: "default" },
       "gateways/default": gatewayRoot("default", { desiredStatus: "paused" }),
-      "gateways/invalid": {},
-    }, ["default", "invalid"]);
-    expect(summarizeReleaseStatus(await readReleaseStatus(db as never, NOW))).toEqual({
+      "gateways/invalid": gatewayRoot("invalid", { configSchemaVersion: 0, gatewayClass: "builder" }),
+    });
+    expect(summarizeReleaseStatus(await readReleaseStatus(store, NOW))).toEqual({
       status: "incomplete", serving: 0, converged: 0, excluded: 1,
       blockers: ["default gateway: paused", "invalid: invalid-root", "no serving gateways"],
     });
   });
 
-  it("observes a converged release in one Firestore read pass", async () => {
-    const readPaths: string[] = [];
-    const db = database({
+  it("observes a converged release in one read pass", async () => {
+    const { store, reads } = database({
       "config/orchestrator": { defaultGatewayId: "default" },
       "gateways/default": gatewayRoot("default"),
       "gateways/default/releases/4": release("default", 4),
@@ -234,9 +176,9 @@ describe("release status", () => {
           lastHeartbeatAt: FRESH_HEARTBEAT_AT,
         },
       }),
-    }, ["default"], readPaths);
+    });
 
-    await expect(readReleaseStatus(db as never, NOW)).resolves.toEqual({
+    await expect(readReleaseStatus(store, NOW)).resolves.toEqual({
       defaultGatewayId: "default",
       defaultSelection: "selected",
       gateways: [{
@@ -254,8 +196,8 @@ describe("release status", () => {
         observation: "converged",
       }],
     });
-    expect(readPaths.sort()).toEqual([
-      "gateways",
+    expect(reads.sort()).toEqual([
+      "gateways/default",
       "gateways/default/releases/4",
       "glmGateways/default",
     ]);
@@ -268,14 +210,14 @@ describe("release status", () => {
     { defaultGatewayId: "default-r4" },
     { defaultGatewayId: "missing" },
   ])("ignores legacy orchestrator selection %j when deriving the Shared default", async (orchestrator) => {
-    const db = database({
+    const { store } = database({
       "config/orchestrator": orchestrator,
       "gateways/default": gatewayRoot("default"),
       "gateways/default/releases/4": release("default", 4),
       "glmGateways/default": runtime("default"),
-    }, ["default"]);
+    });
 
-    await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
+    await expect(readReleaseStatus(store, NOW)).resolves.toMatchObject({
       defaultGatewayId: "default",
       defaultSelection: "selected",
       gateways: [{
@@ -287,11 +229,11 @@ describe("release status", () => {
   });
 
   it.each([
-    { roots: {}, ids: [], defaultGatewayId: null, defaultSelection: "unconfigured" },
-    { roots: { "gateways/shared-0": { gatewayClass: "shared", desiredStatus: "running" } }, ids: ["shared-0"], defaultGatewayId: "shared-0", defaultSelection: "invalid" },
-  ])("blocks convergence with incomplete authoritative roots: $defaultSelection", async ({ roots, ids, defaultGatewayId, defaultSelection }) => {
-    const db = database({ "config/orchestrator": { defaultGatewayId: "legacy" }, ...roots }, ids);
-    const status = await readReleaseStatus(db as never, NOW);
+    { roots: {}, defaultGatewayId: null, defaultSelection: "unconfigured" },
+    { roots: { "gateways/shared-0": gatewayRoot("shared-0", { configSchemaVersion: 0 }) }, defaultGatewayId: "shared-0", defaultSelection: "invalid" },
+  ])("blocks convergence with incomplete authoritative roots: $defaultSelection", async ({ roots, defaultGatewayId, defaultSelection }) => {
+    const { store } = database({ "config/orchestrator": { defaultGatewayId: "legacy" }, ...roots });
+    const status = await readReleaseStatus(store, NOW);
     expect(status).toMatchObject({ defaultGatewayId, defaultSelection });
     expect(summarizeReleaseStatus(status)).toMatchObject({ status: "incomplete", serving: 0, converged: 0 });
   });
@@ -432,7 +374,7 @@ describe("release status", () => {
   });
 
   it("accepts Cowboy's booting heartbeat and reports it as unhealthy", async () => {
-    const db = database({
+    const { store } = database({
       "config/orchestrator": { defaultGatewayId: "default" },
       "gateways/default": gatewayRoot("default"),
       "gateways/default/releases/4": release("default", 4),
@@ -443,9 +385,9 @@ describe("release status", () => {
           lastHeartbeatAt: FRESH_HEARTBEAT_AT,
         },
       }),
-    }, ["default"]);
+    });
 
-    await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
+    await expect(readReleaseStatus(store, NOW)).resolves.toMatchObject({
       gateways: [{
         gatewayId: "default",
         heartbeatStatus: "booting",
@@ -455,13 +397,22 @@ describe("release status", () => {
     });
   });
 
-  it("surfaces malformed durable roots instead of silently omitting them", async () => {
-    const db = database({
+  it("fails closed on a document that is not a durable gateway root instead of omitting it", async () => {
+    const { store } = database({
       "config/orchestrator": { defaultGatewayId: "default" },
       "gateways/default": { gatewayId: "default" },
-    }, ["default"]);
+    });
 
-    await expect(readReleaseStatus(db as never, NOW)).resolves.toEqual({
+    await expect(readReleaseStatus(store, NOW)).rejects.toBeInstanceOf(MalformedRecordError);
+  });
+
+  it("surfaces durable roots with unreadable configuration instead of silently omitting them", async () => {
+    const { store } = database({
+      "config/orchestrator": { defaultGatewayId: "default" },
+      "gateways/default": gatewayRoot("default", { configSchemaVersion: 0, gatewayClass: "builder" }),
+    });
+
+    await expect(readReleaseStatus(store, NOW)).resolves.toEqual({
       defaultGatewayId: null,
       defaultSelection: "unconfigured",
       gateways: [{
@@ -488,12 +439,11 @@ describe("release status", () => {
       release: 4,
       lifecycle: "serving",
     }],
-    ["mismatched gateway identity", runtime("other")],
-    ["invalid Date heartbeat", runtime("default", {
+    ["non-finite heartbeat", runtime("default", {
       heartbeat: {
         status: "ready",
         version: "abc1234-oc2026.7.1",
-        lastHeartbeatAt: new Date(Number.NaN),
+        lastHeartbeatAt: Number.NaN,
       },
     })],
     ["out-of-range numeric heartbeat", runtime("default", {
@@ -507,14 +457,14 @@ describe("release status", () => {
     _caseName,
     malformedRuntime,
   ) => {
-    const db = database({
+    const { store } = database({
       "config/orchestrator": { defaultGatewayId: "default" },
       "gateways/default": gatewayRoot("default"),
       "gateways/default/releases/4": release("default", 4),
       "glmGateways/default": malformedRuntime,
-    }, ["default"]);
+    });
 
-    await expect(readReleaseStatus(db as never, NOW)).resolves.toMatchObject({
+    await expect(readReleaseStatus(store, NOW)).resolves.toMatchObject({
       gateways: [{
         gatewayId: "default",
         runtimeRelease: null,
@@ -525,5 +475,15 @@ describe("release status", () => {
         observation: "missing-runtime",
       }],
     });
+  });
+
+  it("fails closed on a runtime record that names another gateway", async () => {
+    const { store } = database({
+      "gateways/default": gatewayRoot("default"),
+      "gateways/default/releases/4": release("default", 4),
+      "glmGateways/default": runtime("other"),
+    });
+
+    await expect(readReleaseStatus(store, NOW)).rejects.toBeInstanceOf(MalformedRecordError);
   });
 });

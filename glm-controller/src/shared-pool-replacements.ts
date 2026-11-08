@@ -1,28 +1,13 @@
-import type { DocumentSnapshot, Firestore, Transaction } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { parseSharedPoolReplacements, type SharedPoolReplacement } from "@octogee/shared/types/shared-gateway-pool";
 
 export { parseSharedPoolReplacements };
 
-export const SHARED_POOL_SCALER_STATE_DOC_PATH = "glmControllerState/sharedPoolScaler";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-export function parseSharedPoolReplacementsFromState(snapshot: DocumentSnapshot): SharedPoolReplacement[] {
-  if (!snapshot.exists) return [];
-  const data = snapshot.data();
-  if (!isRecord(data)) throw new Error("shared pool scaler state is malformed");
-  return parseSharedPoolReplacements(data.replacements);
-}
-
 export async function readSharedPoolReplacements(
-  db: Firestore,
-  transaction?: Transaction,
+  repositories: Pick<PlatformStateRepositories, "controllerState">,
 ): Promise<SharedPoolReplacement[]> {
-  const reference = db.doc(SHARED_POOL_SCALER_STATE_DOC_PATH);
-  const snapshot = transaction ? await transaction.get(reference) : await reference.get();
-  return parseSharedPoolReplacementsFromState(snapshot);
+  const state = await repositories.controllerState.sharedPoolScaler.get();
+  return [...(state?.replacements ?? [])];
 }
 
 export function pairedReplacementTarget(

@@ -1,16 +1,23 @@
 import { isDeepStrictEqual } from "node:util";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import type {
+  BuilderRecord,
+  FleetRegistryRecord,
+  FleetRegistryVmHome,
+  GatewayRoot,
+  OperationRecord,
+  PlatformStateStore,
+  Stored,
+} from "@octogee/core/platform-state";
+import type { OperationStatus } from "@octogee/shared/types/glm";
 import type { GatewayVmClient } from "./lib/compute-vm.js";
 import { nativeReturnSourceIdentity, nativeReturnSourceStopped } from "./lib/native-return-source-fence.js";
-import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, type OperationStatus } from "@octogee/shared/types/glm";
-import { mirroredOrScan, type FleetInformer } from "./fleet-informer.js";
+import type { FleetInformer } from "./fleet-informer.js";
 import { OPERATION_JOURNAL_RETENTION_MS } from "./operation-retry.js";
 
 export const NATIVE_RETURN_HOLD_REAPER_CREATOR = "glm-controller-native-return-hold-reaper";
 
 export interface NativeReturnHoldReaperDeps {
-  db: Pick<Firestore, "collection" | "runTransaction">;
+  store: PlatformStateStore;
   informer: Pick<FleetInformer, "glmGateways">;
   vm: Pick<GatewayVmClient, "describe">;
   log: (msg: string) => void;
@@ -24,20 +31,31 @@ export interface NativeReturnHoldReaperResult {
 
 type ReturnOperationStatus = OperationStatus | "missing";
 
+interface HoldCandidate {
+  gatewayId: string;
+  returnOperationId: string | null;
+}
+
+interface HoldAuthority {
+  runtime: Stored<FleetRegistryRecord> | null;
+  operation: Stored<OperationRecord> | null;
+  desired: Stored<GatewayRoot> | null;
+  owner: Stored<BuilderRecord> | null;
+}
+
 const TERMINAL: ReadonlySet<ReturnOperationStatus> = new Set(["succeeded", "failed", "rolled-back", "missing"]);
 
-function heldReturnOperationId(data: FirebaseFirestore.DocumentData | undefined): string | null {
-  const home = data?.vmHome;
+function heldReturnOperationId(home: unknown): string | null {
   if (!home || typeof home !== "object") return null;
   const id = (home as Record<string, unknown>).returnOperationId;
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
-function returnOperationStatus(snap: FirebaseFirestore.DocumentSnapshot): ReturnOperationStatus {
-  if (!snap.exists) return "missing";
-  const status = snap.data()?.status;
+function returnOperationStatus(operationId: string, operation: Stored<OperationRecord> | null): ReturnOperationStatus {
+  if (operation === null) return "missing";
+  const status: unknown = operation.status;
   if (typeof status !== "string") {
-    throw new Error(`return operation ${snap.id} has a malformed status (${String(status)}); hold retained`);
+    throw new Error(`return operation ${operationId} has a malformed status (${String(status)}); hold retained`);
   }
   return status as OperationStatus;
 }
@@ -46,11 +64,16 @@ function releaseJournalId(gatewayId: string, returnOperationId: string): string 
   return `native-return-hold-release-${gatewayId}-${returnOperationId}`;
 }
 
-function rollbackStillOwnsSource(runtime: FirebaseFirestore.DocumentData | undefined, desired: FirebaseFirestore.DocumentData,
-  op: FirebaseFirestore.DocumentData | undefined, user: FirebaseFirestore.DocumentData | undefined, gatewayId: string): boolean {
-  return [runtime?.runtime === "gce-vm", ["failed", "rolled-back"].includes(op?.status), op?.kind === "migrate-customer",
+function releasedHome(home: FleetRegistryVmHome | undefined): FleetRegistryVmHome {
+  const { returnOperationId: _returnOperationId, checkpointRequestedAt: _checkpointRequestedAt, parkRequestedAt: _parkRequestedAt, ...rest } = home ?? {};
+  return rest;
+}
+
+function rollbackStillOwnsSource(authority: HoldAuthority, desired: Stored<GatewayRoot>, gatewayId: string): boolean {
+  const { runtime, operation: op, owner } = authority;
+  return [runtime?.runtime === "gce-vm", ["failed", "rolled-back"].includes(op?.status ?? ""), op?.kind === "migrate-customer",
     op?.cutoverCommittedAt === undefined, op?.input?.uid === desired.ownerUid, op?.input?.fromGatewayId === gatewayId,
-    user?.provisioning?.openclaw?.gatewayId === gatewayId, desired.desiredStatus === "running"].every(Boolean);
+    owner?.gateway?.gatewayId === gatewayId, desired.desiredStatus === "running"].every(Boolean);
 }
 
 async function releaseTerminalHold(
@@ -58,38 +81,38 @@ async function releaseTerminalHold(
   gatewayId: string,
   returnOperationId: string,
 ): Promise<ReturnOperationStatus | null> {
-  const gatewayRef = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-  const operationRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(returnOperationId);
-  const journalRef = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(releaseJournalId(gatewayId, returnOperationId));
-  const rootRef = deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-  const [held, terminal, root] = await Promise.all([gatewayRef.get(), operationRef.get(), rootRef.get()]);
-  if (heldReturnOperationId(held.data()) !== returnOperationId || !TERMINAL.has(returnOperationStatus(terminal))) return null;
-  const runtime = held.data(), desired = root.data(), op = terminal.data();
+  const journalId = releaseJournalId(gatewayId, returnOperationId);
+  const [runtime, operation, desired] = await Promise.all([
+    deps.store.fleetRegistry.get(gatewayId),
+    deps.store.journal.operations.get(returnOperationId),
+    deps.store.gateways.roots.get(gatewayId),
+  ]);
+  if (heldReturnOperationId(runtime?.vmHome) !== returnOperationId || !TERMINAL.has(returnOperationStatus(returnOperationId, operation))) return null;
   if (desired?.gatewayClass !== "builder" || typeof desired.ownerUid !== "string") throw new Error("source ownership unavailable; hold retained");
-  const userRef = deps.db.collection("users").doc(desired.ownerUid);
-  const owner = await userRef.get();
-  const user = owner.data();
-  const rollback = rollbackStillOwnsSource(runtime, desired, op, user, gatewayId);
-  if (!rollback) {
-    const identity = nativeReturnSourceIdentity(runtime, desired);
+  const ownerUid = desired.ownerUid;
+  const authority: HoldAuthority = { runtime, operation, desired, owner: await deps.store.builders.records.get(ownerUid) };
+  if (!rollbackStillOwnsSource(authority, desired, gatewayId)) {
+    const identity = nativeReturnSourceIdentity(runtime ?? undefined, desired);
     if (!identity || !await nativeReturnSourceStopped(deps.vm, identity)) throw new Error("exact source is not stopped or absent; hold retained");
   }
-  return deps.db.runTransaction(async (tx) => {
-    const [gateway, operation, journal, currentRoot, currentUser] = await Promise.all([
-      tx.get(gatewayRef), tx.get(operationRef), tx.get(journalRef), tx.get(rootRef), tx.get(userRef),
+  return deps.store.transaction({ label: "native-return-hold-reaper.release" }, async (tx) => {
+    const [current, journal] = await Promise.all([
+      Promise.all([
+        tx.fleetRegistry.get(gatewayId),
+        tx.journal.operations.get(returnOperationId),
+        tx.gateways.roots.get(gatewayId),
+        tx.builders.records.get(ownerUid),
+      ]).then(([runtime, operation, desired, owner]): HoldAuthority => ({ runtime, operation, desired, owner })),
+      tx.journal.operations.get(journalId),
     ]);
-    if (![isDeepStrictEqual(gateway.data(), runtime), isDeepStrictEqual(operation.data(), op),
-      isDeepStrictEqual(currentRoot.data(), desired), isDeepStrictEqual(currentUser.data(), user)].every(Boolean)) return null;
-    const status = returnOperationStatus(operation);
+    if (!isDeepStrictEqual(current, authority) || current.runtime === null) return null;
+    const status = returnOperationStatus(returnOperationId, current.operation);
     if (!TERMINAL.has(status)) return null;
     const now = deps.now();
-    tx.update(gatewayRef, {
-      "vmHome.returnOperationId": FieldValue.delete(),
-      "vmHome.checkpointRequestedAt": FieldValue.delete(),
-      "vmHome.parkRequestedAt": FieldValue.delete(),
-    });
-    if (!journal.exists) {
-      tx.set(journalRef, {
+    await tx.fleetRegistry.patch(gatewayId, { vmHome: releasedHome(current.runtime.vmHome) }, { revision: current.runtime.revision });
+    if (journal === null) {
+      await tx.journal.operations.create({
+        id: journalId,
         kind: "migrate-customer",
         status: "succeeded",
         origin: "automatic",
@@ -98,7 +121,7 @@ async function releaseTerminalHold(
         startedAt: now,
         completedAt: now,
         lastProgressAt: now,
-        expireAt: Timestamp.fromMillis(now + OPERATION_JOURNAL_RETENTION_MS),
+        expireAt: now + OPERATION_JOURNAL_RETENTION_MS,
         gatewayId,
         input: { gatewayId, returnOperationId, returnOperationStatus: status },
         output: { released: true },
@@ -109,31 +132,38 @@ async function releaseTerminalHold(
   });
 }
 
+async function holdCandidates(deps: NativeReturnHoldReaperDeps): Promise<HoldCandidate[]> {
+  const mirrored = deps.informer.glmGateways();
+  if (mirrored !== null) {
+    return mirrored.map((doc) => ({ gatewayId: doc.id, returnOperationId: heldReturnOperationId(doc.data().vmHome) }));
+  }
+  return (await deps.store.fleetRegistry.list()).map((record) => ({
+    gatewayId: record.gatewayId,
+    returnOperationId: heldReturnOperationId(record.vmHome),
+  }));
+}
+
 export async function runNativeReturnHoldReaperTick(
   deps: NativeReturnHoldReaperDeps,
 ): Promise<NativeReturnHoldReaperResult> {
-  const docs = await mirroredOrScan(
-    deps.informer.glmGateways(),
-    () => deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
-  );
+  const candidates = await holdCandidates(deps);
   let released = 0;
-  for (const doc of docs) {
-    const returnOperationId = heldReturnOperationId(doc.data());
+  for (const { gatewayId, returnOperationId } of candidates) {
     if (returnOperationId === null) continue;
     try {
-      const status = await releaseTerminalHold(deps, doc.id, returnOperationId);
+      const status = await releaseTerminalHold(deps, gatewayId, returnOperationId);
       if (status === null) continue;
       released += 1;
       deps.log(
-        `[native-return-hold-reaper] ⚠ released the native return hold on ${doc.id}: ` +
+        `[native-return-hold-reaper] ⚠ released the native return hold on ${gatewayId}: ` +
         `return operation ${returnOperationId} is ${status} and never released it`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      deps.log(`[native-return-hold-reaper] ⚠ ${doc.id}: hold for ${returnOperationId} not released — ${message}`);
+      deps.log(`[native-return-hold-reaper] ⚠ ${gatewayId}: hold for ${returnOperationId} not released — ${message}`);
     }
   }
-  return { scanned: docs.length, released };
+  return { scanned: candidates.length, released };
 }
 
 export interface StartNativeReturnHoldReaperDeps extends NativeReturnHoldReaperDeps {

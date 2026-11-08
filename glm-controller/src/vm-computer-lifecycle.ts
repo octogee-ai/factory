@@ -1,8 +1,15 @@
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
 import {
-  GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
+  MissingRecordError,
+  type BuilderRecord,
+  type ClearField,
+  type FleetRegistryPatch,
+  type FleetRegistryVmFields,
+  type FleetRegistryVmHome,
+  type GatewayRoot,
+  type PlatformStateRepositories,
+  type PlatformStateStore,
+} from "@octogee/core/platform-state";
+import {
   builderComputerInstanceName,
   resolveGatewayRuntime,
   homeCheckpointOutstanding,
@@ -29,7 +36,6 @@ import {
   awaitHomeCheckpoint,
   homeCheckpointCompletedAt,
   readHomeCheckpointCompletedAt,
-  readVmHome,
 } from "./lib/home-checkpoint.js";
 import { readRetainedBuilderHome, recordRetainedBuilderHome, readHomeRecovery, readParkedComputer, releaseParkedComputer, writeParkedComputer } from "./lib/parked-computer.js";
 import { selectRetainedBootImage, type RetainedBootImage } from "./lib/retained-boot-image.js";
@@ -43,7 +49,7 @@ const COWBOY_STOP_REASONS = new Set<GatewayVmStopReason>(["idle", "operator"]);
 const COMPUTER_CREATION_RETRY_MS = 30_000;
 
 export interface ComputerLifecycleDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   vm: GatewayVmClient;
   environment: string;
   vmSpec: GatewayVmSpec;
@@ -78,29 +84,50 @@ export interface ComputerLifecycle {
 type ParkedVmState = GatewayVmState & { parkedCheckpoint: GatewayVmParkedCheckpoint };
 interface ReplacementOptions { boot?: boolean; expectedImageId?: string; forceOwnerUid?: string; expectedInstanceId?: string }
 
+const CLEAR: ClearField = { clear: true };
+
+export type VmHomeObservation = { readonly [K in keyof GatewayVmHomeState]?: GatewayVmHomeState[K] | ClearField };
+export type VmObservation = Omit<FleetRegistryPatch, "vmHome"> & { readonly vmHome?: VmHomeObservation };
+
+const CLEARED_HOME_REQUESTS: VmHomeObservation = { checkpointRequestedAt: CLEAR, parkRequestedAt: CLEAR, checkpointAcknowledgedAt: CLEAR };
+
+function isClearField(value: unknown): value is ClearField {
+  return typeof value === "object" && value !== null && (value as { clear?: unknown }).clear === true;
+}
+
+function observedVmHome(current: FleetRegistryVmHome | undefined, observed: VmHomeObservation): FleetRegistryVmHome {
+  const home: Record<string, unknown> = { ...current };
+  for (const [field, value] of Object.entries(observed)) {
+    if (value === undefined) continue;
+    if (isClearField(value)) delete home[field];
+    else home[field] = value;
+  }
+  return home;
+}
+
 export async function recordVmObservation(
-  deps: Pick<ComputerLifecycleDeps, "db" | "log">,
+  deps: Pick<ComputerLifecycleDeps, "store" | "log">,
   gatewayId: string,
-  observation: Record<string, unknown>,
+  observation: VmObservation,
   what: string,
 ): Promise<boolean> {
-  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-  const recorded = await deps.db.runTransaction(async (transaction) => {
-    const snap = await transaction.get(ref);
-    if (!snap.exists) return false;
-    transaction.set(ref, observation, { merge: true });
+  const recorded = await deps.store.transaction({ label: "vm-computer.record-observation" }, async (tx) => {
+    const current = await tx.fleetRegistry.get(gatewayId);
+    if (!current) return false;
+    const { vmHome, ...fields } = observation;
+    await tx.fleetRegistry.patch(
+      gatewayId,
+      vmHome === undefined ? fields : { ...fields, vmHome: observedVmHome(current.vmHome, vmHome) },
+      { revision: current.revision },
+    );
     return true;
   });
   if (!recorded) deps.log(`[vm-gateway-runtime] ${gatewayId}: runtime record is gone; dropped the ${what} observation instead of re-creating it`);
   return recorded;
 }
 
-export function clearReplacedComputer(deps: Pick<ComputerLifecycleDeps, "db" | "log">, gatewayId: string): Promise<boolean> {
-  return recordVmObservation(deps, gatewayId, {
-    vm: null,
-    vmInstance: FieldValue.delete(),
-    vmHome: { checkpointRequestedAt: FieldValue.delete(), parkRequestedAt: FieldValue.delete(), checkpointAcknowledgedAt: FieldValue.delete() },
-  }, "replacement");
+export function clearReplacedComputer(deps: Pick<ComputerLifecycleDeps, "store" | "log">, gatewayId: string): Promise<boolean> {
+  return recordVmObservation(deps, gatewayId, { vm: null, vmInstance: CLEAR, vmHome: CLEARED_HOME_REQUESTS }, "replacement");
 }
 
 function stateFrom(
@@ -236,9 +263,9 @@ async function finalHomeCheckpoint(
     const result = await awaitHomeCheckpoint(
       {
         readHomeCheckpointCompletedAt: async (id) => {
-          const home = readVmHome((await readVmRecord(deps.db, id)).data);
+          const home = (await deps.store.fleetRegistry.get(id))?.vmHome;
           return home?.checkpointRequestedAt === requestedAt && home?.lastCheckpoint?.instanceId === description.instanceId
-            ? readHomeCheckpointCompletedAt(deps.db, id) : null;
+            ? readHomeCheckpointCompletedAt(deps.store, id) : null;
         },
         wait: deps.wait,
         now: deps.now,
@@ -248,7 +275,7 @@ async function finalHomeCheckpoint(
       { gatewayId, requestedAt },
     );
     if (result.outcome === "completed") return { outcome: "fresh", requestedAt, completedAt: result.completedAt };
-    return staleAtBound(deps, gatewayId, description, requestedAt, await readHomeCheckpointCompletedAt(deps.db, gatewayId));
+    return staleAtBound(deps, gatewayId, description, requestedAt, await readHomeCheckpointCompletedAt(deps.store, gatewayId));
   }
   if (deps.now() - requestedAt >= timeoutMs) return staleAtBound(deps, gatewayId, description, requestedAt, completedAt);
   throw new FinalHomeCheckpointPendingError(`computer ${description.name} is taking its final home checkpoint (requested at ${requestedAt}); parking on a later converge`);
@@ -258,8 +285,8 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function parkedComputerOwner(data: Record<string, unknown> | undefined, description: GatewayVmDescription): string | null {
-  const stamped = (data?.vmInstance as { ownerUid?: unknown } | undefined)?.ownerUid;
+function parkedComputerOwner(data: VmRuntimeFields | undefined, description: GatewayVmDescription): string | null {
+  const stamped = data?.vmInstance?.ownerUid;
   return nonEmptyString(stamped) ?? nonEmptyString(description.metadata["octogee-owner-uid"]);
 }
 
@@ -268,13 +295,13 @@ async function recordParkedComputer(
   gatewayId: string,
   ownerUid: string | null,
   parked: ParkedVmState,
-  data: Record<string, unknown> | undefined,
+  data: VmRuntimeFields | undefined,
 ): Promise<void> {
   if (!ownerUid) {
     deps.log(`[vm-gateway-runtime] ⚠ ${gatewayId}: parked ${parked.instanceName} without an owner; it is not replaceable while parked`);
     return;
   }
-  await writeParkedComputer(deps.db, ownerUid, {
+  await writeParkedComputer(deps.store, ownerUid, {
     instanceName: parked.instanceName,
     zone: parked.zone,
     instanceId: parked.instanceId,
@@ -282,7 +309,7 @@ async function recordParkedComputer(
     parkedAt: parked.updatedAt,
     checkpoint: parked.parkedCheckpoint,
     bootRecovery: data?.vmBootRecovery as import("@octogee/shared/types/glm").BuilderParkedComputer["bootRecovery"],
-    vmSpec: data?.vmSpec as GatewayVmSpec | undefined,
+    vmSpec: data?.vmSpec,
   });
 }
 
@@ -351,24 +378,24 @@ function bindingOf(input: CreateGatewayVmInput): BindGatewayVmInput {
   return { labels: input.labels, metadata: input.metadata };
 }
 
-async function readVmRecord(db: Firestore, gatewayId: string): Promise<{ data: Record<string, unknown> | undefined; vm: GatewayVmState | null }> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const data = (snap.exists ? snap.data() : undefined) as Record<string, unknown> | undefined;
-  const vm = data?.vm as GatewayVmState | null | undefined;
-  return { data, vm: vm ?? null };
+type VmRuntimeFields = FleetRegistryVmFields;
+interface VmRecord { data: VmRuntimeFields | undefined; vm: GatewayVmState | null }
+
+async function readVmRecord(state: Pick<PlatformStateRepositories, "fleetRegistry">, gatewayId: string): Promise<VmRecord> {
+  const data = (await state.fleetRegistry.get(gatewayId)) ?? undefined;
+  return { data, vm: data?.vm ?? null };
 }
 
 async function readComputerDeploymentPrerequisiteError(deps: ComputerLifecycleDeps, gatewayId: string): Promise<string | null> {
-  const { data, vm } = await readVmRecord(deps.db, gatewayId);
+  const { data, vm } = await readVmRecord(deps.store, gatewayId);
   let description = vm ? await deps.vm.describe(vm.instanceName, vm.zone) : null;
   if (!description) {
-    const gateway = await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-    const ownerUid = nonEmptyString(gateway.data()?.ownerUid);
+    const ownerUid = nonEmptyString((await deps.store.gateways.roots.get(gatewayId))?.ownerUid);
     if (!ownerUid) return `gateway ${gatewayId}: a gce-vm Builder gateway needs an owner`;
     description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
   }
   if (!description || description.status === "STOPPING") return null;
-  const spec = (data?.vmSpec as GatewayVmSpec | undefined) ?? deps.vmSpec;
+  const spec = data?.vmSpec ?? deps.vmSpec;
   return computerIdentityPrerequisiteError(description, spec.serviceAccountEmail);
 }
 
@@ -391,14 +418,14 @@ async function externalStopCause(
   return `was already ${description.status} (stopped outside Cowboy)`;
 }
 
-function announcedPreemptionAt(data: Record<string, unknown> | undefined, vm: GatewayVmState, sinceMs: number): number | null {
+function announcedPreemptionAt(data: VmRuntimeFields | undefined, vm: GatewayVmState, sinceMs: number): number | null {
   const notice = data?.vmPreemption;
   if (!isGatewayVmPreemptionNotice(notice) || notice.instanceId !== vm.instanceId) return null;
   return notice.announcedAt >= sinceMs ? notice.announcedAt : null;
 }
 
 async function detectComputerPreemption(deps: ComputerLifecycleDeps, gatewayId: string, sinceMs: number): Promise<string | null> {
-  const { data, vm } = await readVmRecord(deps.db, gatewayId);
+  const { data, vm } = await readVmRecord(deps.store, gatewayId);
   if (resolveGatewayRuntime(data?.runtime) !== "gce-vm" || !vm) return null;
   const announcedAt = announcedPreemptionAt(data, vm, sinceMs);
   if (announcedAt !== null) {
@@ -440,7 +467,7 @@ interface StopOnPark {
   claimedAt?: number;
 }
 
-function readStopOnPark(data: Record<string, unknown> | undefined): StopOnPark | null {
+function readStopOnPark(data: VmRuntimeFields | undefined | null): StopOnPark | null {
   const value = data?.vmStopOnPark as Partial<StopOnPark> | undefined;
   if (value === undefined) return null;
   if (typeof value?.operationId !== "string" || !value.operationId || typeof value.reason !== "string" ||
@@ -453,15 +480,15 @@ function readStopOnPark(data: Record<string, unknown> | undefined): StopOnPark |
 async function recordAwakeComputer(
   deps: ComputerLifecycleDeps,
   gatewayId: string,
-  record: Record<string, unknown>,
+  record: FleetRegistryPatch,
 ): Promise<void> {
-  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-  const outcome = await deps.db.runTransaction(async (tx) => {
-    const [runtime, root] = await Promise.all([tx.get(ref), tx.get(deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId))]);
-    const stop = readStopOnPark(runtime.data());
-    const writer = stop ? await tx.get(deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(stop.operationId)) : null;
-    const stale = stop !== null && stop.claimedAt === undefined && root.data()?.desiredStatus === "running" && writer?.data()?.status !== "running";
-    tx.set(ref, { ...record, ...(stale ? { vmStopOnPark: FieldValue.delete() } : {}) }, { merge: true });
+  const outcome = await deps.store.transaction({ label: "vm-computer.record-awake" }, async (tx) => {
+    const [runtime, root] = await Promise.all([tx.fleetRegistry.get(gatewayId), tx.gateways.roots.get(gatewayId)]);
+    if (!runtime) throw new MissingRecordError({ aggregate: "fleet-registry", key: gatewayId });
+    const stop = readStopOnPark(runtime);
+    const writer = stop ? await tx.journal.operations.get(stop.operationId) : null;
+    const stale = stop !== null && stop.claimedAt === undefined && root?.desiredStatus === "running" && writer?.status !== "running";
+    await tx.fleetRegistry.patch(gatewayId, { ...record, ...(stale ? { vmStopOnPark: CLEAR } : {}) }, { revision: runtime.revision });
     return stop ? { stop, stale } : null;
   });
   if (!outcome) return;
@@ -471,20 +498,22 @@ async function recordAwakeComputer(
 }
 
 async function claimStopOnPark(deps: ComputerLifecycleDeps, gatewayId: string, stopFor: StopOnPark): Promise<boolean> {
-  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-  return deps.db.runTransaction(async (tx) => {
-    const current = readStopOnPark((await tx.get(ref)).data());
-    if (current?.operationId !== stopFor.operationId) return false;
-    if (current.claimedAt === undefined) tx.set(ref, { vmStopOnPark: { ...current, claimedAt: deps.now() } }, { merge: true });
+  return deps.store.transaction({ label: "vm-computer.claim-stop-on-park" }, async (tx) => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    const current = readStopOnPark(runtime);
+    if (!runtime || current?.operationId !== stopFor.operationId) return false;
+    if (current.claimedAt === undefined) {
+      await tx.fleetRegistry.patch(gatewayId, { vmStopOnPark: { ...current, claimedAt: deps.now() } }, { revision: runtime.revision });
+    }
     return true;
   });
 }
 
 async function releaseConfirmedStop(deps: ComputerLifecycleDeps, gatewayId: string, stopFor: StopOnPark): Promise<void> {
-  const ref = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-  await deps.db.runTransaction(async (tx) => {
-    if (readStopOnPark((await tx.get(ref)).data())?.operationId !== stopFor.operationId) return;
-    tx.set(ref, { vmStopOnPark: FieldValue.delete() }, { merge: true });
+  await deps.store.transaction({ label: "vm-computer.release-stop-on-park" }, async (tx) => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    if (!runtime || readStopOnPark(runtime)?.operationId !== stopFor.operationId) return;
+    await tx.fleetRegistry.patch(gatewayId, { vmStopOnPark: CLEAR }, { revision: runtime.revision });
   });
 }
 
@@ -539,22 +568,21 @@ async function parkComputerInstance(
 
 async function assertComputerUnbound(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription): Promise<void> {
   if (!description.instanceId) return;
-  const snap = await deps.db.collection(GLM_GATEWAYS_COLLECTION).where("vm.instanceId", "==", description.instanceId).get();
-  const holders = snap.docs.map((doc) => doc.id).filter((id) => id !== gatewayId);
-  if (holders.length > 0) {
-    throw new Error(`computer ${description.name} is still recorded by gateway ${holders.join(", ")}; waiting for its retirement to finish`);
+  const holder = await deps.store.fleetRegistry.findByVmInstanceId(description.instanceId);
+  if (holder && holder.gatewayId !== gatewayId) {
+    throw new Error(`computer ${description.name} is still recorded by gateway ${holder.gatewayId}; waiting for its retirement to finish`);
   }
 }
 
-async function requireHomeRecovery(deps: ComputerLifecycleDeps, input: { gatewayId: string; ownerUid: string; data: Record<string, unknown> | undefined; description: GatewayVmDescription | null }): Promise<GatewayVmHomeCheckpoint | null> {
+async function requireHomeRecovery(deps: ComputerLifecycleDeps, input: { gatewayId: string; ownerUid: string; data: VmRuntimeFields | undefined; description: GatewayVmDescription | null }): Promise<GatewayVmHomeCheckpoint | null> {
   const { gatewayId, ownerUid, data, description } = input;
-  const parked = await readParkedComputer(deps.db, ownerUid);
-  const recovery = await readHomeRecovery(deps.db, ownerUid);
+  const parked = await readParkedComputer(deps.store, ownerUid);
+  const recovery = await readHomeRecovery(deps.store, ownerUid);
   if (parked?.disposable && !recovery) throw new Error(`Builder ${ownerUid}: disposable home recovery checkpoint is missing`);
-  const required = readVmHome(data)?.restoreCheckpoint;
+  const required = data?.vmHome?.restoreCheckpoint;
   if (recovery && description?.instanceId !== recovery.instanceId && (!required || !sameHomeCheckpoint(required, recovery))) {
     const transferred = await recordVmObservation(deps, gatewayId, {
-      vmHome: { restoreCheckpoint: recovery, checkpointRequestedAt: FieldValue.delete(), parkRequestedAt: FieldValue.delete(), checkpointAcknowledgedAt: FieldValue.delete() },
+      vmHome: { ...CLEARED_HOME_REQUESTS, restoreCheckpoint: recovery },
     }, "required home restore");
     if (!transferred) throw new Error(`gateway ${gatewayId}: cannot persist the required home restore`);
   }
@@ -566,54 +594,53 @@ async function recordComputerHome(deps: ComputerLifecycleDeps, input: { gatewayI
     const { gatewayId, ownerUid, description, retainedHome, recovery } = input;
     const home = await deps.vm.retainHome(description.name, description.zone, ownerUid);
     if (!recovery || description.instanceId === recovery.instanceId || retainedHome) {
-      await recordRetainedBuilderHome(deps.db, ownerUid, home);
+      await recordRetainedBuilderHome(deps.store, ownerUid, home);
     }
     if (retainedHome) {
       if (home.id !== retainedHome.id || home.source !== retainedHome.source) throw new Error(`Builder ${ownerUid}: computer attached another home`);
-      await recordVmObservation(deps, gatewayId, { vmHome: { restoreCheckpoint: FieldValue.delete() } }, "retained home disk");
+      await recordVmObservation(deps, gatewayId, { vmHome: { restoreCheckpoint: CLEAR } }, "retained home disk");
     }
     return home;
  }
 
 async function deleteOwnedComputer(deps: ComputerLifecycleDeps, ownerUid: string): Promise<boolean> {
     const description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
-    let home = await readRetainedBuilderHome(deps.db, ownerUid);
+    let home = await readRetainedBuilderHome(deps.store, ownerUid);
     if (!description) {
       if (home) {
         await deps.vm.deleteRetainedHome(home, ownerUid);
-        await deps.db.collection("users").doc(ownerUid).set({ provisioning: { homeDisk: FieldValue.delete() } }, { merge: true });
+        await deps.store.builders.records.patch(ownerUid, { home: { homeDisk: CLEAR } });
         return true;
       }
       deps.log(`[vm-gateway-runtime] ${ownerUid} has no computer to delete`);
       return false;
     }
     home ??= await deps.vm.retainHome(description.name, description.zone, ownerUid);
-    await recordRetainedBuilderHome(deps.db, ownerUid, home);
+    await recordRetainedBuilderHome(deps.store, ownerUid, home);
     await deps.vm.delete(description.name, description.zone);
     await deps.vm.deleteRetainedHome(home, ownerUid);
-    await deps.db.collection("users").doc(ownerUid).set({ provisioning: { homeDisk: FieldValue.delete() } }, { merge: true });
+    await deps.store.builders.records.patch(ownerUid, { home: { homeDisk: CLEAR } });
     deps.log(`[vm-gateway-runtime] deleted computer ${description.name} in ${description.zone} (was ${description.status}, bound to ${description.gatewayId ?? "no gateway"})`);
     return true;
   }
 
 
-function assertReplacementOwner(deps: ComputerLifecycleDeps, data: Record<string, unknown> | undefined, description: GatewayVmDescription): string {
+function assertReplacementOwner(deps: ComputerLifecycleDeps, data: VmRuntimeFields | undefined, description: GatewayVmDescription): string {
   const ownerUid = parkedComputerOwner(data, description);
   if (!ownerUid || description.metadata["octogee-owner-uid"] !== ownerUid
     || Object.entries(ownerComputerLabels(deps.environment, ownerUid)).some(([key, value]) => description.labels[key] !== value)) throw new Error("boot replacement computer owner/environment/purpose differs");
   return ownerUid;
 }
 
-async function assertHomeAssignment(db: Firestore, ownerUid: string, gatewayId: string, boot = false): Promise<void> {
-  const owner = (await db.collection("users").doc(ownerUid).get()).data();
-  const assigned = owner?.provisioning?.openclaw?.gatewayId;
+async function assertHomeAssignment(store: PlatformStateStore, ownerUid: string, gatewayId: string, boot = false): Promise<void> {
+  const assigned = (await store.builders.records.get(ownerUid))?.gateway?.gatewayId;
   if (assigned && assigned !== gatewayId) {
-    const root = boot ? (await db.collection(GATEWAYS_COLLECTION).doc(assigned).get()).data() : null;
+    const root = boot ? await store.gateways.roots.get(assigned) : null;
     if (root?.gatewayClass !== "shared") throw new Error("boot replacement home is assigned to another gateway");
   }
 }
 
-function assertReplacementRecoveryCapacity(data: Record<string, unknown> | undefined, vm: GatewayVmState, description: GatewayVmDescription): void {
+function assertReplacementRecoveryCapacity(data: VmRuntimeFields | undefined, vm: GatewayVmState, description: GatewayVmDescription): void {
   const recovery = data?.vmBootRecovery as { instanceId?: string; observedAt?: number } | undefined;
   if (!isGatewayVmBootRecoverySample(recovery) || !recovery.ready || recovery.retainedPoints > 1 || recovery.freeBytes < 2 * 1024 ** 3) throw new Error("boot replacement requires successful native admission and room for its pre-migration recovery point; source boot/home kept");
   const identity = recovery as typeof recovery & { instanceId?: string; observedAt?: number };
@@ -622,40 +649,41 @@ function assertReplacementRecoveryCapacity(data: Record<string, unknown> | undef
   if ((recovery.retainedPoints === 0) !== (recovery.currentPointId === null)) throw new Error("boot replacement recovery point count/identity differs; source boot/home kept");
 }
 
-function assertReplacementRoot(root: FirebaseFirestore.DocumentSnapshot, desired: string | null, forceOwnerUid?: string): void {
-  if (desired === null && root.exists) throw new Error("force replacement requires a valid retired gateway or an absent gateway root");
+function assertReplacementRoot(root: GatewayRoot | null, desired: string | null, forceOwnerUid?: string): void {
+  if (desired === null && root) throw new Error("force replacement requires a valid retired gateway or an absent gateway root");
   if (!forceOwnerUid) return;
-  if (!root.exists && desired !== null) throw new Error("force replacement gateway disappeared");
-  if (root.exists && (root.data()?.ownerUid !== forceOwnerUid || root.data()?.gatewayClass !== "builder" || root.data()?.desiredStatus !== desired)) throw new Error("force replacement gateway owner changed or status changed");
+  if (!root && desired !== null) throw new Error("force replacement gateway disappeared");
+  if (root && (root.ownerUid !== forceOwnerUid || root.gatewayClass !== "builder" || root.desiredStatus !== desired)) throw new Error("force replacement gateway owner changed or status changed");
 }
 
-async function replacementRecord(deps: ComputerLifecycleDeps, gatewayId: string, desired: string | null, forceOwnerUid?: string): Promise<Awaited<ReturnType<typeof readVmRecord>>> {
-  const record = await readVmRecord(deps.db, gatewayId);
-  const forceRoot = forceOwnerUid ? await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get() : null;
-  if (forceRoot) assertReplacementRoot(forceRoot, desired, forceOwnerUid);
+async function replacementRecord(deps: ComputerLifecycleDeps, gatewayId: string, desired: string | null, forceOwnerUid?: string): Promise<VmRecord> {
+  const record = await readVmRecord(deps.store, gatewayId);
+  const forceRoot = forceOwnerUid ? { root: await deps.store.gateways.roots.get(gatewayId) } : null;
+  if (forceRoot) assertReplacementRoot(forceRoot.root, desired, forceOwnerUid);
   if (record.data !== undefined) return record;
   if (desired !== "retired" && !(forceOwnerUid && desired === null)) return record;
-  const root = forceRoot ?? await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
+  const root = forceRoot ? forceRoot.root : await deps.store.gateways.roots.get(gatewayId);
   assertReplacementRoot(root, desired, forceOwnerUid);
-  const ownerUid = forceOwnerUid ?? nonEmptyString(root.data()?.ownerUid);
-  const parked = ownerUid ? await readParkedComputer(deps.db, ownerUid) : null;
+  const ownerUid = forceOwnerUid ?? nonEmptyString(root?.ownerUid);
+  const parked = ownerUid ? await readParkedComputer(deps.store, ownerUid) : null;
   if (!parked || parked.gatewayId !== gatewayId) throw new Error("retired replacement requires the same owner-anchored parked computer");
-  return { data: { runtime: "gce-vm", vmInstance: { ownerUid }, vmSpec: parked.vmSpec, vmBootRecovery: parked.bootRecovery },
+  return { data: { runtime: "gce-vm", vmInstance: { ownerUid }, vmSpec: parked.vmSpec, ...(parked.bootRecovery ? { vmBootRecovery: { ...parked.bootRecovery } } : {}) },
     vm: { instanceName: parked.instanceName, zone: parked.zone, instanceId: parked.instanceId, updatedAt: parked.parkedAt,
       internalIp: null, status: "TERMINATED", startedAt: null, provisioningModel: null, stopReason: "idle" } };
 }
 
 async function clearForceReplacementRuntime(deps: ComputerLifecycleDeps, gatewayId: string, ownerUid: string, instanceId: string): Promise<boolean> {
-  const runtime = deps.db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId);
-  const root = deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-  return deps.db.runTransaction(async tx => {
-    const [runtimeSnapshot, rootSnapshot] = await Promise.all([tx.get(runtime), tx.get(root)]);
-    const rootData = rootSnapshot.data();
-    if (rootSnapshot.exists && (rootData?.ownerUid !== ownerUid || rootData.gatewayClass !== "builder" || !["paused", "retired"].includes(rootData.desiredStatus))) throw new Error("replacement gateway identity changed");
-    if (!runtimeSnapshot.exists) return false;
-    const data = runtimeSnapshot.data();
-    if ((data?.vm != null && data.vm.instanceId !== instanceId) || (data?.vmInstance?.ownerUid != null && data.vmInstance.ownerUid !== ownerUid)) throw new Error("replacement runtime identity changed");
-    tx.set(runtime, { vm: null, vmInstance: FieldValue.delete(), vmHome: { checkpointRequestedAt: FieldValue.delete(), parkRequestedAt: FieldValue.delete(), checkpointAcknowledgedAt: FieldValue.delete() } }, { merge: true });
+  return deps.store.transaction({ label: "vm-computer.clear-force-replacement" }, async (tx) => {
+    const [runtime, root] = await Promise.all([tx.fleetRegistry.get(gatewayId), tx.gateways.roots.get(gatewayId)]);
+    if (root && (root.ownerUid !== ownerUid || root.gatewayClass !== "builder" || !["paused", "retired"].includes(root.desiredStatus))) throw new Error("replacement gateway identity changed");
+    if (!runtime) return false;
+    const runtimeOwner = runtime.vmInstance?.ownerUid;
+    if ((runtime.vm != null && runtime.vm.instanceId !== instanceId) || (runtimeOwner != null && runtimeOwner !== ownerUid)) throw new Error("replacement runtime identity changed");
+    await tx.fleetRegistry.patch(
+      gatewayId,
+      { vm: null, vmInstance: CLEAR, vmHome: observedVmHome(runtime.vmHome, CLEARED_HOME_REQUESTS) },
+      { revision: runtime.revision },
+    );
     return true;
   });
 }
@@ -664,27 +692,30 @@ async function finishForceRuntimeClear(deps: ComputerLifecycleDeps, gatewayId: s
   if (!instanceId) throw new Error("force replacement requires the recorded computer identity");
   if (await clearForceReplacementRuntime(deps, gatewayId, ownerUid, instanceId)) return;
   if (await deps.readDesiredStatus(gatewayId) === null &&
-    !(await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()).exists &&
-    (await readParkedComputer(deps.db, ownerUid))?.gatewayId === gatewayId &&
-    (await readVmRecord(deps.db, gatewayId)).data === undefined) return;
-  if (await deps.readDesiredStatus(gatewayId) === "retired" && (await readVmRecord(deps.db, gatewayId)).data === undefined) return;
+    (await deps.store.gateways.roots.get(gatewayId)) === null &&
+    (await readParkedComputer(deps.store, ownerUid))?.gatewayId === gatewayId &&
+    (await readVmRecord(deps.store, gatewayId)).data === undefined) return;
+  if (await deps.readDesiredStatus(gatewayId) === "retired" && (await readVmRecord(deps.store, gatewayId)).data === undefined) return;
   throw new Error("replacement runtime record disappeared; retained home preserved");
 }
 
 async function clearReplacementRuntime(deps: ComputerLifecycleDeps, gatewayId: string, boot = false, forceOwnerUid?: string, expectedInstanceId?: string): Promise<void> {
   if (forceOwnerUid) return finishForceRuntimeClear(deps, gatewayId, forceOwnerUid, expectedInstanceId);
   const cleared = boot
-    ? await recordVmObservation(deps, gatewayId, { vm: null, vmHome: { checkpointRequestedAt: FieldValue.delete(), parkRequestedAt: FieldValue.delete(), checkpointAcknowledgedAt: FieldValue.delete() } }, "replacement")
+    ? await recordVmObservation(deps, gatewayId, { vm: null, vmHome: CLEARED_HOME_REQUESTS }, "replacement")
     : await clearReplacedComputer(deps, gatewayId);
   if (cleared) return;
-  if (await deps.readDesiredStatus(gatewayId) !== "retired" || (await readVmRecord(deps.db, gatewayId)).data !== undefined) {
+  if (await deps.readDesiredStatus(gatewayId) !== "retired" || (await readVmRecord(deps.store, gatewayId)).data !== undefined) {
     throw new Error("replacement runtime record disappeared; retained home preserved");
   }
 }
 
-async function assertNoBootProjectStorage(db: ComputerLifecycleDeps["db"], ownerUid: string): Promise<void> {
-  const owner = (await db.collection("users").doc(ownerUid).get()).data();
-  if (owner?.provisioning?.projectStorage?.nativeBoot === true) throw new Error("boot replacement cannot discard unpublished project work; source boot and home retained");
+function bootHoldsProjectWork(builder: BuilderRecord | null): boolean {
+  return builder?.home.projectStorageNativeBoot === true;
+}
+
+async function assertNoBootProjectStorage(store: PlatformStateStore, ownerUid: string): Promise<void> {
+  if (bootHoldsProjectWork(await store.builders.records.get(ownerUid))) throw new Error("boot replacement cannot discard unpublished project work; source boot and home retained");
 }
 
 function replacementStatusAllowed(desired: string | null, boot: boolean): desired is string {
@@ -711,19 +742,19 @@ async function replacementSource(deps: ComputerLifecycleDeps, gatewayId: string,
   const { data, vm, observed } = await replacementObservation(deps, gatewayId, boot, forceOwnerUid, expectedInstanceId);
   if (forceOwnerUid) {
     await assertComputerUnbound(deps, gatewayId, observed);
-    await assertHomeAssignment(deps.db, forceOwnerUid, gatewayId, true);
+    await assertHomeAssignment(deps.store, forceOwnerUid, gatewayId, true);
   }
   const description = await stopSuspendedComputer(deps, gatewayId, observed, "replace its boot");
   const ownerUid = assertReplacementOwner(deps, data, description);
   if (forceOwnerUid && forceOwnerUid !== ownerUid) throw new Error("force replacement owner changed");
-  if (!boot && !forceOwnerUid) await assertNoBootProjectStorage(deps.db, ownerUid);
+  if (!boot && !forceOwnerUid) await assertNoBootProjectStorage(deps.store, ownerUid);
   if (!forceOwnerUid) assertReplacementRecoveryCapacity(data, vm, description);
   await assertComputerUnbound(deps, gatewayId, description);
-  await assertHomeAssignment(deps.db, ownerUid, gatewayId, boot || !!forceOwnerUid);
-  return { description, ownerUid, spec: recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec) };
+  await assertHomeAssignment(deps.store, ownerUid, gatewayId, boot || !!forceOwnerUid);
+  return { description, ownerUid, spec: recordedSpecInConfiguredZones(data?.vmSpec, deps.vmSpec) };
 }
 
-function assertAbsentReplacementRecord(input: { gatewayId: string; source: NonNullable<RetainedBootImage["sourceComputer"]>; home: RetainedBuilderHome; record: Awaited<ReturnType<typeof readVmRecord>>; desired: string }): void {
+function assertAbsentReplacementRecord(input: { gatewayId: string; source: NonNullable<RetainedBootImage["sourceComputer"]>; home: RetainedBuilderHome; record: VmRecord; desired: string }): void {
   const { gatewayId, source, home } = input;
   const { vm } = input.record;
   if (input.record.data === undefined && input.desired !== "retired") throw new Error("replacement retry runtime record disappeared; retained home preserved");
@@ -734,22 +765,22 @@ function assertAbsentReplacementRecord(input: { gatewayId: string; source: NonNu
 
 async function releaseReplacementOwner(deps: ComputerLifecycleDeps, input: { ownerUid: string; gatewayId: string; instanceId: string; operationId: string; force: boolean }): Promise<void> {
   const { ownerUid, gatewayId, instanceId, operationId, force } = input;
-  if (force) return finishComputerRecovery(deps.db, { ownerUid, gatewayId, instanceId, operationId });
-  const parked = await readParkedComputer(deps.db, ownerUid);
-  if (parked?.instanceId === instanceId && parked.gatewayId === gatewayId) await releaseParkedComputer(deps.db, ownerUid);
+  if (force) return finishComputerRecovery(deps.store, { ownerUid, gatewayId, instanceId, operationId });
+  const parked = await readParkedComputer(deps.store, ownerUid);
+  if (parked?.instanceId === instanceId && parked.gatewayId === gatewayId) await releaseParkedComputer(deps.store, ownerUid);
 }
 
 async function assertAbsentReplacementStatus(deps: ComputerLifecycleDeps, gatewayId: string, desired: string | null, boot: boolean, forceOwnerUid?: string): Promise<void> {
   if (replacementStatusAllowed(desired, boot)) return;
-  if (forceOwnerUid && desired === null && !(await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()).exists) return;
+  if (forceOwnerUid && desired === null && (await deps.store.gateways.roots.get(gatewayId)) === null) return;
   throw new Error("boot replacement retry requires paused or retired status, or an active boot");
 }
 
 async function finishAbsentBootReplacement(deps: ComputerLifecycleDeps, gatewayId: string, operationId: string, options: ReplacementOptions): Promise<Record<string, unknown> | null> {
   const { boot = false, forceOwnerUid, expectedInstanceId } = options;
-  const ownerUid = forceOwnerUid ?? nonEmptyString((await deps.db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get()).data()?.ownerUid);
+  const ownerUid = forceOwnerUid ?? nonEmptyString((await deps.store.gateways.roots.get(gatewayId))?.ownerUid);
   if (!ownerUid) return null;
-  const home = await readRetainedBuilderHome(deps.db, ownerUid);
+  const home = await readRetainedBuilderHome(deps.store, ownerUid);
   const pin = (home as (RetainedBuilderHome & { bootImage?: RetainedBootImage }) | null)?.bootImage;
   if (!home || pin?.operationId !== operationId || !pin.sourceComputer) return null;
   const source = pin.sourceComputer;
@@ -757,18 +788,18 @@ async function finishAbsentBootReplacement(deps: ComputerLifecycleDeps, gatewayI
   if (await deps.vm.describe(source.name, source.zone)) return null;
   const desired = await deps.readDesiredStatus(gatewayId);
   await assertAbsentReplacementStatus(deps, gatewayId, desired, boot, forceOwnerUid);
-  const record = await readVmRecord(deps.db, gatewayId);
+  const record = await readVmRecord(deps.store, gatewayId);
   assertAbsentReplacementRecord({ gatewayId, source, home, record, desired: desired ?? "retired" });
-  await assertHomeAssignment(deps.db, ownerUid, gatewayId, boot || !!forceOwnerUid);
+  await assertHomeAssignment(deps.store, ownerUid, gatewayId, boot || !!forceOwnerUid);
   await deps.vm.verifyDetachedHome(home, ownerUid);
-  const image = await selectRetainedBootImage({ db: deps.db, vm: deps.vm, ownerUid, home, spec: deps.vmSpec });
+  const image = await selectRetainedBootImage({ store: deps.store, vm: deps.vm, ownerUid, home, spec: deps.vmSpec });
   await clearReplacementRuntime(deps, gatewayId, boot, forceOwnerUid, expectedInstanceId);
   await releaseReplacementOwner(deps, { ownerUid, gatewayId, instanceId: source.instanceId, operationId, force: !!forceOwnerUid });
   return { instanceName: source.name, home, previous: pin.previous, image, bootDeleted: true, resumeRequired: true };
 }
 
 async function logPossibleUnsavedProjects(deps: ComputerLifecycleDeps, gatewayId: string, ownerUid: string, boot: boolean): Promise<void> {
-  if (boot && (await deps.db.collection("users").doc(ownerUid).get()).data()?.provisioning?.projectStorage?.nativeBoot === true) {
+  if (boot && bootHoldsProjectWork(await deps.store.builders.records.get(ownerUid))) {
     deps.log(`[vm-gateway-runtime] ${gatewayId}: project autosave is best-effort; unsaved project work on the old boot disk may be lost`);
   }
 }
@@ -776,7 +807,7 @@ async function logPossibleUnsavedProjects(deps: ComputerLifecycleDeps, gatewayId
 async function confirmForceReplacement(deps: ComputerLifecycleDeps, input: { fence: { ownerUid: string; gatewayId: string; instanceId: string; operationId: string } | null; boot: boolean; source: GatewayVmDescription; assertAuthority: () => Promise<void> }): Promise<void> {
   if (!input.fence) return;
   await input.assertAuthority();
-  await assertComputerRecoveryFence(deps.db, input.fence);
+  await assertComputerRecoveryFence(deps.store, input.fence);
   const finalSource = await replacementSource(deps, input.fence.gatewayId, input.boot, input.fence.ownerUid, input.fence.instanceId);
   verifiedStoppedComputer(input.source, finalSource.description);
 }
@@ -786,23 +817,23 @@ async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: st
   if (forceOwnerUid && !expectedInstanceId) throw new Error("force replacement requires the recorded computer identity");
   await assertAuthority();
   const fence = forceOwnerUid && expectedInstanceId ? { ownerUid: forceOwnerUid, gatewayId, instanceId: expectedInstanceId, operationId } : null;
-  if (fence) await assertComputerRecoveryFence(deps.db, fence);
+  if (fence) await assertComputerRecoveryFence(deps.store, fence);
   const completed = await finishAbsentBootReplacement(deps, gatewayId, operationId, options);
   if (completed) return completed;
   const source = await replacementSource(deps, gatewayId, boot, forceOwnerUid, expectedInstanceId);
   await logPossibleUnsavedProjects(deps, gatewayId, source.ownerUid, boot);
   const home = await deps.vm.retainHome(source.description.name, source.description.zone, source.ownerUid);
-  await recordRetainedBuilderHome(deps.db, source.ownerUid, home);
+  await recordRetainedBuilderHome(deps.store, source.ownerUid, home);
   const previous = await deps.vm.readBootImage(source.description.name, source.description.zone);
-  const selected = await selectRetainedBootImage({ db: deps.db, vm: deps.vm, ownerUid: source.ownerUid, home, spec: source.spec, previous, operationId, sourceComputer: { name: source.description.name, zone: source.description.zone, instanceId: source.description.instanceId!, gatewayId } });
+  const selected = await selectRetainedBootImage({ store: deps.store, vm: deps.vm, ownerUid: source.ownerUid, home, spec: source.spec, previous, operationId, sourceComputer: { name: source.description.name, zone: source.description.zone, instanceId: source.description.instanceId!, gatewayId } });
   if (expectedImageId && selected.id !== expectedImageId) throw new Error("computer image family changed during boot upgrade; retry on a later boot");
   await assertAuthority();
-  if (fence) await assertComputerRecoveryFence(deps.db, fence);
+  if (fence) await assertComputerRecoveryFence(deps.store, fence);
   const confirmed = await replacementSource(deps, gatewayId, boot, forceOwnerUid, expectedInstanceId);
   verifiedStoppedComputer(source.description, confirmed.description);
   const retained = await deps.vm.retainHome(confirmed.description.name, confirmed.description.zone, source.ownerUid);
   if (retained.id !== home.id || retained.source !== home.source) throw new Error("boot replacement home changed before deletion");
-  await recordRetainedBuilderHome(deps.db, source.ownerUid, retained);
+  await recordRetainedBuilderHome(deps.store, source.ownerUid, retained);
   await confirmForceReplacement(deps, { fence, boot, source: source.description, assertAuthority });
   await deps.vm.deleteRetainingHome(source.description.name, source.description.zone, source.ownerUid, home, source.description.instanceId!);
   await clearReplacementRuntime(deps, gatewayId, boot, forceOwnerUid, expectedInstanceId);
@@ -829,6 +860,14 @@ async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: st
     return resized;
   }
 
+  async function recordHomeCapacity(store: PlatformStateStore, ownerUid: string, capacity: Record<string, unknown>): Promise<void> {
+    await store.transaction({ label: "vm-computer.record-home-capacity" }, async (tx) => {
+      const builder = await tx.builders.records.get(ownerUid);
+      if (!builder) throw new MissingRecordError({ aggregate: "builder", key: ownerUid });
+      await tx.builders.records.patch(ownerUid, { home: { homeCapacity: { ...builder.home.homeCapacity, ...capacity } } }, { revision: builder.revision });
+    });
+  }
+
   async function reconcileHomeCapacity(deps: ComputerLifecycleDeps, input: { gatewayId: string; ownerUid: string; description: GatewayVmDescription; home: RetainedBuilderHome; spec: GatewayVmSpec }): Promise<GatewayVmDescription> {
     const { gatewayId, ownerUid, spec } = input;
     let { home, description } = input;
@@ -837,16 +876,12 @@ async function replaceStoppedComputer(deps: ComputerLifecycleDeps, gatewayId: st
     if (!applyOnResume && home.sizeGb < spec.homeDiskSizeGb) {
       description = await stopSuspendedComputer(deps, gatewayId, description, "grow its home");
       home = await deps.vm.expandHome(home, ownerUid, spec.homeDiskSizeGb);
-      await recordRetainedBuilderHome(deps.db, ownerUid, home);
+      await recordRetainedBuilderHome(deps.store, ownerUid, home);
     }
     let status = "ready";
     if (home.sizeGb < spec.homeDiskSizeGb) status = "grow-pending";
     if (home.sizeGb > spec.homeDiskSizeGb) status = "shrink-pending";
-    await deps.db.collection("users").doc(ownerUid).set({ provisioning: { homeCapacity: {
-      desiredGiB: spec.homeDiskSizeGb, allocatedGiB: home.sizeGb,
-      status,
-      diskId: home.id, applyOnResume,
-    } } }, { merge: true });
+    await recordHomeCapacity(deps.store, ownerUid, { desiredGiB: spec.homeDiskSizeGb, allocatedGiB: home.sizeGb, status, diskId: home.id, applyOnResume });
     return applyOnResume ? description : reconcileComputerCapacity(deps, gatewayId, description, spec);
   }
 
@@ -899,7 +934,7 @@ async function upgradeStoppedBoot(deps: ComputerLifecycleDeps, gatewayId: string
 
 async function confirmRetainedHome(deps: ComputerLifecycleDeps, gatewayId: string, description: GatewayVmDescription, recovery: GatewayVmHomeCheckpoint | null): Promise<void> {
   if (!recovery || description.instanceId !== recovery.instanceId) return;
-  const retained = await recordVmObservation(deps, gatewayId, { vmHome: { restoreCheckpoint: FieldValue.delete() } }, "retained home");
+  const retained = await recordVmObservation(deps, gatewayId, { vmHome: { restoreCheckpoint: CLEAR } }, "retained home");
   if (!retained) throw new Error(`gateway ${gatewayId}: cannot confirm the retained home`);
 }
 
@@ -911,12 +946,12 @@ async function prepareParkedUpgrade(deps: ComputerLifecycleDeps, input: {
   let { description } = input;
   if (!PARKED_STATUSES.has(description.status)) return description;
   if (description.gatewayId !== gatewayId) {
-    const parked = await readParkedComputer(deps.db, ownerUid);
+    const parked = await readParkedComputer(deps.store, ownerUid);
     if (parked?.bootRecovery && parked.gatewayId === description.gatewayId && parked.instanceId === description.instanceId
       && parked.instanceName === description.name && parked.zone === description.zone) {
       await assertComputerUnbound(deps, gatewayId, description);
       const recorded = await recordVmObservation(deps, gatewayId, {
-        vm: stateFrom(description, parked.parkedAt, "idle"), vmBootRecovery: parked.bootRecovery,
+        vm: stateFrom(description, parked.parkedAt, "idle"), vmBootRecovery: { ...parked.bootRecovery },
       }, "parked computer adoption");
       if (recorded) description = await input.bind(description);
     }
@@ -936,7 +971,7 @@ function replacementPinMatches(gatewayId: string, vm: GatewayVmState | null, pin
 }
 
 async function recoverMissingReplacement(deps: ComputerLifecycleDeps, input: {
-  gatewayId: string; data: Record<string, unknown> | undefined; vm: GatewayVmState | null;
+  gatewayId: string; data: VmRuntimeFields | undefined; vm: GatewayVmState | null;
   ensureVm: ComputerLifecycle["ensureVm"];
 }): Promise<void> {
   const { gatewayId, data, vm } = input;
@@ -944,7 +979,7 @@ async function recoverMissingReplacement(deps: ComputerLifecycleDeps, input: {
   const owner = nonEmptyString(instance?.ownerUid);
   const repository = nonEmptyString(instance?.image?.repository);
   const tag = nonEmptyString(instance?.image?.tag);
-  const home = owner ? await readRetainedBuilderHome(deps.db, owner) : null;
+  const home = owner ? await readRetainedBuilderHome(deps.store, owner) : null;
   const pin = (home as (RetainedBuilderHome & { bootImage?: RetainedBootImage }) | null)?.bootImage;
   if (owner && repository && tag && replacementPinMatches(gatewayId, vm, pin)) {
     await input.ensureVm(gatewayId, `${repository}:${tag}`, owner, await deps.resolveBridge());
@@ -966,8 +1001,8 @@ async function upgradePreemptedBoot(deps: ComputerLifecycleDeps, gatewayId: stri
     deps.log(`[vm-gateway-runtime] ${gatewayId}: boot image upgrade skipped during preemption recovery; computer binding is incomplete`);
     return description;
   }
-  const { data } = await readVmRecord(deps.db, gatewayId);
-  const spec = recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec);
+  const { data } = await readVmRecord(deps.store, gatewayId);
+  const spec = recordedSpecInConfiguredZones(data?.vmSpec, deps.vmSpec);
   const upgraded = await upgradeStoppedBoot(deps, gatewayId, description, spec);
   if (upgraded) return upgraded;
   await ensureVm(gatewayId, image, owner, bridge);
@@ -1080,7 +1115,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
       description = await reconcileComputerIdentity(gatewayId, description, input.serviceAccountEmail);
       await deps.vm.bind(description.name, description.zone, bindingOf(input));
       deps.log(`[vm-gateway-runtime] ${gatewayId}: bound ${description.name} to ${gatewayId} (was ${description.gatewayId ?? "unbound"})`);
-      await releaseParkedComputer(deps.db, ownerUid);
+      await releaseParkedComputer(deps.store, ownerUid);
       description = (await deps.vm.describe(description.name, description.zone)) ?? description;
     } else {
       description = await reconcileComputerIdentity(gatewayId, description, input.serviceAccountEmail);
@@ -1115,19 +1150,19 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   async function ensureVm(gatewayId: string, image: string, ownerUid: string | undefined, bridge: string): Promise<GatewayVmState> {
     if (!ownerUid) throw new Error(`gateway ${gatewayId}: a gce-vm Builder gateway needs an owner`);
     creations.assertNoneInFlight(gatewayId, ownerUid);
-    const { data, vm: existing } = await readVmRecord(deps.db, gatewayId);
-    const spec = recordedSpecInConfiguredZones(data?.vmSpec as GatewayVmSpec | undefined, deps.vmSpec);
+    const { data, vm: existing } = await readVmRecord(deps.store, gatewayId);
+    const spec = recordedSpecInConfiguredZones(data?.vmSpec, deps.vmSpec);
     let input = builderComputerInstanceInput({ gatewayId, ownerUid, spec, environment: deps.environment, image, bridgeIp: bridge });
     let description = existing ? await deps.vm.describe(existing.instanceName, existing.zone) : null;
     if (!description) description = await deps.vm.findByLabels(ownerComputerLabels(deps.environment, ownerUid));
     const recovery = await requireHomeRecovery(deps, { gatewayId, ownerUid, data, description });
     if (description) description = await prepareParkedUpgrade(deps, { gatewayId, ownerUid, image, description, spec,
       bind: (parked) => reconcileComputerBinding(gatewayId, ownerUid, input, parked) });
-    const retainedHome = await readRetainedBuilderHome(deps.db, ownerUid);
+    const retainedHome = await readRetainedBuilderHome(deps.store, ownerUid);
     if (!description && retainedHome) {
       if (!spec.zones.includes(retainedHome.zone)) throw new Error(`Builder ${ownerUid}: retained home is outside configured zones; migration is required`);
       await deps.vm.verifyDetachedHome(retainedHome, ownerUid);
-      const selected = await selectRetainedBootImage({ db: deps.db, vm: deps.vm, ownerUid, home: retainedHome, spec });
+      const selected = await selectRetainedBootImage({ store: deps.store, vm: deps.vm, ownerUid, home: retainedHome, spec });
       input = { ...input, zones: [retainedHome.zone], retainedHome, image: selected, imageProject: selected.project };
     }
     description ??= await acquireComputer(gatewayId, ownerUid, input);
@@ -1139,7 +1174,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
     const home = await recordComputerHome(deps, { gatewayId, ownerUid, description, retainedHome, recovery });
     description = await reconcileHomeCapacity(deps, { gatewayId, ownerUid, description, home, spec });
     if (PARKED_STATUSES.has(description.status)) {
-      await releaseParkedComputer(deps.db, ownerUid);
+      await releaseParkedComputer(deps.store, ownerUid);
       description = await wakeComputer(gatewayId, description);
     }
     const state = stateFrom(description, deps.now(), null);
@@ -1150,23 +1185,23 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
 
   async function parkComputer(gatewayId: string, opts: ParkComputerOptions = {}): Promise<GatewayVmState | null> {
     await creations.inserted(gatewayId);
-    const { data, vm } = await readVmRecord(deps.db, gatewayId);
+    const { data, vm } = await readVmRecord(deps.store, gatewayId);
     if (!vm) return null;
     const description = await stoppableComputer(gatewayId, vm);
     if (!description) return null;
     const ownerUid = parkedComputerOwner(data, description);
     const checkpoint = opts.awaitHomeCheckpoint === true && needsPark(description)
-      ? await finalHomeCheckpoint(deps, gatewayId, description, readVmHome(data), opts)
-      : parkedCheckpointFrom(readVmHome(data));
+      ? await finalHomeCheckpoint(deps, gatewayId, description, data?.vmHome, opts)
+      : parkedCheckpointFrom(data?.vmHome);
     const state = await parkComputerInstance(deps, gatewayId, description, vm, { reason: "idle", note: ` (checkpoint ${checkpoint.outcome})` });
     const parked: ParkedVmState = { ...state, parkedCheckpoint: checkpoint };
-    await recordParkedComputer(deps, gatewayId, ownerUid, parked, (await readVmRecord(deps.db, gatewayId)).data);
+    await recordParkedComputer(deps, gatewayId, ownerUid, parked, (await readVmRecord(deps.store, gatewayId)).data);
     return parked;
   }
 
   async function pauseComputer(gatewayId: string): Promise<void> {
     await creations.inserted(gatewayId);
-    const { data, vm } = await readVmRecord(deps.db, gatewayId);
+    const { data, vm } = await readVmRecord(deps.store, gatewayId);
     if (!vm) return;
     const description = await stoppableComputer(gatewayId, vm);
     if (!description) return;
@@ -1191,7 +1226,7 @@ export function createComputerLifecycle(deps: ComputerLifecycleDeps): ComputerLi
   }
 
   async function recoverUnreachable(gatewayId: string): Promise<void> {
-    const { data, vm } = await readVmRecord(deps.db, gatewayId);
+    const { data, vm } = await readVmRecord(deps.store, gatewayId);
     if (resolveGatewayRuntime(data?.runtime) !== "gce-vm") return;
     if (vm?.stopReason && COWBOY_STOP_REASONS.has(vm.stopReason)) return;
     if ((await deps.readDesiredStatus(gatewayId)) !== "running") return;

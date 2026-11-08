@@ -1,7 +1,16 @@
 import type { SurgePod, SurgePodHealth } from './surge-customer-handoff.js';
 import { builderActivateOperationId } from '@octogee/core/builder-activation-lease';
 import { builderActivationRecoveryTargetMatches } from '@octogee/core/fleet-state';
-import { customerRuntimeMutationFenced } from '@octogee/shared/types/gateway-releases';
+import { builderRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
+import type {
+  BuilderRecord,
+  GatewayAssignment,
+  GatewayRoot,
+  OperationRecord,
+  PlatformStateRepositories,
+  Stored,
+} from '@octogee/core/platform-state';
+import type { DurableGateway } from './converge-gateway.js';
 import { readSchedulerMigrationIdentity, type BuilderActivationTargetRollbackProof } from '@octogee/shared/types/glm';
 import { readWorkspaceMigrationMarker } from '@octogee/shared/types/workspace-migration';
 
@@ -26,21 +35,29 @@ export interface BuilderActivationRollRecovery {
   latestRelease: number;
 }
 
-function qualifyBuilderActivationRollRecoveryState(input: {
-  gateway: unknown;
-  operation: unknown;
-  user: unknown;
-  sourceRoot: unknown;
-  sourceAssignment: unknown;
+export interface BuilderActivationRollRecoveryRecords {
+  gateway: GatewayRoot;
+  operation: OperationRecord;
+  builder: Stored<BuilderRecord> | null;
+  sourceRoot: GatewayRoot | null;
+  sourceAssignment: GatewayAssignment | null;
   targetOccupied: boolean;
-}, custodyOnly: boolean): BuilderActivationRollRecovery | null {
-  const gateway = record(input.gateway), operation = record(input.operation), user = record(input.user);
-  const request = record(operation.input), openclaw = record(record(user.provisioning).openclaw);
-  const lease = record(openclaw.activationLease), allocation = record(gateway.allocation);
+}
+
+function builderHoldsRecovery(builder: Stored<BuilderRecord> | null, request: Record<string, unknown>, operationId: unknown): boolean {
+  if (builder === null) return false;
+  const marker = readWorkspaceMigrationMarker({ migration: builder.fences.migration });
+  return [!builderRuntimeMutationFenced(builder), builder.slug === request.builderSlug, builder.gateway?.gatewayId === request.fromGatewayId,
+    marker?.operationId === operationId, marker?.state === 'moving'].every(Boolean);
+}
+
+function qualifyBuilderActivationRollRecoveryState(input: BuilderActivationRollRecoveryRecords, custodyOnly: boolean): BuilderActivationRollRecovery | null {
+  const gateway = record(input.gateway), operation = record(input.operation), builder = input.builder;
+  const request = record(operation.input);
+  const lease = record(builder?.activationLease), allocation = record(gateway.allocation);
   const sourceRoot = record(input.sourceRoot), assignment = record(input.sourceAssignment);
   const handoff = record(operation.schedulerHandoff), recovery = record(handoff.sourceRecovery);
   const identity = readSchedulerMigrationIdentity(String(operation.id), handoff.migrationId);
-  const marker = readWorkspaceMigrationMarker(openclaw);
   const operationId = typeof gateway.gatewayId === 'string' && Number.isSafeInteger(lease.generation) && Number(lease.generation) > 0
     ? builderActivateOperationId(gateway.gatewayId, Number(lease.generation)) : null;
   const checks = [
@@ -58,9 +75,7 @@ function qualifyBuilderActivationRollRecoveryState(input: {
     Number.isSafeInteger(gateway.liveRelease), Number(gateway.liveRelease) > 0,
     Number.isSafeInteger(gateway.desiredRelease), Number(gateway.desiredRelease) > Number(gateway.liveRelease),
     Number.isSafeInteger(gateway.latestRelease), Number(gateway.latestRelease) >= Number(gateway.desiredRelease),
-    !input.targetOccupied, !customerRuntimeMutationFenced(user),
-    user.username === request.builderSlug, openclaw.slug === request.builderSlug, openclaw.gatewayId === request.fromGatewayId,
-    marker?.operationId === operation.id, marker?.state === 'moving',
+    !input.targetOccupied, builderHoldsRecovery(builder, request, operation.id),
     sourceRoot.gatewayClass === 'shared', sourceRoot.gatewayId === request.fromGatewayId,
     sourceRoot.desiredStatus === 'running' || sourceRoot.desiredStatus === 'draining', sourceRoot.runtimeRestartFence === undefined,
     assignment.uid === request.uid, assignment.slug === request.builderSlug, assignment.gatewayId === request.fromGatewayId,
@@ -71,7 +86,8 @@ function qualifyBuilderActivationRollRecoveryState(input: {
     handoff.stageAfterCutover === true, handoff.stagedAt === undefined,
     recovery.migrationId === handoff.migrationId, recovery.sourceEpoch === assignment.epoch,
     Array.isArray(recovery.steps) && recovery.steps.some(value => record(value).name === 'quiesce-source' && record(value).status === 'done'),
-    builderActivationRecoveryTargetMatches({ operationId: String(operation.id), input: request, openclaw, sourceEpoch: Number(assignment.epoch), targetRoot: gateway }),
+    builderActivationRecoveryTargetMatches({ operationId: String(operation.id), input: request,
+      openclaw: { activationLease: builder?.activationLease ?? undefined }, sourceEpoch: Number(assignment.epoch), targetRoot: gateway }),
   ];
   if (!checks.every(Boolean)) return null;
   return {
@@ -89,7 +105,7 @@ function operationHoldsRecoveryCustody(operation: Record<string, unknown>, custo
   return pending || custodyOnly && claimedUnsettled;
 }
 
-export function qualifyBuilderActivationRollRecovery(input: Parameters<typeof qualifyBuilderActivationRollRecoveryState>[0]): BuilderActivationRollRecovery | null {
+export function qualifyBuilderActivationRollRecovery(input: BuilderActivationRollRecoveryRecords): BuilderActivationRollRecovery | null {
   return qualifyBuilderActivationRollRecoveryState(input, false);
 }
 
@@ -224,40 +240,41 @@ export async function rollbackHeldBuilderActivationTarget(input: {
   await deps.recordProof(proof); await assertCurrent(); return proof;
 }
 
-async function readBuilderActivationRollRecoveryState(input: {
-  db: import('firebase-admin/firestore').Firestore;
+export interface BuilderActivationRollRecoveryRead {
+  state: Pick<PlatformStateRepositories, 'gateways' | 'journal' | 'builders'>;
   gatewayId: string;
-  transaction?: import('firebase-admin/firestore').Transaction;
-}, custodyOnly: boolean): Promise<{ recovery: BuilderActivationRollRecovery; operation: Record<string, unknown>; gateway: import('./converge-gateway.js').DurableGateway } | null> {
-  const read = (ref: import('firebase-admin/firestore').DocumentReference) =>
-    input.transaction ? input.transaction.get(ref) : ref.get();
-  const gatewaySnapshot = await read(input.db.doc(`gateways/${input.gatewayId}`));
-  const gateway = record(gatewaySnapshot.data()), allocation = record(gateway.allocation);
-  if (gateway.gatewayClass !== 'builder' || allocation.kind !== 'disposable-builder' || typeof gateway.ownerUid !== 'string' ||
-      !Number.isSafeInteger(allocation.generation) || Number(allocation.generation) <= 0) return null;
-  const operationId = builderActivateOperationId(input.gatewayId, Number(allocation.generation));
-  const [operationSnapshot, userSnapshot] = await Promise.all([
-    read(input.db.doc(`glmOperations/${operationId}`)), read(input.db.doc(`users/${gateway.ownerUid}`)),
-  ]);
-  const operation = { ...record(operationSnapshot.data()), id: operationId };
-  const request = record(record(operation).input);
-  if (typeof request.fromGatewayId !== 'string' || typeof request.uid !== 'string') return null;
-  const [sourceRoot, sourceAssignment, targetAssignments, targetUsers] = await Promise.all([
-    read(input.db.doc(`gateways/${request.fromGatewayId}`)),
-    read(input.db.doc(`gateways/${request.fromGatewayId}/assignments/${request.uid}`)),
-    input.transaction ? input.transaction.get(input.db.collection(`gateways/${input.gatewayId}/assignments`).limit(1)) : input.db.collection(`gateways/${input.gatewayId}/assignments`).limit(1).get(),
-    input.transaction ? input.transaction.get(input.db.collection('users').where('provisioning.openclaw.gatewayId', '==', input.gatewayId).limit(1)) : input.db.collection('users').where('provisioning.openclaw.gatewayId', '==', input.gatewayId).limit(1).get(),
-  ]);
-  const recovery = qualifyBuilderActivationRollRecoveryState({ gateway, operation, user: userSnapshot.data(), sourceRoot: sourceRoot.data(),
-    sourceAssignment: sourceAssignment.data(), targetOccupied: !targetAssignments.empty || !targetUsers.empty }, custodyOnly);
-  return recovery ? { recovery, operation, gateway: gateway as unknown as import('./converge-gateway.js').DurableGateway } : null;
 }
 
-export function readBuilderActivationRollRecovery(input: Parameters<typeof readBuilderActivationRollRecoveryState>[0]) {
+async function readBuilderActivationRollRecoveryState(input: BuilderActivationRollRecoveryRead, custodyOnly: boolean):
+  Promise<{ recovery: BuilderActivationRollRecovery; operation: Stored<OperationRecord>; gateway: DurableGateway } | null> {
+  const { state, gatewayId } = input;
+  const gateway = await state.gateways.roots.get(gatewayId);
+  const allocation = gateway?.allocation;
+  if (!gateway || gateway.gatewayClass !== 'builder' || allocation?.kind !== 'disposable-builder' || typeof gateway.ownerUid !== 'string' ||
+      !Number.isSafeInteger(allocation.generation) || allocation.generation <= 0) return null;
+  const operationId = builderActivateOperationId(gatewayId, allocation.generation);
+  const [operation, builder] = await Promise.all([
+    state.journal.operations.get(operationId), state.builders.records.get(gateway.ownerUid),
+  ]);
+  const request = record(operation?.input);
+  if (!operation || typeof request.fromGatewayId !== 'string' || typeof request.uid !== 'string') return null;
+  const [sourceRoot, sourceAssignment, targetEmpty, targetBuilders] = await Promise.all([
+    state.gateways.roots.get(request.fromGatewayId),
+    state.gateways.assignments.get(request.fromGatewayId, request.uid),
+    state.gateways.assignments.isEmpty(gatewayId),
+    state.builders.records.listByGateway(gatewayId, { limit: 1 }),
+  ]);
+  const recovery = qualifyBuilderActivationRollRecoveryState({ gateway, operation, builder, sourceRoot, sourceAssignment,
+    targetOccupied: !targetEmpty || targetBuilders.length > 0 }, custodyOnly);
+  const { revision: _revision, ...durable } = gateway;
+  return recovery ? { recovery, operation, gateway: durable } : null;
+}
+
+export function readBuilderActivationRollRecovery(input: BuilderActivationRollRecoveryRead) {
   return readBuilderActivationRollRecoveryState(input, false);
 }
 
-export function readBuilderActivationRollRecoveryCustody(input: Parameters<typeof readBuilderActivationRollRecoveryState>[0]) {
+export function readBuilderActivationRollRecoveryCustody(input: BuilderActivationRollRecoveryRead) {
   return readBuilderActivationRollRecoveryState(input, true);
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Firestore } from "firebase-admin/firestore";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import { disruptionObserverTest, startDisruptionObserver } from "../disruption-observer";
 import { renderMetrics, resetMetrics } from "../metrics";
@@ -82,16 +82,13 @@ describe("disruption observer environment isolation", () => {
       else response = pod;
       return { code: 0, stdout: JSON.stringify(response), stderr: "" };
     });
-    const query = { get: vi.fn(async () => ({ docs: [] })) };
-    const collection = vi.fn(() => ({
-      doc: () => ({ get: async () => ({ exists: false }), collection: () => query }),
-      where: () => query,
-    }));
+    const store = createDocumentFixtureStore({});
+    const readRoot = vi.spyOn(store.gateways.roots, "get");
     const emit = vi.fn();
     const log = vi.fn();
     vi.useFakeTimers();
     const stop = startDisruptionObserver({
-      db: { collection } as unknown as Firestore,
+      store,
       runKubectl,
       environment: "test",
       cluster: "cluster-a",
@@ -105,7 +102,7 @@ describe("disruption observer environment isolation", () => {
       expect(log).not.toHaveBeenCalled();
       expect(emit).toHaveBeenCalledTimes(expectedRecords);
       if (expectedRecords === 0) {
-        expect(collection).not.toHaveBeenCalled();
+        expect(readRoot).not.toHaveBeenCalled();
         expect(runKubectl.mock.calls.some(([args]) => args.includes("octogee"))).toBe(false);
       } else {
         expect(emit.mock.calls[0][0]).toMatchObject({
@@ -144,22 +141,14 @@ describe("disruption observer Builder attribution", () => {
       else response = pod;
       return { code: 0, stdout: JSON.stringify(response), stderr: "" };
     });
-    const query = { get: vi.fn(async () => ({ docs: [] })) };
-    const docs: Record<string, Record<string, unknown>> = {
-      "gateways/b-ada": { gatewayId: "b-ada", desiredStatus: "running", ...root },
-      "glmGateways/b-ada": { gatewayId: "b-ada", lifecycle: "serving" },
-    };
-    const collection = vi.fn((name: string) => ({
-      doc: (id: string) => ({
-        get: async () => ({ exists: Boolean(docs[`${name}/${id}`]), data: () => docs[`${name}/${id}`] }),
-        collection: () => query,
-      }),
-      where: () => query,
-    }));
+    const store = createDocumentFixtureStore({
+      "gateways/b-ada": { gatewayId: "b-ada", desiredStatus: "running", desiredRelease: 1, latestRelease: 1, ...root },
+      "glmGateways/b-ada": { docKind: "runtime", gatewayId: "b-ada", release: 1, lifecycle: "serving" },
+    });
     const emit = vi.fn();
     vi.useFakeTimers();
     const stop = startDisruptionObserver({
-      db: { collection } as unknown as Firestore,
+      store,
       runKubectl,
       environment: "test",
       cluster: "cluster-a",
@@ -187,7 +176,7 @@ describe("disruption observer preemption counter", () => {
     const runKubectl = vi.fn(async () => ({ code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" }));
     vi.useFakeTimers();
     const stop = startDisruptionObserver({
-      db: {} as Firestore,
+      store: createDocumentFixtureStore({}),
       runKubectl,
       environment: "test",
       cluster: "cluster-a",

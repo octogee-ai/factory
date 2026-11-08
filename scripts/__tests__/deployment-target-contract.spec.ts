@@ -270,14 +270,6 @@ describe("deployment target consumers", () => {
     expect(verify).not.toContain("Unknown namespace '$NAMESPACE' — skipping fleet-control secret checks");
   });
 
-  it("resolves registry paths in gateway configuration tooling", () => {
-    const script = "scripts/lib/gateway-mutable-config-backfill.ts";
-    const contents = source(script);
-    expect(contents).toContain("@octogee/core/deployment-environment");
-    expect(contents).not.toContain("us-central1");
-    expect(contents).not.toContain("-docker.pkg.dev/octogee/octogee");
-  });
-
   it("prints a full-rebuild recipe that resolves one immutable manifest for every platform and gateway image", () => {
     const teardown = source("scripts/teardown-env.sh");
 

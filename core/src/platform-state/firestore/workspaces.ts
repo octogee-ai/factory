@@ -214,9 +214,13 @@ function channelPath(path: string): { scope: WorkspaceChannelScope; channelId: s
 
 export function decodeWorkspace(snapshot: DocumentSnapshot): Stored<WorkspaceRecord> | null {
   if (!snapshot.exists) return null;
-  const fields = new FirestoreFields(workspaceKey(snapshot.id), decodeDocumentData(snapshot));
-  return withStoredRevision<WorkspaceRecord>(snapshot, {
-    slug: snapshot.id,
+  return withStoredRevision(snapshot, workspaceRecordFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+
+export function workspaceRecordFromData(slug: string, data: PlainObject): WorkspaceRecord {
+  const fields = new FirestoreFields(workspaceKey(slug), data);
+  return {
+    slug,
     id: fields.string("id"),
     ownerUid: fields.string("ownerUid"),
     ownerActive: fields.nullableBoolean("ownerActive"),
@@ -225,20 +229,24 @@ export function decodeWorkspace(snapshot: DocumentSnapshot): Stored<WorkspaceRec
     giteaRepoName: fields.nullableString("gitea.repoName"),
     createdAt: fields.nullableNumber("createdAt"),
     updatedAt: fields.nullableNumber("updatedAt"),
-  });
+  };
 }
 
 export function decodeWorkspaceMember(snapshot: DocumentSnapshot): Stored<WorkspaceMember> | null {
   const location = memberPath(snapshot.ref.path);
   if (!snapshot.exists || location === null) return null;
-  const fields = new FirestoreFields(memberKey(location.workspaceSlug, location.uid), decodeDocumentData(snapshot));
-  return withStoredRevision<WorkspaceMember>(snapshot, {
-    workspaceSlug: location.workspaceSlug,
-    uid: location.uid,
+  return withStoredRevision(snapshot, workspaceMemberFromData(location.workspaceSlug, location.uid, decodeDocumentData(snapshot)));
+}
+
+export function workspaceMemberFromData(workspaceSlug: string, uid: string, data: PlainObject): WorkspaceMember {
+  const fields = new FirestoreFields(memberKey(workspaceSlug, uid), data);
+  return {
+    workspaceSlug,
+    uid,
     role: fields.oneOf("role", MEMBER_ROLES),
     joinedAt: fields.nullableNumber("joinedAt"),
     mattermostUserId: fields.nullableString("mattermostUserId"),
-  });
+  };
 }
 
 export function decodeWorkspaceProject(snapshot: DocumentSnapshot): Stored<WorkspaceProject> | null {
@@ -291,13 +299,17 @@ export function workspaceChannelFromData(scope: WorkspaceChannelScope, channelId
 
 export function decodeAgentIdentity(snapshot: DocumentSnapshot): Stored<BuilderAgentIdentity> | null {
   if (!snapshot.exists) return null;
-  const fields = new FirestoreFields(agentIdentityKey(snapshot.id), decodeDocumentData(snapshot));
-  return withStoredRevision<BuilderAgentIdentity>(snapshot, {
-    uid: snapshot.id,
+  return withStoredRevision(snapshot, agentIdentityFromData(snapshot.id, decodeDocumentData(snapshot)));
+}
+
+export function agentIdentityFromData(uid: string, data: PlainObject): BuilderAgentIdentity {
+  const fields = new FirestoreFields(agentIdentityKey(uid), data);
+  return {
+    uid,
     mattermostUserId: fields.nullableString("mattermost.userId"),
     createdAt: fields.nullableNumber("createdAt"),
     updatedAt: fields.nullableNumber("updatedAt"),
-  });
+  };
 }
 
 function channelKeyString(snapshot: DocumentSnapshot): string {

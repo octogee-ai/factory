@@ -16,35 +16,6 @@ import { MalformedRecordError } from "./platform-state/errors.js";
 import type { JournalRepositories, OperationAuditPatch } from "./platform-state/operations.js";
 import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 
-export interface OperationsDocSnapshot {
-  exists: boolean;
-  id: string;
-  data(): Record<string, unknown> | undefined;
-}
-
-export interface OperationsDocRef {
-  id: string;
-  get(): Promise<OperationsDocSnapshot>;
-}
-
-export interface OperationsCollection {
-  add(data: Record<string, unknown>): Promise<{ id: string }>;
-  doc(id: string): OperationsDocRef;
-}
-
-export interface OperationsDb {
-  collection(name: string): OperationsCollection;
-  runTransaction<T>(
-    body: (transaction: OperationsTransaction) => Promise<T>,
-  ): Promise<T>;
-}
-
-export interface OperationsTransaction {
-  get(ref: OperationsDocRef): Promise<OperationsDocSnapshot>;
-  create(ref: OperationsDocRef, data: Record<string, unknown>): void;
-  update(ref: OperationsDocRef, data: Record<string, unknown>): void;
-}
-
 export interface OperationAuditIntentInput {
   actor: string;
   forced: boolean;

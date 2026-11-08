@@ -1,21 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { FieldValue, type DocumentReference, type Firestore } from "firebase-admin/firestore";
-import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
 import type { MigrationClient } from "@octogee/core/fleet-migration-client";
+import type { MigrationTransferTask, PlatformStateStore, Stored } from "@octogee/core/platform-state";
 import type { CommandRunner } from "./migration-rsync-transfer.js";
 
 export interface ControllerPodIdentity { name: string; uid: string }
 export interface TransferClaim {
   taskId: string;
-  ref: DocumentReference;
   attempt: number;
   attemptId: string;
   workerId: string;
 }
 
 interface LeaseDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   now: () => number;
   workerId: string;
   leaseMs: number;
@@ -51,7 +49,7 @@ async function observeControllerPod(deps: Pick<LeaseDeps, "runCommand" | "namesp
   return { gone: false, restartCount: observed.status?.containerStatuses?.find(container => container.name === "glm-controller")?.restartCount };
 }
 
-async function claimRecovery(deps: LeaseDeps, taskId: string, observed: Record<string, unknown> | undefined): Promise<boolean> {
+async function claimRecovery(deps: LeaseDeps, taskId: string, observed: Stored<MigrationTransferTask> | null): Promise<boolean> {
   if (observed?.status !== "running") return false;
   if (!isPodIdentity(observed.leasePod)) throw new Error(`transfer task ${taskId} is already running; owner identity unavailable`);
   if (!await ownerPodGone(deps, observed.leasePod, observed.leaseRestartCount)) {
@@ -61,7 +59,7 @@ async function claimRecovery(deps: LeaseDeps, taskId: string, observed: Record<s
   return true;
 }
 
-function assertTaskIdentity(existing: Record<string, unknown> | undefined, taskId: string, input: Parameters<MigrationClient["transferState"]>[0]): void {
+function assertTaskIdentity(existing: MigrationTransferTask | null, taskId: string, input: Parameters<MigrationClient["transferState"]>[0]): void {
   if (existing && [[existing.migrationId, input.migrationId], [existing.slug, input.slug],
     [existing.sourceGatewayId, input.fromGatewayId], [existing.targetGatewayId, input.toGatewayId],
     [existing.mode, input.mode ?? "pre"]].some(([actual, expected]) => actual !== expected)) throw new Error(`transfer task ${taskId} identity changed`);
@@ -73,11 +71,11 @@ async function ownerPodGone(deps: Pick<LeaseDeps, "runCommand" | "namespace">, p
 }
 
 export async function readTransferAttemptForCleanup(
-  deps: Pick<LeaseDeps, "db" | "now" | "runCommand" | "namespace">,
+  deps: Pick<LeaseDeps, "store" | "now" | "runCommand" | "namespace">,
   input: Parameters<MigrationClient["abortImport"]>[0],
 ): Promise<string | undefined> {
-  const ref = deps.db.collection(GLM_MIGRATION_TRANSFER_TASKS_COLLECTION).doc(`${input.migrationId.replace(/[^A-Za-z0-9._-]/g, "_")}__${input.mode}`);
-  const observed = (await ref.get()).data();
+  const taskId = `${input.migrationId.replace(/[^A-Za-z0-9._-]/g, "_")}__${input.mode}`;
+  const observed = await deps.store.migrationTasks.get(taskId);
   if (!observed) return undefined;
   if (observed.migrationId !== input.migrationId || observed.slug !== input.slug || observed.mode !== input.mode || observed.targetGatewayId !== input.gatewayId) {
     throw new Error("transfer cleanup identity changed");
@@ -85,58 +83,64 @@ export async function readTransferAttemptForCleanup(
   if (observed.status === "running" && (!isPodIdentity(observed.leasePod) || !await ownerPodGone(deps, observed.leasePod, observed.leaseRestartCount))) {
     throw new Error("transfer cleanup refused while its owner may still be running");
   }
-  if (!isDeepStrictEqual((await ref.get()).data(), observed)) throw new Error("transfer cleanup claim changed");
-  if (observed.attemptId === undefined) return undefined;
-  if (typeof observed.attemptId !== "string" || !observed.attemptId) throw new Error("invalid transfer cleanup attempt");
+  if (!isDeepStrictEqual(await deps.store.migrationTasks.get(taskId), observed)) throw new Error("transfer cleanup claim changed");
+  if (!observed.attemptId) throw new Error("invalid transfer cleanup attempt");
   return observed.attemptId;
 }
 
+function runningTask(deps: LeaseDeps, claim: {
+  taskId: string;
+  input: Parameters<MigrationClient["transferState"]>[0];
+  existing: MigrationTransferTask | null;
+  attemptId: string;
+  now: number;
+  restartCount: number | undefined;
+}): MigrationTransferTask {
+  const { taskId, input, existing, attemptId, now } = claim;
+  return {
+    id: taskId, kind: "gateway-rsync-transfer", migrationId: input.migrationId, slug: input.slug,
+    mode: input.mode ?? "pre", sourceGatewayId: input.fromGatewayId, targetGatewayId: input.toGatewayId,
+    status: "running", attempt: (existing?.attempt ?? 0) + 1, attemptId, leaseOwner: deps.workerId,
+    leasePod: deps.controllerPod ?? null, leaseExpiresAt: now + deps.leaseMs,
+    leaseRestartCount: claim.restartCount ?? null,
+    createdAt: existing?.createdAt ?? now, updatedAt: now, startedAt: now,
+    completedAt: null, error: null,
+  };
+}
+
 export async function claimTransferTask(deps: LeaseDeps, taskId: string, input: Parameters<MigrationClient["transferState"]>[0]): Promise<TransferClaim> {
-  const ref = deps.db.collection(GLM_MIGRATION_TRANSFER_TASKS_COLLECTION).doc(taskId);
-  const observed = (await ref.get()).data();
+  const observed = await deps.store.migrationTasks.get(taskId);
   const recover = await claimRecovery(deps, taskId, observed);
   const ownPod = deps.controllerPod ? await observeControllerPod(deps, deps.controllerPod) : undefined;
   if (ownPod && (ownPod.gone || !Number.isSafeInteger(ownPod.restartCount) || ownPod.restartCount! < 0)) throw new Error("controller container identity unavailable");
   const attemptId = randomUUID();
-  const claim = await deps.db.runTransaction(async tx => {
-    const existing = (await tx.get(ref)).data();
+  const claim = await deps.store.transaction({ label: "migration-transfer-lease.claim" }, async tx => {
+    const existing = await tx.migrationTasks.get(taskId);
     const now = deps.now();
     if (recover ? !isDeepStrictEqual(existing, observed) : existing?.status === "running") {
       throw new Error(`transfer task ${taskId} is already running (leaseOwner=${existing?.leaseOwner ?? "unknown"}); claim changed or owner remains present`);
     }
     assertTaskIdentity(existing, taskId, input);
-    const attempt = Number(existing?.attempt ?? 0) + 1;
-    tx.set(ref, {
-      kind: "gateway-rsync-transfer", migrationId: input.migrationId, slug: input.slug,
-      mode: input.mode ?? "pre", sourceGatewayId: input.fromGatewayId, targetGatewayId: input.toGatewayId,
-      status: "running", attempt, attemptId, leaseOwner: deps.workerId,
-      leasePod: deps.controllerPod ?? FieldValue.delete(), leaseExpiresAt: now + deps.leaseMs,
-      leaseRestartCount: ownPod?.restartCount ?? FieldValue.delete(),
-      createdAt: existing?.createdAt ?? now, updatedAt: now, startedAt: now,
-      completedAt: FieldValue.delete(), error: FieldValue.delete(),
-    }, { merge: true });
-    return { taskId, ref, attempt, attemptId, workerId: deps.workerId };
+    const task = runningTask(deps, { taskId, input, existing, attemptId, now, restartCount: ownPod?.restartCount });
+    await tx.migrationTasks.claim(task, existing?.revision ?? "absent");
+    return { taskId, attempt: task.attempt, attemptId, workerId: deps.workerId };
   });
   if (recover) deps.log(`[migration-rsync] reclaimed abandoned transfer task=${taskId} attempt=${claim.attempt} previousOwner=${String(observed?.leaseOwner)}`);
   return claim;
 }
 
-function ownsClaim(task: Record<string, unknown> | undefined, claim: TransferClaim): boolean {
+function ownsClaim(task: MigrationTransferTask | null, claim: TransferClaim): boolean {
   return task?.status === "running" && task.attempt === claim.attempt && task.attemptId === claim.attemptId && task.leaseOwner === claim.workerId;
 }
 
-export async function assertTransferClaim(claim: TransferClaim): Promise<void> {
-  if (!ownsClaim((await claim.ref.get()).data(), claim)) throw new Error(`transfer task ${claim.taskId} attempt ownership changed`);
+export async function assertTransferClaim(store: PlatformStateStore, claim: TransferClaim): Promise<void> {
+  if (!ownsClaim(await store.migrationTasks.get(claim.taskId), claim)) throw new Error(`transfer task ${claim.taskId} attempt ownership changed`);
 }
 
-export async function finishTransferTask(db: Firestore, claim: TransferClaim, now: () => number, error?: unknown): Promise<void> {
+export async function finishTransferTask(store: PlatformStateStore, claim: TransferClaim, now: () => number, error?: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
-  await db.runTransaction(async tx => {
-    if (!ownsClaim((await tx.get(claim.ref)).data(), claim)) throw new Error(`transfer task ${claim.taskId} attempt ownership changed`);
-    tx.set(claim.ref, {
-      status: error === undefined ? "succeeded" : "failed", completedAt: now(), updatedAt: now(),
-      leaseOwner: FieldValue.delete(), leasePod: FieldValue.delete(), leaseRestartCount: FieldValue.delete(), leaseExpiresAt: FieldValue.delete(),
-      error: error === undefined ? FieldValue.delete() : message,
-    }, { merge: true });
+  await store.transaction({ label: "migration-transfer-lease.finish" }, async tx => {
+    if (!ownsClaim(await tx.migrationTasks.get(claim.taskId), claim)) throw new Error(`transfer task ${claim.taskId} attempt ownership changed`);
+    await tx.migrationTasks.finish(claim.taskId, { attempt: claim.attempt, attemptId: claim.attemptId, leaseOwner: claim.workerId }, now(), error === undefined ? null : message);
   });
 }

@@ -373,7 +373,7 @@ export function builderRecordFromData(uid: string, data: PlainObject, updatedAt:
       homeMigration: fields.map(HOME_PATHS.homeMigration),
       homeErasure: fields.maps(HOME_PATHS.homeErasure),
       homeCapacity: fields.map(HOME_PATHS.homeCapacity),
-      projectStorageNativeBoot: fields.map(HOME_PATHS.projectStorageNativeBoot),
+      projectStorageNativeBoot: fields.boolean(HOME_PATHS.projectStorageNativeBoot),
     }),
   };
 }

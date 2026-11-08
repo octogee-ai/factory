@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from 'vitest';
-import type {Firestore} from 'firebase-admin/firestore';
+import {createDocumentFixtureStore} from '@octogee/core/testing/journal-store';
 import type {SourceTransferExecution} from '@octogee/shared/types/glm';
 import {FLEET_KEY_PAIR} from '../__tests__/fixtures/fleet-keys.js';
 import {abortRetainedSourceImport} from './migration-rsync-transfer.js';
@@ -8,7 +8,7 @@ function fixture() {
  const record={executionId:'snapshot-transfer-one',status:'failed',targetCleanup:'pending',targetGatewayId:'target',targetName:'target-pod',targetIp:'10.0.0.2',targetVm:false} as SourceTransferExecution;
  const settledTarget=vi.fn(async()=>record);
  const fetch=vi.fn(async()=>new Response(JSON.stringify({imported:false,migrationId:'migration-one',slug:'builder'}),{status:200}));
- const deps={db:{} as Firestore,namespace:'octogee-test',privateKey:FLEET_KEY_PAIR.privateKey,fleetControllerPort:'3003',resolveGatewayUrl:()=>'',fetch,runCommand:vi.fn(async()=>({code:0,stderr:'',stdout:JSON.stringify({items:[{metadata:{name:'target-pod'},status:{phase:'Running',podIP:'10.0.0.2'}}]})})),retainedSource:{assertActiveClaim:vi.fn(),observe:vi.fn(async()=>record),execute:vi.fn(),settledTarget,acknowledgeCleanup:vi.fn()}};
+ const deps={store:createDocumentFixtureStore({}),namespace:'octogee-test',privateKey:FLEET_KEY_PAIR.privateKey,fleetControllerPort:'3003',resolveGatewayUrl:()=>'',fetch,runCommand:vi.fn(async()=>({code:0,stderr:'',stdout:JSON.stringify({items:[{metadata:{name:'target-pod'},status:{phase:'Running',podIP:'10.0.0.2'}}]})})),retainedSource:{assertActiveClaim:vi.fn(),observe:vi.fn(async()=>record),execute:vi.fn(),settledTarget,acknowledgeCleanup:vi.fn()}};
  return {record,settledTarget,fetch,deps,input:{migrationId:'migration-one',slug:'builder',toGatewayId:'target'}};
 }
 describe('retained source target cleanup',()=>{

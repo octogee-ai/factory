@@ -194,7 +194,10 @@ function fixtureStoreOver(collections: { roots: Rows; runtimes: Rows; users: Row
     get: (path) => { const [rows, id] = locate(path); return rows[id]; },
     set: (path, row) => { const [rows, id] = locate(path); rows[id] = row; },
     delete: (path) => { const [rows, id] = locate(path); delete rows[id]; },
-    children: (collectionPath) => { throw new Error(`unexpected collection listing ${collectionPath}`); },
+    children: (collectionPath) => {
+      if (collectionPath === "users") return Object.entries(collections.users);
+      throw new Error(`unexpected collection listing ${collectionPath}`);
+    },
     group: (collectionId) => { throw new Error(`unexpected collection group ${collectionId}`); },
   };
   return createJournalFixtureStore(journalRowsIn(collections.operations), { documents });
@@ -895,12 +898,13 @@ describe("gateway convergence pass outcomes", () => {
       healthy: durableRoot({ gatewayId: "healthy", liveRelease: null }),
     };
     const runtimes: Record<string, Record<string, unknown>> = { hobby: servingRuntime({ gatewayId: "hobby", runtime: "cluster" }) };
-    const db = makeDb({ roots, runtimes, callbacks: {},
-      users: { u: { provisioning: { computer: { id: "retained-computer" } } } },
+    const users = { u: { provisioning: { computer: { id: "retained-computer" } } } };
+    const db = makeDb({ roots, runtimes, callbacks: {}, users,
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234", { profileImages: { builder: { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway-builder", imageTag: `abc1234@sha256:${"b".repeat(64)}` } } }) }])),
     });
     const helm = { upsertInstance: vi.fn(async () => {}), readDeployedInstances: vi.fn(async () => ({})) };
-    const deps = { db, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+    const store = fixtureStoreOver({ roots, runtimes, users, operations: {}, assignments: {} });
+    const deps = { db, store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
 
@@ -922,15 +926,17 @@ describe("gateway convergence pass outcomes", () => {
       creating: durableRoot({ gatewayId: "creating", liveRelease: null }),
       next: durableRoot({ gatewayId: "next", liveRelease: null }),
     };
-    const db = makeDb({ roots, runtimes: {}, callbacks: {},
+    const runtimes: Record<string, Record<string, unknown>> = {};
+    const db = makeDb({ roots, runtimes, callbacks: {},
       releases: Object.fromEntries(Object.keys(roots).map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])),
     });
+    const store = fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {} });
     const upsertInstance = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       if (gatewayId === "creating") throw new ComputerCreationPendingError("computer c is being created; converging it once Compute finishes");
     });
     const helm = { upsertInstance, readDeployedInstance: vi.fn(async () => null), readDeployedInstances: vi.fn(async () => ({})) };
     const log = vi.fn();
-    const converge = serializeGatewayConvergence((gatewayIds) => runGatewayConvergencePass({ db, helm: helm as never, kubeOps: {} as never,
+    const converge = serializeGatewayConvergence((gatewayIds) => runGatewayConvergencePass({ db, store, helm: helm as never, kubeOps: {} as never,
       chartFingerprint: "chart", prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log }, gatewayIds));
 
@@ -1104,7 +1110,7 @@ describe("gateway convergence pass outcomes", () => {
     }
     if (fence === "mirrored-transfer") openclaw.sourceTransferFence = {};
     if (fence === "restart") h.roots["shared-1"].runtimeRestartFence = {};
-    await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow("outcome is unresolved");
+    await expect(runGatewayConvergencePass(h.deps)).rejects.toThrow(fence === "malformed-restore" ? "restoreFence is not a map" : "outcome is unresolved");
     expect(h.helm.upsertInstance).not.toHaveBeenCalled();
     expect(h.helm.removeInstance).not.toHaveBeenCalled();
   });
@@ -1125,6 +1131,7 @@ describe("gateway convergence pass outcomes", () => {
     const log = vi.fn();
     const passDeps = (roots: Record<string, Record<string, unknown>>) => ({
       db: makeDb({ roots, runtimes: {}, callbacks: {} }) as never,
+      store: fixtureStoreOver({ roots, runtimes: {}, users: {}, operations: {}, assignments: {} }),
       helm: {
         removeInstance,
         readDeployedInstances: vi.fn(async () => Object.fromEntries(Object.keys(roots).map((gatewayId) => [gatewayId, { enabled: true, image: { repository: "repo", tag: "abc1234" }, gatewayId }]))),

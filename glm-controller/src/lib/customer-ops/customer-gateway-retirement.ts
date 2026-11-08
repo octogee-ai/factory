@@ -1,6 +1,7 @@
-import type { DocumentReference, DocumentSnapshot, Firestore, QueryDocumentSnapshot, Transaction } from "firebase-admin/firestore";
+import { isDeepStrictEqual } from "node:util";
+import type { Firestore } from "firebase-admin/firestore";
 import {
-  claimGatewayRetirementAtomic,
+  claimGatewayRetirementInStore,
   GatewayRetirementReleaseUnconvergedError,
   GatewayRetirementTelemetryUnavailableError,
 } from "@octogee/core/gateway-retirement-claim";
@@ -9,12 +10,18 @@ import {
   builderRecoverOperationId,
   builderReturnOperationId,
 } from "@octogee/core/builder-activation-lease";
+import type {
+  GatewayRecoveryReceipt,
+  GatewayRoot,
+  NewOperation,
+  OperationRecord,
+  PlatformStateStore,
+  PlatformStateTransaction,
+  Stored,
+} from "@octogee/core/platform-state";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import {
-  GLM_OPERATIONS_COLLECTION,
-} from "@octogee/shared/types/glm";
+import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
 import { schedulerHandoffAwaitingRelease } from "../../scheduler-handoff-release.js";
-import { DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION } from "../../placement-policy-reconciler.js";
 
 export type OwnedGatewayRetirementOutcome =
   | "not-owned"
@@ -22,11 +29,12 @@ export type OwnedGatewayRetirementOutcome =
   | "retired";
 
 export interface OwnedGatewayRetirementInput {
-  db: Firestore;
+  store: PlatformStateStore;
+  db: Pick<Firestore, "collection" | "recursiveDelete">;
   uid: string;
   deletionId: string;
   now: number;
-  claimRetirement?: typeof claimGatewayRetirementAtomic;
+  claimRetirement?: typeof claimGatewayRetirementInStore;
   preserveRetirementProof?: (proof: CustomerGatewayRetirementProof) => Promise<void>;
 }
 
@@ -38,67 +46,70 @@ export interface CustomerGatewayRetirementProof {
   runtime: "cluster" | "gce-vm";
 }
 
+interface RetirementCleanup {
+  claimOperationId: string;
+  recoveryOperationId: string | null;
+  recoveryReceiptId: string | null;
+}
+
+type RootFields = Record<string, unknown>;
+
 const CUSTOMER_DELETION_ACTOR = "customer-deletion-lifecycle";
 
 function retirementOperationId(deletionId: string, gatewayId: string): string {
   return `delete-retire-${deletionId}-${gatewayId}`;
 }
 
+function fieldsOf(root: GatewayRoot): RootFields {
+  return root as unknown as RootFields;
+}
+
 export async function ensureOwnedGatewaysRetired(
   input: OwnedGatewayRetirementInput,
 ): Promise<OwnedGatewayRetirementOutcome> {
-  const claimRetirement = input.claimRetirement ?? claimGatewayRetirementAtomic;
-  const snapshot = await input.db
-    .collection(GATEWAYS_COLLECTION)
-    .where("ownerUid", "==", input.uid)
-    .get();
-  const owned = snapshot.docs
-    .filter((doc) => {
-      const root = doc.data() as Record<string, unknown>;
-      return root.gatewayClass === "builder";
-    })
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const claimRetirement = input.claimRetirement ?? claimGatewayRetirementInStore;
+  const owned = (await input.store.gateways.roots.list({ ownerUid: input.uid }))
+    .filter((root) => root.gatewayClass === "builder")
+    .sort((a, b) => a.gatewayId.localeCompare(b.gatewayId));
   if (owned.length === 0) return "not-owned";
 
   let pending = false;
-  for (const doc of owned) {
-    pending = (await reconcileOwnedGatewayRetirement(input, doc, claimRetirement)) || pending;
+  for (const root of owned) {
+    pending = (await reconcileOwnedGatewayRetirement(input, root, claimRetirement)) || pending;
   }
   return pending ? "retirement-pending" : "retired";
 }
 
 async function reconcileOwnedGatewayRetirement(
   input: OwnedGatewayRetirementInput,
-  doc: QueryDocumentSnapshot,
-  claimRetirement: typeof claimGatewayRetirementAtomic,
+  root: Stored<GatewayRoot>,
+  claimRetirement: typeof claimGatewayRetirementInStore,
 ): Promise<boolean> {
-  const root = doc.data() as Record<string, unknown>;
-  assertRetirementClaimOwnership(input, doc.id, root);
-  const operationId = retirementOperationId(input.deletionId, doc.id);
+  const gatewayId = root.gatewayId;
+  assertRetirementClaimOwnership(input, gatewayId, fieldsOf(root));
   if (root.desiredStatus === "retired") {
-    return finishCompletedGatewayRetirement(input, doc);
+    return finishCompletedGatewayRetirement(input, root);
   }
   if (root.desiredStatus !== "running" && root.desiredStatus !== "paused") {
     throw new Error(
-      `owned gateway ${doc.id} has invalid desired status: ${String(root.desiredStatus)}`,
+      `owned gateway ${gatewayId} has invalid desired status: ${String(root.desiredStatus)}`,
     );
   }
   try {
     await claimRetirement({
-      db: input.db,
-      gatewayId: doc.id,
-      operationId,
-      operation: automaticRetirementOperation(input, doc.id),
+      store: input.store,
+      gatewayId,
+      operationId: retirementOperationId(input.deletionId, gatewayId),
+      operation: automaticRetirementOperation(input, gatewayId),
       now: input.now,
       updatedBy: CUSTOMER_DELETION_ACTOR,
-      claimGuard: async ({ root: claimedRoot }) => {
-        const claimed = claimedRoot as unknown as Record<string, unknown>;
-        assertRetirementClaimOwnership(input, doc.id, claimed);
+      claimGuard: ({ root: claimedRoot }) => {
+        assertRetirementClaimOwnership(input, gatewayId, claimedRoot as unknown as RootFields);
       },
     });
   } catch (error) {
     if (!retirableOnlyOncePaused(error)) throw error;
-    await pauseOwnedGatewayForRetirement(input, doc);
+    await pauseOwnedGatewayForRetirement(input, gatewayId);
   }
   return true;
 }
@@ -110,21 +121,25 @@ function retirableOnlyOncePaused(error: unknown): boolean {
 
 async function pauseOwnedGatewayForRetirement(
   input: OwnedGatewayRetirementInput,
-  doc: QueryDocumentSnapshot,
+  gatewayId: string,
 ): Promise<void> {
-  await input.db.runTransaction(async (transaction) => {
-    const current = (await transaction.get(doc.ref)).data();
-    if (!current) return;
-    assertRetirementClaimOwnership(input, doc.id, current);
+  await input.store.transaction({ label: "customer-deletion.pause-owned-gateway" }, async (transaction) => {
+    const current = await transaction.gateways.roots.get(gatewayId);
+    if (current === null) return;
+    assertRetirementClaimOwnership(input, gatewayId, fieldsOf(current));
     if (current.desiredStatus !== "running" || current.retirementClaim != null) return;
-    transaction.set(doc.ref, { desiredStatus: "paused", updatedAt: input.now, updatedBy: CUSTOMER_DELETION_ACTOR }, { merge: true });
+    await transaction.gateways.roots.patch(
+      gatewayId,
+      { desiredStatus: "paused", updatedAt: input.now, updatedBy: CUSTOMER_DELETION_ACTOR },
+      { updatedAt: current.updatedAt },
+    );
   });
 }
 
 function automaticRetirementOperation(
   input: OwnedGatewayRetirementInput,
   gatewayId: string,
-): Parameters<typeof claimGatewayRetirementAtomic>[0]["operation"] {
+): NewOperation {
   return {
     kind: "retire-gateway",
     status: "pending",
@@ -139,8 +154,8 @@ function automaticRetirementOperation(
   };
 }
 
-function disposableAllocationGeneration(gatewayId: string, root: Record<string, unknown> | undefined): number | null {
-  const allocation = root?.allocation as { kind?: unknown; generation?: unknown } | undefined;
+function disposableAllocationGeneration(gatewayId: string, root: RootFields): number | null {
+  const allocation = root.allocation as { kind?: unknown; generation?: unknown } | null | undefined;
   if (allocation?.kind !== "disposable-builder") return null;
   if (!Number.isSafeInteger(allocation.generation) || (allocation.generation as number) < 1) {
     throw new Error(`owned gateway ${gatewayId} disposable allocation has no generation`);
@@ -148,98 +163,135 @@ function disposableAllocationGeneration(gatewayId: string, root: Record<string, 
   return allocation.generation as number;
 }
 
+async function deleteGatewayRootChildren(db: OwnedGatewayRetirementInput["db"], gatewayId: string): Promise<void> {
+  const children = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).listCollections();
+  for (const collection of children) {
+    if (collection.id === GATEWAY_ASSIGNMENTS_SUBCOLLECTION) continue;
+    await db.recursiveDelete(collection);
+  }
+}
+
 async function finishCompletedGatewayRetirement(
   input: OwnedGatewayRetirementInput,
-  doc: QueryDocumentSnapshot,
+  selected: Stored<GatewayRoot>,
 ): Promise<boolean> {
-  const expectedClaim = retirementClaim(doc.id, doc.data());
-  const operationRef = input.db.collection(GLM_OPERATIONS_COLLECTION).doc(expectedClaim.operationId);
-  const generation = disposableAllocationGeneration(doc.id, doc.data());
-  const recoveryRefs = generation === null ? [] : [GLM_OPERATIONS_COLLECTION, DISPOSABLE_GATEWAY_RECOVERY_RECEIPTS_COLLECTION]
-    .map((collection) => input.db.collection(collection).doc(builderRecoverOperationId(doc.id, generation)));
+  const gatewayId = selected.gatewayId;
+  const expectedClaim = retirementClaim(gatewayId, fieldsOf(selected));
+  const generation = disposableAllocationGeneration(gatewayId, fieldsOf(selected));
+  const recoveryId = generation === null ? null : builderRecoverOperationId(gatewayId, generation);
   const handoffOperationIds = generation === null ? [] : [
-    builderActivateOperationId(doc.id, generation),
-    builderReturnOperationId(doc.id, generation),
+    builderActivateOperationId(gatewayId, generation),
+    builderReturnOperationId(gatewayId, generation),
   ];
   let proof: CustomerGatewayRetirementProof | undefined;
-  const canFinish = async (transaction: Transaction): Promise<DocumentReference[] | null> => {
-    const rootSnap = await transaction.get(doc.ref);
-    const root = rootSnap.data();
-    if (!root) return null;
-    assertRetirementClaimOwnership(input, doc.id, root);
-    const claim = retirementClaim(doc.id, root);
-    if (root.desiredStatus !== "retired" || claim.operationId !== expectedClaim.operationId || claim.version !== expectedClaim.version) {
-      throw new Error(`owned gateway ${doc.id} retirement claim changed during customer deletion`);
-    }
-    const operationSnap = await transaction.get(operationRef);
-    if (!retirementOperationAllowsCleanup(input, doc.id, claim.version, operationSnap)) return null;
-    proof = retirementProofForDeletion(input, doc.id, root, claim, operationSnap.data());
-    const [runtime, assignments, users, ...handoffs] = await Promise.all([
-      transaction.get(input.db.collection("glmGateways").doc(doc.id)),
-      transaction.get(doc.ref.collection("assignments")),
-      transaction.get(input.db.collection("users").where("provisioning.openclaw.gatewayId", "==", doc.id)),
-      ...handoffOperationIds.map((operationId) =>
-        transaction.get(input.db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId))),
+  const canFinish = async (transaction: PlatformStateTransaction): Promise<RetirementCleanup | null> => {
+    const root = await transaction.gateways.roots.get(gatewayId);
+    if (root === null) return null;
+    const fields = fieldsOf(root);
+    const claim = unchangedRetirementClaim(input, gatewayId, root, expectedClaim);
+    const [operations, runtime, assignmentsEmpty, builders, receipt] = await Promise.all([
+      transaction.journal.operations.getMany([claim.operationId, ...handoffOperationIds, ...(recoveryId === null ? [] : [recoveryId])]),
+      transaction.fleetRegistry.get(gatewayId),
+      transaction.gateways.assignments.isEmpty(gatewayId),
+      transaction.builders.records.listByGateway(gatewayId, { limit: 1 }),
+      recoveryId === null ? null : transaction.journal.recoveryReceipts.get(recoveryId),
     ]);
-    if (runtime.exists || !assignments.empty || !users.empty ||
-      handoffs.some((snapshot) => handoffAwaitsRelease(snapshot, input.deletionId))) return null;
-    const recoverySnapshots = await Promise.all(recoveryRefs.map((ref) => transaction.get(ref)));
-    const cleanupRefs = [doc.ref, operationRef];
-    for (const [index, snapshot] of recoverySnapshots.entries()) {
-      if (!snapshot.exists) continue;
-      assertRecoveryOwnership(input, doc.id, root, snapshot.data()!);
-      cleanupRefs.push(recoveryRefs[index]!);
-    }
-    return cleanupRefs;
+    const operation = operations.get(claim.operationId) ?? null;
+    if (!retirementOperationAllowsCleanup(input, gatewayId, claim.version, operation)) return null;
+    proof = retirementProofForDeletion(input, gatewayId, fields, claim, operation);
+    const tenantsRemain = runtime !== null || !assignmentsEmpty || builders.length > 0 ||
+      handoffOperationIds.some((operationId) => handoffAwaitsRelease(operations.get(operationId), input.deletionId));
+    if (tenantsRemain) return null;
+    return {
+      claimOperationId: claim.operationId,
+      ...ownedRecoveryArtifacts(input, gatewayId, fields, {
+        recoveryId,
+        operation: recoveryId === null ? undefined : operations.get(recoveryId),
+        receipt,
+      }),
+    };
   };
-  const cleanupRefs = await input.db.runTransaction(canFinish);
-  if (!cleanupRefs) return true;
+  const cleanup = await input.store.transaction(
+    { label: "customer-deletion.owned-gateway-retirement.verify", readOnly: true },
+    canFinish,
+  );
+  if (!cleanup) return true;
   if (proof) await input.preserveRetirementProof!(proof);
-  const childCollections = await Promise.all(cleanupRefs.map((ref) => ref.listCollections()));
-  for (const collection of childCollections.flat()) {
-    if (collection.path === `${doc.ref.path}/assignments`) continue;
-    await input.db.recursiveDelete(collection);
-  }
-  return input.db.runTransaction(async (transaction) => {
-    const currentRefs = await canFinish(transaction);
-    if (!currentRefs || currentRefs.length !== cleanupRefs.length ||
-      currentRefs.some((ref, index) => ref.path !== cleanupRefs[index]?.path)) return true;
-    for (const ref of currentRefs) transaction.delete(ref);
+  await deleteGatewayRootChildren(input.db, gatewayId);
+  return input.store.transaction({ label: "customer-deletion.owned-gateway-retirement.finish" }, async (transaction) => {
+    const current = await canFinish(transaction);
+    if (!current || !isDeepStrictEqual(current, cleanup)) return true;
+    await transaction.gateways.roots.delete(gatewayId, { retirementVersion: expectedClaim.version });
+    await transaction.journal.operations.delete(current.claimOperationId);
+    if (current.recoveryOperationId !== null) await transaction.journal.operations.delete(current.recoveryOperationId);
+    if (current.recoveryReceiptId !== null) await transaction.journal.recoveryReceipts.delete(current.recoveryReceiptId);
     return false;
   });
 }
 
-function retirementProofForDeletion(input: OwnedGatewayRetirementInput, gatewayId: string, root: Record<string, unknown>, claim: { operationId: string; version: number }, operation: Record<string, unknown> | undefined): CustomerGatewayRetirementProof | undefined {
+function unchangedRetirementClaim(
+  input: OwnedGatewayRetirementInput,
+  gatewayId: string,
+  root: Stored<GatewayRoot>,
+  expected: { operationId: string; version: number },
+): { operationId: string; version: number } {
+  const fields = fieldsOf(root);
+  assertRetirementClaimOwnership(input, gatewayId, fields);
+  const claim = retirementClaim(gatewayId, fields);
+  if (root.desiredStatus !== "retired" || claim.operationId !== expected.operationId || claim.version !== expected.version) {
+    throw new Error(`owned gateway ${gatewayId} retirement claim changed during customer deletion`);
+  }
+  return claim;
+}
+
+function ownedRecoveryArtifacts(
+  input: OwnedGatewayRetirementInput,
+  gatewayId: string,
+  root: RootFields,
+  recovery: {
+    recoveryId: string | null;
+    operation: Stored<OperationRecord> | undefined;
+    receipt: Stored<GatewayRecoveryReceipt> | null;
+  },
+): Pick<RetirementCleanup, "recoveryOperationId" | "recoveryReceiptId"> {
+  if (recovery.operation !== undefined) assertRecoveryOwnership(input, gatewayId, root, recovery.operation as unknown as RootFields);
+  if (recovery.receipt !== null) assertRecoveryOwnership(input, gatewayId, root, recovery.receipt as unknown as RootFields);
+  return {
+    recoveryOperationId: recovery.operation === undefined ? null : recovery.recoveryId,
+    recoveryReceiptId: recovery.receipt === null ? null : recovery.recoveryId,
+  };
+}
+
+function retirementProofForDeletion(input: OwnedGatewayRetirementInput, gatewayId: string, root: RootFields, claim: { operationId: string; version: number }, operation: OperationRecord): CustomerGatewayRetirementProof | undefined {
   if (!input.preserveRetirementProof) return undefined;
-  const completedAt = operation?.completedAt;
+  const completedAt = operation.completedAt;
   if (typeof completedAt !== "number" || !Number.isFinite(completedAt)) throw new Error("retirement completion timestamp is unavailable");
   return { gatewayId, operationId: claim.operationId, version: claim.version, completedAt, runtime: root.runtime === "gce-vm" ? "gce-vm" : "cluster" };
 }
 
-function handoffAwaitsRelease(snapshot: DocumentSnapshot, deletionId: string): boolean {
-  const operation = snapshot.data();
-  if (operation?.cancelledByDeletionId === deletionId) return false;
-  return schedulerHandoffAwaitingRelease({ ...operation, id: snapshot.id });
+function handoffAwaitsRelease(operation: Stored<OperationRecord> | undefined, deletionId: string): boolean {
+  if (operation === undefined || operation.cancelledByDeletionId === deletionId) return false;
+  return schedulerHandoffAwaitingRelease(operation);
 }
 
 function retirementOperationAllowsCleanup(
   input: OwnedGatewayRetirementInput,
   gatewayId: string,
   version: number,
-  operationSnap: DocumentSnapshot,
-): boolean {
-  const operation = operationSnap.data();
-  if (!operationSnap.exists) return false;
-  if (operation?.kind !== "retire-gateway" || operation.gatewayId !== gatewayId ||
-    operation.input?.gatewayId !== gatewayId || operation.input.retirementClaimVersion !== version ||
-    (operation.input.uid != null && operation.input.uid !== input.uid)) {
+  operation: OperationRecord | null,
+): operation is OperationRecord {
+  if (operation === null) return false;
+  const operationInput = operation.input as RootFields | undefined;
+  if (operation.kind !== "retire-gateway" || operation.gatewayId !== gatewayId ||
+    operationInput?.gatewayId !== gatewayId || operationInput.retirementClaimVersion !== version ||
+    (operationInput.uid != null && operationInput.uid !== input.uid)) {
     throw new Error(`owned gateway ${gatewayId} retirement operation does not match its owner and claim`);
   }
   if (operation.status === "failed") {
     throw new Error(`owned gateway ${gatewayId} retirement failed: ${String(operation.error ?? "unknown")}`);
   }
   if (operation.status !== "succeeded") return false;
-  if (operation.input.retainData === true || operation.input.retainServiceAccount === true) {
+  if (operationInput.retainData === true || operationInput.retainServiceAccount === true) {
     throw new Error(`owned gateway ${gatewayId} retirement retained resources; customer cleanup cannot complete`);
   }
   return true;
@@ -248,8 +300,8 @@ function retirementOperationAllowsCleanup(
 function assertRecoveryOwnership(
   input: OwnedGatewayRetirementInput,
   gatewayId: string,
-  root: Record<string, unknown>,
-  recovery: Record<string, unknown>,
+  root: RootFields,
+  recovery: RootFields,
 ): void {
   const allocation = root.allocation as Record<string, unknown> | undefined;
   const recoveryInput = recovery.input as Record<string, unknown> | undefined;

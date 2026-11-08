@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { GatewayVmAddress } from "./gateway-address.js";
 import { gatewayVmPodName } from "@octogee/shared/types/glm";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { assertTransferClaim, claimTransferTask, controllerPodIdentity, finishTransferTask, type ControllerPodIdentity, type TransferClaim } from "./migration-transfer-lease.js";
 import {
   type FinishRsyncImportRequestBody,
@@ -26,31 +26,6 @@ const controlDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 const DEFAULT_WORKER_ID = `glm-${randomUUID()}`;
 const MIGRATION_TRANSFER_USER = "migration";
 
-export type MigrationTransferTaskStatus =
-  | "running"
-  | "succeeded"
-  | "failed";
-
-export interface MigrationTransferTaskDoc {
-  kind: "gateway-rsync-transfer";
-  migrationId: string;
-  slug: string;
-  mode: MigrationSyncMode;
-  sourceGatewayId: string;
-  targetGatewayId: string;
-  status: MigrationTransferTaskStatus;
-  attempt: number;
-  leaseOwner?: string;
-  leasePod?: ControllerPodIdentity;
-  attemptId?: string;
-  leaseExpiresAt?: number;
-  createdAt: number;
-  updatedAt: number;
-  startedAt?: number;
-  completedAt?: number;
-  error?: string;
-}
-
 export interface CommandResult {
   stdout: string;
   stderr: string;
@@ -68,7 +43,7 @@ import type { RetainedSourceTransfer } from './retained-source-transfer.js';
 export interface RSyncMigrationTransferDeps {
   prepareAgentStores?: (gatewayId: string, slug: string) => Promise<void>;
   retainedSource?: RetainedSourceTransfer;
-  db: Firestore;
+  store: PlatformStateStore;
   namespace: string;
   privateKey: string;
   fleetControllerPort: string;
@@ -277,11 +252,11 @@ async function assertFinalImportNotReleased(fetchImpl: typeof globalThis.fetch, 
   throw new Error("migration target terminal identity does not match the reclaimed transfer");
 }
 
-async function inspectReclaimedFinalImport(fetchImpl: typeof globalThis.fetch, baseUrl: string, input: { migrationId: string; slug: string; toGatewayId: string; mode: MigrationSyncMode }, claim: TransferClaim, targetUid?: string): Promise<void> {
-  await assertTransferClaim(claim);
-  if (input.mode !== "final" || claim.attempt <= 1) return;
+async function inspectReclaimedFinalImport(lease: { store: PlatformStateStore; claim: TransferClaim }, fetchImpl: typeof globalThis.fetch, baseUrl: string, input: { migrationId: string; slug: string; toGatewayId: string; mode: MigrationSyncMode }, targetUid?: string): Promise<void> {
+  await assertTransferClaim(lease.store, lease.claim);
+  if (input.mode !== "final" || lease.claim.attempt <= 1) return;
   await assertFinalImportNotReleased(fetchImpl, baseUrl, input, targetUid);
-  await assertTransferClaim(claim);
+  await assertTransferClaim(lease.store, lease.claim);
 }
 
 async function resolveRunningGatewayPod(params: {
@@ -466,7 +441,7 @@ export function createRsyncMigrationTransfer(
       namespace: deps.namespace, transportId: toTransportId, runCommand, requireReady: false, resolveGatewayVm: deps.resolveGatewayVm,
     });
     const claimed = await claimTransferTask(
-      { db: deps.db, now, workerId, leaseMs, namespace: deps.namespace, runCommand, controllerPod, log,
+      { store: deps.store, now, workerId, leaseMs, namespace: deps.namespace, runCommand, controllerPod, log,
         beforeRecovery: async () => {
           recoveryTarget = await resolveTarget();
           await assertTargetTransferFencing(fetchImpl, podBaseUrl(recoveryTarget.podIP, deps.fleetControllerPort), recoveryTarget.name);
@@ -491,7 +466,7 @@ export function createRsyncMigrationTransfer(
       ]);
       targetPod = resolvedTargetPod;
       const targetBaseUrl = podBaseUrl(targetPod.podIP, deps.fleetControllerPort);
-      await inspectReclaimedFinalImport(fetchImpl, targetBaseUrl, { ...input, mode }, claimed, targetPod.uid);
+      await inspectReclaimedFinalImport({ store: deps.store, claim: claimed }, fetchImpl, targetBaseUrl, { ...input, mode }, targetPod.uid);
       const prepareBody: PrepareRsyncImportRequestBody = {
         transferAttempt: claimed.attempt,
         transferAttemptId: claimed.attemptId,
@@ -515,7 +490,7 @@ export function createRsyncMigrationTransfer(
       log(
         `[migration-rsync] task=${claimed.taskId} attempt=${claimed.attempt} mode=${mode} ${input.fromGatewayId}/${sourcePod.name} → ${input.toGatewayId}/${targetPod.name} target=${targetPod.podIP}:${prepared.port}`,
       );
-      await assertTransferClaim(claimed);
+      await assertTransferClaim(deps.store, claimed);
       const pushBody: PushRsyncStateRequestBody = {
         migrationId: input.migrationId,
         slug: input.slug,
@@ -535,7 +510,7 @@ export function createRsyncMigrationTransfer(
         migrationId: input.migrationId,
         body: pushBody as unknown as Record<string, unknown>,
       });
-      await assertTransferClaim(claimed);
+      await assertTransferClaim(deps.store, claimed);
       if (mode === "final") await deps.prepareAgentStores?.(input.toGatewayId, input.slug);
       const finished = await control<ImportResponse>({
         transportId: toTransportId,
@@ -559,7 +534,7 @@ export function createRsyncMigrationTransfer(
           await waitForTargetPodReady(runCommand, deps.namespace, targetPod.name);
         }
       }
-      await finishTransferTask(deps.db, claimed, now);
+      await finishTransferTask(deps.store, claimed, now);
       // The target committed the import and told us which post-commit step it could
       // not confirm. Aborting here would unmount work that landed and send the retry
       // back into the same reload, so the state stands and the reconcile converges it.
@@ -574,7 +549,7 @@ export function createRsyncMigrationTransfer(
       );
       return finished;
     } catch (err) {
-      await assertTransferClaim(claimed);
+      await assertTransferClaim(deps.store, claimed);
       if (targetPrepareAttempted && targetPod) {
         await control<ImportResponse>({
           transportId: toTransportId,
@@ -595,7 +570,7 @@ export function createRsyncMigrationTransfer(
           );
         });
       }
-      await finishTransferTask(deps.db, claimed, now, err).catch((markErr) => {
+      await finishTransferTask(deps.store, claimed, now, err).catch((markErr) => {
         log(
           `[migration-rsync] ⚠ failed to mark task=${claimed.taskId} failed: ${markErr instanceof Error ? markErr.message : String(markErr)}`,
         );

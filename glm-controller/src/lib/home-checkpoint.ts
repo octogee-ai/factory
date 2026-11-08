@@ -1,5 +1,5 @@
-import type { Firestore } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, homeCheckpointOutstanding, type GatewayVmHomeState } from "@octogee/shared/types/glm";
+import type { PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
+import { homeCheckpointOutstanding, type GatewayVmHomeState } from "@octogee/shared/types/glm";
 
 export const HOME_CHECKPOINT_TIMEOUT_MS = 15 * 60_000;
 export const HOME_CHECKPOINT_POLL_MS = 10_000;
@@ -32,24 +32,20 @@ export async function awaitHomeCheckpoint(
   }
 }
 
-type HomeDb = Pick<Firestore, "collection">;
-
-export function readVmHome(data: Record<string, unknown> | undefined): Partial<GatewayVmHomeState> | undefined {
-  const home = data?.vmHome;
-  return home && typeof home === "object" ? (home as Partial<GatewayVmHomeState>) : undefined;
-}
-
 export function homeCheckpointCompletedAt(home: Partial<GatewayVmHomeState> | undefined): number | null {
   const completedAt = home?.lastCheckpoint?.completedAt;
   return typeof completedAt === "number" ? completedAt : null;
 }
 
-export async function requestHomeCheckpoint(db: HomeDb, gatewayId: string, requestedAt: number): Promise<void> {
-  await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).set({ vmHome: { checkpointRequestedAt: requestedAt } }, { merge: true });
+export async function requestHomeCheckpoint(store: PlatformStateStore, gatewayId: string, requestedAt: number): Promise<void> {
+  await store.transaction({ label: "home-checkpoint.request" }, async tx => {
+    const runtime = await tx.fleetRegistry.get(gatewayId);
+    if (runtime === null) throw new Error(`gateway ${gatewayId}: home checkpoint requires a runtime record`);
+    await tx.fleetRegistry.patch(gatewayId, { vmHome: { ...runtime.vmHome, checkpointRequestedAt: requestedAt } }, { revision: runtime.revision });
+  });
 }
 
-export async function readHomeCheckpointCompletedAt(db: HomeDb, gatewayId: string): Promise<number | null> {
-  const snap = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get();
-  const home = readVmHome(snap.exists ? (snap.data() as Record<string, unknown>) : undefined);
+export async function readHomeCheckpointCompletedAt(state: Pick<PlatformStateRepositories, "fleetRegistry">, gatewayId: string): Promise<number | null> {
+  const home = (await state.fleetRegistry.get(gatewayId))?.vmHome;
   return homeCheckpointOutstanding(home) ? null : homeCheckpointCompletedAt(home);
 }

@@ -10,6 +10,7 @@ import {
   OPERATION_QUEUE_DRAIN_MS_DEFAULT,
 } from "../index";
 import type { OperationHandler, OperationHandlers } from "../operation-router";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
 import { operationNeedsDurableRestartResume } from "../operation-retry.js";
 
@@ -971,9 +972,9 @@ describe("completion bookkeeping reads the fresh doc, not the caller's snapshot"
       return { steps: [], success: true };
     });
     const deps = buildDeps(db, { "migrate-customer": handler });
-    expect(await resumeOrphanedRunningOps({ db: db as never, log: vi.fn(),
+    expect(await resumeOrphanedRunningOps({ store: createDocumentFixtureStore({ "glmOperations/committed-migration": original }), log: vi.fn(),
       resumableKinds: new Set(["migrate-customer"]), resumableOperation: operationNeedsDurableRestartResume,
-      redrive: (op, ref) => reAdoptAndRunOperation(op, ref, deps),
+      redrive: (op) => reAdoptAndRunOperation(op, db.collection("glmOperations").doc(op.id) as never, deps),
     })).toEqual({ scanned: 1, resumed: 1 });
     expect(handler).toHaveBeenCalledOnce();
     expect(store.get("committed-migration")).toMatchObject({ status: "succeeded", schedulerHandoff, cutoverCommittedAt: 200 });

@@ -1,62 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   buildOperationAuditIntent,
   enqueueOperation,
   readOperation,
   awaitOperation,
   isTerminalStatus,
-  type OperationsDb,
 } from "../lib/glm-operations.js";
-import { GLM_OPERATIONS_COLLECTION } from "../../shared/types/glm.js";
 
-function makeFakeDb(initial: Record<string, Record<string, unknown>> = {}) {
-  const docs = new Map<string, Record<string, unknown>>(Object.entries(initial));
-  let seq = 0;
-  const added: Array<{ id: string; data: Record<string, unknown> }> = [];
-  const db: OperationsDb = {
-    collection(name) {
-      expect(name).toBe(GLM_OPERATIONS_COLLECTION);
-      return {
-        async add(data) {
-          const id = `op-${++seq}`;
-          docs.set(id, data);
-          added.push({ id, data });
-          return { id };
-        },
-        doc(id) {
-          return {
-            id,
-            async get() {
-              const data = docs.get(id);
-              return { exists: data !== undefined, id, data: () => data };
-            },
-          };
-        },
-      };
-    },
-    async runTransaction(body) {
-      const writes: Array<() => void> = [];
-      const result = await body({
-        get: async (ref) => ref.get(),
-        create: (ref, data) => {
-          writes.push(() => {
-            if (docs.has(ref.id)) throw new Error(`document ${ref.id} already exists`);
-            docs.set(ref.id, data);
-          });
-        },
-        update: (ref, data) => {
-          writes.push(() => {
-            const current = docs.get(ref.id);
-            if (!current) throw new Error(`document ${ref.id} does not exist`);
-            docs.set(ref.id, { ...current, ...data });
-          });
-        },
-      });
-      for (const write of writes) write();
-      return result;
-    },
-  };
-  return { db, docs, added };
+function makeFixtureStore(initial: Record<string, Record<string, unknown>> = {}) {
+  const docs = new Map<string, Record<string, unknown>>(
+    Object.entries(initial).map(([id, row]) => [`glmOperations/${id}`, row]),
+  );
+  return { store: createDocumentFixtureStore(docs), docs };
 }
 
 describe("isTerminalStatus", () => {
@@ -71,16 +27,16 @@ describe("isTerminalStatus", () => {
 
 describe("enqueueOperation", () => {
   it("writes a pending op with kind/input/createdBy and returns the new id", async () => {
-    const { db, docs } = makeFakeDb();
-    const id = await enqueueOperation(db, {
+    const { store, docs } = makeFixtureStore();
+    const id = await enqueueOperation(store, {
       kind: "migrate-customer",
       input: { uid: "u1", toGatewayId: "canary" },
       createdBy: "fleet-cli",
       now: () => 1234,
     });
-    expect(id).toBe("op-1");
-    const doc = docs.get("op-1")!;
-    expect(doc).toMatchObject({
+    expect([...docs.keys()]).toEqual([`glmOperations/${id}`]);
+    const doc = docs.get(`glmOperations/${id}`)!;
+    expect(doc).toEqual({
       kind: "migrate-customer",
       status: "pending",
       createdBy: "fleet-cli",
@@ -94,14 +50,14 @@ describe("enqueueOperation", () => {
   });
 
   it("mirrors a gatewayId from input to the top-level field for controller indexing", async () => {
-    const { db, docs } = makeFakeDb();
-    await enqueueOperation(db, {
+    const { store, docs } = makeFixtureStore();
+    const id = await enqueueOperation(store, {
       kind: "retire-gateway",
       input: { gatewayId: "bender" },
       createdBy: "fleet-cli",
     });
-    expect(docs.get("op-1")).toMatchObject({ gatewayId: "bender" });
-    expect(docs.get("op-1")).not.toHaveProperty("inputUid");
+    expect(docs.get(`glmOperations/${id}`)).toMatchObject({ gatewayId: "bender" });
+    expect(docs.get(`glmOperations/${id}`)).not.toHaveProperty("inputUid");
   });
 });
 
@@ -160,15 +116,15 @@ describe("operation audit journal", () => {
 
 describe("readOperation", () => {
   it("returns null when the op does not exist", async () => {
-    const { db } = makeFakeDb();
-    expect(await readOperation(db, "missing")).toBeNull();
+    const { store } = makeFixtureStore();
+    expect(await readOperation(store, "missing")).toBeNull();
   });
 
   it("returns the op with its id merged in", async () => {
-    const { db } = makeFakeDb({
+    const { store } = makeFixtureStore({
       "op-1": { kind: "migrate-customer", status: "running", steps: [] },
     });
-    const op = await readOperation(db, "op-1");
+    const op = await readOperation(store, "op-1");
     expect(op).toMatchObject({ id: "op-1", status: "running" });
   });
 });
@@ -176,7 +132,7 @@ describe("readOperation", () => {
 describe("awaitOperation", () => {
   it("polls until the op reaches a terminal status and returns it", async () => {
     const base = { kind: "migrate-customer", createdBy: "fleet-cli", input: {} };
-    const { db, docs } = makeFakeDb({
+    const { store, docs } = makeFixtureStore({
       "op-1": { ...base, status: "pending", steps: [] },
     });
     const transitions = [
@@ -186,10 +142,10 @@ describe("awaitOperation", () => {
     let tick = 0;
     const sleep = vi.fn(async () => {
       const next = transitions[tick++] ?? transitions[transitions.length - 1];
-      docs.set("op-1", { ...base, ...next });
+      docs.set("glmOperations/op-1", { ...base, ...next });
     });
     const onUpdate = vi.fn();
-    const op = await awaitOperation(db, "op-1", {
+    const op = await awaitOperation(store, "op-1", {
       pollMs: 1,
       timeoutMs: 10_000,
       now: () => 0,
@@ -202,20 +158,20 @@ describe("awaitOperation", () => {
   });
 
   it("throws when the op never finishes before the timeout", async () => {
-    const { db } = makeFakeDb({
+    const { store } = makeFixtureStore({
       "op-1": { kind: "migrate-customer", status: "pending", steps: [], createdBy: "x", input: {} },
     });
     let calls = 0;
     const now = () => (calls++ === 0 ? 0 : 10_000);
     await expect(
-      awaitOperation(db, "op-1", { pollMs: 1, timeoutMs: 1_000, now, sleep: vi.fn() }),
+      awaitOperation(store, "op-1", { pollMs: 1, timeoutMs: 1_000, now, sleep: vi.fn() }),
     ).rejects.toThrow(/did not finish within 1000ms/);
   });
 
   it("throws when the op disappears", async () => {
-    const { db } = makeFakeDb();
+    const { store } = makeFixtureStore();
     await expect(
-      awaitOperation(db, "ghost", { now: () => 0, sleep: vi.fn() }),
+      awaitOperation(store, "ghost", { now: () => 0, sleep: vi.fn() }),
     ).rejects.toThrow(/operation ghost not found/);
   });
 });

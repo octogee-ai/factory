@@ -11,7 +11,7 @@ import { workspaceIdentityReady } from "@octogee/core/openclaw-workspace-bootstr
 import { OpenclawWireError } from "@octogee/shared/types/openclaw-wire-core";
 import * as path from "node:path";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
-import { readAssignedSlugsForGateway, slugFromAssignedUser } from "./assigned-roster.js";
+import { readAssignedSlugsForGateway } from "./assigned-roster.js";
 import { agentIdsFromConfig } from "./byosub-restore.js";
 import { OPENCLAW_DIR, readOpenClawConfig } from "./config.js";
 import { readActivationManifest } from "./migration-activation-manifest.js";
@@ -84,6 +84,7 @@ import {
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
 import { buildProductionLifecycleAdapter } from "./customer-lifecycle-prod-adapter.js";
+import { FenceMismatchError, type BuilderRecordsRepository, type PlatformStateStore } from "@octogee/core/platform-state";
 import { agentIdsForMigration } from "./customer-lifecycle-broker-adapter.js";
 import { createScheduleTransfer } from "./schedule-transfer.js";
 import {
@@ -357,6 +358,7 @@ export function registerByosubDeviceAuth(
 
 export interface BuildAdapterOptions {
   db: Firestore;
+  store: PlatformStateStore;
   rpc: GatewayRpcClient;
   log: (msg: string) => void;
 }
@@ -367,6 +369,7 @@ export function buildProductionAdapter(opts: BuildAdapterOptions): CustomerLifec
 
 export interface StartFleetOptions {
   db?: Firestore;
+  store?: PlatformStateStore;
   rpc: GatewayRpcClient;
   adapter?: CustomerLifecycleAdapter;
   gatewayId: string;
@@ -540,7 +543,7 @@ export function resolveFleetCapabilities(opts: {
 }
 
 export async function readMountedCustomersFromAssignedState(
-  db: Firestore,
+  builders: Pick<BuilderRecordsRepository, "listByGateway">,
   gatewayId: string,
   adapter: Pick<
     CustomerLifecycleAdapter,
@@ -555,15 +558,11 @@ export async function readMountedCustomersFromAssignedState(
     | "hasGitRemote"
   >,
 ): Promise<string[]> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.gatewayId", "==", gatewayId)
-    .where("provisioning.openclaw.status", "==", "complete")
-    .get();
+  const assigned = await builders.listByGateway(gatewayId, { openclawStatus: "complete" });
 
   const mounted = new Set<string>();
-  for (const doc of snap.docs) {
-    const slug = slugFromAssignedUser(doc.data() as Record<string, unknown> | undefined);
+  for (const builder of assigned) {
+    const slug = builder.slug;
     if (slug && assignedCustomerLooksMounted(adapter, slug)) mounted.add(slug);
   }
   return [...mounted].sort((a, b) => a.localeCompare(b));
@@ -1348,14 +1347,9 @@ function recordReconcileError(opts: StartFleetOptions, slug: string, message: st
       .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError write failed: ${String(err)}`));
     return;
   }
-  if (!opts.db) return;
-  opts.db
-    .collection("gateways")
-    .doc(opts.gatewayId)
-    .set(
-      { lastError: { slug, message, at: FieldValue.serverTimestamp() } },
-      { merge: true },
-    )
+  if (!opts.store) return;
+  opts.store.gateways.roots
+    .patch(opts.gatewayId, { lastError: { slug, message, at: { serverNow: true } } })
     .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError write failed: ${String(err)}`));
 }
 
@@ -1368,18 +1362,13 @@ function clearReconcileError(opts: StartFleetOptions, slug: string): void {
       .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ broker lastError clear failed: ${String(err)}`));
     return;
   }
-  const db = opts.db;
-  if (!db) return;
-  const ref = db.collection("gateways").doc(opts.gatewayId);
-  db
-    .runTransaction(async (txn) => {
-      const snap = await txn.get(ref);
-      const current = snap.data()?.lastError as { slug?: string } | null | undefined;
-      if (current && current.slug === slug) {
-        txn.set(ref, { lastError: null }, { merge: true });
-      }
-    })
-    .catch((err) => opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError clear failed: ${String(err)}`));
+  if (!opts.store) return;
+  opts.store.gateways.roots
+    .patch(opts.gatewayId, { lastError: null }, { lastErrorSlug: slug })
+    .catch((err) => {
+      if (err instanceof FenceMismatchError) return;
+      opts.log(`[reconcile] ${opts.gatewayId}: ⚠ lastError clear failed: ${String(err)}`);
+    });
 }
 
 interface EvictLocalCustomerInput {
@@ -1946,11 +1935,12 @@ function createStateDeps(opts: StartFleetOptions, needsState: boolean): GatewayH
 
 function buildFleetAdapter(opts: StartFleetOptions): CustomerLifecycleAdapter {
   if (opts.adapter) return opts.adapter;
-  if (!opts.db) {
-    throw new Error("[fleet] db is required when no explicit lifecycle adapter is provided");
+  if (!opts.db || !opts.store) {
+    throw new Error("[fleet] db and store are required when no explicit lifecycle adapter is provided");
   }
   return buildProductionAdapter({
-    db: opts.db!,
+    db: opts.db,
+    store: opts.store,
     rpc: opts.rpc,
     log: opts.log,
   });
@@ -2139,9 +2129,9 @@ async function seedRuntimeMountedCustomers(params: {
 }): Promise<void> {
   const { opts, reportMounted, wrappedAdapter, runtime } = params;
   try {
-    if (!reportMounted || !opts.db) return;
+    if (!reportMounted || !opts.store) return;
     runtime.mountedCustomers = await readMountedCustomersFromAssignedState(
-      opts.db,
+      opts.store.builders.records,
       opts.gatewayId,
       wrappedAdapter,
     );
@@ -2844,12 +2834,9 @@ const serviceName = gatewayServiceName({ gatewayId: opts.gatewayId });
       await opts.stampMounted(uid, mounted);
       return;
     }
-    if (!opts.db) return;
+    if (!opts.store) return;
     try {
-      await opts.db
-        .collection("users")
-        .doc(uid)
-        .update({ "provisioning.openclaw.mounted": mounted });
+      await opts.store.builders.records.patch(uid, { openclaw: { mounted } });
     } catch (err) {
       opts.log(`[reconcile] ⚠ mounted-mirror stamp failed for ${uid}: ${String(err)}`);
     }

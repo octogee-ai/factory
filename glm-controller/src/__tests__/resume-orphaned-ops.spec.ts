@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { resumeOrphanedRunningOps } from "../resume-orphaned-ops.js";
 import type { Operation } from "@octogee/shared/types/glm";
 import { operationNeedsDurableCustomerMigrationV2Resume } from "../operation-retry.js";
@@ -8,21 +9,8 @@ interface FakeOpDoc {
   data: Partial<Operation> & { status?: string; kind?: string; recordType?: string };
 }
 
-function makeFakeDb(ops: FakeOpDoc[]) {
-  return {
-    collection: (name: string) => {
-      if (name !== "glmOperations") throw new Error(`unexpected collection: ${name}`);
-      return {
-        where: (field: string, op: string, value: unknown) => ({
-          get: async () => ({
-            docs: ops
-              .filter((o) => (field === "status" && op === "==" ? o.data.status === value : true))
-              .map((o) => ({ id: o.id, data: () => o.data, ref: { id: o.id } })),
-          }),
-        }),
-      };
-    },
-  };
+function makeStore(ops: FakeOpDoc[]) {
+  return createDocumentFixtureStore(Object.fromEntries(ops.map((op) => [`glmOperations/${op.id}`, op.data as Record<string, unknown>])));
 }
 
 const RESUMABLE = new Set(["rollout"]);
@@ -31,18 +19,18 @@ describe("resumeOrphanedRunningOps", () => {
   it("does not re-drive a running audit record", async () => {
     const redrive = vi.fn(async () => undefined);
     const result = await resumeOrphanedRunningOps({
-      db: makeFakeDb([
+      store: makeStore([
         {
           id: "audit-running",
           data: { recordType: "audit", status: "running", kind: "rollout" },
         },
-      ]) as never,
+      ]),
       log: vi.fn(),
       resumableKinds: RESUMABLE,
       redrive,
     });
 
-    expect(result).toEqual({ scanned: 1, resumed: 0 });
+    expect(result).toEqual({ scanned: 0, resumed: 0 });
     expect(redrive).not.toHaveBeenCalled();
   });
 
@@ -52,7 +40,7 @@ describe("resumeOrphanedRunningOps", () => {
       { id: "op-roll", data: { status: "running", kind: "rollout" } },
     ];
     const result = await resumeOrphanedRunningOps({
-      db: makeFakeDb(ops) as never,
+      store: makeStore(ops),
       log: vi.fn(),
       resumableKinds: RESUMABLE,
       redrive,
@@ -69,7 +57,7 @@ describe("resumeOrphanedRunningOps", () => {
       { id: "op-add", data: { status: "running", kind: "add-gateway" } },
     ];
     const result = await resumeOrphanedRunningOps({
-      db: makeFakeDb(ops) as never,
+      store: makeStore(ops),
       log: vi.fn(),
       resumableKinds: RESUMABLE,
       redrive,
@@ -91,7 +79,7 @@ describe("resumeOrphanedRunningOps", () => {
     const redrive = vi.fn(async () => undefined);
 
     await resumeOrphanedRunningOps({
-      db: makeFakeDb([active, legacy] as FakeOpDoc[]) as never,
+      store: makeStore([active, legacy] as FakeOpDoc[]),
       log: vi.fn(),
       resumableKinds: new Set(["rollout", "migrate-customer"]),
       resumableOperation: (op) => op.kind !== "migrate-customer" || !!op.customerMigrationV2,
@@ -99,7 +87,7 @@ describe("resumeOrphanedRunningOps", () => {
     });
 
     expect(redrive).toHaveBeenCalledOnce();
-    expect(redrive).toHaveBeenCalledWith(expect.objectContaining({ id: "op-v2" }), expect.anything());
+    expect(redrive).toHaveBeenCalledWith(expect.objectContaining({ id: "op-v2" }));
   });
 
   it.each(["complete", "aborted"] as const)(
@@ -116,7 +104,7 @@ describe("resumeOrphanedRunningOps", () => {
       const redrive = vi.fn(async () => undefined);
 
       await resumeOrphanedRunningOps({
-        db: makeFakeDb([terminal] as FakeOpDoc[]) as never,
+        store: makeStore([terminal] as FakeOpDoc[]),
         log: vi.fn(),
         resumableKinds: new Set(["rollout", "migrate-customer"]),
         resumableOperation: operationNeedsDurableCustomerMigrationV2Resume,
@@ -135,7 +123,7 @@ describe("resumeOrphanedRunningOps", () => {
       { id: "op-run", data: { status: "running", kind: "rollout" } },
     ];
     const result = await resumeOrphanedRunningOps({
-      db: makeFakeDb(ops) as never,
+      store: makeStore(ops),
       log: vi.fn(),
       resumableKinds: RESUMABLE,
       redrive,
@@ -155,7 +143,7 @@ describe("resumeOrphanedRunningOps", () => {
       { id: "op-b", data: { status: "running", kind: "rollout" } },
     ];
     const result = await resumeOrphanedRunningOps({
-      db: makeFakeDb(ops) as never,
+      store: makeStore(ops),
       log,
       resumableKinds: RESUMABLE,
       redrive,

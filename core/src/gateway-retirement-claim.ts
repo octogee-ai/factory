@@ -5,10 +5,6 @@ import {
   GATEWAYS_COLLECTION,
 } from "@octogee/shared/types/fleet-controller";
 import {
-  GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
-} from "@octogee/shared/types/glm";
-import {
   customerRuntimeMutationFenced,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
@@ -47,26 +43,7 @@ export class GatewayRetirementReleaseUnconvergedError extends GatewayRetirementC
   }
 }
 
-interface RetirementOperation {
-  input?: unknown;
-  [key: string]: unknown;
-}
-
 type RetirableGateway = GatewayDoc & { desiredStatus: "running" | "draining" | "paused" };
-
-interface ClaimGatewayRetirementInput {
-  db: Firestore;
-  gatewayId: string;
-  operationId: string;
-  operation: RetirementOperation;
-  now: number;
-  updatedBy: string;
-  telemetryObservedAfter?: number;
-  claimGuard?: (input: {
-    transaction: Transaction;
-    root: RetirableGateway;
-  }) => Promise<void> | void;
-}
 
 interface ClaimGatewayRetirementInStoreInput {
   store: PlatformStateStore;
@@ -76,6 +53,10 @@ interface ClaimGatewayRetirementInStoreInput {
   now: number;
   updatedBy: string;
   telemetryObservedAfter?: number;
+  claimGuard?: (input: {
+    transaction: PlatformStateTransaction;
+    root: RetirableGateway;
+  }) => Promise<void> | void;
 }
 
 interface VerifyGatewayRetirementClaimInput {
@@ -255,13 +236,6 @@ function nextRetirementVersion(value: unknown): number {
   return (value as number) + 1;
 }
 
-function operationInput(operation: RetirementOperation): Record<string, unknown> {
-  if (!isPlainRecord(operation.input)) {
-    throw new Error("retirement operation input must be an object");
-  }
-  return operation.input;
-}
-
 function claimableGatewayRetirementRoot(
   gatewayId: string,
   value: unknown,
@@ -338,108 +312,6 @@ export async function assertGatewayRuntimeMutationUnfencedInStore(
   }
 }
 
-export async function claimGatewayRetirementAtomic(
-  input: ClaimGatewayRetirementInput,
-): Promise<{ version: number }> {
-  const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
-  const operationRef = input.db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .doc(input.operationId);
-
-  return input.db.runTransaction(async (transaction) => {
-    const [rootSnap, activeOperations] = await Promise.all([
-      transaction.get(rootRef),
-      transaction.get(
-        input.db
-          .collection(GLM_OPERATIONS_COLLECTION)
-          .where("status", "in", ["pending", "running"]),
-      ),
-    ]);
-    const { rootData } = claimableGatewayRetirementRoot(
-      input.gatewayId,
-      rootSnap.exists ? rootSnap.data() : undefined,
-    );
-    const migrationConflict = findActiveGatewayMigration(
-      input.gatewayId,
-      activeOperations.docs.map((doc) => {
-        const operation = doc.data() as Record<string, unknown>;
-        return {
-          id: doc.id,
-          kind: typeof operation.kind === "string" ? operation.kind : "",
-          status: typeof operation.status === "string" ? operation.status : "",
-          input: operation.input,
-          customerMigrationV2: operation.customerMigrationV2,
-        };
-      }),
-    );
-    if (migrationConflict) {
-      throw new GatewayRetirementConflictError(
-        `customer migration is in flight for gateway ${input.gatewayId}`,
-      );
-    }
-
-    await assertGatewayRuntimeMutationUnfenced(input.db, transaction, input.gatewayId);
-
-    let liveRuntimeIdentity: LiveRuntimeIdentity = null;
-    if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
-      const runtimeSnap = await transaction.get(
-        input.db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId),
-      );
-      const runtime = runtimeSnap.exists ? runtimeSnap.data() : undefined;
-      if (rootData.desiredRelease !== rootData.liveRelease) {
-        throw unconvergedRetirementError(input.gatewayId, runtime);
-      }
-      const inspection = runningRetirementError(
-        input.gatewayId,
-        runtime,
-        input.now,
-        rootData.liveRelease,
-        input.telemetryObservedAfter,
-      );
-      if (inspection.error) {
-        throw inspection.telemetryUnavailable
-          ? new GatewayRetirementTelemetryUnavailableError(inspection.error)
-          : new GatewayRetirementConflictError(inspection.error);
-      }
-      liveRuntimeIdentity = inspection.liveRuntimeIdentity;
-    }
-
-    await input.claimGuard?.({ transaction, root: rootData });
-
-    const version = nextRetirementVersion(
-      (rootData as unknown as Record<string, unknown>).retirementVersion,
-    );
-    const claim: RetirementClaim = {
-      operationId: input.operationId,
-      version,
-      claimedAt: input.now,
-      phase: "claimed",
-      liveRelease: rootData.liveRelease,
-      liveRuntimeIdentity,
-      previousDesiredStatus: rootData.desiredStatus,
-    };
-    transaction.set(
-      rootRef,
-      {
-        desiredStatus: "retired",
-        retirementVersion: version,
-        retirementClaim: claim,
-        updatedAt: input.now,
-        updatedBy: input.updatedBy,
-      },
-      { merge: true },
-    );
-    transaction.set(operationRef, {
-      ...input.operation,
-      input: {
-        ...operationInput(input.operation),
-        retirementClaimVersion: version,
-      },
-    });
-    return { version };
-  });
-}
-
 function activeMigrationConflict(gatewayId: string, operations: readonly Stored<OperationRecord>[]): boolean {
   return findActiveGatewayMigration(
     gatewayId,
@@ -502,6 +374,8 @@ export async function claimGatewayRetirementInStore(
         registry === null ? undefined : { ...registry, docKind: "runtime" },
       );
     }
+
+    await input.claimGuard?.({ transaction, root: rootData });
 
     const version = nextRetirementVersion(rootData.retirementVersion);
     const claim: RetirementClaim = {

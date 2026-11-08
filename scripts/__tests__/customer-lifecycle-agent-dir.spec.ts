@@ -1,3 +1,4 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import * as fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import * as fsSync from "node:fs";
@@ -348,6 +349,7 @@ describe("customer lifecycle config patch agent directories", () => {
       );
       const adapter = buildProductionLifecycleAdapter({
         db: {} as Firestore,
+        store: createDocumentFixtureStore(new Map()),
         rpc: {
           channelsStatus: vi.fn(async () => ({ channelAccounts: { mattermost: [] } })),
         } as unknown as GatewayRpcClient,
@@ -517,6 +519,7 @@ describe("customer lifecycle config patch agent directories", () => {
       })
       : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
         db: {} as Firestore,
+        store: createDocumentFixtureStore(new Map()),
         rpc: {} as GatewayRpcClient,
         log: vi.fn(),
       });
@@ -735,6 +738,7 @@ describe("customer lifecycle config patch agent directories", () => {
       );
       const adapter = buildProductionLifecycleAdapter({
         db: {} as Firestore,
+        store: createDocumentFixtureStore(new Map()),
         rpc: {} as GatewayRpcClient,
         log: vi.fn(),
       });
@@ -843,6 +847,7 @@ describe("customer lifecycle config patch agent directories", () => {
           })
           : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
             db: {} as Firestore,
+            store: createDocumentFixtureStore(new Map()),
             rpc: {} as GatewayRpcClient,
             log: vi.fn(),
           });
@@ -904,6 +909,7 @@ describe("customer lifecycle config patch agent directories", () => {
           })
           : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
             db: {} as Firestore,
+            store: createDocumentFixtureStore(new Map()),
             rpc,
             log: vi.fn(),
           });
@@ -945,6 +951,7 @@ describe("customer lifecycle config patch agent directories", () => {
           })
           : (await import("../lib/customer-lifecycle-prod-adapter.js")).buildProductionLifecycleAdapter({
             db: {} as Firestore,
+            store: createDocumentFixtureStore(new Map()),
             rpc,
             log: vi.fn(),
           });

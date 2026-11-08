@@ -1,7 +1,7 @@
-
-
 import type { Firestore } from "firebase-admin/firestore";
+import type { BuilderAccountReader } from "@octogee/core/builder-account";
 import { SYSTEM_CONFIG_REPO, WORKSPACE_REPO } from "@octogee/core/gitea-naming";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
 import {
   MODEL_CREDENTIAL_STATIC_PROVIDER_IDS,
@@ -11,7 +11,9 @@ import {
 } from "@octogee/shared/types/model-credentials";
 
 export interface ContextDeps {
-  db: Firestore;
+  store: PlatformStateStore;
+  accounts: BuilderAccountReader;
+  db: Pick<Firestore, "collection" | "doc">;
 }
 
 function asString(v: unknown): string | null {
@@ -23,96 +25,39 @@ function normalizedEmail(v: unknown): string | null {
   return email.length > 0 ? email : null;
 }
 
-function readMmUserId(data: Record<string, unknown> | undefined): string | null {
-  if (!data) return null;
-  const mm = data.mattermost as Record<string, unknown> | undefined;
-  return asString(mm?.userId);
-}
-
-function readMmTeamId(data: Record<string, unknown> | undefined): string | null {
-  if (!data) return null;
-  const mm = data.mattermost as Record<string, unknown> | undefined;
-  return asString(mm?.teamId);
-}
-
-function readMmChannelId(data: Record<string, unknown> | undefined): string | null {
-  if (!data) return null;
-  const mm = data.mattermost as Record<string, unknown> | undefined;
-  return asString(mm?.channelId);
-}
-
-function resolveSlug(userData: Record<string, unknown>): string {
-  const provisioning = (userData.provisioning as Record<string, unknown> | undefined) ?? {};
-  const openclaw = (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-  const openclawSlug = asString(openclaw.slug);
-  if (openclawSlug) return openclawSlug;
-  const username = asString(userData.username);
-  return username ?? "";
-}
-
-function resolveGatewayId(userData: Record<string, unknown>): string | null {
-  const provisioning = (userData.provisioning as Record<string, unknown> | undefined) ?? {};
-  const openclaw = (provisioning.openclaw as Record<string, unknown> | undefined) ?? {};
-  return asString(openclaw.gatewayId);
-}
-
-async function resolveWorkspaceTeamId(db: Firestore, slug: string): Promise<string | null> {
+async function resolveWorkspaceTeamId(store: PlatformStateStore, slug: string): Promise<string | null> {
   if (!slug) return null;
-  const wsDoc = await db.collection("workspaces").doc(slug).get();
-  if (!wsDoc.exists) return null;
-  return readMmTeamId(wsDoc.data() as Record<string, unknown>);
+  return asString((await store.workspaces.records.get(slug))?.mattermostTeamId);
 }
 
-async function resolveCoachMmUserId(db: Firestore, uid: string): Promise<string | null> {
-  const agentDoc = await db.collection("agents").doc(uid).get();
-  if (!agentDoc.exists) return null;
-  return readMmUserId(agentDoc.data() as Record<string, unknown>);
+async function resolveCoachMmUserId(store: PlatformStateStore, uid: string): Promise<string | null> {
+  return asString((await store.workspaces.agentIdentities.get(uid))?.mattermostUserId);
 }
 
-async function resolveAdminChannelId(db: Firestore, slug: string): Promise<string | null> {
+async function resolveAdminChannelId(store: PlatformStateStore, slug: string): Promise<string | null> {
   if (!slug) return null;
-  const adminDoc = await db.doc(`workspaces/${slug}/channels/admin`).get();
-  if (!adminDoc.exists) return null;
-  return readMmChannelId(adminDoc.data() as Record<string, unknown>);
+  const channel = await store.workspaces.channels.get({ workspaceSlug: slug, projectSlug: null }, "admin");
+  return asString(channel?.mattermostChannelId);
 }
 
-function resolveProjectRepoName(
-  projDoc: { id: string; data: () => unknown },
-): string {
-  const projData = (projDoc.data() ?? {}) as Record<string, unknown>;
-
-const persisted = asString(projData.giteaRepoName);
-  if (persisted) return persisted;
-  return (
-    asString(projData.slug) ?? asString(projData.projectSlug) ?? projDoc.id
-  );
-}
-
-async function resolveRepoNames(db: Firestore, slug: string): Promise<string[]> {
-  if (!slug) return [];
-  const out: string[] = [WORKSPACE_REPO, SYSTEM_CONFIG_REPO];
-  const projectsSnap = await db.collection(`workspaces/${slug}/projects`).get();
-  for (const projDoc of projectsSnap.docs) {
-    out.push(resolveProjectRepoName(projDoc));
-  }
-  return out;
-}
-
-async function resolveProjectSlugs(db: Firestore, slug: string): Promise<string[]> {
-  if (!slug) return [];
-  const projectsSnap = await db.collection(`workspaces/${slug}/projects`).get();
-  const slugs: string[] = [];
-  for (const projDoc of projectsSnap.docs) {
-    const projData = (projDoc.data() ?? {}) as Record<string, unknown>;
-    const projSlug =
-      asString(projData.slug) ?? asString(projData.projectSlug) ?? projDoc.id;
-    slugs.push(projSlug);
-  }
-  return slugs.sort();
+async function resolveProjects(
+  store: PlatformStateStore,
+  slug: string,
+): Promise<{ repoNames: string[]; projectSlugs: string[] }> {
+  if (!slug) return { repoNames: [], projectSlugs: [] };
+  const projects = await store.workspaces.projects.list(slug);
+  return {
+    repoNames: [
+      WORKSPACE_REPO,
+      SYSTEM_CONFIG_REPO,
+      ...projects.map((project) => asString(project.giteaRepoName) ?? project.projectSlug),
+    ],
+    projectSlugs: projects.map((project) => project.projectSlug).sort(),
+  };
 }
 
 async function resolveCredentialSecretNames(
-  db: Firestore,
+  db: ContextDeps["db"],
   uid: string,
   slug: string,
 ): Promise<string[]> {
@@ -135,28 +80,26 @@ async function resolveCredentialSecretNames(
 }
 
 async function resolveProjectAgentCleanup(
-  db: Firestore,
+  store: PlatformStateStore,
   uid: string,
 ): Promise<{
   projectAgentMmUserIds: string[];
   projectAgentCredentialDocPaths: string[];
 }> {
-  const secrets = await db.collection(`users/${uid}/secrets`).get();
-  const projectAgentDocs = secrets.docs.filter((doc) =>
-    doc.id.startsWith("projectAgentMattermost-"));
+  const secrets = await store.secrets.list(uid, "project-agent-mattermost");
   return {
-    projectAgentMmUserIds: projectAgentDocs
-      .map((doc) => asString((doc.data() as Record<string, unknown>).mmUserId))
+    projectAgentMmUserIds: secrets
+      .map((secret) => secret.kind === "connector" ? null : asString(secret.mattermostUserId))
       .filter((value): value is string => value !== null)
       .sort(),
-    projectAgentCredentialDocPaths: projectAgentDocs
-      .map((doc) => `users/${uid}/secrets/${doc.id}`)
+    projectAgentCredentialDocPaths: secrets
+      .map((secret) => `users/${uid}/secrets/${secret.secretId}`)
       .sort(),
   };
 }
 
 async function resolveChatArtifactIds(
-  db: Firestore,
+  db: ContextDeps["db"],
   uid: string,
   slug: string,
 ): Promise<string[]> {
@@ -175,7 +118,7 @@ async function resolveChatArtifactIds(
   return Array.from(new Set(ids)).sort();
 }
 
-async function resolveAgentImportIds(db: Firestore, uid: string): Promise<string[]> {
+async function resolveAgentImportIds(db: ContextDeps["db"], uid: string): Promise<string[]> {
   const snapshot = await db.collection("agentImports").where("uid", "==", uid).get();
   return snapshot.docs.map((doc) => {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(doc.id)) {
@@ -189,31 +132,29 @@ export async function loadCustomerCleanupContext(
   deps: ContextDeps,
   uid: string,
 ): Promise<CustomerCleanupContext | null> {
-  const userDoc = await deps.db.collection("users").doc(uid).get();
-  if (!userDoc.exists) return null;
-  const userData = userDoc.data() as Record<string, unknown>;
-  const slug = resolveSlug(userData);
-  const gatewayId = resolveGatewayId(userData);
+  const builder = await deps.store.builders.records.get(uid);
+  if (builder === null) return null;
+  const slug = builder.slug ?? "";
 
   const [
+    account,
     workspaceTeamId,
     mmCoachUserId,
     adminChannelId,
-    repoNames,
-    projectSlugs,
+    projects,
     credentialSecretNames,
     projectAgentCleanup,
     chatArtifactIds,
     agentImportIds,
   ] =
     await Promise.all([
-      resolveWorkspaceTeamId(deps.db, slug),
-      resolveCoachMmUserId(deps.db, uid),
-      resolveAdminChannelId(deps.db, slug),
-      resolveRepoNames(deps.db, slug),
-      resolveProjectSlugs(deps.db, slug),
+      deps.accounts.get(uid),
+      resolveWorkspaceTeamId(deps.store, slug),
+      resolveCoachMmUserId(deps.store, uid),
+      resolveAdminChannelId(deps.store, slug),
+      resolveProjects(deps.store, slug),
       resolveCredentialSecretNames(deps.db, uid, slug),
-      resolveProjectAgentCleanup(deps.db, uid),
+      resolveProjectAgentCleanup(deps.store, uid),
       resolveChatArtifactIds(deps.db, uid, slug),
       resolveAgentImportIds(deps.db, uid),
     ]);
@@ -221,15 +162,14 @@ export async function loadCustomerCleanupContext(
   return {
     uid,
     slug,
-    email: normalizedEmail(userData.email),
+    email: normalizedEmail(account?.email),
     giteaOrg: slug,
-    repoNames,
-    projectSlugs,
+    ...projects,
     workspaceTeamId,
-    mmUserId: readMmUserId(userData),
+    mmUserId: asString(builder.mattermostUserId),
     mmCoachUserId,
     adminChannelId,
-    currentGatewayId: gatewayId,
+    currentGatewayId: builder.gateway?.gatewayId ?? null,
     credentialSecretNames,
     ...projectAgentCleanup,
     chatArtifactIds,

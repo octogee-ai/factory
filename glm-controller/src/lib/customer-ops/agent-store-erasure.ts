@@ -1,8 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
-import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
-import { CUSTOMER_DELETION_JOBS_COLLECTION } from "@octogee/shared/types/account-lifecycle";
 import type { Operation } from "@octogee/shared/types/glm";
 import type { AgentStoreErasureCustody, AgentStoreErasureTarget } from "@octogee/core/agent-store-credentials";
+import type {
+  BuilderRecord,
+  CustomerDeletionJob,
+  GatewayRoot,
+  MigrationTransferTask,
+  OperationRecord,
+  PlatformStateStore,
+  PlatformStateTransaction,
+  Stored,
+} from "@octogee/core/platform-state";
 import type { CustomerCleanupContext } from "../../handlers/deprovision-customer.js";
 import { assertActiveOperationClaim } from "../../operation-context.js";
 import type { CustomerGatewayRetirementProof } from "./customer-gateway-retirement.js";
@@ -19,7 +27,7 @@ export interface SharedAgentErasureSource {
 }
 
 export interface CustomerAgentStoreErasureDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   now(): number;
   eraseStores(cleanup: CustomerCleanupContext, custody: AgentStoreErasureCustody): Promise<void>;
   sharedGatewayRetired(gatewayId: string): Promise<boolean>;
@@ -30,118 +38,128 @@ export interface CustomerAgentStoreErasureDeps {
   unmountSharedCustomer(cleanup: CustomerCleanupContext, coverage: AgentStoreUnmountCoverage, operation: Operation): Promise<void>;
 }
 
-function validRetirementProof(value: DocumentData): value is CustomerGatewayRetirementProof {
-  return typeof value.gatewayId === "string" && typeof value.operationId === "string" &&
-    Number.isSafeInteger(value.version) && value.version > 0 &&
+function isMap(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validRetirementProof(value: unknown): value is CustomerGatewayRetirementProof {
+  return isMap(value) && typeof value.gatewayId === "string" && typeof value.operationId === "string" &&
+    Number.isSafeInteger(value.version) && (value.version as number) > 0 &&
     typeof value.completedAt === "number" && Number.isFinite(value.completedAt) &&
     (value.runtime === "cluster" || value.runtime === "gce-vm");
 }
 
-function retirementProofs(job: DocumentData): CustomerGatewayRetirementProof[] {
-  const values = Object.values(job.retiredGatewayProofs ?? {});
-  if (!values.every(value => value && typeof value === "object" && validRetirementProof(value))) {
+function retirementProofs(job: CustomerDeletionJob): CustomerGatewayRetirementProof[] {
+  const values: unknown[] = Object.values(job.retiredGatewayProofs ?? {});
+  if (!values.every(validRetirementProof)) {
     throw new Error("Customer deletion retirement proof is malformed");
   }
-  return values as CustomerGatewayRetirementProof[];
+  return values;
 }
 
-export async function preserveCustomerGatewayRetirement(db: Firestore, uid: string, deletionId: string, proof: CustomerGatewayRetirementProof): Promise<void> {
-  const ref = db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-  await db.runTransaction(async tx => {
-    const job = (await tx.get(ref)).data();
-    if (!job || job.uid !== uid || !["suspending", "hibernating"].includes(job.status) ||
+export async function preserveCustomerGatewayRetirement(
+  store: PlatformStateStore,
+  uid: string,
+  deletionId: string,
+  proof: CustomerGatewayRetirementProof,
+): Promise<void> {
+  await store.transaction({ label: "customer-deletion.preserve-gateway-retirement" }, async (transaction) => {
+    const job = await transaction.jobs.deletions.get(deletionId);
+    if (job === null || job.uid !== uid || !["suspending", "hibernating"].includes(job.status) ||
         typeof job.requestedBy !== "string" || !validRetirementProof(proof)) {
       throw new Error("Customer deletion does not own the gateway retirement proof");
     }
     const prior = job.retiredGatewayProofs?.[proof.gatewayId];
     if (prior && !isDeepStrictEqual(prior, proof)) throw new Error("Customer deletion gateway retirement changed");
-    tx.update(ref, { [`retiredGatewayProofs.${proof.gatewayId}`]: proof });
+    await transaction.jobs.deletions.recordRetiredGatewayProof(deletionId, proof.gatewayId, { ...proof });
   });
 }
 
-function customerAuthorityMatches(user: DocumentData | undefined, cleanup: CustomerCleanupContext, deletionId: string, eraseAfter: number): boolean {
-  if (!user) return true;
-  const state = user.provisioning?.openclaw ?? {};
-  return user.username === cleanup.slug && user.accountLifecycle?.deletionId === deletionId &&
-    user.accountLifecycle.eraseAfter === eraseAfter &&
-    ["deletion_scheduled", "erasing"].includes(user.accountLifecycle?.status) &&
-    !["gatewayId", "migration", "restoreFence", "sourceTransferFence", "runtimeRestartFence"]
-      .some(key => state[key] != null);
+function customerAuthorityMatches(builder: BuilderRecord | null, cleanup: CustomerCleanupContext, deletionId: string, eraseAfter: number): boolean {
+  if (builder === null) return true;
+  const lifecycle = builder.accountLifecycle;
+  return builder.slug === cleanup.slug && lifecycle?.deletionId === deletionId &&
+    lifecycle.eraseAfter === eraseAfter && ["deletion_scheduled", "erasing"].includes(lifecycle.status) &&
+    builder.gateway === null && builder.fences.migration === undefined &&
+    builder.fences.restoreFence === undefined && builder.fences.sourceTransferFence === undefined;
 }
 
-function operationConflicts(data: DocumentData, uid: string, gateways: Set<string>): boolean {
-  return data.inputUid === uid || data.input?.uid === uid ||
-    [data.gatewayId, data.input?.gatewayId, data.input?.fromGatewayId, data.input?.toGatewayId].some(id => gateways.has(id));
+function operationConflicts(operation: OperationRecord, uid: string, gateways: Set<string>): boolean {
+  const input = operation.input as Record<string, unknown> | undefined;
+  return operation.inputUid === uid || input?.uid === uid ||
+    [operation.gatewayId, input?.gatewayId, input?.fromGatewayId, input?.toGatewayId]
+      .some(id => typeof id === "string" && gateways.has(id));
 }
 
-function deletionIdentityMatches(job: DocumentData, cleanup: CustomerCleanupContext, operation: Operation): boolean {
+function transferConflicts(task: MigrationTransferTask, slug: string, gateways: Set<string>): boolean {
+  return task.slug === slug || gateways.has(task.sourceGatewayId) || gateways.has(task.targetGatewayId);
+}
+
+function deletionIdentityMatches(job: CustomerDeletionJob, cleanup: CustomerCleanupContext, operation: Operation): boolean {
   return job.version === 1 && job.uid === cleanup.uid && job.slug === cleanup.slug &&
     job.currentGatewayId === cleanup.currentGatewayId && job.erasureOperationId === operation.id &&
     job.status === "hibernating" && isDeepStrictEqual(job.cleanupContext, cleanup);
 }
 
-function deletionConsentIsDue(job: DocumentData, now: number): boolean {
+function deletionConsentIsDue(job: CustomerDeletionJob, now: number): boolean {
   return typeof job.requestedBy === "string" && job.requestedBy.length > 0 &&
-    typeof job.requestedAt === "number" && Number.isFinite(job.requestedAt) &&
-    typeof job.eraseAfter === "number" && Number.isFinite(job.eraseAfter) && now >= job.eraseAfter;
+    Number.isFinite(job.requestedAt) && Number.isFinite(job.eraseAfter) && now >= job.eraseAfter;
 }
 
 async function assertDeletionAuthority(
   deps: CustomerAgentStoreErasureDeps,
-  tx: Transaction,
+  transaction: PlatformStateTransaction,
   cleanup: CustomerCleanupContext,
   deletionId: string,
   operation: Operation,
-): Promise<DocumentData> {
-  const [jobSnap, user, current, assignments, operations, roots, transfers] = await Promise.all([
-    tx.get(deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId)),
-    tx.get(deps.db.collection("users").doc(cleanup.uid)),
-    tx.get(deps.db.collection("glmOperations").doc(operation.id)),
-    tx.get(deps.db.collectionGroup("assignments").where("uid", "==", cleanup.uid)),
-    tx.get(deps.db.collection("glmOperations").where("status", "in", ["pending", "running"])),
-    tx.get(deps.db.collection("gateways").where("ownerUid", "==", cleanup.uid)),
-    tx.get(deps.db.collection("glmMigrationTransferTasks").where("status", "==", "running")),
+): Promise<Stored<CustomerDeletionJob>> {
+  const [job, builder, currentOperation, assignments, operations, roots, transfers] = await Promise.all([
+    transaction.jobs.deletions.get(deletionId),
+    transaction.builders.records.get(cleanup.uid),
+    transaction.journal.operations.get(operation.id),
+    transaction.gateways.assignments.listForUid(cleanup.uid),
+    transaction.journal.operations.listByStatus(["pending", "running"]),
+    transaction.gateways.roots.list({ ownerUid: cleanup.uid }),
+    transaction.migrationTasks.listByStatus(["running"]),
   ]);
-  const job = jobSnap.data();
-  const currentOperation = current.exists ? current.data() as Operation : null;
   assertActiveOperationClaim(operation, currentOperation);
   if (operation.kind !== "erase-customer" || operation.input.uid !== cleanup.uid || operation.input.deletionId !== deletionId ||
-      !job || !deletionIdentityMatches(job, cleanup, operation) || !deletionConsentIsDue(job, deps.now()) ||
+      job === null || !deletionIdentityMatches(job, cleanup, operation) || !deletionConsentIsDue(job, deps.now()) ||
       currentOperation?.input.deletionId !== deletionId ||
-      !customerAuthorityMatches(user.data(), cleanup, deletionId, job.eraseAfter) || !assignments.empty) {
+      !customerAuthorityMatches(builder, cleanup, deletionId, job.eraseAfter) || assignments.length > 0) {
     throw new Error("Customer PostgreSQL erasure no longer owns its due deletion job");
   }
   const gateways = new Set([cleanup.currentGatewayId, ...retirementProofs(job).map(proof => proof.gatewayId)].filter((id): id is string => typeof id === "string"));
-  if (operations.docs.some(doc => doc.id !== operation.id && operationConflicts(doc.data(), cleanup.uid, gateways)) ||
-      transfers.docs.some(doc => operationConflicts(doc.data(), cleanup.uid, gateways)) ||
-      roots.docs.some(doc => doc.data().desiredStatus !== "retired" || doc.data().runtimeRestartFence != null)) {
+  if (operations.some(candidate => candidate.id !== operation.id && operationConflicts(candidate, cleanup.uid, gateways)) ||
+      transfers.some(task => transferConflicts(task, cleanup.slug, gateways)) ||
+      roots.some(root => root.desiredStatus !== "retired" || root.runtimeRestartFence != null)) {
     throw new Error("Customer PostgreSQL erasure has conflicting runtime work");
   }
   return job;
 }
 
-function retiredRootMatches(state: DocumentData | undefined, proof: CustomerGatewayRetirementProof, uid: string): boolean {
-  return !state || (state.ownerUid === uid && state.gatewayClass === "builder" && state.desiredStatus === "retired" &&
-    state.retirementVersion === proof.version && state.retirementClaim?.operationId === proof.operationId);
+function retiredRootMatches(root: GatewayRoot | null, proof: CustomerGatewayRetirementProof, uid: string): boolean {
+  return root === null || (root.ownerUid === uid && root.gatewayClass === "builder" && root.desiredStatus === "retired" &&
+    root.retirementVersion === proof.version && root.retirementClaim?.operationId === proof.operationId);
 }
 
 async function assertBuilderRetirementAbsent(deps: CustomerAgentStoreErasureDeps, cleanup: CustomerCleanupContext, proof: CustomerGatewayRetirementProof): Promise<void> {
-  const [root, runtime, assignments, users, operations] = await Promise.all([
-    deps.db.collection("gateways").doc(proof.gatewayId).get(),
-    deps.db.collection("glmGateways").doc(proof.gatewayId).get(),
-    deps.db.collection("gateways").doc(proof.gatewayId).collection("assignments").get(),
-    deps.db.collection("users").where("provisioning.openclaw.gatewayId", "==", proof.gatewayId).get(),
-    deps.db.collection("glmOperations").where("gatewayId", "==", proof.gatewayId).get(),
+  const [root, runtime, assignmentsEmpty, builders, operations] = await Promise.all([
+    deps.store.gateways.roots.get(proof.gatewayId),
+    deps.store.fleetRegistry.get(proof.gatewayId),
+    deps.store.gateways.assignments.isEmpty(proof.gatewayId),
+    deps.store.builders.records.listByGateway(proof.gatewayId, { limit: 1 }),
+    deps.store.journal.operations.listByGateway(proof.gatewayId),
   ]);
-  if (!retiredRootMatches(root.data(), proof, cleanup.uid) || runtime.exists || !assignments.empty || !users.empty ||
-      operations.docs.some(doc => doc.data().kind === "add-gateway" &&
-        (typeof doc.data().createdAt !== "number" || doc.data().createdAt >= proof.completedAt)) ||
+  if (!retiredRootMatches(root, proof, cleanup.uid) || runtime !== null || !assignmentsEmpty || builders.length > 0 ||
+      operations.some(candidate => candidate.kind === "add-gateway" &&
+        (typeof candidate.createdAt !== "number" || candidate.createdAt >= proof.completedAt)) ||
       !await deps.runtimeAbsent(proof.gatewayId, proof.runtime)) {
     throw new Error("Customer PostgreSQL erasure retained a gateway runtime or changed retirement");
   }
 }
 
-async function assertRetiredCustomerWriters(deps: CustomerAgentStoreErasureDeps, cleanup: CustomerCleanupContext, job: DocumentData): Promise<void> {
+async function assertRetiredCustomerWriters(deps: CustomerAgentStoreErasureDeps, cleanup: CustomerCleanupContext, job: CustomerDeletionJob): Promise<void> {
   const proofs = retirementProofs(job);
   if (!cleanup.currentGatewayId) throw new Error("Customer PostgreSQL erasure lacks its captured source gateway");
   if (!cleanup.currentGatewayId.startsWith("shared-") && !proofs.some(proof => proof.gatewayId === cleanup.currentGatewayId)) {
@@ -170,12 +188,11 @@ async function assertSharedCustomerStopped(
   }
   const agentIds = [...new Set(targets.flatMap(target => target.family === "agent" && agentIdBelongsToSlug(target.agentId, cleanup.slug) ? [target.agentId] : []))].sort();
   const identity = { gatewayId, podUid: source.podUid, startedAt: source.startedAt, agentIds, operationId: operation.id };
-  const ref = deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-  const complete = await deps.db.runTransaction(async tx => {
-    const job = await assertDeletionAuthority(deps, tx, cleanup, deletionId, operation);
+  const complete = await deps.store.transaction({ label: "customer-deletion.shared-agent-store-cleanup.claim" }, async (transaction) => {
+    const job = await assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation);
     const suspensionId = job.suspensionOperationId;
-    if (typeof suspensionId !== "string") throw new Error("Customer PostgreSQL erasure lacks completed suspension cleanup");
-    const suspension = (await tx.get(deps.db.collection("glmOperations").doc(suspensionId))).data();
+    if (suspensionId === undefined) throw new Error("Customer PostgreSQL erasure lacks completed suspension cleanup");
+    const suspension = await transaction.journal.operations.get(suspensionId);
     if (!suspensionCleanupMatches(suspension, cleanup.uid, deletionId)) {
       throw new Error("Customer PostgreSQL erasure lacks completed suspension cleanup");
     }
@@ -185,10 +202,14 @@ async function assertSharedCustomerStopped(
           !isDeepStrictEqual(prior, { ...identity, complete: prior.complete, claimStartedAt: prior.claimStartedAt })) {
         throw new Error("Customer PostgreSQL erasure Shared source or agent coverage changed");
       }
-      if (!prior.complete) tx.update(ref, { "sharedAgentStoreCleanup.claimStartedAt": operation.startedAt });
+      if (!prior.complete) {
+        await transaction.jobs.deletions.patch(deletionId,
+          { sharedAgentStoreCleanup: { ...prior, claimStartedAt: operation.startedAt } }, { revision: job.revision });
+      }
       return prior.complete;
     }
-    tx.update(ref, { sharedAgentStoreCleanup: { ...identity, complete: false, claimStartedAt: operation.startedAt } });
+    await transaction.jobs.deletions.patch(deletionId,
+      { sharedAgentStoreCleanup: { ...identity, complete: false, claimStartedAt: operation.startedAt } }, { revision: job.revision });
     return false;
   });
   if (!complete) {
@@ -201,25 +222,32 @@ async function assertSharedCustomerStopped(
       current.customers.includes(cleanup.slug) || current.migratingIn.includes(cleanup.slug)) {
     throw new Error("Customer PostgreSQL erasure Shared runtime changed or retained the customer");
   }
-  if (!complete) await deps.db.runTransaction(async tx => {
-    const job = await assertDeletionAuthority(deps, tx, cleanup, deletionId, operation);
-    if (!isDeepStrictEqual(job.sharedAgentStoreCleanup, { ...identity, complete: false, claimStartedAt: operation.startedAt })) {
-      throw new Error("Customer PostgreSQL erasure Shared cleanup admission changed");
-    }
-    tx.update(ref, { "sharedAgentStoreCleanup.complete": true });
-  });
+  if (!complete) {
+    await deps.store.transaction({ label: "customer-deletion.shared-agent-store-cleanup.complete" }, async (transaction) => {
+      const job = await assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation);
+      const claimed = { ...identity, complete: false, claimStartedAt: operation.startedAt };
+      if (!isDeepStrictEqual(job.sharedAgentStoreCleanup, claimed)) {
+        throw new Error("Customer PostgreSQL erasure Shared cleanup admission changed");
+      }
+      await transaction.jobs.deletions.patch(deletionId,
+        { sharedAgentStoreCleanup: { ...claimed, complete: true } }, { revision: job.revision });
+    });
+  }
 }
 
-function suspensionCleanupMatches(suspension: DocumentData | undefined, uid: string, deletionId: string): boolean {
+function suspensionCleanupMatches(suspension: OperationRecord | null, uid: string, deletionId: string): boolean {
   return suspension?.kind === "suspend-customer" && suspension.status === "succeeded" &&
     suspension.input?.uid === uid && suspension.input?.deletionId === deletionId &&
-    Array.isArray(suspension.steps) && suspension.steps.some((step: DocumentData) => step.name === "unmount-gateway" && step.status === "done");
+    Array.isArray(suspension.steps) && suspension.steps.some(step => step.name === "unmount-gateway" && step.status === "done");
 }
 
 export function createCustomerAgentStoreErasure(deps: CustomerAgentStoreErasureDeps) {
   return async (cleanup: CustomerCleanupContext, deletionId: string, operation: Operation, assertActiveClaim: (() => Promise<void>) | undefined): Promise<void> => {
     if (!assertActiveClaim) throw new Error("Customer PostgreSQL erasure requires its active operation claim");
-    const readAuthority = () => deps.db.runTransaction(tx => assertDeletionAuthority(deps, tx, cleanup, deletionId, operation));
+    const readAuthority = () => deps.store.transaction(
+      { label: "customer-deletion.agent-store-erasure.authority", readOnly: true },
+      transaction => assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation),
+    );
     const assertCurrent = async () => { await assertActiveClaim(); await readAuthority(); };
     await assertCurrent();
     await deps.eraseStores(cleanup, {
@@ -240,13 +268,13 @@ export function createCustomerAgentStoreErasure(deps: CustomerAgentStoreErasureD
         await assertCurrent();
         return [cleanup.currentGatewayId!, ...retirementProofs(job).map(proof => proof.gatewayId)];
       },
-      bindTargets: targets => deps.db.runTransaction(async tx => {
-        const job = await assertDeletionAuthority(deps, tx, cleanup, deletionId, operation);
+      bindTargets: targets => deps.store.transaction({ label: "customer-deletion.agent-store-erasure.bind-targets" }, async (transaction) => {
+        const job = await assertDeletionAuthority(deps, transaction, cleanup, deletionId, operation);
         if (job.postgresAgentStoreTargets !== undefined) {
-          if (!Array.isArray(job.postgresAgentStoreTargets)) throw new Error("Customer PostgreSQL erasure targets are malformed");
-          return job.postgresAgentStoreTargets as AgentStoreErasureTarget[];
+          return job.postgresAgentStoreTargets as unknown as readonly AgentStoreErasureTarget[];
         }
-        tx.update(deps.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId), { postgresAgentStoreTargets: [...targets] });
+        await transaction.jobs.deletions.patch(deletionId,
+          { postgresAgentStoreTargets: targets.map(target => ({ ...target })) }, { revision: job.revision });
         return targets;
       }),
     });

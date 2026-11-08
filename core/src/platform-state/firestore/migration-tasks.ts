@@ -8,7 +8,7 @@ import type {
   MigrationTransferTask,
   MigrationTransferTaskStatus,
 } from "../migration-tasks.js";
-import type { Stored } from "../store.js";
+import type { Revision, Stored } from "../store.js";
 import { assertAbsentFence, assertFenceEquals, assertFenceOneOf, assertRevisionFence } from "./fences.js";
 import type { FirestoreSession } from "./session.js";
 import { decodeDocumentData, encodeDocument, encodePatch, revisionOf, STORED_AS_NUMBERS } from "./values.js";
@@ -40,17 +40,19 @@ function optional<T>(
 const isString = (value: unknown): value is string => typeof value === "string";
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-export function decodeMigrationTransferTask(snapshot: DocumentSnapshot): Stored<MigrationTransferTask> | null {
-  if (!snapshot.exists) return null;
-  const key = taskKey(snapshot.id);
-  const data = decodeDocumentData(snapshot);
+export function migrationTransferTaskFromData(
+  id: string,
+  data: Readonly<Record<string, unknown>>,
+  revision: Revision,
+): Stored<MigrationTransferTask> {
+  const key = taskKey(id);
   const required = <T>(field: string, accepts: (value: unknown) => value is T): T => {
     const value = data[field];
     if (!accepts(value)) throw new MalformedRecordError(key, `${field} is ${JSON.stringify(value)}`);
     return value;
   };
   return {
-    id: snapshot.id,
+    id,
     kind: required("kind", isString),
     migrationId: required("migrationId", isString),
     slug: required("slug", isString),
@@ -70,8 +72,13 @@ export function decodeMigrationTransferTask(snapshot: DocumentSnapshot): Stored<
     startedAt: required("startedAt", isNumber),
     completedAt: optional(key, data, "completedAt", isNumber),
     error: optional(key, data, "error", isString),
-    revision: revisionOf(snapshot),
+    revision,
   };
+}
+
+export function decodeMigrationTransferTask(snapshot: DocumentSnapshot): Stored<MigrationTransferTask> | null {
+  if (!snapshot.exists) return null;
+  return migrationTransferTaskFromData(snapshot.id, decodeDocumentData(snapshot), revisionOf(snapshot));
 }
 
 function encodeTask(task: MigrationTransferTask) {

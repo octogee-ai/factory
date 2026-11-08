@@ -1,5 +1,5 @@
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -75,15 +75,17 @@ afterAll(() => {
   for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function mkDb(rows: Array<Record<string, unknown>>): Firestore {
-  const docs = rows.map((row) => ({ data: () => row }));
-  const query = {
-    where: vi.fn(() => query),
-    get: vi.fn(async () => ({ docs })),
-  };
-  return {
-    collection: vi.fn(() => query),
-  } as unknown as Firestore;
+function assignedBuilders(gatewayId: string, rows: Array<Record<string, unknown>>) {
+  const docs = new Map<string, Record<string, unknown>>();
+  rows.forEach((row, index) => {
+    const provisioning = (row.provisioning ?? {}) as Record<string, unknown>;
+    const openclaw = (provisioning.openclaw ?? {}) as Record<string, unknown>;
+    docs.set(`users/u${index}`, {
+      ...row,
+      provisioning: { ...provisioning, openclaw: { gatewayId, status: "complete", ...openclaw } },
+    });
+  });
+  return createDocumentFixtureStore(docs).builders.records;
 }
 
 function recoveredSnapshot(overrides: Record<string, unknown> = {}) {
@@ -586,8 +588,8 @@ describe("createMountRefusalReader", () => {
 });
 
 describe("readMountedCustomersFromAssignedState", () => {
-  it("seeds assigned complete customers only when local state is present and wired", async () => {
-    const db = mkDb([
+  it("seeds assigned complete customers of this gateway only when local state is present and wired", async () => {
+    const db = assignedBuilders("gw-bender", [
       { provisioning: { openclaw: { slug: "ceckert" } } },
       { provisioning: { openclaw: { slug: "missing-dir" } } },
       { provisioning: { openclaw: { slug: "unwired" } } },
@@ -596,6 +598,8 @@ describe("readMountedCustomersFromAssignedState", () => {
       { provisioning: { openclaw: { slug: "no-origin" } } },
       { provisioning: { openclaw: { slug: "ceckert" } } },
       { username: "fallback" },
+      { provisioning: { openclaw: { slug: "still-provisioning", status: "provisioning" } } },
+      { provisioning: { openclaw: { slug: "elsewhere", gatewayId: "gw-other" } } },
     ]);
     const hasCustomerDir = vi.fn((slug: string) => slug !== "missing-dir");
     const customerCoachWiredInOpenclawConfig = vi.fn(
@@ -614,7 +618,7 @@ describe("readMountedCustomersFromAssignedState", () => {
   });
 
   it("falls back to customer-dir presence when the adapter has no config wiring probe", async () => {
-    const db = mkDb([
+    const db = assignedBuilders("gw-a", [
       { provisioning: { openclaw: { slug: "alice" } } },
       { provisioning: { openclaw: { slug: "bob" } } },
     ]);
@@ -629,7 +633,7 @@ describe("readMountedCustomersFromAssignedState", () => {
   });
 
   it("seeds a Builder-owned overlay only after its local mount marker is written", async () => {
-    const db = mkDb([
+    const db = assignedBuilders("gw-builder", [
       { provisioning: { openclaw: { slug: "discord-builder" } } },
       { provisioning: { openclaw: { slug: "unmounted-builder" } } },
     ]);

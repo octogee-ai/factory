@@ -5,9 +5,15 @@ import {
   GatewayRetirementTelemetryUnavailableError,
 } from "@octogee/core/gateway-retirement-claim";
 
+import type { PlatformStateTransaction } from "@octogee/core/platform-state";
+import { createJournalFixtureStore, journalRowsIn, type FixtureDocuments } from "@octogee/core/testing/journal-store";
 import { ensureOwnedGatewaysRetired } from "../lib/customer-ops/customer-gateway-retirement.js";
 
 interface Root {
+  gatewayId: string;
+  latestRelease: number;
+  desiredRelease: number;
+  liveRelease: number | null;
   ownerUid: string | null;
   gatewayClass: "shared" | "builder";
   desiredStatus: "running" | "paused" | "retired";
@@ -19,106 +25,113 @@ interface Root {
   updatedBy?: string;
 }
 
+type Rows = Record<string, Record<string, unknown>>;
+
+function durableRoot(gatewayId: string, fields: Omit<Root, "gatewayId" | "latestRelease" | "desiredRelease" | "liveRelease">): Root {
+  return { gatewayId, latestRelease: 1, desiredRelease: 1, liveRelease: 1, ...fields };
+}
+
+function runtimeRecord(gatewayId: string): Record<string, unknown> {
+  return { docKind: "runtime", gatewayId, release: 1, lifecycle: "serving" };
+}
+
+function assignedBuilder(gatewayId: string): Record<string, unknown> {
+  return { provisioning: { openclaw: { gatewayId } } };
+}
+
 function harness(
   roots: Record<string, Root>,
-  operations: Record<string, Record<string, unknown>> = {},
-  users: Record<string, Record<string, unknown>> = {},
-  runtimes: Record<string, Record<string, unknown>> = {},
+  operations: Rows = {},
+  users: Rows = {},
+  runtimes: Rows = {},
   assignments: string[] = [],
   subcollections: Record<string, string[]> = {},
-  recoveryReceipts: Record<string, Record<string, unknown>> = {},
+  recoveryReceipts: Rows = {},
 ) {
   const deleted: string[] = [];
   const committed: string[][] = [];
   const failures = { commit: false };
+  const hooks: { beforeTransaction?: () => void } = {};
+  let applying: string[] | null = null;
+  const tables: Record<string, Rows> = {
+    gateways: roots as unknown as Rows,
+    glmOperations: operations,
+    users,
+    glmGateways: runtimes,
+    gatewayRecoveryReceipts: recoveryReceipts,
+  };
+  const assignmentsPath = (gatewayId: string) => `gateways/${gatewayId}/assignments`;
   const collections = (path: string) => Object.keys(subcollections)
     .filter((name) => name.startsWith(`${path}/`) && !name.slice(path.length + 1).includes("/"))
-    .map((name) => ({ id: name.split("/").at(-1), path: name }));
+    .map((name) => ({ id: name.split("/").at(-1)!, path: name }));
   const erase = (path: string, recursive = false) => {
     deleted.push(path);
-    if (path.split("/").length === 2) {
-      if (path.startsWith("gateways/")) delete roots[path.slice("gateways/".length)];
-      if (path.startsWith("glmOperations/")) delete operations[path.slice("glmOperations/".length)];
-      if (path.startsWith("gatewayRecoveryReceipts/")) delete recoveryReceipts[path.slice("gatewayRecoveryReceipts/".length)];
-    }
+    applying?.push(path);
+    const [collection, id, child, childId] = path.split("/");
+    if (childId === undefined && child === undefined) delete tables[collection!]?.[id!];
+    if (child === "assignments" && childId !== undefined) assignments.splice(assignments.indexOf(childId), 1);
     if (recursive) {
       for (const name of Object.keys(subcollections)) {
         if (name === path || name.startsWith(`${path}/`)) delete subcollections[name];
       }
     }
   };
-  const gatewayRef = (id: string) => ({
-    path: `gateways/${id}`,
-    get: async () => ({ exists: roots[id] !== undefined, data: () => roots[id] }),
-    collection: () => ({ get: async () => ({ empty: assignments.length === 0 }) }),
-    listCollections: async () => collections(`gateways/${id}`),
-  });
-  const operationRef = (id: string) => ({
-    path: `glmOperations/${id}`,
-    get: async () => ({ id, exists: operations[id] !== undefined, data: () => operations[id] }),
-    listCollections: async () => collections(`glmOperations/${id}`),
+  const documents: FixtureDocuments = {
+    get: (path) => {
+      const [collection, id, child] = path.split("/");
+      return child === undefined ? tables[collection!]?.[id!] : undefined;
+    },
+    set: (path, row) => {
+      const [collection, id] = path.split("/");
+      tables[collection!]![id!] = row;
+    },
+    delete: (path) => erase(path),
+    children: (collectionPath) => {
+      if (collectionPath.endsWith("/assignments")) {
+        return assignmentsPath(collectionPath.split("/")[1]!) === collectionPath
+          ? assignments.map((uid) => [uid, { uid }] as const)
+          : [];
+      }
+      if (collectionPath.includes("/")) return [];
+      return Object.entries(tables[collectionPath] ?? {});
+    },
+    group: (collectionId) => { throw new Error(`unexpected collection group ${collectionId}`); },
+  };
+  const fixture = createJournalFixtureStore(journalRowsIn(operations), { documents });
+  const store = new Proxy(fixture, {
+    get(target, property, receiver) {
+      if (property !== "transaction") return Reflect.get(target, property, receiver);
+      return async <T>(options: { label: string; readOnly?: boolean }, body: (transaction: PlatformStateTransaction) => Promise<T>) => {
+        hooks.beforeTransaction?.();
+        const writes: string[] = [];
+        const result = await target.transaction(options, async (transaction) => {
+          const value = await body(transaction);
+          if (failures.commit && options.label.endsWith(".finish")) throw new Error("retirement cleanup commit unavailable");
+          applying = writes;
+          return value;
+        });
+        applying = null;
+        if (writes.length > 0) committed.push(writes);
+        return result;
+      };
+    },
   });
   const db = {
     collection: (name: string) => ({
-      doc: (id: string) => {
-        if (name === "gateways") return gatewayRef(id);
-        if (name === "glmGateways") return { get: async () => ({ exists: runtimes[id] !== undefined, data: () => runtimes[id] }) };
-        if (name === "gatewayRecoveryReceipts") return {
-          path: `${name}/${id}`,
-          get: async () => ({ exists: recoveryReceipts[id] !== undefined, data: () => recoveryReceipts[id] }),
-          listCollections: async () => collections(`${name}/${id}`),
-        };
-        if (name === "users") {
-          return {
-            path: `users/${id}`,
-            get: async () => ({ exists: users[id] !== undefined, data: () => users[id] }),
-          };
-        }
-        return operationRef(id);
-      },
-      where: (_field: string, _op: string, uid: string) => ({
-        get: async () => ({
-          empty: name === "users" ? Object.keys(users).length === 0 : false,
-          docs: name === "gateways"
-            ? Object.entries(roots)
-                .filter(([, root]) => root.ownerUid === uid)
-                .map(([id, root]) => ({ id, data: () => root, ref: gatewayRef(id) }))
-            : [],
-        }),
-      }),
+      doc: (id: string) => ({ listCollections: async () => collections(`${name}/${id}`) }),
     }),
-    runTransaction: async (action: (transaction: {
-      get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
-      delete: (ref: { path: string }) => void;
-      set: (ref: { path: string }, data: Partial<Root>, options: { merge: true }) => void;
-    }) => Promise<unknown>) => {
-      const pending: string[] = [];
-      const sets: Array<[string, Partial<Root>]> = [];
-      const result = await action({
-        get: (ref) => ref.get(),
-        delete: (ref) => { pending.push(ref.path); },
-        set: (ref, data) => { sets.push([ref.path.slice("gateways/".length), data]); },
-      });
-      for (const [id, data] of sets) roots[id] = { ...roots[id]!, ...data };
-      if (pending.length > 0) {
-        if (failures.commit) throw new Error("retirement cleanup commit unavailable");
-        committed.push(pending);
-        for (const path of pending) erase(path);
-      }
-      return result;
-    },
     recursiveDelete: async (ref: { path: string }) => {
       erase(ref.path, true);
     },
   };
-  return { db, deleted, committed, failures };
+  return { db, store, deleted, committed, failures, hooks };
 }
 
 function retiredRoot(operationId: string): Root {
-  return {
+  return durableRoot("builder-alice", {
     ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "retired",
     retirementVersion: 1, retirementClaim: { operationId, version: 1, phase: "claimed" },
-  };
+  });
 }
 
 function retirementOperation(status: string): Record<string, unknown> {
@@ -148,13 +161,13 @@ describe("owned customer gateway retirement", () => {
     const operationId = "delete-retire-delete-1-builder-alice";
     const roots = { "builder-alice": retiredRoot(operationId) };
     const operations = { [operationId]: { ...retirementOperation("succeeded"), completedAt: 90 } };
-    const { db } = harness(roots, operations);
+    const { db, store } = harness(roots, operations);
     const preserveRetirementProof = vi.fn(async proof => {
       expect(roots["builder-alice"]).toBeDefined();
       expect(operations[operationId]).toBeDefined();
       expect(proof).toEqual({ gatewayId: "builder-alice", operationId, version: 1, completedAt: 90, runtime: "cluster" });
     });
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, preserveRetirementProof })).resolves.toBe("retired");
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, preserveRetirementProof })).resolves.toBe("retired");
     expect(preserveRetirementProof).toHaveBeenCalledTimes(1);
     expect(roots).toEqual({});
     expect(operations).toEqual({});
@@ -162,11 +175,11 @@ describe("owned customer gateway retirement", () => {
 
   it("follows the recorded placement retirement operation after it succeeds", async () => {
     const operationId = "placement-retire-owner-builder-alice";
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
+    const { db, store, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
       [operationId]: retirementOperation("succeeded"),
     });
     const claimRetirement = vi.fn();
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never }))
       .resolves.toBe("retired");
     expect(deleted).toEqual(["gateways/builder-alice", `glmOperations/${operationId}`]);
     expect(claimRetirement).not.toHaveBeenCalled();
@@ -178,8 +191,8 @@ describe("owned customer gateway retirement", () => {
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded"), [recoveryId]: recoveryOperation() };
     const receipts = { [recoveryId]: recoveryOperation() };
-    const { db, committed } = harness(roots, operations, {}, {}, [], {}, receipts);
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
+    const { db, store, committed } = harness(roots, operations, {}, {}, [], {}, receipts);
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
 
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retired");
     expect(committed).toEqual([[
@@ -198,13 +211,13 @@ describe("owned customer gateway retirement", () => {
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded"), [recoveryId]: recoveryOperation() };
     const receipts = { [recoveryId]: recoveryOperation() };
-    const subcollections = { [`gatewayRecoveryReceipts/${recoveryId}/details`]: ["private-context"] };
-    const { db, failures, committed } = harness(roots, operations, {}, {}, [], subcollections, receipts);
+    const subcollections = { "gateways/builder-alice/releases": ["release-1"] };
+    const { db, store, failures, committed } = harness(roots, operations, {}, {}, [], subcollections, receipts);
     const recursiveDelete = db.recursiveDelete;
     const cleanup = vi.spyOn(db, "recursiveDelete");
     if (failure === "children") cleanup.mockRejectedValue(new Error("recovery child cleanup unavailable"));
     else failures.commit = true;
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
 
     await expect(ensureOwnedGatewaysRetired(input)).rejects.toThrow(/unavailable/);
     expect(roots["builder-alice"]).toBeDefined();
@@ -239,9 +252,9 @@ describe("owned customer gateway retirement", () => {
         ...(artifact === "legacy operation" ? { [recoveryId]: recovery } : {}),
       };
       const receipts = artifact === "receipt" ? { [recoveryId]: recovery } : {};
-      const { db, deleted } = harness(roots, operations, {}, {}, [], {}, receipts);
+      const { db, store, deleted } = harness(roots, operations, {}, {}, [], {}, receipts);
 
-      await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+      await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
         .rejects.toThrow(/recovery.*does not match/);
       expect(deleted).toEqual([]);
       expect(roots["builder-alice"]).toBeDefined();
@@ -254,7 +267,7 @@ describe("owned customer gateway retirement", () => {
     const roots = { "builder-alice": recoveredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded") };
     const receipts = { [recoveryId]: recoveryOperation() };
-    const { db, committed } = harness(roots, operations, {}, {}, [], {
+    const { db, store, committed } = harness(roots, operations, {}, {}, [], {
       "gateways/builder-alice/releases": ["release-1"],
     }, receipts);
     const recursiveDelete = db.recursiveDelete;
@@ -263,7 +276,7 @@ describe("owned customer gateway retirement", () => {
       receipts[recoveryId] = { ...recoveryOperation(), input: { uid: "other", gatewayId: "builder-alice" } };
     });
 
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/recovery.*does not match/);
     expect(roots["builder-alice"]).toBeDefined();
     expect(operations[operationId]).toBeDefined();
@@ -278,14 +291,13 @@ describe("owned customer gateway retirement", () => {
     const operations = { [operationId]: retirementOperation("succeeded") };
     const receipts: Record<string, Record<string, unknown>> = {};
     const subcollections: Record<string, string[]> = { "gateways/builder-alice/releases": ["release-1"] };
-    const { db, committed } = harness(roots, operations, {}, {}, [], subcollections, receipts);
+    const { db, store, committed } = harness(roots, operations, {}, {}, [], subcollections, receipts);
     const recursiveDelete = db.recursiveDelete;
     const cleanup = vi.spyOn(db, "recursiveDelete").mockImplementation(async (ref) => {
       await recursiveDelete(ref);
       receipts[recoveryId] = recoveryOperation();
-      subcollections[`gatewayRecoveryReceipts/${recoveryId}/details`] = ["private-context"];
     });
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
 
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retirement-pending");
     expect(roots["builder-alice"]).toBeDefined();
@@ -300,28 +312,28 @@ describe("owned customer gateway retirement", () => {
     expect(subcollections).toEqual({});
   });
 
-  it("keeps a placement receipt discoverable after partial child cleanup fails and retries it", async () => {
+  it("keeps the retirement receipt discoverable after partial root child cleanup fails and retries it", async () => {
     const operationId = "placement-retire-owner-builder-alice";
     const roots = { "builder-alice": retiredRoot(operationId) };
     const operation = retirementOperation("succeeded");
-    operation.input = { ...operation.input, builderSlug: "alice" };
+    operation.input = { ...operation.input as object, builderSlug: "alice" };
     const operations = { [operationId]: operation };
     const subcollections = {
       "gateways/builder-alice/releases": ["release-1"],
-      [`glmOperations/${operationId}/details`]: ["owner-details"],
+      "gateways/builder-alice/history": ["owner-details"],
     };
-    const { db, committed } = harness(roots, operations, {}, {}, [], subcollections);
+    const { db, store, committed } = harness(roots, operations, {}, {}, [], subcollections);
     const recursiveDelete = db.recursiveDelete;
     const cleanup = vi.spyOn(db, "recursiveDelete").mockImplementation(async (ref) => {
-      if (ref.path.startsWith("glmOperations/")) throw new Error("receipt child cleanup unavailable");
+      if (ref.path.endsWith("/history")) throw new Error("root child cleanup unavailable");
       await recursiveDelete(ref);
     });
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
 
     await expect(ensureOwnedGatewaysRetired(input)).rejects.toThrow(/cleanup unavailable/);
     expect(roots["builder-alice"]?.retirementClaim?.operationId).toBe(operationId);
     expect(operations[operationId]).toBe(operation);
-    expect(subcollections).toEqual({ [`glmOperations/${operationId}/details`]: ["owner-details"] });
+    expect(subcollections).toEqual({ "gateways/builder-alice/history": ["owner-details"] });
     expect(committed).toEqual([]);
 
     cleanup.mockImplementation(recursiveDelete);
@@ -336,8 +348,8 @@ describe("owned customer gateway retirement", () => {
     const operationId = "placement-retire-owner-builder-alice";
     const roots = { "builder-alice": retiredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded") };
-    const { db, failures, committed } = harness(roots, operations);
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
+    const { db, store, failures, committed } = harness(roots, operations);
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
     failures.commit = true;
 
     await expect(ensureOwnedGatewaysRetired(input)).rejects.toThrow(/commit unavailable/);
@@ -356,7 +368,7 @@ describe("owned customer gateway retirement", () => {
     const operationId = "placement-retire-owner-builder-alice";
     const roots = { "builder-alice": retiredRoot(operationId) };
     const operations = { [operationId]: retirementOperation("succeeded") };
-    const { db, committed } = harness(roots, operations, {}, {}, [], {
+    const { db, store, committed } = harness(roots, operations, {}, {}, [], {
       "gateways/builder-alice/releases": ["release-1"],
     });
     const recursiveDelete = db.recursiveDelete;
@@ -371,7 +383,7 @@ describe("owned customer gateway retirement", () => {
       };
     });
 
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/ownership changed|retirement claim changed|retirement operation does not match|retained resources/);
     expect(roots["builder-alice"]).toBeDefined();
     expect(operations[operationId]).toBeDefined();
@@ -389,23 +401,23 @@ describe("owned customer gateway retirement", () => {
       "gateways/builder-alice/releases": ["release-1"],
       "gateways/builder-alice/assignments": [],
     };
-    const { db, deleted, committed } = harness(roots, operations, users, runtimes, assignments, subcollections);
+    const { db, store, deleted, committed } = harness(roots, operations, users, runtimes, assignments, subcollections);
     const recursiveDelete = db.recursiveDelete;
     vi.spyOn(db, "recursiveDelete").mockImplementation(async (ref) => {
       await recursiveDelete(ref);
-      if (remaining === "runtime") runtimes["builder-alice"] = {};
+      if (remaining === "runtime") runtimes["builder-alice"] = runtimeRecord("builder-alice");
       if (remaining === "assignment") {
         assignments.push("uid-2");
         subcollections["gateways/builder-alice/assignments"] = ["uid-2"];
       }
-      if (remaining === "customer") users["uid-2"] = {};
+      if (remaining === "customer") users["uid-2"] = assignedBuilder("builder-alice");
       if (remaining === "handoff") operations["builder-return-builder-alice-g1"] = {
         status: "failed", schedulerHandoffReleased: false,
         schedulerHandoff: { migrationId: "move-1", fromGatewayId: "builder-alice", toGatewayId: "shared-new", uid: "uid-1", slug: "alice" },
       };
     });
 
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .resolves.toBe("retirement-pending");
     expect(roots["builder-alice"]).toBeDefined();
     expect(operations[operationId]).toBeDefined();
@@ -416,21 +428,21 @@ describe("owned customer gateway retirement", () => {
 
   it("surfaces the actual existing retirement failure", async () => {
     const operationId = "placement-retire-owner-builder-alice";
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
+    const { db, store, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
       [operationId]: { ...retirementOperation("failed"), error: "RESOURCE_NOT_FOUND during computer deletion" },
     });
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/retirement failed: RESOURCE_NOT_FOUND/);
     expect(deleted).toEqual([]);
   });
 
   it.each(["pending", "running", "absent"])("keeps %s existing retirement blocked", async (status) => {
     const operationId = "placement-retire-owner-builder-alice";
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, status === "absent" ? {} : {
+    const { db, store, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, status === "absent" ? {} : {
       [operationId]: retirementOperation(status),
     });
     const claimRetirement = vi.fn();
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never }))
       .resolves.toBe("retirement-pending");
     expect(deleted).toEqual([]);
     expect(claimRetirement).not.toHaveBeenCalled();
@@ -443,10 +455,10 @@ describe("owned customer gateway retirement", () => {
     { label: "old claim", change: { input: { gatewayId: "builder-alice", retirementClaimVersion: 2 } } },
   ])("rejects $label retirement receipts", async ({ change }) => {
     const operationId = "delete-retire-delete-1-builder-alice";
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
+    const { db, store, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
       [operationId]: { ...retirementOperation("succeeded"), ...change },
     });
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/retirement operation does not match/);
     expect(deleted).toEqual([]);
   });
@@ -455,8 +467,8 @@ describe("owned customer gateway retirement", () => {
     const operationId = "placement-retire-owner-builder-alice";
     const operation = retirementOperation("succeeded");
     operation.input = { ...operation.input, [flag]: true };
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, { [operationId]: operation });
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    const { db, store, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, { [operationId]: operation });
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/retained resources/);
     expect(deleted).toEqual([]);
   });
@@ -464,22 +476,22 @@ describe("owned customer gateway retirement", () => {
   it("does not complete a retired root without a validated claim", async () => {
     const root = retiredRoot("delete-retire-delete-1-builder-alice");
     delete root.retirementClaim;
-    const { db, deleted } = harness({ "builder-alice": root }, {
+    const { db, store, deleted } = harness({ "builder-alice": root }, {
       "delete-retire-delete-1-builder-alice": retirementOperation("succeeded"),
     });
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/invalid retirement claim/);
     expect(deleted).toEqual([]);
   });
 
   it.each(["runtime", "assignment", "customer"])("blocks succeeded retirement cleanup while a %s remains", async (remaining) => {
     const operationId = "delete-retire-delete-1-builder-alice";
-    const { db, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
+    const { db, store, deleted } = harness({ "builder-alice": retiredRoot(operationId) }, {
       [operationId]: retirementOperation("succeeded"),
-    }, remaining === "customer" ? { "uid-1": {} } : {},
-    remaining === "runtime" ? { "builder-alice": {} } : {},
+    }, remaining === "customer" ? { "uid-1": assignedBuilder("builder-alice") } : {},
+    remaining === "runtime" ? { "builder-alice": runtimeRecord("builder-alice") } : {},
     remaining === "assignment" ? ["uid-1"] : []);
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .resolves.toBe("retirement-pending");
     expect(deleted).toEqual([]);
   });
@@ -487,15 +499,13 @@ describe("owned customer gateway retirement", () => {
   it.each(["owner", "claim"])("revalidates the %s after selecting the owned root", async (changed) => {
     const operationId = "placement-retire-owner-builder-alice";
     const roots = { "builder-alice": retiredRoot(operationId) };
-    const { db, deleted } = harness(roots, { [operationId]: retirementOperation("succeeded") });
-    const runTransaction = db.runTransaction;
-    db.runTransaction = async (action) => {
+    const { db, store, deleted, hooks } = harness(roots, { [operationId]: retirementOperation("succeeded") });
+    hooks.beforeTransaction = () => {
       roots["builder-alice"] = changed === "owner"
         ? { ...retiredRoot(operationId), ownerUid: "other" }
         : retiredRoot("new-retirement");
-      return runTransaction(action);
     };
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(changed === "owner" ? /ownership changed/ : /retirement claim changed/);
     expect(deleted).toEqual([]);
   });
@@ -504,8 +514,8 @@ describe("owned customer gateway retirement", () => {
     const operationId = "placement-retire-owner-builder-alice";
     const root = recoveredRoot(operationId);
     root.allocation = { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1" };
-    const { db, deleted } = harness({ "builder-alice": root }, { [operationId]: retirementOperation("succeeded") });
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    const { db, store, deleted } = harness({ "builder-alice": root }, { [operationId]: retirementOperation("succeeded") });
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .rejects.toThrow(/allocation has no generation/);
     expect(deleted).toEqual([]);
   });
@@ -521,8 +531,8 @@ describe("owned customer gateway retirement", () => {
         schedulerHandoff: { migrationId: "move-1", fromGatewayId: "builder-alice", toGatewayId: "shared-new", uid: "uid-1", slug: "alice" },
       },
     };
-    const { db } = harness({ "builder-alice": root }, operations);
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    const { db, store } = harness({ "builder-alice": root }, operations);
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .resolves.toBe("retired");
   });
 
@@ -535,8 +545,8 @@ describe("owned customer gateway retirement", () => {
         schedulerHandoff: { migrationId: "move-1", fromGatewayId: "builder-alice", toGatewayId: "shared-new", uid: "uid-1", slug: "alice" },
       },
     };
-    const { db, deleted } = harness({ "builder-alice": recoveredRoot(operationId) }, operations);
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
+    const { db, store, deleted } = harness({ "builder-alice": recoveredRoot(operationId) }, operations);
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 };
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retirement-pending");
     expect(deleted).toEqual([]);
     operations[`${prefix}-builder-alice-g1`].schedulerHandoffReleased = true;
@@ -563,9 +573,9 @@ describe("owned customer gateway retirement", () => {
         },
       },
     };
-    const { db } = harness({ "builder-alice": recoveredRoot(operationId) }, operations);
+    const { db, store } = harness({ "builder-alice": recoveredRoot(operationId) }, operations);
 
-    await expect(ensureOwnedGatewaysRetired({ db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
+    await expect(ensureOwnedGatewaysRetired({ store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100 }))
       .resolves.toBe(outcome);
   });
 
@@ -574,19 +584,19 @@ describe("owned customer gateway retirement", () => {
     ["desired release never went live", GatewayRetirementReleaseUnconvergedError, "desired release is not converged to live"],
   ])("pauses a running owned Builder whose %s, then retires it paused", async (_label, Refusal, reason) => {
     const roots: Record<string, Root> = {
-      "builder-alice": {
+      "builder-alice": durableRoot("builder-alice", {
         ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running",
         allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-      },
+      }),
     };
-    const { db } = harness(roots);
+    const { db, store } = harness(roots);
     const claimRetirement = vi.fn(async ({ gatewayId }: { gatewayId: string }) => {
       if (roots[gatewayId]!.desiredStatus === "running") {
         throw new Refusal(`gateway ${gatewayId} ${reason}`);
       }
       return { version: 1 };
     });
-    const input = { db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never };
+    const input = { store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never };
 
     await expect(ensureOwnedGatewaysRetired(input)).resolves.toBe("retirement-pending");
     expect(roots["builder-alice"]).toMatchObject({ desiredStatus: "paused", updatedAt: 100, updatedBy: "customer-deletion-lifecycle" });
@@ -598,36 +608,36 @@ describe("owned customer gateway retirement", () => {
 
   it("keeps a running owned Builder running when retirement is refused for another reason", async () => {
     const roots: Record<string, Root> = {
-      "builder-alice": {
+      "builder-alice": durableRoot("builder-alice", {
         ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running",
         allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-      },
+      }),
     };
-    const { db } = harness(roots);
+    const { db, store } = harness(roots);
     const claimRetirement = vi.fn(async () => {
       throw new GatewayRetirementConflictError("gateway builder-alice still has mounted customers: alice");
     });
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never,
+      store, db: db as never, uid: "uid-1", deletionId: "delete-1", now: 100, claimRetirement: claimRetirement as never,
     })).rejects.toThrow(/still has mounted customers/);
     expect(roots["builder-alice"]!.desiredStatus).toBe("running");
   });
 
   it("retires the owned disposable Builder gateway while the user's current placement is shared", async () => {
-    const { db } = harness({
-      default: { ownerUid: null, gatewayClass: "shared", desiredStatus: "running" },
-      "builder-alice": {
+    const { db, store } = harness({
+      default: durableRoot("default", { ownerUid: null, gatewayClass: "shared", desiredStatus: "running" }),
+      "builder-alice": durableRoot("builder-alice", {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
         allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-      },
+      }),
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,
@@ -641,18 +651,18 @@ describe("owned customer gateway retirement", () => {
   });
 
   it("stamps customer-deletion retirement work as automatic", async () => {
-    const { db } = harness({
-      "builder-alice": {
+    const { db, store } = harness({
+      "builder-alice": durableRoot("builder-alice", {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
         allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-      },
+      }),
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
 
     await ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,
@@ -665,18 +675,18 @@ describe("owned customer gateway retirement", () => {
   });
 
   it("retires a disposable root during suspension cleanup", async () => {
-    const { db } = harness({
-      "run-alice": {
+    const { db, store } = harness({
+      "run-alice": durableRoot("run-alice", {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
         allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-      },
+      }),
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,
@@ -691,22 +701,22 @@ describe("owned customer gateway retirement", () => {
 
   it("deletes every durable gateway root only after its retirement operation succeeds", async () => {
     const operationId = "delete-retire-delete-1-builder-alice";
-    const { db, deleted } = harness(
+    const { db, store, deleted } = harness(
       {
-        "builder-alice": {
+        "builder-alice": durableRoot("builder-alice", {
           ownerUid: "uid-1",
           gatewayClass: "builder",
           desiredStatus: "retired",
           retirementVersion: 1,
           retirementClaim: { operationId, version: 1, phase: "claimed" },
           allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-        },
+        }),
       },
       { [operationId]: { ...retirementOperation("succeeded"), origin: "automatic" } },
     );
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,
@@ -721,22 +731,22 @@ describe("owned customer gateway retirement", () => {
 
   it("cleans up a succeeded retirement for a missing-origin operation", async () => {
     const operationId = "delete-retire-delete-1-builder-alice";
-    const { db, deleted } = harness(
+    const { db, store, deleted } = harness(
       {
-        "builder-alice": {
+        "builder-alice": durableRoot("builder-alice", {
           ownerUid: "uid-1",
           gatewayClass: "builder",
           desiredStatus: "retired",
           retirementVersion: 1,
           retirementClaim: { operationId, version: 1, phase: "claimed" },
           allocation: { kind: "disposable-builder", claimedByUid: "uid-1", leaseId: "lease-1", generation: 1 },
-        },
+        }),
       },
       { [operationId]: retirementOperation("succeeded") },
     );
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,
@@ -747,13 +757,13 @@ describe("owned customer gateway retirement", () => {
   });
 
   it("leaves a shared gateway alone even if malformed ownership data points at the customer", async () => {
-    const { db } = harness({
-      default: { ownerUid: "uid-1", gatewayClass: "shared", desiredStatus: "running" },
+    const { db, store } = harness({
+      default: durableRoot("default", { ownerUid: "uid-1", gatewayClass: "shared", desiredStatus: "running" }),
     });
     const claimRetirement = vi.fn();
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,
@@ -763,17 +773,17 @@ describe("owned customer gateway retirement", () => {
   });
 
   it("retires a legacy owner root without a disposable allocation", async () => {
-    const { db } = harness({
-      "legacy-builder": {
+    const { db, store } = harness({
+      "legacy-builder": durableRoot("legacy-builder", {
         ownerUid: "uid-1",
         gatewayClass: "builder",
         desiredStatus: "running",
-      },
+      }),
     });
     const claimRetirement = vi.fn(async () => ({ version: 1 }));
 
     await expect(ensureOwnedGatewaysRetired({
-      db: db as never,
+      store, db: db as never,
       uid: "uid-1",
       deletionId: "delete-1",
       now: 100,

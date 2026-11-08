@@ -1,59 +1,49 @@
 import { describe, expect, it, vi } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { runNativeReturnHoldReaperTick } from "../native-return-hold-reaper.js";
 
 const NOW = 1_700_000_000_000;
 
+type Data = Record<string, any>;
+
+function runtime(gatewayId: string, fields: Data): Data {
+  return { docKind: "runtime", gatewayId, release: 1, lifecycle: "active", ...fields };
+}
+
+function root(gatewayId: string): Data {
+  return {
+    gatewayId,
+    gatewayClass: "builder",
+    ownerUid: "alice",
+    builderSlug: "alice",
+    desiredRelease: 1,
+    latestRelease: 1,
+    desiredStatus: "paused",
+  };
+}
+
 function harness(input: {
-  gateways: Record<string, Record<string, any>>;
-  operations?: Record<string, Record<string, any>>;
+  gateways: Record<string, Data>;
+  operations?: Record<string, Data>;
   mirrorStale?: boolean;
 }) {
-  const docs: Record<string, Record<string, any>> = {};
+  const docs: Record<string, Data> = {};
   for (const [id, data] of Object.entries(input.gateways)) {
-    docs[`glmGateways/${id}`] = data;
-    docs[`gateways/${id}`] = { gatewayClass: "builder", ownerUid: "alice", builderSlug: "alice", desiredStatus: "paused" };
+    docs[`glmGateways/${id}`] = runtime(id, data);
+    docs[`gateways/${id}`] = root(id);
   }
   for (const [id, data] of Object.entries(input.operations ?? {})) docs[`glmOperations/${id}`] = data;
-  const snapshot = (path: string) => ({ id: path.split("/")[1], exists: !!docs[path], data: () => structuredClone(docs[path]) });
-  const writes: Array<{ path: string; op: string; data: Record<string, unknown> }> = [];
-  const applyUpdate = (path: string, data: Record<string, unknown>) => {
-    writes.push({ path, op: "update", data });
-    for (const [key, value] of Object.entries(data)) {
-      const [parent, field] = key.split(".");
-      if (value instanceof FieldValue) delete docs[path][parent][field];
-      else docs[path][parent][field] = value;
-    }
-  };
-  const ref = (path: string) => ({
-    path,
-    get: async () => snapshot(path),
-  });
-  const db = {
-    collection: (collection: string) => ({
-      doc: (id: string) => ref(`${collection}/${id}`),
-      get: async () => ({ docs: Object.keys(input.gateways).map((id) => snapshot(`glmGateways/${id}`)) }),
-    }),
-    runTransaction: async (body: (tx: unknown) => Promise<unknown>) => body({
-      get: async (r: { path: string }) => snapshot(r.path),
-      update: (r: { path: string }, data: Record<string, unknown>) => applyUpdate(r.path, data),
-      set: (r: { path: string }, data: Record<string, unknown>) => { writes.push({ path: r.path, op: "set", data }); docs[r.path] = data; },
-    }),
-  };
-  const scan = vi.fn(db.collection("glmGateways").get);
-  db.collection = ((collection: string) => ({
-    doc: (id: string) => ref(`${collection}/${id}`),
-    get: scan,
-  })) as typeof db.collection;
+  const store = createDocumentFixtureStore(docs);
+  const scan = vi.spyOn(store.fleetRegistry, "list");
   const informer = {
     glmGateways: () => (input.mirrorStale
       ? null
-      : Object.keys(input.gateways).map((id) => snapshot(`glmGateways/${id}`))),
+      : Object.keys(input.gateways).map((id) => ({ id, data: () => structuredClone(docs[`glmGateways/${id}`]) }))),
   };
   const log = vi.fn();
   const vm = { describe: vi.fn(async (): Promise<{ status: string; instanceId: string } | null> => ({ status: "TERMINATED", instanceId: "vm-1" })) };
-  const deps = { vm: vm as never, db: db as never, informer: informer as never, log, now: () => NOW };
-  return { deps, docs, writes, log, scan, vm };
+  const deps = { vm: vm as never, store, informer: informer as never, log, now: () => NOW };
+  return { deps, docs, log, scan, vm, store };
 }
 
 const heldGateway = (returnOperationId: string) => ({
@@ -61,6 +51,11 @@ const heldGateway = (returnOperationId: string) => ({
   vm: { instanceName: "computer", instanceId: "vm-1", zone: "us-central1-a" },
   vmHome: { returnOperationId, checkpointRequestedAt: 500, parkRequestedAt: 500, lastCheckpoint: { completedAt: 400 } },
 });
+
+function expectHoldUntouched(h: ReturnType<typeof harness>, gatewayId: string, returnOperationId: string) {
+  expect(h.docs[`glmGateways/${gatewayId}`].vmHome.returnOperationId).toBe(returnOperationId);
+  expect(h.docs[`glmOperations/native-return-hold-release-${gatewayId}-${returnOperationId}`]).toBeUndefined();
+}
 
 describe("native return hold reaper", () => {
   it.each(["failed", "succeeded", "rolled-back"])(
@@ -103,7 +98,7 @@ describe("native return hold reaper", () => {
       operations: status === "missing" ? {} : { "return-op": { kind: "migrate-customer", status, cutoverCommittedAt: 600 } } });
     h.vm.describe.mockResolvedValue({ status: "RUNNING", instanceId: "vm-1" });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 0 });
-    expect(h.writes).toEqual([]);
+    expectHoldUntouched(h, "native", "return-op");
   });
 
   it.each(["pending", "running"])("keeps the hold while the return operation is %s", async (status) => {
@@ -112,8 +107,7 @@ describe("native return hold reaper", () => {
       operations: { "builder-return-native": { kind: "migrate-customer", status } },
     });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 0 });
-    expect(h.writes).toEqual([]);
-    expect(h.docs["glmGateways/native"].vmHome.returnOperationId).toBe("builder-return-native");
+    expectHoldUntouched(h, "native", "builder-return-native");
   });
 
   it.each([{ kind: "migrate-customer" }, { kind: "migrate-customer", status: 7 }])(
@@ -133,6 +127,21 @@ describe("native return hold reaper", () => {
     },
   );
 
+  it("keeps the hold and logs when the gateway's runtime record is malformed, still sweeping other gateways", async () => {
+    const h = harness({
+      gateways: { broken: heldGateway("builder-return-broken"), native: heldGateway("builder-return-native") },
+      operations: {
+        "builder-return-broken": { kind: "migrate-customer", status: "failed" },
+        "builder-return-native": { kind: "migrate-customer", status: "failed" },
+      },
+    });
+    delete h.docs["glmGateways/broken"].lifecycle;
+    expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 2, released: 1 });
+    expect(h.docs["glmGateways/broken"].vmHome.returnOperationId).toBe("builder-return-broken");
+    expect(h.docs["glmGateways/native"].vmHome.returnOperationId).toBeUndefined();
+    expect(h.log).toHaveBeenCalledWith(expect.stringMatching(/native-return-hold-reaper.*broken.*builder-return-broken not released/));
+  });
+
   it("ignores gateways without a return hold, including plain park checkpoints", async () => {
     const h = harness({
       gateways: {
@@ -140,8 +149,9 @@ describe("native return hold reaper", () => {
         cluster: { runtime: "cluster" },
       },
     });
+    const before = structuredClone(h.docs);
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 2, released: 0 });
-    expect(h.writes).toEqual([]);
+    expect(h.docs).toEqual(before);
   });
 
   it("re-checks the hold inside the transaction and leaves a hold that moved to another operation", async () => {
@@ -149,13 +159,14 @@ describe("native return hold reaper", () => {
       gateways: { native: heldGateway("builder-return-native") },
       operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
     });
-    const original = h.deps.db.runTransaction;
-    h.deps.db.runTransaction = (async (body: (tx: unknown) => Promise<unknown>) => {
+    const original = h.store.transaction.bind(h.store);
+    vi.spyOn(h.store, "transaction").mockImplementation(((options: never, body: never) => {
       h.docs["glmGateways/native"].vmHome.returnOperationId = "builder-return-native-2";
-      return original(body);
-    }) as typeof original;
+      return original(options, body);
+    }) as typeof h.store.transaction);
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 0 });
-    expect(h.writes).toEqual([]);
+    expectHoldUntouched(h, "native", "builder-return-native-2");
+    expect(h.docs["glmOperations/native-return-hold-release-native-builder-return-native"]).toBeUndefined();
   });
 
   it("does not journal twice when the release journal already exists", async () => {
@@ -168,11 +179,10 @@ describe("native return hold reaper", () => {
     });
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 1 });
     expect(h.docs["glmGateways/native"].vmHome.returnOperationId).toBeUndefined();
-    expect(h.docs["glmOperations/native-return-hold-release-native-builder-return-native"].createdAt).toBe(1);
-    expect(h.writes.filter((w) => w.op === "set")).toEqual([]);
+    expect(h.docs["glmOperations/native-return-hold-release-native-builder-return-native"]).toEqual({ status: "succeeded", createdAt: 1 });
   });
 
-  it("falls back to a scan when the glmGateways mirror is stale", async () => {
+  it("falls back to the registry when the glmGateways mirror is stale", async () => {
     const h = harness({
       gateways: { native: heldGateway("builder-return-native") },
       operations: { "builder-return-native": { kind: "migrate-customer", status: "failed" } },
@@ -181,13 +191,15 @@ describe("native return hold reaper", () => {
     expect(await runNativeReturnHoldReaperTick(h.deps)).toEqual({ scanned: 1, released: 1 });
     expect(h.scan).toHaveBeenCalledOnce();
   });
+
   it.each(["STOPPING", "replacement", "read-failure", "binding-missing"])("retains terminal holds without exact stop proof: %s", async kind => {
     const h = harness({ gateways: { native: heldGateway("return-op") }, operations: { "return-op": { status: "failed" } } });
     if (kind === "STOPPING") h.vm.describe.mockResolvedValue({ status: "STOPPING", instanceId: "vm-1" });
     if (kind === "replacement") h.vm.describe.mockResolvedValue({ status: "STOPPED", instanceId: "vm-2" });
     if (kind === "read-failure") h.vm.describe.mockRejectedValue(new Error("Compute unavailable"));
     if (kind === "binding-missing") delete h.docs["glmGateways/native"].vm.instanceId;
-    expect(await runNativeReturnHoldReaperTick(h.deps)).toMatchObject({ released: 0 }); expect(h.writes).toEqual([]);
+    expect(await runNativeReturnHoldReaperTick(h.deps)).toMatchObject({ released: 0 });
+    expectHoldUntouched(h, "native", "return-op");
   });
 
   it.each(["hold", "claim", "instance", "desired"])("revalidates %s after the Compute read", async kind => {
@@ -199,7 +211,8 @@ describe("native return hold reaper", () => {
       if (kind === "desired") h.docs["gateways/native"].desiredStatus = "running";
       return { status: "TERMINATED", instanceId: "vm-1" };
     });
-    expect(await runNativeReturnHoldReaperTick(h.deps)).toMatchObject({ released: 0 }); expect(h.writes).toEqual([]);
+    expect(await runNativeReturnHoldReaperTick(h.deps)).toMatchObject({ released: 0 });
+    expectHoldUntouched(h, "native", "return-op");
   });
 
   it("releases a proven uncommitted rollback while the source remains its owner's assigned runtime", async () => {
@@ -214,7 +227,7 @@ describe("native return hold reaper", () => {
     const h = harness({ gateways: { native: heldGateway("return-op") } });
     h.docs["gateways/native"].desiredStatus = "running";
     h.docs["users/alice"] = { provisioning: { openclaw: { gatewayId: "native" } } };
-    expect(await runNativeReturnHoldReaperTick(h.deps)).toMatchObject({ released: 0 }); expect(h.writes).toEqual([]);
+    expect(await runNativeReturnHoldReaperTick(h.deps)).toMatchObject({ released: 0 });
+    expectHoldUntouched(h, "native", "return-op");
   });
-
 });

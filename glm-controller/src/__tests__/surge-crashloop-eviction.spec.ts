@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { MissingRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { CRASH_LOOP_EVICTION_BUDGET, claimCrashLoopEviction, crashLoopEvictionDecision } from "../surge-crashloop-eviction.js";
 
 const pod = { uid: "t", name: "gateway-new", podIP: "10.0.0.2", ready: false, terminating: false, crashLooping: true };
@@ -18,25 +20,29 @@ describe("crashLoopEvictionDecision", () => {
 });
 
 describe("claimCrashLoopEviction", () => {
-  function fakeDb(seed: Record<string, unknown> | undefined) {
-    let stored = seed;
-    const ref = { path: "glmGateways/gw" };
-    const db = {
-      collection: () => ({ doc: () => ref }),
-      runTransaction: async <T>(body: (transaction: unknown) => Promise<T>) => body({
-        get: async () => ({ exists: stored !== undefined, data: () => stored }),
-        set: (_ref: unknown, patch: Record<string, unknown>) => { stored = { ...(stored ?? {}), ...patch }; },
-      }),
+  function runtime(fields: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      docKind: "runtime", gatewayId: "gw", release: 1, lifecycle: "serving", createdAt: 1, createdByOperationId: null,
+      helm: {}, heartbeat: {}, lastError: { message: null, at: null }, ...fields,
     };
-    return { db: db as never, read: () => stored };
   }
 
   it("records each allowed eviction on the runtime doc and leaves the doc alone once the budget is spent", async () => {
-    const { db, read } = fakeDb({ docKind: "runtime", surgeCrashLoopEvictions: { imageTag: "new-sha", count: 2, lastAt: 1, lastPod: "p" } });
-    await expect(claimCrashLoopEviction(db, { gatewayId: "gw", imageTag: "new-sha", pod, now: 50 })).resolves.toEqual({ allowed: true, count: 3, budget: 3 });
-    expect(read()).toEqual({ docKind: "runtime", surgeCrashLoopEvictions: { imageTag: "new-sha", count: 3, lastAt: 50, lastPod: "gateway-new" } });
+    const documents: Record<string, Record<string, unknown>> = {
+      "glmGateways/gw": runtime({ surgeCrashLoopEvictions: { imageTag: "new-sha", count: 2, lastAt: 1, lastPod: "p" } }),
+    };
+    const store = createDocumentFixtureStore(documents);
+    await expect(claimCrashLoopEviction(store, { gatewayId: "gw", imageTag: "new-sha", pod, now: 50 })).resolves.toEqual({ allowed: true, count: 3, budget: 3 });
+    expect(documents["glmGateways/gw"]).toEqual(runtime({ surgeCrashLoopEvictions: { imageTag: "new-sha", count: 3, lastAt: 50, lastPod: "gateway-new" } }));
 
-    await expect(claimCrashLoopEviction(db, { gatewayId: "gw", imageTag: "new-sha", pod, now: 60 })).resolves.toEqual({ allowed: false, count: 3, budget: 3 });
-    expect(read()).toMatchObject({ surgeCrashLoopEvictions: { count: 3, lastAt: 50 } });
+    await expect(claimCrashLoopEviction(store, { gatewayId: "gw", imageTag: "new-sha", pod, now: 60 })).resolves.toEqual({ allowed: false, count: 3, budget: 3 });
+    expect(documents["glmGateways/gw"]).toMatchObject({ surgeCrashLoopEvictions: { count: 3, lastAt: 50 } });
+  });
+
+  it("refuses to spend a budget for a gateway without a runtime record instead of creating one", async () => {
+    const documents: Record<string, Record<string, unknown>> = {};
+    const store = createDocumentFixtureStore(documents);
+    await expect(claimCrashLoopEviction(store, { gatewayId: "gw", imageTag: "new-sha", pod, now: 50 })).rejects.toBeInstanceOf(MissingRecordError);
+    expect(documents).toEqual({});
   });
 });

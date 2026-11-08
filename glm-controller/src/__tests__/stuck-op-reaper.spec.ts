@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
 import { MIGRATION_TRANSFER_LEASE_MS } from "@octogee/shared/types/fleet-controller";
 import { recoverControllerOrphanedOperations, runStuckOpReaperTick } from "../stuck-op-reaper.js";
 import { decideOperationClaim } from "../operation-queue.js";
@@ -13,6 +14,7 @@ interface FakeOpDoc {
     startedAt?: number;
     createdAt?: number;
     lastProgressAt?: number;
+    expireAt?: number;
     output?: Record<string, unknown>;
     customerMigrationV2?: { phase: string };
     recordType?: string;
@@ -28,7 +30,7 @@ interface FakeOpDoc {
     attemptHistory?: unknown[];
     cancellationRequestedAt?: number;
   };
-  updated?: Record<string, unknown>;
+  updated?: FakeOpDoc["data"];
 }
 
 interface FakeDbState {
@@ -39,83 +41,57 @@ interface FakeDbState {
   transactionState?: { active: boolean };
 }
 
-function makeFakeDb(ops: FakeOpDoc[], state: FakeDbState = {}) {
-  function operationRef(operation: FakeOpDoc) {
-    return {
-      id: operation.id,
-      snapshot: () => ({ exists: true, data: () => operation.data }),
-      apply: (patch: Record<string, unknown>) => {
-        operation.updated = patch;
-        Object.assign(operation.data, patch);
-      },
-      update: async (patch: Record<string, unknown>) => {
-        operation.updated = patch;
-        Object.assign(operation.data, patch);
-      },
-    };
+function completeAssignment(gatewayId: string, uid: string, assignment: Record<string, unknown>): Record<string, unknown> {
+  return Object.assign(assignment, {
+    uid, slug: uid, gatewayId, source: "migrate-customer", state: "serving", epoch: 1,
+    createdAt: 1, updatedAt: 1, updatedByOperationId: null, ...assignment,
+  });
+}
+
+function completeRoot(gatewayId: string, root: Record<string, unknown>): Record<string, unknown> {
+  return { gatewayId, desiredRelease: 1, latestRelease: 1, desiredStatus: "running", ...root };
+}
+
+function makeStore(ops: FakeOpDoc[], state: FakeDbState = {}): PlatformStateStore {
+  const records: Record<string, Record<string, unknown>> = {};
+  for (const op of ops) records[`glmOperations/${op.id}`] = op.data;
+  for (const [uid, user] of Object.entries(state.users ?? {})) records[`users/${uid}`] = user;
+  for (const [path, assignment] of Object.entries(state.assignments ?? {})) {
+    const [gatewayId, uid] = path.split("/");
+    records[`gateways/${gatewayId}/assignments/${uid}`] = completeAssignment(gatewayId, uid, assignment);
   }
-  function stateRef(record: Record<string, unknown> | undefined) {
-    return {
-      snapshot: () => ({ exists: record !== undefined, data: () => record }),
-      apply: (patch: Record<string, unknown>) => Object.assign(record ?? {}, patch),
-    };
-  }
-  return {
-    collection: (name: string) => {
-      if (name === "users") {
-        return { doc: (uid: string) => stateRef(state.users?.[uid]) };
-      }
-      if (name === "gateways") {
-        return {
-          doc: (gatewayId: string) => ({
-            ...stateRef(state.roots?.[gatewayId]),
-            collection: (subcollection: string) => {
-              if (subcollection !== "assignments") {
-                throw new Error(`unexpected subcollection: ${subcollection}`);
-              }
-              return {
-                doc: (uid: string) => stateRef(state.assignments?.[`${gatewayId}/${uid}`]),
-              };
-            },
-          }),
-        };
-      }
-      if (name !== "glmOperations") {
-        throw new Error(`unexpected collection: ${name}`);
-      }
-      return {
-        where: (field: string, op: string, value: unknown) => ({
-          get: async () => ({
-            docs: ops
-              .filter((o) => {
-                if (field !== "status" || op !== "==") return true;
-                return o.data.status === value;
-              })
-              .map((o) => ({
-                id: o.id,
-                data: () => o.data,
-                ref: operationRef(o),
-              })),
-          }),
-        }),
-      };
+  for (const [gatewayId, root] of Object.entries(state.roots ?? {})) records[`gateways/${gatewayId}`] = completeRoot(gatewayId, root);
+  const documents = fixtureDocumentsAt(records);
+  const fixture = createJournalFixtureStore(journalRowsAtPaths(records), {
+    beforeTransaction: () => state.beforeTransaction?.(),
+    documents: {
+      ...documents,
+      set: (path, row) => {
+        const current = records[path];
+        if (current === undefined) {
+          records[path] = row;
+        } else {
+          for (const field of Object.keys(current)) delete current[field];
+          Object.assign(current, row);
+        }
+        const op = ops.find((candidate) => `glmOperations/${candidate.id}` === path);
+        if (op) op.updated = structuredClone(row) as FakeOpDoc["data"];
+      },
     },
-    runTransaction: async (callback: (txn: {
-      get: (ref: { snapshot: () => unknown }) => Promise<unknown>;
-      update: (ref: { apply: (patch: Record<string, unknown>) => void }, patch: Record<string, unknown>) => void;
-    }) => Promise<unknown>) => {
-      state.beforeTransaction?.();
+  });
+  return {
+    journal: fixture.journal,
+    builders: fixture.builders,
+    gateways: fixture.gateways,
+    transaction: async (options, body) => {
       if (state.transactionState) state.transactionState.active = true;
       try {
-        return await callback({
-          get: async (ref) => ref.snapshot(),
-          update: (ref, patch) => ref.apply(patch),
-        });
+        return await fixture.transaction(options, body);
       } finally {
         if (state.transactionState) state.transactionState.active = false;
       }
     },
-  };
+  } as PlatformStateStore;
 }
 
 const NOW = 1_700_000_000_000;
@@ -144,18 +120,18 @@ describe("runStuckOpReaperTick", () => {
       if (scenario === "cancelled") op.data.cancellationRequestedAt = 200;
       if (scenario === "other-attempt") op.data.attempts = 2;
       if (scenario === "forward-recovery") op.data.schedulerHandoff!.forwardRecovery = { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 1 };
-      const db = makeFakeDb([op], {
+      const db = makeStore([op], {
         users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: marker } } } },
         assignments: { "shared-a/alice": assignment, ...(scenario === "target-assigned" ? { "shared-b/alice": { state: "serving" } } : {}) },
       });
 
-      await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+      await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
 
       expect(op.data.status).toBe(admitted ? "pending" : "failed");
       expect(assignment.state).toBe("serving");
       expect(marker.operationId).toBe(scenario === "foreign-marker" ? "other" : op.id);
       if (admitted) {
-        expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+        expect(op.updated?.input?.recoverSourceOnly).toBe(true);
         expect(op.data.attemptHistory).toEqual([expect.objectContaining({ attempt: 1, steps: expect.arrayContaining([expect.objectContaining({ name: "pre-sync-state", status: "failed" })]) })]);
       } else expect(op.updated).toBeUndefined();
     },
@@ -170,29 +146,29 @@ describe("runStuckOpReaperTick", () => {
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1:claim:100" },
     } };
     const openclaw: Record<string, unknown> = { gatewayId: "shared-a", migration: { state: "preparing", operationId: op.id, startedAt: 100 } };
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw } } },
       assignments: { "shared-a/alice": { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id } },
     });
-    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
     expect(op.data.schedulerHandoff?.sourceRecovery).toEqual({ migrationId: "mig-placement-owned:scheduler:1:claim:100", sourceEpoch: 1, steps });
     for (let attempt = 2; attempt <= 23; attempt++) {
       Object.assign(op.data, { status: "failed", attempts: attempt, steps: [], error: "target cleanup refused", completedAt: NOW + attempt * 600_000 });
       op.data.input!.recoverSourceOnly = true;
       op.data.attemptHistory = Array.from({ length: 20 }, (_, index) => ({ attempt: attempt + index, steps: [], error: "target cleanup refused" }));
-      await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW + attempt * 600_000, stalenessMs: 15 * 60_000 });
+      await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW + attempt * 600_000, stalenessMs: 15 * 60_000 });
       expect(op.data.status).toBe("pending");
       expect(op.updated?.nextAttemptAt).toBeGreaterThan(NOW + attempt * 600_000);
       expect(op.data.schedulerHandoff?.sourceRecovery).toEqual({ migrationId: "mig-placement-owned:scheduler:1:claim:100", sourceEpoch: 1, steps });
     }
     Object.assign(op.data, { status: "failed", rolledBack: true, schedulerHandoffReleased: true, error: "abandoned Shared migration rolled back; native source recovery completed" });
     op.updated = undefined;
-    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW + 30 * 600_000, stalenessMs: 15 * 60_000 });
+    await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW + 30 * 600_000, stalenessMs: 15 * 60_000 });
     expect(op.data.status).toBe("failed");
     expect(op.updated).toBeUndefined();
     Object.assign(op.data, { status: "running", rolledBack: undefined, startedAt: NOW, schedulerHandoffReleased: true });
     delete openclaw.migration;
-    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW + 30 * 600_000, controllerStartedAt: NOW + 1_000 });
+    await recoverControllerOrphanedOperations({ store: db, log: vi.fn(), now: () => NOW + 30 * 600_000, controllerStartedAt: NOW + 1_000 });
     expect(op.data).toMatchObject({ status: "failed", rolledBack: true, steps: [{ name: "recover-source", status: "done" }] });
     expect(op.data.schedulerHandoffReleased).toBe(true);
   });
@@ -213,11 +189,11 @@ describe("runStuckOpReaperTick", () => {
       input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1:claim:100" },
     } };
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "preparing", operationId: op.id, startedAt: 100 } } } } },
       assignments: { "shared-a/alice": { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id } },
     });
-    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
     expect(op.data.status).toBe(admitted ? "pending" : "failed");
     if (admitted) expect(op.data.schedulerHandoff?.sourceRecovery?.steps).toEqual(op.data.attemptHistory![0].steps);
     else expect(op.updated).toBeUndefined();
@@ -235,14 +211,14 @@ describe("runStuckOpReaperTick", () => {
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 4, state: "quiescing", updatedByOperationId: op.id };
     const marker = { state: "moving", operationId: op.id, startedAt: 100 };
     if (phase === "acknowledged") assignment.state = "serving";
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", ...(phase === "quiescing" ? { migration: marker } : {}), activationLease: { leaseId: "lease-a", generation: 2, status: "activating", sourceGatewayId: "shared-a", sourceAssignmentEpoch: 4, targetGatewayId: target } } } } },
       assignments: { "shared-a/alice": assignment },
       roots: { [target]: { gatewayId: target, gatewayClass: "builder", ownerUid: "alice", allocation: { kind: "disposable-builder", leaseId: "lease-a", generation: 2, claimedByUid: "alice" } } },
     });
-    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    await recoverControllerOrphanedOperations({ store: db, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
     expect(op.data.status).toBe("pending");
-    expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+    expect(op.updated?.input?.recoverSourceOnly).toBe(true);
     expect(op.data.schedulerHandoffReleased).toBe(false);
     expect(assignment.state).toBe(phase === "quiescing" ? "quiescing" : "serving");
   });
@@ -263,21 +239,21 @@ describe("runStuckOpReaperTick", () => {
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: target, migrationId: `mig-${id}:scheduler:1:claim:${NOW - 5_000}`, stageAfterCutover: true },
     } };
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 4, state: held ? "quiescing" : "serving", updatedByOperationId: id };
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: id, startedAt: 100 },
         activationLease: { leaseId: "lease-a", generation: 2, status: "activating", sourceGatewayId: "shared-a", sourceAssignmentEpoch: 4, targetGatewayId: target } } } } },
       assignments: { "shared-a/alice": assignment },
       roots: { [target]: { gatewayId: target, gatewayClass: "builder", ownerUid: "alice", allocation: { kind: "disposable-builder", leaseId: "lease-a", generation: 2, claimedByUid: "alice" } } },
     });
-    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
     expect(op.data.status).toBe(held ? "pending" : "failed");
-    expect(op.updated?.["input.recoverSourceOnly"]).toBe(held ? true : undefined);
+    expect(op.updated?.input?.recoverSourceOnly).toBe(held ? true : undefined);
     expect(assignment.state).toBe(held ? "quiescing" : "serving");
     if (retry) {
       Object.assign(op.data, { status: "failed", attempts: 2, steps: [], error: "target cleanup refused" });
       op.data.input!.recoverSourceOnly = true;
       if (legacyQueued) delete op.data.schedulerHandoff!.sourceRecovery;
-      await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+      await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
       expect(op.data.status).toBe("pending");
       if (!legacyQueued) expect(op.updated?.nextAttemptAt).toBeGreaterThan(NOW);
       expect(assignment.state).toBe("quiescing");
@@ -286,7 +262,7 @@ describe("runStuckOpReaperTick", () => {
   it("ignores failed audit entries without migration input", async () => {
     const audit: FakeOpDoc = { id: "audit-unrelated", data: { status: "failed", recordType: "audit", error: "operator action failed" } };
     const log = vi.fn();
-    await runStuckOpReaperTick({ db: makeFakeDb([audit]) as never, log, now: () => NOW, stalenessMs: 15 * 60_000 });
+    await runStuckOpReaperTick({ store: makeStore([audit]), log, now: () => NOW, stalenessMs: 15 * 60_000 });
     expect(audit.updated).toBeUndefined();
     expect(log.mock.calls.flat().join("\n")).not.toContain("recovery admission failed");
   });
@@ -298,13 +274,13 @@ describe("runStuckOpReaperTick", () => {
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: "mig-placement-owned:scheduler:1:claim:100" },
     } };
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "serving", updatedByOperationId: op.id };
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "preparing", operationId: op.id, startedAt: 100 } } } } },
       assignments: { "shared-a/alice": assignment },
     });
-    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+    await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
     expect(op.data.status).toBe("pending");
-    expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+    expect(op.updated?.input?.recoverSourceOnly).toBe(true);
     expect(assignment.state).toBe("serving");
   });
   it.each(["boot", "budget", "scheduler-only-released"])("requeues an abandoned owned Shared migration without pretending the source is serving: %s", async (scenario) => {
@@ -319,17 +295,17 @@ describe("runStuckOpReaperTick", () => {
     if (scenario === "scheduler-only-released") op.data.schedulerHandoffReleased = true;
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "quiescing", updatedByOperationId: op.id };
     const marker = { state: "moving", operationId: op.id, startedAt: 100 };
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: marker } } } },
       assignments: { "shared-a/alice": assignment },
     });
-    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    await recoverControllerOrphanedOperations({ store: db, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
     expect(op.data.status).toBe("pending");
     expect(assignment.state).toBe("quiescing");
     expect(marker.operationId).toBe(op.id);
     expect(op.data.schedulerHandoff).toMatchObject({ migrationId: "mig-placement-owned:scheduler:1:claim:100" });
     expect(op.data.attempts).toBe(1);
-    expect(op.updated?.["input.recoverSourceOnly"]).toBe(true);
+    expect(op.updated?.input?.recoverSourceOnly).toBe(true);
   });
   it.each(["previous-controller", "current-controller"])("does not strand a boot-missed orphan or race a live claim: %s", async (scenario) => {
     const claimedAt = NOW - 30 * 60_000;
@@ -339,8 +315,8 @@ describe("runStuckOpReaperTick", () => {
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: `mig-placement-owned:scheduler:1:claim:${claimedAt}` },
     } };
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "quiescing", updatedByOperationId: op.id };
-    const db = makeFakeDb([op], { users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: op.id, startedAt: 100 } } } } }, assignments: { "shared-a/alice": assignment } });
-    await runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000,
+    const db = makeStore([op], { users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: op.id, startedAt: 100 } } } } }, assignments: { "shared-a/alice": assignment } });
+    await runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000,
       controllerStartedAt: claimedAt + (scenario === "previous-controller" ? 1_000 : -1_000),
     } as never);
     expect(op.data.status).toBe(scenario === "previous-controller" ? "pending" : "failed");
@@ -365,11 +341,11 @@ describe("runStuckOpReaperTick", () => {
     if (scenario === "source-transfer") openclaw.sourceTransferFence = { operationId: op.id };
     if (scenario === "terminal") op.data.error = "signature verification failed";
     if (scenario === "missing-handoff") delete op.data.schedulerHandoff;
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: { alice: { provisioning: { openclaw } } },
       assignments: { "shared-a/alice": assignment, ...(scenario === "target-assigned" ? { "shared-b/alice": { state: "serving" } } : {}) },
     });
-    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    await recoverControllerOrphanedOperations({ store: db, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
     expect(op.updated).toBeUndefined();
     expect(assignment.state).toBe("quiescing");
   });
@@ -382,8 +358,8 @@ describe("runStuckOpReaperTick", () => {
       schedulerHandoff: { uid: "alice", slug: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b", migrationId: `mig-placement-owned:scheduler:1:claim:${NOW - 1_000}` },
     } };
     const assignment = { uid: "alice", gatewayId: "shared-a", epoch: 1, state: "quiescing", updatedByOperationId: op.id };
-    const db = makeFakeDb([op], { users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: op.id, startedAt: 100 } } } } }, assignments: { "shared-a/alice": assignment } });
-    await recoverControllerOrphanedOperations({ db: db as never, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
+    const db = makeStore([op], { users: { alice: { provisioning: { openclaw: { gatewayId: "shared-a", migration: { state: "moving", operationId: op.id, startedAt: 100 } } } } }, assignments: { "shared-a/alice": assignment } });
+    await recoverControllerOrphanedOperations({ store: db, log: vi.fn(), now: () => NOW, controllerStartedAt: NOW });
     expect(op.data).toMatchObject({ status: "pending", attempts: 1, steps: [], schedulerHandoff: { migrationId: `mig-placement-owned:scheduler:1:claim:${NOW - 1_000}` } });
     expect(op.data.attemptHistory).toMatchObject([{ attempt: 1, steps: [{ name: "quiesce-source", status: "done" }] }]);
     expect(assignment.state).toBe("quiescing");
@@ -398,7 +374,7 @@ describe("runStuckOpReaperTick", () => {
       },
     }];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as never, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000,
+      store: makeStore(ops), log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000,
     });
     expect(result).toEqual({ scanned: 1, reaped: 0 });
     expect(ops[0].updated).toBeUndefined();
@@ -417,13 +393,13 @@ describe("runStuckOpReaperTick", () => {
       },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
     });
 
-    expect(result).toEqual({ scanned: 1, reaped: 0 });
+    expect(result).toEqual({ scanned: 0, reaped: 0 });
     expect(ops[0].updated).toBeUndefined();
   });
 
@@ -431,7 +407,7 @@ describe("runStuckOpReaperTick", () => {
   it.each([{ age: MIGRATION_TRANSFER_LEASE_MS + 59_000, reaped: 0 }, { age: MIGRATION_TRANSFER_LEASE_MS + 61_000, reaped: 1 }])("respects the bounded final-import deadline at age $age", async ({ age, reaped }) => {
     const ops: FakeOpDoc[] = [{ id: "slow-final", data: { status: "running", kind: "migrate-customer",
       startedAt: NOW - age, lastProgressAt: NOW - age, steps: [{ name: "final-sync-state", status: "running" }] } }];
-    await expect(runStuckOpReaperTick({ db: makeFakeDb(ops) as never, log: vi.fn(), now: () => NOW,
+    await expect(runStuckOpReaperTick({ store: makeStore(ops), log: vi.fn(), now: () => NOW,
       stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped });
   });
 
@@ -440,8 +416,8 @@ describe("runStuckOpReaperTick", () => {
     const ops: FakeOpDoc[] = [{ id: "changed-stage", data: { status: "running", kind: "migrate-customer",
       startedAt: NOW - 1_100_000, input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "builder-target" },
       steps: [{ name: "pre-sync-state", status: "running" }] } }];
-    const db = makeFakeDb(ops, { beforeTransaction: () => { ops[0].data.steps = [{ name: "final-sync-state", status: "running" }]; } });
-    await expect(runStuckOpReaperTick({ db: db as never, log: vi.fn(), now: () => NOW,
+    const db = makeStore(ops, { beforeTransaction: () => { ops[0].data.steps = [{ name: "final-sync-state", status: "running" }]; } });
+    await expect(runStuckOpReaperTick({ store: db, log: vi.fn(), now: () => NOW,
       stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped: 0 });
     expect(ops[0].updated).toBeUndefined();
   });
@@ -459,7 +435,7 @@ describe("runStuckOpReaperTick", () => {
     ];
     const log = vi.fn();
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log,
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -484,7 +460,7 @@ describe("runStuckOpReaperTick", () => {
     }];
 
     await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -499,12 +475,12 @@ describe("runStuckOpReaperTick", () => {
       input: { uid: "uid-mike", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
     } }];
     const assignment = { uid: "uid-mike", gatewayId: "shared-a", state: "quiescing", source: "migrate-customer", updatedByOperationId: "placement-owned" };
-    const db = makeFakeDb(ops, {
-      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a", [fence]: null } } } },
+    const db = makeStore(ops, {
+      users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a", [fence]: { operationId: "restore-1", sourceGatewayId: "shared-a", targetGatewayId: "shared-b" } } } } },
       assignments: { "shared-a/uid-mike": assignment },
     });
     const log = vi.fn();
-    await expect(runStuckOpReaperTick({ db: db as never, log, now: () => NOW, stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped: 0 });
+    await expect(runStuckOpReaperTick({ store: db, log, now: () => NOW, stalenessMs: 15 * 60_000 })).resolves.toEqual({ scanned: 1, reaped: 0 });
     expect(assignment.state).toBe("quiescing");
     expect(ops[0].updated).toBeUndefined();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("restore"));
@@ -532,7 +508,7 @@ describe("runStuckOpReaperTick", () => {
       updatedByOperationId: "placement-owned",
     };
     const transactionState = { active: false };
-    const db = makeFakeDb(ops, {
+    const db = makeStore(ops, {
       users: {
         "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a" } } },
       },
@@ -542,7 +518,7 @@ describe("runStuckOpReaperTick", () => {
     const log = vi.fn(() => expect(transactionState.active).toBe(false));
 
     const result = await runStuckOpReaperTick({
-      db: db as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: db,
       log,
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -581,7 +557,7 @@ describe("runStuckOpReaperTick", () => {
       source: "migrate-customer",
       updatedByOperationId: owner,
     };
-    const db = makeFakeDb(ops, {
+    const db = makeStore(ops, {
       users: {
         "uid-mike": { provisioning: { openclaw: { gatewayId: userGatewayId } } },
       },
@@ -589,7 +565,7 @@ describe("runStuckOpReaperTick", () => {
     });
 
     await runStuckOpReaperTick({
-      db: db as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: db,
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -623,7 +599,7 @@ describe("runStuckOpReaperTick", () => {
       source: "migrate-customer",
       updatedByOperationId: "placement-raced",
     };
-    const db = makeFakeDb([op], {
+    const db = makeStore([op], {
       users: {
         "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a" } } },
       },
@@ -633,7 +609,7 @@ describe("runStuckOpReaperTick", () => {
     const log = vi.fn();
 
     const result = await runStuckOpReaperTick({
-      db: db as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: db,
       log,
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -645,6 +621,24 @@ describe("runStuckOpReaperTick", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it("leaves a stale op alone when a worker re-claims it before the reap writes", async () => {
+    const ops: FakeOpDoc[] = [{ id: "op-reclaimed", data: { status: "running", kind: "rollout", startedAt: NOW - 20 * 60_000 } }];
+    const store = makeStore(ops);
+    const operations = store.journal.operations;
+    const listByStatus = operations.listByStatus.bind(operations);
+    vi.spyOn(operations, "listByStatus").mockImplementation(async (statuses) => {
+      const listed = await listByStatus(statuses);
+      if (statuses.includes("running")) ops[0].data.startedAt = NOW - 1_000;
+      return listed;
+    });
+
+    const result = await runStuckOpReaperTick({ store, log: vi.fn(), now: () => NOW, stalenessMs: 15 * 60_000 });
+
+    expect(result).toEqual({ scanned: 1, reaped: 0 });
+    expect(ops[0].updated).toBeUndefined();
+    expect(ops[0].data.status).toBe("running");
+  });
+
   it("leaves a recent `running` op alone", async () => {
     const ops: FakeOpDoc[] = [
       {
@@ -653,7 +647,7 @@ describe("runStuckOpReaperTick", () => {
       },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -670,7 +664,7 @@ describe("runStuckOpReaperTick", () => {
         data: { status: "running", kind, startedAt: NOW - 60 * 60_000 },
       }];
       const result = await runStuckOpReaperTick({
-        db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+        store: makeStore(ops),
         log: vi.fn(),
         now: () => NOW,
         stalenessMs: 15 * 60_000,
@@ -694,7 +688,7 @@ describe("runStuckOpReaperTick", () => {
       }];
 
       const result = await runStuckOpReaperTick({
-        db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+        store: makeStore(ops),
         log: vi.fn(),
         now: () => NOW,
         stalenessMs: 15 * 60_000,
@@ -717,7 +711,7 @@ describe("runStuckOpReaperTick", () => {
       },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -731,7 +725,7 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
       { id: "op-no-anchor", data: { status: "running", kind: "rollout" } },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -753,7 +747,7 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
       },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -775,7 +769,7 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
       },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -791,7 +785,7 @@ it("skips ops with no anchor timestamp (defensively — log noise only)", async 
       { id: "op-c", data: { status: "running", kind: "add-gateway", startedAt: NOW - 60_000 } },
     ];
     const result = await runStuckOpReaperTick({
-      db: makeFakeDb(ops) as unknown as Parameters<typeof runStuckOpReaperTick>[0]["db"],
+      store: makeStore(ops),
       log: vi.fn(),
       now: () => NOW,
       stalenessMs: 15 * 60_000,
@@ -827,9 +821,9 @@ describe("recoverControllerOrphanedOperations", () => {
     };
   }
 
-  function recover(db: unknown, log = vi.fn()) {
+  function recover(store: PlatformStateStore, log = vi.fn()) {
     return recoverControllerOrphanedOperations({
-      db: db as Parameters<typeof recoverControllerOrphanedOperations>[0]["db"],
+      store,
       log,
       now: () => NOW,
       controllerStartedAt: BOOTED_AT,
@@ -856,7 +850,7 @@ describe("recoverControllerOrphanedOperations", () => {
       updatedByOperationId: "placement-orphan",
     };
     const ops = [orphan];
-    const db = makeFakeDb(ops, {
+    const db = makeStore(ops, {
       users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-a" } } } },
       assignments: { "shared-a/uid-mike": assignment },
     });
@@ -896,7 +890,7 @@ describe("recoverControllerOrphanedOperations", () => {
       state: "quiescing",
       updatedByOperationId: "placement-orphan",
     };
-    const db = makeFakeDb([orphan], {
+    const db = makeStore([orphan], {
       users: { "uid-mike": { provisioning: { openclaw: { gatewayId: "shared-b" } } } },
       assignments: { "shared-a/uid-mike": assignment },
     });
@@ -915,7 +909,7 @@ describe("recoverControllerOrphanedOperations", () => {
 
   it("leaves a migration this controller claimed after boot to its live worker", async () => {
     const claimedHere = orphanedPlacement({ startedAt: BOOTED_AT + 1 });
-    const db = makeFakeDb([claimedHere]);
+    const db = makeStore([claimedHere]);
 
     const result = await recover(db);
 
@@ -925,7 +919,7 @@ describe("recoverControllerOrphanedOperations", () => {
 
   it("leaves an orphan this controller re-claims while the recovery transaction is pending", async () => {
     const raced = orphanedPlacement();
-    const db = makeFakeDb([raced], { beforeTransaction: () => { raced.data.startedAt = BOOTED_AT + 5; } });
+    const db = makeStore([raced], { beforeTransaction: () => { raced.data.startedAt = BOOTED_AT + 5; } });
 
     const result = await recover(db);
 
@@ -940,7 +934,7 @@ describe("recoverControllerOrphanedOperations", () => {
     ["a suspend-customer op", { kind: "suspend-customer" }],
   ])("leaves %s to its own restart recovery", async (_label, overrides) => {
     const op = orphanedPlacement(overrides);
-    const db = makeFakeDb([op]);
+    const db = makeStore([op]);
 
     const result = await recover(db);
 
@@ -968,10 +962,10 @@ describe("recoverControllerOrphanedOperations", () => {
   }
 
   it("re-arms a retirement the previous controller orphaned mid-teardown so the operation worker re-drives it from the top", async () => {
-    const orphan = orphanedRetirement();
+    const orphan = orphanedRetirement({ error: "delete-sm-secret timed out", expireAt: NOW + 60_000 });
     const log = vi.fn();
 
-    const result = await recover(makeFakeDb([orphan]), log);
+    const result = await recover(makeStore([orphan]), log);
 
     expect(result).toEqual({ scanned: 1, recovered: 1 });
     expect(orphan.data).toMatchObject({
@@ -979,7 +973,7 @@ describe("recoverControllerOrphanedOperations", () => {
       input: { gatewayId: "shared-c39b93f1591e", retirementClaimVersion: 1 },
     });
     for (const field of ["error", "lastProgressAt", "expireAt"]) {
-      expect(FieldValue.delete().isEqual(orphan.updated?.[field] as FieldValue)).toBe(true);
+      expect(orphan.data).not.toHaveProperty(field);
     }
     expect(log).toHaveBeenCalledWith(expect.stringContaining("re-armed orphaned shared-pool-retire-shared-c39b93f1591e"));
   });
@@ -987,7 +981,7 @@ describe("recoverControllerOrphanedOperations", () => {
   it("leaves a retirement this controller claimed after boot to its live worker", async () => {
     const claimedHere = orphanedRetirement({ startedAt: BOOTED_AT + 1 });
 
-    const result = await recover(makeFakeDb([claimedHere]));
+    const result = await recover(makeStore([claimedHere]));
 
     expect(result).toEqual({ scanned: 1, recovered: 0 });
     expect(claimedHere.updated).toBeUndefined();
@@ -995,7 +989,7 @@ describe("recoverControllerOrphanedOperations", () => {
 
   it("leaves a retirement this controller re-claims while the recovery transaction is pending", async () => {
     const raced = orphanedRetirement();
-    const db = makeFakeDb([raced], { beforeTransaction: () => { raced.data.startedAt = BOOTED_AT + 5; } });
+    const db = makeStore([raced], { beforeTransaction: () => { raced.data.startedAt = BOOTED_AT + 5; } });
 
     const result = await recover(db);
 
@@ -1013,7 +1007,7 @@ describe("recoverControllerOrphanedOperations", () => {
       },
     };
 
-    const result = await recover(makeFakeDb([op]));
+    const result = await recover(makeStore([op]));
 
     expect(result).toEqual({ scanned: 1, recovered: 0 });
     expect(op.updated).toBeUndefined();

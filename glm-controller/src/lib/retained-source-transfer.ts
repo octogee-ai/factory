@@ -1,12 +1,11 @@
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { isDeepStrictEqual } from 'node:util';
 import { spawn } from 'node:child_process';
 import type { CustomerMigrationV2State, Operation, SourceTransferExecution } from '@octogee/shared/types/glm';
-import { GLM_OPERATIONS_COLLECTION } from '@octogee/shared/types/glm';
-import { customerRuntimeMutationFenced } from '@octogee/shared/types/gateway-releases';
+import type { AssignmentDoc } from '@octogee/shared/types/gateway-releases';
 import { accountAllowsInteractiveAccess } from '@octogee/shared/types/account-lifecycle';
-import { slugFromAssignedUser } from '@octogee/core/assigned-roster';
 import { isCustomerMigrationV2ForwardOnly } from '@octogee/core/customer-migration-v2';
+import { builderRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
+import type { BuilderRecord, GatewayRoot, OperationRecord, PlatformStateStore, PlatformStateTransaction, SourceTransferFence, Stored } from '@octogee/core/platform-state';
 import type { PushRsyncStateRequestBody } from '@octogee/shared/types/fleet-controller';
 import type { CommandRunner } from './migration-rsync-transfer.js';
 import { planSourceTransfer, observeSourceTransfer, sourceTransferBlocksRelease, type SourceTransferPod } from './source-transfer-execution.js';
@@ -21,10 +20,10 @@ export interface RetainedSourceTransfer {
   acknowledgeCleanup(record: SourceTransferExecution): Promise<SourceTransferExecution>;
   execute(input: { target: RetainedSourceTarget; prepare(sourceIp: string): Promise<PushRsyncStateRequestBody> }): Promise<SourceTransferExecution>;
 }
-interface Deps { db: Firestore; namespace: string; image: string; runCommand: CommandRunner; now(): number; attach?: typeof attachTransfer; wait?: (ms: number) => Promise<void> }
+interface Deps { store: PlatformStateStore; namespace: string; image: string; runCommand: CommandRunner; now(): number; attach?: typeof attachTransfer; wait?: (ms: number) => Promise<void> }
 const PROBE = `const fs=require('fs');const m=fs.readFileSync('/proc/meminfo','utf8').match(/^MemAvailable:\\s+(\\d+) kB$/m);const max=fs.readFileSync('/sys/fs/cgroup/memory.max','utf8').trim();const current=fs.readFileSync('/sys/fs/cgroup/memory.current','utf8').trim();const disk=fs.statfsSync('/tmp');if(!m||!/^\\d+$/.test(max)||!/^\\d+$/.test(current)||Number(m[1])*1024<4294967296||Number(max)-Number(current)<4294967296||disk.bavail*disk.bsize<1073741824)process.exit(1);process.stdout.write(JSON.stringify({sourceMemoryMax:Number(max),sourceMemoryCurrent:Number(current)}));`;
 
-function retainedSourceCancellationDeferred(context: RetainedSourceContext, fresh: FirebaseFirestore.DocumentData | undefined): boolean {
+function retainedSourceCancellationDeferred(context: RetainedSourceContext, fresh: OperationRecord | null): boolean {
   const {op,state}=context;
   return [fresh?.kind==='migrate-customer',state.operationId===op.id,
     fresh?.input?.sourceTransferMode==='retained-pod',fresh?.input?.uid===state.uid,
@@ -32,24 +31,24 @@ function retainedSourceCancellationDeferred(context: RetainedSourceContext, fres
     isCustomerMigrationV2ForwardOnly(state),isDeepStrictEqual(fresh?.customerMigrationV2,state)].every(Boolean);
 }
 
-export function assertRetainedSourceAuthority(input: RetainedSourceContext, fresh: Operation & { cancellationRequestedAt?: unknown; restoreAttempt?: {phase?:string} }, user: Record<string, unknown>, assignment: Record<string, unknown>, roots: {source:Record<string,unknown>;target:Record<string,unknown>}): void {
+export function assertRetainedSourceAuthority(input: RetainedSourceContext, fresh: OperationRecord | null, builder: Stored<BuilderRecord> | null, assignment: AssignmentDoc | null, roots: {source:GatewayRoot|null;target:GatewayRoot|null}): void {
   const {op,state} = input;
   const {source:root,target}=roots;
-  const oc = (user.provisioning as {openclaw?:Record<string,unknown>} | undefined)?.openclaw;
+  if (!fresh) throw new Error('source transfer operation unavailable');
   const durable = fresh.customerMigrationV2;
   if (!durable) throw new Error('retained source transfer has no durable migration');
-  const exact = [
+  const exact = builder !== null && assignment !== null && root !== null && target !== null && [
     fresh.kind === 'migrate-customer', fresh.status === 'running', fresh.startedAt === op.startedAt,
     fresh.input.sourceTransferMode === 'retained-pod', fresh.input.uid === state.uid,
     fresh.input.fromGatewayId === state.sourceGatewayId, fresh.input.toGatewayId === state.targetGatewayId,
-    fresh.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(input,fresh), !customerRuntimeMutationFenced(user),
+    fresh.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(input,fresh), !builderRuntimeMutationFenced(builder),
     fresh.restoreAttempt === undefined || fresh.restoreAttempt.phase === 'acknowledged',
     durable.phase === 'sourceQuiesced', durable.operationId === op.id,
     durable.migrationId === state.migrationId, durable.uid === state.uid, durable.slug === state.slug,
     durable.sourceGatewayId === state.sourceGatewayId, durable.sourceEpoch === state.sourceEpoch,
     durable.targetGatewayId === state.targetGatewayId, state.sourceGatewayId.startsWith('shared-'),
-    state.sourceAssignmentMode === 'assigned', slugFromAssignedUser(user) === state.slug,
-    oc?.gatewayId === state.sourceGatewayId, accountAllowsInteractiveAccess(user),
+    state.sourceAssignmentMode === 'assigned', builder.slug === state.slug,
+    builder.gateway?.gatewayId === state.sourceGatewayId, accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined }),
     assignment.uid === state.uid, assignment.slug === state.slug, assignment.gatewayId === state.sourceGatewayId,
     assignment.epoch === state.sourceEpoch, assignment.state === 'quiescing',
     assignment.updatedByOperationId === op.id, root.gatewayClass === 'shared',
@@ -94,11 +93,11 @@ function sourcePodFromList(stdout: string): SourceTransferPod {
 }
 
 export function createRetainedSourceTransfer(deps: Deps, context: RetainedSourceContext): RetainedSourceTransfer {
-  const ref = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(context.op.id);
-  function requireActiveClaim(fresh: FirebaseFirestore.DocumentData | undefined, allowCancelled = false): void {
+  const readOperation = () => deps.store.journal.operations.get(context.op.id);
+  function requireActiveClaim(fresh: OperationRecord | null, allowCancelled = false): void {
     if (fresh?.status !== 'running' || fresh.startedAt !== context.op.startedAt || (!allowCancelled && fresh.cancellationRequestedAt !== undefined && !retainedSourceCancellationDeferred(context,fresh))) throw new Error('source transfer active claim changed');
   }
-  async function assertActiveClaim(): Promise<void> { requireActiveClaim((await ref.get()).data()); }
+  async function assertActiveClaim(): Promise<void> { requireActiveClaim(await readOperation()); }
   async function transferred(record: SourceTransferExecution | undefined): Promise<SourceTransferExecution> {
     await assertActiveClaim();
     return requireTransferred(record);
@@ -114,37 +113,35 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
       if (!pod.metadata.uid || pod.metadata.deletionTimestamp || pod.metadata.name !== target.name || (pod.status as {podIP?:string} | undefined)?.podIP !== target.podIP) throw new Error('target pod unavailable');
       return pod.metadata.uid;
     }
-    const runtime = (await deps.db.doc(`glmGateways/${context.state.targetGatewayId}`).get()).data();
+    const runtime = await deps.store.fleetRegistry.get(context.state.targetGatewayId);
     const vm = runtime?.vm;
     if (runtime?.runtime !== 'gce-vm' || !vm?.instanceId || vm.instanceName !== target.name || vm.internalIp !== target.podIP) throw new Error('target VM identity changed');
     return vm.instanceId;
   }
   async function persistObservation(current: SourceTransferExecution, observed: SourceTransferExecution, requireClaim = false): Promise<SourceTransferExecution> {
-    await deps.db.runTransaction(async txn => {
-      const userRef = deps.db.doc(`users/${current.uid}`);
-      const [operation,user] = await Promise.all([txn.get(ref),txn.get(userRef)]);
-      const fresh = operation.data();
+    await deps.store.transaction({label:'retained-source-transfer.persist-observation'},async tx => {
+      const [fresh,builder] = await Promise.all([tx.journal.operations.get(context.op.id),tx.builders.records.get(current.uid)]);
       if (requireClaim) requireActiveClaim(fresh,true);
       if (fresh?.sourceTransferExecution?.executionId !== current.executionId) throw new Error('source transfer execution changed');
       if (!isDeepStrictEqual(fresh.sourceTransferExecution,current)) return;
-      const fence = user.data()?.provisioning?.openclaw?.sourceTransferFence;
+      const fence = builder?.fences.sourceTransferFence;
       if (!sourceTransferBlocksRelease(observed)) {
         const {status: _status,exitCode: _exitCode,failureReason: _reason,targetCleanup: _cleanup,...identity} = current;
         if (fence !== undefined || current.status !== 'transferred') {
           if (!isDeepStrictEqual(fence,identity)) throw new Error('source transfer user fence changed');
-          txn.update(userRef,{'provisioning.openclaw.sourceTransferFence':FieldValue.delete()});
+          await tx.builders.records.setFence(current.uid,'sourceTransferFence',{clear:true},fence);
         }
       }
-      txn.update(ref,{sourceTransferExecution:observed,lastProgressAt:deps.now()});
+      await tx.journal.operations.patch(context.op.id,{sourceTransferExecution:observed,lastProgressAt:deps.now()});
     });
-    const final = (await ref.get()).data()?.sourceTransferExecution as SourceTransferExecution | undefined;
+    const final = (await readOperation())?.sourceTransferExecution;
     if (!final) throw new Error('source transfer execution unavailable');
     return final;
   }
   async function observe(): Promise<SourceTransferExecution | undefined> {
-    const operation = (await ref.get()).data();
+    const operation = await readOperation();
     if (!operation) throw new Error('source transfer operation unavailable');
-    const current = operation.sourceTransferExecution as SourceTransferExecution | undefined;
+    const current = operation.sourceTransferExecution;
     if (!current) return undefined;
     assertExecutionContext(current,context);
     if (!sourceTransferBlocksRelease(current)) return current;
@@ -160,20 +157,19 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
   }
   async function transitionAuthority(record: SourceTransferExecution, status: 'preparing'|'prepared'|'dispatched', requireClaim: boolean): Promise<SourceTransferExecution> {
     const next={...record,status};
-    await deps.db.runTransaction(async txn => {
-      const [operation,user] = await Promise.all([txn.get(ref),txn.get(deps.db.doc(`users/${record.uid}`))]);
-      const fresh=operation.data();
+    await deps.store.transaction({label:'retained-source-transfer.transition'},async tx => {
+      const [fresh,builder] = await Promise.all([tx.journal.operations.get(context.op.id),tx.builders.records.get(record.uid)]);
       const {status: _status,...identity}=record;
       const claimValid=!requireClaim || (fresh?.status === 'running' && fresh?.startedAt === context.op.startedAt && (fresh?.cancellationRequestedAt === undefined || retainedSourceCancellationDeferred(context,fresh)));
       const exact=[claimValid,isDeepStrictEqual(fresh?.sourceTransferExecution,record),
-        isDeepStrictEqual(user.data()?.provisioning?.openclaw?.sourceTransferFence,identity)].every(Boolean);
+        isDeepStrictEqual(builder?.fences.sourceTransferFence,identity)].every(Boolean);
       if (!exact) throw new Error('source transfer dispatch authority changed');
-      txn.update(ref,{sourceTransferExecution:next,lastProgressAt:deps.now()});
+      await tx.journal.operations.patch(context.op.id,{sourceTransferExecution:next,lastProgressAt:deps.now()});
     });
     return next;
   }
   async function settledTarget(target: RetainedSourceTarget): Promise<SourceTransferExecution | undefined> {
-    requireActiveClaim((await ref.get()).data(),true);
+    requireActiveClaim(await readOperation(),true);
     const record=await observe();
     if (!record || (record.status==='failed' && record.targetCleanup===undefined)) return undefined;
     if (record.status!=='failed' && record.status!=='transferred') throw new Error('source transfer observation pending');
@@ -182,6 +178,12 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
   }
   async function acknowledgeCleanup(record: SourceTransferExecution): Promise<SourceTransferExecution> {
     return persistObservation(record,{...record,targetCleanup:'complete'},true);
+  }
+  async function reserveAuthority(tx: PlatformStateTransaction): Promise<OperationRecord> {
+    const {uid,sourceGatewayId,targetGatewayId}=context.state;
+    const [fresh,builder,assignment,roots] = await Promise.all([tx.journal.operations.get(context.op.id),tx.builders.records.get(uid),tx.gateways.assignments.get(sourceGatewayId,uid),tx.gateways.roots.getMany([sourceGatewayId,targetGatewayId])]);
+    assertRetainedSourceAuthority(context,fresh,builder,assignment,{source:roots.get(sourceGatewayId) ?? null,target:roots.get(targetGatewayId) ?? null});
+    return fresh!;
   }
   async function probeResources(record: SourceTransferExecution, container: string) {
     const probe = await deps.runCommand('kubectl',['-n',deps.namespace,'exec',record.podName,'-c',container,'--','/usr/local/bin/node','-e',PROBE],{timeoutMs:15_000});
@@ -223,14 +225,12 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
       }
       const source = await discoverSource(input.target,targetUid);
       if (!source.planned.patch) throw new Error('source transfer execution existed before reservation');
-      await deps.db.runTransaction(async txn => {
-        const [operation,user,assignment,root,targetRoot] = await Promise.all([txn.get(ref),txn.get(deps.db.doc(`users/${context.state.uid}`)),txn.get(deps.db.doc(`gateways/${context.state.sourceGatewayId}/assignments/${context.state.uid}`)),txn.get(deps.db.doc(`gateways/${context.state.sourceGatewayId}`)),txn.get(deps.db.doc(`gateways/${context.state.targetGatewayId}`))]);
-        const fresh = operation.data() as Operation;
-        assertRetainedSourceAuthority(context,fresh,user.data() ?? {},assignment.data() ?? {},{source:root.data() ?? {},target:targetRoot.data() ?? {}});
+      await deps.store.transaction({label:'retained-source-transfer.reserve'},async tx => {
+        const fresh = await reserveAuthority(tx);
         if (fresh.sourceTransferExecution) throw new Error('source transfer already reserved');
-        txn.update(ref,{sourceTransferExecution:source.planned.record,lastProgressAt:deps.now()});
+        await tx.journal.operations.patch(context.op.id,{sourceTransferExecution:source.planned.record,lastProgressAt:deps.now()});
         const {status: _status,...identity} = source.planned.record;
-        txn.update(deps.db.doc(`users/${context.state.uid}`),{'provisioning.openclaw.sourceTransferFence':identity});
+        await tx.builders.records.setFence(context.state.uid,'sourceTransferFence',identity as SourceTransferFence,'absent');
       });
       return { kind: 'reserved' as const, ...source };
     });
@@ -260,7 +260,7 @@ export function createRetainedSourceTransfer(deps: Deps, context: RetainedSource
     if (patched.code !== 0) throw new Error('source transfer dispatch outcome unresolved');
     if (!await waitForHelper(planned.record)) return transferred(await observe());
     const freshAdmission=await probeResources(planned.record,sourceContainerName);
-    const attachClaim = (await ref.get()).data();
+    const attachClaim = await readOperation();
     requireActiveClaim(attachClaim);
     await (deps.attach ?? attachTransfer)(deps.namespace,planned.record.podName,planned.record.executionId,{
       resourceAdmission:freshAdmission,version:1,executionId:planned.record.executionId,operationId:context.op.id,claimStartedAt:planned.record.claimStartedAt,migrationId:context.state.migrationId,uid:context.state.uid,slug:context.state.slug,sourceGatewayId:context.state.sourceGatewayId,sourcePodUid:planned.record.podUid,assignmentEpoch:context.state.sourceEpoch,mode:'final',includeActivationManifest:push.includeActivationManifest === true,targetHost:push.targetHost,targetPort:push.targetPort,targetCertificatePem:push.targetCertificatePem,transferUser:push.transferUser,transferKey:push.transferKey,

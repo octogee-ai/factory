@@ -3,7 +3,8 @@ import { MIGRATION_IMPORT_FINISH_TIMEOUT_MS } from "@octogee/shared/types/fleet-
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type {SourceTransferExecution} from "@octogee/shared/types/glm";
 import { describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createJournalFixtureStore, journalRowsIn } from "@octogee/core/testing/journal-store";
 import { GLM_MIGRATION_TRANSFER_TASKS_COLLECTION } from "@octogee/shared/types/glm";
 import { FLEET_KEY_PAIR } from "./fixtures/fleet-keys.js";
 import { readTransferAttemptForCleanup } from "../lib/migration-transfer-lease.js";
@@ -48,47 +49,19 @@ describe("migration recovery transport", () => {
   });
 });
 
-function makeDb(store: Store): Firestore {
-  const docFor = (collection: string, id: string) => ({
-    id,
-    async get() {
-      const data = store[id];
-      return {
-        exists: data != null,
-        data: () => data,
-      };
-    },
-    async set(data: Record<string, unknown>, opts?: { merge?: boolean }) {
-      if (collection !== GLM_MIGRATION_TRANSFER_TASKS_COLLECTION) {
-        throw new Error(`unexpected collection: ${collection}`);
-      }
-      store[id] = opts?.merge ? { ...(store[id] ?? {}), ...data } : { ...data };
-    },
-  });
-
-  return {
-    collection: (collection: string) => ({
-      doc: (id: string) => docFor(collection, id),
-    }),
-    runTransaction: async <T,>(body: (txn: {
-      get: (ref: ReturnType<typeof docFor>) => Promise<Awaited<ReturnType<ReturnType<typeof docFor>["get"]>>>;
-      set: (
-        ref: ReturnType<typeof docFor>,
-        data: Record<string, unknown>,
-        opts?: { merge?: boolean },
-      ) => void;
-    }) => Promise<T>) => {
-      const writes: Array<() => Promise<void>> = [];
-      const result = await body({
-        get: (ref) => ref.get(),
-        set: (ref, data, opts) => {
-          writes.push(() => ref.set(data, opts));
-        },
-      });
-      for (const write of writes) await write();
-      return result;
-    },
-  } as unknown as Firestore;
+function makeStore(tasks: Store): PlatformStateStore {
+  const taskId = (path: string) => {
+    const [collection, id, ...rest] = path.split("/");
+    if (collection !== GLM_MIGRATION_TRANSFER_TASKS_COLLECTION || id === undefined || rest.length > 0) throw new Error(`unexpected document ${path}`);
+    return id;
+  };
+  return createJournalFixtureStore(journalRowsIn({}), { documents: {
+    get: (path) => tasks[taskId(path)],
+    set: (path, row) => { tasks[taskId(path)] = row; },
+    delete: (path) => { delete tasks[taskId(path)]; },
+    children: (collectionPath) => { throw new Error(`unexpected collection listing ${collectionPath}`); },
+    group: (collectionId) => { throw new Error(`unexpected collection group ${collectionId}`); },
+  } });
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -205,7 +178,7 @@ describe("createRsyncMigrationTransfer", () => {
       return fallback(command, args, options);
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
       fetch: (async (url, init) => !supportsFencing && String(url).endsWith("/health") ? jsonResponse({ status: "ready" }) : makeFetch(calls)(url, init)) as typeof globalThis.fetch,
       runCommand, now: () => 10_000,
@@ -234,7 +207,7 @@ describe("createRsyncMigrationTransfer", () => {
       ? { stdout: "", stderr: "", code: 0 } : args.includes("new-controller")
         ? { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
         : fallback(command, args, options);
-    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand, now: () => 10_000,
       controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
     await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" }))
@@ -256,7 +229,7 @@ describe("createRsyncMigrationTransfer", () => {
       ? { stdout: "", stderr: "", code: 0 } : args.includes("new-controller")
         ? { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
         : fallback(command, args, options);
-    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
       fetch: (async (url, init) => String(url).endsWith("/surge-ready") ? jsonResponse(state, 503) : makeFetch(calls)(url, init)) as typeof globalThis.fetch,
       runCommand, now: () => 10_000, controllerPod: { name: "new-controller", uid: "new-pod-uid" } });
@@ -283,7 +256,7 @@ describe("createRsyncMigrationTransfer", () => {
       ? { stdout: "", stderr: "", code: 0 } : args.includes("new-controller")
         ? { stdout: JSON.stringify({ metadata: { name: "new-controller", uid: "new-pod-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
         : fallback(command, args, options);
-    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
       resolveGatewayVm: async id => id === "gw-to" ? { instanceName: "vm", internalIp: "172.20.0.9", instanceId: "123" } : null,
       fetch: (async (url, init) => {
@@ -333,7 +306,7 @@ describe("createRsyncMigrationTransfer", () => {
     delete h.store.evicted__final.leasePod;
     h.store.evicted__final.leaseExpiresAt = 1;
     await expect(h.run()).rejects.toThrow("owner identity unavailable");
-    await expect(readTransferAttemptForCleanup({ db: makeDb(h.store), now: () => 10_000, namespace: "test", runCommand: makeCommandRunner([]) },
+    await expect(readTransferAttemptForCleanup({ store: makeStore(h.store), now: () => 10_000, namespace: "test", runCommand: makeCommandRunner([]) },
       { migrationId: "evicted", slug: "alice", gatewayId: "gw-to", mode: "final" })).rejects.toThrow("owner may still be running");
     expect(h.calls).toEqual([]);
   });
@@ -341,7 +314,7 @@ describe("createRsyncMigrationTransfer", () => {
   it("refuses cleanup of an expired transfer while its controller pod still exists", async () => {
     const store: Store = { evicted__final: { ...evictedTask(), leaseExpiresAt: 1 } };
     const runCommand = vi.fn(async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ metadata: evictedTask().leasePod }) }));
-    await expect(readTransferAttemptForCleanup({ db: makeDb(store), now: () => 10_000, namespace: "test", runCommand },
+    await expect(readTransferAttemptForCleanup({ store: makeStore(store), now: () => 10_000, namespace: "test", runCommand },
       { migrationId: "evicted", slug: "alice", gatewayId: "gw-to", mode: "final" })).rejects.toThrow("owner may still be running");
   });
 
@@ -371,7 +344,7 @@ describe("createRsyncMigrationTransfer", () => {
       if (owner === "changed") store.evicted__final = { ...evictedTask(), attemptId: "replacement" };
       return { code: 0, stderr: "", stdout: owner === "present" ? JSON.stringify({ metadata: evictedTask().leasePod }) : "" };
     });
-    const result = readTransferAttemptForCleanup({ db: makeDb(store), now: () => 10_000, namespace: "test", runCommand },
+    const result = readTransferAttemptForCleanup({ store: makeStore(store), now: () => 10_000, namespace: "test", runCommand },
       { migrationId: "evicted", slug: "alice", gatewayId: "gw-to", mode: "final" });
     if (["present", "changed", "wrong-target"].includes(owner)) await expect(result).rejects.toThrow(/owner|claim|identity/);
     else await expect(result).resolves.toBe(owner === "untracked" ? undefined : "old-attempt");
@@ -389,7 +362,7 @@ describe("createRsyncMigrationTransfer", () => {
       }
       return baseFetch(url, init);
     }) as typeof globalThis.fetch;
-    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]) });
     await expect(transfer({ migrationId: "evicted", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).rejects.toThrow(/ownership|claim|attempt/);
     expect(store.evicted__final).toMatchObject({ status: "running", attemptId: "newer-attempt", leaseOwner: "newer-worker" });
@@ -417,7 +390,7 @@ describe("createRsyncMigrationTransfer", () => {
       }
       return baseFetch(url, init);
     }) as typeof globalThis.fetch;
-    const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: async (command, args, options) =>
         args.includes("current-controller") ? { stdout: JSON.stringify({ metadata: { name: "current-controller", uid: "current-uid" }, status: { containerStatuses: [{ name: "glm-controller", restartCount: 0 }] } }), stderr: "", code: 0 }
           : makeCommandRunner([])(command, args, options),
@@ -435,7 +408,7 @@ describe("createRsyncMigrationTransfer", () => {
       expect(calls.at(-1)).toContain("/push-rsync-state/");
       expect(calls.some(url => url.includes("/finish-rsync-import/"))).toBe(false);
     });
-    const transfer = createRsyncMigrationTransfer({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
       resolveGatewayUrl: id => `http://${id}`, runCommand: makeCommandRunner([]), fetch: makeFetch(calls), prepareAgentStores });
     await transfer({ migrationId: "ownership-1", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode });
     expect(prepareAgentStores).toHaveBeenCalledTimes(mode === "final" ? 1 : 0);
@@ -443,7 +416,7 @@ describe("createRsyncMigrationTransfer", () => {
 
   it("aborts the target without adopting when ownership transfer fails", async () => {
     const calls: string[] = [];
-    const transfer = createRsyncMigrationTransfer({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
+    const transfer = createRsyncMigrationTransfer({ store: makeStore({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey, fleetControllerPort: FLEET_CONTROLLER_PORT,
       resolveGatewayUrl: id => `http://${id}`, runCommand: makeCommandRunner([]), fetch: makeFetch(calls),
       prepareAgentStores: async () => { throw new Error("ownership failed"); } });
     await expect(transfer({ migrationId: "ownership-1", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).rejects.toThrow("ownership failed");
@@ -480,7 +453,7 @@ describe("createRsyncMigrationTransfer", () => {
       setGlobalDispatcher(shortHeaders);
       await expect(globalThis.fetch(base + "/slow")).rejects.toThrow("fetch failed");
       const runner = makeCommandRunner([]);
-      const transfer = createRsyncMigrationTransfer({ db: makeDb({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      const transfer = createRsyncMigrationTransfer({ store: makeStore({}), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
         fleetControllerPort: String(port), resolveGatewayUrl: () => base,
         runCommand: async (...args) => { const result = await runner(...args); return { ...result, stdout: result.stdout.replaceAll(SOURCE_POD_IP, "127.0.0.1").replaceAll(TARGET_POD_IP, "127.0.0.1") }; } });
       await expect(transfer({ migrationId: "production-dispatcher", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).resolves.toMatchObject({ imported: true });
@@ -513,7 +486,7 @@ describe("createRsyncMigrationTransfer", () => {
     }) as typeof globalThis.fetch;
     try {
       const transfer = createRsyncMigrationTransfer({
-        db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+        store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`,
         fetch, runCommand: makeCommandRunner([]), now: () => Date.now(),
       });
@@ -543,7 +516,7 @@ describe("createRsyncMigrationTransfer", () => {
       return baseFetch(url, init);
     }) as typeof globalThis.fetch;
     try {
-      const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]), now: () => Date.now() });
       await expect(transfer({ migrationId: "cleanup-budget", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" })).rejects.toThrow("finish failed before deadline");
       expect(store["cleanup-budget__final"].status).toBe("failed");
@@ -566,7 +539,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { ok: true, json: stall } as unknown as Response;
     }) as typeof globalThis.fetch;
     try {
-      const transfer = createRsyncMigrationTransfer({ db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      const transfer = createRsyncMigrationTransfer({ store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
         fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: id => `http://${id}`, fetch, runCommand: makeCommandRunner([]) });
       const completion = transfer({ migrationId: "stalled", fromGatewayId: "gw-from", toGatewayId: "gw-to", slug: "alice", mode: "final" });
       const rejection = expect(completion).rejects.toThrow(`timed out after ${MIGRATION_IMPORT_FINISH_TIMEOUT_MS}ms`);
@@ -597,7 +570,7 @@ describe("createRsyncMigrationTransfer", () => {
       return baseRunner(command, args, opts);
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
       fetch: makeFetch(calls), runCommand,
     });
@@ -616,7 +589,7 @@ describe("createRsyncMigrationTransfer", () => {
     const calls: string[] = [];
     const baseRunner = makeCommandRunner([]);
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
       fetch: makeFetch(calls),
       runCommand: (command, args, opts) => args.includes("wait")
@@ -641,7 +614,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { stdout: await response.text(), stderr: "", code: 0 };
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: "7443",
@@ -680,7 +653,7 @@ describe("createRsyncMigrationTransfer", () => {
       });
     }) as typeof fetch;
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -712,7 +685,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { stdout: await response.text(), stderr: "", code: 0 };
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -758,7 +731,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { stdout: await readyPod("gw-from-pod").text(), stderr: "", code: 0 };
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -813,7 +786,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { stdout: await readyPod("gw-from-pod").text(), stderr: "", code: 0 };
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -845,7 +818,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -882,7 +855,7 @@ describe("createRsyncMigrationTransfer", () => {
       return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
     };
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -898,7 +871,7 @@ describe("createRsyncMigrationTransfer", () => {
       fromTransportId: "default-r2",
       toTransportId: "default-r3",
       slug: "alice",
-      mode: "initial",
+      mode: "pre",
     });
 
     expect(commandCalls.map((call) => call.args[call.args.indexOf("-l") + 1])).toEqual([
@@ -918,7 +891,7 @@ describe("createRsyncMigrationTransfer", () => {
     const commandCalls: Array<{ command: string; args: string[] }> = [];
     let now = 10_000;
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -980,7 +953,7 @@ describe("createRsyncMigrationTransfer", () => {
       return makeFetch([])(input, init);
     }) as typeof globalThis.fetch;
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -1024,7 +997,7 @@ describe("createRsyncMigrationTransfer", () => {
       return makeFetch([])(input, init);
     }) as typeof globalThis.fetch;
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store),
+      store: makeStore(store),
       namespace: "octogee-test",
       privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT,
@@ -1053,7 +1026,7 @@ describe("createRsyncMigrationTransfer with a VM target", () => {
 
   function vmTransfer(store: Store, calls: string[], fetchImpl: typeof fetch, kubectlCalls: Array<{ command: string; args: string[] }>) {
     return createRsyncMigrationTransfer({
-      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
       fetch: fetchImpl,
       runCommand: makeCommandRunner(kubectlCalls),
@@ -1105,7 +1078,7 @@ describe("createRsyncMigrationTransfer with a VM target", () => {
     }) as typeof fetch;
     let clock = 0;
     const transfer = createRsyncMigrationTransfer({
-      db: makeDb(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
+      store: makeStore(store), namespace: "octogee-test", privateKey: FLEET_KEY_PAIR.privateKey,
       fleetControllerPort: FLEET_CONTROLLER_PORT, resolveGatewayUrl: (id) => `http://${id}`,
       fetch: fetchImpl, runCommand: makeCommandRunner([]),
       resolveGatewayVm: async (id) => id === "gw-to" ? { instanceName: "octogee-gw-gw-to", internalIp: VM_IP } : null,
@@ -1126,7 +1099,7 @@ describe("retained source final transfer",()=>{
     const prepareAgentStores = vi.fn(async () => { expect(calls.some(url => url.includes("/finish-rsync-import/"))).toBe(false); });
     const transfer=createRsyncMigrationTransfer({
       prepareAgentStores,
-      db:makeDb(store),namespace:"octogee-test",privateKey:FLEET_KEY_PAIR.privateKey,
+      store:makeStore(store),namespace:"octogee-test",privateKey:FLEET_KEY_PAIR.privateKey,
       fleetControllerPort:FLEET_CONTROLLER_PORT,resolveGatewayUrl:id=>`http://${id}`,
       fetch:makeFetch(calls),runCommand:makeCommandRunner(commands),
       retainedSource:{assertActiveClaim:async()=>{if(outcome==="stale")throw new Error("active claim changed");},settledTarget:async()=>undefined,acknowledgeCleanup:async record=>record,observe:async()=>undefined,execute:async ({target,prepare})=>{

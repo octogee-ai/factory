@@ -1,12 +1,8 @@
-import type { Firestore } from "firebase-admin/firestore";
-import {
-  GLM_OPERATIONS_COLLECTION,
-  isOperationAuditRow,
-  type Operation,
-} from "@octogee/shared/types/glm";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
+import type { Operation } from "@octogee/shared/types/glm";
 
 export interface ResumeOrphanedOpsDeps {
-  db: Firestore;
+  store: Pick<PlatformStateRepositories, "journal">;
   log: (msg: string) => void;
   // Kinds safe to re-drive idempotently after a controller restart. The blue/green
   // rollout is the one that spans minutes and, if abandoned after its pre-migrate
@@ -15,7 +11,7 @@ export interface ResumeOrphanedOpsDeps {
   resumableOperation?: (op: Operation) => boolean;
   // Re-adopt the orphaned running op (bump heartbeat + resumeCount) and re-run its
   // handler from persisted progress. Supplied by the controller wiring.
-  redrive: (op: Operation, ref: FirebaseFirestore.DocumentReference) => Promise<void>;
+  redrive: (op: Operation) => Promise<void>;
 }
 
 export interface ResumeOrphanedOpsResult {
@@ -34,22 +30,16 @@ export interface ResumeOrphanedOpsResult {
 export async function resumeOrphanedRunningOps(
   deps: ResumeOrphanedOpsDeps,
 ): Promise<ResumeOrphanedOpsResult> {
-  const snap = await deps.db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "==", "running")
-    .get();
+  const running = await deps.store.journal.operations.listByStatus(["running"]);
   let resumed = 0;
-  for (const doc of snap.docs) {
-    const data = doc.data() as unknown;
-    if (!data || isOperationAuditRow(data)) continue;
-    const op = { ...data, id: doc.id } as Operation;
+  for (const op of running) {
     if (!deps.resumableKinds.has(op.kind)) continue;
     if (deps.resumableOperation && !deps.resumableOperation(op)) continue;
     deps.log(
       `[resume-orphaned-ops] re-driving orphaned running op=${op.id} kind=${op.kind} (controller restarted mid-op)`,
     );
     try {
-      await deps.redrive(op, doc.ref);
+      await deps.redrive(op);
       resumed += 1;
     } catch (err) {
       deps.log(
@@ -57,5 +47,5 @@ export async function resumeOrphanedRunningOps(
       );
     }
   }
-  return { scanned: snap.docs.length, resumed };
+  return { scanned: running.length, resumed };
 }

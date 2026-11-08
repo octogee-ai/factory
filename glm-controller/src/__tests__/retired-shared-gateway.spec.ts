@@ -1,9 +1,14 @@
 import { createNativeReturnTargetRetirementVerifier } from "../lib/native-return-target-retirement.js";
 import { describe, expect, it, vi } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "../lib/customer-ops/retired-shared-gateway.js";
 
 const gatewayId = "shared-9b3b204b1371";
 const operationId = `shared-pool-retire-${gatewayId}`;
+
+function root(fields: Record<string, unknown>): Record<string, unknown> {
+  return { gatewayId, latestRelease: 1, desiredRelease: 1, liveRelease: 1, ...fields };
+}
 
 function harness() {
   const records: Record<string, Record<string, any>> = {
@@ -12,27 +17,12 @@ function harness() {
       input: { gatewayId, source: "shared-pool-scaler", retirementClaimVersion: 1 },
     },
   };
-  const query = (path: string, field?: string, value?: unknown) => ({
-    get: async () => {
-      const docs = Object.entries(records).filter(([key, data]) => {
-        if (key.split("/").slice(0, -1).join("/") !== path) return false;
-        return !field || field.split(".").reduce((item, part) => item?.[part], data) === value;
-      }).map(([path, data]) => ({ id: path.split("/").at(-1), data: () => data }));
-      return { empty: docs.length === 0, docs };
-    },
-  });
-  const collection = (path: string): any => ({
-    ...query(path),
-    where: (field: string, _operator: string, value: unknown) => query(path, field, value),
-    doc: (id: string) => ({
-      get: async () => ({ exists: records[`${path}/${id}`] !== undefined, data: () => records[`${path}/${id}`] }),
-      collection: (name: string) => collection(`${path}/${id}/${name}`),
-    }),
-  });
-  const db = { collection, runTransaction: async (action: any) => action({ get: (ref: any) => ref.get() }) };
+  const store = createDocumentFixtureStore(records);
   const readRuntimeAbsent = vi.fn(async () => true);
-  return { db, records, readRuntimeAbsent, run: () => isRetiredSharedGateway(db as never, gatewayId, readRuntimeAbsent) };
+  return { store, records, readRuntimeAbsent, run: () => isRetiredSharedGateway(store, gatewayId, readRuntimeAbsent) };
 }
+
+const assignment = (uid: string) => ({ uid, slug: uid, gatewayId, source: "onboarding", state: "serving", epoch: 1 });
 
 describe("retired Shared gateway unmount proof", () => {
   it("recognizes a removed Shared gateway with its successful retirement receipt and absent runtime", async () => {
@@ -43,10 +33,10 @@ describe("retired Shared gateway unmount proof", () => {
 
   it("recognizes a retired Shared root that still holds the completed claim", async () => {
     const h = harness();
-    h.records[`gateways/${gatewayId}`] = {
+    h.records[`gateways/${gatewayId}`] = root({
       gatewayClass: "shared", ownerUid: null, desiredStatus: "retired", retirementVersion: 1,
       retirementClaim: { operationId, version: 1, phase: "claimed" },
-    };
+    });
     await expect(h.run()).resolves.toBe(true);
   });
 
@@ -57,15 +47,15 @@ describe("retired Shared gateway unmount proof", () => {
   });
 
   it.each([
-    ["live root", `gateways/${gatewayId}`, { gatewayClass: "shared", desiredStatus: "running" }],
-    ["foreign owner", `gateways/${gatewayId}`, { gatewayClass: "builder", ownerUid: "other", desiredStatus: "retired" }],
-    ["runtime record", `glmGateways/${gatewayId}`, {}],
-    ["assignment", `gateways/${gatewayId}/assignments/user`, {}],
+    ["live root", `gateways/${gatewayId}`, root({ gatewayClass: "shared", desiredStatus: "running" })],
+    ["foreign owner", `gateways/${gatewayId}`, root({ gatewayClass: "builder", ownerUid: "other", desiredStatus: "retired" })],
+    ["runtime record", `glmGateways/${gatewayId}`, { docKind: "runtime", gatewayId, release: 1, lifecycle: "serving" }],
+    ["assignment", `gateways/${gatewayId}/assignments/user`, assignment("user")],
     ["customer reference", "users/user", { provisioning: { openclaw: { gatewayId } } }],
     ["newer incarnation", "glmOperations/new-add", { gatewayId, kind: "add-gateway", status: "succeeded", createdAt: 150 }],
     ["unfinished add", "glmOperations/pending-add", { gatewayId, kind: "add-gateway", status: "pending", createdAt: 50 }],
     ["unversioned incarnation", "glmOperations/unknown-add", { gatewayId, kind: "add-gateway" }],
-    ["different claim", `gateways/${gatewayId}`, { gatewayClass: "shared", ownerUid: null, desiredStatus: "retired", retirementVersion: 2, retirementClaim: { operationId, version: 2, phase: "claimed" } }],
+    ["different claim", `gateways/${gatewayId}`, root({ gatewayClass: "shared", ownerUid: null, desiredStatus: "retired", retirementVersion: 2, retirementClaim: { operationId, version: 2, phase: "claimed" } })],
   ])("rejects a %s", async (_label, path, record) => {
     const h = harness();
     h.records[path as string] = record as Record<string, any>;
@@ -103,7 +93,7 @@ describe("retired Shared gateway unmount proof", () => {
   it("revalidates tenant references after checking Kubernetes", async () => {
     const h = harness();
     h.readRuntimeAbsent.mockImplementation(async () => {
-      h.records[`gateways/${gatewayId}/assignments/new-user`] = {};
+      h.records[`gateways/${gatewayId}/assignments/new-user`] = assignment("new-user");
       return true;
     });
     await expect(h.run()).resolves.toBe(false);
@@ -145,17 +135,17 @@ describe("retired native return target proof", () => {
     const h = harness();
     if (scenario === "runtime-live") h.readRuntimeAbsent.mockResolvedValue(false);
     const credentialsRetired = vi.fn(async () => {
-      if (scenario === "root-recreated") h.records[`gateways/${gatewayId}`] = { gatewayClass: "shared", desiredStatus: "running" };
+      if (scenario === "root-recreated") h.records[`gateways/${gatewayId}`] = root({ gatewayClass: "shared", desiredStatus: "running" });
       if (scenario === "receipt-changed") h.records[`glmOperations/${operationId}`].status = "pending";
       return scenario !== "credentials-live";
     });
-    const verify = createNativeReturnTargetRetirementVerifier({ db: h.db as never, runtimeAbsent: h.readRuntimeAbsent, credentialsRetired });
+    const verify = createNativeReturnTargetRetirementVerifier({ store: h.store, runtimeAbsent: h.readRuntimeAbsent, credentialsRetired });
     expect(await verify(gatewayId, async () => {})).toBe(scenario === "complete");
     if (scenario === "runtime-live") expect(credentialsRetired).not.toHaveBeenCalled();
   });
   it("retains uncertainty if the caller loses authority during PostgreSQL proof", async () => {
     const h = harness(); let current = true;
-    const verify = createNativeReturnTargetRetirementVerifier({ db: h.db as never, runtimeAbsent: h.readRuntimeAbsent,
+    const verify = createNativeReturnTargetRetirementVerifier({ store: h.store, runtimeAbsent: h.readRuntimeAbsent,
       credentialsRetired: async () => { current = false; return true; } });
     await expect(verify(gatewayId, async () => { if (!current) throw new Error("source claim changed"); })).rejects.toThrow("source claim changed");
   });

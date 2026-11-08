@@ -1953,25 +1953,3 @@ export function listOnDiskCustomerSlugs(): string[] {
 }
 
 type GitRunner = typeof gitExec;
-
-export async function archiveWorkspaceRepo(slug: string): Promise<void> {
-  const org = workspaceGiteaOrg(slug);
-  const repoName = workspaceRepoName();
-  try {
-    await giteaBroker.archiveRepo(org, repoName);
-    log(`[git] Archived repo: ${org}/${repoName}`);
-  } catch (err) {
-    log(`⚠ [git] Failed to archive repo ${org}/${repoName}: ${errMessage(err)}`);
-  }
-}
-
-export async function archiveProjectRepo(slug: string, projectName: string): Promise<void> {
-  const org = workspaceGiteaOrg(slug);
-  const repoName = projectRepoName(projectName);
-  try {
-    await giteaBroker.archiveRepo(org, repoName);
-    log(`[git] Archived project repo: ${org}/${repoName}`);
-  } catch (err) {
-    log(`⚠ [git] Failed to archive project repo ${org}/${repoName}: ${errMessage(err)}`);
-  }
-}

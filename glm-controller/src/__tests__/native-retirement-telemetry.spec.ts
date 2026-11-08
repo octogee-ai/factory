@@ -1,5 +1,6 @@
-import type { Firestore } from "firebase-admin/firestore";
 import { describe, expect, it, vi } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { pausedNativeRetirementSourceFencedOff } from "../lib/native-retirement-telemetry.js";
 import type { GatewayVmDescription } from "../lib/compute-vm.js";
 
@@ -7,6 +8,7 @@ const input = { gatewayId: "builder-old", operationId: "retire-old", version: 2 
 function fixture() {
   const root: Record<string, unknown> = {
     gatewayId: input.gatewayId, gatewayClass: "builder", ownerUid: "uid", desiredStatus: "retired",
+    desiredRelease: 1, latestRelease: 1,
     retirementClaim: { operationId: input.operationId, version: input.version, phase: "claimed", previousDesiredStatus: "paused" },
   };
   let runtime: Record<string, unknown> | undefined = {
@@ -18,10 +20,11 @@ function fixture() {
     name: "computer", instanceId: "instance-1", zone: "zone", gatewayId: input.gatewayId,
     status: "TERMINATED", labels: { "octogee-owner-uid": "uid" }, metadata: { "octogee-owner-uid": "uid" },
   } as GatewayVmDescription;
-  const db = { collection: (name: string) => ({ doc: () => ({ get: async () => {
-    const data = name === "gateways" ? root : runtime;
-    return { exists: data !== undefined, data: () => data };
-  } }) }) } as unknown as Pick<Firestore, "collection">;
+  const records: Record<string, Record<string, unknown> | undefined> = {
+    [`gateways/${input.gatewayId}`]: root,
+    get [`glmGateways/${input.gatewayId}`]() { return runtime; },
+  };
+  const store = createDocumentFixtureStore(records);
   const describeComputer = vi.fn(async () => current);
   return {
     root,
@@ -30,7 +33,7 @@ function fixture() {
     removeRuntime: () => { runtime = undefined; },
     removeComputer: () => { current = null; },
     describeComputer,
-    check: () => pausedNativeRetirementSourceFencedOff({ db, describe: describeComputer }, input),
+    check: () => pausedNativeRetirementSourceFencedOff({ store, describe: describeComputer }, input),
   };
 }
 
@@ -54,8 +57,13 @@ describe("paused native retirement telemetry", () => {
     expect(await h.check()).toBe(false);
   });
 
+  it("fails closed on a root stored under another gateway before Compute reads", async () => {
+    const h = fixture(); h.root.gatewayId = "other";
+    await expect(h.check()).rejects.toBeInstanceOf(MalformedRecordError);
+    expect(h.describeComputer).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ["different gateway", "gatewayId", "other"],
     ["Shared class", "gatewayClass", "shared"],
     ["no owner", "ownerUid", null],
     ["reactivated desired state", "desiredStatus", "running"],

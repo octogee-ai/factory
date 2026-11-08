@@ -2,8 +2,9 @@
 
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import { pathToFileURL } from "node:url";
+import { createFirestorePlatformStateStore } from "@octogee/core/platform-state";
 
 export interface SetAdminRoleArgs {
   project: string;
@@ -37,7 +38,7 @@ async function main(argv: string[] = process.argv.slice(2)) {
     initializeApp({ credential: applicationDefault(), projectId: project });
   }
   const auth = getAuth();
-  const db = getFirestore();
+  const store = createFirestorePlatformStateStore({ db: getFirestore() });
   let uid: string;
   let email: string;
 
@@ -51,25 +52,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
     email = user.email ?? "(no email)";
   }
 
-const userDoc = await db.doc(`users/${uid}`).get();
-  if (!userDoc.exists) {
+  if (await store.builders.records.get(uid) === null) {
     console.error(`❌ No user doc found at users/${uid}. Has this user signed up?`);
     process.exit(1);
   }
 
-const configRef = db.doc(`users/${uid}/system/config`);
-
-  if (revoke) {
-    await configRef.set({ role: FieldValue.delete() }, { merge: true });
-  } else {
-    await configRef.set({ role: "admin" }, { merge: true });
-  }
-
-const userData = userDoc.data();
-  if (userData?.role) {
-    await db.doc(`users/${uid}`).update({ role: FieldValue.delete() });
-    console.log(`   ⚠ Removed legacy top-level role field`);
-  }
+  await store.builders.records.patch(uid, { role: revoke ? { clear: true } : "admin" });
 
   console.log(`\n✅ ${revoke ? "Revoked" : "Granted"} admin role`);
   console.log(`   project: ${project}`);

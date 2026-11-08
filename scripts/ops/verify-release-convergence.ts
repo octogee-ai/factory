@@ -2,23 +2,18 @@
 
 import { execFile as execFileCallback } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import { deploymentTargetSettings } from "@octogee/core/deployment-environment";
-import { isBareGatewayId } from "@octogee/core/gateway-live-release";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
+import { isBareGatewayId, readGatewayRuntimeDoc } from "@octogee/core/gateway-live-release";
+import { createFirestorePlatformStateStore, type PlatformStateStore } from "@octogee/core/platform-state";
 import {
-  GATEWAY_ASSIGNMENTS_SUBCOLLECTION,
-  GATEWAY_RELEASES_SUBCOLLECTION,
   isGatewayRuntimeDoc,
   projectGatewayDesiredRootForGateway,
 } from "@octogee/shared/types/gateway-releases";
-import {
-  GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
-  resolveGatewayClass,
-} from "@octogee/shared/types/glm";
+import { resolveGatewayClass } from "@octogee/shared/types/glm";
 import {
   assessReleaseConvergence,
   hasBlockingRolloutFailure,
@@ -222,39 +217,28 @@ async function readKubernetesState(input: {
   return { deployment, pods, replicaSets };
 }
 
-async function readSnapshot(input: {
-  db: Firestore;
-  expectedImageTag: string;
-  kubeContext: string;
-  namespace: string;
-}): Promise<{ snapshot: ReleaseConvergenceSnapshot }> {
-  const [config, gatewayDocuments, operationDocuments] = await Promise.all([
-    input.db.doc("config/orchestrator").get(),
-    input.db.collection(GATEWAYS_COLLECTION).get(),
-    input.db.collection(GLM_OPERATIONS_COLLECTION).get(),
+export type ReleaseConvergenceRecords = Omit<ReleaseConvergenceSnapshot, "expectedImageTag" | "deployment" | "pods" | "replicaSets"> & {
+  defaultDeploymentName: string;
+};
+
+export async function readReleaseConvergenceRecords(store: PlatformStateStore): Promise<ReleaseConvergenceRecords> {
+  const [config, storedRoots, operations] = await Promise.all([
+    store.config.orchestrator.get(),
+    store.gateways.roots.list(),
+    store.journal.operations.listByKind("rollout"),
   ]);
-  const configuredDefaultGatewayId = config.data()?.defaultGatewayId;
+  const configuredDefaultGatewayId = config?.defaultGatewayId;
   if (!isBareGatewayId(configuredDefaultGatewayId)) {
     throw new Error("config/orchestrator.defaultGatewayId is missing or invalid");
   }
 
-  const roots = gatewayDocuments.docs.flatMap((document) => {
-    const value = projectGatewayDesiredRootForGateway(document.data(), document.id);
+  const roots = storedRoots.flatMap(({ revision: _revision, ...stored }) => {
+    const value = projectGatewayDesiredRootForGateway(stored, stored.gatewayId);
     return value ? [value] : [];
   });
   const gateways = await Promise.all(roots.map(async (root): Promise<ReleaseConvergenceGateway> => {
-    const release = await input.db
-      .collection(GATEWAYS_COLLECTION)
-      .doc(root.gatewayId)
-      .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-      .doc(String(root.desiredRelease))
-      .get();
-    const data = release.data();
-    const payload = data?.payload;
-    const desiredImageTag = payload && typeof payload === "object" &&
-      typeof (payload as Record<string, unknown>).imageTag === "string"
-      ? (payload as Record<string, unknown>).imageTag as string
-      : null;
+    const release = await store.gateways.releases.get(root.gatewayId, root.desiredRelease);
+    const desiredImageTag = release?.payload.imageTag ?? null;
     return {
       gatewayId: root.gatewayId,
       desiredStatus: root.desiredStatus,
@@ -268,10 +252,9 @@ async function readSnapshot(input: {
       desiredImageTag,
     };
   }));
-  const rolloutOperations = operationDocuments.docs.flatMap((document) => {
-    const value = document.data();
+  const rolloutOperations = operations.flatMap((value) => {
     const inputValue = value.input;
-    if (value.kind !== "rollout" || !inputValue || typeof inputValue !== "object") return [];
+    if (!inputValue || typeof inputValue !== "object") return [];
     const operationInput = inputValue as Record<string, unknown>;
     if (
       typeof operationInput.gatewayId !== "string" ||
@@ -279,7 +262,7 @@ async function readSnapshot(input: {
       typeof value.status !== "string"
     ) return [];
     const operation: ReleaseConvergenceRolloutOperation = {
-      id: document.id,
+      id: value.id,
       gatewayId: operationInput.gatewayId,
       imageTag: operationInput.imageTag,
       status: value.status,
@@ -287,12 +270,10 @@ async function readSnapshot(input: {
     };
     return [operation];
   });
-  const [runtimeDocument, assignmentDocuments] = await Promise.all([
-    input.db.collection(GLM_GATEWAYS_COLLECTION).doc(configuredDefaultGatewayId).get(),
-    input.db.collection(GATEWAYS_COLLECTION).doc(configuredDefaultGatewayId)
-      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
+  const [runtimeValue, assignments] = await Promise.all([
+    readGatewayRuntimeDoc(store, { gatewayId: configuredDefaultGatewayId }),
+    store.gateways.assignments.list(configuredDefaultGatewayId),
   ]);
-  const runtimeValue = runtimeDocument.data();
   const defaultRuntime = isGatewayRuntimeDoc(runtimeValue)
     ? {
       gatewayId: runtimeValue.gatewayId,
@@ -303,37 +284,41 @@ async function readSnapshot(input: {
       mountedCustomers: runtimeValue.heartbeat.mountedCustomers,
     }
     : null;
-  const defaultAssignments = assignmentDocuments.docs.map((document) => {
-    const slug = document.data().slug;
-    if (typeof slug !== "string" || slug.length === 0) {
-      throw new Error(`${document.ref.path} is missing slug`);
+  const defaultAssignments = assignments.map((assignment) => {
+    if (assignment.slug.length === 0) {
+      throw new Error(`gateways/${configuredDefaultGatewayId}/assignments/${assignment.uid} is missing slug`);
     }
-    return slug;
+    return assignment.slug;
   });
-  const defaultAssignmentsServing = assignmentDocuments.docs.every(
-    (document) => document.data().state === "serving",
-  );
-  const deploymentName = defaultRuntime && isGatewayRuntimeDoc(runtimeValue)
+  const defaultAssignmentsServing = assignments.every((assignment) => assignment.state === "serving");
+  const defaultDeploymentName = defaultRuntime && isGatewayRuntimeDoc(runtimeValue)
     ? runtimeValue.helm.deploymentName
     : `octogee-gateway-${configuredDefaultGatewayId}`;
+  return {
+    configuredDefaultGatewayId,
+    gateways,
+    rolloutOperations,
+    defaultRuntime,
+    defaultAssignments,
+    defaultAssignmentsServing,
+    defaultDeploymentName,
+  };
+}
+
+async function readSnapshot(input: {
+  store: PlatformStateStore;
+  expectedImageTag: string;
+  kubeContext: string;
+  namespace: string;
+}): Promise<{ snapshot: ReleaseConvergenceSnapshot }> {
+  const { defaultDeploymentName, ...records } = await readReleaseConvergenceRecords(input.store);
   const kubernetes = await readKubernetesState({
     kubeContext: input.kubeContext,
     namespace: input.namespace,
-    gatewayId: configuredDefaultGatewayId,
-    deploymentName,
+    gatewayId: records.configuredDefaultGatewayId,
+    deploymentName: defaultDeploymentName,
   });
-  return {
-    snapshot: {
-      expectedImageTag: input.expectedImageTag,
-      configuredDefaultGatewayId,
-      gateways,
-      rolloutOperations,
-      defaultRuntime,
-      defaultAssignments,
-      defaultAssignmentsServing,
-      ...kubernetes,
-    },
-  };
+  return { snapshot: { expectedImageTag: input.expectedImageTag, ...records, ...kubernetes } };
 }
 
 async function run(): Promise<void> {
@@ -345,14 +330,14 @@ async function run(): Promise<void> {
     credential: applicationDefault(),
     projectId: settings.firebaseProjectId,
   }, `release-convergence-${settings.targetId}`);
-  const db = getFirestore(app);
+  const store = createFirestorePlatformStateStore({ db: getFirestore(app) });
   const deadline = Date.now() + options.timeoutMs;
   let failures = ["release convergence has not been observed"];
 
   while (Date.now() < deadline) {
     try {
       const observed = await readSnapshot({
-        db,
+        store,
         expectedImageTag: options.expectedImageTag,
         kubeContext: settings.kubeContext,
         namespace: settings.namespace,
@@ -379,7 +364,9 @@ async function run(): Promise<void> {
   throw new Error(`Release convergence failed: ${failures.join("; ")}`);
 }
 
-run().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  run().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

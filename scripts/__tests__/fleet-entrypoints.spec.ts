@@ -8,6 +8,8 @@ import { customerEnsureRetryReady } from "../lib/fleet-provisioner.js";
 import { reconcileFleet, _resetReconcileInFlightForTests } from "../lib/reconcile-loop.js";
 import { CONFIG_RELOAD_DEADLINE_MS } from "../../shared/types/fleet-controller.js";
 import { acquireSystemConfigMutationLease } from "@octogee/core/system-config-mutation-lease";
+import { builderAccountFromData } from "@octogee/core/builder-account";
+import { createDocumentFixtureStore, createJournalFixtureStore, fixtureDocumentsAt } from "@octogee/core/testing/journal-store";
 import {
   createAssignedCustomerReader,
   readCustomerEnsureAdmission,
@@ -717,18 +719,30 @@ describe("fleet-controller entrypoint config", () => {
 });
 
 describe("assign-customer-gateway args", () => {
-  it("bulk-selects only identity-complete builders whose provisioning has started", () => {
-    expect(isBulkAssignmentCandidate({
+  async function bulkCandidate(data: Record<string, unknown>): Promise<boolean> {
+    const store = createDocumentFixtureStore(new Map([["users/u1", data]]));
+    const builder = await store.builders.records.get("u1");
+    return isBulkAssignmentCandidate(builder!, builderAccountFromData("u1", data));
+  }
+
+  it("bulk-selects only identity-complete builders whose provisioning has started", async () => {
+    await expect(bulkCandidate({
       username: "alice",
       onboardingStep: "complete",
       provisioning: { status: "in_progress", openclaw: {} },
-    })).toBe(true);
-    expect(isBulkAssignmentCandidate({ username: "partial" })).toBe(false);
-    expect(isBulkAssignmentCandidate({
+    })).resolves.toBe(true);
+    await expect(bulkCandidate({ username: "partial" })).resolves.toBe(false);
+    await expect(bulkCandidate({
       username: "service",
       onboardingStep: "complete",
       provisioning: { status: "queued", openclaw: {} },
-    })).toBe(false);
+    })).resolves.toBe(false);
+  });
+
+  it("skips bulk placement for an already placed or operator-managed builder", async () => {
+    const complete = { username: "alice", onboardingStep: "complete" };
+    await expect(bulkCandidate({ ...complete, provisioning: { status: "complete", openclaw: { gatewayId: "shared-0" } } })).resolves.toBe(false);
+    await expect(bulkCandidate({ ...complete, provisioning: { status: "complete", openclaw: { managedBy: "operator" } } })).resolves.toBe(false);
   });
 
   it("accepts uid-targeted dry runs", () => {
@@ -789,26 +803,22 @@ describe("assign-customer-gateway root config", () => {
     };
   }
 
-  function db(docs: Record<string, Record<string, unknown>>) {
-    return {
-      doc: (path: string) => ({
-        get: async () => ({
-          exists: docs[path] !== undefined,
-          data: () => docs[path],
-        }),
-      }),
-    };
+  function store(docs: Record<string, Record<string, unknown>>) {
+    return createDocumentFixtureStore(new Map(Object.entries(docs)));
   }
 
   it("reads the profile from a validated durable root only", async () => {
     await expect(
-      readGatewayProfile(db({ "gateways/default": gatewayRoot("builder") }) as never, "default"),
+      readGatewayProfile(store({ "gateways/default": gatewayRoot("builder") }), "default"),
     ).resolves.toBe("builder");
     await expect(
-      readGatewayProfile(
-        db({ "glmGateways/default": { profile: "builder" } }) as never,
-        "default",
-      ),
+      readGatewayProfile(store({ "glmGateways/default": { profile: "builder" } }), "default"),
+    ).resolves.toBeNull();
+  });
+
+  it("reads no profile for a retired root", async () => {
+    await expect(
+      readGatewayProfile(store({ "gateways/default": { ...gatewayRoot(), desiredStatus: "retired" } }), "default"),
     ).resolves.toBeNull();
   });
 });
@@ -851,35 +861,47 @@ describe("fleet force gateway restart", () => {
     const documents = new Map<string, Record<string, unknown>>([
       ["gateways/canary", durableGatewayRoot()],
       ["glmOperations/audit-force-restart", {
+        recordType: "audit",
+        schemaVersion: 1,
         status: "in-progress",
-        actionClaimId: "claim-force-restart",
+        lifecycleStage: "action-started",
+        idempotencyKey: "restart-canary-force",
+        mutationFingerprint: "restart-canary-force-fingerprint",
+        mutation: { kind: "restart-gateway", gatewayId: "canary", mode: "force-pod-delete" },
+        actor: "operator",
+        forced: true,
+        what: "force restart gateway pod",
+        why: "operator requested break-glass pod restart",
         target: { gatewayId: "canary" },
+        preActionStatus: {},
+        aliasPlan: [],
+        createdAt: 1000,
+        actionClaimId: "claim-force-restart",
+        actionStartedAt: 1100,
+        actionRecoveryCount: 0,
+        completedAt: null,
       }],
     ]);
     const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
-    const ref = (path: string) => ({
-      id: path.split("/").at(-1)!,
-      path,
-      get: async () => ({
-        exists: documents.has(path),
-        id: path.split("/").at(-1)!,
-        data: () => documents.get(path),
-      }),
-    });
-    const db = {
-      doc: ref,
-      collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-      runTransaction: async <T>(body: (transaction: {
-        get: (target: ReturnType<typeof ref>) => Promise<Awaited<ReturnType<typeof target.get>>>;
-        update: (target: ReturnType<typeof ref>, data: Record<string, unknown>) => void;
-      }) => Promise<T>) => body({
-        get: (target) => target.get(),
-        update: (target, data) => {
-          documents.set(target.path, { ...documents.get(target.path), ...data });
-          writes.push({ path: target.path, data });
+    const fixture = fixtureDocumentsAt(documents);
+    const store = createJournalFixtureStore(
+      {
+        get: (id) => documents.get(`glmOperations/${id}`),
+        set: (id, data) => {
+          writes.push({ path: `glmOperations/${id}`, data });
+          documents.set(`glmOperations/${id}`, data);
         },
-      }),
-    };
+      },
+      {
+        documents: {
+          ...fixture,
+          set: (path, data) => {
+            writes.push({ path, data });
+            fixture.set(path, data);
+          },
+        },
+      },
+    );
     const selector = overrides.selector ?? {
       items: [{ metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-1" } }],
     };
@@ -909,7 +931,7 @@ describe("fleet force gateway restart", () => {
       idempotencyKey?: string;
       action: (claim: { auditId: string; claimId: string }) => Promise<T>;
     }) => input.action({ auditId: "audit-force-restart", claimId: "claim-force-restart" }));
-    return { db, documents, writes, kubectl, runMutation };
+    return { store, documents, writes, kubectl, runMutation };
   }
 
   it("maps a normal restart to the journaled Admin API route", () => {
@@ -923,10 +945,10 @@ describe("fleet force gateway restart", () => {
   });
 
   it("rejects a Shared forced pod restart before audit or kubectl", async () => {
-    const { db, documents, writes, kubectl, runMutation } = forceRestartHarness();
+    const { store, documents, writes, kubectl, runMutation } = forceRestartHarness();
     documents.get("gateways/canary")!.gatewayClass = "shared";
     await expect(runForcedGatewayRestart({
-      db: db as never,
+      store,
       kubeContext: "gke_octogee_us-central1_octogee-gateway", namespace: "octogee-test",
       gatewayId: "canary", runKubectl: kubectl, runMutation,
     })).rejects.toThrow("Shared gateways cannot be force restarted");
@@ -1002,10 +1024,10 @@ describe("fleet force gateway restart", () => {
   });
 
   it("journals and performs a forced restart against only the selected pod identity", async () => {
-    const { db, documents, writes, kubectl, runMutation } = forceRestartHarness();
+    const { store, documents, writes, kubectl, runMutation } = forceRestartHarness();
 
     await expect(runForcedGatewayRestart({
-      db: db as never,
+      store,
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
       namespace: "octogee-test",
       gatewayId: "canary",
@@ -1059,12 +1081,12 @@ describe("fleet force gateway restart", () => {
   });
 
   it("fails before delete when the exact pod name now has a different UID", async () => {
-    const { db, documents, kubectl, runMutation } = forceRestartHarness({
+    const { store, documents, kubectl, runMutation } = forceRestartHarness({
       reread: { metadata: { name: "octogee-gateway-canary-a", uid: "pod-uid-2" } },
     });
 
     await expect(runForcedGatewayRestart({
-      db: db as never,
+      store,
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
       namespace: "octogee-test",
       gatewayId: "canary",
@@ -1082,7 +1104,7 @@ describe("fleet force gateway restart", () => {
   });
 
   it("rejects an exact pod that entered termination after selection", async () => {
-    const { db, kubectl, runMutation } = forceRestartHarness({
+    const { store, kubectl, runMutation } = forceRestartHarness({
       reread: {
         metadata: {
           name: "octogee-gateway-canary-a",
@@ -1093,7 +1115,7 @@ describe("fleet force gateway restart", () => {
     });
 
     await expect(runForcedGatewayRestart({
-      db: db as never,
+      store,
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
       namespace: "octogee-test",
       gatewayId: "canary",
@@ -1133,10 +1155,10 @@ describe("fleet force gateway restart", () => {
       });
     }, "force restart audit audit-force-restart is not owned by this action"],
   ])("does not delete when %s lands after the UID re-read", async (_name, afterExactPodRead, error) => {
-    const { db, kubectl, runMutation } = forceRestartHarness({ afterExactPodRead });
+    const { store, kubectl, runMutation } = forceRestartHarness({ afterExactPodRead });
 
     await expect(runForcedGatewayRestart({
-      db: db as never,
+      store,
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
       namespace: "octogee-test",
       gatewayId: "canary",
@@ -1149,7 +1171,7 @@ describe("fleet force gateway restart", () => {
   });
 
   it("binds the delete to the audited UID when replacement lands after the final fence", async () => {
-    const { db, kubectl, runMutation } = forceRestartHarness({
+    const { store, kubectl, runMutation } = forceRestartHarness({
       deleteResult: {
         status: 1,
         stdout: "",
@@ -1158,7 +1180,7 @@ describe("fleet force gateway restart", () => {
     });
 
     await expect(runForcedGatewayRestart({
-      db: db as never,
+      store,
       kubeContext: "gke_octogee_us-central1_octogee-gateway",
       namespace: "octogee-test",
       gatewayId: "canary",

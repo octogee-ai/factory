@@ -1,6 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCustomerAgentStoreErasure, preserveCustomerGatewayRetirement } from "../lib/customer-ops/agent-store-erasure.js";
 import type { AgentStoreErasureCustody } from "@octogee/core/agent-store-credentials";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+
+function root(gatewayId: string, fields: Record<string, unknown>): Record<string, unknown> {
+  return { gatewayId, latestRelease: 1, desiredRelease: 1, liveRelease: 1, ...fields };
+}
+
+function assignment(gatewayId: string, uid: string): Record<string, unknown> {
+  return { uid, slug: "alice", gatewayId, source: "onboarding", state: "serving", epoch: 1 };
+}
+
+function transferTask(fields: Record<string, unknown>): Record<string, unknown> {
+  return {
+    kind: "migration-transfer", migrationId: "move-1", slug: "other", mode: "final", sourceGatewayId: "shared-a",
+    targetGatewayId: "shared-b", status: "running", attempt: 1, attemptId: "attempt-1", createdAt: 1, updatedAt: 1, startedAt: 1,
+    ...fields,
+  };
+}
 
 function harness() {
   const cleanup = { uid: "uid-1", slug: "alice", currentGatewayId: "shared-old", projectSlugs: [] };
@@ -11,34 +28,11 @@ function harness() {
     "users/uid-1": { username: "alice", accountLifecycle: { status: "deletion_scheduled", deletionId: "delete-1", eraseAfter: 5 }, provisioning: { openclaw: {} } },
     "glmOperations/erase-1": operation,
   };
-  const field = (data: any, key: string) => key.split(".").reduce((value, key) => value?.[key], data);
-  const collection = (name: string, predicates: Array<(path: string, data: any) => boolean> = [], group = false): any => ({
-    where: (key: string, op: string, value: unknown) => collection(name, [...predicates, (_path, data) =>
-      op === "in" ? (value as unknown[]).includes(field(data, key)) : field(data, key) === value], group),
-    get: async () => {
-      const docs = Object.entries(records).filter(([path, data]) => (group ? path.split("/").at(-2) === name : path.split("/").slice(0, -1).join("/") === name) && predicates.every(test => test(path, data)))
-        .map(([path, data]) => ({ id: path.split("/").at(-1), data: () => data }));
-      return { docs, empty: docs.length === 0 };
-    },
-    doc: (id: string) => ({ path: `${name}/${id}`, collection: (child: string) => collection(`${name}/${id}/${child}`),
-      get: async () => ({ exists: records[`${name}/${id}`] !== undefined, data: () => records[`${name}/${id}`] }) }),
-  });
-  const db = { collection, collectionGroup: (name: string) => collection(name, [], true), runTransaction: async (action: any) => {
-    const writes: Array<[string, Record<string, unknown>]> = [];
-    const result = await action({ get: (ref: any) => ref.get(), update: (ref: any, patch: Record<string, unknown>) => writes.push([ref.path, patch]) });
-    for (const [path, patch] of writes) {
-      for (const [key, value] of Object.entries(patch)) {
-        const parts = key.split("."); let target = records[path]!;
-        for (const part of parts.slice(0, -1)) target = target[part] ??= {};
-        target[parts.at(-1)!] = value;
-      }
-    }
-    return result;
-  } };
+  const store = createDocumentFixtureStore(records);
   const target = { namespace: "octogee_agent_one", namespaceOid: "123", owner: "shared", family: "agent" as const, role: "agent" as const,
     storeId: "d57c47b6-c455-4c58-a30e-30dc01d7d80a", agentId: "octogee-alice-coach" };
   const deps = {
-    db: db as never, now: () => 20,
+    store, now: () => 20,
     sharedGatewayRetired: vi.fn(async () => true), runtimeAbsent: vi.fn(async () => true), ownerHomeAbsent: vi.fn(async () => true),
     eraseComputer: vi.fn(async (_uid: string) => undefined),
     readSharedSource: vi.fn(async (_gatewayId: string) => ({ gatewayId: "shared-old", podUid: "pod-original", startedAt: 1,
@@ -52,7 +46,7 @@ function harness() {
     }),
   };
   const claim = vi.fn(async () => undefined);
-  return { records, db, deps, target, cleanup, operation, claim,
+  return { records, store, deps, target, cleanup, operation, claim,
     run: () => createCustomerAgentStoreErasure(deps)(cleanup as never, "delete-1", operation as never, claim) };
 }
 
@@ -83,9 +77,12 @@ describe("due customer PostgreSQL erasure authority", () => {
     ["reactivated", "users/uid-1", { accountLifecycle: { status: "active" } }],
     ["restoring", "users/uid-1", { provisioning: { openclaw: { restoreFence: {} } } }],
     ["reassigned", "users/uid-1", { provisioning: { openclaw: { gatewayId: "shared-new" } } }],
-    ["assignment", "gateways/shared-new/assignments/uid-1", { uid: "uid-1" }],
+    ["assignment", "gateways/shared-new/assignments/uid-1", assignment("shared-new", "uid-1")],
     ["migration", "glmOperations/migration", { status: "running", input: { uid: "uid-1" } }],
-    ["owned running host", "gateways/builder-old", { ownerUid: "uid-1", desiredStatus: "running" }],
+    ["owned running host", "gateways/builder-old", root("builder-old", { ownerUid: "uid-1", gatewayClass: "builder", desiredStatus: "running" })],
+    ["customer transfer", "glmMigrationTransferTasks/move-1__final", transferTask({ slug: "alice" })],
+    ["transfer from the captured gateway", "glmMigrationTransferTasks/move-1__final", transferTask({ sourceGatewayId: "shared-old" })],
+    ["transfer into the captured gateway", "glmMigrationTransferTasks/move-1__final", transferTask({ targetGatewayId: "shared-old" })],
   ])("refuses %s before invoking the database owner", async (_label, path, patch) => {
     const h = harness();
     h.records[path as string] = { ...h.records[path as string], ...patch as object };
@@ -178,7 +175,7 @@ describe("due customer PostgreSQL erasure authority", () => {
     h.records["customerDeletionJobs/delete-1"]!.currentGatewayId = "builder-old";
     await expect(h.run()).rejects.toThrow("lacks its captured Builder retirement proof");
     const proof = { gatewayId: "builder-old", operationId: "retire-old", version: 1, completedAt: 15, runtime: "cluster" as const };
-    await preserveCustomerGatewayRetirement(h.db as never, "uid-1", "delete-1", proof);
+    await preserveCustomerGatewayRetirement(h.store, "uid-1", "delete-1", proof);
     h.deps.runtimeAbsent.mockResolvedValue(false);
     await expect(h.run()).rejects.toThrow("retained a gateway runtime");
     h.deps.runtimeAbsent.mockResolvedValue(true);

@@ -1,6 +1,6 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const eventLogger = createServiceLogger("cowboy");
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import type { KubectlSubprocess } from "./lib/kube-ops.js";
 import {
   initializeDisruptionObservation,
@@ -110,7 +110,7 @@ interface KubeEvent extends KubeObject {
 }
 
 interface DisruptionObserverDeps {
-  db: Firestore;
+  store: Pick<PlatformStateRepositories, "gateways" | "journal">;
   runKubectl: KubectlSubprocess;
   environment: string;
   cluster: string;
@@ -323,38 +323,25 @@ function gatewayIdsForPods(pods: readonly DisruptionPodRecord[]): string[] {
 }
 
 async function gatewayRecords(
-  db: Firestore,
+  store: Pick<PlatformStateRepositories, "gateways" | "journal">,
   gatewayIds: readonly string[],
 ): Promise<DisruptionGatewayRecord[]> {
   return Promise.all(gatewayIds.map(async (gatewayId) => {
     const [root, assignments, operations] = await Promise.all([
-      db.collection("gateways").doc(gatewayId).get(),
-      db.collection("gateways").doc(gatewayId).collection("assignments").get(),
-      db.collection("glmOperations").where("gatewayId", "==", gatewayId).get(),
+      store.gateways.roots.get(gatewayId),
+      store.gateways.assignments.list(gatewayId),
+      store.journal.operations.listByGateway(gatewayId),
     ]);
-    const data = root.exists && isRecord(root.data()) ? root.data() as Record<string, unknown> : {};
     return {
       gatewayId,
-      gatewayClass: stringOrNull(data.gatewayClass),
-      desiredStatus: stringOrNull(data.desiredStatus),
-      builderSlug: stringOrNull(data.builderSlug),
-      assignments: assignments.docs.flatMap((doc) => {
-        const value = doc.data();
-        const slug = stringOrNull(value.slug);
-        return slug ? [{ uid: doc.id, slug }] : [];
-      }),
-      operations: operations.docs.flatMap((doc) => {
-        const value = doc.data();
-        const status = stringOrNull(value.status);
-        return status === "pending" || status === "running"
-          ? [{
-              id: doc.id,
-              kind: stringOrNull(value.kind),
-              status,
-              origin: stringOrNull(value.origin),
-            }]
-          : [];
-      }),
+      gatewayClass: root?.gatewayClass ?? null,
+      desiredStatus: root?.desiredStatus ?? null,
+      builderSlug: root?.builderSlug ?? null,
+      assignments: assignments.map((assignment) => ({ uid: assignment.uid, slug: assignment.slug })),
+      operations: operations.flatMap((operation) =>
+        operation.status === "pending" || operation.status === "running"
+          ? [{ id: operation.id, kind: operation.kind, status: operation.status, origin: operation.origin ?? null }]
+          : []),
     };
   }));
 }
@@ -475,7 +462,7 @@ async function observeOnce(
       affectedGateways: await (async () => {
         const gatewayIds = gatewayIdsForPods(relevantPods);
         const cacheKey = gatewayIds.join(",");
-        const pending = gatewayCache.get(cacheKey) ?? gatewayRecords(deps.db, gatewayIds);
+        const pending = gatewayCache.get(cacheKey) ?? gatewayRecords(deps.store, gatewayIds);
         gatewayCache.set(cacheKey, pending);
         return pending;
       })(),

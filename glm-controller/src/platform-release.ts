@@ -1,6 +1,6 @@
 import { GATEWAY_CONFIG_SCHEMA_VERSION } from "@octogee/shared/types/gateway-mutable-config";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import {
   isGatewayEdgeImage,
   isReleasePayload,
@@ -64,14 +64,13 @@ export function platformGatewayArtifactFromEnvironment(
 }
 
 export async function writePlatformReleaseRecord(input: {
-  db: Firestore;
+  store: Pick<PlatformStateRepositories, "controllerState">;
   artifact: GatewayArtifact;
   now(): number;
   log(message: string): void;
 }): Promise<void> {
   try {
-    await input.db.doc(PLATFORM_RELEASE_RECORD_DOC_PATH)
-      .set(platformReleaseRecord(input.artifact, input.now()));
+    await input.store.controllerState.platformRelease.put(platformReleaseRecord(input.artifact, input.now()));
   } catch (error) {
     input.log(
       `[glm-controller] platform release record ${PLATFORM_RELEASE_RECORD_DOC_PATH} write failed: ${error instanceof Error ? error.message : String(error)}`,

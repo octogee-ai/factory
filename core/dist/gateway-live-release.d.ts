@@ -1,7 +1,7 @@
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, type GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import { type GatewayDoc, type GatewayLifecycleStatus, type ReleaseDoc, type ReleasePayload, type GatewayProfileImages, type GatewayEdgeImage } from "@octogee/shared/types/gateway-releases";
-import type { PlatformStateRepositories, PlatformStateStore } from "./platform-state/store.js";
+import type { PlatformStateRepositories, PlatformStateStore, PlatformStateTransaction } from "./platform-state/store.js";
 export { GATEWAY_CONFIG_SCHEMA_VERSION, effectiveGatewayServiceAccountNameForGateway, isBareGatewayId, isGatewayMutableConfig, isGatewayMutableConfigForGateway, projectGatewayMutableConfigForGateway, };
 export type { GatewayMutableConfig };
 type FirestoreReader = Pick<Firestore, "doc">;
@@ -34,11 +34,8 @@ export interface InitialGatewayReleaseArgs {
     createdBy: string;
     now: number;
     desiredStatus: GatewayLifecycleStatus;
-    validateAdditional?: (transaction: Transaction) => Promise<void>;
-    writeAdditional?: (transaction: Transaction) => void;
 }
-export type InitialGatewayReleaseInStoreArgs = Omit<InitialGatewayReleaseArgs, "validateAdditional" | "writeAdditional">;
-export declare function initialGatewayReleaseDocuments(args: InitialGatewayReleaseInStoreArgs): {
+export declare function initialGatewayReleaseDocuments(args: InitialGatewayReleaseArgs): {
     gatewayDoc: GatewayDoc & GatewayMutableConfig;
     releaseDoc: ReleaseDoc;
 };
@@ -46,8 +43,8 @@ export declare class InitialGatewayReleaseConflictError extends Error {
     readonly gatewayId: string;
     constructor(gatewayId: string);
 }
-export declare function writeInitialGatewayRelease(db: Firestore, args: InitialGatewayReleaseArgs): Promise<void>;
-export declare function writeInitialGatewayReleaseInStore(store: PlatformStateStore, args: InitialGatewayReleaseInStoreArgs): Promise<void>;
+export declare function writeInitialGatewayReleaseInTransaction(transaction: PlatformStateTransaction, args: InitialGatewayReleaseArgs): Promise<void>;
+export declare function writeInitialGatewayReleaseInStore(store: PlatformStateStore, args: InitialGatewayReleaseArgs): Promise<void>;
 export interface RenderedGatewayConfig extends Omit<GatewayMutableConfig, "configSchemaVersion">, GatewayArtifact {
 }
 export interface GatewayAuthorization {
@@ -58,7 +55,7 @@ export interface GatewayAuthorization {
 export declare function gatewayArtifactFromReleasePayload(payload: ReleasePayload): GatewayArtifact;
 export declare function readGatewayArtifact(db: FirestoreReader, gatewayId: string, release: number | null, transaction?: Pick<Transaction, "get">): Promise<GatewayArtifact | null>;
 export declare function readGatewayArtifactInStore(state: GatewayRootReader, gatewayId: string, release: number | null): Promise<GatewayArtifact | null>;
-export declare function readGatewayRuntimeDoc(state: GatewayRuntimeReader, gateway: GatewayDoc): Promise<unknown>;
+export declare function readGatewayRuntimeDoc(state: GatewayRuntimeReader, gateway: Pick<GatewayDoc, "gatewayId">): Promise<unknown>;
 export declare function gatewayRuntimeHeartbeatOf(runtime: unknown, gateway: GatewayDoc): Record<string, unknown> | null;
 export declare function readGatewayRuntimeHeartbeat(state: GatewayRuntimeReader, gateway: GatewayDoc): Promise<Record<string, unknown> | null>;
 export declare function mergeGatewayConfigWithArtifact(config: GatewayMutableConfig, artifact: GatewayArtifact): RenderedGatewayConfig;

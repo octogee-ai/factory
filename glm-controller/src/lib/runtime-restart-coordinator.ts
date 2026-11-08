@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { type Firestore, type Transaction } from 'firebase-admin/firestore';
 import { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
 export { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
-import { assertGatewayRuntimeMutationUnfenced } from '@octogee/core/gateway-retirement-claim';
+import { assertGatewayRuntimeMutationUnfencedInStore } from '@octogee/core/gateway-retirement-claim';
 import { findActiveGatewayMigration, type FleetOperationLockRef } from '@octogee/core/fleet-operation-lock';
 import { runNormalFleetMutation } from '@octogee/core/normal-fleet-mutation';
-import { createFirestorePlatformStateStore } from '@octogee/core/platform-state';
+import type { PlatformStateStore } from '@octogee/core/platform-state';
 import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
 export async function assertMigrationRestartUnfenced(db:Firestore,transaction:Transaction,input:Record<string,unknown>):Promise<void> {
@@ -18,31 +18,30 @@ export async function assertMigrationRestartUnfenced(db:Firestore,transaction:Tr
   if(roots.some(root=>root.data()?.runtimeRestartFence!==undefined))throw new Error('gateway runtime restart outcome is unresolved');
   if (owner?.data()?.provisioning?.computerRecovery != null) throw new Error('Builder computer recovery is in progress');
 }
-export async function acquireRuntimeRestart(db:Firestore,fence:RuntimeRestartFence):Promise<void> {
-  await db.runTransaction(async transaction=>{
-    const rootRef=db.doc(`gateways/${fence.gatewayId}`);
-    const [root,running,pending]=await Promise.all([transaction.get(rootRef),transaction.get(db.collection('glmOperations').where('status','==','running')),transaction.get(db.collection('glmOperations').where('status','==','pending'))]);
-    await assertGatewayRuntimeMutationUnfenced(db,transaction,fence.gatewayId);
-    const data=root.data();
-    if(!data || !['running','draining'].includes(data.desiredStatus) || data.retirementClaim!=null || data.runtimeRestartFence!==undefined || !Number.isSafeInteger(data.liveRelease) || data.liveRelease<1 || data.desiredRelease!==data.liveRelease)throw new Error('gateway restart authority is unavailable');
-    const operations=[...running.docs,...pending.docs].map(doc=>({id:doc.id,...doc.data()} as FleetOperationLockRef));
-    if(findActiveGatewayMigration(fence.gatewayId,operations))throw new Error('gateway migration is pending during restart admission');
-    transaction.update(rootRef,{runtimeRestartFence:fence});
+export async function acquireRuntimeRestart(store:PlatformStateStore,fence:RuntimeRestartFence):Promise<void> {
+  await store.transaction({label:'runtime-restart.acquire'},async transaction=>{
+    const [root,operations]=await Promise.all([transaction.gateways.roots.get(fence.gatewayId),transaction.journal.operations.listByStatus(['running','pending'])]);
+    await assertGatewayRuntimeMutationUnfencedInStore(transaction,fence.gatewayId);
+    if(!root || !['running','draining'].includes(root.desiredStatus) || root.retirementClaim!=null || root.runtimeRestartFence!==undefined || !Number.isSafeInteger(root.liveRelease) || root.liveRelease!<1 || root.desiredRelease!==root.liveRelease)throw new Error('gateway restart authority is unavailable');
+    if(findActiveGatewayMigration(fence.gatewayId,operations as readonly FleetOperationLockRef[]))throw new Error('gateway migration is pending during restart admission');
+    await transaction.gateways.roots.compareAndSetRuntimeRestartFence(fence.gatewayId,null,fence);
   });
 }
+async function savedRuntimeRestart(store:PlatformStateStore,gatewayId:string):Promise<RuntimeRestartFence|undefined> {
+  return (await store.gateways.roots.get(gatewayId))?.runtimeRestartFence as RuntimeRestartFence|undefined;
+}
 export async function coordinateRuntimeRestart(
-  db:Firestore,gatewayId:string,kind:RuntimeRestartFence['kind'],
+  store:PlatformStateStore,gatewayId:string,kind:RuntimeRestartFence['kind'],
   work:(fence:RuntimeRestartFence,save:(next:RuntimeRestartFence)=>Promise<void>)=>Promise<void>,
   observe?:(fence:RuntimeRestartFence)=>Promise<void>,
 ):Promise<void> {
   const attemptId=randomUUID();
-  const store=createFirestorePlatformStateStore({ db });
-  const saved=(await db.doc(`gateways/${gatewayId}`).get()).data()?.runtimeRestartFence as RuntimeRestartFence|undefined;
+  const saved=await savedRuntimeRestart(store,gatewayId);
   await runNormalFleetMutation(store,{
     actor:'cowboy',forced:false,what:saved?.phase==='acknowledged'?'gateway-restart-observation':`gateway-${kind}-restart`,why:kind==='deployment'?'model-key secret changed':'operator requested process restart',
     target:{gatewayId},preActionStatus:saved?{restartAttemptId:saved.attemptId,phase:saved.phase}:{},mutation:{kind,attemptId},idempotencyKey:attemptId,
     action:async claim=>{
-      const existing=(await db.doc(`gateways/${gatewayId}`).get()).data()?.runtimeRestartFence as RuntimeRestartFence|undefined;
+      const existing=await savedRuntimeRestart(store,gatewayId);
       if(existing?.phase==='acknowledged') {
         if(!observe || existing.gatewayId!==gatewayId)throw new Error('gateway restart observation unavailable');
         await observe(existing);
@@ -50,7 +49,7 @@ export async function coordinateRuntimeRestart(
         return;
       }
       let current:RuntimeRestartFence={attemptId,auditId:claim.auditId,gatewayId,kind,startedAt:Date.now(),phase:'reserved'};
-      await runGatewayRuntimeExclusive(() => acquireRuntimeRestart(db,current));
+      await runGatewayRuntimeExclusive(() => acquireRuntimeRestart(store,current));
       try {
         await work(current,async next=>{await updateRuntimeRestart(store,current,next);current=next;});
         if(current.phase!=='acknowledged')throw new Error('gateway restart completion was not acknowledged');

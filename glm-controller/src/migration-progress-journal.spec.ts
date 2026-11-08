@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MigrationProgressRecord, Operation } from "@octogee/shared/types/glm";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { compactProgress, journalHandoffProgress, journalOperationProgress, type ProgressJournalDeps } from "./migration-progress-journal.js";
 
 const event: MigrationProgressRecord = {
@@ -14,28 +15,20 @@ function claimed(startedAt: number | null = 4_000): Operation {
 }
 
 function harness(stored: Record<string, Record<string, unknown>>) {
-  const updates: Array<{ path: string; data: Record<string, unknown> }> = [];
-  const ref = (path: string) => ({
-    path,
-    get: async () => ({ exists: stored[path] !== undefined, data: () => stored[path] }),
-    update: async (data: Record<string, unknown>) => { updates.push({ path, data }); },
-    set: async () => undefined,
-    collection: (sub: string) => ({ doc: (id: string) => ref(`${path}/${sub}/${id}`) }),
-  });
+  const before = structuredClone(stored);
   const deps: ProgressJournalDeps = {
-    db: {
-      collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-      runTransaction: async (body) => body({
-        get: async (target) => target.get(),
-        update: (target, data) => { updates.push({ path: (target as unknown as { path: string }).path, data }); },
-        set: () => undefined,
-        delete: () => undefined,
-      }),
-    },
+    store: createDocumentFixtureStore(stored),
     log: vi.fn(),
     now: () => 9_000,
   };
-  return { deps, updates };
+  return { deps, stored, before };
+}
+
+function assignment(fields: Record<string, unknown>): Record<string, unknown> {
+  return {
+    uid: "u1", slug: "alice", gatewayId: "shared-0", source: "onboarding", state: "quiescing", epoch: 3,
+    createdAt: 1_000, updatedAt: 1_000, updatedByOperationId: null, ...fields,
+  };
 }
 
 describe("journalOperationProgress", () => {
@@ -43,7 +36,7 @@ describe("journalOperationProgress", () => {
     const earlier = { ...event, phase: "gate-source", status: "done" as const, at: 3_000 };
     const h = harness({ "glmOperations/op-1": { startedAt: 4_000, status: "running", progress: [earlier] } });
     await journalOperationProgress(h.deps, claimed(), event);
-    expect(h.updates).toEqual([{ path: "glmOperations/op-1", data: { progress: [earlier, event], lastProgressAt: 9_000 } }]);
+    expect(h.stored["glmOperations/op-1"]).toEqual({ ...h.before["glmOperations/op-1"], progress: [earlier, event], lastProgressAt: 9_000 });
   });
 
   it("stays bounded by phase count when a waiting migration is requeued again and again", () => {
@@ -70,7 +63,7 @@ describe("journalOperationProgress", () => {
   ])("discards a late event once this attempt no longer owns a running operation: %s", async (_label, doc) => {
     const h = harness(doc ? { "glmOperations/op-1": doc } : {});
     await journalOperationProgress(h.deps, claimed(), event);
-    expect(h.updates).toEqual([]);
+    expect(h.stored).toEqual(h.before);
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("op=op-1 progress transfer-and-verify:running discarded"));
   });
 });
@@ -82,23 +75,23 @@ describe("journalHandoffProgress", () => {
 
   it("keeps one record per phase of the current handoff on the builder's assignment document", async () => {
     const first = handoff("surge-a", "gate-source", 1_000);
-    const h = harness({ [path]: { state: "quiescing", handoffProgress: [first, handoff("surge-a", "transfer-and-verify", 1_500)] } });
+    const h = harness({ [path]: assignment({ handoffProgress: [first, handoff("surge-a", "transfer-and-verify", 1_500)] }) });
     const next = handoff("surge-a", "transfer-and-verify", 2_000);
     await journalHandoffProgress(h.deps, { gatewayId: "shared-0", uid: "u1" }, next);
-    expect(h.updates).toEqual([{ path, data: { handoffProgress: [first, next] } }]);
+    expect(h.stored[path]).toEqual(assignment({ handoffProgress: [first, next] }));
   });
 
   it("replaces the previous roll's journal when a new handoff starts", async () => {
-    const h = harness({ [path]: { state: "quiescing", handoffProgress: [handoff("surge-a", "serving-handoff", 1_000), "junk"] } });
+    const h = harness({ [path]: assignment({ handoffProgress: [handoff("surge-a", "serving-handoff", 1_000), "junk"] }) });
     const fresh = handoff("surge-b", "gate-source", 5_000);
     await journalHandoffProgress(h.deps, { gatewayId: "shared-0", uid: "u1" }, fresh);
-    expect(h.updates).toEqual([{ path, data: { handoffProgress: [fresh] } }]);
+    expect(h.stored[path]).toEqual(assignment({ handoffProgress: [fresh] }));
   });
 
   it("discards progress for an assignment that no longer exists and says so", async () => {
     const h = harness({});
     await journalHandoffProgress(h.deps, { gatewayId: "shared-0", uid: "u1" }, event);
-    expect(h.updates).toEqual([]);
+    expect(h.stored).toEqual({});
     expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining("assignments/u1 is gone"));
   });
 });

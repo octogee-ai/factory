@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { releaseAbandonedSchedulerHandoffs } from "../scheduler-handoff-release.js";
 
 describe("abandoned forward migration fences", () => {
@@ -14,14 +14,35 @@ describe("abandoned forward migration fences", () => {
       ...(kind === "v2" ? { customerMigrationV2: { phase: "sourceQuiesced" } } : {}),
       steps: [{ name: "quiesce-source", status: "done" }, { name: "final-sync-state", status: "failed" }],
     };
-    const query = { where: vi.fn(() => query), get: vi.fn(async () => ({ docs: [{ id: "upgrade", data: () => operation }] })) };
+    const records = { "glmOperations/upgrade": operation };
+    const store = createDocumentFixtureStore(records);
     const scheduler = vi.fn();
-    const runTransaction = vi.fn();
+    const transaction = vi.spyOn(store, "transaction");
     expect(await releaseAbandonedSchedulerHandoffs({
-      db: { collection: () => query, runTransaction } as unknown as Firestore,
-      gatewayExists: vi.fn(async () => true), scheduler, log: vi.fn(), now: () => 1000,
+      store, gatewayExists: vi.fn(async () => true), scheduler, log: vi.fn(), now: () => 1000,
     })).toEqual({ released: 0 });
     expect(scheduler).not.toHaveBeenCalled();
-    expect(runTransaction).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(records["glmOperations/upgrade"]).toBe(operation);
+  });
+
+  it("keeps releasing other handoffs when one operation's records are malformed", async () => {
+    const handoff = (uid: string) => ({ migrationId: `mig-${uid}`, fromGatewayId: "shared-a", toGatewayId: "shared-b", uid, slug: uid });
+    const records: Record<string, Record<string, unknown>> = {
+      "glmOperations/committed": { kind: "migrate-customer", status: "failed", schedulerHandoffReleased: false, cutoverCommittedAt: 900,
+        schedulerHandoff: handoff("alice"), input: { uid: "alice", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+        steps: [{ name: "quiesce-source", status: "done" }] },
+      "users/alice": { provisioning: { openclaw: { gatewayId: 7 } } },
+      "glmOperations/never-held": { kind: "migrate-customer", status: "failed", schedulerHandoffReleased: false,
+        schedulerHandoff: handoff("bob"), input: { uid: "bob", fromGatewayId: "shared-a", toGatewayId: "shared-b" },
+        steps: [{ name: "keys-sync-state", status: "failed" }] },
+    };
+    const log = vi.fn();
+    expect(await releaseAbandonedSchedulerHandoffs({
+      store: createDocumentFixtureStore(records), gatewayExists: async () => true, scheduler: vi.fn(), log, now: () => 1000,
+    })).toEqual({ released: 1 });
+    expect(records["glmOperations/never-held"]).toMatchObject({ schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 1000 });
+    expect(records["glmOperations/committed"]).toMatchObject({ status: "failed", schedulerHandoffReleased: false });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("committed release failed"));
   });
 });

@@ -1,10 +1,9 @@
 import { GoogleAuth } from 'google-auth-library';
 import { randomUUID } from 'node:crypto';
 import { runWithOperationAuditIntent } from '@octogee/core/operation-audit';
-import { createFirestorePlatformStateStore } from '@octogee/core/platform-state';
+import type { PlatformStateStore } from '@octogee/core/platform-state';
 import { createCentralReleaseAuthority } from '@octogee/core/artifact-registry';
 import { deploymentEnvironmentSettings } from '@octogee/core/deployment-environment';
-import type { Firestore } from 'firebase-admin/firestore';
 import { validateDesktopImage, assertDesktopImageIdentity } from '../../.github/actions/release-digest-manifest/desktop-image.mjs';
 import { resolveDesktopRelease } from './desktop-image-release.mjs';
 
@@ -101,7 +100,7 @@ async function pruneArchiveAfterPublication(project: string, keep: number, archi
 }
 
 export async function runDesktopArchivePrune(input: {
-  environment: 'test' | 'prod'; keep: number; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; archive?: DesktopArchiveDeps;
+  environment: 'test' | 'prod'; keep: number; apply: boolean; actor: string; why: string; store: PlatformStateStore; auth?: GoogleAuth; archive?: DesktopArchiveDeps;
 }) {
   const project = desktopImageProject(input.environment);
   const archive = input.archive ?? createDesktopArchiveCloud(
@@ -112,7 +111,7 @@ export async function runDesktopArchivePrune(input: {
   console.log(JSON.stringify(plan, null, 2));
   if (!input.apply || plan.remove.length === 0) return plan;
   let applied = plan;
-  await runWithOperationAuditIntent(createFirestorePlatformStateStore({ db: input.db }), {
+  await runWithOperationAuditIntent(input.store, {
     actor: input.actor, forced: false, what: 'Prune archived desktop images', why: input.why,
     target: { environment: input.environment }, preActionStatus: plan,
     mutation: { action: 'prune-desktop-archive' },
@@ -225,7 +224,7 @@ export function createDesktopPublicationCloud(auth: GoogleAuth): DesktopPublicat
 }
 
 export async function runDesktopImagePublication(input: {
-  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; db: Firestore; auth?: GoogleAuth; skipMissing?: boolean;
+  environment: 'test' | 'prod'; sourceSha: string; apply: boolean; actor: string; why: string; store: PlatformStateStore; auth?: GoogleAuth; skipMissing?: boolean;
   archiveKeep?: number; cloud?: DesktopPublicationDeps; archive?: DesktopArchiveDeps;
 }) {
   if (!/^[a-f0-9]{40}$/.test(input.sourceSha)) throw new Error('desktop-image publish requires --sha=<full-main-sha>');
@@ -260,7 +259,7 @@ export async function runDesktopImagePublication(input: {
     console.log(`desktop image: ${publication.project} family already serves ${publication.image}`);
     return;
   }
-  await runWithOperationAuditIntent(createFirestorePlatformStateStore({ db: input.db }), {
+  await runWithOperationAuditIntent(input.store, {
     actor: input.actor, forced: false, what: 'Publish desktop image', why: input.why,
     target: { environment: input.environment }, preActionStatus: plan,
     mutation: { action: 'publish-desktop-image' },

@@ -23,7 +23,7 @@ import {
   type GatewayProfileImages,
   type GatewayEdgeImage,
 } from "@octogee/shared/types/gateway-releases";
-import type { PlatformStateRepositories, PlatformStateStore } from "./platform-state/store.js";
+import type { PlatformStateRepositories, PlatformStateStore, PlatformStateTransaction } from "./platform-state/store.js";
 
 export {
   GATEWAY_CONFIG_SCHEMA_VERSION,
@@ -114,14 +114,10 @@ export interface InitialGatewayReleaseArgs {
   createdBy: string;
   now: number;
   desiredStatus: GatewayLifecycleStatus;
-  validateAdditional?: (transaction: Transaction) => Promise<void>;
-  writeAdditional?: (transaction: Transaction) => void;
 }
 
-export type InitialGatewayReleaseInStoreArgs = Omit<InitialGatewayReleaseArgs, "validateAdditional" | "writeAdditional">;
-
 export function initialGatewayReleaseDocuments(
-  args: InitialGatewayReleaseInStoreArgs,
+  args: InitialGatewayReleaseArgs,
 ): {
   gatewayDoc: GatewayDoc & GatewayMutableConfig;
   releaseDoc: ReleaseDoc;
@@ -158,51 +154,28 @@ export class InitialGatewayReleaseConflictError extends Error {
   }
 }
 
-export async function writeInitialGatewayRelease(
-  db: Firestore,
+export async function writeInitialGatewayReleaseInTransaction(
+  transaction: PlatformStateTransaction,
   args: InitialGatewayReleaseArgs,
 ): Promise<void> {
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(args.gatewayId);
-  const releaseRef = gatewayRef
-    .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-    .doc("1");
   const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
-  await db.runTransaction(async (transaction) => {
-    const existing = await transaction.get(gatewayRef);
-    const releaseExisting = await transaction.get(releaseRef);
-    await args.validateAdditional?.(transaction);
-    if (existing.exists || releaseExisting.exists) {
-      throw new InitialGatewayReleaseConflictError(args.gatewayId);
-    }
-    transaction.set(
-      gatewayRef,
-      gatewayDoc as unknown as Record<string, unknown>,
-      { merge: true },
-    );
-    transaction.set(
-      releaseRef,
-      releaseDoc as unknown as Record<string, unknown>,
-    );
-    args.writeAdditional?.(transaction);
-  });
+  const [existing, releaseExisting] = await Promise.all([
+    transaction.gateways.roots.get(args.gatewayId),
+    transaction.gateways.releases.get(args.gatewayId, 1),
+  ]);
+  if (existing !== null || releaseExisting !== null) {
+    throw new InitialGatewayReleaseConflictError(args.gatewayId);
+  }
+  await transaction.gateways.roots.create(gatewayDoc);
+  await transaction.gateways.releases.createInitial(releaseDoc);
 }
 
 export async function writeInitialGatewayReleaseInStore(
   store: PlatformStateStore,
-  args: InitialGatewayReleaseInStoreArgs,
+  args: InitialGatewayReleaseArgs,
 ): Promise<void> {
-  const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
-  await store.transaction({ label: "gateway-release.initial" }, async (transaction) => {
-    const [existing, releaseExisting] = await Promise.all([
-      transaction.gateways.roots.get(args.gatewayId),
-      transaction.gateways.releases.get(args.gatewayId, 1),
-    ]);
-    if (existing !== null || releaseExisting !== null) {
-      throw new InitialGatewayReleaseConflictError(args.gatewayId);
-    }
-    await transaction.gateways.roots.create(gatewayDoc);
-    await transaction.gateways.releases.createInitial(releaseDoc);
-  });
+  await store.transaction({ label: "gateway-release.initial" }, (transaction) =>
+    writeInitialGatewayReleaseInTransaction(transaction, args));
 }
 
 export interface RenderedGatewayConfig
@@ -287,7 +260,7 @@ function artifactFromStoredRelease(releaseData: unknown, gatewayId: string, rele
 
 export async function readGatewayRuntimeDoc(
   state: GatewayRuntimeReader,
-  gateway: GatewayDoc,
+  gateway: Pick<GatewayDoc, "gatewayId">,
 ): Promise<unknown> {
   const stored = await state.fleetRegistry.get(gateway.gatewayId);
   if (stored === null) return undefined;

@@ -1,10 +1,8 @@
-import type { FleetStateFirestore } from "@octogee/core/fleet-state";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION } from "@octogee/shared/types/gateway-releases";
-import { GLM_OPERATIONS_COLLECTION, isMigrationProgressRecord, type MigrationProgressRecord, type Operation } from "@octogee/shared/types/glm";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { isMigrationProgressRecord, type MigrationProgressRecord, type Operation } from "@octogee/shared/types/glm";
 
 export interface ProgressJournalDeps {
-  db: FleetStateFirestore;
+  store: PlatformStateStore;
   log: (message: string) => void;
   now?: () => number;
 }
@@ -26,16 +24,19 @@ export async function journalOperationProgress(
   claimed: Operation,
   event: MigrationProgressRecord,
 ): Promise<void> {
-  const ref = deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(claimed.id);
-  await deps.db.runTransaction(async (txn) => {
-    const fresh = await txn.get(ref);
-    const data = fresh.exists ? fresh.data() as Operation | undefined : undefined;
-    if (data?.status !== "running" || data.startedAt !== claimed.startedAt) {
-      deps.log(`[glm-controller] op=${claimed.id} progress ${event.phase}:${event.status} discarded because this attempt no longer owns a running operation (status=${data?.status ?? "missing"})`);
-      return;
-    }
-    txn.update(ref, { progress: compactProgress(data.progress, event), lastProgressAt: (deps.now ?? Date.now)() });
+  const discardedStatus = await deps.store.transaction({ label: "migration-progress.operation" }, async (transaction) => {
+    const fresh = await transaction.journal.operations.get(claimed.id);
+    if (fresh?.status !== "running" || fresh.startedAt !== claimed.startedAt) return fresh?.status ?? "missing";
+    await transaction.journal.operations.patch(
+      claimed.id,
+      { progress: compactProgress(fresh.progress, event), lastProgressAt: (deps.now ?? Date.now)() },
+      { status: ["running"], startedAt: claimed.startedAt },
+    );
+    return null;
   });
+  if (discardedStatus !== null) {
+    deps.log(`[glm-controller] op=${claimed.id} progress ${event.phase}:${event.status} discarded because this attempt no longer owns a running operation (status=${discardedStatus})`);
+  }
 }
 
 export async function journalHandoffProgress(
@@ -43,15 +44,18 @@ export async function journalHandoffProgress(
   input: { gatewayId: string; uid: string },
   event: MigrationProgressRecord,
 ): Promise<void> {
-  const gateway = deps.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
-  if (!gateway.collection) throw new Error("FleetStateFirestore doc ref does not support subcollections");
-  const ref = gateway.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(input.uid);
-  await deps.db.runTransaction(async (txn) => {
-    const fresh = await txn.get(ref);
-    if (!fresh.exists) {
-      deps.log(`[glm-controller] handoff progress ${event.phase}:${event.status} discarded because gateways/${input.gatewayId}/assignments/${input.uid} is gone`);
-      return;
-    }
-    txn.update(ref, { handoffProgress: compactProgress(fresh.data()?.handoffProgress, event) });
+  const recorded = await deps.store.transaction({ label: "migration-progress.handoff" }, async (transaction) => {
+    const fresh = await transaction.gateways.assignments.get(input.gatewayId, input.uid);
+    if (fresh === null) return false;
+    await transaction.gateways.assignments.patch(
+      input.gatewayId,
+      input.uid,
+      { handoffProgress: compactProgress(fresh.handoffProgress, event) },
+      { epoch: fresh.epoch },
+    );
+    return true;
   });
+  if (!recorded) {
+    deps.log(`[glm-controller] handoff progress ${event.phase}:${event.status} discarded because gateways/${input.gatewayId}/assignments/${input.uid} is gone`);
+  }
 }

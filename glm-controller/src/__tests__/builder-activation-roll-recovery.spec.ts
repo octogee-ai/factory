@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { qualifyBuilderActivationRollRecovery } from '../builder-activation-roll-recovery.js';
+import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
+import { qualifyBuilderActivationRollRecovery, type BuilderActivationRollRecoveryRecords } from '../builder-activation-roll-recovery.js';
 
 function fixture() {
   const migrationId = 'mig-builder-activate-builder-a-g1:scheduler:1:claim:1000';
@@ -11,16 +12,28 @@ function fixture() {
       sourceRecovery: { migrationId, sourceEpoch: 7, steps: [{ name: 'quiesce-source', status: 'done' }] } } };
   const lease = { leaseId: 'lease-a', generation: 1, status: 'activating', sourceGatewayId: 'shared-a', sourceAssignmentEpoch: 7, targetGatewayId: 'builder-a' };
   const user = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-a', slug: 'alice', activationLease: lease, migration: { state: 'moving', operationId: operation.id, startedAt: 1000 } } } };
-  const sourceRoot = { gatewayId: 'shared-a', gatewayClass: 'shared', desiredStatus: 'running' };
-  const sourceAssignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', state: 'quiescing', epoch: 7, updatedByOperationId: operation.id };
+  const sourceRoot = { gatewayId: 'shared-a', gatewayClass: 'shared', desiredStatus: 'running', desiredRelease: 3, latestRelease: 3 };
+  const sourceAssignment = { uid: 'alice', slug: 'alice', gatewayId: 'shared-a', source: 'migrate-customer', state: 'quiescing', epoch: 7, updatedByOperationId: operation.id };
   const snapshot = { gateway, operation, user, sourceRoot, sourceAssignment, targetOccupied: false };
   return { snapshot, gateway, operation, user, lease, sourceRoot, sourceAssignment };
 }
 
+async function records(h: ReturnType<typeof fixture>): Promise<BuilderActivationRollRecoveryRecords> {
+  const store = createDocumentFixtureStore({
+    'gateways/builder-a': h.gateway, [`glmOperations/${h.operation.id}`]: h.operation, 'users/alice': h.user,
+    'gateways/shared-a': h.sourceRoot, 'gateways/shared-a/assignments/alice': h.sourceAssignment,
+  });
+  const [gateway, operation, builder, sourceRoot, sourceAssignment] = await Promise.all([
+    store.gateways.roots.get('builder-a'), store.journal.operations.get(h.operation.id), store.builders.records.get('alice'),
+    store.gateways.roots.get('shared-a'), store.gateways.assignments.get('shared-a', 'alice'),
+  ]);
+  return { gateway: gateway!, operation: operation!, builder, sourceRoot, sourceAssignment, targetOccupied: h.snapshot.targetOccupied };
+}
+
 describe('unadmitted Builder activation rollout recovery authority', () => {
-  it('recognizes a pending recovery without inventing an active migration claim', () => {
+  it('recognizes a pending recovery without inventing an active migration claim', async () => {
     const h = fixture();
-    expect(qualifyBuilderActivationRollRecovery(h.snapshot)).toMatchObject({ uid: 'alice', sourceEpoch: 7, generation: 1, operationId: h.operation.id });
+    expect(qualifyBuilderActivationRollRecovery(await records(h))).toMatchObject({ uid: 'alice', sourceEpoch: 7, generation: 1, operationId: h.operation.id });
     expect(h.operation.startedAt).toBeNull();
   });
   it.each([
@@ -37,15 +50,15 @@ describe('unadmitted Builder activation rollout recovery authority', () => {
     ['a cutover', (h: ReturnType<typeof fixture>) => { Object.assign(h.operation, { cutoverCommittedAt: 2000 }); }],
     ['another handoff claim', (h: ReturnType<typeof fixture>) => { h.operation.schedulerHandoff.sourceRecovery.migrationId += '-other'; }],
     ['an unresolved runtime restart', (h: ReturnType<typeof fixture>) => { Object.assign(h.gateway, { runtimeRestartFence: {} }); }],
-  ])('does not authorize rollback for %s', (_name, change) => {
-    const h = fixture(); change(h); expect(qualifyBuilderActivationRollRecovery(h.snapshot)).toBeNull();
+  ])('does not authorize rollback for %s', async (_name, change) => {
+    const h = fixture(); change(h); expect(qualifyBuilderActivationRollRecovery(await records(h))).toBeNull();
   });
 });
 
 describe('owned held activation target rollback', () => {
   async function setup(scenario: string) {
     const { rollbackHeldBuilderActivationTarget } = await import('../builder-activation-roll-recovery.js');
-    const current = qualifyBuilderActivationRollRecovery(fixture().snapshot)!;
+    const current = qualifyBuilderActivationRollRecovery(await records(fixture()))!;
     const events: string[] = []; let applied = false, cleaned = false, reads = 0, now = 0, proof: unknown;
     const liveImage = 'registry/builder:old@sha256:' + 'a'.repeat(64), installedImage = 'registry/builder:new@sha256:' + 'b'.repeat(64);
     const retained = { uid: 'old', name: 'pod-old', podIP: '10.0.0.1', image: liveImage, ready: false, terminating: false, crashLooping: false };

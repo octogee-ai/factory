@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 
 import {
   pairedReplacementTarget,
   parseSharedPoolReplacements,
-  parseSharedPoolReplacementsFromState,
+  readSharedPoolReplacements,
 } from "../shared-pool-replacements.js";
 
 const pairA = { sourceGatewayId: "shared-olda", targetGatewayId: "shared-newa", updatedAt: 0 };
@@ -13,20 +14,10 @@ describe("parseSharedPoolReplacements", () => {
   it("treats an absent list as no replacements", () => {
     expect(parseSharedPoolReplacements(undefined)).toEqual([]);
     expect(parseSharedPoolReplacements(null)).toEqual([]);
-    expect(parseSharedPoolReplacementsFromState({ exists: false, data: () => undefined } as never)).toEqual([]);
   });
 
   it("keeps only the pair fields of each recorded replacement", () => {
     expect(parseSharedPoolReplacements([{ ...pairA, note: "stray" }, pairB])).toEqual([pairA, pairB]);
-    expect(parseSharedPoolReplacementsFromState({
-      exists: true,
-      data: () => ({ schemaVersion: 1, replacements: [pairB] }),
-    } as never)).toEqual([pairB]);
-  });
-
-  it("rejects a scaler state document that is not a record", () => {
-    expect(() => parseSharedPoolReplacementsFromState({ exists: true, data: () => "stray" } as never))
-      .toThrow("shared pool scaler state is malformed");
   });
 
   it.each([
@@ -46,6 +37,19 @@ describe("parseSharedPoolReplacements", () => {
     ["a target that is also a source", [pairA, { sourceGatewayId: "shared-newa", targetGatewayId: "shared-newb", updatedAt: 0 }]],
   ])("rejects %s", (_label, value) => {
     expect(() => parseSharedPoolReplacements(value)).toThrow("shared pool replacement state pairs a gateway twice");
+  });
+});
+
+describe("readSharedPoolReplacements", () => {
+  it("reads no replacements before the scaler has recorded its state", async () => {
+    await expect(readSharedPoolReplacements(createDocumentFixtureStore({}))).resolves.toEqual([]);
+  });
+
+  it("reads the replacement pairs the scaler recorded", async () => {
+    const store = createDocumentFixtureStore({
+      "glmControllerState/sharedPoolScaler": { schemaVersion: 1, actionSequence: 2, lastActionAt: 1, replacements: [pairB] },
+    });
+    await expect(readSharedPoolReplacements(store)).resolves.toEqual([pairB]);
   });
 });
 

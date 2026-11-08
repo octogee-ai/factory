@@ -1,15 +1,6 @@
-import type { Firestore } from "firebase-admin/firestore";
-import {
-  GATEWAY_UNREACHABLE_AFTER_MS,
-  GATEWAYS_COLLECTION,
-} from "@octogee/shared/types/fleet-controller";
-import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
-  isGatewayRuntimeDoc,
-  isReleasePayload,
-  projectGatewayDesiredRootForGateway,
-} from "@octogee/shared/types/gateway-releases";
-import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
+import type { FleetRegistryRecord, PlatformStateStore, Stored } from "@octogee/core/platform-state";
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
+import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { deriveSharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { imageTagMatchesArtifact } from "./release-convergence.js";
 
@@ -127,29 +118,11 @@ export function observeGatewayRelease(
 }
 
 function millis(value: unknown): number | null {
-  const valid = (candidate: unknown): candidate is number =>
-    typeof candidate === "number" &&
-    Number.isFinite(candidate) &&
-    Math.abs(candidate) <= 8.64e15;
-  if (valid(value)) return value;
-  if (value instanceof Date) {
-    const result = value.getTime();
-    return valid(result) ? result : null;
-  }
-  if (
-    value &&
-    typeof value === "object" &&
-    typeof (value as { toMillis?: unknown }).toMillis === "function"
-  ) {
-    const result = (value as { toMillis: () => unknown }).toMillis();
-    return valid(result) ? result : null;
-  }
-  return null;
+  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 8.64e15 ? value : null;
 }
 
-function projectRuntime(value: unknown, gatewayId: string): ReleaseStatusRuntime | null {
-  if (!isGatewayRuntimeDoc(value) || value.gatewayId !== gatewayId) return null;
-  const heartbeat = value.heartbeat as unknown;
+function projectRuntime(record: Stored<FleetRegistryRecord>): ReleaseStatusRuntime | null {
+  const heartbeat = record.heartbeat as unknown;
   if (!heartbeat || typeof heartbeat !== "object") return null;
   const observation = heartbeat as Record<string, unknown>;
   if (typeof observation.status !== "string" || observation.status.length === 0) return null;
@@ -161,17 +134,12 @@ function projectRuntime(value: unknown, gatewayId: string): ReleaseStatusRuntime
   const lastHeartbeatAt = millis(observation.lastHeartbeatAt);
   if (lastHeartbeatAt === null) return null;
   return {
-    release: value.release,
-    lifecycle: value.lifecycle,
+    release: record.release,
+    lifecycle: record.lifecycle,
     heartbeatStatus: observation.status,
     heartbeatVersion: typeof observation.version === "string" ? observation.version : null,
     lastHeartbeatAt,
   };
-}
-
-function projectImageTag(value: unknown): string | null {
-  const payload = (value as { payload?: unknown } | undefined)?.payload;
-  return isReleasePayload(payload) ? payload.imageTag : null;
 }
 
 function invalidRoot(gatewayId: string, defaultGatewayId: string | null): ReleaseStatusGateway {
@@ -192,18 +160,19 @@ function invalidRoot(gatewayId: string, defaultGatewayId: string | null): Releas
 }
 
 export async function readReleaseStatus(
-  db: Pick<Firestore, "collection">,
+  store: PlatformStateStore,
   now = Date.now(),
 ): Promise<ReleaseStatusSnapshot> {
-  const gatewayDocuments = await db.collection(GATEWAYS_COLLECTION).get();
-  const pool = deriveSharedGatewayPoolConfig(gatewayDocuments.docs.map((document) => {
-    const data = document.data();
-    return { gatewayId: document.id, gatewayClass: data.gatewayClass, desiredStatus: data.desiredStatus };
-  }));
+  const roots = await store.gateways.roots.list();
+  const pool = deriveSharedGatewayPoolConfig(roots.map((root) => ({
+    gatewayId: root.gatewayId,
+    gatewayClass: root.gatewayClass,
+    desiredStatus: root.desiredStatus,
+  })));
   const defaultGatewayId = pool?.defaultGatewayId ?? null;
-  const validRoots = gatewayDocuments.docs.flatMap((document) => {
-    const root = projectGatewayDesiredRootForGateway(document.data(), document.id);
-    return root ? [{ gatewayId: document.id, root }] : [];
+  const validRoots = roots.flatMap(({ revision: _revision, ...stored }) => {
+    const root = projectGatewayDesiredRootForGateway(stored, stored.gatewayId);
+    return root ? [{ gatewayId: stored.gatewayId, root }] : [];
   });
   const validGatewayIds = new Set(validRoots.map(({ gatewayId }) => gatewayId));
   let defaultSelection: ReleaseStatusDefaultSelection = "unconfigured";
@@ -212,16 +181,12 @@ export async function readReleaseStatus(
   }
   const selectedDefaultGatewayId = defaultSelection === "selected" ? defaultGatewayId : null;
   const observed = await Promise.all(validRoots.map(async ({ gatewayId, root }) => {
-    const [releaseDocument, runtimeDocument] = await Promise.all([
-      db.collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-        .doc(String(root.desiredRelease))
-        .get(),
-      db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId).get(),
+    const [release, registry] = await Promise.all([
+      store.gateways.releases.get(gatewayId, root.desiredRelease),
+      store.fleetRegistry.get(gatewayId),
     ]);
-    const desiredImageTag = projectImageTag(releaseDocument.data());
-    const runtime = projectRuntime(runtimeDocument.data(), gatewayId);
+    const desiredImageTag = release?.payload.imageTag ?? null;
+    const runtime = registry === null ? null : projectRuntime(registry);
     return {
       gatewayId,
       isDefault: gatewayId === selectedDefaultGatewayId,
@@ -244,9 +209,9 @@ export async function readReleaseStatus(
       }, now),
     } satisfies ReleaseStatusGateway;
   }));
-  const invalidRoots = gatewayDocuments.docs
-    .filter((document) => !validGatewayIds.has(document.id))
-    .map((document) => invalidRoot(document.id, selectedDefaultGatewayId));
+  const invalidRoots = roots
+    .filter((root) => !validGatewayIds.has(root.gatewayId))
+    .map((root) => invalidRoot(root.gatewayId, selectedDefaultGatewayId));
 
   return {
     defaultGatewayId,

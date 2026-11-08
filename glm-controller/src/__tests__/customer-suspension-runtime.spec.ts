@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
+import { MalformedRecordError, type PlatformStateTransaction } from "@octogee/core/platform-state";
+import {
+  createDocumentFixtureStore,
+  createJournalFixtureStore,
+  fixtureDocumentsAt,
+  journalRowsAtPaths,
+  type FixtureDocuments,
+} from "@octogee/core/testing/journal-store";
 import {
   assertCustomerRestoreNotInProgress,
   cancelCustomerMigrationsForSuspension,
@@ -16,108 +23,131 @@ import {
   revokeOwnerModelBrokerTokens,
 } from "../lib/customer-ops/customer-suspension-runtime.js";
 
-function placementDb(user: Record<string, unknown> | null) {
-  const writes: Array<{ op: string; path: string; data?: Record<string, unknown> }> = [];
-  const ref = (path: string) => ({
-    path,
-    collection: (name: string) => ({ doc: (id: string) => ref(`${path}/${name}/${id}`) }),
-  });
-  const db = {
-    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-    runTransaction: async (run: (transaction: {
-      get: (target: { path: string }) => Promise<{ exists: boolean; data: () => Record<string, unknown> | undefined }>;
-      delete: (target: { path: string }) => void;
-      update: (target: { path: string }, data: Record<string, unknown>) => void;
-    }) => Promise<void>) => run({
-      get: async () => ({ exists: user !== null, data: () => user ?? undefined }),
-      delete: (target) => { writes.push({ op: "delete", path: target.path }); },
-      update: (target, data) => { writes.push({ op: "update", path: target.path, data }); },
-    }),
+type Documents = Record<string, Record<string, unknown>>;
+
+function countingStore(records: Documents) {
+  const base = fixtureDocumentsAt(records);
+  let writes = 0;
+  const documents: FixtureDocuments = {
+    ...base,
+    set: (path, row) => { writes += 1; base.set(path, row); },
+    delete: (path) => { writes += 1; base.delete(path); },
   };
-  return { db, writes };
+  const fixture = createJournalFixtureStore(journalRowsAtPaths(records), { documents });
+  const committed: number[] = [];
+  const store = new Proxy(fixture, {
+    get(target, property, receiver) {
+      if (property !== "transaction") return Reflect.get(target, property, receiver);
+      return async <T>(options: { label: string; readOnly?: boolean }, body: (transaction: PlatformStateTransaction) => Promise<T>) => {
+        const before = writes;
+        const result = await target.transaction(options, body);
+        committed.push(writes - before);
+        return result;
+      };
+    },
+  });
+  return { store, committed };
 }
 
+const assignment = (gatewayId: string) => ({
+  uid: "uid-1", slug: "alice", gatewayId, source: "onboarding", state: "serving", epoch: 1,
+});
+
+function placementRecords(openclaw: Record<string, unknown> | null, assigned: string[] = ["shared-0"]): Documents {
+  return {
+    ...(openclaw === null ? {} : { "users/uid-1": { username: "alice", provisioning: { openclaw } } }),
+    ...Object.fromEntries(assigned.map((gatewayId) => [`gateways/${gatewayId}/assignments/uid-1`, assignment(gatewayId)])),
+  };
+}
+
+const assignmentPaths = (records: Documents) => Object.keys(records).filter((path) => path.includes("/assignments/")).sort();
+
 describe("assertCustomerRestoreNotInProgress", () => {
-  it.each([null, { phase: "dispatched" }])("rejects unresolved restore before suspension effects: %j", async (restoreFence) => {
-    const db = { collection: () => ({ doc: () => ({ get: async () => ({ data: () => ({ provisioning: { openclaw: { restoreFence } } }) }) }) }) };
-    await expect(assertCustomerRestoreNotInProgress(db as never, "uid-1")).rejects.toThrow("customer restore is in progress");
+  it("rejects unresolved restore before suspension effects", async () => {
+    const store = createDocumentFixtureStore(placementRecords({ restoreFence: { phase: "dispatched" } }));
+    await expect(assertCustomerRestoreNotInProgress(store, "uid-1")).rejects.toThrow("customer restore is in progress");
   });
-  it.each([undefined, { provisioning: { openclaw: { gatewayId: "shared-1" } } }])("allows an unfenced account or completed cleanup retry", async (user) => {
-    const db = { collection: () => ({ doc: () => ({ get: async () => ({ data: () => user }) }) }) };
-    await expect(assertCustomerRestoreNotInProgress(db as never, "uid-1")).resolves.toBeUndefined();
+  it("rejects a malformed restore fence before suspension effects", async () => {
+    const store = createDocumentFixtureStore(placementRecords({ restoreFence: null }));
+    await expect(assertCustomerRestoreNotInProgress(store, "uid-1")).rejects.toBeInstanceOf(MalformedRecordError);
+  });
+  it.each([null, { gatewayId: "shared-1" }])("allows an unfenced account or completed cleanup retry", async (openclaw) => {
+    const store = createDocumentFixtureStore(placementRecords(openclaw, []));
+    await expect(assertCustomerRestoreNotInProgress(store, "uid-1")).resolves.toBeUndefined();
   });
 });
 
 describe("releaseCustomerPlacement", () => {
   it.each(["shared-0", undefined])("clears the migration projection after releasing placement %j", async (gatewayId) => {
-    const { db, writes } = placementDb({ provisioning: { openclaw: {
-      gatewayId, migration: { state: "preparing", phase: "waiting", operationId: "failed-activation" },
-    } } });
-    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
-    expect(writes.find(write => write.op === "update")?.data).toEqual(expect.objectContaining({
-      "provisioning.openclaw.migration": FieldValue.delete(),
-    }));
+    const records = placementRecords({
+      ...(gatewayId === undefined ? {} : { gatewayId }),
+      migration: { state: "preparing", phase: "waiting", operationId: "failed-activation" },
+    });
+    await releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
+    expect(records["users/uid-1"]).toEqual({ username: "alice", provisioning: { openclaw: {} } });
   });
 
-  it.each([null, false, { phase: "dispatched", claimStartedAt: 1 }])("preserves all assignments while a restore fence remains: %j", async (restoreFence) => {
-    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", restoreFence } } });
-    await expect(releaseCustomerPlacement(db as never, "uid-1", "shared-0")).rejects.toThrow("customer restore is in progress");
-    expect(writes).toEqual([]);
+  it.each([
+    ["a malformed", null, MalformedRecordError],
+    ["a malformed", false, MalformedRecordError],
+    ["an unresolved", { phase: "dispatched", claimStartedAt: 1 }, "customer restore is in progress"],
+  ])("preserves all assignments while %s restore fence remains: %j", async (_label, restoreFence, refusal) => {
+    const records = placementRecords({ gatewayId: "shared-1", restoreFence }, ["shared-0", "shared-1"]);
+    const before = structuredClone(records);
+    const attempt = releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
+    if (typeof refusal === "string") await expect(attempt).rejects.toThrow(refusal);
+    else await expect(attempt).rejects.toBeInstanceOf(refusal);
+    expect(records).toEqual(before);
   });
 
-  it.each([null, false, { phase: "dispatched", claimStartedAt: 1 }])("preserves all assignments while a source transfer fence remains: %j", async (sourceTransferFence) => {
-    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", sourceTransferFence } } });
-    await expect(releaseCustomerPlacement(db as never, "uid-1", "shared-0")).rejects.toThrow("customer source transfer is in progress");
-    expect(writes).toEqual([]);
+  it.each([
+    ["a malformed", null, MalformedRecordError],
+    ["a malformed", false, MalformedRecordError],
+    ["an unresolved", { sourceGatewayId: "shared-1", targetGatewayId: "target", phase: "dispatched", claimStartedAt: 1 }, "customer source transfer is in progress"],
+  ])("preserves all assignments while %s source transfer fence remains: %j", async (_label, sourceTransferFence, refusal) => {
+    const records = placementRecords({ gatewayId: "shared-1", sourceTransferFence }, ["shared-0", "shared-1"]);
+    const before = structuredClone(records);
+    const attempt = releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
+    if (typeof refusal === "string") await expect(attempt).rejects.toThrow(refusal);
+    else await expect(attempt).rejects.toBeInstanceOf(refusal);
+    expect(records).toEqual(before);
   });
 
   it("deletes the assignment and clears the user mirror that still points at the gateway", async () => {
-    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-0", slug: "alice" } } });
+    const records = placementRecords({
+      gatewayId: "shared-0", gatewayAssignedAt: 10, gatewayProfile: "standard", controlUiEnabled: true, status: "complete",
+    });
 
-    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+    await releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
 
-    expect(writes).toEqual([
-      { op: "delete", path: "gateways/shared-0/assignments/uid-1" },
-      {
-        op: "update",
-        path: "users/uid-1",
-        data: expect.objectContaining({
-          "provisioning.openclaw.gatewayId": expect.anything(),
-          "provisioning.openclaw.gatewayAssignedAt": expect.anything(),
-        }),
-      },
-    ]);
+    expect(assignmentPaths(records)).toEqual([]);
+    expect(records["users/uid-1"]).toEqual({ username: "alice", provisioning: { openclaw: { status: "complete" } } });
   });
 
   it("releases the gateway the mirror names now as well as the one captured at suspension time", async () => {
-    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", slug: "alice" } } });
+    const records = placementRecords({ gatewayId: "shared-1" }, ["shared-0", "shared-1", "shared-2"]);
 
-    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+    await releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
 
-    expect(writes).toEqual([
-      { op: "delete", path: "gateways/shared-0/assignments/uid-1" },
-      { op: "delete", path: "gateways/shared-1/assignments/uid-1" },
-      { op: "update", path: "users/uid-1", data: expect.anything() },
-    ]);
+    expect(assignmentPaths(records)).toEqual(["gateways/shared-2/assignments/uid-1"]);
+    expect(records["users/uid-1"]).toEqual({ username: "alice", provisioning: { openclaw: {} } });
   });
 
   it("releases the current placement when nothing was captured at suspension time", async () => {
-    const { db, writes } = placementDb({ provisioning: { openclaw: { gatewayId: "shared-1", slug: "alice" } } });
+    const records = placementRecords({ gatewayId: "shared-1" }, ["shared-0", "shared-1"]);
 
-    await releaseCustomerPlacement(db as never, "uid-1", null);
+    await releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", null);
 
-    expect(writes).toEqual([
-      { op: "delete", path: "gateways/shared-1/assignments/uid-1" },
-      { op: "update", path: "users/uid-1", data: expect.anything() },
-    ]);
+    expect(assignmentPaths(records)).toEqual(["gateways/shared-0/assignments/uid-1"]);
+    expect(records["users/uid-1"]).toEqual({ username: "alice", provisioning: { openclaw: {} } });
   });
 
   it("still deletes the captured assignment when the user document is gone", async () => {
-    const { db, writes } = placementDb(null);
+    const records = placementRecords(null, ["shared-0", "shared-1"]);
 
-    await releaseCustomerPlacement(db as never, "uid-1", "shared-0");
+    await releaseCustomerPlacement(createDocumentFixtureStore(records), "uid-1", "shared-0");
 
-    expect(writes).toEqual([{ op: "delete", path: "gateways/shared-0/assignments/uid-1" }]);
+    expect(records).toEqual({ "gateways/shared-1/assignments/uid-1": assignment("shared-1") });
   });
 });
 
@@ -276,108 +306,94 @@ describe("deleteStripeCustomer", () => {
   });
 });
 
+function token(): Record<string, unknown> {
+  return {
+    capped: true, gatewayId: "builder-1", ownerUid: "uid-1", provider: "anthropic", secretName: "broker-secret",
+    createdAt: 1, expiresAt: null, limits: { spendWindowUsd: null, spendWeekUsd: null, requestsPerMinute: null },
+  };
+}
+
+function tokens(prefix: string, count: number): Documents {
+  return Object.fromEntries(Array.from({ length: count }, (_, index) => [`modelBrokerTokens/${prefix}${index}`, token()]));
+}
+
+function pointers(prefix: string, count: number): Documents {
+  return Object.fromEntries(Array.from({ length: count }, (_, index) => [`modelBrokerGatewayTokens/${prefix}${index}`, {
+    gatewayId: "builder-1", ownerUid: "uid-1", provider: "anthropic", secretName: "broker-secret", tokenHash: `hash-${index}`, updatedAt: 1,
+  }]));
+}
+
+function migration(id: string, fields: Record<string, unknown>): Documents {
+  return {
+    [`glmOperations/${id}`]: {
+      kind: "migrate-customer", status: "pending", createdBy: "glm-controller", createdAt: 10, startedAt: null, completedAt: null,
+      steps: [], inputUid: "uid-1", input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
+      waitingOn: "source", nextAttemptAt: 70, ...fields,
+    },
+  };
+}
+
 describe("Firestore suspension fences", () => {
   it("terminally cancels queued Builder migrations and requests cancellation for started work", async () => {
-    const writes: Array<{ id: string; data: Record<string, unknown> }> = [];
-    const operations = [
-      {
-        id: "queued-migration",
-        kind: "migrate-customer",
-        status: "pending",
-        inputUid: "uid-1",
-        input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
-      },
-      {
-        id: "started-migration",
-        kind: "migrate-customer",
-        status: "running",
-        inputUid: "uid-1",
-        input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
-        customerMigrationV2: { phase: "initialized" },
-      },
-      {
-        id: "forward-retry",
-        kind: "migrate-customer",
-        status: "pending",
-        inputUid: "uid-1",
-        input: { uid: "uid-1", fromGatewayId: "default", toGatewayId: "builder-1" },
-        schedulerHandoff: { forwardRecovery: { schemaVersion: 1, phase: "source-flushed" } },
-      },
-      {
-        id: "other-builder",
-        kind: "migrate-customer",
-        status: "pending",
-        inputUid: "uid-2",
-        input: { uid: "uid-2", fromGatewayId: "default", toGatewayId: "builder-2" },
-      },
-    ];
-    const refs = new Map(operations.map((operation) => [operation.id, { id: operation.id }]));
-    const db = {
-      collection: () => ({
-        where: () => ({
-          get: async () => ({
-            docs: operations.map((operation) => ({
-              id: operation.id,
-              ref: refs.get(operation.id),
-              data: () => operation,
-            })),
-          }),
-        }),
-      }),
-      runTransaction: async (run: (transaction: {
-        get: (ref: { id: string }) => Promise<{ exists: boolean; data: () => Record<string, unknown> }>;
-        update: (ref: { id: string }, data: Record<string, unknown>) => void;
-      }) => Promise<void>) => run({
-        get: async (ref) => ({
-          exists: true,
-          data: () => operations.find((operation) => operation.id === ref.id)!,
-        }),
-        update: (ref, data) => { writes.push({ id: ref.id, data }); },
-      }),
+    const records: Documents = {
+      ...migration("queued-migration", {}),
+      ...migration("started-migration", { status: "running", startedAt: 20, customerMigrationV2: { phase: "initialized" } }),
+      ...migration("forward-retry", { schedulerHandoff: { forwardRecovery: { schemaVersion: 1, phase: "source-flushed" } } }),
+      ...migration("other-builder", { inputUid: "uid-2", input: { uid: "uid-2", fromGatewayId: "default", toGatewayId: "builder-2" } }),
     };
+    const before = structuredClone(records);
 
-    await expect(cancelCustomerMigrationsForSuspension(db as never, "uid-1", "delete-1", 80)).resolves.toBe(true);
+    await expect(cancelCustomerMigrationsForSuspension(createDocumentFixtureStore(records), "uid-1", "delete-1", 80)).resolves.toBe(true);
 
-    expect(writes).toHaveLength(3);
-    expect(writes).toContainEqual({
-      id: "queued-migration",
-      data: expect.objectContaining({
-        status: "failed",
-        completedAt: 80,
-        error: "customer migration cancelled because the account was suspended",
-        rolledBack: false,
-        cancelledByDeletionId: "delete-1",
-      }),
+    const { waitingOn: _waitingOn, nextAttemptAt: _nextAttemptAt, ...queued } = before["glmOperations/queued-migration"];
+    expect(records["glmOperations/queued-migration"]).toEqual({
+      ...queued,
+      status: "failed",
+      completedAt: 80,
+      error: "customer migration cancelled because the account was suspended",
+      rolledBack: false,
+      cancelledByDeletionId: "delete-1",
     });
-    expect(writes).toContainEqual({
-      id: "started-migration",
-      data: { cancellationRequestedAt: 80 },
-    });
-    expect(writes).toContainEqual({
-      id: "forward-retry",
-      data: { cancellationRequestedAt: 80 },
-    });
+    expect(records["glmOperations/started-migration"]).toEqual({ ...before["glmOperations/started-migration"], cancellationRequestedAt: 80 });
+    expect(records["glmOperations/forward-retry"]).toEqual({ ...before["glmOperations/forward-retry"], cancellationRequestedAt: 80 });
+    expect(records["glmOperations/other-builder"]).toEqual(before["glmOperations/other-builder"]);
+  });
+
+  it("leaves a migration alone once it left the live statuses before its cancellation transaction", async () => {
+    const records: Documents = migration("queued-migration", {});
+    const store = createDocumentFixtureStore(records);
+    const listed = await store.journal.operations.listByStatus(["pending", "running"]);
+    records["glmOperations/queued-migration"].status = "succeeded";
+    const listing = vi.spyOn(store.journal.operations, "listByStatus").mockResolvedValue(listed);
+
+    await expect(cancelCustomerMigrationsForSuspension(store, "uid-1", "delete-1", 80)).resolves.toBe(false);
+
+    expect(listing).toHaveBeenCalledWith(["pending", "running"]);
+    expect(records["glmOperations/queued-migration"]).toMatchObject({ status: "succeeded" });
+    expect(records["glmOperations/queued-migration"]).not.toHaveProperty("cancelledByDeletionId");
   });
 
   it("deactivates every public projection and deletes social edges in bounded batches", async () => {
+    const records: Documents = Object.fromEntries(Array.from({ length: 250 }, (_, index) => [
+      [`workspaces/ws-${index}`, { id: `ws-${index}`, slug: `ws-${index}`, ownerUid: "uid-1", ownerActive: true }],
+      [`workspaces/ws-0/projects/p-${index}`, { ownerUid: "uid-1", ownerActive: true }],
+    ]).flat());
+    records["workspaces/other"] = { id: "other", slug: "other", ownerUid: "uid-2", ownerActive: true };
+    const { store, committed: transactions } = countingStore(records);
     const refs = (prefix: string) => Array.from({ length: 250 }, (_, index) => ({
       ref: { path: `${prefix}/${index}` },
     }));
     const queryDocs: Record<string, Array<{ ref: { path: string } }>> = {
-      workspaces: refs("workspaces"),
-      projects: refs("projects"),
       posts: refs("posts"),
       feed: refs("feed"),
       stars: refs("stars"),
       follows: refs("follows"),
     };
     const committed: Array<Array<{ kind: string; path: string }>> = [];
-    const query = (name: string) => ({
-      where: () => ({ get: async () => ({ docs: queryDocs[name] }) }),
-    });
     const db = {
-      collection: (name: string) => query(name),
-      collectionGroup: (name: string) => query(name),
+      collection: (name: string) => ({
+        where: () => ({ get: async () => ({ docs: queryDocs[name] }) }),
+      }),
       batch: () => {
         const operations: Array<{ kind: string; path: string }> = [];
         return {
@@ -388,10 +404,15 @@ describe("Firestore suspension fences", () => {
       },
     };
 
-    await deactivateCustomerVisibility(db as never, "uid-1");
+    await deactivateCustomerVisibility(store, db as never, "uid-1");
 
-    expect(committed.map((batch) => batch.length)).toEqual([400, 400, 400, 300]);
-    expect(committed.flat().filter((write) => write.kind === "update")).toHaveLength(750);
+    expect(transactions).toEqual([400, 100]);
+    const owned = Object.entries(records).filter(([path]) => path !== "workspaces/other");
+    expect(owned).toHaveLength(500);
+    expect(owned.every(([, row]) => row.ownerActive === false)).toBe(true);
+    expect(records["workspaces/other"]).toMatchObject({ ownerActive: true });
+    expect(committed.map((batch) => batch.length)).toEqual([400, 400, 200]);
+    expect(committed.flat().filter((write) => write.kind === "update")).toHaveLength(250);
     expect(committed.flat().filter((write) => write.kind === "delete")).toHaveLength(750);
   });
 
@@ -415,40 +436,36 @@ describe("Firestore suspension fences", () => {
   });
 
   it("revokes every owner token and deletes every owner pointer", async () => {
-    const writes: string[] = [];
-    const docs = (ids: string[]) => ids.map((id) => ({ id, ref: { path: id } }));
-    const db = {
-      collection: (name: string) => ({
-        where: () => ({ get: async () => ({ docs: docs(name === "modelBrokerTokens" ? ["t1", "t2"] : ["p1"]) }) }),
-      }),
-      batch: () => ({
-        set: (ref: { path: string }, data: Record<string, unknown>) => writes.push(`set:${ref.path}:${data.revokedAt}`),
-        delete: (ref: { path: string }) => writes.push(`delete:${ref.path}`),
-        commit: async () => undefined,
-      }),
+    const records: Documents = {
+      ...tokens("t", 2),
+      "modelBrokerTokens/foreign": { ...token(), ownerUid: "uid-2" },
+      ...pointers("p", 1),
     };
-    await revokeOwnerModelBrokerTokens(db as never, "uid-1", 50);
-    expect(writes).toEqual(["set:t1:50", "set:t2:50", "delete:p1"]);
+
+    await revokeOwnerModelBrokerTokens(createDocumentFixtureStore(records), "uid-1", 50);
+
+    expect(records["modelBrokerTokens/t0"]).toEqual({ ...token(), revoked: true, revokedAt: 50 });
+    expect(records["modelBrokerTokens/t1"]).toEqual({ ...token(), revoked: true, revokedAt: 50 });
+    expect(records["modelBrokerTokens/foreign"]).toEqual({ ...token(), ownerUid: "uid-2" });
+    expect(records).not.toHaveProperty("modelBrokerGatewayTokens/p0");
   });
 
   it("revokes tens of thousands of owner tokens in bounded batches", async () => {
-    const docs = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({ ref: { path: `${prefix}/${index}` } }));
-    const committed: number[] = [];
-    const db = {
-      collection: (name: string) => ({
-        where: () => ({ get: async () => ({ docs: name === "modelBrokerTokens" ? docs("tokens", 1_050) : docs("pointers", 3) }) }),
-      }),
-      batch: () => {
-        let size = 0;
-        return {
-          set: () => { size += 1; },
-          delete: () => { size += 1; },
-          commit: async () => { committed.push(size); },
-        };
-      },
-    };
-    await revokeOwnerModelBrokerTokens(db as never, "uid-1", 50);
+    const records: Documents = { ...tokens("tokens", 1_050), ...pointers("pointers", 3) };
+    const { store, committed } = countingStore(records);
+
+    await revokeOwnerModelBrokerTokens(store, "uid-1", 50);
+
     expect(committed).toEqual([400, 400, 253]);
+  });
+
+  it("refuses to revoke from a malformed owner token record", async () => {
+    const records: Documents = { ...tokens("t", 1), "modelBrokerTokens/legacy": { ...token(), capped: false } };
+
+    await expect(revokeOwnerModelBrokerTokens(createDocumentFixtureStore(records), "uid-1", 50))
+      .rejects.toBeInstanceOf(MalformedRecordError);
+
+    expect(records["modelBrokerTokens/t0"]).toEqual(token());
   });
 
   it("disables automatic top-up without deleting the financial balance", async () => {

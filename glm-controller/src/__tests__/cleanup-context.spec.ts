@@ -1,7 +1,10 @@
 
 
 import { describe, it, expect } from "vitest";
-import { loadCustomerCleanupContext } from "../lib/customer-ops/cleanup-context";
+import { builderAccountFromData, type BuilderAccountReader } from "@octogee/core/builder-account";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
+import { loadCustomerCleanupContext, type ContextDeps } from "../lib/customer-ops/cleanup-context";
 
 interface DocSnap {
   exists: boolean;
@@ -85,25 +88,42 @@ function buildDb(initialDocs: Record<string, Record<string, unknown> | undefined
   };
 }
 
+function contextDeps(initialDocs: Record<string, Record<string, unknown> | undefined>): ContextDeps {
+  const account = (uid: string) => {
+    const data = initialDocs[`users/${uid}`];
+    return data === undefined ? null : builderAccountFromData(uid, data);
+  };
+  const accounts: BuilderAccountReader = {
+    get: async (uid) => account(uid),
+    getMany: async () => { throw new Error("cleanup context reads one account"); },
+    list: async () => { throw new Error("cleanup context reads one account"); },
+  };
+  return {
+    store: createDocumentFixtureStore(initialDocs),
+    accounts,
+    db: buildDb(initialDocs) as unknown as ContextDeps["db"],
+  };
+}
+
 describe("loadCustomerCleanupContext", () => {
   it("returns null when the user doc does not exist", async () => {
-    const db = buildDb({});
+    const deps = contextDeps({});
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-missing",
     );
     expect(ctx).toBeNull();
   });
 
   it("resolves slug from provisioning.openclaw.slug (canonical)", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": {
         email: "alice@example.com",
         provisioning: { openclaw: { slug: "alice-canon", gatewayId: "gw-test" } },
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.slug).toBe("alice-canon");
@@ -112,22 +132,22 @@ describe("loadCustomerCleanupContext", () => {
   });
 
   it("normalizes the captured email used to erase email-indexed PII", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": { username: "alice", email: " Alice@Example.COM " },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.email).toBe("alice@example.com");
   });
 
   it("falls back to username when openclaw.slug is missing", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-bob": { username: "bob-legacy" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-bob",
     );
     expect(ctx?.slug).toBe("bob-legacy");
@@ -135,11 +155,11 @@ describe("loadCustomerCleanupContext", () => {
   });
 
   it("returns empty repoNames + null IDs when no slug at all", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-bare": { email: "bare@example.com" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-bare",
     );
     expect(ctx?.slug).toBe("");
@@ -148,24 +168,24 @@ describe("loadCustomerCleanupContext", () => {
     expect(ctx?.adminChannelId).toBeNull();
   });
 
-  it("derives bare project repo names (org-namespaced) when giteaRepoName absent", async () => {
-    const db = buildDb({
+  it("derives bare project repo names (org-namespaced) from the project slug when giteaRepoName absent", async () => {
+    const deps = contextDeps({
       "users/uid-alice": {
         username: "alice",
         provisioning: { openclaw: { slug: "alice" } },
       },
-      "workspaces/alice/projects/p1": { slug: "blog" },
-      "workspaces/alice/projects/p2": { projectSlug: "shop" },
+      "workspaces/alice/projects/blog": { slug: "blog", ownerUid: "uid-alice" },
+      "workspaces/alice/projects/shop": { projectSlug: "shop", ownerUid: "uid-alice" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.repoNames).toEqual(["workspace", "system_config", "blog", "shop"]);
   });
 
   it("prefers projData.giteaRepoName when present (the actual Gitea name)", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": {
         username: "alice",
         provisioning: { openclaw: { slug: "alice" } },
@@ -173,10 +193,11 @@ describe("loadCustomerCleanupContext", () => {
       "workspaces/alice/projects/p1": {
         slug: "ignored-derivation",
         giteaRepoName: "alice-proj-canonical-name",
+        ownerUid: "uid-alice",
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.repoNames).toContain("alice-proj-canonical-name");
@@ -184,15 +205,15 @@ describe("loadCustomerCleanupContext", () => {
   });
 
   it("falls back to project doc id when neither slug nor projectSlug nor giteaRepoName is set", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": {
         username: "alice",
         provisioning: { openclaw: { slug: "alice" } },
       },
-      "workspaces/alice/projects/legacy-doc-id": {},
+      "workspaces/alice/projects/legacy-doc-id": { ownerUid: "uid-alice" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.repoNames).toEqual(["workspace", "system_config", "legacy-doc-id"]);
@@ -200,59 +221,77 @@ describe("loadCustomerCleanupContext", () => {
 
   it("surfaces projectSlugs[] directly from project docs (PR #3 — drives Firebase Hosting deletes)", async () => {
 
-const db = buildDb({
+const deps = contextDeps({
       "users/uid-alice": {
         username: "alice",
         provisioning: { openclaw: { slug: "alice" } },
       },
-      "workspaces/alice/projects/p1": { slug: "blog" },
-      "workspaces/alice/projects/p2": { projectSlug: "shop" },
-      "workspaces/alice/projects/legacy-id": {},
+      "workspaces/alice/projects/blog": { slug: "blog", ownerUid: "uid-alice" },
+      "workspaces/alice/projects/shop": { projectSlug: "shop", ownerUid: "uid-alice" },
+      "workspaces/alice/projects/legacy-id": { ownerUid: "uid-alice" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     
     expect(ctx?.projectSlugs).toEqual(["blog", "legacy-id", "shop"]);
   });
 
+  it("names projects by their document id rather than a diverging legacy slug field", async () => {
+    const deps = contextDeps({
+      "users/uid-alice": { username: "alice", provisioning: { openclaw: { slug: "alice" } } },
+      "workspaces/alice/projects/blog": { slug: "legacy-blog", projectSlug: "legacy-blog", ownerUid: "uid-alice" },
+    });
+    const ctx = await loadCustomerCleanupContext(deps, "uid-alice");
+    expect(ctx?.projectSlugs).toEqual(["blog"]);
+    expect(ctx?.repoNames).toEqual(["workspace", "system_config", "blog"]);
+  });
+
+  it("fails context capture when a workspace project record has no owner", async () => {
+    const deps = contextDeps({
+      "users/uid-alice": { username: "alice", provisioning: { openclaw: { slug: "alice" } } },
+      "workspaces/alice/projects/blog": { slug: "blog" },
+    });
+    await expect(loadCustomerCleanupContext(deps, "uid-alice")).rejects.toBeInstanceOf(MalformedRecordError);
+  });
+
   it("returns projectSlugs: [] when the customer has no projects", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-bob": { username: "bob", provisioning: { openclaw: { slug: "bob" } } },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-bob",
     );
     expect(ctx?.projectSlugs).toEqual([]);
   });
 
   it("returns projectSlugs: [] when the customer has no slug (no workspace path to scan)", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-bare": { email: "bare@example.com" },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-bare",
     );
     expect(ctx?.projectSlugs).toEqual([]);
   });
 
   it("resolves Mattermost IDs from user, workspace, agents, and admin channel docs", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": {
         username: "alice",
         email: "alice@example.com",
         provisioning: { openclaw: { slug: "alice", gatewayId: "gw-test" } },
         mattermost: { userId: "mm-u-1" },
       },
-      "workspaces/alice": { mattermost: { teamId: "team-1" } },
+      "workspaces/alice": { id: "alice", ownerUid: "uid-alice", mattermost: { teamId: "team-1" } },
       "agents/uid-alice": { mattermost: { userId: "mm-coach-1" } },
       "workspaces/alice/channels/admin": { mattermost: { channelId: "mm-c-admin" } },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx).toMatchObject({
@@ -268,7 +307,7 @@ const db = buildDb({
   });
 
   it("captures every persisted model credential secret name before deletion", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": { username: "alice" },
       "users/uid-alice/system/config": {
         modelCredential: { secretName: "untrusted-firestore-secret-name" },
@@ -281,7 +320,7 @@ const db = buildDb({
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.credentialSecretNames).toEqual([
@@ -297,10 +336,10 @@ const db = buildDb({
   });
 
   it("captures deterministic BYOS secret names even when a callback has not persisted its integration", async () => {
-    const db = buildDb({ "users/uid-alice": { username: "alice" } });
+    const deps = contextDeps({ "users/uid-alice": { username: "alice" } });
 
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
 
@@ -317,7 +356,7 @@ const db = buildDb({
   });
 
   it("captures every project-agent Mattermost user and credential document before suspension", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": { username: "alice" },
       "users/uid-alice/secrets/projectAgentMattermost-orbit": {
         mmUserId: "mm-project-orbit",
@@ -332,7 +371,7 @@ const db = buildDb({
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.projectAgentMmUserIds).toEqual(["mm-project-labs", "mm-project-orbit"]);
@@ -343,7 +382,7 @@ const db = buildDb({
   });
 
   it("captures artifact object IDs owned by the user or their workspace", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": { username: "alice" },
       "chatArtifactJobs/aaa": {
         artifactId: "a".repeat(64),
@@ -362,21 +401,21 @@ const db = buildDb({
       },
     });
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
     expect(ctx?.chatArtifactIds).toEqual(["a".repeat(64), "b".repeat(64)]);
   });
 
   it("captures every agent import staging prefix owned by the user", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": { username: "alice" },
       "agentImports/import-owned": { uid: "uid-alice" },
       "agentImports/import-other": { uid: "uid-other" },
     });
 
     const ctx = await loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     );
 
@@ -384,14 +423,14 @@ const db = buildDb({
   });
 
   it("fails context capture when a connected credential leaf is malformed", async () => {
-    const db = buildDb({
+    const deps = contextDeps({
       "users/uid-alice": { username: "alice" },
       "users/uid-alice/integrations/byosub": {
         providers: { openai: { connected: true, status: "connected" } },
       },
     });
     await expect(loadCustomerCleanupContext(
-      { db: db as unknown as Parameters<typeof loadCustomerCleanupContext>[0]["db"] },
+      deps,
       "uid-alice",
     )).rejects.toThrow(/malformed provider leaf/);
   });

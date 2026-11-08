@@ -1,5 +1,5 @@
-import type { Firestore, Transaction } from 'firebase-admin/firestore';
-import type { Operation } from '@octogee/shared/types/glm';
+import type { PlatformStateStore, PlatformStateTransaction } from '@octogee/core/platform-state';
+import type { Operation, SchedulerHandoffState } from '@octogee/shared/types/glm';
 import type { ReleasePayload } from '@octogee/shared/types/gateway-releases';
 import type { OperationContext } from './operation-router.js';
 import type { HelmRunner } from './helm-runner.js';
@@ -12,7 +12,7 @@ import { heldBuilderRollbackTemplatesMatch, readBuilderActivationRollRecovery, r
 class BuilderActivationRollbackUnavailableError extends Error {}
 
 interface OwnerDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   namespace: string;
   helm: HelmRunner;
   chartFingerprint: string;
@@ -56,23 +56,26 @@ function predecessorTemplate(objects: unknown, gatewayId: string, retainedPodUid
   return { predecessorTemplate: record(predecessor.spec).template, installedTemplate: record(deployment.spec).template };
 }
 
-async function assertOwnedRoll(deps: OwnerDeps, op: Operation, ctx: OperationContext, transaction?: Transaction): Promise<void> {
+async function assertOwnedRoll(op: Operation, ctx: OperationContext, transaction?: PlatformStateTransaction): Promise<void> {
   if (!ctx.assertActiveClaim) throw new Error('Held Builder rollback requires its current rollout claim');
   if (!transaction) { await ctx.assertActiveClaim(); return; }
-  const snapshot = await transaction.get(deps.db.doc(`glmOperations/${op.id}`));
-  const current = snapshot.data();
+  const current = await transaction.journal.operations.get(op.id);
   if (current?.kind !== 'rollout' || current.status !== 'running' || current.startedAt !== op.startedAt || current.cancellationRequestedAt !== undefined ||
       current.input?.gatewayId !== op.input.gatewayId || current.input?.targetRelease !== op.input.targetRelease) throw new Error('Held Builder rollback rollout claim changed');
 }
 
+function withTargetRollback(handoff: SchedulerHandoffState | undefined, proof: BuilderActivationTargetRollbackProof): SchedulerHandoffState {
+  if (!handoff?.sourceRecovery) throw new Error('Builder rollback recovery changed before journaling');
+  return { ...handoff, sourceRecovery: { ...handoff.sourceRecovery, targetRollback: proof } };
+}
+
 async function recordRollbackProof(deps: OwnerDeps, op: Operation, ctx: OperationContext, proof: BuilderActivationTargetRollbackProof): Promise<void> {
-  await deps.db.runTransaction(async transaction => {
-    await assertOwnedRoll(deps, op, ctx, transaction);
-    const current = await readBuilderActivationRollRecovery({ db: deps.db, gatewayId: proof.targetGatewayId, transaction });
+  await deps.store.transaction({ label: 'builder-activation-roll-recovery.record-proof' }, async transaction => {
+    await assertOwnedRoll(op, ctx, transaction);
+    const current = await readBuilderActivationRollRecovery({ state: transaction, gatewayId: proof.targetGatewayId });
     if (!current || !sameRecovery(current.recovery, proof)) throw new Error('Builder rollback recovery changed before journaling');
-    transaction.update(deps.db.doc(`glmOperations/${proof.operationId}`), {
-      'schedulerHandoff.sourceRecovery.targetRollback': proof,
-    });
+    await transaction.journal.operations.patch(proof.operationId, { schedulerHandoff: withTargetRollback(current.operation.schedulerHandoff, proof) },
+      { revision: current.operation.revision });
   });
 }
 
@@ -84,10 +87,10 @@ async function readClusterRollbackRelease(
   deps: OwnerDeps, op: Operation, ctx: OperationContext, expected: BuilderActivationRollRecovery,
 ): Promise<number | null> {
   const gatewayId = expected.targetGatewayId;
-  const runtime = (await deps.db.doc(`glmGateways/${gatewayId}`).get()).data();
+  const runtime = await deps.store.fleetRegistry.get(gatewayId);
   if (runtime?.runtime === 'gce-vm') {
-    const current = await readBuilderActivationRollRecovery({ db: deps.db, gatewayId });
-    await assertOwnedRoll(deps, op, ctx);
+    const current = await readBuilderActivationRollRecovery({ state: deps.store, gatewayId });
+    await assertOwnedRoll(op, ctx);
     if (!sameRecovery(expected, current?.recovery)) return null;
     // A held VM cannot adopt this release, and only source recovery owns its
     // cleanup. End this roll's claim rather than keeping recovery serialized.
@@ -98,8 +101,8 @@ async function readClusterRollbackRelease(
 
 async function rollbackOwnedTarget(deps: OwnerDeps, op: Operation, ctx: OperationContext): Promise<BuilderActivationTargetRollbackProof | null> {
   const gatewayId = String(op.input.gatewayId);
-  await assertOwnedRoll(deps, op, ctx);
-  const initial = await readBuilderActivationRollRecovery({ db: deps.db, gatewayId });
+  await assertOwnedRoll(op, ctx);
+  const initial = await readBuilderActivationRollRecovery({ state: deps.store, gatewayId });
   if (!initial || initial.recovery.latestRelease !== op.input.targetRelease || typeof op.startedAt !== 'number') return null;
   const installedRelease = await readClusterRollbackRelease(deps, op, ctx, initial.recovery);
   if (installedRelease === null) return null;
@@ -119,14 +122,14 @@ async function rollbackOwnedTarget(deps: OwnerDeps, op: Operation, ctx: Operatio
   const liveImage = `${liveGatewayImage.imageRepository}:${liveGatewayImage.imageTag}`;
   const installedImage = `${installedGatewayImage.imageRepository}:${installedGatewayImage.imageTag}`;
   const assertCurrent = async () => {
-    await assertOwnedRoll(deps, op, ctx);
-    const current = await readBuilderActivationRollRecovery({ db: deps.db, gatewayId });
+    await assertOwnedRoll(op, ctx);
+    const current = await readBuilderActivationRollRecovery({ state: deps.store, gatewayId });
     if (!sameRecovery(initial.recovery, current?.recovery)) throw new Error('Builder rollback pending recovery authority changed');
     return current!;
   };
   return rollbackHeldBuilderActivationTarget({ liveImage, installedImage, rollOperationId: op.id, rollClaimStartedAt: op.startedAt,
     timeoutMs: 120_000, deps: {
-      assertRollClaim: () => assertOwnedRoll(deps, op, ctx),
+      assertRollClaim: () => assertOwnedRoll(op, ctx),
       readCurrent: async () => (await assertCurrent()).recovery,
       observe: async () => {
         const snapshot = await deps.listPods(gatewayId);
@@ -178,7 +181,7 @@ export function createBuilderActivationRollRecoveryOwner(deps: OwnerDeps) {
     await deps.runExclusive(async () => {
       try { proof = await rollbackOwnedTarget(deps, op, ctx); } catch (error) {
         if (!(error instanceof BuilderActivationRollbackUnavailableError)) throw error;
-        await assertOwnedRoll(deps, op, ctx);
+        await assertOwnedRoll(op, ctx);
         await ctx.reportStep({ name: 'rollback-unadmitted-target', status: 'failed', completedAt: deps.now(), error: error.message });
         deps.log(`[rollout] ${String(op.input.gatewayId)} retained-target rollback unavailable; continuing ordinary target repair: ${error.message}`);
       }

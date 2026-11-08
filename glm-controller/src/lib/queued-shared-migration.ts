@@ -1,7 +1,9 @@
 import { readSchedulerMigrationIdentity } from "@octogee/shared/types/glm";
-import type { DocumentData, Firestore, Transaction } from 'firebase-admin/firestore';
-import { customerRuntimeMutationFenced } from '@octogee/shared/types/gateway-releases';
+import type { DocumentData } from 'firebase-admin/firestore';
+import type { AssignmentDoc } from '@octogee/shared/types/gateway-releases';
 import { readWorkspaceMigrationMarker } from '@octogee/shared/types/workspace-migration';
+import { builderRuntimeMutationFenced } from '@octogee/core/gateway-retirement-claim';
+import type { BuilderRecord, PlatformStateRepositories, Stored } from '@octogee/core/platform-state';
 import { MAX_OPERATION_ATTEMPT_HISTORY } from '../operation-retry.js';
 
 function positiveInteger(value: unknown): boolean {
@@ -58,13 +60,14 @@ function queuedSharedMigrationBeforeTransport(row: DocumentData, id: string): bo
   return queuedSharedScope(row) && unclaimedRetry(row) && handoffMatches(row, id) && untouchedTransportHistory(row);
 }
 
-function sourceOwnerMatches(row: DocumentData, id: string, owner: DocumentData | undefined): boolean {
-  const openclaw = owner?.provisioning?.openclaw, marker = readWorkspaceMigrationMarker(openclaw);
-  return !customerRuntimeMutationFenced(owner) && openclaw?.gatewayId === row.input.fromGatewayId &&
-    ['complete', 'provisioning'].includes(openclaw.status) && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
+function builderOwnerMatches(row: DocumentData, id: string, owner: Stored<BuilderRecord> | null): boolean {
+  if (!owner) return false;
+  const marker = readWorkspaceMigrationMarker({ migration: owner.fences.migration });
+  return !builderRuntimeMutationFenced(owner) && owner.gateway?.gatewayId === row.input.fromGatewayId &&
+    ['complete', 'provisioning'].includes(owner.openclaw.status ?? '') && marker?.operationId === id && marker.state === 'preparing' && marker.phase === 'preparing';
 }
 
-function sourceAssignmentMatches(row: DocumentData, id: string, assignment: DocumentData | undefined): boolean {
+function sourceAssignmentMatches(row: DocumentData, id: string, assignment: DocumentData | AssignmentDoc | null | undefined): boolean {
   if (!assignment) return false;
   return assignment.uid === row.input.uid && assignment.slug === row.input.builderSlug && assignment.gatewayId === row.input.fromGatewayId &&
     assignment.state === 'serving' && Number.isSafeInteger(assignment.epoch) && assignment.epoch >= 0 &&
@@ -72,14 +75,13 @@ function sourceAssignmentMatches(row: DocumentData, id: string, assignment: Docu
     (assignment.updatedByOperationId == null || typeof assignment.updatedByOperationId === 'string' && assignment.updatedByOperationId.length > 0);
 }
 
-export async function queuedSharedMigrationOwnsSource(
-  db: Firestore, tx: Transaction, row: DocumentData, id: string,
+export async function queuedSharedMigrationOwnsSourceInStore(
+  state: Pick<PlatformStateRepositories, 'builders' | 'gateways'>, row: DocumentData, id: string,
 ): Promise<boolean> {
   if (!queuedSharedMigrationBeforeTransport(row, id)) return false;
   const { uid, fromGatewayId, toGatewayId } = row.input;
-  const [user, source, target] = await Promise.all([
-    tx.get(db.doc(`users/${uid}`)), tx.get(db.doc(`gateways/${fromGatewayId}/assignments/${uid}`)),
-    tx.get(db.doc(`gateways/${toGatewayId}/assignments/${uid}`)),
+  const [owner, source, target] = await Promise.all([
+    state.builders.records.get(uid), state.gateways.assignments.get(fromGatewayId, uid), state.gateways.assignments.get(toGatewayId, uid),
   ]);
-  return !target.exists && sourceOwnerMatches(row, id, user.data()) && sourceAssignmentMatches(row, id, source.data());
+  return target === null && builderOwnerMatches(row, id, owner) && sourceAssignmentMatches(row, id, source);
 }

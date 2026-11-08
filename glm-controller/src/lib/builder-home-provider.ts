@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import type { BuilderHomeLocation, BuilderHomeMigrationDeps, BuilderHomeOwner } from "../builder-home-migration.js";
 import type { ComputeRequest, GatewayVmClient } from "./compute-vm.js";
 import { PARKED_STATUSES, STOPPED_STATUSES } from "../vm-computer-lifecycle.js";
@@ -11,7 +11,7 @@ interface ComputeHomeResource {
   items?: Record<string, { disks?: Array<{ selfLink?: string; name?: string }> }>;
 }
 interface HomeProviderDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   projectId: string;
   environment: string;
   request: ComputeRequest;
@@ -19,7 +19,7 @@ interface HomeProviderDeps {
   journal: <T>(what: string, uid: string, action: () => Promise<T>) => Promise<T>;
 }
 type ObservedHomeDisk = CopyHomeDisk & { users?: string[]; ownerUid?: string };
-type LegacyComputer = NonNullable<NonNullable<BuilderHomeOwner["provisioning"]>["computer"]>;
+type LegacyComputer = NonNullable<BuilderHomeOwner["computer"]>;
 
 function assertLegacyInstance(instance: ComputeHomeResource, uid: string, recorded: LegacyComputer, environment: string): void {
   if (![instance.id === recorded.instanceId, instance.status === "TERMINATED",
@@ -108,11 +108,11 @@ class BuilderHomeProvider {
       computer: { name: recorded.instanceName, id: recorded.instanceId, zone: recorded.zone } };
   }
   async inventory(uid: string, owner: BuilderHomeOwner): Promise<BuilderHomeLocation | null> {
-    const migration = owner.provisioning?.homeMigration;
+    const migration = owner.homeMigration;
     if (migration?.phase === "adopting") return migration.source;
-    const primary = owner.provisioning?.homeStorage;
-    const home = owner.provisioning?.homeDisk;
-    const computer = owner.provisioning?.computer;
+    const primary = owner.homeStorage;
+    const home = owner.homeDisk;
+    const computer = owner.computer;
     if (primary) {
       assertNativeHome(primary);
       return this.nativeInventory(uid, primary.disk);
@@ -134,8 +134,8 @@ class BuilderHomeProvider {
       if (attached.autoDelete !== false) throw new Error("adopted home has auto-delete enabled");
       return true;
     }
-    const owner = (await this.deps.db.collection("users").doc(uid).get()).data() as BuilderHomeOwner | undefined;
-    if (old.id !== owner?.provisioning?.homeDisk?.id || attached.autoDelete !== false) throw new Error("retained computer home identity changed");
+    const owner = await this.deps.store.builders.records.get(uid);
+    if (old.id !== owner?.home.homeDisk?.id || attached.autoDelete !== false) throw new Error("retained computer home identity changed");
     await this.deps.journal("detach-retained-builder-home", uid, () => this.compute(`${url}/detachDisk?deviceName=octogee-home`, "POST"));
     return false;
   }

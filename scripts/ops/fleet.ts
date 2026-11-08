@@ -7,37 +7,37 @@ import {
   type ServiceAccount,
 } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  type GatewayStatus,
-  GATEWAYS_COLLECTION,
-} from "../../shared/types/fleet-controller.js";
-import {
-  GLM_OPERATIONS_COLLECTION,
   isValidGatewayId,
   type GatewayDesiredStatus,
   type GatewayProfile,
 } from "../../shared/types/glm.js";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
+import { projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
 import {
   readGatewayAuthorizationInStore,
   readGatewayRuntimeHeartbeat,
   type GatewayStateReader,
 } from "@octogee/core/gateway-live-release";
+import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import {
   runNormalFleetMutation,
   type NormalFleetMutationInput,
 } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, type PlatformStateStore } from "@octogee/core/platform-state";
+import {
+  createFirestorePlatformStateStore,
+  type BuilderRecord,
+  type PlatformStateStore,
+  type Stored,
+} from "@octogee/core/platform-state";
 import {
   enqueueOperation,
   awaitOperation,
-  type OperationsDb,
 } from "../lib/glm-operations.js";
 import { readReleaseStatus, summarizeReleaseStatus, type ReleaseStatusSnapshot } from "../lib/release-status.js";
 import { readForceMigrationPlan, readForceMigrationSource } from "./fleet-force-migration.js";
@@ -52,7 +52,7 @@ import {
 } from "../lib/admin-fleet-client.js";
 
 import { runDesktopImagePublication } from "../lib/desktop-image-publication.js";
-import { addCustomerAssignmentRefusal } from "../lib/fleet-add-customer.js";
+import { addCustomerAssignmentRefusal, commitAddCustomerPlacement } from "../lib/fleet-add-customer.js";
 import { runFleetLogsCommand } from "../lib/fleet-logs-command.js";
 import { requireOperatorEmail } from "../lib/operator-email.js";
 import { resolveForcedGatewayRestart } from "./fleet-resolve-forced-restart.js";
@@ -773,7 +773,7 @@ export type ForcedGatewayRestartMutationRunner = <T>(
 ) => Promise<T>;
 
 export interface ForcedGatewayRestartInput {
-  db: Firestore;
+  store: PlatformStateStore;
   kubeContext: string;
   namespace: string;
   gatewayId: string;
@@ -873,83 +873,68 @@ function runForceRestartKubectl(
   return result.stdout;
 }
 
+function isPlainTarget(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 async function recordForcedGatewayRestartPod(
-  db: Firestore,
+  store: PlatformStateStore,
   claim: { auditId: string; claimId: string },
   gatewayId: string,
   pod: ForceRestartPod,
 ): Promise<void> {
-  const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
-  await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(auditRef);
-    const data = snapshot.data() as Record<string, unknown> | undefined;
-    if (
-      !snapshot.exists ||
-      data?.status !== "in-progress" ||
-      data.actionClaimId !== claim.claimId ||
-      data.target === null ||
-      typeof data.target !== "object" ||
-      Array.isArray(data.target)
-    ) {
+  await store.transaction({ label: "fleet.force-restart.record-pod" }, async (tx) => {
+    const audit = await tx.journal.audits.get(claim.auditId);
+    if (audit?.status !== "in-progress" || audit.actionClaimId !== claim.claimId || !isPlainTarget(audit.target)) {
       throw new Error(`force restart audit ${claim.auditId} is not owned by this action`);
     }
-    transaction.update(auditRef, {
-      target: {
-        ...(data.target as Record<string, unknown>),
-        gatewayId,
-        podName: pod.name,
-        podUid: pod.uid,
-      },
+    await tx.journal.audits.patch(claim.auditId, {
+      target: { ...audit.target, gatewayId, podName: pod.name, podUid: pod.uid },
     });
   });
 }
 
 async function assertForcedGatewayRestartDeleteFence(
-  db: Firestore,
+  store: PlatformStateStore,
   claim: { auditId: string; claimId: string },
   gatewayId: string,
   pod: ForceRestartPod,
 ): Promise<void> {
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(gatewayId);
-  const auditRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(claim.auditId);
-  await db.runTransaction(async (transaction) => {
+  await store.transaction({ label: "fleet.force-restart.delete-fence", readOnly: true }, async (tx) => {
     const [gateway, audit] = await Promise.all([
-      transaction.get(gatewayRef),
-      transaction.get(auditRef),
+      tx.gateways.roots.get(gatewayId),
+      tx.journal.audits.get(claim.auditId),
     ]);
-    assertBuilderForceRestart(gateway.data());
-    const durableGateway = projectGatewayDesiredRootForGateway(
-      gateway.exists ? gateway.data() : undefined,
-      gatewayId,
-    );
+    assertBuilderForceRestart(gateway);
+    const durableGateway = gateway === null ? null : projectGatewayDesiredRootForGateway(withoutRevision(gateway), gatewayId);
     if (!durableGateway) {
       throw new Error(`gateway ${gatewayId} has no valid durable root configuration`);
     }
     if (durableGateway.desiredStatus === "retired") {
       throw new Error(`cannot force restart a retired gateway: ${gatewayId}`);
     }
-    const data = audit.data() as Record<string, unknown> | undefined;
-    const target = data?.target;
-    const targetRecord = target !== null && typeof target === "object" && !Array.isArray(target)
-      ? target as Record<string, unknown>
-      : null;
-    const targetKeys = targetRecord ? Object.keys(targetRecord).sort() : [];
+    const target = audit?.target;
+    const targetKeys = isPlainTarget(target) ? Object.keys(target).sort() : [];
     if (
-      !audit.exists ||
-      data?.status !== "in-progress" ||
-      data.actionClaimId !== claim.claimId ||
-      targetRecord === null ||
+      audit?.status !== "in-progress" ||
+      audit.actionClaimId !== claim.claimId ||
+      !isPlainTarget(target) ||
       targetKeys.join(",") !== "gatewayId,podName,podUid" ||
-      targetRecord.gatewayId !== gatewayId ||
-      targetRecord.podName !== pod.name ||
-      targetRecord.podUid !== pod.uid
+      target.gatewayId !== gatewayId ||
+      target.podName !== pod.name ||
+      target.podUid !== pod.uid
     ) {
       throw new Error(`force restart audit ${claim.auditId} is not owned by this action`);
     }
   });
 }
 
-function assertBuilderForceRestart(root: Record<string, unknown> | undefined): void {
+function withoutRevision<T extends { readonly revision: unknown }>(record: T): Omit<T, "revision"> {
+  const { revision: _revision, ...rest } = record;
+  return rest;
+}
+
+function assertBuilderForceRestart(root: { readonly gatewayClass?: unknown } | null): void {
   if (root?.gatewayClass !== "builder") {
     throw new Error("Shared gateways cannot be force restarted; a dedicated Builder gateway is required");
   }
@@ -969,13 +954,10 @@ function forceRestartKubectlArgs(input: {
 export async function runForcedGatewayRestart(
   input: ForcedGatewayRestartInput,
 ): Promise<{ auditId: string; podName: string; podUid: string }> {
-  assertBuilderForceRestart((await input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId).get()).data());
+  assertBuilderForceRestart(await input.store.gateways.roots.get(input.gatewayId));
   const runKubectl = input.runKubectl ?? localFleetKubectl;
   const runMutation: ForcedGatewayRestartMutationRunner = input.runMutation ??
-    ((mutation) => runNormalFleetMutation(
-      createFirestorePlatformStateStore({ db: input.db }),
-      mutation,
-    ));
+    ((mutation) => runNormalFleetMutation(input.store, mutation));
   return runMutation({
     actor: "operator",
     forced: true,
@@ -1000,7 +982,7 @@ export async function runForcedGatewayRestart(
         ]),
         input.gatewayId,
       );
-      await recordForcedGatewayRestartPod(input.db, claim, input.gatewayId, pod);
+      await recordForcedGatewayRestartPod(input.store, claim, input.gatewayId, pod);
       assertForceRestartPodUnchanged(
         runForceRestartKubectl(runKubectl, "get pod", [
           ...base,
@@ -1010,7 +992,7 @@ export async function runForcedGatewayRestart(
         pod,
       );
       await assertForcedGatewayRestartDeleteFence(
-        input.db,
+        input.store,
         claim,
         input.gatewayId,
         pod,
@@ -1148,7 +1130,7 @@ function fleetOperatorUid(): Promise<string> {
   resolvedOperatorUid ??= resolveFleetOperatorUid(process.env, {
     getUser: (uid) => getAuth().getUser(uid),
     getUserByEmail: (email) => getAuth().getUserByEmail(email),
-    readRole: async (uid) => (await db.doc(`users/${uid}/system/config`).get()).get("role"),
+    readRole: async (uid) => (await platformState.builders.records.get(uid))?.role ?? null,
   });
   return resolvedOperatorUid;
 }
@@ -1231,19 +1213,6 @@ export async function listFleetGatewayRuntimes(
   })));
 }
 
-interface UserDoc {
-  username?: string;
-  email?: string;
-  provisioning?: {
-    openclaw?: {
-      slug?: string;
-      status?: GatewayStatus | string;
-      gatewayId?: string;
-      gatewayProfile?: unknown;
-    };
-  };
-}
-
 interface PodInfo {
   name: string;
   phase: string;
@@ -1321,20 +1290,11 @@ function table(rows: Array<Record<string, string | number>>): string {
   return [header, sep, ...body].join("\n");
 }
 
-async function findUserBySlug(slug: string): Promise<
-  { uid: string; data: UserDoc } | null
-> {
-  let snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.slug", "==", slug)
-    .limit(1)
-    .get();
-  if (snap.empty) {
-    snap = await db.collection("users").where("username", "==", slug).limit(1).get();
-  }
-  if (snap.empty) return null;
-  const doc = snap.docs[0];
-  return { uid: doc.id, data: doc.data() as UserDoc };
+async function findBuilderBySlug(slug: string): Promise<Stored<BuilderRecord> | null> {
+  const builder = await platformState.builders.records.findBySlug(slug);
+  if (builder !== null) return builder;
+  const alias = await db.collection("users").where("username", "==", slug).limit(1).get();
+  return alias.empty ? null : platformState.builders.records.get(alias.docs[0].id);
 }
 
 export function retirementFinished(entry: FleetGatewayRuntimeEntry, podNames: readonly string[]): boolean {
@@ -1394,18 +1354,16 @@ async function lsCustomers(): Promise<void> {
     }
   }
 
-  let q: FirebaseFirestore.Query = db.collection("users");
-  if (filter) {
-    q = q.where("provisioning.openclaw.gatewayId", "==", filter);
-  }
-  const usersSnap = await q.get();
+  const builders = filter
+    ? await platformState.builders.records.listByGateway(filter)
+    : await platformState.builders.records.listAll();
+  const accounts = await firestoreBuilderAccountReader(db).getMany(builders.map((builder) => builder.uid));
 
-  const rows = usersSnap.docs
-    .map((d) => {
-      const u = d.data() as UserDoc;
-      const slug = u.provisioning?.openclaw?.slug ?? u.username ?? "?";
-      const gw = u.provisioning?.openclaw?.gatewayId ?? "-";
-      const status = u.provisioning?.openclaw?.status ?? "-";
+  const rows = builders
+    .map((builder) => {
+      const slug = builder.slug ?? "?";
+      const gw = builder.gateway?.gatewayId ?? "-";
+      const status = builder.openclaw.status ?? "-";
       const onGateway = gw !== "-" && gwMounted[gw]?.has(slug);
       const drift =
         gw !== "-" && status === "complete"
@@ -1415,7 +1373,7 @@ async function lsCustomers(): Promise<void> {
           : "-";
       return {
         slug,
-        username: u.username ?? "-",
+        username: accounts.get(builder.uid)?.username ?? "-",
         gatewayId: gw,
         status,
         drift,
@@ -1430,14 +1388,9 @@ async function lsCustomers(): Promise<void> {
   for (const [gwId, mountedSet] of Object.entries(gwMounted)) {
     if (filter && gwId !== filter) continue;
     if (mountedSet.size === 0) continue;
-    const assignedSnap = await db
-      .collection("users")
-      .where("provisioning.openclaw.gatewayId", "==", gwId)
-      .get();
+    const assigned = await platformState.builders.records.listByGateway(gwId);
     const assignedSlugs = new Set(
-      assignedSnap.docs
-        .map((d) => (d.data() as UserDoc).provisioning?.openclaw?.slug ?? null)
-        .filter((s): s is string => s !== null),
+      assigned.map((builder) => builder.slug).filter((s): s is string => s !== null),
     );
     for (const slug of mountedSet) {
       if (!assignedSlugs.has(slug)) {
@@ -1446,53 +1399,55 @@ async function lsCustomers(): Promise<void> {
     }
   }
   if (orphans.length > 0) {
-    console.log("\n" + yellow(bold("ORPHANS")) + dim("  in gateway.mountedCustomers but not assigned to that gateway in Firestore"));
+    console.log("\n" + yellow(bold("ORPHANS")) + dim("  in gateway.mountedCustomers but not assigned to that gateway"));
     console.log(table(orphans));
   }
 }
 
 async function inspectCustomer(slug: string): Promise<void> {
-  const user = await findUserBySlug(slug);
+  const user = await findBuilderBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
-  const oc = user.data.provisioning?.openclaw ?? {};
+  const account = await firestoreBuilderAccountReader(db).get(user.uid);
+  const gatewayId = user.gateway?.gatewayId;
+  const openclawStatus = user.openclaw.status;
   console.log(bold(`USER ${slug}`) + dim(`  uid=${user.uid}`));
   console.log(table([
     {
       field: "username",
-      value: user.data.username ?? "-",
+      value: account?.username ?? "-",
     },
     {
       field: "email",
-      value: user.data.email ?? "-",
+      value: account?.email ?? "-",
     },
     {
       field: "openclaw.status",
-      value: oc.status ?? "-",
+      value: openclawStatus ?? "-",
     },
     {
       field: "openclaw.gatewayId",
-      value: oc.gatewayId ?? "-",
+      value: gatewayId ?? "-",
     },
   ]));
 
-  if (!oc.gatewayId) {
+  if (!gatewayId) {
     console.log("\n" + yellow(`No gateway assigned — placement hasn't run; check config/orchestrator.`));
     return;
   }
 
-  const runtime = await readFleetGatewayRuntime(platformState, oc.gatewayId);
+  const runtime = await readFleetGatewayRuntime(platformState, gatewayId);
   if (!runtime) {
-    console.log("\n" + red(`${CROSS} gateways/${oc.gatewayId} has no valid durable root configuration.`));
+    console.log("\n" + red(`${CROSS} gateways/${gatewayId} has no valid durable root configuration.`));
     return;
   }
   const gw = runtime.heartbeat;
   const mounted = (gw.mountedCustomers ?? []).includes(slug);
   const lastErrorForSlug =
     gw.lastError && gw.lastError.slug === slug ? gw.lastError : null;
-  console.log("\n" + bold(`GATEWAY ${oc.gatewayId}`));
+  console.log("\n" + bold(`GATEWAY ${gatewayId}`));
   console.log(table([
     { field: "status", value: gw.status ?? "-" },
     { field: "heartbeat", value: ts(gw.lastHeartbeatAt) },
@@ -1506,11 +1461,11 @@ async function inspectCustomer(slug: string): Promise<void> {
   ]));
 
 console.log("\n" + bold("DRIFT"));
-  if (oc.status === "complete" && !mounted) {
+  if (openclawStatus === "complete" && !mounted) {
     console.log(red(`${CROSS} NOT MOUNTED`) + " — assigned + complete but absent from mountedCustomers.");
     console.log(dim(`  The gateway reconcile re-checks desired−observed every ~15s and self-heals — no kick needed.`));
     console.log(dim(`  If it persists, check the gateway pod's [reconcile] logs${lastErrorForSlug ? " + the lastError above" : ""}.`));
-  } else if (oc.status !== "complete") {
+  } else if (openclawStatus !== "complete") {
     console.log(yellow("·") + " upstream provisioning incomplete; not a fleet issue.");
   } else {
     console.log(green(`${CHECK} healthy`) + " — mounted on the assigned gateway.");
@@ -1577,7 +1532,7 @@ async function runFleetGatewayRestart(): Promise<void> {
   const restart = resolveFleetGatewayRestart(args);
   if (restart.resolveForceAuditId) {
     const result = await resolveForcedGatewayRestart({
-      db, gatewayId: restart.gatewayId, forceAuditId: restart.resolveForceAuditId,
+      store: platformState, gatewayId: restart.gatewayId, forceAuditId: restart.resolveForceAuditId,
       kubeContext: KUBE_CONTEXT, namespace: KUBE_NS, runKubectl: localFleetKubectl,
       apply: restart.apply,
       ...(restart.idempotencyKey ? { idempotencyKey: restart.idempotencyKey } : {}),
@@ -1586,7 +1541,7 @@ async function runFleetGatewayRestart(): Promise<void> {
     return;
   }
   if (!restart.force) return runFleetGatewayMutation(restart.apply);
-  assertBuilderForceRestart((await db.collection(GATEWAYS_COLLECTION).doc(restart.gatewayId).get()).data());
+  assertBuilderForceRestart(await platformState.gateways.roots.get(restart.gatewayId));
   console.log(bold(`GW FORCE RESTART ${restart.gatewayId.toUpperCase()}`));
   console.log(dim(`  delete exactly one pod selected by gateway-instance=${restart.gatewayId}`));
   if (!restart.apply) {
@@ -1594,7 +1549,7 @@ async function runFleetGatewayRestart(): Promise<void> {
     return;
   }
   const result = await runForcedGatewayRestart({
-    db,
+    store: platformState,
     kubeContext: KUBE_CONTEXT,
     namespace: KUBE_NS,
     gatewayId: restart.gatewayId,
@@ -1625,7 +1580,7 @@ export function releaseStatusRows(status: ReleaseStatusSnapshot): Array<Record<s
 }
 
 async function releaseStatus(): Promise<void> {
-  const status = await readReleaseStatus(db);
+  const status = await readReleaseStatus(platformState);
   const summary = summarizeReleaseStatus(status);
   const defaultLabel = status.defaultGatewayId || (
     status.defaultSelection === "invalid" ? "(invalid)" : "(unconfigured)"
@@ -1642,7 +1597,7 @@ async function releaseStatus(): Promise<void> {
 }
 
 async function addCustomer(slug: string, gatewayId: string, apply: boolean): Promise<void> {
-  const user = await findUserBySlug(slug);
+  const user = await findBuilderBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
@@ -1664,33 +1619,20 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     console.error(dim(`  Refusing to assign — the customer would never get mounted.`));
     process.exit(1);
   }
-  const assignments = await db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).where("uid", "==", user.uid).get();
+  const assignments = await platformState.gateways.assignments.listForUid(user.uid);
+  const current = user.gateway?.gatewayId ?? null;
   const refusal = addCustomerAssignmentRefusal({
     targetGatewayId: gatewayId,
-    currentGatewayId: user.data.provisioning?.openclaw?.gatewayId ?? null,
-    assignmentGatewayIds: assignments.docs.map((doc) => doc.ref.parent.parent?.id ?? "(unknown)"),
+    currentGatewayId: current,
+    assignmentGatewayIds: assignments.map((assignment) => assignment.gatewayId),
   });
   if (refusal) {
     console.error(red(`${CROSS} ${refusal}`));
     process.exit(1);
   }
-  const current = user.data.provisioning?.openclaw?.gatewayId ?? null;
-  const currentProfile = normalizeGatewayProfile(user.data.provisioning?.openclaw?.gatewayProfile);
-  if (current === gatewayId) {
-    if (currentProfile !== gatewayProfile) {
-      console.log(yellow(`'${slug}' is already assigned to '${gatewayId}', but gatewayProfile is ${currentProfile}; repairing to ${gatewayProfile}.`));
-      if (apply) {
-        await db.collection("users").doc(user.uid).update({
-          "provisioning.openclaw.gatewayProfile": gatewayProfile,
-          "provisioning.openclaw.controlUiEnabled": false,
-        });
-        console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
-        console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.controlUiEnabled = false`));
-      } else {
-        console.log(dim(`--- DRY RUN (re-run with --apply to repair gatewayProfile) ---`));
-      }
-      return;
-    }
+  const currentProfile = normalizeGatewayProfile(user.gateway?.gatewayProfile);
+  const assigned = assignments.some((assignment) => assignment.gatewayId === gatewayId);
+  if (current === gatewayId && assigned && currentProfile === gatewayProfile) {
     console.log(yellow(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`));
     return;
   }
@@ -1699,7 +1641,9 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
   console.log(`  uid                 ${user.uid}`);
   console.log(`  current gatewayId   ${current ?? dim("(none)")}`);
   console.log(`  new gatewayId       ${cyan(gatewayId)}`);
+  console.log(`  current profile     ${currentProfile}`);
   console.log(`  gateway profile     ${gatewayProfile}`);
+  console.log(`  assignment          ${assigned ? "present" : "created"}`);
   console.log(`  gateway status      ${gw.status}`);
 
   if (!apply) {
@@ -1707,14 +1651,18 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     return;
   }
 
-  await db.collection("users").doc(user.uid).update({
-    "provisioning.openclaw.gatewayId": gatewayId,
-    "provisioning.openclaw.gatewayProfile": gatewayProfile,
-    "provisioning.openclaw.controlUiEnabled": false,
+  const outcome = await commitAddCustomerPlacement(platformState, {
+    uid: user.uid,
+    gatewayId,
+    gatewayProfile,
+    now: Date.now(),
   });
-  console.log("\n" + green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayId = ${gatewayId}`));
-  console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.gatewayProfile = ${gatewayProfile}`));
-  console.log(green(`${CHECK} users/${user.uid}.provisioning.openclaw.controlUiEnabled = false`));
+  if (outcome === "unchanged") {
+    console.log(yellow(`'${slug}' is already assigned to '${gatewayId}'. Nothing to do.`));
+    return;
+  }
+  console.log("\n" + green(`${CHECK} ${user.uid} placed on ${gatewayId} (gatewayProfile ${gatewayProfile}, controlUiEnabled false)`));
+  if (outcome === "placed") console.log(green(`${CHECK} serving assignment on ${gatewayId} created in the same transaction`));
   console.log(dim(`  The ${gatewayId} reconcile loop mounts ${slug} within ~15s (desired−observed → ensure); watch gateways/${gatewayId}.mountedCustomers.`));
 }
 
@@ -1725,20 +1673,19 @@ async function migrateCustomerPlan(
   sourceTransferMode?: "retained-pod",
   forceOperationId?: string,
 ): Promise<void> {
-  const user = await findUserBySlug(slug);
+  const user = await findBuilderBySlug(slug);
   if (!user) {
     console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
-  const oc = user.data.provisioning?.openclaw ?? {};
-  slug = oc.slug ?? user.data.username ?? slug;
-  const fromGatewayId = oc.gatewayId;
+  slug = user.slug ?? slug;
+  const fromGatewayId = user.gateway?.gatewayId;
   if (!fromGatewayId) {
     console.error(red(`${CROSS} User '${slug}' is not currently assigned to any gateway.`));
     console.error(dim(`  Use \`fleet --env=${args.env} add-customer ${slug} --to=<gw-id> --apply\` to place them first.`));
     process.exit(1);
   }
-  if (forceOperationId) await readForceMigrationSource(db, {
+  if (forceOperationId) await readForceMigrationSource(platformState, {
     operationId: forceOperationId, uid: user.uid, slug, fromGatewayId, toGatewayId,
   });
   if (fromGatewayId === toGatewayId) {
@@ -1767,8 +1714,8 @@ async function migrateCustomerPlan(
     const target = {
       operationId: forceOperationId, uid: user.uid, slug, fromGatewayId, toGatewayId,
     };
-    const recovery = await readForcedMigrationRecovery(db, target);
-    const plan = recovery.completed ?? await readForceMigrationPlan(db, target, recovery.owned);
+    const recovery = await readForcedMigrationRecovery(platformState, target);
+    const plan = recovery.completed ?? await readForceMigrationPlan(platformState, target, recovery.owned);
     console.log(`  existing operation  ${plan.operationId}  source epoch ${plan.sourceEpoch}`);
     if (recovery.completed) console.log(dim("  Native restart already completed; observing the existing migration."));
     else if (recovery.owned) console.log(dim("  Native restart already reserved; observing its outcome without dispatching again."));
@@ -1832,10 +1779,9 @@ async function executeMigration(
   options: { sourceTransferMode?: "retained-pod"; forceOperationId?: string },
 ): Promise<void> {
   const { sourceTransferMode, forceOperationId } = options;
-  const opsDb = db as unknown as OperationsDb;
   const actor = `fleet-cli:${process.env.USER ?? "operator"}`;
   const opId = forceOperationId ? (await runForcedMigration({
-    db, actor, target: { operationId: forceOperationId, uid, slug, fromGatewayId, toGatewayId },
+    store: platformState, actor, target: { operationId: forceOperationId, uid, slug, fromGatewayId, toGatewayId },
     transport: createForceMigrationTransport({
       namespace: KUBE_NS,
       runKubectl: async (argv, opts) => {
@@ -1844,7 +1790,7 @@ async function executeMigration(
         return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
       },
     }),
-  })).operationId : await enqueueOperation(opsDb, {
+  })).operationId : await enqueueOperation(platformState, {
     kind: "migrate-customer",
     input: buildFleetMigrateOperationInput(uid, fromGatewayId, toGatewayId, sourceTransferMode),
     createdBy: actor,
@@ -1857,7 +1803,7 @@ async function executeMigration(
   );
 
   const rendered = new Set<string>();
-  const finalOp = await awaitOperation(opsDb, opId, {
+  const finalOp = await awaitOperation(platformState, opId, {
     pollMs: 2_000,
     timeoutMs: MIGRATION_OP_TIMEOUT_MS,
     onUpdate: (op) => {
@@ -1927,7 +1873,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return inspectGateway(args.positional[2]);
     case "desktop-image publish": {
       if (args.positional.length !== 2 || Object.keys(args.flags).some(flag => !["sha", "apply"].includes(flag)) || (args.flags.apply !== undefined && args.flags.apply !== true)) throw new Error("desktop-image publish accepts only --sha and --apply");
-      return runDesktopImagePublication({ environment: args.env as "test" | "prod", sourceSha: requiredFlag(args, "sha", "desktop-image publish", "full-main-sha"), apply, actor: await fleetOperatorUid(), why: "Operator selected a tested immutable desktop image manifest", db });
+      return runDesktopImagePublication({ environment: args.env as "test" | "prod", sourceSha: requiredFlag(args, "sha", "desktop-image publish", "full-main-sha"), apply, actor: await fleetOperatorUid(), why: "Operator selected a tested immutable desktop image manifest", store: platformState });
     }
     case "release status":
       return releaseStatus();

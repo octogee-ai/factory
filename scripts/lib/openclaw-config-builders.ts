@@ -1,3 +1,4 @@
+import type { SecretsRepository } from "@octogee/core/platform-state";
 import { PROJECT_COACH_WORKSPACE_PARTS, type ProjectAgentIdentity } from "../../shared/types/project.js";
 import { parseAgentId, projectAgentId } from "../../shared/types/identity.js";
 import { PLATFORM_MATTERMOST_BASE_URL } from "../../shared/types/openclaw-mattermost-accounts.js";
@@ -212,17 +213,7 @@ export async function fetchCoachIdentities(
 }
 
 export interface CoachTokenDeps {
-  db: {
-    collection: (name: string) => {
-      doc: (id: string) => {
-        collection: (name: string) => {
-          doc: (id: string) => {
-            get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> }>;
-          };
-        };
-      };
-    };
-  };
+  secrets: Pick<SecretsRepository, "get">;
   log: (msg: string) => void;
 }
 
@@ -233,18 +224,14 @@ export async function fetchCoachTokens(
   const out = new Map<string, string>();
   for (const c of customers) {
     try {
-      const snap = await deps.db
-        .collection("users").doc(c.uid)
-        .collection("secrets").doc("coachMattermost")
-        .get();
-      if (!snap.exists) {
+      const coach = await deps.secrets.get(c.uid, "coachMattermost");
+      if (coach === null) {
         deps.log(
           `⚠ no users/${c.uid}/secrets/coachMattermost for ${c.slug} — coach has no PAT; re-run provisioning`,
         );
         continue;
       }
-      const data = snap.data() ?? {};
-      const token = typeof data.personalToken === "string" ? data.personalToken : "";
+      const token = coach.kind === "coach-mattermost" ? coach.personalToken : "";
       if (!token) {
         deps.log(
           `⚠ users/${c.uid}/secrets/coachMattermost missing personalToken for ${c.slug}`,

@@ -8,7 +8,7 @@ export interface OperationJournalFields {
     readonly cancelledByDeletionId?: string;
     readonly retryRequestedAt?: number;
     readonly retryRequestedBy?: string;
-    readonly supersededBy?: string;
+    readonly supersededBy?: OpaqueMap;
     readonly restoreAttempt?: OpaqueMap;
     readonly restoreRuntimeRecovery?: OpaqueMap;
     readonly sourceRuntimeRecovery?: OpaqueMap;

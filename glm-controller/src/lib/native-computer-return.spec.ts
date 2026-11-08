@@ -1,42 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
 import { prepareNativeComputerReturn, releaseNativeReturnSourceRecoveryHold } from "./native-computer-return.js";
 
 const input = { fromGatewayId: "native", toGatewayId: "shared", uid: "alice-id", slug: "alice", operationId: "return-1", claimedStartedAt: 900 };
 
 function harness() {
-  const root = { gatewayClass: "builder", ownerUid: "alice-id", builderSlug: "alice", desiredStatus: "running" };
-  const source: Record<string, any> = {
-    runtime: "gce-vm", vm: { instanceName: "computer", zone: "us-central1-a", instanceId: "computer-id" }, vmHome: {},
+  const docs: Record<string, any> = {
+    "glmGateways/native": {
+      docKind: "runtime", gatewayId: "native", release: 1, lifecycle: "serving",
+      runtime: "gce-vm", vm: { instanceName: "computer", zone: "us-central1-a", instanceId: "computer-id" }, vmHome: {},
+    },
+    "gateways/native": { gatewayId: "native", gatewayClass: "builder", ownerUid: "alice-id", builderSlug: "alice", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 },
+    "gateways/shared": { gatewayId: "shared", gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, latestRelease: 1 },
+    "users/alice-id": { provisioning: { openclaw: { gatewayId: "native" } } },
+    "glmOperations/return-1": { kind: "migrate-customer", status: "running", startedAt: 900, input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } },
   };
-  const user = { provisioning: { openclaw: { gatewayId: "native" } } };
-  const target = { gatewayClass: "shared" };
-  const docs: Record<string, any> = { "glmGateways/native": source, "gateways/native": root, "gateways/shared": target, "users/alice-id": user, "glmOperations/return-1": { kind: "migrate-customer", status: "running", startedAt: 900, input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } } };
-  const snapshot = (path: string) => ({ exists: !!docs[path], data: () => docs[path] });
-  const update = vi.fn((ref: { path: string }, data: Record<string, unknown>) => {
-    for (const [key, value] of Object.entries(data)) {
-      const [parent, field] = key.split(".");
-      if (field === undefined) {
-        if (value instanceof FieldValue) delete docs[ref.path][parent];
-        else docs[ref.path][parent] = value;
-        continue;
-      }
-      if (value instanceof FieldValue) delete docs[ref.path][parent][field];
-      else docs[ref.path][parent][field] = value;
-    }
-  });
-  const db = {
-    collection: (collection: string) => ({ doc: (id: string) => ({ path: `${collection}/${id}`, get: async () => snapshot(`${collection}/${id}`) }) }),
-    runTransaction: async (body: (tx: unknown) => Promise<unknown>) => body({ get: async (ref: { path: string }) => snapshot(ref.path), update }),
-  };
+  const documents = fixtureDocumentsAt(docs);
+  const update = vi.fn();
+  const store = createJournalFixtureStore(journalRowsAtPaths(docs), { documents: {
+    ...documents,
+    set: (path, row) => { update(path, row); documents.set(path, row); },
+    delete: (path) => { update(path, undefined); documents.delete(path); },
+  } });
   let now = 1000;
   const wait = vi.fn(async (ms: number) => { now += ms; });
   const vm = {
     describe: vi.fn(async (): Promise<{ status: string; instanceId: string } | null> => ({ status: "RUNNING", instanceId: "computer-id" })),
     stop: vi.fn(async () => undefined),
   };
-  const deps = { db: db as never, vm: vm as never, now: () => now, wait, timeoutMs: 100 };
-  return { deps, source, root, target, user, docs, update };
+  const deps = { store, vm: vm as never, now: () => now, wait, timeoutMs: 100 };
+  return {
+    deps, docs, update,
+    get source() { return docs["glmGateways/native"]; },
+    get root() { return docs["gateways/native"]; },
+    get target() { return docs["gateways/shared"]; },
+    get user() { return docs["users/alice-id"]; },
+  };
 }
 
 describe("native computer return checkpoint", () => {
@@ -166,7 +165,7 @@ describe("native computer return checkpoint", () => {
       lastCheckpoint: { completedAt: 1001, instanceId: "computer-id" } };
     h.docs["glmOperations/return-1"] = { kind: "migrate-customer", status: "running", startedAt: 900, cutoverCommittedAt: 1002,
       input: { uid: "alice-id", fromGatewayId: "native", toGatewayId: "shared" } };
-    h.docs["gateways/shared/assignments/alice-id"] = { uid: "alice-id", gatewayId: "shared", slug: "alice", state: "serving" };
+    h.docs["gateways/shared/assignments/alice-id"] = { uid: "alice-id", gatewayId: "shared", slug: "alice", source: "migrate-customer", epoch: 1, state: "serving" };
   }
 
   it("releases the writer hold on the committed source while it still runs, so the Builder can unmount the customer", async () => {

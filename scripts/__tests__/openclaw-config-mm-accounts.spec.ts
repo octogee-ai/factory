@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, it, expect, vi } from "vitest";
 import {
   activeAgentProjectIds,
@@ -333,24 +334,11 @@ describe("mattermostAccountBindingsNeedActivation", () => {
 
 describe("fetchCoachTokens", () => {
   function mkDeps(
-    docs: Record<string, { personalToken?: string } | undefined>,
+    docs: Record<string, Record<string, unknown>>,
     logSpy = vi.fn(),
   ): CoachTokenDeps & { logs: ReturnType<typeof vi.fn> } {
-    const db = {
-      collection: (_users: string) => ({
-        doc: (uid: string) => ({
-          collection: (_secrets: string) => ({
-            doc: (_coachMm: string) => ({
-              get: async () => {
-                const data = docs[uid];
-                return { exists: !!data, data: () => data };
-              },
-            }),
-          }),
-        }),
-      }),
-    };
-    return { db, log: logSpy, logs: logSpy };
+    const store = createDocumentFixtureStore(new Map(Object.entries(docs).map(([uid, data]) => [`users/${uid}/secrets/coachMattermost`, data])));
+    return { secrets: store.secrets, log: logSpy, logs: logSpy };
   }
 
   it("reads users/{uid}/secrets/coachMattermost.personalToken and keys by uid", async () => {
@@ -380,7 +368,7 @@ describe("fetchCoachTokens", () => {
     expect(result.has("uid-chris")).toBe(true);
     expect(result.has("uid-sam")).toBe(false);
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("sam-cooks-b4g3"),
+      expect.stringContaining("no users/uid-sam/secrets/coachMattermost for sam-cooks-b4g3"),
     );
   });
 
@@ -396,23 +384,29 @@ describe("fetchCoachTokens", () => {
     );
   });
 
+  it("omits and logs a coach secret that does not decode", async () => {
+    const logSpy = vi.fn();
+    const deps = mkDeps({ "uid-chris": { personalToken: 7 } }, logSpy);
+    const result = await fetchCoachTokens(deps, [
+      { uid: "uid-chris", slug: "chris-builds-a3f2" },
+    ]);
+    expect(result.has("uid-chris")).toBe(false);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("read failed for chris-builds-a3f2"));
+  });
+
   it("tolerates Firestore errors for a single customer (continues others)", async () => {
     const logSpy = vi.fn();
-    const db = {
-      collection: (_users: string) => ({
-        doc: (uid: string) => ({
-          collection: (_secrets: string) => ({
-            doc: (_coachMm: string) => ({
-              get: async () => {
-                if (uid === "uid-broken") throw new Error("firestore hiccup");
-                return { exists: true, data: () => ({ personalToken: "tok-ok" }) };
-              },
-            }),
-          }),
-        }),
-      }),
+    const { secrets } = mkDeps({ "uid-ok": { personalToken: "tok-ok" } });
+    const deps: CoachTokenDeps = {
+      secrets: {
+        get: async (uid, secretId) => {
+          if (uid === "uid-broken") throw new Error("firestore hiccup");
+          return secrets.get(uid, secretId);
+        },
+      },
+      log: logSpy,
     };
-    const result = await fetchCoachTokens({ db, log: logSpy }, [
+    const result = await fetchCoachTokens(deps, [
       { uid: "uid-broken", slug: "broken-a1b2" },
       { uid: "uid-ok", slug: "ok-c3d4" },
     ]);

@@ -12,26 +12,9 @@ export declare class GatewayRetirementTelemetryUnavailableError extends GatewayR
 export declare class GatewayRetirementReleaseUnconvergedError extends GatewayRetirementConflictError {
     constructor(message: string);
 }
-interface RetirementOperation {
-    input?: unknown;
-    [key: string]: unknown;
-}
 type RetirableGateway = GatewayDoc & {
     desiredStatus: "running" | "draining" | "paused";
 };
-interface ClaimGatewayRetirementInput {
-    db: Firestore;
-    gatewayId: string;
-    operationId: string;
-    operation: RetirementOperation;
-    now: number;
-    updatedBy: string;
-    telemetryObservedAfter?: number;
-    claimGuard?: (input: {
-        transaction: Transaction;
-        root: RetirableGateway;
-    }) => Promise<void> | void;
-}
 interface ClaimGatewayRetirementInStoreInput {
     store: PlatformStateStore;
     gatewayId: string;
@@ -40,6 +23,10 @@ interface ClaimGatewayRetirementInStoreInput {
     now: number;
     updatedBy: string;
     telemetryObservedAfter?: number;
+    claimGuard?: (input: {
+        transaction: PlatformStateTransaction;
+        root: RetirableGateway;
+    }) => Promise<void> | void;
 }
 interface VerifyGatewayRetirementClaimInput {
     store: PlatformStateStore;
@@ -58,9 +45,6 @@ export type GatewayRetirementVerification = {
 export declare function assertGatewayRuntimeMutationUnfenced(db: Firestore, transaction: Transaction, gatewayId: string, allowedComputerRecoveryOperationId?: string): Promise<void>;
 export declare function builderRuntimeMutationFenced(builder: Stored<BuilderRecord>): boolean;
 export declare function assertGatewayRuntimeMutationUnfencedInStore(transaction: PlatformStateTransaction, gatewayId: string, allowedComputerRecoveryOperationId?: string): Promise<void>;
-export declare function claimGatewayRetirementAtomic(input: ClaimGatewayRetirementInput): Promise<{
-    version: number;
-}>;
 export declare function claimGatewayRetirementInStore(input: ClaimGatewayRetirementInStoreInput): Promise<{
     version: number;
 }>;

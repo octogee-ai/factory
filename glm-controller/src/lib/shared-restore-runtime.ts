@@ -1,19 +1,19 @@
 import { isDeepStrictEqual } from 'node:util';
-import { FieldValue, type DocumentData, type Firestore, type Transaction, type QuerySnapshot } from 'firebase-admin/firestore';
+import type { DocumentData } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
+import type { BuilderRecord, GatewayRoot, GatewayRuntimeRestartFenceValue, OperationRecord, PlatformStateStore, PlatformStateTransaction, Stored } from '@octogee/core/platform-state';
 import type { OperationContext } from '../operation-router.js';
 import type { KubectlSubprocess } from '../fleet-ingress.js';
-import { queuedSharedMigrationOwnsSource } from './queued-shared-migration.js';
+import { queuedSharedMigrationOwnsSourceInStore } from './queued-shared-migration.js';
 
 type RecordValue = DocumentData;
 interface Recovery { operationId: string; sourceSha: string; images: Record<string, string>; reauthorize?: RecordValue; supersede?: RecordValue }
-export interface SharedPodRecoveryDeps { db: Firestore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
+export interface SharedPodRecoveryDeps { store: PlatformStateStore; namespace: string; sourceSha: string; runKubectl: KubectlSubprocess; now?: () => number; wait?: (ms: number) => Promise<void> }
 type Deps = SharedPodRecoveryDeps;
 function object(value: unknown): RecordValue { return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {}; }
-function customerState(user: RecordValue | undefined): RecordValue { return object(object(user?.provisioning).openclaw); }
-function liveShared(root: RecordValue): boolean {
-  return root.gatewayClass === 'shared' && ['running', 'draining'].includes(root.desiredStatus) && root.retirementClaim == null &&
-    Number.isSafeInteger(root.liveRelease) && root.liveRelease >= 1 && root.liveRelease === root.desiredRelease;
+function liveShared(root: GatewayRoot | null): root is Stored<GatewayRoot> {
+  return root !== null && root.gatewayClass === 'shared' && ['running', 'draining'].includes(root.desiredStatus) && root.retirementClaim == null &&
+    Number.isSafeInteger(root.liveRelease) && root.liveRelease! >= 1 && root.liveRelease === root.desiredRelease;
 }
 function restoreMatches(receipt: RecordValue, returned: RecordValue, gatewayId: string): boolean {
   const handoff = object(returned.schedulerHandoff); const input = object(returned.input);
@@ -53,57 +53,62 @@ function recovery(op: Operation, sourceSha: string): Recovery {
   return input as Recovery;
 }
 
-async function authority(deps: Deps, tx: Transaction, op: Operation, input: Recovery): Promise<RecordValue> {
-  const gatewayId = op.input.gatewayId as string;
-  const [root, claim, restore, users, active, transfersFrom, transfersTo] = await Promise.all([
-    tx.get(deps.db.doc(`gateways/${gatewayId}`)), tx.get(deps.db.doc(`glmOperations/${op.id}`)),
-    tx.get(deps.db.doc(`glmOperations/${input.operationId}`)),
-    tx.get(deps.db.collection('users').where('provisioning.openclaw.gatewayId', '==', gatewayId)),
-    tx.get(deps.db.collection('glmOperations').where('status', 'in', ['running', 'pending'])),
-    tx.get(deps.db.collection('users').where('provisioning.openclaw.sourceTransferFence.sourceGatewayId', '==', gatewayId)),
-    tx.get(deps.db.collection('users').where('provisioning.openclaw.sourceTransferFence.targetGatewayId', '==', gatewayId)),
-  ]);
-  const data = object(root.data()); const current = object(claim.data()); const returned = object(restore.data());
-  const receipt = object(returned.restoreAttempt); const uid = receipt.uid;
-  const user = users.docs.find(row => row.id === uid)?.data();
-  const openclaw = customerState(user);
-  const fence = object(openclaw.restoreFence);
-  const exact = [
-    transfersFrom.docs.length === 0, transfersTo.docs.length === 0,
-    liveShared(data),
-    current.status === 'running', current.startedAt === op.startedAt, current.cancellationRequestedAt === undefined,
-    isDeepStrictEqual(current.input, op.input), returned.kind === 'migrate-customer',
-    ['pending', 'failed'].includes(returned.status), returned.cancellationRequestedAt === undefined,
-    returned.cutoverCommittedAt > 0, Number.isFinite(returned.cutoverCommittedAt),
-    receipt.phase === 'dispatched', isDeepStrictEqual(receipt, fence), typeof uid === 'string', Boolean(uid),
-    receipt.operationId === input.operationId, receipt.gatewayId === gatewayId, Number.isSafeInteger(receipt.assignmentEpoch),
-    typeof receipt.attemptId === 'string', Boolean(String(receipt.attemptId ?? '').trim()),
-    restoreMatches(receipt, returned, gatewayId),
-    openclaw.status === 'complete', !Object.hasOwn(openclaw, 'sourceTransferFence'),
-  ].every(Boolean);
-  if (!exact) throw new Error('paired post-cutover restore authority is unavailable');
-  if (!reauthorizationMatches(input, receipt, returned.status)) throw new Error('restore reauthorization requires an unchanged intent and a pending native return');
-  const assignment = object((await tx.get(deps.db.doc(`gateways/${gatewayId}/assignments/${uid}`))).data());
-  if (![assignment.uid === receipt.uid, assignment.slug === receipt.slug, assignment.gatewayId === gatewayId,
+function claimMatches(current: OperationRecord | undefined, op: Operation): boolean {
+  return current?.status === 'running' && current.startedAt === op.startedAt && current.cancellationRequestedAt === undefined &&
+    isDeepStrictEqual(current.input, op.input);
+}
+function returnedAwaitsRestore(returned: RecordValue): boolean {
+  return returned.kind === 'migrate-customer' && ['pending', 'failed'].includes(returned.status) && returned.cancellationRequestedAt === undefined &&
+    returned.cutoverCommittedAt > 0 && Number.isFinite(returned.cutoverCommittedAt);
+}
+function receiptMatches(receipt: RecordValue, fence: RecordValue, input: Recovery, gatewayId: string): boolean {
+  return receipt.phase === 'dispatched' && isDeepStrictEqual(receipt, fence) && typeof receipt.uid === 'string' && Boolean(receipt.uid) &&
+    receipt.operationId === input.operationId && receipt.gatewayId === gatewayId && Number.isSafeInteger(receipt.assignmentEpoch) &&
+    typeof receipt.attemptId === 'string' && Boolean(receipt.attemptId.trim());
+}
+function restoreOwnerReady(builder: Stored<BuilderRecord> | undefined): boolean {
+  return builder?.openclaw.status === 'complete' && builder.fences.sourceTransferFence === undefined;
+}
+async function assertRestoreAssignment(tx: PlatformStateTransaction, gatewayId: string, receipt: RecordValue): Promise<void> {
+  const assignment = await tx.gateways.assignments.get(gatewayId, receipt.uid);
+  if (!assignment || ![assignment.uid === receipt.uid, assignment.slug === receipt.slug, assignment.gatewayId === gatewayId,
     assignment.epoch === receipt.assignmentEpoch, assignment.state === "serving"].every(Boolean)) {
     throw new Error('restore recovery assignment changed');
   }
-  for (const row of users.docs) {
-    const state = customerState(row.data());
-    if (row.id !== uid && (Object.hasOwn(state, 'restoreFence') || Object.hasOwn(state, 'sourceTransferFence'))) throw new Error('another customer runtime outcome is unresolved');
+}
+async function authority(tx: PlatformStateTransaction, op: Operation, input: Recovery): Promise<Stored<GatewayRoot>> {
+  const gatewayId = op.input.gatewayId as string;
+  const [root, operations, holders, active] = await Promise.all([
+    tx.gateways.roots.get(gatewayId), tx.journal.operations.getMany([op.id, input.operationId]),
+    tx.builders.records.listGatewayFenceHolders(gatewayId), tx.journal.operations.listByStatus(['running', 'pending']),
+  ]);
+  const returned: RecordValue = { ...operations.get(input.operationId) };
+  const receipt = object(returned.restoreAttempt);
+  const builder = holders.assigned.find(row => row.uid === receipt.uid);
+  const exact = [
+    holders.sourceTransferSource.length === 0, holders.sourceTransferTarget.length === 0,
+    claimMatches(operations.get(op.id), op), returnedAwaitsRestore(returned),
+    receiptMatches(receipt, object(builder?.fences.restoreFence), input, gatewayId),
+    restoreMatches(receipt, returned, gatewayId), restoreOwnerReady(builder),
+  ].every(Boolean);
+  if (!liveShared(root) || !exact) throw new Error('paired post-cutover restore authority is unavailable');
+  if (!reauthorizationMatches(input, receipt, returned.status)) throw new Error('restore reauthorization requires an unchanged intent and a pending native return');
+  await assertRestoreAssignment(tx, gatewayId, receipt);
+  for (const row of holders.assigned) {
+    if (row.uid !== receipt.uid && (row.fences.restoreFence !== undefined || row.fences.sourceTransferFence !== undefined)) throw new Error('another customer runtime outcome is unresolved');
   }
-  await assertNoCompetingMigrations(deps, tx, active, { operationId: input.operationId, gatewayId });
-  return data;
+  await assertNoCompetingMigrations(tx, active, { operationId: input.operationId, gatewayId });
+  return root;
 }
 
-async function assertNoCompetingMigrations(deps: Deps, tx: Transaction, active: QuerySnapshot,
+async function assertNoCompetingMigrations(tx: PlatformStateTransaction, active: readonly Stored<OperationRecord>[],
   scope: { operationId: string; gatewayId: string }): Promise<void> {
-  for (const row of active.docs) {
-    const move = row.data();
+  for (const row of active) {
+    const move: RecordValue = { ...row };
     if (!competingMigration(row.id, move, scope.operationId, scope.gatewayId)) continue;
     if (move.input?.fromGatewayId !== scope.gatewayId || move.schedulerHandoffReleased !== true ||
         !Number.isSafeInteger(move.schedulerHandoffReleasedAt) || move.schedulerHandoffReleasedAt <= 0 ||
-        !await queuedSharedMigrationOwnsSource(deps.db, tx, move, row.id) ||
+        !await queuedSharedMigrationOwnsSourceInStore(tx, move, row.id) ||
         move.schedulerHandoffReleasedAt < move.attemptHistory.at(-1).completedAt) {
       throw new Error('another migration is active on the restore target');
     }
@@ -187,17 +192,16 @@ function recoveryPredecessorFenceMatches(params: {
     target.podName === pod.metadata.name && target.restoreOperationId === operationId;
 }
 async function assertRecoveryPredecessor(params: {
-  deps: Deps;
-  tx: Transaction;
+  tx: PlatformStateTransaction;
   op: Operation;
   input: Recovery;
   existing: unknown;
   pod: RecordValue;
 }): Promise<void> {
-  const { deps, tx, op, input, existing, pod } = params;
+  const { tx, op, input, existing, pod } = params;
   const captured = input.supersede!;
   if (input.reauthorize === undefined) throw new Error('failed restore recovery requires explicit reauthorization');
-  const previous = object((await tx.get(deps.db.doc(`glmOperations/${captured.operationId}`))).data());
+  const previous: RecordValue = { ...await tx.journal.operations.get(captured.operationId) };
   const fence = object(existing); const target = object(fence.target);
   if (!recoveryPredecessorOperationMatches(previous, captured, op.input.gatewayId) ||
       !recoveryPredecessorFenceMatches({ fence, captured, gatewayId: op.input.gatewayId, operationId: input.operationId, pod })) throw new Error('failed restore recovery predecessor changed');
@@ -208,20 +212,20 @@ async function assertRecoveryPredecessor(params: {
 }
 async function reserveRecovery(deps: Deps, op: Operation, input: Recovery, pod: RecordValue): Promise<RecordValue> {
   const gatewayId = op.input.gatewayId as string;
-  return deps.db.runTransaction(async tx => {
-    const root = await authority(deps, tx, op, input);
-    const existing = root.runtimeRestartFence;
+  return deps.store.transaction({ label: 'shared-restore-runtime.reserve' }, async tx => {
+    const root = await authority(tx, op, input);
+    const existing: RecordValue | undefined = root.runtimeRestartFence;
     if (input.supersede && existing?.attemptId !== op.id) {
-      await assertRecoveryPredecessor({ deps, tx, op, input, existing, pod });
+      await assertRecoveryPredecessor({ tx, op, input, existing, pod });
     } else if (existing !== undefined) {
       if (existing.kind !== 'restore-recovery' || existing.attemptId !== op.id || existing.target?.podUid !== pod.metadata.uid ||
           existing.target?.restoreOperationId !== input.operationId || !isDeepStrictEqual(existing.target?.images, input.images)) throw new Error('another runtime restart outcome is unresolved');
-      return existing as RecordValue;
+      return existing;
     }
-    const fence = { kind: 'restore-recovery', attemptId: op.id, auditId: op.id, gatewayId, startedAt: Date.now(), phase: 'reserved',
+    const fence: GatewayRuntimeRestartFenceValue = { kind: 'restore-recovery', attemptId: op.id, auditId: op.id, gatewayId, startedAt: Date.now(), phase: 'reserved',
       target: { podName: pod.metadata.name, podUid: pod.metadata.uid, restoreOperationId: input.operationId, images: input.images,
         originalImages: Object.fromEntries(pod.spec.containers.map((container: RecordValue) => [container.name, container.image])) } };
-    tx.update(deps.db.doc(`gateways/${gatewayId}`), { runtimeRestartFence: fence });
+    await tx.gateways.roots.compareAndSetRuntimeRestartFence(gatewayId, root.runtimeRestartFence ?? null, fence);
     return fence;
   });
 }
@@ -251,31 +255,32 @@ function completedRecovery(completed: RecordValue, gatewayId: string, input: Rec
     completed.sourceSha === input.sourceSha && isDeepStrictEqual(completed.images, input.images) &&
     isDeepStrictEqual(completed.previousRestoreAttempt, input.reauthorize);
 }
-function reauthorizeRestore(deps: Deps, tx: Transaction, op: Operation, input: Recovery, now: number): void {
+async function reauthorizeRestore(tx: PlatformStateTransaction, op: Operation, input: Recovery, now: number): Promise<void> {
   if (!input.reauthorize) return;
   if (now < input.reauthorize.claimStartedAt) throw new Error('restore reauthorization clock precedes the retained intent');
   const intent: RecordValue = { ...input.reauthorize, claimStartedAt: now, dispatchClaimStartedAt: now, dispatchedAt: now, reauthorizedBy: op.id };
-  tx.update(deps.db.doc(`users/${intent.uid}`), { 'provisioning.openclaw.restoreFence': intent });
-  tx.update(deps.db.doc(`glmOperations/${input.operationId}`), { restoreAttempt: intent });
+  await tx.builders.records.setFence(intent.uid, 'restoreFence', intent);
+  await tx.journal.operations.patch(input.operationId, { restoreAttempt: intent });
 }
 export async function recoverSharedRestoreRuntime(deps: Deps, op: Operation, ctx: OperationContext): Promise<void> {
   const input = recovery(op, deps.sourceSha); const gatewayId = op.input.gatewayId as string;
   if (!ctx.assertActiveClaim) throw new Error('restore recovery operation claim is unavailable');
   await ctx.assertActiveClaim();
-  const completed = object((await deps.db.doc(`glmOperations/${op.id}`).get()).data()?.restoreRuntimeRecovery);
+  const completed = object((await deps.store.journal.operations.get(op.id))?.restoreRuntimeRecovery);
   if (completedRecovery(completed, gatewayId, input)) return;
   const pod = await existingOwnedPod(deps, gatewayId);
   let saved = await reserveRecovery(deps, op, input, pod);
   const update = async (next: RecordValue | null) => {
     await ctx.assertActiveClaim!();
-    await deps.db.runTransaction(async tx => {
-      const root = await authority(deps, tx, op, input);
-      if (!isDeepStrictEqual(root.runtimeRestartFence, saved)) throw new Error('restore recovery restart fence changed');
-      tx.update(deps.db.doc(`gateways/${gatewayId}`), { runtimeRestartFence: next ?? FieldValue.delete() });
+    await deps.store.transaction({ label: 'shared-restore-runtime.update' }, async tx => {
+      const root = await authority(tx, op, input);
+      const fence = root.runtimeRestartFence;
+      if (fence === undefined || !isDeepStrictEqual(fence, saved)) throw new Error('restore recovery restart fence changed');
+      await tx.gateways.roots.compareAndSetRuntimeRestartFence(gatewayId, fence, next as GatewayRuntimeRestartFenceValue | null);
       if (!next) {
         const now = Date.now();
-        reauthorizeRestore(deps, tx, op, input, now);
-        tx.update(deps.db.doc(`glmOperations/${op.id}`), { restoreRuntimeRecovery: {
+        await reauthorizeRestore(tx, op, input, now);
+        await tx.journal.operations.patch(op.id, { restoreRuntimeRecovery: {
           gatewayId, restoreOperationId: input.operationId, sourceSha: input.sourceSha, images: input.images,
           podUid: saved.target.podUid, completedAt: now,
           ...(input.reauthorize ? { previousRestoreAttempt: input.reauthorize } : {}),

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startGatewayHeartbeatPoller } from "../gateway-heartbeat-poller.js";
-import { startOrphanHeartbeatReaper } from "../orphan-heartbeat-reaper.js";
 import { startStuckOpReaper } from "../stuck-op-reaper.js";
 import { startNativeReturnHoldReaper } from "../native-return-hold-reaper.js";
 import { startGiteaGatewayKeyGc } from "../gitea-gateway-key-gc.js";
@@ -11,18 +10,13 @@ const loops: Array<[string, Start]> = [
     listGatewayIds: async () => { await work(); return []; },
     fetchFleetState: vi.fn(), readAssignedSlugs: vi.fn(), writeHeartbeat: vi.fn(), log,
   }, 100)],
-  ["orphan heartbeat reaper", (work, log) => startOrphanHeartbeatReaper({
-    db: {} as Parameters<typeof startOrphanHeartbeatReaper>[0]["db"],
-    now: Date.now, stalenessMs: 1000, intervalMs: 100, log,
-    runTick: async () => { await work(); return { scanned: 0, deleted: 0 }; },
-  })],
   ["stuck operation reaper", (work, log) => startStuckOpReaper({
-    db: {} as Parameters<typeof startStuckOpReaper>[0]["db"],
+    store: {} as Parameters<typeof startStuckOpReaper>[0]["store"],
     now: Date.now, stalenessMs: 1000, intervalMs: 100, log,
     runTick: async () => { await work(); return { scanned: 0, reaped: 0 }; },
   })],
   ["native return hold reaper", (work, log) => startNativeReturnHoldReaper({
-    db: {} as Parameters<typeof startNativeReturnHoldReaper>[0]["db"],
+    store: {} as Parameters<typeof startNativeReturnHoldReaper>[0]["store"],
     informer: { glmGateways: () => null },
     now: Date.now, intervalMs: 100, log,
     runTick: async () => { await work(); return { scanned: 0, released: 0 }; },

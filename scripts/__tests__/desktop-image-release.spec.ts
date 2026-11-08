@@ -1,7 +1,7 @@
-import type { Firestore } from 'firebase-admin/firestore';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createCentralReleaseAuthority } from '@octogee/core/artifact-registry';
+import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
 import { runWithOperationAuditIntent } from '@octogee/core/operation-audit';
 import { runDesktopArchivePrune, runDesktopImagePublication, type DesktopArchiveDeps, type DesktopPublicationDeps } from '../lib/desktop-image-publication';
 import * as releaseSource from '../lib/desktop-image-release.mjs';
@@ -20,7 +20,7 @@ function publication(desktopImage?: unknown) {
   vi.mocked(createCentralReleaseAuthority).mockReturnValue({ resolveManifest } as unknown as ReturnType<typeof createCentralReleaseAuthority>);
   const input = {
     environment: 'test' as const, sourceSha: 'a'.repeat(40), apply: true, actor: 'fixture', why: 'fixture',
-    db: {} as Firestore, auth: new GoogleAuth(),
+    store: createDocumentFixtureStore({}), auth: new GoogleAuth(),
   };
   const client = vi.spyOn(input.auth, 'getClient').mockRejectedValue(new Error('unexpected Compute request'));
   const auth = vi.spyOn(input.auth, 'getAccessToken').mockResolvedValue('fixture-token');
@@ -152,14 +152,14 @@ it('audits an on-demand archive prune only when it applies removals', async () =
   vi.spyOn(console, 'log').mockImplementation(() => {});
   runAuditedWork();
   const archive = archiveFixture();
-  const prune = { environment: 'test' as const, keep: 2, actor: 'fixture', why: 'fixture', db: {} as Firestore, auth: new GoogleAuth(), archive };
+  const prune = { environment: 'test' as const, keep: 2, actor: 'fixture', why: 'fixture', store: createDocumentFixtureStore({}), auth: new GoogleAuth(), archive };
   const dry = await runDesktopArchivePrune({ ...prune, apply: false });
   expect(dry).toMatchObject({ project: 'octogee-test', kept: ['a3', 'a2'], remove: ['a1'], removed: 0 });
   expect(runWithOperationAuditIntent).not.toHaveBeenCalled();
   expect(archive.deleteImage).not.toHaveBeenCalled();
   const applied = await runDesktopArchivePrune({ ...prune, apply: true });
   expect(runWithOperationAuditIntent).toHaveBeenCalledWith(
-    expect.objectContaining({ transaction: expect.any(Function) }), expect.objectContaining({ actor: 'fixture', mutation: { action: 'prune-desktop-archive' } }), expect.anything(), expect.any(Function),
+    prune.store, expect.objectContaining({ actor: 'fixture', mutation: { action: 'prune-desktop-archive' } }), expect.anything(), expect.any(Function),
   );
   expect(archive.deleteImage).toHaveBeenCalledWith('octogee-test', 'a1');
   expect(applied).toMatchObject({ remove: ['a1'], removed: 1 });

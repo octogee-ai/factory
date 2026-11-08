@@ -6,20 +6,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { WebSocketServer } from "ws";
-import type { Firestore } from "firebase-admin/firestore";
 import { buildOperationAuditIntent } from "@octogee/core/operation-audit";
-import { fixtureDocumentsAt } from "@octogee/core/testing/journal-store";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
 import type { RestartDriverDeps } from "@octogee/core/gateway-restart-probe";
 import { releasePayloadHash } from "../../shared/types/gateway-releases.js";
 import { isOperationAuditRecord } from "../../shared/types/glm.js";
 import { generateIdentity } from "@octogee/shared/types/device-identity";
 import { nativeHealth, nativeProbeSource, resolveForcedGatewayRestart } from "../ops/fleet-resolve-forced-restart.js";
-import { keepJournalRowsIn } from "./journal-fixture-store.test-support.js";
-
-vi.mock("@octogee/core/platform-state", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
-  createFirestorePlatformStateStore: (await import("./journal-fixture-store.test-support.js")).journalFixtureStoreFor,
-}));
 
 function harness() {
   const payload = {
@@ -51,8 +44,9 @@ function harness() {
   ]);
   const writes: Array<{ path: string; data: Record<string, any> }> = [];
   const documents = fixtureDocumentsAt(docs);
-  const db = {};
-  keepJournalRowsIn(db, docs, { documents: { ...documents, set: (path, data) => { writes.push({ path, data }); documents.set(path, data); } } });
+  const store = createJournalFixtureStore(journalRowsAtPaths(docs), {
+    documents: { ...documents, set: (path, data) => { writes.push({ path, data }); documents.set(path, data); } },
+  });
   const images = [payload.profileImages.builder, payload.gatewayEdgeImage].map(image => `${image.imageRepository}:${image.imageTag}`);
   const containers = ["gateway", "gateway-edge"].map((name, index) => ({ name, image: images[index] }));
   const pod: any = { metadata: { name: "octogee-gateway-canary-new", uid: "new-uid", creationTimestamp: new Date(350).toISOString(),
@@ -73,7 +67,7 @@ function harness() {
     else throw new Error(`unexpected Kubernetes command ${args.join(" ")} ${stdin ?? ""}`);
     return { status: 0, stdout: value ? JSON.stringify(value) : "", stderr: "" };
   });
-  const input = { db: db as unknown as Firestore, gatewayId: "canary", forceAuditId: "audit-force", kubeContext: "test-context", namespace: "octogee-test", runKubectl, apply: true, idempotencyKey: "resolve-1" };
+  const input = { store, gatewayId: "canary", forceAuditId: "audit-force", kubeContext: "test-context", namespace: "octogee-test", runKubectl, apply: true, idempotencyKey: "resolve-1" };
   return { docs, writes, root, fence, pod, deployment, replicaSets, input, runKubectl,
     beforeProbe: (hook: typeof beforeProbe) => { beforeProbe = hook; },
     setOld: (value: any) => { old = value; }, setExtraPod: () => { extraPod = true; }, setHealth: (value: any) => { health = value; }, failNative: () => { nativeFailure = true; } };

@@ -1,8 +1,12 @@
-import type { OperationsDocRef, OperationsTransaction } from "@octogee/core/operation-audit";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
+import type { Firestore } from "firebase-admin/firestore";
 import { keepJournalRowsIn } from "./journal-fixture-store.test-support.js";
 
 export const forceMigrationTarget = { operationId: "move-1", uid: "u1", slug: "alice", fromGatewayId: "builder-a", toGatewayId: "shared-b" };
+
+export function forceMigrationAssignment(gatewayId: string, uid: string, slug: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { uid, slug, gatewayId, source: "onboarding", state: "serving", epoch: 75, createdAt: 10, updatedAt: 20, updatedByOperationId: "move-1", ...overrides };
+}
 
 export function forceMigrationHarness() {
   const docs = new Map<string, Record<string, any>>([
@@ -20,55 +24,37 @@ export function forceMigrationHarness() {
     ["users/u1", { username: "alice", provisioning: { openclaw: {
       gatewayId: "builder-a", status: "complete", migration: { state: "preparing", phase: "waiting", operationId: "move-1", startedAt: 400 },
     } } }],
-    ["gateways/builder-a/assignments/u1", { uid: "u1", slug: "alice", gatewayId: "builder-a", state: "serving", epoch: 75, updatedByOperationId: "move-1" }],
-    ["gateways/builder-a", { gatewayClass: "builder", ownerUid: "u1", builderSlug: "alice", runtime: "cluster", desiredStatus: "draining", desiredRelease: 1, liveRelease: 1 }],
-    ["gateways/shared-b", { gatewayClass: "shared", desiredStatus: "running", desiredRelease: 1, liveRelease: 1 }],
+    ["gateways/builder-a/assignments/u1", forceMigrationAssignment("builder-a", "u1", "alice")],
+    ["gateways/builder-a", { gatewayId: "builder-a", gatewayClass: "builder", ownerUid: "u1", builderSlug: "alice", runtime: "cluster", desiredStatus: "draining", latestRelease: 1, desiredRelease: 1, liveRelease: 1 }],
+    ["gateways/shared-b", { gatewayId: "shared-b", gatewayClass: "shared", desiredStatus: "running", latestRelease: 1, desiredRelease: 1, liveRelease: 1 }],
   ]);
   const writes: Array<{ path: string; data: Record<string, unknown> }> = [];
-  let transactions = 0;
-  let beforeTransaction: ((at: number) => void) | undefined;
-  const snapshot = (path: string) => ({ exists: docs.has(path), id: path.split("/").at(-1)!, data: () => structuredClone(docs.get(path)) });
-  const ref = (path: string) => ({ path, id: path.split("/").at(-1)!, get: async () => snapshot(path) });
-  function query(path: string, field: string, value: unknown) {
-    return { query: true, path, field, value, limit: () => query(path, field, value), get: async () => {
-      const matching = [...docs].filter(([key, doc]) => key.startsWith(`${path}/`) && key.split("/").length === path.split("/").length + 1 &&
-        field.split(".").reduce((current: any, part) => current?.[part], doc) === value)
-        .map(([key]) => ({ ...snapshot(key), ref: ref(key) }));
-      return { docs: matching, size: matching.length, empty: matching.length === 0 };
-    } };
-  }
+  const documents = fixtureDocumentsAt(docs);
+  const tracked = {
+    ...documents,
+    set: (path: string, data: Record<string, unknown>) => { writes.push({ path, data }); documents.set(path, data); },
+    delete: (path: string) => { writes.push({ path, data: {} }); documents.delete(path); },
+  };
+  const store = createJournalFixtureStore(journalRowsAtPaths(docs), { documents: tracked });
+  const usernameQuery = (value: unknown) => ({
+    limit: () => usernameQuery(value),
+    get: async () => {
+      const matching = [...docs].filter(([key, doc]) => key.startsWith("users/") && key.split("/").length === 2 && doc.username === value)
+        .map(([key]) => ({ id: key.split("/")[1], data: () => structuredClone(docs.get(key)) }));
+      return { docs: matching, empty: matching.length === 0 };
+    },
+  });
   const db = {
-    doc: (path: string) => ref(path),
-    collection: (path: string) => ({ doc: (id: string) => ref(`${path}/${id}`), where: (field: string, _op: string, value: unknown) => query(path, field, value), add: async () => { throw new Error("must not enqueue another migration"); } }),
-    async runTransaction<T>(body: (transaction: OperationsTransaction) => Promise<T>) {
-      beforeTransaction?.(++transactions);
-      const staged: Array<{ path: string; data: Record<string, unknown>; create: boolean }> = [];
-      const transaction: OperationsTransaction = {
-        get: async (reference) => {
-          const selected = reference as OperationsDocRef & { path: string; query?: boolean; field: string; value: unknown };
-          if (!selected.query) return snapshot(selected.path);
-          return query(selected.path, selected.field, selected.value).get() as never;
+    collection: (path: string) => {
+      if (path !== "users") throw new Error(`the force migration fake only answers Builder account lookups, not ${path}`);
+      return {
+        where: (field: string, _op: string, value: unknown) => {
+          if (field !== "username") throw new Error(`the force migration fake only looks up usernames, not ${field}`);
+          return usernameQuery(value);
         },
-        create: (reference, data) => staged.push({ path: (reference as OperationsDocRef & { path: string }).path, data, create: true }),
-        update: (reference, data) => staged.push({ path: (reference as OperationsDocRef & { path: string }).path, data, create: false }),
       };
-      const result = await body(transaction);
-      for (const write of staged) {
-        if (write.create && docs.has(write.path)) throw new Error("already exists");
-        const next = { ...docs.get(write.path) };
-        for (const [key, value] of Object.entries(write.data)) {
-          const parts = key.split(".");
-          const field = parts.pop()!;
-          const parent = parts.reduce((obj, part) => obj[part] ??= {}, next);
-          if (value && typeof value === "object" && "isEqual" in value && typeof value.isEqual === "function" && value.isEqual(FieldValue.delete())) delete parent[field];
-          else parent[field] = value;
-        }
-        docs.set(write.path, next);
-        writes.push(write);
-      }
-      return result;
     },
   };
-  keepJournalRowsIn(db, docs);
-  return { db: db as unknown as Firestore, docs, writes, op: () => docs.get("glmOperations/move-1")!, beforeTransaction: (hook: typeof beforeTransaction) => { beforeTransaction = hook; } };
+  keepJournalRowsIn(db, docs, { documents: tracked });
+  return { db: db as unknown as Firestore, store, docs, writes, op: () => docs.get("glmOperations/move-1")! };
 }

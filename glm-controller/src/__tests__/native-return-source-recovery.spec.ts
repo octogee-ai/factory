@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMigrateCustomerHandler, type MigrateCustomerDeps } from "../handlers/migrate-customer.js";
-import { enqueuePlacementMigration, type FirestorePlacementPolicyInput } from "../placement-policy-reconciler.js";
-import { FieldValue } from "firebase-admin/firestore";
+import { enqueuePlacementMigration } from "../placement-policy-reconciler.js";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createNativeReturnSourceRecoveryOwner } from "../native-return-source-recovery.js";
 import type { Operation, OperationStep } from "@octogee/shared/types/glm";
 
@@ -13,9 +14,9 @@ function fixture() {
       activationLease: { status: "returning", leaseId: "lease114", generation: 114, targetGatewayId: source, returnOperationId: operationId, pendingDemand: { eventKey: "human-chat" } } } } },
     [`gateways/${source}`]: { gatewayId: source, latestRelease: 7, gatewayClass: "builder", ownerUid: uid, builderSlug: "ceckert-test", desiredStatus: "running", desiredRelease: 7, liveRelease: 7,
       allocation: { kind: "disposable-builder", claimedByUid: uid, leaseId: "lease114", generation: 114 } },
-    [`glmGateways/${source}`]: { gatewayId: source, runtime: "gce-vm", vm: { instanceName: "native-source", instanceId: "vm114", zone: "us-central1-a" }, vmHome: { returnOperationId: operationId, checkpointRequestedAt: 50 } },
-    [`gateways/${source}/assignments/${uid}`]: { uid, slug: "ceckert-test", gatewayId: source, epoch: 25, state: "serving" },
-    [`gateways/${target}`]: { gatewayClass: "shared", desiredStatus: "retired", retirementVersion: 1, retirementClaim: { operationId: retirementId, version: 1, phase: "claimed" } },
+    [`glmGateways/${source}`]: { docKind: "runtime", gatewayId: source, release: 7, lifecycle: "active", runtime: "gce-vm", vm: { instanceName: "native-source", instanceId: "vm114", zone: "us-central1-a" }, vmHome: { returnOperationId: operationId, checkpointRequestedAt: 50 } },
+    [`gateways/${source}/assignments/${uid}`]: { uid, slug: "ceckert-test", gatewayId: source, source: "migrate-customer", epoch: 25, state: "serving", createdAt: 10, updatedAt: 10, updatedByOperationId: null },
+    [`gateways/${target}`]: { gatewayId: target, desiredRelease: 3, latestRelease: 3, gatewayClass: "shared", desiredStatus: "retired", retirementVersion: 1, retirementClaim: { operationId: retirementId, version: 1, phase: "claimed" } },
     [`glmOperations/${retirementId}`]: { kind: "retire-gateway", status: "succeeded", gatewayId: target, createdAt: 200, completedAt: 300,
       input: { gatewayId: target, source: "shared-pool-scaler", retirementClaimVersion: 1 }, steps: [{ name: "helm-uninstall", status: "done" }, { name: "revoke-agent-store-credentials", status: "done" }] },
     [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: "failed", origin: "automatic", createdBy: "glm-controller-placement-policy", inputUid: uid, gatewayId: target,
@@ -24,31 +25,10 @@ function fixture() {
       input: { uid, builderSlug: "ceckert-test", fromGatewayId: source, toGatewayId: target, source: "builder-activation-lease" },
       schedulerHandoffReleased: false, schedulerHandoff: { uid, slug: "ceckert-test", fromGatewayId: source, toGatewayId: target, migrationId: `mig-${operationId}:scheduler:22:claim:90` } },
   };
-  const getValue = (data: any, field: string) => field.split(".").reduce((current, key) => current?.[key], data);
-  const snapshot = (path: string) => ({ id: path.split("/").at(-1), ref: { path }, exists: records[path] !== undefined, data: () => records[path] === undefined ? undefined : structuredClone(records[path]) });
-  const query = (path: string, filters: Array<[string, string, unknown]> = []): any => ({
-    where: (field: string, comparator: string, value: unknown) => query(path, [...filters, [field, comparator, value]]),
-    get: async () => {
-      const docs = Object.keys(records).filter(key => key.split("/").slice(0, -1).join("/") === path && filters.every(([field, comparator, value]) => comparator === "in" ? (value as unknown[]).includes(getValue(records[key], field)) : getValue(records[key], field) === value)).map(snapshot);
-      return { docs, empty: docs.length === 0 };
-    },
-  });
-  const doc = (path: string): any => ({ path, get: async () => snapshot(path), collection: (name: string) => collection(`${path}/${name}`) });
-  const collection = (path: string): any => ({ ...query(path), doc: (id: string) => doc(`${path}/${id}`) });
-  const db = { doc, collection, runTransaction: async (work: any) => {
-    const updates: Array<[string, Record<string, unknown>]> = [];
-    const result = await work({ get: (ref: any) => ref.get(), update: (ref: any, values: Record<string, unknown>) => updates.push([ref.path, values]) });
-    for (const [path, values] of updates) for (const [field, value] of Object.entries(values)) {
-      const keys = field.split("."), name = keys.pop()!;
-      const parent = keys.reduce((current, key) => current[key] ??= {}, records[path]);
-      if (value instanceof FieldValue) delete parent[name]; else parent[name] = structuredClone(value);
-    }
-    return result;
-  } };
   const events: string[] = [];
   let proof = true;
   const deps = {
-    db: db as never, now: () => 1000, log: vi.fn(),
+    store: createDocumentFixtureStore(records), now: () => 1000, log: vi.fn(),
     verifyRetiredTarget: vi.fn(async (gatewayId: string, assertCurrent: () => Promise<void>) => { expect(gatewayId).toBe(target); await assertCurrent(); return proof; }),
     releaseSourceHold: vi.fn(async () => { events.push("hold"); }),
     prepareSourceStores: vi.fn(async (gatewayId: string, slug: string, authority?: { expectedBuilderUid: string; assertCurrent(): Promise<void> }) => {
@@ -77,11 +57,11 @@ describe("retired target Native return source-only recovery", () => {
   it.each(["lease", "epoch", "owner", "vm", "cutover", "target-assignment", "retirement-pending", "retirement-version", "retained-data", "credential-step", "restore-fence", "transfer-fence", "competing", "foreign-handoff", "rollback-missing", "unfinished-receipt", "manual", "retained-transfer", "foreign-checkpoint", "scheduler-claim", "scheduler-attempt"])("refuses changed %s custody", async change => {
     const h = fixture(), op = h.records[`glmOperations/${operationId}`];
     if (change === "lease") h.records[`users/${uid}`].provisioning.openclaw.activationLease.generation = 115;
-    if (change === "epoch") h.records[`gateways/${source}/assignments/${uid}`].epoch = -1;
+    if (change === "epoch") h.records[`gateways/${source}/assignments/${uid}`].epoch = 0;
     if (change === "owner") h.records[`gateways/${source}`].ownerUid = "foreign";
     if (change === "vm") h.records[`glmGateways/${source}`].runtime = "cluster";
     if (change === "cutover") op.cutoverCommittedAt = 99;
-    if (change === "target-assignment") h.records[`gateways/${target}/assignments/${uid}`] = { uid };
+    if (change === "target-assignment") h.records[`gateways/${target}/assignments/${uid}`] = { uid, slug: "ceckert-test", gatewayId: target, source: "migrate-customer", epoch: 1, state: "serving" };
     if (change === "retirement-pending") h.records[`glmOperations/${retirementId}`].status = "pending";
     if (change === "retirement-version") h.records[`gateways/${target}`].retirementVersion = 2;
     if (change === "retained-data") h.records[`glmOperations/${retirementId}`].input.retainData = true;
@@ -98,6 +78,15 @@ describe("retired target Native return source-only recovery", () => {
     if (change === "retained-transfer") op.sourceTransferExecution = {};
     if (change === "foreign-checkpoint") h.records[`glmGateways/${source}`].vmHome.returnOperationId = "foreign-operation";
     expect(await h.request()).toBe(false); expect(op.status).toBe("failed"); expect(h.events).toEqual([]);
+  });
+  it.each([
+    ["source assignment", (records: Record<string, any>) => { records[`gateways/${source}/assignments/${uid}`].epoch = -1; }],
+    ["source runtime", (records: Record<string, any>) => { delete records[`glmGateways/${source}`].lifecycle; }],
+    ["target root", (records: Record<string, any>) => { delete records[`gateways/${target}`].latestRelease; }],
+  ])("fails closed on a malformed %s without queueing", async (_record, corrupt) => {
+    const h = fixture(); corrupt(h.records);
+    await expect(h.request()).rejects.toBeInstanceOf(MalformedRecordError);
+    expect(h.records[`glmOperations/${operationId}`].status).toBe("failed"); expect(h.events).toEqual([]);
   });
   it("does not queue without the physical retirement proof", async () => {
     const h = fixture(); h.setProof(false); expect(await h.request()).toBe(false); expect(h.events).toEqual([]);
@@ -145,10 +134,11 @@ describe("retired target Native return source-only recovery", () => {
   });
   it("retargets only through the subsequent normal operator retry and retains the actual recovery receipt", async () => {
     const h = fixture(); expect(await h.request()).toBe(true); expect(await h.owner.recover(h.claim(), h.ctx)).toMatchObject({ rolledBack: true });
-    const operation = h.records[`glmOperations/${operationId}`];
-    Object.assign(operation, { status: "failed", rolledBack: true, retryRequestedAt: 2000 });
-    await enqueuePlacementMigration({ db: h.deps.db, now: () => 2000 } as FirestorePlacementPolicyInput,
+    Object.assign(h.records[`glmOperations/${operationId}`], { status: "failed", rolledBack: true, retryRequestedAt: 2000 });
+    const platformArtifact = { imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway", imageTag: `abc1234@sha256:${"a".repeat(64)}` };
+    await enqueuePlacementMigration({ store: createDocumentFixtureStore(h.records), now: () => 2000, platformArtifact },
       { uid, builderSlug: "ceckert-test", fromGatewayId: source, toGatewayId: "shared-new", source: "builder-activation-lease", operationId });
+    const operation = h.records[`glmOperations/${operationId}`];
     expect(operation).toMatchObject({ status: "pending", gatewayId: "shared-new", input: { toGatewayId: "shared-new" } });
     expect(operation.input.recoverSourceOnly).toBeUndefined(); expect(operation.input.nativeReturnSourceRecovery).toBeUndefined();
     expect(operation.nativeReturnSourceRecoveryReceipts).toHaveLength(1);

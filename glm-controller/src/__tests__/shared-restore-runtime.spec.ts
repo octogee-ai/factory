@@ -9,6 +9,7 @@ import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps }
 import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
 import { MalformedRecordError } from '@octogee/core/platform-state';
 import type { Operation } from '@octogee/shared/types/glm';
+import { releasePayloadHash } from '@octogee/shared/types/gateway-releases';
 import { recoverSharedRestoreRuntime } from '../lib/shared-restore-runtime.js';
 import { processOperation } from '../index.js';
 import { releaseAbandonedSchedulerHandoffs } from '../scheduler-handoff-release.js';
@@ -84,8 +85,8 @@ function harness() {
     return { code: 0, stdout: JSON.stringify(result), stderr: '' };
   });
   const ctx = { assertActiveClaim: vi.fn(async () => {}), reportStep: vi.fn() };
-  const deps = { db: db as never, namespace: 'octogee-test', sourceSha: sha, runKubectl };
-  return { deps, op, ctx, store, pod, lostReply: () => { lostReply = true; }, setReady: (value: boolean) => { ready = value; } };
+  const deps = { store: createDocumentFixtureStore(store), namespace: 'octogee-test', sourceSha: sha, runKubectl };
+  return { deps, db: db as never, op, ctx, store, pod, lostReply: () => { lostReply = true; }, setReady: (value: boolean) => { ready = value; } };
 }
 describe('journaled Shared restore runtime recovery', () => {
   function reauthorize(h: ReturnType<typeof harness>) {
@@ -134,8 +135,8 @@ describe('journaled Shared restore runtime recovery', () => {
     const handler = vi.fn(async () => ({ success: true, steps: [] }));
     const log = vi.fn();
     const run = () => processOperation({ ...h.store['glmOperations/queued'], id: 'queued' },
-      (h.deps.db as any).doc('glmOperations/queued'),
-      { db: h.deps.db, handlers: { 'migrate-customer': handler }, log } as never);
+      (h.db as any).doc('glmOperations/queued'),
+      { db: h.db, handlers: { 'migrate-customer': handler }, log } as never);
     return { run, handler, log };
   }
 
@@ -153,11 +154,11 @@ describe('journaled Shared restore runtime recovery', () => {
       })).slice(-MAX_OPERATION_ATTEMPT_HISTORY) });
     h.store['users/other'] = { provisioning: { openclaw: { status: 'complete', gatewayId: 'shared-1',
       migration: { operationId: 'queued', phase: 'preparing', state: 'preparing', startedAt: 1_100 } } } };
-    h.store['gateways/shared-1/assignments/other'] = { uid: 'other', slug: 'bob', gatewayId: 'shared-1', state: 'serving', epoch: 0, updatedByOperationId: null };
+    h.store['gateways/shared-1/assignments/other'] = { uid: 'other', slug: 'bob', gatewayId: 'shared-1', source: 'migrate-customer', state: 'serving', epoch: 0, updatedByOperationId: null };
     const scheduler = vi.fn(async () => { throw new Error('no scheduler RPC is safe while the source is unavailable'); });
-    const release = () => releaseAbandonedSchedulerHandoffs({ db: h.deps.db, scheduler,
+    const release = () => releaseAbandonedSchedulerHandoffs({ store: h.deps.store, scheduler,
       gatewayExists: vi.fn(async () => false), log: vi.fn(), now: () => Math.max(3_000, 1_300 + attempts * 100) });
-    return { ...queued, release, scheduler, row };
+    return { ...queued, release, scheduler, get row() { return h.store['glmOperations/queued']; } };
   }
 
   it('releases a proven pre-transport retry through its owner before admitting same-pod restore recovery', async () => {
@@ -294,12 +295,7 @@ describe('journaled Shared restore runtime recovery', () => {
   });
 
   it.each([0, 2])('fails actual source pod selection at cardinality %s before gateway RPC or guest execution', async count => {
-    let task: any;
-    const ref = { get: async () => ({ exists: task !== undefined, data: () => task }),
-      set: async (patch: any) => { task = { ...task, ...patch }; } };
-    const db = { collection: () => ({ doc: () => ref }), runTransaction: async (fn: any) => fn({
-      get: (target: any) => target.get(), set: (target: any, value: any) => target.set(value),
-    }) };
+    const tasks: Record<string, Record<string, unknown>> = {};
     const fetch = vi.fn(async () => { throw new Error('gateway RPC must not run before source selection'); });
     const resolveGatewayUrl = vi.fn(() => { throw new Error('gateway control URL must not be used before source selection'); });
     const runCommand = vi.fn(async (command: string, args: string[]) => {
@@ -309,12 +305,12 @@ describe('journaled Shared restore runtime recovery', () => {
         metadata: { name: `pod-${index}` }, status: { phase: 'Running', podIP: `10.0.0.${index + 1}`, conditions: [{ type: 'Ready', status: 'True' }] },
       })) }) };
     });
-    const transfer = createRsyncMigrationTransfer({ db: db as never, namespace: 'octogee-test',
+    const transfer = createRsyncMigrationTransfer({ store: createDocumentFixtureStore(tasks), namespace: 'octogee-test',
       privateKey: 'unused-before-gateway-rpc', fleetControllerPort: '3003', fetch, resolveGatewayUrl, runCommand });
     await expect(transfer({ migrationId: 'mig-queued', slug: 'bob', fromGatewayId: 'shared-1', toGatewayId: 'shared-2', mode: 'keys' }))
       .rejects.toMatchObject({ message: `expected exactly one ready pod for transport=shared-1; found ${count}`, retryable: true });
     expect(fetch).not.toHaveBeenCalled(); expect(resolveGatewayUrl).not.toHaveBeenCalled(); expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(task).toMatchObject({ status: 'failed', error: `expected exactly one ready pod for transport=shared-1; found ${count}` });
+    expect(tasks['glmMigrationTransferTasks/mig-queued__keys']).toMatchObject({ status: 'failed', error: `expected exactly one ready pod for transport=shared-1; found ${count}` });
   });
 
   it.each(['short-suffix', 'gap', 'duplicate', 'unknown-attempt', 'wrong-latest', 'stale-handoff', 'retained-hold', 'unknown-steps'])('denies capped history with %s', async change => {
@@ -343,7 +339,7 @@ describe('journaled Shared restore runtime recovery', () => {
     h.store['gateways/shared-1/assignments/other'].epoch = epoch;
     await expect(queued.release()).resolves.toEqual({ released: 0 });
     Object.assign(queued.row, { schedulerHandoffReleased: true, schedulerHandoffReleasedAt: 3_000 });
-    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('another migration is active');
+    await expect(recoverSharedRestoreRuntime(h.deps, h.op, h.ctx)).rejects.toBeInstanceOf(MalformedRecordError);
     expect(h.deps.runKubectl.mock.calls.some(([args]) => args.includes('patch'))).toBe(false);
   });
 
@@ -413,10 +409,10 @@ describe('journaled Shared restore runtime recovery', () => {
 
   it('does not release a migration claimed after the scheduler sweep snapshot', async () => {
     const h = harness(); const queued = blockedPreTransportMigration(h);
-    const db = h.deps.db, transaction = db.runTransaction.bind(db);
-    vi.spyOn(db, 'runTransaction').mockImplementationOnce(async fn => {
+    const store = h.deps.store, transaction = store.transaction.bind(store);
+    vi.spyOn(store, 'transaction').mockImplementationOnce(async (options, fn) => {
       queued.row.status = 'running'; queued.row.startedAt = 2_700;
-      return transaction(fn);
+      return transaction(options, fn);
     });
     await expect(queued.release()).resolves.toEqual({ released: 0 });
     expect(queued.row.schedulerHandoffReleased).toBe(false); expect(queued.scheduler).not.toHaveBeenCalled();
@@ -445,7 +441,7 @@ describe('journaled Shared restore runtime recovery', () => {
     queued.row.status = 'failed';
     queued.row.steps = [{ name: 'quiesce-source', status: 'done' }, { name: 'final-sync-state', status: 'failed' }];
     const scheduler = vi.fn(async () => ({ agentIds: [] }));
-    await expect(releaseAbandonedSchedulerHandoffs({ db: h.deps.db, scheduler,
+    await expect(releaseAbandonedSchedulerHandoffs({ store: h.deps.store, scheduler,
       gatewayExists: async () => true, log: vi.fn(), now: () => 3_000 })).resolves.toEqual({ released: 1 });
     expect(scheduler.mock.calls).toEqual([
       ['shared-2', { migrationId: 'mig-queued:scheduler:13:claim:2300', slug: 'bob', phase: 'abort' }],
@@ -779,7 +775,7 @@ describe('journaled Shared source schema repair', () => {
       }
     }
     if (absent) delete h.store['users/source-0'].provisioning.openclaw.migration;
-    const { db, ...podDeps } = h.deps, store = createDocumentFixtureStore(h.store);
+    const podDeps = h.deps, store = createDocumentFixtureStore(h.store);
     const captured = await readAuthority(h.store, h.op.id);
     h.op.input = { gatewayId: 'shared-1', sourceRecovery: { sourceSha: sha, images, ...captured } };
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
@@ -818,7 +814,7 @@ describe('journaled Shared source schema repair', () => {
       return { code: 0, stdout: JSON.stringify(result), stderr: '' };
     });
     let clock = Date.now();
-    return { ...h, db, deps: { ...podDeps, store, runKubectl, now: () => clock, wait: async () => { clock += 600_000; } },
+    return { ...h, deps: { ...podDeps, store, runKubectl, now: () => clock, wait: async () => { clock += 600_000; } },
       setManagementTransportFailure: () => { transportFailure = true; }, setManagementReceipt: (value: string) => { managementReceipt = value; },
       setManagementFailure: (value = true) => { managementFailure = value; }, setChangedAfterProbe: () => { changedAfterProbe = true; },
       setAck: (value: boolean) => { ack = value; }, setWrongImage: () => { wrongImage = true; }, setHealthyWithoutAck: () => { healthyWithoutAck = true; } };
@@ -1142,12 +1138,12 @@ describe('journaled Shared source schema repair', () => {
       heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), mountedCustomers: [], migratingIn: [] },
       helm: { imageRepository: payload.imageRepository, imageTag: payload.imageTag } };
     h.store['gateways/shared-2'] = { ...root, gatewayId: 'shared-2', desiredStatus: 'running', latestRelease: 1, desiredRelease: 1, liveRelease: 1 };
-    h.store['gateways/shared-2/releases/1'] = { payload };
+    h.store['gateways/shared-2/releases/1'] = { gatewayId: 'shared-2', release: 1, createdAt: 1, createdBy: 'operator', sourceRelease: null, note: null,
+      payloadHash: releasePayloadHash(payload), payload };
     h.store['glmGateways/shared-2'] = { docKind: 'runtime', gatewayId: 'shared-2', runtime: 'cluster', release: 1, lifecycle: 'serving',
       heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), mountedCustomers: [], migratingIn: [] } };
     const request = { ...h.store[`glmOperations/${failedId}`].input, operationId: failedId };
-    const input = { db: h.db, now: h.deps.now, platformArtifact: payload } as Parameters<typeof enqueuePlacementMigration>[0];
-    await expect(enqueuePlacementMigration(input, request)).resolves.toBe(failedId);
+    await expect(enqueuePlacementMigration({ store: h.deps.store, now: h.deps.now, platformArtifact: payload }, request)).resolves.toBe(failedId);
     expect(h.store[`glmOperations/${failedId}`].status).toBe('pending');
   });
 });

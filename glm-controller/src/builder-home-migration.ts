@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
-import { FieldValue, type Firestore, type Transaction } from "firebase-admin/firestore";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
-import { resolveBuilderTier, type TierResolvable } from "@octogee/shared/types/billing";
+import { BUILDER_TIERS, type BuilderTierName } from "@octogee/shared/types/billing-tiers";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
+import { withCurrentBuilderTier, type BuilderTierReader } from "@octogee/core/builder-activation-lease";
+import type {
+  BuilderHomeState,
+  BuilderRecord,
+  OpaqueMap,
+  PlatformStateStore,
+  RecordPatch,
+  Stored,
+} from "@octogee/core/platform-state";
 import type { AllocateDisposableGatewayInput } from "./placement-policy-reconciler.js";
 import { HomeCopyFailure, homeCopyCapacity, type CopyHomeDisk, type HomeCopyInput, type HomeCopyProgress } from "./lib/compute-home-copy.js";
 
@@ -30,20 +37,18 @@ export interface BuilderHomeStorage extends BuilderHomeLocation {
   retained: BuilderHomeLocation[];
   admittedAt?: number;
 }
-export interface BuilderHomeOwner extends Record<string, unknown>, TierResolvable {
-  provisioning?: {
-    computer?: { instanceName: string; instanceId: string; zone: string };
-    homeStorage?: BuilderHomeStorage;
-    homeMigration?: BuilderHomeMigration;
-    homeDisk?: CopyHomeDisk;
-    openclaw?: {
-      gatewayId?: string;
-      activationLease?: Partial<AllocateDisposableGatewayInput> & { status?: string; targetGatewayId?: string };
-    };
-  };
+export interface BuilderHomeOwner {
+  computer?: { instanceName: string; instanceId: string; zone: string };
+  homeStorage?: BuilderHomeStorage;
+  homeMigration?: BuilderHomeMigration;
+  homeDisk?: CopyHomeDisk;
+}
+export function builderHomeOwner(builder: BuilderRecord): BuilderHomeOwner {
+  return builder.home as BuilderHomeOwner;
 }
 export interface BuilderHomeMigrationDeps {
-  db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
   environment: "test" | "prod";
   now: () => number;
   subnetwork: string;
@@ -61,13 +66,18 @@ export interface BuilderHomeMigrationDeps {
   log: (message: string) => void;
 }
 
-export function assertHomeMigrationAuthority(owner: BuilderHomeOwner, request: AllocateDisposableGatewayInput, now: number): void {
-  const openclaw = owner.provisioning?.openclaw;
-  const lease = openclaw?.activationLease;
-  if (!accountAllowsInteractiveAccess(owner) || resolveBuilderTier(owner, new Date(now)) !== request.entitlementTier ||
-      openclaw?.gatewayId !== request.sourceGatewayId || lease?.leaseId !== request.leaseId || lease.generation !== request.generation ||
+export function assertHomeMigrationAuthority(owner: BuilderRecord, tier: BuilderTierName | null, request: AllocateDisposableGatewayInput): void {
+  const lease = owner.activationLease;
+  if (!accountAllowsInteractiveAccess({ accountLifecycle: owner.accountLifecycle ?? undefined }) || tier !== request.entitlementTier ||
+      owner.gateway?.gatewayId !== request.sourceGatewayId || lease?.leaseId !== request.leaseId || lease.generation !== request.generation ||
       lease.status !== "requested" || lease.targetGatewayId !== undefined || lease.sourceAssignmentEpoch !== request.sourceAssignmentEpoch ||
       lease.entitlementTier !== request.entitlementTier || lease.sizingTier !== request.sizingTier) throw new Error("home migration activation authority changed");
+}
+
+type HomePatch = RecordPatch<BuilderHomeState>;
+
+function stored(value: object): OpaqueMap {
+  return value as OpaqueMap;
 }
 
 function assertNativeCopy(state: BuilderHomeMigration): void {
@@ -80,32 +90,33 @@ function assertNativeCopy(state: BuilderHomeMigration): void {
 class HomeMigration {
   constructor(private readonly deps: BuilderHomeMigrationDeps, private readonly request: AllocateDisposableGatewayInput) {}
 
-  private get ownerRef() { return this.deps.db.collection("users").doc(this.request.uid); }
   private get policy() {
     const policy = BUILDER_TIERS[this.request.entitlementTier].computer;
     if (!policy) throw new Error("home migration requires a computer tier policy");
     return policy;
   }
-  private assertOwner(owner: BuilderHomeOwner): void { assertHomeMigrationAuthority(owner, this.request, this.deps.now()); }
-  private async readOwner(): Promise<BuilderHomeOwner> {
-    const snapshot = await this.ownerRef.get();
-    if (!snapshot.exists) throw new Error("home migration owner disappeared");
-    const owner = snapshot.data() as BuilderHomeOwner;
-    this.assertOwner(owner);
-    return owner;
+  private withCurrentTier<T>(run: (assertOwner: (owner: Stored<BuilderRecord> | null) => Stored<BuilderRecord>) => Promise<T>): Promise<T> {
+    return withCurrentBuilderTier({ store: this.deps.store, readBuilderTier: this.deps.readBuilderTier, uid: this.request.uid, now: this.deps.now() },
+      ({ tier, assertCurrent }) => run((owner) => {
+        assertCurrent(owner);
+        if (!owner) throw new Error("home migration owner disappeared");
+        assertHomeMigrationAuthority(owner, tier, this.request);
+        return owner;
+      }));
   }
-  private async transaction(update: (owner: BuilderHomeOwner, tx: Transaction) => void): Promise<void> {
-    await this.deps.db.runTransaction(async tx => {
-      const owner = (await tx.get(this.ownerRef)).data() as BuilderHomeOwner;
-      if (!owner) throw new Error("home migration owner disappeared");
-      this.assertOwner(owner);
-      update(owner, tx);
-    });
+  private async readOwner(): Promise<Stored<BuilderRecord>> {
+    return this.withCurrentTier(async assertOwner => assertOwner(await this.deps.store.builders.records.get(this.request.uid)));
   }
-  private async save(state: BuilderHomeMigration, fields: Record<string, unknown> = {}): Promise<void> {
-    await this.transaction((owner, tx) => {
-      if (owner.provisioning?.homeMigration?.id !== state.id) throw new Error("home migration operation changed");
-      tx.update(this.ownerRef, { ...fields, "provisioning.homeMigration": state });
+  private async transaction(label: string, update: (owner: BuilderHomeOwner) => HomePatch): Promise<void> {
+    await this.withCurrentTier(assertOwner => this.deps.store.transaction({ label: `builder-home-migration.${label}` }, async tx => {
+      const owner = assertOwner(await tx.builders.records.get(this.request.uid));
+      await tx.builders.records.patch(this.request.uid, { home: update(builderHomeOwner(owner)) }, { revision: owner.revision });
+    }));
+  }
+  private async save(state: BuilderHomeMigration, home: HomePatch = {}): Promise<void> {
+    await this.transaction("save", owner => {
+      if (owner.homeMigration?.id !== state.id) throw new Error("home migration operation changed");
+      return { ...home, homeMigration: stored(state) };
     });
   }
   private async removeExpiredHome(storage?: BuilderHomeStorage): Promise<void> {
@@ -114,10 +125,10 @@ class HomeMigration {
     if (!previous) return;
     if (previous.disk.id === storage.disk.id) throw new Error("retained home cleanup cannot remove the primary home");
     if (!await this.deps.removeStoppedHome(this.request.uid, previous)) return;
-    await this.transaction((owner, tx) => {
-      const home = owner.provisioning?.homeStorage;
+    await this.transaction("remove-expired-home", owner => {
+      const home = owner.homeStorage;
       if (home?.disk.id !== storage.disk.id || home.retained[0]?.disk.id !== previous.disk.id) throw new Error("retained home cleanup authority changed");
-      tx.update(this.ownerRef, { "provisioning.homeStorage.retained": home.retained.slice(1) });
+      return { homeStorage: stored({ ...home, retained: home.retained.slice(1) }) };
     });
   }
   private async targetZone(source: BuilderHomeLocation): Promise<string> {
@@ -136,10 +147,10 @@ class HomeMigration {
       targetZone: await this.targetZone(source),
       desiredGiB: this.policy.homeSizeGiB, subnetwork: this.deps.subnetwork,
     } };
-    await this.transaction((owner, tx) => {
-      const previous = owner.provisioning?.homeMigration;
+    await this.transaction("start", owner => {
+      const previous = owner.homeMigration;
       if (previous && previous.phase !== "complete" && previous.id !== id) throw new Error("another home migration is in progress");
-      tx.update(this.ownerRef, { "provisioning.homeMigration": state });
+      return { homeMigration: stored(state) };
     });
     return state;
   }
@@ -150,9 +161,9 @@ class HomeMigration {
   }
   private async cancel(state: BuilderHomeMigration): Promise<void> {
     if (!await this.deps.copy.abort(state.copy)) return;
-    await this.transaction((owner, tx) => {
-      if (owner.provisioning?.homeMigration?.id !== state.id) throw new Error("home migration changed during cancellation");
-      tx.update(this.ownerRef, { "provisioning.homeMigration": FieldValue.delete() });
+    await this.transaction("cancel", owner => {
+      if (owner.homeMigration?.id !== state.id) throw new Error("home migration changed during cancellation");
+      return { homeMigration: { clear: true } };
     });
   }
   private async failed(state: BuilderHomeMigration): Promise<void> {
@@ -187,7 +198,7 @@ class HomeMigration {
   private async retain(state: BuilderHomeMigration, source: BuilderHomeLocation): Promise<boolean> {
     if (!await this.deps.copy.abort(state.copy)) return false;
     await this.save({ ...state, phase: "complete", target: source.disk, completedAt: this.deps.now() }, {
-      "provisioning.homeCapacity": { desiredGiB: this.policy.homeSizeGiB, allocatedGiB: source.disk.sizeGb, status: "shrink-pending", diskId: source.disk.id },
+      homeCapacity: { desiredGiB: this.policy.homeSizeGiB, allocatedGiB: source.disk.sizeGb, status: "shrink-pending", diskId: source.disk.id },
     });
     return true;
   }
@@ -201,27 +212,26 @@ class HomeMigration {
     assertNativeCopy(state);
     await this.readOwner();
     if (!await this.deps.adopt({ uid: this.request.uid, target })) return false;
-    const fields = {
-      "provisioning.homeCapacity": { desiredGiB: this.policy.homeSizeGiB, allocatedGiB: target.sizeGb, usedBytes: proof.usedBytes,
-        status: target.sizeGb > this.policy.homeSizeGiB ? "shrink-pending" : "ready", diskId: target.id },
-      "provisioning.homeDisk": target,
-    };
-    await this.transaction((owner, tx) => {
-      if (owner.provisioning?.homeMigration?.id !== state.id) throw new Error("home migration operation changed before activation");
-      tx.update(this.ownerRef, { ...fields,
-        "provisioning.homeMigration": { ...state, phase: "complete", completedAt: this.deps.now() },
-        "provisioning.homeStorage": { runtime: "gce-vm", disk: target, layout: "portable", retained: [...(owner.provisioning.homeStorage?.retained ?? []), state.source] },
-      });
+    const homeCapacity = { desiredGiB: this.policy.homeSizeGiB, allocatedGiB: target.sizeGb, usedBytes: proof.usedBytes,
+      status: target.sizeGb > this.policy.homeSizeGiB ? "shrink-pending" : "ready", diskId: target.id };
+    await this.transaction("adopt", owner => {
+      if (owner.homeMigration?.id !== state.id) throw new Error("home migration operation changed before activation");
+      return {
+        homeCapacity,
+        homeDisk: stored(target),
+        homeMigration: stored({ ...state, phase: "complete", completedAt: this.deps.now() }),
+        homeStorage: stored({ runtime: "gce-vm", disk: target, layout: "portable", retained: [...(owner.homeStorage?.retained ?? []), state.source] }),
+      };
     });
     this.deps.log(`[home-migration] ${this.request.uid}: verified native home ${target.id} (${target.sizeGb} GiB); previous home retained`);
     return true;
   }
   async reconcile(): Promise<boolean> {
-    const owner = await this.readOwner();
-    await this.removeExpiredHome(owner.provisioning?.homeStorage);
+    const owner = builderHomeOwner(await this.readOwner());
+    await this.removeExpiredHome(owner.homeStorage);
     const source = await this.deps.inventory(this.request.uid, owner);
     if (!source) return true;
-    let state = owner.provisioning?.homeMigration;
+    let state = owner.homeMigration;
     if (this.alreadyFits(state, source)) return true;
     if (!state || state.phase === "complete") state = await this.start(source);
     if (state.source.disk.id !== source.disk.id && state.phase !== "adopting") throw new Error("home migration source changed; original disks retained");

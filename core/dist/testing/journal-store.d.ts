@@ -11,6 +11,7 @@ export interface FixtureDocuments {
     delete(path: string): void;
     children(collectionPath: string): ReadonlyArray<readonly [string, Record<string, unknown>]>;
     group(collectionId: string): ReadonlyArray<readonly [string, Record<string, unknown>]>;
+    descendants?(documentPath: string): readonly string[];
 }
 export type FixtureDocumentRecords = Map<string, Record<string, unknown>> | Record<string, Record<string, unknown> | undefined>;
 export declare function fixtureDocumentsAt(records: FixtureDocumentRecords): FixtureDocuments;

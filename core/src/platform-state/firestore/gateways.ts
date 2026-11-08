@@ -113,6 +113,10 @@ function assertStoredFences(key: RecordKey, uid: string, data: Record<string, un
   if (data.updatedAt !== undefined && !isFenceCount(data.updatedAt)) {
     throw new MalformedRecordError(key, storedFieldDetail("updatedAt", data.updatedAt));
   }
+  const operationId = data.updatedByOperationId;
+  if (operationId !== undefined && operationId !== null && typeof operationId !== "string") {
+    throw new MalformedRecordError(key, storedFieldDetail("updatedByOperationId", operationId));
+  }
 }
 
 export function decodeGatewayAssignmentData(gatewayId: string, uid: string, data: Record<string, unknown>): GatewayAssignment {
