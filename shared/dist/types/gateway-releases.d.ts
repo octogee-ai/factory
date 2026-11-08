@@ -144,7 +144,7 @@ export interface GatewayKubernetesObservation {
     observedAt: number;
     pods?: GatewayPodPlacement[];
 }
-export declare function hasFreshReadyKubernetesObservation(runtime: GatewayRuntimeDoc, nowMs: number, maxAgeMs: number): boolean;
+export declare function hasFreshReadyKubernetesObservation(runtime: Pick<GatewayRuntimeDoc, "kubernetes">, nowMs: number, maxAgeMs: number): boolean;
 export declare function isGatewayRuntimeDoc(data: unknown): data is GatewayRuntimeDoc;
 export declare function isGatewayDesiredDoc(data: unknown): data is GatewayDoc;
 export declare function projectGatewayDesiredRootForGateway(value: unknown, gatewayId: string): (GatewayDoc & GatewayMutableConfig) | null;
@@ -166,63 +166,7 @@ export type GatewayFieldClassification = "release" | "gateway-mutable";
 export declare const RELEASE_FIELDS: readonly ["imageRepository", "imageTag"];
 export declare const GATEWAY_MUTABLE_FIELDS: readonly ["profile", "gatewayClass", "imageProfile", "sizingTier", "gcpProject", "gatewayContainerSecurityContext", "serviceAccountName", "serviceAccount", "builderAccess", "ownerUid", "builderSlug", "modelBrokerLimits", "allocation", "desiredStatus", "liveRelease", "retireAfter"];
 export declare function classifyGatewayField(field: string): GatewayFieldClassification;
-export interface PlacementDocSnap {
-    exists: boolean;
-    data: () => Record<string, unknown> | undefined;
-}
-export interface PlacementDocRef {
-    get: () => Promise<PlacementDocSnap>;
-    set: (data: Record<string, unknown>, options?: {
-        merge?: boolean;
-    }) => Promise<unknown>;
-    update: (data: Record<string, unknown>) => Promise<unknown>;
-    collection: (name: string) => {
-        doc: (id: string) => PlacementDocRef;
-    };
-}
-export interface PlacementTxn {
-    get: (ref: PlacementDocRef) => Promise<PlacementDocSnap>;
-    set: (ref: PlacementDocRef, data: Record<string, unknown>, options?: {
-        merge?: boolean;
-    }) => void;
-    update: (ref: PlacementDocRef, data: Record<string, unknown>) => void;
-}
-export interface PlacementFirestore {
-    collection: (name: string) => {
-        doc: (id: string) => PlacementDocRef;
-    };
-    runTransaction: <T>(body: (txn: PlacementTxn) => Promise<T>) => Promise<T>;
-}
-export interface PlacementTargetValidationContext {
-    txn: PlacementTxn;
-    gatewayRef: PlacementDocRef;
-    assignmentRef: PlacementDocRef;
-    gateway: GatewayDoc & GatewayMutableConfig;
-    runtime: Record<string, unknown>;
-}
-export interface CommitPlacementParams {
-    uid: string;
-    slug: string;
-    gatewayId: string;
-    source: AssignmentSource;
-    now: number;
-    mirrorPatch: Record<string, unknown>;
-    atomicCreate?: {
-        userField: string;
-        userPatch: Record<string, unknown>;
-        writes: ReadonlyArray<{
-            collection: string;
-            document: string;
-            data: Record<string, unknown>;
-        }>;
-    };
-    updatedByOperationId?: string | null;
-    assignmentWrite?: "upsert" | "create-if-missing";
-    requireDurableGateway?: boolean;
-    automatic?: boolean;
-    validateTarget?: (context: PlacementTargetValidationContext) => Promise<PlacementRejectReason | null>;
-}
-export type PlacementRejectReason = "builder-operator-managed" | "account-not-interactive" | "restore-in-progress" | "source-transfer-in-progress" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting" | "assigned-elsewhere";
+export type PlacementRejectReason = "builder-missing" | "builder-operator-managed" | "account-not-interactive" | "restore-in-progress" | "source-transfer-in-progress" | "gateway-root-invalid" | "gateway-not-running" | "gateway-not-serving" | "gateway-target-not-accepting" | "assigned-elsewhere";
 export type CommitPlacementResult = {
     kind: "mirror-only";
 } | {
@@ -236,4 +180,3 @@ export type CommitPlacementResult = {
 };
 export declare function customerRestoreFencePresent(user: unknown): boolean;
 export declare function customerRuntimeMutationFenced(user: unknown): boolean;
-export declare function commitPlacementAtomic(db: PlacementFirestore, params: CommitPlacementParams): Promise<CommitPlacementResult>;

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 export interface PlatformBoundaryManifest {
@@ -33,7 +33,7 @@ export function isProductModule(file: string, productModules: readonly string[])
   return productModules.some((entry) => (entry.endsWith("/") ? file.startsWith(entry) : file === entry));
 }
 
-function resolveSourceFile(candidate: string): string | null {
+function findSourceFile(candidate: string): string | null {
   for (const ext of SOURCE_EXTENSIONS) {
     if (candidate.endsWith(ext) && existsSync(candidate)) return candidate;
   }
@@ -49,6 +49,11 @@ function resolveSourceFile(candidate: string): string | null {
   return null;
 }
 
+function resolveSourceFile(candidate: string): string | null {
+  const found = findSourceFile(candidate);
+  return found ? realpathSync(found) : null;
+}
+
 export function resolveImport(specifier: string, fromFile: string, repoRoot: string): string | null {
   if (specifier.startsWith(".")) return resolveSourceFile(resolve(dirname(fromFile), specifier));
   if (specifier.startsWith("@octogee/core/")) {
@@ -61,7 +66,7 @@ export function resolveImport(specifier: string, fromFile: string, repoRoot: str
     return resolveSourceFile(join(repoRoot, "shared", specifier.slice("@shared/".length)));
   }
   if (specifier.startsWith("@/")) {
-    const pkg = relative(repoRoot, fromFile).split("/")[0];
+    const pkg = relative(realpathSync(repoRoot), fromFile).split("/")[0];
     return resolveSourceFile(join(repoRoot, pkg, "src", specifier.slice(2)));
   }
   return null;
@@ -80,11 +85,12 @@ export function importsOf(file: string, repoRoot: string): string[] {
 }
 
 export function reachableSources(entrypoints: readonly string[], repoRoot: string): Set<string> {
+  const root = realpathSync(repoRoot);
   const seen = new Set<string>();
-  const queue = entrypoints.map((entry) => join(repoRoot, entry));
-  for (const entry of queue) {
-    if (!existsSync(entry)) throw new Error(`platform entrypoint does not exist: ${relative(repoRoot, entry)}`);
+  for (const entry of entrypoints) {
+    if (!existsSync(join(root, entry))) throw new Error(`platform entrypoint does not exist: ${entry}`);
   }
+  const queue = entrypoints.map((entry) => realpathSync(join(root, entry)));
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
@@ -93,7 +99,7 @@ export function reachableSources(entrypoints: readonly string[], repoRoot: strin
       if (!seen.has(target)) queue.push(target);
     }
   }
-  return new Set([...seen].map((file) => relative(repoRoot, file)));
+  return new Set([...seen].map((file) => relative(root, file)));
 }
 
 export function platformBoundaryReport(manifest: PlatformBoundaryManifest, repoRoot: string): BoundaryReport {

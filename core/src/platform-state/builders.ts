@@ -260,9 +260,17 @@ export interface BuilderRepositories {
   readonly agentStores: AgentStoresRepository;
 }
 
+export type PlacementAdmissionDecision =
+  | { readonly kind: "admitted" }
+  | { readonly kind: "pending"; readonly reason: string }
+  | { readonly kind: "refused"; readonly code: string; readonly reason: string };
+
+export interface PlacementAdmissionPolicy {
+  decide(uid: string): Promise<PlacementAdmissionDecision>;
+}
+
 export interface BuilderPlacementPolicy {
   readonly uid: string;
-  readonly placementAllowed: boolean;
   readonly sizingKey: string | null;
   readonly byot: boolean;
   readonly workspacePermissions: boolean;

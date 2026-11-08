@@ -26,7 +26,6 @@ import {
 import {
   isGatewayRuntime,
   resolveGatewayRuntime,
-  resolveUserGatewayControlState,
     type GatewayRuntime,
 } from "@octogee/shared/types/glm";
 import {
@@ -34,8 +33,6 @@ import {
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
   releasePayloadHash,
-  type CommitPlacementResult,
-  type PlacementRejectReason,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
 import {
@@ -55,6 +52,7 @@ import {
   authoritativeSharedGatewayLoad,
   compareSharedGatewayIds,
   deriveSharedGatewayPoolConfig,
+  isAcceptingSharedGateway,
   isSettledSharedGateway,
   parseSharedGatewayAutoscalingConfig,
   parseSharedGatewayPoolConfig,
@@ -69,7 +67,6 @@ import {
 import {
   InvalidSharedGatewayAutoscalingConfigError,
   readSharedGatewayPoolConfigInStore,
-  readSharedGatewayAutoscalingConfigInStore,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
   builderActivateOperationId,
@@ -98,6 +95,8 @@ import {
   type OperationPatch,
   type OperationRecord,
   type OrchestratorConfig,
+  type PlacementAdmissionDecision,
+  type PlacementAdmissionPolicy,
   type PlatformStateStore,
   type PlatformStateTransaction,
   type Stored,
@@ -120,6 +119,7 @@ import {
   readBuilderActivityFirestore,
 } from "./disposable-gateway-lifecycle.js";
 import { MIGRATE_CUSTOMER_KIND } from "./operation-kinds.js";
+import { commitInitialPlacement, type AssignInitialPlacementInput } from "./initial-placement.js";
 import { pairedReplacementTarget, readSharedPoolReplacements } from "./shared-pool-replacements.js";
 import type { FleetInformer } from "./fleet-informer.js";
 import {
@@ -403,18 +403,12 @@ export interface RetireOwnedGatewayInput {
   zeroWorkloadRecoveryOperationId?: string;
 }
 
-export interface AssignInitialPlacementInput {
-  uid: string;
-  builderSlug: string;
-  gatewayId: string;
-  gateway: ContinuousPlacementOwnedGateway;
-}
-
 export interface PlacementPolicyReconcilerDeps {
   now(): number;
   log(message: string): void;
   debug?(message: string): void;
   readSnapshot(): Promise<PlacementPolicySnapshot>;
+  decidePlacementAdmission(uid: string): Promise<PlacementAdmissionDecision>;
   assignInitialPlacement(input: AssignInitialPlacementInput): Promise<void>;
   allocateDisposableGateway(input: AllocateDisposableGatewayInput): Promise<string | null>;
   advanceActivationLease(input: AdvanceActivationLeaseInput): Promise<void>;
@@ -831,6 +825,27 @@ function selectPlatformPreferredSharedGateway(
   });
 }
 
+function initialPlacementSiblingGatewayIds(
+  context: PlacementPolicyReconcileContext,
+  uid: string,
+  placement: ReturnType<typeof resolveContinuousBuilderPlacement>,
+): string[] {
+  if (placement.ownedGatewayId !== null) return [];
+  const config = sharedGatewayPlacementConfig(context);
+  return platformPreferredSharedGatewayCandidates({
+    config,
+    candidates: sharedGatewayCandidates(context),
+    purpose: "initial-placement",
+    preference: {
+      platformCurrentGatewayIds: context.state.platformCurrentGatewayIds,
+      buildersPerGateway: context.state.buildersPerGateway,
+    },
+    currentGatewayId: null,
+  })
+    .filter((candidate) => candidate.gatewayId !== placement.targetGatewayId && isAcceptingSharedGateway(config, candidate))
+    .map((candidate) => candidate.gatewayId);
+}
+
 function selectAcceptingSharedGateway(
   context: PlacementPolicyReconcileContext,
   uid: string,
@@ -1004,11 +1019,21 @@ async function assignMissingPlacement(
 ): Promise<void> {
   const targetGateway = context.gateways.get(placement.targetGatewayId);
   if (!targetGateway) throw new Error(`placement target ${placement.targetGatewayId} is missing`);
+  const admission = await context.deps.decidePlacementAdmission(user.uid);
+  if (admission.kind !== "admitted") {
+    blockPlacement(context, {
+      uid: user.uid,
+      code: admission.kind === "refused" ? admission.code : "placement-admission-pending",
+      reason: admission.reason,
+    });
+    return;
+  }
   await context.deps.assignInitialPlacement({
     uid: user.uid,
     builderSlug,
     gatewayId: placement.targetGatewayId,
     gateway: targetGateway,
+    siblingGatewayIds: initialPlacementSiblingGatewayIds(context, user.uid, placement),
   });
   projectSharedGatewayPlacement(context, placement.targetGatewayId);
   context.result.assigned += 1;
@@ -2807,6 +2832,7 @@ interface FirestorePlacementPolicyInput {
   db: Firestore;
   store: PlatformStateStore;
   readBuilderTier: BuilderTierReader;
+  placementAdmission: PlacementAdmissionPolicy;
   prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
@@ -3394,85 +3420,13 @@ function unavailableRecoveryTargetFence(
   };
 }
 
-async function initialPlacementBuilderRejection(
-  transaction: PlatformStateTransaction,
-  builder: Stored<BuilderRecord> | null,
-  request: AssignInitialPlacementInput,
-): Promise<PlacementRejectReason | null> {
-  if (builder?.openclaw.managedBy === "operator") return "builder-operator-managed";
-  if (builder !== null && builderRuntimeMutationFenced(builder)) {
-    return builder.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress";
-  }
-  if (!accountAllowsInteractiveAccess({ accountLifecycle: builder?.accountLifecycle })) return "account-not-interactive";
-  const currentGatewayId = builder?.gateway?.gatewayId;
-  if (
-    currentGatewayId !== undefined && currentGatewayId !== request.gatewayId &&
-    await transaction.gateways.assignments.get(currentGatewayId, request.uid) !== null
-  ) {
-    return "assigned-elsewhere";
-  }
-  return null;
-}
-
-async function sharedInitialPlacementTargetRejection(
-  transaction: PlatformStateTransaction,
-  request: AssignInitialPlacementInput,
-): Promise<PlacementRejectReason | null> {
-  const [config, assignments, operations] = await Promise.all([
-    readSharedGatewayAutoscalingConfigInStore(transaction),
-    transaction.gateways.assignments.list(request.gatewayId),
-    transaction.journal.operations.listByStatus(["pending", "running"]),
-  ]);
-  if (assignments.some((assignment) => assignment.uid === request.uid)) return null;
-  const incoming = operations.filter((operation) =>
-    operation.kind === MIGRATE_CUSTOMER_KIND && record(operation.input)?.toGatewayId === request.gatewayId).length;
-  return assignments.length + incoming < config.buildersPerGateway ? null : "gateway-target-not-accepting";
-}
-
-async function assignInitialPlacementFirestore(
+async function assignInitialPlacementInStore(
   input: FirestorePlacementPolicyInput,
   request: AssignInitialPlacementInput,
 ): Promise<void> {
-  const controlState = resolveUserGatewayControlState(request.gateway, request.uid);
-  const now = input.now();
-  const placement = await input.store.transaction(
-    { label: "placement-policy.initial-placement" },
-    async (transaction): Promise<CommitPlacementResult> => {
-      const builder = await transaction.builders.records.get(request.uid);
-      const builderRejection = await initialPlacementBuilderRejection(transaction, builder, request);
-      if (builderRejection !== null) return { kind: "rejected", reason: builderRejection };
-      const stored = await transaction.gateways.roots.get(request.gatewayId);
-      const root = stored === null ? null : projectGatewayDesiredRootForGateway(stored, request.gatewayId);
-      if (root === null) return { kind: "rejected", reason: "gateway-root-invalid" };
-      if (root.desiredStatus !== "running") return { kind: "rejected", reason: "gateway-not-running" };
-      const runtime = await transaction.fleetRegistry.get(request.gatewayId);
-      if (runtime?.lifecycle !== "serving") return { kind: "rejected", reason: "gateway-not-serving" };
-      const targetRejection = root.gatewayClass === "shared"
-        ? await sharedInitialPlacementTargetRejection(transaction, request)
-        : null;
-      if (targetRejection !== null) return { kind: "rejected", reason: targetRejection };
-      await transaction.builders.records.setGatewayMirror(request.uid, {
-        gatewayId: request.gatewayId,
-        gatewayProfile: controlState.gatewayProfile,
-        controlUiEnabled: controlState.controlUiEnabled,
-      });
-      await transaction.gateways.assignments.put({
-        uid: request.uid,
-        slug: request.builderSlug,
-        gatewayId: request.gatewayId,
-        source: "repair",
-        state: "serving",
-        epoch: 0,
-        createdAt: now,
-        updatedAt: now,
-        updatedByOperationId: null,
-      });
-      return { kind: "assigned", release: root.liveRelease };
-    },
-  );
-  if (placement.kind !== "assigned") {
-    const reason = placement.kind === "rejected" ? placement.reason : placement.kind;
-    throw new Error(`initial placement onto ${request.gatewayId} failed: ${reason}`);
+  const placement = await commitInitialPlacement(input.store, request, { nowMs: input.now(), log: input.log });
+  if (placement.kind === "rejected") {
+    throw new Error(`initial placement onto ${request.gatewayId} failed: ${placement.reason}`);
   }
 }
 
@@ -4651,7 +4605,8 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     log: input.log,
     debug: input.debug,
     readSnapshot: () => readPlacementPolicySnapshot(input),
-    assignInitialPlacement: (request) => assignInitialPlacementFirestore(input, request),
+    decidePlacementAdmission: (uid) => input.placementAdmission.decide(uid),
+    assignInitialPlacement: (request) => assignInitialPlacementInStore(input, request),
     allocateDisposableGateway: async (request) => {
       if (await refreshRequestedAllocationFirestore(input, request)) return null;
       if (input.prepareBuilderHome && !await input.prepareBuilderHome(request)) return null;

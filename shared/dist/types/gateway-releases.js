@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
-import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
-import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import { projectGatewayMutableConfigForGateway, } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import { GLM_GATEWAYS_COLLECTION, } from "./glm.js";
 // Simple-roll model (GATEWAY-SIMPLE-ROLL-SPEC): durable identity
 // (gateways/{id}) + immutable releases (releases/{n}) + ONE stable-name
 // realization per gateway (glmGateways/{gatewayId} runtime doc). A roll is a
@@ -255,77 +252,6 @@ export function classifyGatewayField(field) {
         return "gateway-mutable";
     return "release";
 }
-function isDurablePlacementRoot(value, gatewayId) {
-    return projectGatewayDesiredRootForGateway(value, gatewayId) !== null;
-}
-function placementRuntimeRejectReason(snap, gatewayId) {
-    const data = snap.exists ? snap.data() : undefined;
-    if (!isGatewayRuntimeDoc(data) || data.gatewayId !== gatewayId) {
-        return "gateway-not-serving";
-    }
-    return data.lifecycle === "serving" ? null : "gateway-not-serving";
-}
-async function preserveExistingAssignment(txn, assignmentRef, userRef, params) {
-    if (params.assignmentWrite !== "create-if-missing")
-        return false;
-    const assignmentSnap = await txn.get(assignmentRef);
-    if (!assignmentSnap.exists)
-        return false;
-    txn.update(userRef, params.mirrorPatch);
-    return true;
-}
-async function assignedElsewhere(db, txn, userData, params) {
-    const provisioning = isPlainRecord(userData?.provisioning) ? userData.provisioning : undefined;
-    const openclaw = isPlainRecord(provisioning?.openclaw) ? provisioning.openclaw : undefined;
-    const currentGatewayId = openclaw?.gatewayId;
-    if (typeof currentGatewayId !== "string" || currentGatewayId === params.gatewayId)
-        return false;
-    const current = await txn.get(db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId)
-        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(params.uid));
-    return current.exists;
-}
-function placementGatewayRejectReason(gatewayData, params) {
-    if (!isDurablePlacementRoot(gatewayData, params.gatewayId))
-        return "gateway-root-invalid";
-    return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
-}
-async function placementUserWriteContext(db, txn, userRef, params) {
-    const userSnap = await txn.get(userRef);
-    const userData = userSnap.exists ? userSnap.data() : undefined;
-    const atomicCreate = params.atomicCreate;
-    const shouldCreate = Boolean(atomicCreate &&
-        !Object.prototype.hasOwnProperty.call(userData ?? {}, atomicCreate.userField));
-    const mirrorPatch = shouldCreate
-        ? { ...params.mirrorPatch, ...atomicCreate.userPatch }
-        : params.mirrorPatch;
-    return {
-        userData,
-        mirrorPatch,
-        applyAtomicWrites() {
-            if (!shouldCreate || !atomicCreate)
-                return;
-            for (const write of atomicCreate.writes) {
-                txn.set(db.collection(write.collection).doc(write.document), write.data);
-            }
-        },
-    };
-}
-function commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites) {
-    if (params.requireDurableGateway) {
-        return { kind: "rejected", reason: "gateway-root-invalid" };
-    }
-    txn.update(userRef, mirrorPatch);
-    applyAtomicWrites();
-    return { kind: "mirror-only" };
-}
-async function readServingRuntime(db, txn, gatewayId) {
-    const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId));
-    const reason = placementRuntimeRejectReason(runtimeSnap, gatewayId);
-    if (reason)
-        return { reason };
-    const runtime = runtimeSnap.data();
-    return runtime ? { runtime } : { reason: "gateway-not-serving" };
-}
 export function customerRestoreFencePresent(user) {
     if (!isPlainRecord(user) || !isPlainRecord(user.provisioning))
         return false;
@@ -339,75 +265,4 @@ export function customerRuntimeMutationFenced(user) {
         return false;
     const openclaw = user.provisioning.openclaw;
     return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;
-}
-function placementUserIsOperatorManaged(user, automatic) {
-    if (!automatic || !isPlainRecord(user) || !isPlainRecord(user.provisioning))
-        return false;
-    const openclaw = user.provisioning.openclaw;
-    return isPlainRecord(openclaw) && openclaw.managedBy === "operator";
-}
-export async function commitPlacementAtomic(db, params) {
-    const userRef = db.collection("users").doc(params.uid);
-    const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
-    const assignmentRef = gatewayRef
-        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-        .doc(params.uid);
-    return db.runTransaction(async (txn) => {
-        const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(db, txn, userRef, params);
-        if (placementUserIsOperatorManaged(userData, params.automatic)) {
-            return { kind: "rejected", reason: "builder-operator-managed" };
-        }
-        if (customerRuntimeMutationFenced(userData)) {
-            return { kind: "rejected", reason: customerRestoreFencePresent(userData) ? "restore-in-progress" : "source-transfer-in-progress" };
-        }
-        if (!accountAllowsInteractiveAccess(userData)) {
-            return { kind: "rejected", reason: "account-not-interactive" };
-        }
-        if (await assignedElsewhere(db, txn, userData, params)) {
-            return { kind: "rejected", reason: "assigned-elsewhere" };
-        }
-        const gatewaySnap = await txn.get(gatewayRef);
-        const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-        if (!gatewaySnap.exists) {
-            return commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites);
-        }
-        const gatewayRejectReason = placementGatewayRejectReason(gatewayData, params);
-        if (gatewayRejectReason)
-            return { kind: "rejected", reason: gatewayRejectReason };
-        if (!isDurablePlacementRoot(gatewayData, params.gatewayId))
-            return { kind: "rejected", reason: "gateway-root-invalid" };
-        const runtimeResult = await readServingRuntime(db, txn, params.gatewayId);
-        if ("reason" in runtimeResult)
-            return { kind: "rejected", reason: runtimeResult.reason };
-        if (params.validateTarget) {
-            const targetRejectReason = await params.validateTarget({
-                txn,
-                gatewayRef,
-                assignmentRef,
-                gateway: gatewayData,
-                runtime: runtimeResult.runtime,
-            });
-            if (targetRejectReason)
-                return { kind: "rejected", reason: targetRejectReason };
-        }
-        if (await preserveExistingAssignment(txn, assignmentRef, userRef, { ...params, mirrorPatch })) {
-            applyAtomicWrites();
-            return { kind: "assignment-preserved" };
-        }
-        txn.update(userRef, mirrorPatch);
-        applyAtomicWrites();
-        const assignmentDoc = {
-            uid: params.uid,
-            slug: params.slug,
-            gatewayId: params.gatewayId,
-            source: params.source,
-            state: "serving",
-            epoch: 0,
-            createdAt: params.now,
-            updatedAt: params.now,
-            updatedByOperationId: params.updatedByOperationId ?? null,
-        };
-        txn.set(assignmentRef, assignmentDoc);
-        return { kind: "assigned", release: gatewayData.liveRelease };
-    });
 }

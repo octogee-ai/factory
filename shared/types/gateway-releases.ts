@@ -1,7 +1,5 @@
 import type { MigrationProgressRecord } from "./glm.js";
 import { createHash } from "node:crypto";
-import { accountAllowsInteractiveAccess } from "./account-lifecycle.js";
-import { GATEWAYS_COLLECTION } from "./fleet-controller.js";
 import type {
   GatewayPodPlacement,
   GatewayPodReplacements,
@@ -11,9 +9,6 @@ import {
   type GatewayMutableConfig,
 } from "./gateway-mutable-config.js";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import {
-  GLM_GATEWAYS_COLLECTION,
-} from "./glm.js";
 import type {
   GatewayDesiredStatus,
 } from "./glm.js";
@@ -345,7 +340,7 @@ export interface GatewayKubernetesObservation {
 }
 
 export function hasFreshReadyKubernetesObservation(
-  runtime: GatewayRuntimeDoc,
+  runtime: Pick<GatewayRuntimeDoc, "kubernetes">,
   nowMs: number,
   maxAgeMs: number,
 ): boolean {
@@ -532,87 +527,8 @@ export function classifyGatewayField(field: string): GatewayFieldClassification 
   return "release";
 }
 
-// ---------------------------------------------------------------------------
-// Atomic placement (GATEWAY-RELEASES-SPEC "Placement and migration targeting")
-// ---------------------------------------------------------------------------
-//
-// EVERY placement entry point — onboarding (functions), the admin direct-assign
-// route (core), and the operator assignment script (scripts) — commits through
-// this ONE helper so a customer's user mirror AND their assignment doc land
-// together, in a single Firestore transaction. Without it, a placement that
-// wrote only users/{uid}.provisioning.openclaw.gatewayId (the "decorative layer"
-// bug) leaves a customer with no assignment doc — invisible to the edge's
-// quiesce gate and the mount roster.
-//
-// Serving eligibility is resolved INSIDE the transaction from a fresh read of
-// the gateway root + runtime doc, rejecting if the gateway is not serving. A
-// legacy gateway (no GatewayDoc) has no assignment layer, so this writes ONLY
-// the mirror. Three different packages call it, so it is written against a
-// narrow structural Firestore surface that the real firebase-admin Firestore
-// satisfies.
-
-export interface PlacementDocSnap {
-  exists: boolean;
-  data: () => Record<string, unknown> | undefined;
-}
-
-export interface PlacementDocRef {
-  get: () => Promise<PlacementDocSnap>;
-  set: (data: Record<string, unknown>, options?: { merge?: boolean }) => Promise<unknown>;
-  update: (data: Record<string, unknown>) => Promise<unknown>;
-  collection: (name: string) => { doc: (id: string) => PlacementDocRef };
-}
-
-export interface PlacementTxn {
-  get: (ref: PlacementDocRef) => Promise<PlacementDocSnap>;
-  set: (ref: PlacementDocRef, data: Record<string, unknown>, options?: { merge?: boolean }) => void;
-  update: (ref: PlacementDocRef, data: Record<string, unknown>) => void;
-}
-
-export interface PlacementFirestore {
-  collection: (name: string) => { doc: (id: string) => PlacementDocRef };
-  runTransaction: <T>(body: (txn: PlacementTxn) => Promise<T>) => Promise<T>;
-}
-
-export interface PlacementTargetValidationContext {
-  txn: PlacementTxn;
-  gatewayRef: PlacementDocRef;
-  assignmentRef: PlacementDocRef;
-  gateway: GatewayDoc & GatewayMutableConfig;
-  runtime: Record<string, unknown>;
-}
-
-export interface CommitPlacementParams {
-  uid: string;
-  slug: string;
-  // Bare gateway id — the placement target.
-  gatewayId: string;
-  source: AssignmentSource;
-  now: number;
-  // The exact users/{uid} mirror patch the caller already writes today
-  // (gatewayId + gatewayProfile + controlUiEnabled + any model-metadata deletes).
-  // Passed in so this helper stays agnostic to per-caller mirror shaping and
-  // preserves each entry point's field set byte-for-byte.
-  mirrorPatch: Record<string, unknown>;
-  atomicCreate?: {
-    userField: string;
-    userPatch: Record<string, unknown>;
-    writes: ReadonlyArray<{
-      collection: string;
-      document: string;
-      data: Record<string, unknown>;
-    }>;
-  };
-  updatedByOperationId?: string | null;
-  assignmentWrite?: "upsert" | "create-if-missing";
-  requireDurableGateway?: boolean;
-  automatic?: boolean;
-  validateTarget?: (
-    context: PlacementTargetValidationContext,
-  ) => Promise<PlacementRejectReason | null>;
-}
-
 export type PlacementRejectReason =
+  | "builder-missing"
   | "builder-operator-managed"
   | "account-not-interactive"
   | "restore-in-progress"
@@ -629,123 +545,6 @@ export type CommitPlacementResult =
   | { kind: "assigned"; release: number | null }
   | { kind: "rejected"; reason: PlacementRejectReason };
 
-type DurablePlacementRoot = GatewayDoc & GatewayMutableConfig;
-
-function isDurablePlacementRoot(
-  value: unknown,
-  gatewayId: string,
-): value is DurablePlacementRoot {
-  return projectGatewayDesiredRootForGateway(value, gatewayId) !== null;
-}
-
-function placementRuntimeRejectReason(
-  snap: PlacementDocSnap,
-  gatewayId: string,
-): PlacementRejectReason | null {
-  const data = snap.exists ? snap.data() : undefined;
-  if (!isGatewayRuntimeDoc(data) || data.gatewayId !== gatewayId) {
-    return "gateway-not-serving";
-  }
-  return data.lifecycle === "serving" ? null : "gateway-not-serving";
-}
-
-async function preserveExistingAssignment(
-  txn: PlacementTxn,
-  assignmentRef: PlacementDocRef,
-  userRef: PlacementDocRef,
-  params: CommitPlacementParams,
-): Promise<boolean> {
-  if (params.assignmentWrite !== "create-if-missing") return false;
-  const assignmentSnap = await txn.get(assignmentRef);
-  if (!assignmentSnap.exists) return false;
-  txn.update(userRef, params.mirrorPatch);
-  return true;
-}
-
-async function assignedElsewhere(
-  db: PlacementFirestore,
-  txn: PlacementTxn,
-  userData: Record<string, unknown> | undefined,
-  params: CommitPlacementParams,
-): Promise<boolean> {
-  const provisioning = isPlainRecord(userData?.provisioning) ? userData.provisioning : undefined;
-  const openclaw = isPlainRecord(provisioning?.openclaw) ? provisioning.openclaw : undefined;
-  const currentGatewayId = openclaw?.gatewayId;
-  if (typeof currentGatewayId !== "string" || currentGatewayId === params.gatewayId) return false;
-  const current = await txn.get(
-    db.collection(GATEWAYS_COLLECTION).doc(currentGatewayId)
-      .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(params.uid),
-  );
-  return current.exists;
-}
-
-function placementGatewayRejectReason(
-  gatewayData: Record<string, unknown> | undefined,
-  params: CommitPlacementParams,
-): PlacementRejectReason | null {
-  if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) return "gateway-root-invalid";
-  return gatewayData.desiredStatus === "running" ? null : "gateway-not-running";
-}
-
-async function placementUserWriteContext(
-  db: PlacementFirestore,
-  txn: PlacementTxn,
-  userRef: PlacementDocRef,
-  params: CommitPlacementParams,
-): Promise<{
-  userData: Record<string, unknown> | undefined;
-  mirrorPatch: Record<string, unknown>;
-  applyAtomicWrites(): void;
-}> {
-  const userSnap = await txn.get(userRef);
-  const userData = userSnap.exists ? userSnap.data() : undefined;
-  const atomicCreate = params.atomicCreate;
-  const shouldCreate = Boolean(
-    atomicCreate &&
-    !Object.prototype.hasOwnProperty.call(userData ?? {}, atomicCreate.userField),
-  );
-  const mirrorPatch = shouldCreate
-    ? { ...params.mirrorPatch, ...atomicCreate!.userPatch }
-    : params.mirrorPatch;
-  return {
-    userData,
-    mirrorPatch,
-    applyAtomicWrites() {
-      if (!shouldCreate || !atomicCreate) return;
-      for (const write of atomicCreate.writes) {
-        txn.set(db.collection(write.collection).doc(write.document), write.data);
-      }
-    },
-  };
-}
-
-function commitMissingGateway(
-  txn: PlacementTxn,
-  userRef: PlacementDocRef,
-  params: CommitPlacementParams,
-  mirrorPatch: Record<string, unknown>,
-  applyAtomicWrites: () => void,
-): CommitPlacementResult {
-  if (params.requireDurableGateway) {
-    return { kind: "rejected", reason: "gateway-root-invalid" };
-  }
-  txn.update(userRef, mirrorPatch);
-  applyAtomicWrites();
-  return { kind: "mirror-only" };
-}
-
-async function readServingRuntime(
-  db: PlacementFirestore,
-  txn: PlacementTxn,
-  gatewayId: string,
-): Promise<{ runtime: Record<string, unknown> } | { reason: PlacementRejectReason }> {
-  const runtimeSnap = await txn.get(db.collection(GLM_GATEWAYS_COLLECTION).doc(gatewayId));
-  const reason = placementRuntimeRejectReason(runtimeSnap, gatewayId);
-  if (reason) return { reason };
-  const runtime = runtimeSnap.data();
-  return runtime ? { runtime } : { reason: "gateway-not-serving" };
-}
-
 export function customerRestoreFencePresent(user: unknown): boolean {
   if (!isPlainRecord(user) || !isPlainRecord(user.provisioning)) return false;
   const openclaw = user.provisioning.openclaw;
@@ -759,84 +558,3 @@ export function customerRuntimeMutationFenced(user: unknown): boolean {
   return isPlainRecord(openclaw) && openclaw.sourceTransferFence !== undefined;
 }
 
-function placementUserIsOperatorManaged(user: unknown, automatic: boolean | undefined): boolean {
-  if (!automatic || !isPlainRecord(user) || !isPlainRecord(user.provisioning)) return false;
-  const openclaw = user.provisioning.openclaw;
-  return isPlainRecord(openclaw) && openclaw.managedBy === "operator";
-}
-
-export async function commitPlacementAtomic(
-  db: PlacementFirestore,
-  params: CommitPlacementParams,
-): Promise<CommitPlacementResult> {
-  const userRef = db.collection("users").doc(params.uid);
-  const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(params.gatewayId);
-  const assignmentRef = gatewayRef
-    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-    .doc(params.uid);
-  return db.runTransaction<CommitPlacementResult>(async (txn) => {
-    const { userData, mirrorPatch, applyAtomicWrites } = await placementUserWriteContext(
-      db,
-      txn,
-      userRef,
-      params,
-    );
-    if (placementUserIsOperatorManaged(userData, params.automatic)) {
-      return { kind: "rejected", reason: "builder-operator-managed" };
-    }
-    if (customerRuntimeMutationFenced(userData)) {
-      return { kind: "rejected", reason: customerRestoreFencePresent(userData) ? "restore-in-progress" : "source-transfer-in-progress" };
-    }
-    if (!accountAllowsInteractiveAccess(userData)) {
-      return { kind: "rejected", reason: "account-not-interactive" };
-    }
-    if (await assignedElsewhere(db, txn, userData, params)) {
-      return { kind: "rejected", reason: "assigned-elsewhere" };
-    }
-    const gatewaySnap = await txn.get(gatewayRef);
-    const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-    if (!gatewaySnap.exists) {
-      return commitMissingGateway(txn, userRef, params, mirrorPatch, applyAtomicWrites);
-    }
-    const gatewayRejectReason = placementGatewayRejectReason(gatewayData, params);
-    if (gatewayRejectReason) return { kind: "rejected", reason: gatewayRejectReason };
-    if (!isDurablePlacementRoot(gatewayData, params.gatewayId)) return { kind: "rejected", reason: "gateway-root-invalid" };
-    const runtimeResult = await readServingRuntime(db, txn, params.gatewayId);
-    if ("reason" in runtimeResult) return { kind: "rejected", reason: runtimeResult.reason };
-    if (params.validateTarget) {
-      const targetRejectReason = await params.validateTarget({
-        txn,
-        gatewayRef,
-        assignmentRef,
-        gateway: gatewayData,
-        runtime: runtimeResult.runtime,
-      });
-      if (targetRejectReason) return { kind: "rejected", reason: targetRejectReason };
-    }
-    if (await preserveExistingAssignment(
-      txn,
-      assignmentRef,
-      userRef,
-      { ...params, mirrorPatch },
-    )) {
-      applyAtomicWrites();
-      return { kind: "assignment-preserved" };
-    }
-
-    txn.update(userRef, mirrorPatch);
-    applyAtomicWrites();
-    const assignmentDoc: AssignmentDoc = {
-      uid: params.uid,
-      slug: params.slug,
-      gatewayId: params.gatewayId,
-      source: params.source,
-      state: "serving",
-      epoch: 0,
-      createdAt: params.now,
-      updatedAt: params.now,
-      updatedByOperationId: params.updatedByOperationId ?? null,
-    };
-    txn.set(assignmentRef, assignmentDoc as unknown as Record<string, unknown>);
-    return { kind: "assigned", release: gatewayData.liveRelease };
-  });
-}

@@ -28,17 +28,4 @@ describe("durable gateway authority boundary", () => {
 
     expect(violations).toEqual([]);
   });
-
-  it("allows onboarding to read runtime observations only as a placement admission fence", () => {
-    const source = readFileSync(
-      path.join(REPOSITORY_ROOT, "functions/src/orchestrator/assign.ts"),
-      "utf8",
-    );
-
-    expect(source).toContain("GLM_GATEWAYS_COLLECTION");
-    expect(source).toContain("hasFreshReadyKubernetesObservation");
-    expect(source).not.toMatch(
-      /collection\(GLM_GATEWAYS_COLLECTION\)[\s\S]{0,200}\.(?:set|update|delete)\(/u,
-    );
-  });
 });

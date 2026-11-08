@@ -12,7 +12,7 @@ import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type CustomerDeletionJob, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type SecretsRepository, type Stored, type WatchChange, type WatchEvent } from "@octogee/core/platform-state";
+import { createFirestorePlatformStateStore, platformStateStoreFromEnvironment, MissingRecordError, type CustomerDeletionJob, type PlacementAdmissionPolicy, type FleetRegistryRecord, type GatewayRoot, type OpaqueMap, type GatewayRootFields, type GatewayRootPatch, type OperationRecord, type PlatformStateStore, type SecretsRepository, type Stored, type WatchChange, type WatchEvent } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -377,6 +377,7 @@ import {
   createFirestorePlacementPolicyReconcilerDeps,
   startPlacementPolicyReconciler,
 } from "./placement-policy-reconciler.js";
+import { openPlacementAdmission } from "./initial-placement.js";
 import type {
   FleetBrokerChannelBinding,
   FleetBrokerProjectCheckoutScope,
@@ -2209,6 +2210,7 @@ type ControllerStopper = () => void;
 
 interface ControllerBackgroundTasksDeps {
   addProductAdminRoutes?: ProductAdminRoutes;
+  placementAdmission: PlacementAdmissionPolicy;
   db: Firestore;
   deps: ControllerDeps;
   helm: HelmRunner;
@@ -2224,6 +2226,7 @@ const GITEA_GATEWAY_KEY_GC_GRACE_MS = 10 * 60 * 1000;
 
 function startControllerBackgroundTasks({
   addProductAdminRoutes,
+  placementAdmission,
   db,
   deps,
   helm,
@@ -2324,6 +2327,7 @@ function startControllerBackgroundTasks({
       now: () => Date.now(),
       log,
       readBuilderTier: firestoreBuilderTierReader(db),
+      placementAdmission,
       debug: (message) => logger.debug(message),
       ensureAuthSecret: deps.ensureGatewayAuthSecret,
       readGatewayPodDiagnostics: deps.kubeOps.readGatewayPodDiagnostics,
@@ -2715,7 +2719,7 @@ async function createControllerRuntime(db: Firestore, store: PlatformStateStore)
   return { deps, fleetControllerPrivateKey, chartFingerprint };
 }
 
-export async function main(product: { addAdminRoutes?: ProductAdminRoutes } = {}): Promise<void> {
+export async function main(product: { addAdminRoutes?: ProductAdminRoutes; placementAdmission?: PlacementAdmissionPolicy } = {}): Promise<void> {
   const controllerStartedAt = Date.now();
   initializeApp({
     credential: applicationDefault(),
@@ -2785,6 +2789,7 @@ export async function main(product: { addAdminRoutes?: ProductAdminRoutes } = {}
 
   const stoppers = startControllerBackgroundTasks({
     addProductAdminRoutes: product.addAdminRoutes,
+    placementAdmission: product.placementAdmission ?? openPlacementAdmission,
     db,
     deps,
     helm: deps.helm,
