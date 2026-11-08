@@ -14,12 +14,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { isValidUsername, usernameValidationError, } from "@octogee/shared/types/identity";
 import { log, OPENCLAW_DIR, CUSTOMERS_DIR, agentExists, } from "./config.js";
-import { db } from "./firebase.js";
+import { db, platformStateStore } from "./firebase.js";
+import { MissingRecordError } from "./platform-state/errors.js";
 import { CREW_IDENTITY } from "./crew.js";
 import { workspaceRepoName } from "./gitea-naming.js";
 import { provisionMattermostUser } from "./mattermost.js";
 import { notifyNewSignup } from "./notifications.js";
-import { registerAgentIds } from "./gateway.js";
 import { writeTierTemplateFiles as writeTierTemplateFilesImpl } from "./tier-template-files.js";
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export function buildProvisioningContext(uid, userData) {
@@ -192,7 +192,6 @@ export async function markProvisioningComplete(ctx, mmUpdate, allAgentIds) {
     await seedWorkspaceChannels(ctx, mmUpdate);
     await seedWorkspaceOwner(ctx);
     await writeAgentDoc(ctx, mmUpdate);
-    registerAgentIds(ctx.uid, allAgentIds);
     await updateUserWorkspaceEntry(ctx, provisioningObj);
 }
 function buildProvisioningSnapshot(ctx, allAgentIds) {
@@ -208,6 +207,13 @@ function buildProvisioningSnapshot(ctx, allAgentIds) {
     return provisioningObj;
 }
 async function writeSystemConfig(ctx) {
+    await platformStateStore.transaction({ label: "provisioning.default-role" }, async (transaction) => {
+        const builder = await transaction.builders.records.get(ctx.uid);
+        if (builder === null)
+            throw new MissingRecordError({ aggregate: "builder", key: ctx.uid });
+        if (builder.role === null)
+            await transaction.builders.records.patch(ctx.uid, { role: "user" });
+    });
     const systemConfigData = {
         updatedAt: FieldValue.serverTimestamp(),
     };
@@ -217,14 +223,7 @@ async function writeSystemConfig(ctx) {
         systemConfigData.trialExpiresAt = expiresAt;
         log(`Trial expires: ${expiresAt.toISOString().slice(0, 10)} for ${ctx.slug}`);
     }
-    const configRef = db.doc(`users/${ctx.uid}/system/config`);
-    await db.runTransaction(async (transaction) => {
-        const current = await transaction.get(configRef);
-        if (current.data()?.role === undefined) {
-            systemConfigData.role = "user";
-        }
-        transaction.set(configRef, systemConfigData, { merge: true });
-    });
+    await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
 export function buildUserOperationalFields(ctx, provisioningObj, mmUpdate) {
     const operationalFields = {

@@ -1,42 +1,22 @@
+import type { BuilderSecret, SecretsRepository } from "./platform-state/secrets.js";
+
 export interface ConnectorRevocationTarget {
   connectorId: string;
   revocationUrl: string;
 }
 
-interface SecretReader {
-  collection(name: string): {
-    doc(uid: string): {
-      collection(name: string): {
-        doc(connectorId: string): {
-          get(): Promise<{ data(): unknown }>;
-        };
-      };
-    };
-  };
-}
-
 export interface ConnectorRevocationDeps {
-  db: SecretReader;
+  secrets: Pick<SecretsRepository, "get">;
   decryptSecret: (ciphertext: string) => Promise<string>;
   logger: { warn: (message: string) => void };
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
 
-interface StoredTokens {
-  encryptedAccessToken?: unknown;
-  encryptedRefreshToken?: unknown;
-}
-
-function revocableCiphertext(data: unknown): string | null {
-  const tokens = (data as { tokens?: StoredTokens } | undefined)?.tokens;
-  if (typeof tokens?.encryptedRefreshToken === "string" && tokens.encryptedRefreshToken.length > 0) {
-    return tokens.encryptedRefreshToken;
-  }
-  if (typeof tokens?.encryptedAccessToken === "string" && tokens.encryptedAccessToken.length > 0) {
-    return tokens.encryptedAccessToken;
-  }
-  return null;
+function revocableCiphertext(grant: BuilderSecret | null): string | null {
+  if (!grant) return null;
+  if (grant.kind !== "connector") throw new Error(`secret ${grant.secretId} is not a connector grant`);
+  return grant.encryptedRefreshToken || grant.encryptedAccessToken || null;
 }
 
 function errorMessage(error: unknown): string {
@@ -49,13 +29,7 @@ export async function revokeProviderGrant(
   deps: ConnectorRevocationDeps,
 ): Promise<void> {
   try {
-    const snapshot = await deps.db
-      .collection("users")
-      .doc(uid)
-      .collection("secrets")
-      .doc(target.connectorId)
-      .get();
-    const ciphertext = revocableCiphertext(snapshot.data());
+    const ciphertext = revocableCiphertext(await deps.secrets.get(uid, target.connectorId));
     if (ciphertext === null) return;
 
     const response = await (deps.fetchImpl ?? fetch)(target.revocationUrl, {

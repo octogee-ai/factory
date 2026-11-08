@@ -10,6 +10,8 @@ import {
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
+import type { BuilderAccount } from "./builder-account.js";
+import type { BuilderRecord } from "./platform-state/builders.js";
 
 export function toISODate(val: unknown): string | null {
   if (!val) return null;
@@ -24,7 +26,7 @@ export function isActiveStatus(status: string): boolean {
   return status === "active" || status === "trialing";
 }
 
-type CustomerDoc = Record<string, unknown>;
+type CustomerDoc = Readonly<Record<string, unknown>>;
 
 function objectAt(src: CustomerDoc, key: string): CustomerDoc {
   const value = src[key];
@@ -36,24 +38,17 @@ function stringAt(src: CustomerDoc, key: string, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function nullableStringAt(src: CustomerDoc, key: string): string | null {
-  const value = src[key];
-  return typeof value === "string" ? value : null;
-}
-
 function numberAt(src: CustomerDoc, key: string, fallback = 0): number {
   const value = src[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function stringArrayAt(src: CustomerDoc, key: string): string[] {
-  const value = src[key];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+export function isoMillis(value: number | null): string | null {
+  return value === null ? null : new Date(value).toISOString();
 }
 
-function displayNameFor(d: CustomerDoc): string {
-  const email = stringAt(d, "email");
-  return stringAt(d, "displayName") || stringAt(d, "username") || email.split("@")[0] || "(unknown)";
+function displayNameFor(account: BuilderAccount): string {
+  return account.displayName || account.username || (account.email ?? "").split("@")[0] || "(unknown)";
 }
 
 // Per-owner figures from the broker ledger (modelBrokerUsage*) — the only
@@ -102,27 +97,34 @@ export interface CustomerSummary {
   accountLifecycleStatus: string;
 }
 
+function builderSummaryFields(builder: BuilderRecord) {
+  return {
+    mattermostConnected: (builder.mattermostUserId ?? "").length > 0,
+    agentCount: builder.agents.agentIds.length,
+    createdAt: isoMillis(builder.createdAt),
+    provisioningStatus: builder.openclaw.status ?? builder.provisioning.status ?? null,
+    accountLifecycleStatus: builder.accountLifecycle?.status ?? "active",
+  };
+}
+
 export function buildCustomerSummary(
-  uid: string,
-  d: CustomerDoc,
+  builder: BuilderRecord,
+  account: BuilderAccount,
   broker: BrokerCustomerUsage = {},
 ): CustomerSummary {
-  const subscription = objectAt(d, "subscription");
+  const subscription = objectAt(account.planInputs as CustomerDoc, "subscription");
   const now = broker.now ?? Date.now();
-  const plan = resolveBillingProfile(d, new Date(now));
+  const plan = resolveBillingProfile(account.planInputs, new Date(now));
   const tierConfig = getTierConfig(plan.tier);
   const subscriptionStatus = stringAt(subscription, "status", "trial");
-  const usage = objectAt(d, "usage");
-  const provisioning = objectAt(d, "provisioning");
-  const openclaw = objectAt(provisioning, "openclaw");
-  const mattermost = objectAt(d, "mattermost");
+  const usage = account.usage;
   const windowCostUsd = broker.windowCostUsd ?? 0;
   const weekCostUsd = broker.weekCostUsd ?? 0;
   const costUsd = broker.totalCostUsd ?? 0;
   // Owner-credential (BYOSUB/BYOT) traffic never lands in a spend window, so a
   // percentage against a zero budget would misleadingly read 100% — mirror the
   // customer surfaces and show 0. The broker never throttles them either.
-  const onOwnerCredential = d.byotActive === true;
+  const onOwnerCredential = account.byotActive;
   const degraded = spendDegradeState({
     modelAccess: plan.modelAccess,
     windowCostUsd,
@@ -132,21 +134,20 @@ export function buildCustomerSummary(
     onOwnerCredential,
     houseFallback: plan.houseFallback,
   }).degraded;
-  const agentIds = stringArrayAt(openclaw, "agentIds");
   const revenueUsd: number = isActiveStatus(subscriptionStatus)
     ? tierConfig.monthlyPrice
     : 0;
 
   return {
-    uid,
-    displayName: displayNameFor(d),
-    email: stringAt(d, "email"),
-    username: stringAt(d, "username"),
+    uid: builder.uid,
+    displayName: displayNameFor(account),
+    email: account.email ?? "",
+    username: account.username ?? "",
     tier: plan.tier,
     effectiveTier: plan.effectiveTier,
     trialDaysRemaining: plan.trialDaysRemaining,
     subscriptionStatus,
-    byotActive: d.byotActive === true,
+    byotActive: account.byotActive,
     windowCostUsd,
     windowBudgetUsd: plan.windowBudgetUsd,
     weekCostUsd,
@@ -159,17 +160,10 @@ export function buildCustomerSummary(
     costUsd,
     degraded,
     lastActive: toISODate(usage.lastUpdated),
-    mattermostConnected: typeof mattermost.userId === "string" && mattermost.userId.length > 0,
-    mattermostUsername: nullableStringAt(mattermost, "username"),
-    agentCount: agentIds.length,
-    createdAt: toISODate(d.createdAt),
+    mattermostUsername: account.mattermostUsername,
     percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
     revenueUsd,
     marginUsd: revenueUsd - costUsd,
-
-    provisioningStatus:
-      nullableStringAt(openclaw, "status") ??
-      nullableStringAt(provisioning, "status"),
-    accountLifecycleStatus: nullableStringAt(objectAt(d, "accountLifecycle"), "status") ?? "active",
+    ...builderSummaryFields(builder),
   };
 }

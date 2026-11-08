@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "./platform-state/store.js";
 export interface SupersedeRollingSharedGatewayRollInput {
     sourceGatewayId: string;
     targetGatewayId: string;
@@ -18,7 +18,7 @@ export type SupersedeRollingSharedGatewayRollResult = {
     kind: "not-eligible";
 };
 export interface SharedGatewayRollRecoveryDeps {
-    db: Firestore;
+    store: PlatformStateStore;
     now: () => number;
 }
 export declare function supersedeRollingSharedGatewayRoll(deps: SharedGatewayRollRecoveryDeps, input: SupersedeRollingSharedGatewayRollInput): Promise<SupersedeRollingSharedGatewayRollResult>;

@@ -8,6 +8,7 @@ import { GATEWAY_CREDENTIAL_TOKEN_AUDIENCE, GATEWAY_CREDENTIAL_TOKEN_HEADER } fr
 import { K8S_SA_TOKEN_HEADER, createTenantBindingMetrics, createTenantBindingMiddleware } from "../tenant-binding.js";
 import { createGatewayCredentialAuth } from "../gateway-credential-auth.js";
 import { createTenantEnforcementMiddleware } from "../tenant-enforcement.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "../../routes/fleet-broker.js";
 import type { ReviewResult, Reviewer } from "../../lib/token-review.js";
 
@@ -110,6 +111,7 @@ describe("builder runtime-state routes for a VM gateway", () => {
     app.use(createTenantEnforcementMiddleware({ db }));
     app.use("/internal/fleet", createFleetBrokerRoutes({
       db: db as unknown as Firestore,
+      store: createDocumentFixtureStore({}),
       createBlobSignedUrl: async (input) => ({ url: `signed:${input.gcsPath}`, method: "GET", gcsPath: input.gcsPath, expiresAt: "later" }),
     }));
 

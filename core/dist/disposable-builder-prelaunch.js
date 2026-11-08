@@ -1,21 +1,14 @@
 import { builderActivateOperationId } from "./builder-activation-lease.js";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
-function record(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
 function prelaunchStatusMatches(gatewayId, generation, lease, activationBoot) {
     return lease.status === "provisioning" && lease.activationOperationId === undefined && lease.activatingAt === undefined ||
-        activationBoot && ["provisioning", "activating"].includes(String(lease.status)) &&
+        activationBoot && ["provisioning", "activating"].includes(lease.status) &&
             lease.activationOperationId === builderActivateOperationId(gatewayId, generation);
 }
-function prelaunchLease(gateway, userData, activationBoot = false) {
-    const user = record(userData);
-    const openclaw = record(record(user?.provisioning)?.openclaw);
-    const lease = record(openclaw?.activationLease);
+function prelaunchLease(gateway, builder, activationBoot = false) {
+    const lease = builder?.activationLease ?? null;
     const allocation = gateway.allocation;
-    if (!user || !accountAllowsInteractiveAccess(user) || !lease || !allocation)
+    if (!builder || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle }) || !lease || !allocation)
         return null;
     return [
         gateway.desiredStatus === "running",
@@ -29,8 +22,8 @@ function prelaunchLease(gateway, userData, activationBoot = false) {
         lease.activeAt === undefined,
         typeof lease.sourceGatewayId === "string",
         lease.sourceGatewayId !== gateway.gatewayId,
-        openclaw?.gatewayId === lease.sourceGatewayId,
-        openclaw?.slug === gateway.builderSlug,
+        builder.gateway?.gatewayId === lease.sourceGatewayId,
+        builder.slug === gateway.builderSlug,
         lease.builderSlug === gateway.builderSlug,
         Number.isSafeInteger(lease.sourceAssignmentEpoch),
     ].every(Boolean) ? lease : null;
@@ -45,37 +38,30 @@ function samePrelaunchAllocation(gateway, expected) {
     ].every(Boolean);
 }
 export async function disposableBuilderPrelaunchReserved(input) {
-    const { db, gateway, transaction, expectedGateway } = input;
+    const { reader, gateway, expectedGateway } = input;
     if (expectedGateway && !samePrelaunchAllocation(gateway, expectedGateway))
         return false;
     if (gateway.gatewayClass !== "builder" || gateway.allocation?.kind !== "disposable-builder" || !gateway.ownerUid) {
         return false;
     }
-    const userRef = db.collection("users").doc(gateway.ownerUid);
-    const user = await (transaction ? transaction.get(userRef) : userRef.get());
-    const lease = prelaunchLease(gateway, user.data(), input.activationBoot);
+    const lease = prelaunchLease(gateway, await reader.builders.records.get(gateway.ownerUid), input.activationBoot);
     if (!lease)
         return false;
-    const sourceRef = db.collection(GATEWAYS_COLLECTION).doc(lease.sourceGatewayId);
-    const assignmentRef = sourceRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(gateway.ownerUid);
-    const targetAssignments = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId)
-        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).limit(1);
-    const [source, assignment, target] = await Promise.all([
-        transaction ? transaction.get(sourceRef) : sourceRef.get(),
-        transaction ? transaction.get(assignmentRef) : assignmentRef.get(),
-        transaction ? transaction.get(targetAssignments) : targetAssignments.get(),
+    const sourceGatewayId = lease.sourceGatewayId;
+    const [sourceRoot, assigned, targetEmpty] = await Promise.all([
+        reader.gateways.roots.get(sourceGatewayId),
+        reader.gateways.assignments.get(sourceGatewayId, gateway.ownerUid),
+        reader.gateways.assignments.isEmpty(gateway.gatewayId),
     ]);
-    const sourceRoot = projectGatewayDesiredRootForGateway(source.data(), lease.sourceGatewayId);
-    const assigned = assignment.data();
     if (!assigned || sourceRoot?.gatewayClass !== "shared")
         return false;
     return [
         assigned.uid === gateway.ownerUid,
         assigned.slug === gateway.builderSlug,
-        assigned.gatewayId === lease.sourceGatewayId,
+        assigned.gatewayId === sourceGatewayId,
         assigned.state === "serving",
         assigned.epoch === lease.sourceAssignmentEpoch,
-        target.empty,
+        targetEmpty,
     ].every(Boolean);
 }
 function activationLeaseMatches(gateway, lease) {
@@ -83,7 +69,7 @@ function activationLeaseMatches(gateway, lease) {
         lease.targetGatewayId === gateway.gatewayId && gateway.allocation?.claimedByUid === gateway.ownerUid && lease.builderSlug === gateway.builderSlug);
 }
 function activationBootMode(gateway, lease) {
-    if (["active", "returning", "failed"].includes(String(lease.status)))
+    if (["active", "returning", "failed"].includes(lease.status))
         return { mode: "normal" };
     if (lease.status === "activating" || (lease.status === "provisioning" && lease.activationOperationId !== undefined)) {
         if (typeof lease.activationOperationId !== "string" || lease.activationOperationId !== builderActivateOperationId(gateway.gatewayId, gateway.allocation.generation)) {
@@ -95,27 +81,24 @@ function activationBootMode(gateway, lease) {
         throw new Error("Builder prelaunch authority is inconsistent");
     return { mode: "prelaunch" };
 }
-async function hasServingBuilderAssignment(input, userData, ownerUid) {
-    const { gateway, db, transaction } = input;
-    if (record(record(userData.provisioning)?.openclaw)?.gatewayId !== gateway.gatewayId)
+async function hasServingBuilderAssignment(reader, gateway, builder) {
+    if (builder.gateway?.gatewayId !== gateway.gatewayId)
         return false;
-    const assigned = (await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId)
-        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(ownerUid))).data();
-    return assigned?.uid === ownerUid && assigned.state === "serving";
+    const assigned = await reader.gateways.assignments.get(gateway.gatewayId, builder.uid);
+    return assigned?.uid === builder.uid && assigned.state === "serving";
 }
 export async function disposableBuilderBootMode(input) {
-    const { gateway, db, transaction } = input;
+    const { gateway, reader } = input;
     if (gateway.gatewayClass !== "builder" || gateway.allocation?.kind !== "disposable-builder")
         return { mode: "normal" };
     if (!gateway.ownerUid)
         throw new Error("Builder prelaunch owner is unavailable");
-    const user = await transaction.get(db.collection("users").doc(gateway.ownerUid));
-    const data = user.data();
-    if (!data)
+    const builder = await reader.builders.records.get(gateway.ownerUid);
+    if (!builder)
         throw new Error("Builder prelaunch owner is unavailable");
-    if (await hasServingBuilderAssignment(input, data, gateway.ownerUid))
+    if (await hasServingBuilderAssignment(reader, gateway, builder))
         return { mode: "normal" };
-    const lease = record(record(record(data.provisioning)?.openclaw)?.activationLease);
+    const lease = builder.activationLease;
     if (!activationLeaseMatches(gateway, lease)) {
         throw new Error("Builder activation authority is inconsistent");
     }

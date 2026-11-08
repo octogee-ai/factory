@@ -10,12 +10,15 @@ import {
   initialGatewayReleaseDocuments,
   podBelongsToGateway,
   readGatewayArtifact,
-  readGatewayAuthorization,
+  readGatewayArtifactInStore,
+  readGatewayAuthorizationInStore,
   readGatewayRuntimeHeartbeat,
   readServingGatewayAuthorization,
   type GatewayMutableConfig,
 } from "./gateway-live-release.js";
 import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
+import { MalformedRecordError } from "./platform-state/errors.js";
+import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
 const POD_NAME = "octogee-gateway-bender-5bc5949d46-p946t";
 
@@ -292,16 +295,20 @@ describe("gateway durable configuration authorization", () => {
 
   it("rejects revision-shaped ids before attempting a durable root read", async () => {
     let reads = 0;
-    const db = {
-      doc() {
-        reads += 1;
-        throw new Error("revision ids must not reach Firestore");
+    const state = {
+      gateways: {
+        roots: {
+          get() {
+            reads += 1;
+            throw new Error("revision ids must not reach the store");
+          },
+        },
       },
     };
 
     expect(isBareGatewayId("bender")).toBe(true);
     expect(isBareGatewayId("bender-r2")).toBe(false);
-    await expect(readGatewayAuthorization(db as never, "bender-r2")).resolves.toBeNull();
+    await expect(readGatewayAuthorizationInStore(state as never, "bender-r2")).resolves.toBeNull();
     expect(reads).toBe(0);
   });
 
@@ -320,7 +327,7 @@ describe("gateway durable configuration authorization", () => {
       "glmGateways/bender": servingRuntime(),
     };
 
-    await expect(readGatewayAuthorization(database(docs) as never, "bender")).resolves.toMatchObject({
+    await expect(readGatewayAuthorizationInStore(createDocumentFixtureStore(docs), "bender")).resolves.toMatchObject({
       kind: "durable",
       config: {
         gatewayClass: "builder",
@@ -328,7 +335,7 @@ describe("gateway durable configuration authorization", () => {
         builderAccess: { controlUiEnabled: true },
       },
     });
-    await expect(readServingGatewayAuthorization(database(docs) as never, "bender")).resolves.toMatchObject({
+    await expect(readServingGatewayAuthorization(createDocumentFixtureStore(docs), "bender")).resolves.toMatchObject({
       kind: "durable",
       config: { gatewayClass: "builder" },
     });
@@ -344,7 +351,7 @@ describe("gateway durable configuration authorization", () => {
         profile: "standard",
       },
     };
-    await expect(readServingGatewayAuthorization(database(docs) as never, "bender")).resolves.toBeNull();
+    await expect(readServingGatewayAuthorization(createDocumentFixtureStore(docs), "bender")).resolves.toBeNull();
   });
 
   it("fails closed instead of falling back to stale bare glm config before the root config marker exists", async () => {
@@ -357,7 +364,7 @@ describe("gateway durable configuration authorization", () => {
       },
     };
 
-    await expect(readGatewayAuthorization(database(docs) as never, "bender")).resolves.toBeNull();
+    await expect(readGatewayAuthorizationInStore(createDocumentFixtureStore(docs), "bender")).resolves.toBeNull();
   });
 
   it("fails closed when no durable gateway exists instead of reading a bare glm config", async () => {
@@ -370,7 +377,7 @@ describe("gateway durable configuration authorization", () => {
       },
     };
 
-    await expect(readServingGatewayAuthorization(database(docs) as never, "bender")).resolves.toBeNull();
+    await expect(readServingGatewayAuthorization(createDocumentFixtureStore(docs), "bender")).resolves.toBeNull();
   });
 
   it("does not authorize a runtime realization without a durable root", async () => {
@@ -381,10 +388,10 @@ describe("gateway durable configuration authorization", () => {
       }),
     };
 
-    await expect(readGatewayAuthorization(database(docs) as never, "bender")).resolves.toBeNull();
+    await expect(readGatewayAuthorizationInStore(createDocumentFixtureStore(docs), "bender")).resolves.toBeNull();
   });
 
-  it("does not revive stale legacy authority when a durable gateway doc is malformed", async () => {
+  it("refuses a malformed durable gateway doc instead of reviving stale legacy authority", async () => {
     const docs: Docs = {
       "gateways/bender": { gatewayId: "bender", desiredStatus: "running" },
       "glmGateways/bender": {
@@ -395,7 +402,9 @@ describe("gateway durable configuration authorization", () => {
       },
     };
 
-    await expect(readGatewayAuthorization(database(docs) as never, "bender")).resolves.toBeNull();
+    await expect(readGatewayAuthorizationInStore(createDocumentFixtureStore(docs), "bender")).rejects.toBeInstanceOf(
+      MalformedRecordError,
+    );
   });
 
   it("rejects a runtime realization that is missing or not serving", async () => {
@@ -404,9 +413,9 @@ describe("gateway durable configuration authorization", () => {
       "glmGateways/bender": servingRuntime({ lifecycle: "failed" }),
     };
 
-    await expect(readServingGatewayAuthorization(database(docs) as never, "bender")).resolves.toBeNull();
+    await expect(readServingGatewayAuthorization(createDocumentFixtureStore(docs), "bender")).resolves.toBeNull();
     await expect(
-      readServingGatewayAuthorization(database({ "gateways/bender": durableGateway() }) as never, "bender"),
+      readServingGatewayAuthorization(createDocumentFixtureStore({ "gateways/bender": durableGateway() }), "bender"),
     ).resolves.toBeNull();
   });
 
@@ -593,7 +602,7 @@ describe("gateway durable configuration authorization", () => {
 
     await expect(
       readGatewayRuntimeHeartbeat(
-        database(docs) as never,
+        createDocumentFixtureStore(docs),
         durableGateway() as never,
       ),
     ).resolves.toEqual({ status: "ready" });
@@ -609,10 +618,50 @@ describe("gateway durable configuration authorization", () => {
 
     await expect(
       readGatewayRuntimeHeartbeat(
-        database(docs) as never,
+        createDocumentFixtureStore(docs),
         durableGateway() as never,
       ),
     ).resolves.toBeNull();
+  });
+
+  it("reads a hash-verified artifact from the store through the retired Mac schema upgrade", async () => {
+    const payload = {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag: "deadbee",
+      macOpsTokenProtocol: { version: 1 },
+    };
+    const store = createDocumentFixtureStore({
+      "gateways/bender/releases/2": {
+        gatewayId: "bender",
+        release: 2,
+        payloadHash: releasePayloadHash(payload as never),
+        payload,
+      },
+    });
+
+    await expect(readGatewayArtifactInStore(store, "bender", 2)).resolves.toEqual({
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag: "deadbee",
+    });
+    await expect(readGatewayArtifactInStore(store, "bender", 3)).resolves.toBeNull();
+    await expect(readGatewayArtifactInStore(store, "bender", null)).resolves.toBeNull();
+    await expect(readGatewayArtifactInStore(store, "bender-r2", 2)).resolves.toBeNull();
+  });
+
+  it("refuses a stored release payload that still carries credential state", async () => {
+    const store = createDocumentFixtureStore({
+      "gateways/bender/releases/2": {
+        gatewayId: "bender",
+        release: 2,
+        payload: {
+          imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+          imageTag: "deadbee",
+          byosub: { legacy: true },
+        },
+      },
+    });
+
+    await expect(readGatewayArtifactInStore(store, "bender", 2)).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
   it("refuses a release payload that still carries credential state", async () => {

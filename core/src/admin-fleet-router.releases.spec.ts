@@ -8,6 +8,7 @@ import {
   addAdminFleetRoutes,
   ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE,
 } from "./admin-fleet-router.js";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "./testing/journal-store.js";
 import type {
   CentralReleaseAuthority,
   ReleaseDigestManifest,
@@ -261,13 +262,25 @@ function mkApp(
   seed?: Record<string, Record<string, unknown>>,
   opts?: TestRouterOptions,
 ) {
-  const { db, store } = makeDb(seed, opts);
+  let firstTransactionStarted = false;
+  const beforeFirstTransaction = (state: Map<string, Record<string, unknown>>) => {
+    if (firstTransactionStarted) return;
+    firstTransactionStarted = true;
+    opts?.beforeFirstTransaction?.(state);
+  };
+  const { db, store } = makeDb(seed, { ...opts, beforeFirstTransaction });
   const app = express();
   app.use(express.json());
   addAdminFleetRoutes(app, {
     db,
+    store: createJournalFixtureStore(journalRowsAtPaths(store), {
+      transactionFailure: opts?.failTransactions ? new Error("simulated transaction failure") : undefined,
+      documents: fixtureDocumentsAt(store),
+      beforeTransaction: (label) => {
+        if (!label.startsWith("operation-audit.")) beforeFirstTransaction(store);
+      },
+    }),
     logger: { info: vi.fn(), warn: vi.fn() },
-    workspaceSlugsForUser: (data) => (data.username ? [data.username] : []),
     provisionGatewayAuthSecret: opts?.provisionGatewayAuthSecret
       ? vi.fn((input) => opts.provisionGatewayAuthSecret!(input))
       : vi.fn(async () => ({})),
@@ -870,10 +883,10 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
   it.each([
     { fence: { sourceGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
     { fence: { sourceGatewayId: "source", targetGatewayId: "gamma", executionId: "transfer-1" }, mirror: "other" },
-    { fence: null, mirror: "gamma" },
-    { fence: false, mirror: "gamma" },
     { fence: {}, mirror: "gamma" },
-  ])("rejects rollback append with retained source fence $fence after operation failure", async ({ fence, mirror }) => {
+    { fence: null, mirror: "gamma", malformed: true },
+    { fence: false, mirror: "gamma", malformed: true },
+  ])("rejects rollback append with retained source fence $fence after operation failure", async ({ fence, mirror, malformed }) => {
     const seed = seedNewSchemaGateway("gamma", sharedPayload(), builderGateway);
     seed["gateways/gamma"].latestRelease = 2;
     seed["gateways/gamma"].desiredRelease = 2;
@@ -890,8 +903,12 @@ describe("POST /gateways/:id/releases/:n/rollback — cut a NEW release from rel
     const { app, store } = mkApp(seed);
     const original = structuredClone(store.get("gateways/gamma"));
     const response = await request(app).post("/gateways/gamma/releases/1/rollback").send({});
-    expect(response.status).toBe(409);
-    expect(response.body.error).toMatch(/source transfer outcome is unresolved/);
+    if (malformed) {
+      expect(response.status).toBe(500);
+    } else {
+      expect(response.status).toBe(409);
+      expect(response.body.error).toMatch(/source transfer outcome is unresolved/);
+    }
     expect(store.get("gateways/gamma")).toEqual(original);
     expect(store.has(`gateways/gamma/${GATEWAY_RELEASES_SUBCOLLECTION}/3`)).toBe(false);
     expect([...store.values()].filter(doc => doc.kind === "rollout")).toHaveLength(0);
@@ -1030,8 +1047,6 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
   it.each([
     { fence: { sourceGatewayId: "zeta", executionId: "transfer-1" }, mirror: "other" },
     { fence: { sourceGatewayId: "source", targetGatewayId: "zeta", executionId: "transfer-1" }, mirror: "other" },
-    { fence: null, mirror: "zeta" },
-    { fence: false, mirror: "zeta" },
     { fence: {}, mirror: "zeta" },
   ])("blocks root PATCH with a retained transfer fence $fence after operation failure", async ({ fence, mirror }) => {
     const seed = seedNewSchemaGateway("zeta", sharedPayload());
@@ -1045,6 +1060,16 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
     const response = await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" });
     expect(response.status).toBe(409);
     expect(response.body.error).toMatch(/source transfer outcome is unresolved/);
+    expect(store.get("gateways/zeta")).toEqual(original);
+  });
+
+  it.each([null, false])("fails closed on a malformed transfer fence %s without touching the root", async (fence) => {
+    const seed = seedNewSchemaGateway("zeta", sharedPayload());
+    seed["users/u1"] = { provisioning: { openclaw: { gatewayId: "zeta", sourceTransferFence: fence } } };
+    const original = structuredClone(seed["gateways/zeta"]);
+    const { app, store } = mkApp(seed);
+    const response = await request(app).patch("/gateways/zeta").send({ desiredStatus: "paused" });
+    expect(response.status).toBe(500);
     expect(store.get("gateways/zeta")).toEqual(original);
   });
 
@@ -1077,8 +1102,7 @@ describe("PATCH /gateways/:id — updates durable lifecycle", () => {
 
     const res = await request(app).patch("/gateways/zeta").send({ sizingTier: "m" });
 
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ error: "gateway durable root is invalid", gatewayId: "zeta" });
+    expect(res.status).toBe(500);
     expect(store.get("gateways/zeta")?.sizingTier).toBeNull();
   });
 
@@ -1135,10 +1159,13 @@ describe("DELETE /gateways/:id — retirement claim", () => {
     const res = await request(app).delete("/gateways/zed");
     expect(res.status).toBe(202);
     expect(store.get(`${GLM_GATEWAYS_COLLECTION}/zed`)).not.toMatchObject({ desiredStatus: expect.anything() });
+    const [retirePath] = [...store.entries()]
+      .filter(([path, data]) => path.startsWith(`${GLM_OPERATIONS_COLLECTION}/`) && data.kind === "retire-gateway")
+      .map(([path]) => path);
     expect(store.get("gateways/zed")).toMatchObject({
       desiredStatus: "retired",
       retirementVersion: 1,
-      retirementClaim: { operationId: "auto-1", version: 1 },
+      retirementClaim: { operationId: retirePath?.split("/")[1], version: 1 },
     });
     expect(opsIn(store, "retire-gateway")[0]?.input).toMatchObject({
       retirementClaimVersion: 1,
@@ -1169,7 +1196,6 @@ describe("DELETE /gateways/:id — retirement claim", () => {
   it("rejects a legacy-only gateway without a durable root", async () => {
     const { app, store } = mkApp({
       [`${GLM_GATEWAYS_COLLECTION}/leg`]: { gatewayId: "leg", imageTag: "abc1234" },
-      "gateways/leg": { gatewayId: "leg", status: "ready", mountedCustomers: [] },
     });
     const res = await request(app).delete("/gateways/leg");
     expect(res.status).toBe(404);
@@ -1260,9 +1286,9 @@ describe("DELETE /gateways/:id — retirement claim", () => {
         uid: "u1",
         slug: "alice",
         gatewayId: "assn",
-        revisionId: "assn-r1",
-        release: 1,
         source: "onboarding",
+        state: "serving",
+        epoch: 0,
       },
     });
     const res = await request(app).delete("/gateways/assn");
@@ -1324,7 +1350,6 @@ describe("PATCH /gateways/:id — build artifacts remain deploy-only", () => {
         imageTag: "abc1234",
         gatewayClass: "shared",
       },
-      "gateways/leg": { gatewayId: "leg", status: "ready" },
     });
     const res = await request(app).patch("/gateways/leg").send({ sizingTier: "m" });
     expect(res.status).toBe(404);
@@ -1404,7 +1429,11 @@ describe("P1-5 endpoint gaps", () => {
 
 
 describe("platform runtime configuration", () => {
-  it.each([{}, { "config/orchestrator": { sharedGatewayIds: ["shared-a"] } }])(
+  it.each([
+    {},
+    { "config/orchestrator": { sharedGatewayIds: ["shared-a"] } },
+    { "config/orchestrator": { disposableGatewayIdleMs: null } },
+  ])(
     "defaults an absent idle override to 15 minutes",
     async (seed) => {
       const { app } = mkApp(seed);
@@ -1421,7 +1450,7 @@ describe("platform runtime configuration", () => {
     expect(response.body).toEqual({ disposableGatewayIdleMs: idleMs });
   });
 
-  it.each([null, -1, 0.5, "5400000", Number.MAX_SAFE_INTEGER + 1])(
+  it.each([-1, 0.5, "5400000", Number.MAX_SAFE_INTEGER + 1])(
     "fails loudly for malformed persisted idle duration %s", async (idleMs) => {
       const { app } = mkApp({ "config/orchestrator": { disposableGatewayIdleMs: idleMs } });
       expect((await request(app).get("/platform-runtime-config")).status).toBe(500);
@@ -1482,9 +1511,10 @@ describe('POST /gateways/:id/recover-source', () => {
     for (const [index, slug] of ['jdog99', 'oct01'].entries()) {
       const uid = `source-user-${index}`, agentId = `octogee-${slug}-coach`;
       seed[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: 'shared-0', status: 'complete' } } };
-      seed[`gateways/shared-0/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-0', state: 'serving', epoch: index + 1 };
+      seed[`gateways/shared-0/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-0', source: 'onboarding', state: 'serving', epoch: index + 1,
+        createdAt: 1, updatedAt: 1, updatedByOperationId: null };
       seed[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: 'shared-0', assignmentEpoch: index + 1,
-        storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}` };
+        storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}`, recordedAt: 1 };
     }
     return seed;
   }

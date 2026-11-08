@@ -8,14 +8,24 @@ import {
 import { type Firestore } from "firebase-admin/firestore";
 import {
   buildCustomerSummary,
+  isoMillis,
   toISODate,
   type BrokerCustomerUsage,
   type CustomerSummary,
 } from "./admin-shape.js";
 import { getTierConfig, type TierName } from "@octogee/shared/types/billing-tiers";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { readBuilderParkedComputer } from "@octogee/shared/types/glm";
-import { PLACEMENT_RECEIPTS_SUBCOLLECTION } from "@octogee/shared/types/placement-receipts";
+import { isBuilderParkedComputer } from "@octogee/shared/types/glm";
+import { placementReceiptDocId, type PlacementReceipt } from "@octogee/shared/types/placement-receipts";
+import {
+  builderAccountFromData,
+  firestoreBuilderAccountReader,
+  type BuilderAccount,
+  type BuilderAccountReader,
+} from "./builder-account.js";
+import type { BuilderActivationLease, BuilderRecord } from "./platform-state/builders.js";
+import { MissingRecordError } from "./platform-state/errors.js";
+import type { AnonymousOperationalArchive } from "./platform-state/jobs.js";
+import type { PlatformStateStore } from "./platform-state/store.js";
 import { readOwnerBrokerUsageSeries } from "./broker-usage-series.js";
 import { addAdminCustomerResetRoutes } from "./admin-customer-reset.js";
 import {
@@ -28,7 +38,6 @@ import {
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";
 import {
-  ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION,
   anonymousOperationalEnvironment,
   anonymousOperationalGatewayClass,
   anonymousOperationalPlanTier,
@@ -294,21 +303,11 @@ export interface CustomerRouterLogger {
   warn: (msg: string, meta?: Record<string, unknown>) => void;
 }
 
-export interface WorkspaceMmContextLite {
-  coachDmChannelId: string | null;
-}
-
 export interface AdminCustomerRouterDeps {
   db: Firestore;
-
+  store: PlatformStateStore;
   FieldValue: { serverTimestamp: () => unknown };
   logger: CustomerRouterLogger;
-  workspaceSlugsForUser: (data: { username?: string | null }) => string[];
-
-  getWorkspaceMmContext: (
-    uid: string,
-    userDataHint: Record<string, unknown>,
-  ) => Promise<WorkspaceMmContextLite | null>;
 }
 
 type ActorRequest = Request & {
@@ -405,40 +404,68 @@ interface CustomerPage {
   hasMore: boolean;
 }
 
+type CustomerSort = "createdAt" | "lastActive";
+
+class UnknownCustomerCursorError extends Error {}
+
+interface CustomerDirectory {
+  db: Firestore;
+  store: PlatformStateStore;
+  accounts: BuilderAccountReader;
+}
+
+function accountFor(accounts: ReadonlyMap<string, BuilderAccount>, uid: string): BuilderAccount {
+  return accounts.get(uid) ?? builderAccountFromData(uid, {});
+}
+
+async function summarizeBuilders(
+  directory: CustomerDirectory,
+  builders: readonly BuilderRecord[],
+): Promise<CustomerSummary[]> {
+  const uids = builders.map((builder) => builder.uid);
+  const [accounts, brokerUsage] = await Promise.all([
+    directory.accounts.getMany(uids),
+    readBrokerCustomerUsage(directory.db, uids, Date.now()),
+  ]);
+  return builders.map((builder) =>
+    buildCustomerSummary(builder, accountFor(accounts, builder.uid), brokerUsage.get(builder.uid) ?? {}));
+}
+
+async function sortedCustomers(directory: CustomerDirectory, sort: CustomerSort): Promise<CustomerSummary[]> {
+  const summaries = await summarizeBuilders(directory, await directory.store.builders.records.listAll());
+  const key = (customer: CustomerSummary) => (sort === "lastActive" ? customer.lastActive : customer.createdAt);
+  return summaries
+    .filter((customer) => key(customer) !== null)
+    .sort((a, b) => key(b)!.localeCompare(key(a)!) || b.uid.localeCompare(a.uid));
+}
+
 async function unfilteredCustomerPage(
-  db: Firestore,
-  orderField: string,
+  directory: CustomerDirectory,
   cursor: string | null,
   pageSize: number,
 ): Promise<CustomerPage> {
-  let q = db.collection("users").orderBy(orderField, "desc").limit(pageSize + 1);
-  if (cursor) {
-    const cursorDoc = await db.collection("users").doc(cursor).get();
-    if (cursorDoc.exists) q = q.startAfter(cursorDoc);
+  let page;
+  try {
+    page = await directory.store.builders.records.list({ limit: pageSize, ...(cursor ? { after: cursor } : {}) });
+  } catch (error) {
+    if (error instanceof MissingRecordError && error.record.aggregate === "builder" && error.record.key === cursor) {
+      throw new UnknownCustomerCursorError();
+    }
+    throw error;
   }
-  const docs = (await q.get()).docs;
-  const pageDocs = docs.slice(0, pageSize);
-  const brokerUsage = await readBrokerCustomerUsage(db, pageDocs.map((d) => d.id), Date.now());
-  return {
-    items: pageDocs.map((d) => buildCustomerSummary(d.id, d.data(), brokerUsage.get(d.id) ?? {})),
-    hasMore: docs.length > pageSize,
-  };
+  return { items: await summarizeBuilders(directory, page.items), hasMore: page.next !== null };
 }
 
-async function filteredCustomerPage(
-  db: Firestore,
-  orderField: string,
+async function sortedCustomerPage(
+  directory: CustomerDirectory,
+  sort: CustomerSort,
   filters: CustomerListFilters,
   cursor: string | null,
   pageSize: number,
 ): Promise<CustomerPage> {
-  const docs = (await db.collection("users").orderBy(orderField, "desc").get()).docs;
-  const brokerUsage = await readBrokerCustomerUsage(db, docs.map((d) => d.id), Date.now());
-  const matches = applyCustomerFilters(
-    docs.map((d) => buildCustomerSummary(d.id, d.data(), brokerUsage.get(d.id) ?? {})),
-    filters,
-  );
+  const matches = applyCustomerFilters(await sortedCustomers(directory, sort), filters);
   const start = cursor ? matches.findIndex((customer) => customer.uid === cursor) + 1 : 0;
+  if (cursor && start === 0) throw new UnknownCustomerCursorError();
   return {
     items: matches.slice(start, start + pageSize),
     hasMore: start + pageSize < matches.length,
@@ -451,14 +478,11 @@ export interface AdminCustomerPlacementProjection {
   gatewayProfile: string | null;
 }
 
-export function projectCustomerPlacement(openclaw: unknown): AdminCustomerPlacementProjection {
-  const record = openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
-    ? (openclaw as Record<string, unknown>)
-    : {};
+export function projectCustomerPlacement(builder: BuilderRecord): AdminCustomerPlacementProjection {
   return {
-    managedBy: record.managedBy === "operator" ? "operator" : "cowboy",
-    gatewayId: typeof record.gatewayId === "string" ? record.gatewayId : null,
-    gatewayProfile: typeof record.gatewayProfile === "string" ? record.gatewayProfile : null,
+    managedBy: builder.openclaw.managedBy ?? "cowboy",
+    gatewayId: builder.gateway?.gatewayId ?? null,
+    gatewayProfile: builder.gateway?.gatewayProfile ?? null,
   };
 }
 
@@ -479,9 +503,10 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function projectPlacementReceipt(id: string, data: Record<string, unknown>) {
+function projectPlacementReceipt(receipt: PlacementReceipt) {
+  const data = receipt as unknown as Record<string, unknown>;
   return {
-    id,
+    id: placementReceiptDocId(receipt.leaseId, receipt.generation, receipt.kind),
     kind: stringValue(data.kind) ?? "unknown",
     at: finiteNumber(data.at),
     builderSlug: stringValue(data.builderSlug),
@@ -500,16 +525,12 @@ function projectPlacementReceipt(id: string, data: Record<string, unknown>) {
   };
 }
 
-function activationLeaseSummary(userData: Record<string, unknown>) {
-  const openclaw = objectValue(objectValue(userData.provisioning)?.openclaw);
-  const lease = objectValue(openclaw?.activationLease);
-  const generation = finiteNumber(lease?.generation);
-  const leaseId = stringValue(lease?.leaseId);
-  if (!lease || !leaseId || generation === null) return null;
+function activationLeaseSummary(lease: BuilderActivationLease | null) {
+  if (!lease) return null;
   return {
-    leaseId,
-    generation,
-    status: stringValue(lease.status),
+    leaseId: lease.leaseId,
+    generation: lease.generation,
+    status: lease.status,
     cause: stringValue(lease.cause),
     sizingTier: stringValue(lease.sizingTier),
     targetGatewayId: stringValue(lease.targetGatewayId),
@@ -517,18 +538,32 @@ function activationLeaseSummary(userData: Record<string, unknown>) {
   };
 }
 
-function warnIfNoSlug(
-  logger: CustomerRouterLogger,
-  slugs: string[],
-  uid: string,
-): string[] {
-  if (slugs.length === 0) {
+function workspaceSlugs(logger: CustomerRouterLogger, builder: BuilderRecord): string[] {
+  if (builder.slug === null) {
     logger.warn(
       "no workspace slug resolved — workspace reads will return empty",
-      { uid },
+      { uid: builder.uid },
     );
+    return [];
   }
-  return slugs;
+  return [builder.slug];
+}
+
+async function readAllArchives(store: PlatformStateStore): Promise<AnonymousOperationalArchive[]> {
+  const archives: AnonymousOperationalArchive[] = [];
+  let after: string | undefined;
+  do {
+    const page = await store.jobs.archives.list({ limit: 500, ...(after === undefined ? {} : { after }) });
+    archives.push(...page.items);
+    after = page.next ?? undefined;
+  } while (after !== undefined);
+  return archives;
+}
+
+function sendUnknownCursor(res: Response, error: unknown): boolean {
+  if (!(error instanceof UnknownCustomerCursorError)) return false;
+  res.status(400).json({ error: "Unknown customer cursor" });
+  return true;
 }
 
 // eslint-disable-next-line max-lines-per-function -- factory mounts the customer routes; splitting it would scatter the contract
@@ -536,19 +571,17 @@ export function addAdminCustomerRoutes(
   router: Router,
   deps: AdminCustomerRouterDeps,
 ): Router {
-  const { db, logger, FieldValue } = deps;
+  const { db, store, logger, FieldValue } = deps;
+  const accounts = firestoreBuilderAccountReader(db);
+  const directory: CustomerDirectory = { db, store, accounts };
   addAdminCustomerResetRoutes(router, deps);
 
   router.get(
     "/customer-archives",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const snap = await db
-          .collection(ANONYMOUS_OPERATIONAL_ARCHIVES_COLLECTION)
-          .orderBy("archivedAt", "desc")
-          .get();
-        const archives = snap.docs.map((doc) =>
-          projectAnonymousArchive(doc.id, doc.data() as Record<string, unknown>));
+        const archives = (await readAllArchives(store)).map((archive) =>
+          projectAnonymousArchive(archive.id, { ...archive.record, archivedAt: archive.archivedAt }));
         const summary = archives.reduce(
           (total, archive) => ({
             archiveCount: total.archiveCount + 1,
@@ -627,10 +660,10 @@ router.get(
           byotFilter: (req.query.byot as string) ?? "all",
         };
 
-        const orderField = sort === "lastActive" ? "usage.lastUpdated" : "createdAt";
-        const page = customerFiltersActive(filters)
-          ? await filteredCustomerPage(db, orderField, filters, cursor, pageSize)
-          : await unfilteredCustomerPage(db, orderField, cursor, pageSize);
+        const order: CustomerSort = sort === "lastActive" ? "lastActive" : "createdAt";
+        const page = customerFiltersActive(filters) || order === "lastActive"
+          ? await sortedCustomerPage(directory, order, filters, cursor, pageSize)
+          : await unfilteredCustomerPage(directory, cursor, pageSize);
         const { items, hasMore } = page;
         const nextCursor = hasMore ? items[items.length - 1]!.uid : null;
 
@@ -644,7 +677,9 @@ const statsSnap = await db.doc("system/stats").get();
           total,
           generatedAt: new Date().toISOString(),
         });
-      } catch (e) { next(e); }
+      } catch (e) {
+        if (!sendUnknownCursor(res, e)) next(e);
+      }
     },
   );
 
@@ -652,25 +687,13 @@ const statsSnap = await db.doc("system/stats").get();
     "/customers/stats",
     async (_req: Request, res: Response, next: NextFunction) => {
       try {
-        const usersSnap = await db.collection("users").orderBy("createdAt", "desc").get();
-        const brokerUsage = await readBrokerCustomerUsage(
-          db,
-          usersSnap.docs.map((doc) => doc.id),
-          Date.now(),
-        );
-
         let totalCustomers = 0;
         let incompleteProvisioning = 0;
         let mrrUsd = 0;
         let totalCostUsd = 0;
         let needsAttention = 0;
 
-        for (const doc of usersSnap.docs) {
-          const summary = buildCustomerSummary(
-            doc.id,
-            doc.data() as Record<string, unknown>,
-            brokerUsage.get(doc.id) ?? {},
-          );
+        for (const summary of await sortedCustomers(directory, "createdAt")) {
           totalCustomers++;
           if (summary.provisioningStatus !== "complete") incompleteProvisioning++;
           mrrUsd += summary.revenueUsd;
@@ -698,16 +721,16 @@ router.get(
         const uid = req.params.uid as string;
         if (!uid) { res.status(400).json({ error: "uid required" }); return; }
 
-        const userDoc = await db.collection("users").doc(uid).get();
-        if (!userDoc.exists) { res.status(404).json({ error: "User not found" }); return; }
-        const d = userDoc.data()!;
+        const builder = await store.builders.records.get(uid);
+        if (!builder) { res.status(404).json({ error: "User not found" }); return; }
+        const account = (await accounts.get(uid)) ?? builderAccountFromData(uid, {});
 
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const userRef = db.collection("users").doc(uid);
         const systemConfigSnap = await userRef.collection("system").doc("config").get();
         const modelCredential = adminModelCredentialFromSystemConfig(systemConfigSnap.data());
-        const customerCredentialActive = modelCredential?.active === true || d.byotActive === true;
+        const customerCredentialActive = modelCredential?.active === true || account.byotActive;
 
         const logsSnap = await userRef
           .collection("usage_logs").where("date", ">=", thirtyDaysAgo.toISOString().slice(0, 10))
@@ -716,10 +739,9 @@ router.get(
         const wsSnap = await userRef.collection("workspaces").get();
         const onboardingSnap = await userRef.collection("onboarding").get();
 
-        const subscription = d.subscription || {};
-        const usage = d.usage || {};
-        const provisioning = d.provisioning || {};
-        const tier: TierName = subscription.tier || "trial";
+        const subscription = objectValue(account.planInputs.subscription) ?? {};
+        const usage = account.usage;
+        const tier = (subscription.tier || "trial") as TierName;
         const tierConfig = getTierConfig(tier);
 
         const now = Date.now();
@@ -728,11 +750,13 @@ router.get(
           readBrokerDailyUsage(db, uid, thirtyDaysAgo.getTime(), logger),
           db.collection(MODEL_BROKER_USAGE_ROLLUPS_COLLECTION).doc(uid).get(),
         ]);
-        const summary = buildCustomerSummary(uid, d, brokerUsage.get(uid) ?? { now });
+        const summary = buildCustomerSummary(builder, account, brokerUsage.get(uid) ?? { now });
 
-        const mmContext = await deps.getWorkspaceMmContext(uid, d);
+        const coachDm = builder.slug === null
+          ? null
+          : await store.workspaces.channels.get({ workspaceSlug: builder.slug, projectSlug: null }, "coach-dm");
 
-        const slugs = warnIfNoSlug(logger, deps.workspaceSlugsForUser(d as { username?: string | null }), uid);
+        const slugs = workspaceSlugs(logger, builder);
         // Workspace usage_models carry token telemetry for ALL traffic (byosub
         // included) but openclaw-$0 costs; the broker rollup carries the real USD
         // per platform model. Broker figures win per model; workspace-only models
@@ -773,7 +797,7 @@ router.get(
 
         res.json({
           summary,
-          accountLifecycle: d.accountLifecycle ?? { status: "active" },
+          accountLifecycle: builder.accountLifecycle ?? { status: "active" },
           subscription: {
             status: subscription.status || "none",
             stripeCustomerId: subscription.stripeCustomerId || null,
@@ -804,25 +828,25 @@ router.get(
           modelCredential,
           byot: { active: customerCredentialActive },
           provisioning: {
-            status: provisioning.openclaw?.status || provisioning.status || "unknown",
-            slug: provisioning.openclaw?.slug || d.username || "",
-            activatedAgents: provisioning.openclaw?.activatedAgents || [],
-            provisionedAt: toISODate(provisioning.openclaw?.provisionedAt),
+            status: builder.openclaw.status || builder.provisioning.status || "unknown",
+            slug: builder.slug ?? "",
+            activatedAgents: builder.agents.activatedAgents,
+            provisionedAt: isoMillis(builder.openclaw.provisionedAt ?? null),
           },
-          placement: projectCustomerPlacement(provisioning.openclaw),
-          computer: readBuilderParkedComputer(d as Record<string, unknown>),
+          placement: projectCustomerPlacement(builder),
+          computer: isBuilderParkedComputer(builder.home.computer) ? builder.home.computer : null,
           mattermost: {
-            connected: !!d.mattermost?.userId,
-            userId: d.mattermost?.userId || null,
-            channelId: mmContext?.coachDmChannelId || null,
-            username: d.mattermost?.username || null,
+            connected: summary.mattermostConnected,
+            userId: builder.mattermostUserId || null,
+            channelId: coachDm?.mattermostChannelId ?? null,
+            username: account.mattermostUsername || null,
           },
           onboarding: {
-            step: d.onboardingStep || "unknown",
-            complete: d.onboardingComplete || false,
+            step: account.onboardingStep ?? "unknown",
+            complete: account.onboardingComplete,
             milestones: Object.fromEntries(onboardingSnap.docs.map((doc) => [doc.id, doc.data()])),
           },
-          selectedTier: d.selectedTier || tier,
+          selectedTier: account.planInputs.selectedTier || tier,
           workspaces: wsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
           // Daily history: token/interaction telemetry from the legacy tailer
           // (covers byosub traffic), USD strictly from the broker ledger.
@@ -831,7 +855,7 @@ router.get(
             brokerDaily,
           ),
           modelCosts,
-          createdAt: toISODate(d.createdAt),
+          createdAt: summary.createdAt,
         });
       } catch (e) { next(e); }
     },
@@ -846,18 +870,14 @@ router.get(
           parseInt((req.query.days as string) ?? "30", 10),
         ));
 
-        const userDoc = await db.collection("users").doc(uid).get();
-        if (!userDoc.exists) { res.status(404).json({ error: "User not found" }); return; }
-        const userData = userDoc.data()!;
+        const builder = await store.builders.records.get(uid);
+        if (!builder) { res.status(404).json({ error: "User not found" }); return; }
+        const account = await accounts.get(uid);
 
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
 
-        const slugs = warnIfNoSlug(
-          logger,
-          deps.workspaceSlugsForUser(userData as { username?: string | null }),
-          uid,
-        );
+        const slugs = workspaceSlugs(logger, builder);
 
         // Cost is the billing truth from the broker's per-owner event stream —
         // the self-report ledger (usage_models) records openclaw's $0-for-GLM
@@ -867,8 +887,7 @@ router.get(
         // double-counted. Owner-credential (BYOSUB) traffic never reaches the
         // broker and carries $0 platform cost — correct for a cost panel.
         const series = await readOwnerBrokerUsageSeries(db, uid, cutoff.getTime(), logger);
-        const displayName =
-          (userData.displayName as string) || (userData.username as string) || "";
+        const displayName = account?.displayName || account?.username || "";
 
         const workspaces = slugs.map((slug, i) => {
           const s = i === 0 ? series : null;
@@ -930,29 +949,22 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uid = req.params.uid as string;
-        const userDoc = await db.collection("users").doc(uid).get();
-        if (!userDoc.exists) { res.status(404).json({ error: "User not found" }); return; }
+        const builder = await store.builders.records.get(uid);
+        if (!builder) { res.status(404).json({ error: "User not found" }); return; }
 
         const limit = Math.max(1, Math.min(200,
           parseInt((req.query.limit as string) ?? "50", 10) || 50,
         ));
-        const snap = await db
-          .collection(`users/${uid}/${PLACEMENT_RECEIPTS_SUBCOLLECTION}`)
-          .orderBy("at", "desc")
-          .limit(limit + 1)
-          .get();
-        const sorted = snap.docs
-          .map((doc) => projectPlacementReceipt(doc.id, doc.data() as Record<string, unknown>))
-          .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
-        const items = sorted.slice(0, limit);
-        const hasMore = sorted.length > limit;
+        const receipts = await store.builders.placementReceipts.list(uid, { limit });
+        const items = receipts.items.map(projectPlacementReceipt);
+        const hasMore = receipts.next !== null;
 
-        const lease = activationLeaseSummary(userDoc.data() as Record<string, unknown>);
+        const lease = activationLeaseSummary(builder.activationLease);
         let retryAvailable = false;
         if (lease?.status === "failed") {
           retryAvailable = lease.targetGatewayId === null
             ? true
-            : !(await db.collection(GATEWAYS_COLLECTION).doc(lease.targetGatewayId).get()).exists;
+            : (await store.gateways.roots.get(lease.targetGatewayId)) === null;
         }
 
         res.json({ items, hasMore, lease, retryAvailable, generatedAt: new Date().toISOString() });

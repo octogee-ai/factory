@@ -9,6 +9,7 @@ import {
   mergeDailyUsage,
   type AdminCustomerRouterDeps,
 } from "./admin-customer-router.js";
+import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
 type DocData = Record<string, unknown>;
 type DocStore = Map<string, DocData>;
@@ -59,8 +60,7 @@ function fakeCollection(path: string, store: DocStore) {
   return query;
 }
 
-function fakeDb(docs: Record<string, DocData>): Firestore {
-  const store = new Map(Object.entries(docs));
+function fakeDb(store: DocStore): Firestore {
   return {
     collection: (path: string) => fakeCollection(path, store),
     doc: (path: string) => fakeDoc(path, store),
@@ -73,12 +73,12 @@ function makeApp(docs: Record<string, DocData>) {
   const app = express();
   app.use(express.json());
 
+  const documents: DocStore = new Map(Object.entries(docs));
   const deps: AdminCustomerRouterDeps = {
-    db: fakeDb(docs),
+    db: fakeDb(documents),
+    store: createDocumentFixtureStore(documents),
     FieldValue: { serverTimestamp: () => new Date("2026-06-01T00:00:00.000Z") },
     logger: { info: vi.fn(), warn: vi.fn() },
-    workspaceSlugsForUser: () => [],
-    getWorkspaceMmContext: vi.fn().mockResolvedValue(null),
   };
 
   const router = express.Router();
@@ -163,6 +163,33 @@ describe("GET /api/admin/customer/:uid — model credential state", () => {
     expect(res.body.byot).toEqual({ active: true });
   });
 
+  it("resolves the coach DM channel from the Builder's workspace slug", async () => {
+    const app = makeApp({
+      "users/uid-1": customerDoc({ mattermost: { userId: "mm-user-1", username: "builder-mm" } }),
+      "workspaces/builder/channels/coach-dm": {
+        kind: "coach-dm",
+        mattermost: { channelId: "mm-coach-dm" },
+        createdAt: 1,
+      },
+    });
+
+    const res = await request(app).get("/api/admin/customer/uid-1").expect(200);
+
+    expect(res.body.mattermost).toEqual({
+      connected: true,
+      userId: "mm-user-1",
+      channelId: "mm-coach-dm",
+      username: "builder-mm",
+    });
+  });
+
+  it("fails loudly instead of projecting a malformed Builder record", async () => {
+    const app = makeApp({
+      "users/uid-1": customerDoc({ provisioning: { openclaw: { status: "complete", slug: "builder", agentIds: "agent-1" } } }),
+    });
+
+    await request(app).get("/api/admin/customer/uid-1").expect(500);
+  });
 });
 
 describe("GET /api/admin/customers — search and filters cover every customer", () => {
@@ -170,7 +197,12 @@ describe("GET /api/admin/customers — search and filters cover every customer",
     return Object.fromEntries(
       Array.from({ length: count }, (_, index) => {
         const name = `builder${String(index).padStart(2, "0")}`;
-        return [`users/uid-${name}`, customerDoc({ username: name, email: `${name}@example.com`, displayName: name })];
+        return [`users/uid-${name}`, customerDoc({
+          username: name,
+          email: `${name}@example.com`,
+          displayName: name,
+          createdAt: 1_800_000_000_000 - index * 60_000,
+        })];
       }),
     );
   }
@@ -201,6 +233,29 @@ describe("GET /api/admin/customers — search and filters cover every customer",
       "builder34", "builder35", "builder36", "builder37",
     ]);
     expect(second.body.hasMore).toBe(true);
+  });
+
+  it("pages the unfiltered directory newest-first by creation time", async () => {
+    const app = makeApp(directory(6));
+
+    const first = await request(app).get("/api/admin/customers?pageSize=4").expect(200);
+    expect(first.body.items.map((item: { username: string }) => item.username)).toEqual([
+      "builder00", "builder01", "builder02", "builder03",
+    ]);
+    expect(first.body.nextCursor).toBe("uid-builder03");
+
+    const second = await request(app).get(`/api/admin/customers?pageSize=4&cursor=${first.body.nextCursor}`).expect(200);
+    expect(second.body.items.map((item: { username: string }) => item.username)).toEqual(["builder04", "builder05"]);
+    expect(second.body.hasMore).toBe(false);
+  });
+
+  it.each([
+    ["the unfiltered directory", "/api/admin/customers?cursor=uid-gone"],
+    ["a filtered search", "/api/admin/customers?search=builder&cursor=uid-gone"],
+  ])("rejects a cursor naming no customer in %s", async (_name, url) => {
+    const res = await request(makeApp(directory(3))).get(url).expect(400);
+
+    expect(res.body).toEqual({ error: "Unknown customer cursor" });
   });
 });
 
@@ -570,7 +625,21 @@ describe("GET /api/admin/customer/:uid/placements", () => {
   it("withholds retry while the failed runtime record still exists", async () => {
     const app = makeApp({
       "users/uid-1": failedLeaseUser,
-      "gateways/builder-xs-feedf00d": { gatewayId: "builder-xs-feedf00d", desiredStatus: "retired" },
+      "gateways/builder-xs-feedf00d": {
+        gatewayId: "builder-xs-feedf00d",
+        createdAt: 1,
+        createdBy: "test",
+        updatedAt: 1,
+        updatedBy: "test",
+        latestRelease: 1,
+        desiredRelease: 1,
+        liveRelease: 1,
+        desiredStatus: "retired",
+        configSchemaVersion: 1,
+        profile: "builder",
+        gatewayClass: "builder",
+        imageProfile: "standard",
+      },
     });
 
     const res = await request(app).get("/api/admin/customer/uid-1/placements").expect(200);

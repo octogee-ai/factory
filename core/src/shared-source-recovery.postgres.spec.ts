@@ -1,10 +1,14 @@
 import { expect, it } from "vitest";
-import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
+import type { DocumentData } from "firebase-admin/firestore";
 import { Firestore as FirestoreClient } from "firebase-admin/firestore";
 import { assertSharedSourceRecoveryPredecessor, readPostgresSourceAgentStores, readSharedSourceRecoveryAuthority, type SourceRecoveryAssignment } from "./shared-source-recovery.js";
 import { buildOperationAuditIntent, operationAuditMutationFingerprint } from "./operation-audit.js";
+import { MalformedRecordError } from "./platform-state/errors.js";
+import type { PlatformStateTransaction } from "./platform-state/store.js";
+import { createDocumentFixtureStore } from "./testing/journal-store.js";
 const identity: SourceRecoveryAssignment = { uid: "owner", slug: "livefixture", agentId: "octogee-livefixture-coach", assignmentEpoch: 7,
-  assignment: { uid: "owner", slug: "livefixture", gatewayId: "shared-old", state: "serving", epoch: 7 } };
+  assignment: { uid: "owner", slug: "livefixture", gatewayId: "shared-old", source: "onboarding", state: "serving", epoch: 7,
+    createdAt: 1, updatedAt: 1, updatedByOperationId: null } };
 function fixture(migration: "identity" | "database" = "identity") {
   const error = "/finish-rsync-import/shared-new: 500 " + JSON.stringify({ error: "import failed", message:
     `[import:livefixture] agents.create failed for octogee-livefixture-coach (AgentDatabaseMaintenanceRequiredError: Agent ${migration} migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.)` });
@@ -16,118 +20,134 @@ function fixture(migration: "identity" | "database" = "identity") {
       { name: "final-sync-state", status: "failed", error }, ...["unmount-target", "resume-ingress"].map(name => ({ name: `rollback:${name}`, status: "done" }))] };
   return { ...row, attemptHistory: [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }] };
 }
+function readOnly<T>(rows: Record<string, any>, body: (transaction: PlatformStateTransaction) => Promise<T>): Promise<T> {
+  return createDocumentFixtureStore(rows).transaction({ label: "test.shared-source-recovery", readOnly: true }, body);
+}
 function rosterFixture() {
   const anchors = [identity.agentId, "octogee-livefixture-proj-launch-coach"].map((agentId, index) => ({ agentId, gatewayId: "shared-old", assignmentEpoch: 7,
-    storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `agent_${index}` }));
-  const projects: Array<{ id: string; data: any }> = [{ id: "launch", data: { agent: { enabled: true } } }];
-  const reference = (path: string): any => ({ path, collection: (name: string) => reference(`${path}/${name}`), doc: (id: string) => reference(`${path}/${id}`) });
-  const db = { collection: (name: string) => reference(name) } as unknown as Firestore;
-  const tx = { get: async ({ path }: { path: string }) => ({ docs: path.endsWith("agentStores") ? anchors.map(row => ({ id: row.agentId, data: () => row })) : projects.map(row => ({ id: row.id, data: () => row.data })) }) } as unknown as Transaction;
-  return { anchors, projects, db, tx };
+    storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, schema: `agent_${index}`, recordedAt: 1 }));
+  const project: Record<string, unknown> = { ownerUid: identity.uid, agent: { enabled: true } };
+  const rows: Record<string, any> = { "workspaces/livefixture/projects/launch": project };
+  for (const anchor of anchors) rows[`users/owner/agentStores/${anchor.agentId}`] = anchor;
+  const read = () => readOnly(rows, transaction => readPostgresSourceAgentStores(transaction, [identity]));
+  return { anchors, project, rows, read };
 }
 it("captures every recorded owned PostgreSQL anchor including project history", async () => {
   const f = rosterFixture();
-  expect(await readPostgresSourceAgentStores(f.db, f.tx, [identity])).toEqual(f.anchors.map(({ gatewayId: _gateway, ...anchor }) => ({ uid: "owner", slug: "livefixture", ...anchor })));
+  expect(await f.read()).toEqual(f.anchors.map(({ agentId, storeId, schema }) => ({ uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId, storeId, schema })));
 });
 it.each(["missing-project", "foreign-owner", "epoch", "agent", "store", "schema", "duplicate-uuid"])("refuses a PostgreSQL source roster with %s", async change => {
   const f = rosterFixture();
-  if (change === "missing-project") f.anchors.pop();
+  if (change === "missing-project") delete f.rows[`users/owner/agentStores/${f.anchors[1]!.agentId}`];
   if (change === "foreign-owner") f.anchors[0]!.gatewayId = "builder-new-owner";
   if (change === "epoch") f.anchors[0]!.assignmentEpoch++;
   if (change === "agent") f.anchors[0]!.agentId = "octogee-foreign-coach";
   if (change === "store") f.anchors[0]!.storeId = "invalid";
   if (change === "schema") f.anchors[0]!.schema = "unsafe;schema";
   if (change === "duplicate-uuid") f.anchors[1]!.storeId = f.anchors[0]!.storeId;
-  await expect(readPostgresSourceAgentStores(f.db, f.tx, [identity])).rejects.toThrow();
+  await expect(f.read()).rejects.toThrow();
 });
 
 
 function authorityFixture(migration: "identity" | "database" = "identity") {
-  const anchor = { agentId: identity.agentId, gatewayId: "shared-old", assignmentEpoch: 7, storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" };
+  const anchor = { agentId: identity.agentId, gatewayId: "shared-old", assignmentEpoch: 7, storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned", recordedAt: 1 };
   const rows: Record<string, any> = {
     "gateways/shared-old": { gatewayId: "shared-old", gatewayClass: "shared", ownerUid: null, builderSlug: null, desiredStatus: "draining", liveRelease: 1, desiredRelease: 1, latestRelease: 1 },
-    "gateways/shared-old/assignments/owner": identity.assignment,
+    "gateways/shared-old/assignments/owner": structuredClone(identity.assignment),
     "users/owner": { username: "livefixture", provisioning: { openclaw: { gatewayId: "shared-old", status: "complete" } } },
     ["users/owner/agentStores/" + identity.agentId]: anchor,
     "glmOperations/placement": fixture(migration),
   };
-  const reference = (path: string, filters: any[] = []): any => ({ path, filters, doc: (id: string) => reference(`${path}/${id}`),
-    collection: (name: string) => reference(`${path}/${name}`), where: (...filter: any[]) => reference(path, [...filters, filter]) });
-  const snap = (key: string) => ({ id: key.split("/").at(-1)!, exists: rows[key] !== undefined, data: () => rows[key] });
-  const db = { doc: (path: string) => reference(path), collection: (path: string) => reference(path) } as unknown as Firestore;
-  const tx = { get: async (ref: any) => ref.path.split("/").length % 2 === 0 ? snap(ref.path) : { docs: Object.keys(rows)
-    .filter(key => key.startsWith(ref.path + "/") && !key.slice(ref.path.length + 1).includes("/"))
-    .filter(key => ref.filters.every(([field, operator, value]: any[]) => operator === "in" ? value.includes(rows[key][field]) : rows[key][field] === value)).map(snap) } } as unknown as Transaction;
-  return { rows, db, tx };
+  const read = () => readOnly(rows, transaction => readSharedSourceRecoveryAuthority(transaction, "shared-old"));
+  return { rows, read };
 }
+const allocationAnchor = { gatewayId: "retained-builder", generation: 114, storeId: "00000000-0000-4000-8000-000000000003", schema: "agent_builder_default", recordedAt: 1 };
 
 it.each(["identity", "database"] as const)("captures the fully qualified PostgreSQL source authority without changing the %s failed operation", async migration => {
   const f = authorityFixture(migration), before = structuredClone(f.rows);
-  const captured = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
+  const captured = await f.read();
   expect(captured.postgresAgentStores).toEqual([{ uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId: identity.agentId,
     storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" }]);
   expect(f.rows).toEqual(before);
 });
+it("captures each assignment as its stored record without the store revision", async () => {
+  const captured = await authorityFixture().read();
+  expect(captured.assignments).toEqual([{ uid: "owner", slug: "livefixture", agentId: identity.agentId, assignmentEpoch: 7, assignment: identity.assignment }]);
+  expect(captured.assignments[0]!.assignment).not.toHaveProperty("revision");
+});
 it("captures tenant stores from a mixed registry while retaining the old Builder's allocation anchors", async () => {
   const f = authorityFixture("database");
   const projectId = "octogee-livefixture-proj-launch-coach";
-  f.rows["workspaces/livefixture/projects/launch"] = { agent: { enabled: true } };
+  f.rows["workspaces/livefixture/projects/launch"] = { ownerUid: "owner", agent: { enabled: true } };
   f.rows["users/owner/agentStores/" + projectId] = { agentId: projectId, gatewayId: "shared-old", assignmentEpoch: 7,
-    storeId: "00000000-0000-4000-8000-000000000002", schema: "agent_project" };
+    storeId: "00000000-0000-4000-8000-000000000002", schema: "agent_project", recordedAt: 1 };
   f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", gatewayId: "retained-builder", generation: 114,
     storeId: "00000000-0000-4000-8000-000000000003", schema: "agent_builder_default", recordedAt: 1 };
   f.rows["users/owner/agentStores/_gateway-state"] = { kind: "gateway-state", gatewayId: "retained-builder", generation: 114,
     storeId: "00000000-0000-4000-8000-000000000004", schema: "state_builder", recordedAt: 1 };
   const before = structuredClone(f.rows);
-  const captured = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
+  const captured = await f.read();
   expect(captured.postgresAgentStores).toEqual([
     { uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId: identity.agentId, storeId: "00000000-0000-4000-8000-000000000001", schema: "agent_owned" },
     { uid: "owner", slug: "livefixture", assignmentEpoch: 7, agentId: projectId, storeId: "00000000-0000-4000-8000-000000000002", schema: "agent_project" },
   ]);
   expect(f.rows).toEqual(before);
 });
-it.each(["missing-agent-id", "foreign-agent-id", "tenant-agent-id", "similar-service-id"])("refuses an unrecognized allocation record with %s without changing it", async changed => {
-  const f = authorityFixture("database"), id = changed === "similar-service-id" ? "octogee-unmatched-route-extra" : "octogee-unmatched-route";
-  f.rows["users/owner/agentStores/" + id] = { agentId: changed === "missing-agent-id" ? undefined : changed === "foreign-agent-id" ? "octogee-foreign-coach" : changed === "tenant-agent-id" ? identity.agentId : id,
-    gatewayId: "retained-builder", generation: 114, storeId: "00000000-0000-4000-8000-000000000003", schema: "agent_builder_default" };
+it("refuses a service-like allocation record without changing it", async () => {
+  const f = authorityFixture("database"), id = "octogee-unmatched-route-extra";
+  f.rows["users/owner/agentStores/" + id] = { agentId: id, ...allocationAnchor };
   const before = structuredClone(f.rows);
-  await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old")).rejects.toThrow("source recovery PostgreSQL anchor custody changed");
+  await expect(f.read()).rejects.toThrow("source recovery PostgreSQL anchor custody changed");
   expect(f.rows).toEqual(before);
 });
-it.each(["foreign-customer", "gateway", "epoch", "agent-id", "store-id", "schema"])("retains current tenant custody validation with allocation records present: %s", async changed => {
+it.each(["missing-agent-id", "foreign-agent-id", "tenant-agent-id"])("fails closed on an allocation record with %s without changing it", async changed => {
   const f = authorityFixture("database");
-  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", gatewayId: "retained-builder", generation: 114 };
+  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { ...allocationAnchor,
+    agentId: changed === "missing-agent-id" ? undefined : changed === "foreign-agent-id" ? "octogee-foreign-coach" : identity.agentId };
+  const before = structuredClone(f.rows);
+  await expect(f.read()).rejects.toBeInstanceOf(MalformedRecordError);
+  expect(f.rows).toEqual(before);
+});
+it("fails closed on a tenant anchor that names another agent without changing it", async () => {
+  const f = authorityFixture("database");
+  f.rows["users/owner/agentStores/" + identity.agentId].agentId = "octogee-foreign-coach";
+  const before = structuredClone(f.rows);
+  await expect(f.read()).rejects.toBeInstanceOf(MalformedRecordError);
+  expect(f.rows).toEqual(before);
+});
+it.each(["foreign-customer", "gateway", "epoch", "store-id", "schema"])("retains current tenant custody validation with allocation records present: %s", async changed => {
+  const f = authorityFixture("database");
+  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", ...allocationAnchor };
   const anchor = f.rows["users/owner/agentStores/" + identity.agentId];
   if (changed === "foreign-customer") f.rows["users/owner/agentStores/octogee-foreign-coach"] = { ...anchor, agentId: "octogee-foreign-coach" };
   if (changed === "gateway") anchor.gatewayId = "foreign-builder";
   if (changed === "epoch") anchor.assignmentEpoch++;
-  if (changed === "agent-id") anchor.agentId = "octogee-foreign-coach";
   if (changed === "store-id") anchor.storeId = "malformed";
   if (changed === "schema") anchor.schema = "unsafe;schema";
   const before = structuredClone(f.rows);
-  await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old")).rejects.toThrow("source recovery PostgreSQL anchor custody changed");
+  await expect(f.read()).rejects.toThrow("source recovery PostgreSQL anchor custody changed");
   expect(f.rows).toEqual(before);
 });
-it.each(["pending", "running"])("refuses PostgreSQL recovery while a %s source transfer task retains custody", async status => {
+it("refuses PostgreSQL recovery while a running source transfer task retains custody", async () => {
   const f = authorityFixture();
-  f.rows["glmMigrationTransferTasks/task"] = { status, sourceGatewayId: "shared-old", targetGatewayId: "other" };
-  await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old")).rejects.toThrow("transfer task is active");
+  f.rows["glmMigrationTransferTasks/task"] = { status: "running", sourceGatewayId: "shared-old", targetGatewayId: "other" };
+  await expect(f.read()).rejects.toThrow("transfer task is active");
 });
 it("allows unrelated active housekeeping and transfer tasks", async () => {
   const f = authorityFixture();
   f.rows["glmMigrationTransferTasks/task"] = { status: "running", sourceGatewayId: "unrelated", targetGatewayId: "another" };
   f.rows["glmOperations/housekeeping"] = { kind: "housekeeping", status: "running", input: {} };
-  await expect(readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old")).resolves.toHaveProperty("postgresAgentStores");
+  await expect(f.read()).resolves.toHaveProperty("postgresAgentStores");
 });
 
 
 function addPostgresSourceRoster(f: ReturnType<typeof authorityFixture>): void {
   for (const [index, slug] of ["secondfixture", "thirdfixture", "fourthfixture"].entries()) {
     const uid = `owner-${index}`, operationId = `placement-${index}`, agentId = `octogee-${slug}-coach`;
-    f.rows[`gateways/shared-old/assignments/${uid}`] = { uid, slug, gatewayId: "shared-old", state: "serving", epoch: index + 8 };
+    f.rows[`gateways/shared-old/assignments/${uid}`] = { ...identity.assignment, uid, slug, epoch: index + 8 };
     f.rows[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: "shared-old", status: "complete" } } };
     f.rows[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: "shared-old", assignmentEpoch: index + 8,
-      storeId: `00000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`, schema: `agent_owner_${index}` };
+      storeId: `00000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`, schema: `agent_owner_${index}`, recordedAt: 1 };
     const row = fixture("database");
     row.error = row.error.replaceAll("livefixture", slug);
     Object.assign(row.input, { uid, builderSlug: slug });
@@ -139,16 +159,17 @@ function addPostgresSourceRoster(f: ReturnType<typeof authorityFixture>): void {
   for (const [index, project] of ["launch", "second", "third"].entries()) {
     const uid = index === 2 ? "owner-0" : identity.uid, slug = index === 2 ? "secondfixture" : identity.slug;
     const agentId = `octogee-${slug}-proj-${project}-coach`;
-    f.rows[`workspaces/${slug}/projects/${project}`] = { agent: { enabled: true } };
+    f.rows[`workspaces/${slug}/projects/${project}`] = { ownerUid: uid, agent: { enabled: true } };
     f.rows[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: "shared-old", assignmentEpoch: index === 2 ? 8 : 7,
-      storeId: `00000000-0000-4000-8000-${String(index + 5).padStart(12, "0")}`, schema: `agent_project_${index}` };
+      storeId: `00000000-0000-4000-8000-${String(index + 5).padStart(12, "0")}`, schema: `agent_project_${index}`, recordedAt: 1 };
   }
-  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", gatewayId: "retained-builder", generation: 9 };
+  f.rows["users/owner/agentStores/octogee-unmatched-route"] = { agentId: "octogee-unmatched-route", ...allocationAnchor, generation: 9,
+    storeId: "00000000-0000-4000-8000-000000000099" };
 }
 async function spentPostgresPredecessorFixture(fullRoster = false) {
   const f = authorityFixture();
   if (fullRoster) addPostgresSourceRoster(f);
-  const source = await readSharedSourceRecoveryAuthority(f.db, f.tx, "shared-old");
+  const source = await f.read();
   const images = { gateway: "registry/gateway:aaaaaaaa@sha256:" + "a".repeat(64), "gateway-edge": "registry/edge:aaaaaaaa@sha256:" + "b".repeat(64) };
   const sourceSha = "c".repeat(40), operationId = "spent-pg-repair";
   const row = { kind: "restart-gateway", status: "failed", startedAt: 300, completedAt: 600,
@@ -300,16 +321,17 @@ it.each(["anchor", "schema", "epoch", "input", "image", "pod", "clock", "cancell
 });
 
 it.each(["commercial", "project-status"])("does not require a retired project's anchor in the live recovery roster: %s", async archive => {
-  const f = rosterFixture();f.anchors.pop();
-  Object.assign(f.projects[0]!.data, archive === "commercial" ? { commercialLifecycle: { status: "archived" } } : { status: "archived" });
-  await expect(readPostgresSourceAgentStores(f.db, f.tx, [identity])).resolves.toHaveLength(1);
+  const f = rosterFixture();
+  delete f.rows[`users/owner/agentStores/${f.anchors[1]!.agentId}`];
+  Object.assign(f.project, archive === "commercial" ? { commercialLifecycle: { status: "archived" } } : { status: "archived" });
+  await expect(f.read()).resolves.toHaveLength(1);
 });
 it('admits maintenance for the current complete roster without historical migration failures', async () => {
   const f = authorityFixture();
   delete f.rows['glmOperations/placement'];
-  f.rows['gateways/shared-old/assignments/other'] = { uid: 'other', slug: 'other', gatewayId: 'shared-old', state: 'serving', epoch: 3 };
+  f.rows['gateways/shared-old/assignments/other'] = { ...identity.assignment, uid: 'other', slug: 'other', epoch: 3 };
   f.rows['users/other'] = { username: 'other', provisioning: { openclaw: { gatewayId: 'shared-old', status: 'complete' } } };
-  f.rows['users/other/agentStores/octogee-other-coach'] = { agentId: 'octogee-other-coach', gatewayId: 'shared-old', assignmentEpoch: 3, storeId: '00000000-0000-4000-8000-000000000002', schema: 'agent_other' };
-  const result = await readSharedSourceRecoveryAuthority(f.db, f.tx, 'shared-old');
+  f.rows['users/other/agentStores/octogee-other-coach'] = { agentId: 'octogee-other-coach', gatewayId: 'shared-old', assignmentEpoch: 3, storeId: '00000000-0000-4000-8000-000000000002', schema: 'agent_other', recordedAt: 1 };
+  const result = await f.read();
   expect(result.postgresAgentStores?.map(store => store.agentId)).toEqual(['octogee-livefixture-coach', 'octogee-other-coach']);
 });

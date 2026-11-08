@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { forceMigrationHarness } from "./fleet-force-migration.test-support.js";
 
 const mocks = vi.hoisted(() => ({ db: undefined as unknown, transport: undefined as unknown }));
+vi.mock("@octogee/core/platform-state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+  createFirestorePlatformStateStore: (await import("./journal-fixture-store.test-support.js")).journalFixtureStoreFor,
+}));
 vi.mock("firebase-admin/app", async importOriginal => ({
   ...await importOriginal<typeof import("firebase-admin/app")>(),
   initializeApp: vi.fn(), applicationDefault: vi.fn(),
@@ -13,7 +17,7 @@ vi.mock("firebase-admin/firestore", async importOriginal => ({
 vi.mock("../ops/fleet-force-migration-transport.js", () => ({ createForceMigrationTransport: () => mocks.transport }));
 vi.mock("@octogee/core/gateway-live-release", async importOriginal => ({
   ...await importOriginal<typeof import("@octogee/core/gateway-live-release")>(),
-  readGatewayAuthorization: async () => ({ gateway: { desiredStatus: "running" }, config: { profile: "standard" } }),
+  readGatewayAuthorizationInStore: async () => ({ gateway: { desiredStatus: "running" }, config: { profile: "standard" } }),
   readGatewayRuntimeHeartbeat: async () => ({ status: "ready" }),
 }));
 vi.mock("../lib/glm-operations.js", async importOriginal => ({

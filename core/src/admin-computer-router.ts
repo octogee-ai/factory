@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { Request, Router } from "express";
-import { FieldValue, type Firestore, type Transaction } from "firebase-admin/firestore";
-import { GLM_OPERATIONS_COLLECTION, isValidGatewayId, readBuilderParkedComputer } from "@octogee/shared/types/glm";
+import { isValidGatewayId, readBuilderParkedComputer } from "@octogee/shared/types/glm";
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
+import type { BuilderActivationLease, BuilderRecord, ComputerRecoveryFence } from "./platform-state/builders.js";
+import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
+import type { OperationRecord } from "./platform-state/operations.js";
+import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 
 interface ComputerReplacementMutation {
   req: Request;
@@ -16,7 +20,7 @@ interface ComputerReplacementMutation {
 
 interface ComputerRouterDeps {
   replacementEnabled?: boolean;
-  db: Firestore;
+  store: PlatformStateStore;
   journal: (input: ComputerReplacementMutation) => Promise<string>;
 }
 
@@ -30,137 +34,153 @@ function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function assignedGateway(user: Record<string, unknown>): unknown {
-  return object(object(user.provisioning).openclaw).gatewayId;
+function withoutRevision(record: object): Record<string, unknown> {
+  const { revision: _revision, ...data } = record as Record<string, unknown>;
+  return data;
 }
 
-async function boundComputer(db: Firestore, tx: Transaction, gatewayId: string): Promise<ResolvedComputer> {
-  const [rootSnap, runtimeSnap] = await Promise.all([
-    tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.doc(`glmGateways/${gatewayId}`)),
+function assertBoundVm(runtimeRecord: FleetRegistryRecord | null): void {
+  const vm = object(runtimeRecord?.vm);
+  if (runtimeRecord?.runtime !== "gce-vm" || typeof vm.instanceName !== "string" || !vm.instanceName) {
+    throw new ComputerAdmissionError(409, "gateway has no bound VM computer");
+  }
+}
+
+async function boundComputer(tx: PlatformStateTransaction, gatewayId: string): Promise<ResolvedComputer> {
+  const [stored, runtimeRecord] = await Promise.all([
+    tx.gateways.roots.get(gatewayId), tx.fleetRegistry.get(gatewayId),
   ]);
-  const root = projectGatewayDesiredRootForGateway(rootSnap.data(), gatewayId);
+  const root = stored === null ? null : projectGatewayDesiredRootForGateway(withoutRevision(stored), gatewayId);
   if (!root) throw new ComputerAdmissionError(404, "gateway not found");
   if (root.gatewayClass !== "builder" || !root.ownerUid || !root.builderSlug || root.desiredStatus === "retired" || root.retirementClaim != null) {
     throw new ComputerAdmissionError(409, "replacement requires an owned, non-retiring Builder gateway");
   }
-  const runtime = object(runtimeSnap.data());
-  const vm = object(runtime.vm);
-  if (runtime.runtime !== "gce-vm" || typeof vm.instanceName !== "string" || !vm.instanceName) {
-    throw new ComputerAdmissionError(409, "gateway has no bound VM computer");
-  }
-  const owner = await tx.get(db.doc(`users/${root.ownerUid}`));
-  if (!owner.exists || assignedGateway(object(owner.data())) !== gatewayId) {
+  assertBoundVm(runtimeRecord);
+  const owner = await tx.builders.records.get(root.ownerUid);
+  if (owner?.gateway?.gatewayId !== gatewayId) {
     throw new ComputerAdmissionError(409, "gateway is no longer the owner's current assignment");
   }
   return { gatewayId, ownerUid: root.ownerUid, input: { gatewayId, uid: root.ownerUid, action: "replace" } };
 }
 
-async function parkedComputer(db: Firestore, tx: Transaction, ownerUid: string, force: boolean): Promise<ResolvedComputer> {
-  const user = await tx.get(db.doc(`users/${ownerUid}`));
-  if (!user.exists) throw new ComputerAdmissionError(404, "owner not found");
-  const parked = readBuilderParkedComputer(user.data());
+async function assertForceRecoverableRoot(tx: PlatformStateTransaction, gatewayId: string, ownerUid: string): Promise<void> {
+  const root = await tx.gateways.roots.get(gatewayId);
+  if (root !== null && (root.ownerUid !== ownerUid || root.gatewayClass !== "builder" || !["paused", "retired"].includes(String(root.desiredStatus)))) {
+    throw new ComputerAdmissionError(409, "force recovery requires an absent or stopped, owned Builder gateway");
+  }
+}
+
+async function parkedComputer(tx: PlatformStateTransaction, ownerUid: string, force: boolean): Promise<ResolvedComputer> {
+  const owner = await tx.builders.records.get(ownerUid);
+  if (!owner) throw new ComputerAdmissionError(404, "owner not found");
+  const parked = readBuilderParkedComputer({ provisioning: { computer: owner.home.computer } });
   if (!parked) throw new ComputerAdmissionError(404, "owner has no parked computer");
   if (force && (!parked.instanceId || !isValidGatewayId(parked.gatewayId))) throw new ComputerAdmissionError(409, "force recovery requires the parked computer identity");
   if (!force && parked.checkpoint.outcome !== "fresh") {
     throw new ComputerAdmissionError(409, "park checkpoint is stale; activate the Builder and replace through its gateway");
   }
-  const runtime = await tx.get(db.doc(`glmGateways/${parked.gatewayId}`));
-  if (object(object(runtime.data()).vm).instanceName === parked.instanceName) {
+  const runtime = await tx.fleetRegistry.get(parked.gatewayId);
+  if (object(runtime?.vm).instanceName === parked.instanceName) {
     throw new ComputerAdmissionError(409, "computer is still bound to a gateway; replace through that gateway");
   }
-  if (force) {
-    const root = await tx.get(db.doc(`gateways/${parked.gatewayId}`));
-    const data = object(root.data());
-    if (root.exists && (data.ownerUid !== ownerUid || data.gatewayClass !== "builder" || !["paused", "retired"].includes(String(data.desiredStatus)))) {
-      throw new ComputerAdmissionError(409, "force recovery requires an absent or stopped, owned Builder gateway");
-    }
-  }
+  if (force) await assertForceRecoverableRoot(tx, parked.gatewayId, ownerUid);
   return { gatewayId: parked.gatewayId, ownerUid, input: { ownerUid, uid: ownerUid, action: "replace", ...(force ? { force: true, expectedGatewayId: parked.gatewayId, expectedInstanceId: parked.instanceId } : {}) } };
 }
 
-function conflicts(data: Record<string, unknown>, target: ResolvedComputer): boolean {
-  const input = object(data.input);
-  return [data.gatewayId, input.gatewayId, input.fromGatewayId, input.toGatewayId].includes(target.gatewayId)
-    || [data.inputUid, input.uid, input.ownerUid].includes(target.ownerUid);
+function conflicts(operation: OperationRecord, target: ResolvedComputer): boolean {
+  const input = object(operation.input);
+  return [operation.gatewayId, input.gatewayId, input.fromGatewayId, input.toGatewayId].includes(target.gatewayId)
+    || [operation.inputUid, input.uid, input.ownerUid].includes(target.ownerUid);
 }
 
-async function servingShared(db: Firestore, tx: Transaction, ownerUid: string, openclaw: Record<string, unknown>): Promise<{ gatewayId: string; epoch: number }> {
-  const gatewayId = typeof openclaw.gatewayId === "string" ? openclaw.gatewayId : "";
+async function servingShared(tx: PlatformStateTransaction, ownerUid: string, owner: BuilderRecord): Promise<{ gatewayId: string; epoch: number }> {
+  const gatewayId = owner.gateway?.gatewayId ?? "";
   if (!isValidGatewayId(gatewayId)) throw new ComputerAdmissionError(409, "Builder has no valid serving assignment");
-  const root = object((await tx.get(db.doc(`gateways/${gatewayId}`))).data());
-  if (root.gatewayClass !== "shared") throw new ComputerAdmissionError(409, "computer recovery requires a Shared assignment");
-  const assignment = object((await tx.get(db.doc(`gateways/${gatewayId}/assignments/${ownerUid}`))).data());
-  if (assignment.uid !== ownerUid || assignment.gatewayId !== gatewayId || assignment.state !== "serving" || !Number.isSafeInteger(assignment.epoch) || (assignment.epoch as number) < 0) throw new ComputerAdmissionError(409, "computer recovery requires a serving Shared assignment");
-  return { gatewayId, epoch: assignment.epoch as number };
+  const root = await tx.gateways.roots.get(gatewayId);
+  if (root?.gatewayClass !== "shared") throw new ComputerAdmissionError(409, "computer recovery requires a Shared assignment");
+  const assignment = await tx.gateways.assignments.get(gatewayId, ownerUid);
+  if (assignment?.uid !== ownerUid || assignment.gatewayId !== gatewayId || assignment.state !== "serving" || !Number.isSafeInteger(assignment.epoch) || assignment.epoch < 0) throw new ComputerAdmissionError(409, "computer recovery requires a serving Shared assignment");
+  return { gatewayId, epoch: assignment.epoch };
 }
 
-function assertInactiveLease(openclaw: Record<string, unknown>): void {
-  if (openclaw.activationLease != null && !["parked", "failed"].includes(String(object(openclaw.activationLease).status))) throw new ComputerAdmissionError(409, "Builder activation is in progress");
+function assertInactiveLease(lease: BuilderActivationLease | null): void {
+  if (lease !== null && !["parked", "failed"].includes(String(lease.status))) throw new ComputerAdmissionError(409, "Builder activation is in progress");
 }
 
-function recoveryOperationMatches(existing: Record<string, unknown>, input: Record<string, unknown>, ownerUid: string, fence: Record<string, unknown>): boolean {
+function recoveryOperationMatches(existing: OperationRecord, input: Record<string, unknown>, ownerUid: string, fence: ComputerRecoveryFence): boolean {
   return existing.status === "failed" && existing.kind === "gateway-vm" && existing.origin === "operator" && input.action === "replace" && input.force === true &&
     input.ownerUid === ownerUid && input.uid === ownerUid && input.expectedGatewayId === fence.gatewayId && input.expectedInstanceId === fence.instanceId;
 }
 
-async function retryForceRecovery(db: Firestore, tx: Transaction, ownerUid: string, actorUid: string, provisioning: Record<string, unknown>): Promise<string> {
-  const fence = object(provisioning.computerRecovery);
-  const operationId = typeof fence.operationId === "string" ? fence.operationId : "";
-  if (!operationId || operationId.includes("/") || typeof fence.gatewayId !== "string" || !isValidGatewayId(fence.gatewayId) || typeof fence.instanceId !== "string" || !fence.instanceId) throw new ComputerAdmissionError(409, "computer recovery fence is malformed");
-  const openclaw = object(provisioning.openclaw);
-  assertInactiveLease(openclaw);
-  const shared = await servingShared(db, tx, ownerUid, openclaw);
-  const ref = db.doc(`${GLM_OPERATIONS_COLLECTION}/${operationId}`);
-  const operationSnapshot = await tx.get(ref);
-  const existing = object(operationSnapshot.data());
-  const input = operationSnapshot.exists ? object(existing.input) : { ownerUid, uid: ownerUid, action: "replace", force: true, expectedGatewayId: fence.gatewayId, expectedInstanceId: fence.instanceId };
-  if (operationSnapshot.exists && !recoveryOperationMatches(existing, input, ownerUid, fence)) throw new ComputerAdmissionError(409, "computer recovery is already in progress or cannot be retried");
-  const active = await tx.get(db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]));
+function replacementOperation(input: { id: string; actorUid: string; gatewayId: string; ownerUid: string; input: Record<string, unknown> }): OperationRecord {
+  return {
+    id: input.id, kind: "gateway-vm", status: "pending", createdBy: input.actorUid, origin: "operator",
+    createdAt: Date.now(), startedAt: null, completedAt: null, steps: [],
+    gatewayId: input.gatewayId, inputUid: input.ownerUid, input: input.input,
+  };
+}
+
+async function activeOperations(tx: PlatformStateTransaction): Promise<readonly Stored<OperationRecord>[]> {
+  return tx.journal.operations.listByStatus(["pending", "running"]);
+}
+
+async function retryForceRecovery(tx: PlatformStateTransaction, owner: Stored<BuilderRecord>, actorUid: string): Promise<string> {
+  const ownerUid = owner.uid;
+  const fence = owner.fences.computerRecovery!;
+  const operationId = fence.operationId;
+  if (typeof operationId !== "string" || !operationId || operationId.includes("/") || typeof fence.gatewayId !== "string" || !isValidGatewayId(fence.gatewayId) || typeof fence.instanceId !== "string" || !fence.instanceId) throw new ComputerAdmissionError(409, "computer recovery fence is malformed");
+  assertInactiveLease(owner.activationLease);
+  const shared = await servingShared(tx, ownerUid, owner);
+  const existing = await tx.journal.operations.get(operationId);
+  const input = existing ? object(existing.input) : { ownerUid, uid: ownerUid, action: "replace", force: true, expectedGatewayId: fence.gatewayId, expectedInstanceId: fence.instanceId };
+  if (existing && !recoveryOperationMatches(existing, input, ownerUid, fence)) throw new ComputerAdmissionError(409, "computer recovery is already in progress or cannot be retried");
   const target = { ownerUid, gatewayId: fence.gatewayId, input };
-  if (active.docs.some(doc => {
-    const candidate = doc.data();
+  if ((await activeOperations(tx)).some(candidate => {
     const candidateInput = object(candidate.input);
     const fencedPending = candidate.status === "pending" && (candidateInput.uid === ownerUid || (candidateInput.uid == null && candidateInput.ownerUid === ownerUid));
     return conflicts(candidate, target) && !fencedPending;
   })) throw new ComputerAdmissionError(409, "conflicting computer operation is in progress");
-  tx.update(db.doc(`users/${ownerUid}`), { "provisioning.computerRecovery": { ...fence, sharedGatewayId: shared.gatewayId, assignmentEpoch: shared.epoch } });
-  if (operationSnapshot.exists) tx.update(ref, { status: "pending", startedAt: null, completedAt: null, steps: [], error: FieldValue.delete(), expireAt: FieldValue.delete(), nextAttemptAt: FieldValue.delete() });
-  else tx.create(ref, { kind: "gateway-vm", status: "pending", createdBy: actorUid, origin: "operator", createdAt: Date.now(), startedAt: null, completedAt: null, steps: [], gatewayId: fence.gatewayId, inputUid: ownerUid, input });
+  await tx.builders.records.setFence(ownerUid, "computerRecovery", { ...fence, sharedGatewayId: shared.gatewayId, assignmentEpoch: shared.epoch });
+  if (existing) {
+    await tx.journal.operations.patch(operationId, {
+      status: "pending", startedAt: null, completedAt: null, steps: [],
+      error: { clear: true }, expireAt: { clear: true }, nextAttemptAt: { clear: true },
+    });
+  } else {
+    await tx.journal.operations.create(replacementOperation({ id: operationId, actorUid, gatewayId: fence.gatewayId, ownerUid, input }));
+  }
   return operationId;
 }
 
-async function fenceForceRecovery(db: Firestore, tx: Transaction, target: ResolvedComputer, operationId: string): Promise<void> {
-  const ref = db.doc(`users/${target.ownerUid}`);
-  const user = object((await tx.get(ref)).data());
-  const provisioning = object(user.provisioning);
-  const openclaw = object(provisioning.openclaw);
-  if (provisioning.computerRecovery != null) throw new ComputerAdmissionError(409, "computer recovery is already in progress");
-  assertInactiveLease(openclaw);
-  const shared = await servingShared(db, tx, target.ownerUid, openclaw);
-  tx.update(ref, { "provisioning.computerRecovery": { operationId, gatewayId: target.gatewayId, instanceId: target.input.expectedInstanceId, sharedGatewayId: shared.gatewayId, assignmentEpoch: shared.epoch } });
+async function fenceForceRecovery(tx: PlatformStateTransaction, target: ResolvedComputer, operationId: string): Promise<void> {
+  const owner = await tx.builders.records.get(target.ownerUid);
+  if (!owner) throw new ComputerAdmissionError(404, "owner not found");
+  if (owner.fences.computerRecovery !== undefined) throw new ComputerAdmissionError(409, "computer recovery is already in progress");
+  assertInactiveLease(owner.activationLease);
+  const shared = await servingShared(tx, target.ownerUid, owner);
+  await tx.builders.records.setFence(target.ownerUid, "computerRecovery", {
+    operationId, gatewayId: target.gatewayId, instanceId: target.input.expectedInstanceId as string,
+    sharedGatewayId: shared.gatewayId, assignmentEpoch: shared.epoch,
+  });
 }
 
-async function enqueueReplacement(db: Firestore, requested: RequestedComputer, actorUid: string): Promise<string> {
-  const operation = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-  return db.runTransaction(async (tx) => {
+async function enqueueReplacement(store: PlatformStateStore, requested: RequestedComputer, actorUid: string): Promise<string> {
+  const operationId = randomUUID();
+  return store.transaction({ label: "admin.computer.replace" }, async (tx) => {
     if ("force" in requested && requested.force) {
-      const owner = object((await tx.get(db.doc(`users/${requested.ownerUid}`))).data());
-      const provisioning = object(owner.provisioning);
-      if (provisioning.computerRecovery != null) return retryForceRecovery(db, tx, requested.ownerUid, actorUid, provisioning);
+      const owner = await tx.builders.records.get(requested.ownerUid);
+      if (owner?.fences.computerRecovery !== undefined) return retryForceRecovery(tx, owner!, actorUid);
     }
     const target = "gatewayId" in requested
-      ? await boundComputer(db, tx, requested.gatewayId)
-      : await parkedComputer(db, tx, requested.ownerUid, requested.force === true);
-    const active = await tx.get(db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]));
-    const conflict = active.docs.find((doc) => conflicts(doc.data(), target));
+      ? await boundComputer(tx, requested.gatewayId)
+      : await parkedComputer(tx, requested.ownerUid, requested.force === true);
+    const conflict = (await activeOperations(tx)).find((operation) => conflicts(operation, target));
     if (conflict) throw new ComputerAdmissionError(409, `computer operation already in flight: ${conflict.id}`);
-    if ("force" in requested && requested.force) await fenceForceRecovery(db, tx, target, operation.id);
-    tx.create(operation, {
-      kind: "gateway-vm", status: "pending", createdBy: actorUid, origin: "operator",
-      createdAt: Date.now(), startedAt: null, completedAt: null, steps: [],
-      gatewayId: target.gatewayId, inputUid: target.ownerUid, input: target.input,
-    });
-    return operation.id;
+    if ("force" in requested && requested.force) await fenceForceRecovery(tx, target, operationId);
+    await tx.journal.operations.create(replacementOperation({
+      id: operationId, actorUid, gatewayId: target.gatewayId, ownerUid: target.ownerUid, input: target.input,
+    }));
+    return operationId;
   });
 }
 
@@ -197,7 +217,7 @@ export function addAdminComputerRoutes(router: Router, deps: ComputerRouterDeps)
           preActionStatus: { binding: key === "gatewayId" ? "gateway" : "parked-owner" },
           mutation: { kind: "replace-computer", ...requested },
           ...(force ? { forced: true } : {}),
-          action: () => enqueueReplacement(deps.db, requested, actor.uid!),
+          action: () => enqueueReplacement(deps.store, requested, actor.uid!),
         });
         res.status(202).json({ ...requested, operationId });
       } catch (error) {

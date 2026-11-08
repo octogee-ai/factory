@@ -10,10 +10,8 @@ import {
   recordOperationAuditIntent,
   type OperationAuditActionClaim,
   type OperationAuditIntentInput,
-  type OperationsDb,
 } from "./operation-audit.js";
-
-export type NormalFleetMutationDb = OperationsDb;
+import type { PlatformStateStore } from "./platform-state/store.js";
 
 export class FleetMutationIdempotencyError extends Error {
   constructor(readonly auditId: string, readonly status: "recorded" | "in-progress" | "completed" | "failed") {
@@ -61,18 +59,18 @@ export interface NormalFleetMutationInput<T> extends OperationAuditIntentInput {
 }
 
 export async function runNormalFleetMutation<T>(
-  db: NormalFleetMutationDb,
+  store: PlatformStateStore,
   input: NormalFleetMutationInput<T>,
 ): Promise<T> {
   const { action, claimId, classifyResult, idempotencyKey, ...intent } = input;
-  const audit = await recordOperationAuditIntent(db, {
+  const audit = await recordOperationAuditIntent(store, {
     ...intent,
     idempotencyKey: idempotencyKey ?? randomUUID(),
   });
   if (audit.disposition === "existing") {
     throw new FleetMutationIdempotencyError(audit.auditId, audit.status);
   }
-  const claim = await claimOperationAuditAction(db, audit.auditId, {
+  const claim = await claimOperationAuditAction(store, audit.auditId, {
     claimId: claimId ?? randomUUID(),
   });
   let result: T;
@@ -83,7 +81,7 @@ export async function runNormalFleetMutation<T>(
   } catch (error) {
     try {
       const partial = error instanceof FleetMutationPartialError ? error : null;
-      await finishOperationAudit(db, audit.auditId, {
+      await finishOperationAudit(store, audit.auditId, {
         expectedClaimId: claim.claimId,
         outcome: "failed",
         error: error instanceof Error ? error.message : String(error),
@@ -101,7 +99,7 @@ export async function runNormalFleetMutation<T>(
     }
     throw error;
   }
-  await finishOperationAudit(db, audit.auditId, {
+  await finishOperationAudit(store, audit.auditId, {
     expectedClaimId: claim.claimId,
     ...outcome,
   });

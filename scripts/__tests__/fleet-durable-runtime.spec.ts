@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { MalformedRecordError } from "@octogee/core/platform-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   listFleetGatewayRuntimes,
   readFleetGatewayRuntime,
 } from "../ops/fleet.js";
-
-type Docs = Record<string, Record<string, unknown>>;
 
 function gatewayRoot(
   gatewayId: string,
@@ -55,40 +55,14 @@ function runtimeDoc(
   };
 }
 
-function database(docs: Docs, gatewayIds: readonly string[] = []): {
-  doc(path: string): { get(): Promise<{ exists: boolean; data(): Record<string, unknown> | undefined }> };
-  collection(name: string): {
-    get(): Promise<{ docs: Array<{ id: string; data(): Record<string, unknown> | undefined }> }>;
-  };
-} {
-  return {
-    doc(path) {
-      return {
-        get: async () => ({
-          exists: docs[path] !== undefined,
-          data: () => docs[path],
-        }),
-      };
-    },
-    collection(name) {
-      if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
-      return {
-        get: async () => ({
-          docs: gatewayIds.map((id) => ({ id, data: () => docs[`gateways/${id}`] })),
-        }),
-      };
-    },
-  };
-}
-
 describe("fleet durable gateway runtime", () => {
   it("reads the runtime heartbeat from the bare-id doc", async () => {
-    const db = database({
+    const store = createDocumentFixtureStore({
       "gateways/default": gatewayRoot("default"),
       "glmGateways/default": runtimeDoc("default"),
     });
 
-    await expect(readFleetGatewayRuntime(db as never, "default")).resolves.toEqual({
+    await expect(readFleetGatewayRuntime(store, "default")).resolves.toEqual({
       gatewayId: "default",
       desiredStatus: "running",
       profile: "standard",
@@ -99,24 +73,24 @@ describe("fleet durable gateway runtime", () => {
     });
   });
 
-  it("fails closed for an existing malformed root instead of reading its bare glm doc", async () => {
-    const db = database({
+  it("refuses an existing malformed root instead of reading its bare glm doc", async () => {
+    const store = createDocumentFixtureStore({
       "gateways/default": { gatewayId: "default" },
       "glmGateways/default": {
         heartbeat: { status: "ready", mountedCustomers: ["alice"] },
       },
     });
 
-    await expect(readFleetGatewayRuntime(db as never, "default")).resolves.toBeNull();
+    await expect(readFleetGatewayRuntime(store, "default")).rejects.toBeInstanceOf(MalformedRecordError);
   });
 
   it("lists durable root identities from their bare-id runtime docs", async () => {
-    const db = database({
+    const store = createDocumentFixtureStore({
       "gateways/default": gatewayRoot("default"),
       "glmGateways/default": runtimeDoc("default"),
-    }, ["default"]);
+    });
 
-    await expect(listFleetGatewayRuntimes(db as never)).resolves.toEqual([
+    await expect(listFleetGatewayRuntimes(store)).resolves.toEqual([
       {
         gatewayId: "default",
         runtime: {

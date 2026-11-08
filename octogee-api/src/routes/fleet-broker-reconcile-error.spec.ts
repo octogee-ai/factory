@@ -2,6 +2,7 @@ import express, { type RequestHandler } from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const GATEWAY_ID = "shared-blue";
@@ -57,6 +58,7 @@ function fixture(start = 1_000_000) {
   }) as RequestHandler);
   server.use("/internal/fleet", createFleetBrokerRoutes({
     db: db as never,
+    store: createDocumentFixtureStore({}),
     now: () => now,
   }));
   return {

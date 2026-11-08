@@ -76,6 +76,7 @@ import {
 } from "./lib/chat-artifact-adapters.js";
 import { resolveActiveArtifactWorkspaceSlug } from "./lib/chat-artifact-workspace.js";
 import { auth, db, storage } from "../../gateway-edge/src/lib/db.js";
+import { platformStateStore } from "../../gateway-edge/src/lib/platform-state.js";
 import {
   ConnectorTokenReadError,
   getFreshAccessTokenFromDb,
@@ -694,7 +695,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   app.use("/internal/chat-artifacts", chatArtifacts.worker);
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
-  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db, store: platformStateStore }));
   // octogee-api-only: voice relay. gateway-edge Talk engines stream microphone
   // audio and fetch speech here so provider keys never reach a gateway pod.
   app.use("/internal/voice", createVoiceRelayRoutes({ config: voiceRelayConfig, nativeOpenAi: Boolean(voiceOpenAiApiKey), log: voiceRelayLog }));
@@ -720,6 +721,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   // and assigned-scoped mutation endpoints for its own KSA-bound identity.
   app.use("/internal/fleet", createFleetBrokerRoutes({
     db,
+    store: platformStateStore,
     modelBrokerRails,
     onSignupOfferBudgetInterruption: ({ uid, reason }) => recordProductEvent(product, uid, {
       name: "model_budget_interrupted",
@@ -728,7 +730,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   }));
   // octogee-api-only: broker sidecar GitHub file-browser token reads
   // so cattle pods do not need Firestore or KMS access to user secrets.
-  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db }));
+  app.use("/internal/connectors", createConnectorTokenBrokerRoutes({ db, store: platformStateStore }));
   app.use("/internal/workspace-commit", createWorkspaceCommitProofBrokerRoutes({ db }));
   app.use("/internal/owner-automations", createOwnerAutomationAuthorizationBrokerRoutes({ db }));
   // octogee-api-only: materialize BYOK creds for cattle gateways that can't reach

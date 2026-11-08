@@ -22,12 +22,12 @@ import {
   log, OPENCLAW_DIR, CUSTOMERS_DIR,
   agentExists,
 } from "./config.js";
-import { db } from "./firebase.js";
+import { db, platformStateStore } from "./firebase.js";
+import { MissingRecordError } from "./platform-state/errors.js";
 import { CREW_IDENTITY } from "./crew.js";
 import { workspaceRepoName } from "./gitea-naming.js";
 import { provisionMattermostUser } from "./mattermost.js";
 import { notifyNewSignup } from "./notifications.js";
-import { registerAgentIds } from "./gateway.js";
 import { writeTierTemplateFiles as writeTierTemplateFilesImpl } from "./tier-template-files.js";
 
 export {
@@ -334,7 +334,6 @@ export async function markProvisioningComplete(
   await seedWorkspaceChannels(ctx, mmUpdate);
   await seedWorkspaceOwner(ctx);
   await writeAgentDoc(ctx, mmUpdate);
-  registerAgentIds(ctx.uid, allAgentIds);
   await updateUserWorkspaceEntry(ctx, provisioningObj);
 }
 
@@ -356,6 +355,12 @@ function buildProvisioningSnapshot(
 }
 
 async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
+  await platformStateStore.transaction({ label: "provisioning.default-role" }, async (transaction) => {
+    const builder = await transaction.builders.records.get(ctx.uid);
+    if (builder === null) throw new MissingRecordError({ aggregate: "builder", key: ctx.uid });
+    if (builder.role === null) await transaction.builders.records.patch(ctx.uid, { role: "user" });
+  });
+
   const systemConfigData: Record<string, unknown> = {
     updatedAt: FieldValue.serverTimestamp(),
   };
@@ -369,14 +374,7 @@ async function writeSystemConfig(ctx: ProvisioningContext): Promise<void> {
     );
   }
 
-  const configRef = db.doc(`users/${ctx.uid}/system/config`);
-  await db.runTransaction(async (transaction) => {
-    const current = await transaction.get(configRef);
-    if (current.data()?.role === undefined) {
-      systemConfigData.role = "user";
-    }
-    transaction.set(configRef, systemConfigData, { merge: true });
-  });
+  await db.doc(`users/${ctx.uid}/system/config`).set(systemConfigData, { merge: true });
 }
 
 export function buildUserOperationalFields(

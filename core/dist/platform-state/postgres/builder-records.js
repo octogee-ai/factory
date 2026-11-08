@@ -540,6 +540,9 @@ function builderRecordReads(session) {
             const text = selectBuilders("b.openclaw_status = $1::text", BY_UID);
             return selectRecords(session, "builders.records.listByOpenClawStatus", text, [openclawStatus]);
         },
+        listAll() {
+            return selectRecords(session, "builders.records.listAll", selectBuilders("TRUE", BY_UID), []);
+        },
         async list(page) {
             const name = "builders.records.list";
             const parameters = new SqlParameters();

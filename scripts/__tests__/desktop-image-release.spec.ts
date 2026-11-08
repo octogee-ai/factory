@@ -159,7 +159,7 @@ it('audits an on-demand archive prune only when it applies removals', async () =
   expect(archive.deleteImage).not.toHaveBeenCalled();
   const applied = await runDesktopArchivePrune({ ...prune, apply: true });
   expect(runWithOperationAuditIntent).toHaveBeenCalledWith(
-    prune.db, expect.objectContaining({ actor: 'fixture', mutation: { action: 'prune-desktop-archive' } }), expect.anything(), expect.any(Function),
+    expect.objectContaining({ transaction: expect.any(Function) }), expect.objectContaining({ actor: 'fixture', mutation: { action: 'prune-desktop-archive' } }), expect.anything(), expect.any(Function),
   );
   expect(archive.deleteImage).toHaveBeenCalledWith('octogee-test', 'a1');
   expect(applied).toMatchObject({ remove: ['a1'], removed: 1 });

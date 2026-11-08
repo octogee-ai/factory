@@ -78,8 +78,8 @@ import {
 import { startAfterSurgeReadiness } from "./surge-reconcile-gate.js";
 import {
   writeGatewayHeartbeat,
-  type FleetStateDeps,
   type FleetStateFirestore,
+  type GatewayHeartbeatDeps,
   type HeartbeatSnapshot,
 } from "./fleet-state.js";
 import type { GatewayRpcClient } from "./gateway-rpc.js";
@@ -1933,7 +1933,7 @@ function startMaybeReconcileLoop(params: {
   });
 }
 
-function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetStateDeps | null {
+function createStateDeps(opts: StartFleetOptions, needsState: boolean): GatewayHeartbeatDeps | null {
   if (!needsState) return null;
   if (!opts.db) {
     throw new Error("[fleet] db is required when reportState is enabled");
@@ -1941,8 +1941,6 @@ function createStateDeps(opts: StartFleetOptions, needsState: boolean): FleetSta
   return {
     db: opts.db as unknown as FleetStateFirestore,
     serverTimestamp: () => FieldValue.serverTimestamp(),
-    deleteField: () => FieldValue.delete(),
-    log: opts.log,
   };
 }
 
@@ -2765,7 +2763,7 @@ export function createBuilderSurgeGateWiring(input: BuilderSurgeGateWiringOption
 }
 
 function createHeartbeatEmitter(input: {
-  stateDeps: FleetStateDeps | null;
+  stateDeps: GatewayHeartbeatDeps | null;
   opts: StartFleetOptions;
   runtime: FleetRuntime;
   internalUrl: string;

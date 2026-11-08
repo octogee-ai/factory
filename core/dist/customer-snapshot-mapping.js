@@ -1,6 +1,5 @@
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const logger = createServiceLogger("provisioner");
-import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { projectAgentConfigured, projectRepoSourceFromDoc } from "@octogee/shared/types/project";
@@ -54,14 +53,12 @@ function projectAgentArchived(projectData) {
         typeof commercialLifecycle === "object" &&
         commercialLifecycle.status === "archived");
 }
-export function mapProjectAgentState(projectId, projectData, secretData) {
+export function mapProjectAgentState(projectId, projectData, credential) {
     const agent = projectData.agent;
     const requestedEnabled = projectAgentConfigured(agent);
     const enabled = requestedEnabled && !projectAgentArchived(projectData);
-    const mmUserId = typeof secretData?.mmUserId === "string" && secretData.mmUserId ? secretData.mmUserId : null;
-    const token = typeof secretData?.personalToken === "string" && secretData.personalToken
-        ? secretData.personalToken
-        : null;
+    const mmUserId = credential?.mattermostUserId || null;
+    const token = credential?.personalToken || null;
     if (!enabled && mmUserId === null && token === null)
         return null;
     try {
@@ -77,12 +74,12 @@ export function mapProjectAgentState(projectId, projectData, secretData) {
         return { projectId, enabled, mmUserId, token, status: "error", activationId: null };
     }
 }
-// Vegas: collect per-project agent states for a snapshot. The secret is read
-// only for projects whose doc carries an agent field — untouched projects
-// cost no extra reads and can have no lingering secret to retire.
-const PROJECT_AGENT_SECRET_PREFIX = projectAgentSecretDocId("");
-export async function collectProjectAgentStates(db, uid, slug) {
-    const snap = await db.collection("workspaces").doc(slug).collection("projects").get();
+export async function collectProjectAgentStates(db, secrets, uid, slug) {
+    const [snap, projectSecrets] = await Promise.all([
+        db.collection("workspaces").doc(slug).collection("projects").get(),
+        secrets.list(uid, "project-agent-mattermost"),
+    ]);
+    const credentials = new Map(projectSecrets.flatMap((secret) => secret.kind === "connector" || !secret.projectId ? [] : [[secret.projectId, secret]]));
     const out = [];
     const seenProjects = new Set();
     for (const doc of snap.docs) {
@@ -90,25 +87,14 @@ export async function collectProjectAgentStates(db, uid, slug) {
         if (data.agent === undefined)
             continue;
         seenProjects.add(doc.id);
-        const secretSnap = await db
-            .collection("users").doc(uid)
-            .collection("secrets").doc(projectAgentSecretDocId(doc.id))
-            .get();
-        const state = mapProjectAgentState(doc.id, data, secretSnap.data());
+        const state = mapProjectAgentState(doc.id, data, credentials.get(doc.id) ?? null);
         if (state)
             out.push(state);
     }
-    // Deleting a project removes the doc that carries the agent flag — the
-    // lingering secret is then the only retire trigger left. Surface each
-    // orphaned projectAgentMattermost-* secret as a retire-pending state.
-    const secretsSnap = await db.collection("users").doc(uid).collection("secrets").get();
-    for (const doc of secretsSnap.docs) {
-        if (!doc.id.startsWith(PROJECT_AGENT_SECRET_PREFIX))
+    for (const [projectId, credential] of credentials) {
+        if (seenProjects.has(projectId))
             continue;
-        const projectId = doc.id.slice(PROJECT_AGENT_SECRET_PREFIX.length);
-        if (!projectId || seenProjects.has(projectId))
-            continue;
-        const state = mapProjectAgentState(projectId, {}, doc.data());
+        const state = mapProjectAgentState(projectId, {}, credential);
         if (state)
             out.push(state);
     }

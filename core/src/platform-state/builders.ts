@@ -194,6 +194,7 @@ export interface BuilderRecordsRepository {
   listByGateway(gatewayId: string, filter?: BuilderGatewayFilter): Promise<readonly Stored<BuilderRecord>[]>;
   listGatewayFenceHolders(gatewayId: string): Promise<GatewayFenceHolders>;
   listAdmitted(): Promise<readonly Stored<BuilderRecord>[]>;
+  listAll(): Promise<readonly Stored<BuilderRecord>[]>;
   listByOpenClawStatus(openclawStatus: string): Promise<readonly Stored<BuilderRecord>[]>;
   list(page: PageRequest): Promise<Page<Stored<BuilderRecord>>>;
   create(record: NewBuilderRecord): Promise<void>;

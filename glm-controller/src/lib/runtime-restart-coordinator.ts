@@ -4,7 +4,8 @@ import { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/ga
 export { updateRuntimeRestart, type RuntimeRestartFence } from '@octogee/core/gateway-runtime-restart';
 import { assertGatewayRuntimeMutationUnfenced } from '@octogee/core/gateway-retirement-claim';
 import { findActiveGatewayMigration, type FleetOperationLockRef } from '@octogee/core/fleet-operation-lock';
-import { runNormalFleetMutation, type NormalFleetMutationDb } from '@octogee/core/normal-fleet-mutation';
+import { runNormalFleetMutation } from '@octogee/core/normal-fleet-mutation';
+import { createFirestorePlatformStateStore } from '@octogee/core/platform-state';
 import { runGatewayRuntimeExclusive } from './gateway-runtime-mutation.js';
 
 export async function assertMigrationRestartUnfenced(db:Firestore,transaction:Transaction,input:Record<string,unknown>):Promise<void> {
@@ -35,8 +36,9 @@ export async function coordinateRuntimeRestart(
   observe?:(fence:RuntimeRestartFence)=>Promise<void>,
 ):Promise<void> {
   const attemptId=randomUUID();
+  const store=createFirestorePlatformStateStore({ db });
   const saved=(await db.doc(`gateways/${gatewayId}`).get()).data()?.runtimeRestartFence as RuntimeRestartFence|undefined;
-  await runNormalFleetMutation(db as unknown as NormalFleetMutationDb,{
+  await runNormalFleetMutation(store,{
     actor:'cowboy',forced:false,what:saved?.phase==='acknowledged'?'gateway-restart-observation':`gateway-${kind}-restart`,why:kind==='deployment'?'model-key secret changed':'operator requested process restart',
     target:{gatewayId},preActionStatus:saved?{restartAttemptId:saved.attemptId,phase:saved.phase}:{},mutation:{kind,attemptId},idempotencyKey:attemptId,
     action:async claim=>{
@@ -44,17 +46,17 @@ export async function coordinateRuntimeRestart(
       if(existing?.phase==='acknowledged') {
         if(!observe || existing.gatewayId!==gatewayId)throw new Error('gateway restart observation unavailable');
         await observe(existing);
-        await updateRuntimeRestart(db,existing,null);
+        await updateRuntimeRestart(store,existing,null);
         return;
       }
       let current:RuntimeRestartFence={attemptId,auditId:claim.auditId,gatewayId,kind,startedAt:Date.now(),phase:'reserved'};
       await runGatewayRuntimeExclusive(() => acquireRuntimeRestart(db,current));
       try {
-        await work(current,async next=>{await updateRuntimeRestart(db,current,next);current=next;});
+        await work(current,async next=>{await updateRuntimeRestart(store,current,next);current=next;});
         if(current.phase!=='acknowledged')throw new Error('gateway restart completion was not acknowledged');
-        await updateRuntimeRestart(db,current,null);
+        await updateRuntimeRestart(store,current,null);
       } catch(error) {
-        if(current.phase==='reserved')await updateRuntimeRestart(db,current,null);
+        if(current.phase==='reserved')await updateRuntimeRestart(store,current,null);
         throw error;
       }
     },

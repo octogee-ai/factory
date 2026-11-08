@@ -84,6 +84,3 @@ export async function readAssignmentDoc(db, gatewayId, uid) {
         return null;
     return parseAssignmentDoc(uid, snap.data());
 }
-export async function deleteAssignmentDoc(db, gatewayId, uid) {
-    await assignmentsCollection(db, gatewayId).doc(uid).delete();
-}

@@ -4,6 +4,7 @@ import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { deploymentEnvironmentForProject } from "./deployment-environment.js";
+import { createFirestorePlatformStateStore } from "./platform-state/firestore/store.js";
 
 export const FIREBASE_PROJECT_ID =
   process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || "unknown";
@@ -26,5 +27,7 @@ export const OCTOGEE_ENV = deploymentEnvironmentForProject(FIREBASE_PROJECT_ID);
 logger.info(`Environment: ${OCTOGEE_ENV} (${FIREBASE_PROJECT_ID})`);
 
 export const db = getFirestore();
+
+export const platformStateStore = createFirestorePlatformStateStore({ db });
 
 export { getStorage };

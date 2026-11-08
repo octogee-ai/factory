@@ -1,6 +1,5 @@
 import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
 import {
   GATEWAY_CONFIG_SCHEMA_VERSION,
   effectiveGatewayServiceAccountNameForGateway,
@@ -24,6 +23,7 @@ import {
   type GatewayProfileImages,
   type GatewayEdgeImage,
 } from "@octogee/shared/types/gateway-releases";
+import type { PlatformStateRepositories, PlatformStateStore } from "./platform-state/store.js";
 
 export {
   GATEWAY_CONFIG_SCHEMA_VERSION,
@@ -36,6 +36,10 @@ export {
 export type { GatewayMutableConfig };
 
 type FirestoreReader = Pick<Firestore, "doc">;
+
+export type GatewayRootReader = Pick<PlatformStateRepositories, "gateways">;
+export type GatewayRuntimeReader = Pick<PlatformStateRepositories, "fleetRegistry">;
+export type GatewayStateReader = GatewayRootReader & GatewayRuntimeReader;
 
 // A gateway's pods are named octogee-gateway-<id>-<replicaset>-<pod> by the
 // stable-name Deployment. Pod identity binds to the gateway alone — never to a
@@ -114,8 +118,10 @@ export interface InitialGatewayReleaseArgs {
   writeAdditional?: (transaction: Transaction) => void;
 }
 
+export type InitialGatewayReleaseInStoreArgs = Omit<InitialGatewayReleaseArgs, "validateAdditional" | "writeAdditional">;
+
 export function initialGatewayReleaseDocuments(
-  args: InitialGatewayReleaseArgs,
+  args: InitialGatewayReleaseInStoreArgs,
 ): {
   gatewayDoc: GatewayDoc & GatewayMutableConfig;
   releaseDoc: ReleaseDoc;
@@ -181,6 +187,24 @@ export async function writeInitialGatewayRelease(
   });
 }
 
+export async function writeInitialGatewayReleaseInStore(
+  store: PlatformStateStore,
+  args: InitialGatewayReleaseInStoreArgs,
+): Promise<void> {
+  const { gatewayDoc, releaseDoc } = initialGatewayReleaseDocuments(args);
+  await store.transaction({ label: "gateway-release.initial" }, async (transaction) => {
+    const [existing, releaseExisting] = await Promise.all([
+      transaction.gateways.roots.get(args.gatewayId),
+      transaction.gateways.releases.get(args.gatewayId, 1),
+    ]);
+    if (existing !== null || releaseExisting !== null) {
+      throw new InitialGatewayReleaseConflictError(args.gatewayId);
+    }
+    await transaction.gateways.roots.create(gatewayDoc);
+    await transaction.gateways.releases.createInitial(releaseDoc);
+  });
+}
+
 export interface RenderedGatewayConfig
   extends Omit<GatewayMutableConfig, "configSchemaVersion">,
     GatewayArtifact {}
@@ -215,17 +239,29 @@ function isGatewayArtifact(value: unknown): value is GatewayArtifact {
   return isReleasePayload(value);
 }
 
+function isReleaseNumber(release: number | null): release is number {
+  return typeof release === "number" && Number.isInteger(release) && release >= 1;
+}
+
 export async function readGatewayArtifact(
   db: FirestoreReader,
   gatewayId: string,
   release: number | null,
   transaction?: Pick<Transaction, "get">,
 ): Promise<GatewayArtifact | null> {
-  if (!isBareGatewayId(gatewayId)) return null;
-  if (typeof release !== "number" || !Number.isInteger(release) || release < 1) return null;
+  if (!isBareGatewayId(gatewayId) || !isReleaseNumber(release)) return null;
   const releaseRef = db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}/${GATEWAY_RELEASES_SUBCOLLECTION}/${release}`);
   const releaseSnap = await (transaction ? transaction.get(releaseRef) : releaseRef.get());
   return artifactFromStoredRelease(releaseSnap.exists ? releaseSnap.data() : undefined, gatewayId, release);
+}
+
+export async function readGatewayArtifactInStore(
+  state: GatewayRootReader,
+  gatewayId: string,
+  release: number | null,
+): Promise<GatewayArtifact | null> {
+  if (!isBareGatewayId(gatewayId) || !isReleaseNumber(release)) return null;
+  return artifactFromStoredRelease(await state.gateways.releases.get(gatewayId, release), gatewayId, release);
 }
 
 function artifactFromStoredRelease(releaseData: unknown, gatewayId: string, release: number): GatewayArtifact | null {
@@ -250,13 +286,13 @@ function artifactFromStoredRelease(releaseData: unknown, gatewayId: string, rele
 }
 
 export async function readGatewayRuntimeDoc(
-  db: FirestoreReader,
+  state: GatewayRuntimeReader,
   gateway: GatewayDoc,
 ): Promise<unknown> {
-  const runtimeSnap = await db
-    .doc(`${GLM_GATEWAYS_COLLECTION}/${gateway.gatewayId}`)
-    .get();
-  return runtimeSnap.exists ? runtimeSnap.data() : undefined;
+  const stored = await state.fleetRegistry.get(gateway.gatewayId);
+  if (stored === null) return undefined;
+  const { revision: _revision, ...record } = stored;
+  return { docKind: "runtime", ...record };
 }
 
 export function gatewayRuntimeHeartbeatOf(
@@ -275,10 +311,10 @@ export function gatewayRuntimeHeartbeatOf(
 }
 
 export async function readGatewayRuntimeHeartbeat(
-  db: FirestoreReader,
+  state: GatewayRuntimeReader,
   gateway: GatewayDoc,
 ): Promise<Record<string, unknown> | null> {
-  return gatewayRuntimeHeartbeatOf(await readGatewayRuntimeDoc(db, gateway), gateway);
+  return gatewayRuntimeHeartbeatOf(await readGatewayRuntimeDoc(state, gateway), gateway);
 }
 
 export function mergeGatewayConfigWithArtifact(
@@ -318,26 +354,26 @@ export async function readGatewayAuthorization(
 ): Promise<GatewayAuthorization | null> {
   if (!isBareGatewayId(gatewayId)) return null;
   const gatewaySnap = await db.doc(`${GATEWAYS_COLLECTION}/${gatewayId}`).get();
-  const gatewayData = gatewaySnap.exists ? gatewaySnap.data() : undefined;
-  return gatewaySnap.exists ? gatewayAuthorizationFromRootDocument(gatewayData, gatewayId) : null;
+  return gatewaySnap.exists ? gatewayAuthorizationFromRootDocument(gatewaySnap.data(), gatewayId) : null;
+}
+
+export async function readGatewayAuthorizationInStore(
+  state: GatewayRootReader,
+  gatewayId: string,
+): Promise<GatewayAuthorization | null> {
+  if (!isBareGatewayId(gatewayId)) return null;
+  const stored = await state.gateways.roots.get(gatewayId);
+  if (stored === null) return null;
+  const { revision: _revision, ...root } = stored;
+  return gatewayAuthorizationFromRootDocument(root, gatewayId);
 }
 
 export async function readServingGatewayAuthorization(
-  db: FirestoreReader,
+  state: GatewayStateReader,
   gatewayId: string,
 ): Promise<GatewayAuthorization | null> {
-  const authorization = await readGatewayAuthorization(db, gatewayId);
-  if (!authorization) return null;
-  if (authorization.gateway.desiredStatus !== "running") return null;
-
-  const runtimeSnap = await db.doc(`${GLM_GATEWAYS_COLLECTION}/${gatewayId}`).get();
-  const runtimeData = runtimeSnap.exists ? runtimeSnap.data() : undefined;
-  if (
-    !isGatewayRuntimeDoc(runtimeData) ||
-    runtimeData.gatewayId !== gatewayId ||
-    runtimeData.lifecycle !== "serving"
-  ) {
-    return null;
-  }
-  return authorization;
+  const authorization = await readGatewayAuthorizationInStore(state, gatewayId);
+  if (!authorization || authorization.gateway.desiredStatus !== "running") return null;
+  const runtime = await state.fleetRegistry.get(gatewayId);
+  return runtime?.lifecycle === "serving" ? authorization : null;
 }

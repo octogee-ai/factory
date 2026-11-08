@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
-
-import { GLM_GATEWAYS_COLLECTION } from "@octogee/shared/types/glm";
+import type { DocumentData } from "firebase-admin/firestore";
+import type { GatewayRuntimeRestartFenceValue, PlatformStateStore, PlatformStateTransaction } from "@octogee/core/platform-state";
 import { assertSharedSourceRecoveryUnchanged, readSharedSourceRecoveryAuthority } from "@octogee/core/shared-source-recovery";
 import { agentIdBelongsToSlug } from "@octogee/shared/types/agent-models";
 import type { FleetBrokerOpenClawBootClaim } from "@octogee/shared/types/fleet-broker";
@@ -75,21 +74,20 @@ function sourceImageVerified(fence: DocumentData, podUid: string): boolean {
   return true;
 }
 
-async function sourceDoctorContext(db: Firestore, txn: Transaction, input: OpenClawBootInput) {
-  const rootRef = db.doc(`gateways/${input.gatewayId}`);
-  const root = record((await txn.get(rootRef)).data()), fence = record(root.runtimeRestartFence);
-  if (fence.kind !== "source-recovery") return null;
+async function sourceDoctorContext(transaction: PlatformStateTransaction, input: OpenClawBootInput) {
+  const root = await transaction.gateways.roots.get(input.gatewayId), fence = root?.runtimeRestartFence;
+  if (root === null || fence?.kind !== "source-recovery") return null;
   assertSourceFence(fence, input);
   const target = record(fence.target), doctor = record(fence.doctor);
-  const op = record((await txn.get(db.doc(`glmOperations/${doctor.requestId}`))).data()), recovery = record(op.input?.sourceRecovery);
-  assertSourceRoot(root, recovery.root);
+  const op = record(await transaction.journal.operations.get(doctor.requestId)), recovery = record(op.input?.sourceRecovery);
+  assertSourceRoot(record(root), recovery.root);
   assertSourceOperation(op, recovery, target, input.gatewayId);
   const coaches = sourceAgentIds(recovery.assignments, target.agents);
   const stores = sourcePostgresStores(recovery, target, coaches);
   if (recovery.schedulerStateRecovery !== true || target.schedulerStateRecovery !== true) throw new Error("source Doctor scheduler custody mismatch");
-  const current = await readSharedSourceRecoveryAuthority(db, txn, input.gatewayId, doctor.requestId);
+  const current = await readSharedSourceRecoveryAuthority(transaction, input.gatewayId, doctor.requestId);
   assertSharedSourceRecoveryUnchanged(current, recovery as Parameters<typeof assertSharedSourceRecoveryUnchanged>[1]);
-  return { rootRef, fence, doctor, agentIds: stores.map(s => s.agentId), postgresAgentStores: stores,
+  return { fence, doctor, agentIds: stores.map(s => s.agentId), postgresAgentStores: stores,
     schedulerStateRecovery: true as const, imageVerified: sourceImageVerified(fence, input.podUid) };
 }
 
@@ -117,42 +115,42 @@ function sourceDoctorRequest(context: NonNullable<Awaited<ReturnType<typeof sour
     schedulerStateRecovery: context.schedulerStateRecovery, postgresAgentStores: context.postgresAgentStores };
 }
 
+function withDoctor(fence: GatewayRuntimeRestartFenceValue, doctor: DocumentData): GatewayRuntimeRestartFenceValue {
+  return { ...fence, doctor: { ...record(fence.doctor), ...doctor } };
+}
+
 export function createOpenClawBootSentinelStore(
-  db: Firestore,
+  store: PlatformStateStore,
   now: () => number,
 ): OpenClawBootSentinelStore {
   return {
     async claim(input) {
-      const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
-      return db.runTransaction(async (txn) => {
-        const runtimeSnap = await txn.get(runtimeRef);
-        if (!runtimeSnap.exists) return null;
-        const context = await sourceDoctorContext(db, txn, input);
+      return store.transaction({ label: "openclaw-boot.claim" }, async (transaction) => {
+        if (await transaction.fleetRegistry.get(input.gatewayId) === null) return null;
+        const context = await sourceDoctorContext(transaction, input);
         if (context) {
           if (sourceDoctorCompleted(context, input)) return { action: "start" as const };
           if (context.doctor.startedAt !== undefined || context.doctor.completedAt !== undefined) throw new Error("source Doctor attempted without matching success acknowledgement");
           const sourceDoctor = sourceDoctorRequest(context);
           if (!context.imageVerified) return { action: "wait" as const, sourceDoctor };
-          txn.update(context.rootRef, {
-            "runtimeRestartFence.doctor.startedAt": now(),
-            "runtimeRestartFence.doctor.releaseKey": input.releaseKey,
-          });
+          await transaction.gateways.roots.compareAndSetRuntimeRestartFence(input.gatewayId, context.fence,
+            withDoctor(context.fence, { startedAt: now(), releaseKey: input.releaseKey }));
           return { action: "doctor" as const, sourceDoctor };
         }
         return { action: "start" as const };
       });
     },
     async assertDoctor(input) {
-      return db.runTransaction(async txn => {
-        const context = await sourceDoctorContext(db, txn, input);
+      return store.transaction({ label: "openclaw-boot.assertDoctor", readOnly: true }, async (transaction) => {
+        const context = await sourceDoctorContext(transaction, input);
         if (!context?.imageVerified || context.doctor.requestId !== input.requestId || context.doctor.releaseKey !== input.releaseKey ||
             !Number.isSafeInteger(context.doctor.startedAt) || context.doctor.startedAt <= 0) throw new Error("source Doctor authority changed");
         return true;
-      }, { readOnly: true });
+      });
     },
     async completeDoctor(input) {
-      return db.runTransaction(async (txn) => {
-        const context = await sourceDoctorContext(db, txn, input);
+      return store.transaction({ label: "openclaw-boot.completeDoctor" }, async (transaction) => {
+        const context = await sourceDoctorContext(transaction, input);
         if (!context || !context.imageVerified || context.doctor.requestId !== input.requestId ||
             context.doctor.releaseKey !== input.releaseKey || !Number.isSafeInteger(context.doctor.startedAt) || context.doctor.startedAt <= 0 ||
             !isDeepStrictEqual(context.agentIds, input.verifiedAgentIds)) throw new Error("source Doctor acknowledgement mismatch");
@@ -162,21 +160,17 @@ export function createOpenClawBootSentinelStore(
         }
         const completedAt = now();
         if (completedAt < context.doctor.startedAt) throw new Error("source Doctor completion predates its claim");
-        txn.update(context.rootRef, {
-          "runtimeRestartFence.doctor.completedAt": completedAt,
-          "runtimeRestartFence.doctor.verifiedAgentIds": input.verifiedAgentIds,
-        });
+        await transaction.gateways.roots.compareAndSetRuntimeRestartFence(input.gatewayId, context.fence,
+          withDoctor(context.fence, { completedAt, verifiedAgentIds: input.verifiedAgentIds }));
         return true;
       });
     },
     async complete(input) {
-      const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.gatewayId);
-      return db.runTransaction(async (txn) => {
-        const runtimeSnap = await txn.get(runtimeRef);
-        if (!runtimeSnap.exists) return false;
-        const context = await sourceDoctorContext(db, txn, input);
+      return store.transaction({ label: "openclaw-boot.complete" }, async (transaction) => {
+        if (await transaction.fleetRegistry.get(input.gatewayId) === null) return false;
+        const context = await sourceDoctorContext(transaction, input);
         if (context && !sourceDoctorCompleted(context, input)) throw new Error("source Doctor success acknowledgement is required before health");
-        if (input.openclawBuild) txn.update(runtimeRef, { openclawHealthyBuild: input.openclawBuild });
+        if (input.openclawBuild) await transaction.fleetRegistry.patch(input.gatewayId, { openclawHealthyBuild: input.openclawBuild });
         return true;
       });
     },

@@ -21,6 +21,7 @@ import { revokeProviderGrant } from "@octogee/core/connector-revocation";
 import { requireAuth } from "../middleware/auth.js";
 import { logger } from "../middleware/logging.js";
 import { db, FieldValue, Timestamp } from "../lib/db.js";
+import { platformStateStore } from "../lib/platform-state.js";
 import { encryptSecret, decryptSecret } from "../lib/kms.js";
 import { sanitizeReturnUrl, buildOAuthRedirect } from "../lib/redirect-validation.js";
 import {
@@ -408,7 +409,7 @@ router.post(
         await revokeProviderGrant(
           req.uid!,
           { connectorId: def.meta.id, revocationUrl: def.oauth.revocationUrl },
-          { db, decryptSecret, logger },
+          { secrets: platformStateStore.secrets, decryptSecret, logger },
         );
       }
       if (def.revokeStoredFields) {

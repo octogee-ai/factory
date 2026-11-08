@@ -6,13 +6,20 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { WebSocketServer } from "ws";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 import { buildOperationAuditIntent } from "@octogee/core/operation-audit";
+import { fixtureDocumentsAt } from "@octogee/core/testing/journal-store";
 import type { RestartDriverDeps } from "@octogee/core/gateway-restart-probe";
 import { releasePayloadHash } from "../../shared/types/gateway-releases.js";
 import { isOperationAuditRecord } from "../../shared/types/glm.js";
 import { generateIdentity } from "@octogee/shared/types/device-identity";
 import { nativeHealth, nativeProbeSource, resolveForcedGatewayRestart } from "../ops/fleet-resolve-forced-restart.js";
+import { keepJournalRowsIn } from "./journal-fixture-store.test-support.js";
+
+vi.mock("@octogee/core/platform-state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+  createFirestorePlatformStateStore: (await import("./journal-fixture-store.test-support.js")).journalFixtureStoreFor,
+}));
 
 function harness() {
   const payload = {
@@ -43,32 +50,9 @@ function harness() {
     ["users/canary-owner", { provisioning: { openclaw: { gatewayId: "canary" } } }],
   ]);
   const writes: Array<{ path: string; data: Record<string, any> }> = [];
-  const snapshot = (path: string) => ({ exists: docs.has(path), id: path.split("/").at(-1)!, data: () => structuredClone(docs.get(path)) });
-  const ref = (path: string) => ({ path, id: path.split("/").at(-1)!, get: async () => snapshot(path) });
-  const query = (path: string, field: string, op: string, value: any) => ({ get: async () => {
-    const found = [...docs].filter(([key, doc]) => key.startsWith(`${path}/`) && key.split("/").length === 2 &&
-      (op === "in" ? value.includes(field.split(".").reduce((current: any, part) => current?.[part], doc)) : field.split(".").reduce((current: any, part) => current?.[part], doc) === value))
-      .map(([key]) => snapshot(key));
-    return { docs: found, empty: found.length === 0 };
-  } });
-  let beforeTransaction: (() => void) | undefined;
-  const db = {
-    doc: ref,
-    collection: (path: string) => ({ doc: (id: string) => ref(`${path}/${id}`), where: (field: string, op: string, value: any) => query(path, field, op, value) }),
-    async runTransaction<T>(body: (transaction: any) => Promise<T>) {
-      beforeTransaction?.();
-      const staged: typeof writes = [];
-      const result = await body({ get: (reference: any) => reference.get(),
-        create: (reference: any, data: any) => { if (docs.has(reference.path)) { throw new Error("already exists"); } staged.push({ path: reference.path, data }); },
-        update: (reference: any, data: any) => { if (!docs.has(reference.path)) { throw new Error("missing document"); } staged.push({ path: reference.path, data }); } });
-      for (const write of staged) {
-        const next = { ...docs.get(write.path), ...write.data };
-        for (const [key, value] of Object.entries(write.data)) if (value && typeof value === "object" && "isEqual" in value && value.isEqual(FieldValue.delete())) delete next[key];
-        docs.set(write.path, next); writes.push(write);
-      }
-      return result;
-    },
-  };
+  const documents = fixtureDocumentsAt(docs);
+  const db = {};
+  keepJournalRowsIn(db, docs, { documents: { ...documents, set: (path, data) => { writes.push({ path, data }); documents.set(path, data); } } });
   const images = [payload.profileImages.builder, payload.gatewayEdgeImage].map(image => `${image.imageRepository}:${image.imageTag}`);
   const containers = ["gateway", "gateway-edge"].map((name, index) => ({ name, image: images[index] }));
   const pod: any = { metadata: { name: "octogee-gateway-canary-new", uid: "new-uid", creationTimestamp: new Date(350).toISOString(),
@@ -91,7 +75,7 @@ function harness() {
   });
   const input = { db: db as unknown as Firestore, gatewayId: "canary", forceAuditId: "audit-force", kubeContext: "test-context", namespace: "octogee-test", runKubectl, apply: true, idempotencyKey: "resolve-1" };
   return { docs, writes, root, fence, pod, deployment, replicaSets, input, runKubectl,
-    beforeTransaction: (hook: typeof beforeTransaction) => { beforeTransaction = hook; }, beforeProbe: (hook: typeof beforeProbe) => { beforeProbe = hook; },
+    beforeProbe: (hook: typeof beforeProbe) => { beforeProbe = hook; },
     setOld: (value: any) => { old = value; }, setExtraPod: () => { extraPod = true; }, setHealth: (value: any) => { health = value; }, failNative: () => { nativeFailure = true; } };
 }
 

@@ -16,8 +16,6 @@ import {
 // (collection → doc → collection → doc/get), and tests fake exactly these.
 interface AssignmentDocRef {
   get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> | undefined }>;
-  set: (data: Record<string, unknown>, options?: { merge?: boolean }) => Promise<unknown>;
-  delete: () => Promise<unknown>;
 }
 
 interface AssignmentCollectionRef {
@@ -132,12 +130,4 @@ export async function readAssignmentDoc(
   const snap = await assignmentsCollection(db, gatewayId).doc(uid).get();
   if (!snap.exists) return null;
   return parseAssignmentDoc(uid, snap.data());
-}
-
-export async function deleteAssignmentDoc(
-  db: AssignmentFirestore,
-  gatewayId: string,
-  uid: string,
-): Promise<void> {
-  await assignmentsCollection(db, gatewayId).doc(uid).delete();
 }

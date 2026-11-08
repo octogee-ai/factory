@@ -1,3 +1,7 @@
+import type { AccountLifecycle } from "@octogee/shared/types/account-lifecycle";
+import type { CustomerDeletionJob } from "./platform-state/jobs.js";
+import type { OperationRecord } from "./platform-state/operations.js";
+
 interface CustomerDeletionPlanInput {
   uid: string;
   slug: string | null;
@@ -20,8 +24,9 @@ function operationRecord(input: {
   createdBy: string;
   createdAt: number;
   nextAttemptAt?: number;
-}): Record<string, unknown> {
+}): OperationRecord {
   return {
+    id: input.operationId,
     kind: input.kind,
     status: "pending",
     createdBy: input.createdBy,
@@ -38,12 +43,12 @@ function operationRecord(input: {
 }
 
 export function buildCustomerDeletionPlan(input: CustomerDeletionPlanInput): {
-  lifecycle: Record<string, unknown>;
-  job: Record<string, unknown>;
-  suspensionOperation: Record<string, unknown>;
-  erasureOperation: Record<string, unknown>;
+  lifecycle: AccountLifecycle;
+  job: CustomerDeletionJob;
+  suspensionOperation: OperationRecord;
+  erasureOperation: OperationRecord;
 } {
-  const lifecycle = {
+  const lifecycle: AccountLifecycle = {
     status: "deletion_scheduled",
     deletionId: input.deletionId,
     suspendedAt: input.requestedAt,
@@ -52,6 +57,7 @@ export function buildCustomerDeletionPlan(input: CustomerDeletionPlanInput): {
   return {
     lifecycle,
     job: {
+      deletionId: input.deletionId,
       version: 1,
       uid: input.uid,
       slug: input.slug,
@@ -60,10 +66,12 @@ export function buildCustomerDeletionPlan(input: CustomerDeletionPlanInput): {
       requestedAt: input.requestedAt,
       eraseAfter: input.eraseAfter,
       currentGatewayId: input.currentGatewayId,
-      stripeCustomerIds: input.stripeCustomerIds,
-      stripeSubscriptionIds: input.stripeSubscriptionIds,
       suspensionOperationId: input.suspensionOperationId,
       erasureOperationId: input.erasureOperationId,
+      productContext: {
+        stripeCustomerIds: input.stripeCustomerIds,
+        stripeSubscriptionIds: input.stripeSubscriptionIds,
+      },
     },
     suspensionOperation: operationRecord({
       kind: "suspend-customer",

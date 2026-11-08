@@ -3,12 +3,13 @@ import type { Firestore } from 'firebase-admin/firestore';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import type { BoundTenant } from '../lib/sa-to-tenant.js';
+import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
 import { createFleetBrokerRoutes } from './fleet-broker.js';
 
 function harness(bound: BoundTenant | null, greeting: unknown) {
   const user = { username: 'alice', provisioning: { openclaw: { gatewayId: 'shared-test', status: 'complete', greeting } } };
   const writes = vi.fn(() => { throw new Error('Snapshot must not write'); });
-  const docs: Record<string, unknown> = { 'users/uid-alice': user };
+  const docs: Record<string, Record<string, unknown>> = { 'users/uid-alice': user };
   const ref = (path: string, collection = false): unknown => ({
     path,
     collection: (name: string) => ref(`${path}/${name}`, true),
@@ -31,7 +32,7 @@ function harness(bound: BoundTenant | null, greeting: unknown) {
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use('/internal/fleet', createFleetBrokerRoutes({ db }));
+  app.use('/internal/fleet', createFleetBrokerRoutes({ db, store: createDocumentFixtureStore(docs) }));
   return { app, user, writes };
 }
 

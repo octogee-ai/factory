@@ -2,6 +2,11 @@ import request from "supertest";
 import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createJournalFixtureStore,
+  fixtureDocumentsAt,
+  type FixtureDocuments,
+} from "@octogee/core/testing/journal-store";
+import {
   createHttpServer,
   type HttpServerDeps,
 } from "../http-server";
@@ -477,22 +482,71 @@ function buildDb(store: FakeStore, watchRegistry?: WatchRegistry) {
   };
 }
 
+function setOperation(store: FakeStore, id: string, data: Record<string, unknown>): void {
+  const index = store.glmOperations.findIndex((operation) => operation.id === id);
+  if (index === -1) store.glmOperations.push({ id, data });
+  else store.glmOperations[index] = { id, data };
+}
+
+function fakeStoreDocuments(store: FakeStore): FixtureDocuments {
+  const other = fixtureDocumentsAt(new Map<string, Record<string, unknown>>());
+  const topLevel = (path: string): Record<string, Record<string, unknown>> | null => {
+    const [collection, id, ...rest] = path.split("/");
+    if (id === undefined || rest.length > 0) return null;
+    if (collection === "users") return store.users;
+    if (collection === "gateways") return store.gateways;
+    if (collection === "glmGateways") return store.glmGateways;
+    return null;
+  };
+  const operationId = (path: string) => /^glmOperations\/([^/]+)$/.exec(path)?.[1];
+  return {
+    get: (path) => {
+      const id = operationId(path);
+      if (id !== undefined) return store.glmOperations.find((operation) => operation.id === id)?.data;
+      return topLevel(path)?.[path.split("/")[1]] ?? other.get(path);
+    },
+    set: (path, row) => {
+      const id = operationId(path);
+      if (id !== undefined) return setOperation(store, id, row);
+      const rows = topLevel(path);
+      if (rows) rows[path.split("/")[1]] = row;
+      else other.set(path, row);
+    },
+    delete: (path) => {
+      const id = operationId(path);
+      if (id !== undefined) {
+        store.glmOperations = store.glmOperations.filter((operation) => operation.id !== id);
+        return;
+      }
+      const rows = topLevel(path);
+      if (rows) delete rows[path.split("/")[1]];
+      else other.delete(path);
+    },
+    children: (collectionPath) => {
+      if (collectionPath === "glmOperations") {
+        return store.glmOperations.map(({ id, data }) => [id, data] as const);
+      }
+      const rows = topLevel(`${collectionPath}/_`);
+      return rows ? Object.entries(rows) : other.children(collectionPath);
+    },
+    group: (collectionId) => other.group(collectionId),
+  };
+}
+
 function buildDeps(store: FakeStore, overrides: Partial<HttpServerDeps> = {}): HttpServerDeps {
+  const documents = fakeStoreDocuments(store);
   return {
     db: buildDb(store) as any,
+    store: createJournalFixtureStore({
+      get: (id) => documents.get(`glmOperations/${id}`),
+      set: (id, data) => documents.set(`glmOperations/${id}`, data),
+    }, { documents }),
     log: vi.fn(),
     verifyIdToken: vi.fn(async (token: string) => {
       if (token === "admin-token") return { uid: "admin-uid" };
       if (token === "user-token") return { uid: "user-uid" };
       throw new Error("invalid token");
     }),
-    workspaceSlugsForUser: (data) => {
-      const slug =
-        typeof data?.username === "string" && data.username.length > 0
-          ? data.username
-          : null;
-      return slug ? [slug] : [];
-    },
     provisionGatewayAuthSecret: vi.fn(async () => ({
       secretName: "stub",
       created: true,
@@ -757,25 +811,27 @@ describe("createHttpServer — admin gateway routes", () => {
         data: { status: "succeeded" },
       });
     }
-    const db = buildDb(store) as ReturnType<typeof buildDb>;
-    const originalCollection = db.collection.bind(db);
-    const fullOperationRead = vi.fn(async () => {
-      throw new Error("Fleet must not scan glmOperations");
-    });
-    db.collection = ((name: string) => {
-      const collection = originalCollection(name) as Record<string, unknown>;
-      return name === "glmOperations"
-        ? { ...collection, get: fullOperationRead }
-        : collection;
-    }) as typeof db.collection;
-    const app = createHttpServer(buildDeps(store, { db: db as any }));
+    const deps = buildDeps(store);
+    const operations = deps.store.journal.operations;
+    const operationReads = vi.spyOn(operations, "getMany");
+    const operationScans = [
+      vi.spyOn(operations, "listByStatus"),
+      vi.spyOn(operations, "listByGateway"),
+      vi.spyOn(operations, "listForUid"),
+      vi.spyOn(deps.store.journal, "listRecent"),
+    ];
+    const app = createHttpServer(deps);
 
     const res = await request(app)
       .get("/api/admin/gateways")
       .set("Authorization", "Bearer admin-token");
 
     expect(res.status, res.text).toBe(200);
-    expect(fullOperationRead).not.toHaveBeenCalled();
+    expect(operationReads).toHaveBeenCalledOnce();
+    const readIds = operationReads.mock.calls[0]![0];
+    expect(readIds).toContain("activate-alice");
+    expect(readIds.filter((id) => id.startsWith("irrelevant-"))).toEqual([]);
+    for (const scan of operationScans) expect(scan).not.toHaveBeenCalled();
     expect(res.body.builderRuntimes).toEqual([
       expect.objectContaining({
         uid: "uid-alice",
@@ -898,11 +954,10 @@ describe("createHttpServer — admin gateway routes", () => {
   });
 
   it("serves gateways requested by Cowboy before their heartbeat docs exist", async () => {
+    store.gateways["canary"] = { ...durableSharedGateway("canary"), sizingTier: "xs" };
     store.glmGateways["canary"] = {
-      gatewayId: "canary",
-      desiredStatus: "running",
-      imageTag: "8507a63-oc2026.6.10",
-      sizingTier: "xs",
+      ...servingRuntime("canary", { imageTag: "8507a63-oc2026.6.10" }),
+      heartbeat: {},
     };
     const readGatewayPodDiagnostics = vi.fn(async (_gatewayId: string) => ({
       status: "not-ready" as const,
@@ -1002,99 +1057,7 @@ describe("createHttpServer — admin gateway routes", () => {
     });
   });
 
-  it("records targetless Builder demand without queuing a migration", async () => {
-    store.users["uid-alice"] = {
-      username: "alice",
-      builderSubscription: { tier: "pro", status: "active" },
-      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
-    };
-    store.configs["gateways/default/assignments/uid-alice"] = {
-      uid: "uid-alice",
-      gatewayId: "default",
-      state: "serving",
-      epoch: 4,
-    };
-
-    const app = createHttpServer(buildDeps(store));
-    const res = await request(app)
-      .post("/api/admin/customers/uid-alice/activation-lease")
-      .set("Authorization", "Bearer admin-token")
-      .send({ reason: "conversation-start" });
-
-    expect(res.status, JSON.stringify(res.body)).toBe(202);
-    expect(res.body).toMatchObject({
-      generation: 1,
-      sizingTier: "m",
-      status: "requested",
-    });
-    expect(store.glmOperations).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          recordType: "audit",
-          status: "completed",
-          mutation: {
-            kind: "request-activation-lease",
-            uid: "uid-alice",
-          },
-        }),
-      }),
-    ]);
-    expect(store.users["uid-alice"].provisioning).toMatchObject({
-      openclaw: {
-        activationLease: {
-          builderSlug: "alice",
-          sourceGatewayId: "default",
-          sourceAssignmentEpoch: 4,
-          status: "requested",
-        },
-      },
-    });
-    expect(
-      (store.users["uid-alice"].provisioning as Record<string, any>)
-        .openclaw.activationLease,
-    ).not.toHaveProperty("targetGatewayId");
-  });
-
-  it("does not wake a legacy paused owner runtime when recording demand", async () => {
-    store.users["uid-alice"] = {
-      username: "alice",
-      builderSubscription: { tier: "pro", status: "active" },
-      provisioning: { openclaw: { slug: "alice", gatewayId: "default" } },
-    };
-    store.gateways["gw-alice"] = durableBuilderGateway("gw-alice", "paused");
-    store.configs["gateways/default/assignments/uid-alice"] = {
-      uid: "uid-alice",
-      gatewayId: "default",
-      state: "serving",
-      epoch: 9,
-    };
-
-    const app = createHttpServer(buildDeps(store));
-    const res = await request(app)
-      .post("/api/admin/customers/uid-alice/activation-lease")
-      .set("Authorization", "Bearer admin-token")
-      .send({});
-
-    expect(res.status).toBe(202);
-    expect(res.body).toMatchObject({
-      status: "requested",
-    });
-    expect(store.gateways["gw-alice"].desiredStatus).toBe("paused");
-    expect(store.glmOperations).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          recordType: "audit",
-          status: "completed",
-          mutation: {
-            kind: "request-activation-lease",
-            uid: "uid-alice",
-          },
-        }),
-      }),
-    ]);
-  });
-
-it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
+  it("mounts addAdminCustomerRoutes and returns 404 for unknown customer (factory wired)", async () => {
     const app = createHttpServer(buildDeps(store));
     const res = await request(app)
       .get("/api/admin/customer/does-not-exist")

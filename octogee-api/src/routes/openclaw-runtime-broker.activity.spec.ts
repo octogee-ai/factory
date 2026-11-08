@@ -3,6 +3,7 @@ import request from 'supertest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
 import { createOpenClawRuntimeBrokerRoutes } from './openclaw-runtime-broker.js';
+import { createJournalFixtureStore, journalRowsIn } from '@octogee/core/testing/journal-store';
 const authorize = vi.hoisted(() => vi.fn());
 vi.mock('../../../gateway-edge/src/lib/activity-conversation.js', () => ({ resolveActivityConversation: authorize }));
 const threadRootPostId = 'r'.repeat(26);
@@ -23,7 +24,7 @@ function harness(payloadPatch: Record<string, unknown> = {}, ownerGateway = gate
   const db = { doc: (path: string) => ({ path }), collection: (name: string) => ({ doc: (id: string) => ({ path: `${name}/${id}` }) }), runTransaction: async (fn: (value: typeof tx) => unknown) => fn(tx) } as unknown as Firestore;
   const app = express(); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: 'gateway', gatewayId, ownerUid: 'owner' }; next(); });
-  app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ db }));
+  app.use('/internal/openclaw', createOpenClawRuntimeBrokerRoutes({ db, store: createJournalFixtureStore(journalRowsIn({})) }));
   return { deleted, set, post: () => request(app).post('/internal/openclaw/ws/redeem').send({ ticketId: 'ticket', purpose: 'openclaw-ws' }), access: () => request(app).post('/internal/openclaw/activity/conversation-access').send({ uid: 'member', channelId: scope.channelId, threadRootPostId }) };
 }
 beforeEach(() => authorize.mockReset().mockResolvedValue(scope));

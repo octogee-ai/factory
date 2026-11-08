@@ -5,8 +5,6 @@ import { db, FieldValue } from "../lib/db.js";
 import { liftSuppression } from "../lib/email-suppression.js";
 import { runEmailPreflight } from "../lib/email-preflight.js";
 import { getResend } from "../lib/resend.js";
-import { getWorkspaceMmContext } from "../lib/mattermost-context.js";
-import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import { provisionGatewayAuthSecret } from "@octogee/core/secret-manager";
 import {
   createCentralReleaseAuthority,
@@ -15,6 +13,7 @@ import {
 import { addAdminFleetRoutes } from "@octogee/core/admin-fleet-router";
 import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
 import { customerDeletionDeps } from "../lib/customer-deletion-deps.js";
+import { platformStateStore } from "../lib/platform-state.js";
 import { MODEL_CATALOG } from "@octogee/shared/types/model-catalog";
 import { modelRefForCatalogEntry } from "@octogee/shared/types/agent-models";
 import { BUILDER_TIERS, TIERS } from "@octogee/shared/types/billing-tiers";
@@ -81,20 +80,16 @@ const centralRelease = centralReleaseRouteDeps();
 
 addAdminCustomerRoutes(router, {
   db,
+  store: platformStateStore,
   FieldValue,
   logger,
-  workspaceSlugsForUser,
-  getWorkspaceMmContext: async (uid, hint) => {
-    const ctx = await getWorkspaceMmContext(uid, undefined, hint);
-    return ctx ? { coachDmChannelId: ctx.coachDmChannelId } : null;
-  },
 });
 
 addAdminFleetRoutes(router, {
-    computerReplacementEnabled: true,
+  computerReplacementEnabled: true,
   db,
+  store: platformStateStore,
   logger,
-  workspaceSlugsForUser,
   provisionGatewayAuthSecret,
   listGatewayBuilds,
   ...centralRelease,

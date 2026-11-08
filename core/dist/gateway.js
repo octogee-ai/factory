@@ -1,23 +1,4 @@
 import { log, readOpenClawConfig, writeOpenClawConfig, } from "./config.js";
-import { db } from "./firebase.js";
-export const agentToUid = new Map();
-export async function loadAgentToUidMapping() {
-    const snap = await db
-        .collection("users")
-        .where("provisioning.openclaw.status", "==", "complete")
-        .get();
-    for (const doc of snap.docs) {
-        const oc = doc.data().provisioning?.openclaw;
-        if (oc?.agentId)
-            agentToUid.set(oc.agentId, doc.id);
-        if (Array.isArray(oc?.agentIds))
-            oc.agentIds.forEach((id) => agentToUid.set(id, doc.id));
-    }
-    log(`agent-map: loaded ${agentToUid.size} entries`);
-}
-export function registerAgentIds(uid, agentIds) {
-    agentIds.forEach(id => agentToUid.set(id, uid));
-}
 const MIN_AGENT_CONCURRENCY = 8;
 const MIN_SUBAGENT_RUN_TIMEOUT_SECONDS = 900;
 function ensureAgents(config) {

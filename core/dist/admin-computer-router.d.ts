@@ -1,5 +1,5 @@
 import type { Request, Router } from "express";
-import { type Firestore } from "firebase-admin/firestore";
+import type { PlatformStateStore } from "./platform-state/store.js";
 interface ComputerReplacementMutation {
     req: Request;
     what: string;
@@ -12,7 +12,7 @@ interface ComputerReplacementMutation {
 }
 interface ComputerRouterDeps {
     replacementEnabled?: boolean;
-    db: Firestore;
+    store: PlatformStateStore;
     journal: (input: ComputerReplacementMutation) => Promise<string>;
 }
 export declare function addAdminComputerRoutes(router: Router, deps: ComputerRouterDeps): void;

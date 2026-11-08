@@ -9,7 +9,8 @@ import { centralGatewayReleasePayload, createCentralReleaseAuthority, type Relea
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError } from "@octogee/core/gateway-release-append";
 import { GatewayRetirementConflictError } from "@octogee/core/gateway-retirement-claim";
-import { runNormalFleetMutation, type NormalFleetMutationDb } from "@octogee/core/normal-fleet-mutation";
+import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
+import { createFirestorePlatformStateStore } from "@octogee/core/platform-state";
 import { timestampMillis } from "@octogee/core/timestamps";
 import { parseSharedPoolReplacements } from "@octogee/shared/types/shared-gateway-pool";
 import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
@@ -141,13 +142,14 @@ export async function deployFleetBuilder(db: Firestore, gateway: Pick<FleetGatew
   if (!current || current.gatewayClass !== "builder") throw new Error(`${gateway.gatewayId} is no longer a non-retired Builder`);
   if (!matchesFleetPlatformRelease(parsePlatformReleaseRecord(platform.data()), payload, manifest.sourceSha)) throw new Error("platform release was superseded before Builder deployment");
   const actor = process.env.RELEASE_ACTOR ?? `operator:${environment}-fleet`;
-  try { return await runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+  const store = createFirestorePlatformStateStore({ db });
+  try { return await runNormalFleetMutation(store, {
     actor, forced: false, what: `deploy ${environment.toUpperCase()} build to Builder gateway`, why: process.env.RELEASE_REASON ?? `operator requested complete ${environment.toUpperCase()} fleet deployment`,
     target: { gatewayId: current.gatewayId, environment },
     preActionStatus: { desiredStatus: current.desiredStatus, desiredRelease: current.desiredRelease, latestRelease: current.latestRelease },
     mutation: { kind: "deploy-gateway-build", gatewayId: current.gatewayId, sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest },
     ...(environment === "test" ? { testProvenance: { environment: "test" as const, sourceCommit: manifest.sourceSha } } : {}),
-    action: () => appendGatewayRelease(db, { gateway: current, artifact: payload, payload, createdBy: actor, now: Date.now(), sourceRelease: current.latestRelease, note: `complete ${environment.toUpperCase()} deployment of ${manifest.sourceSha}`, origin: "operator" }),
+    action: () => appendGatewayRelease(store, { gateway: current, artifact: payload, payload, createdBy: actor, now: Date.now(), sourceRelease: current.latestRelease, note: `complete ${environment.toUpperCase()} deployment of ${manifest.sourceSha}`, origin: "operator" }),
     classifyResult: (result) => ({ outcome: "completed", releaseRollout: { releaseId: `${current.gatewayId}/releases/${result.release}`, ...(result.operationId ? { rolloutOperationId: result.operationId } : {}) } }),
   }); } catch (error) {
     return rethrowMutationError(db, gateway.gatewayId, error);

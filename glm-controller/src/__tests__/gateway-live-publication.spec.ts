@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Firestore } from "firebase-admin/firestore";
+import { createJournalFixtureStore, fixtureDocumentsAt, journalRowsAtPaths } from "@octogee/core/testing/journal-store";
 import type { DurableGateway } from "../converge-gateway.js";
 import { markGatewayLive } from "../index.js";
 
@@ -14,19 +14,15 @@ function fixture(changed: Record<string, unknown> = {}, status = "draining") {
   } as DurableGateway;
   const documents = new Map<string, Record<string, unknown>>([
     ["gateways/shared-blue", { ...gateway, ...changed }],
-    ["glmGateways/shared-blue", { lifecycle: "provisioning", release: 3 }],
+    ["glmGateways/shared-blue", {
+      docKind: "runtime", gatewayId: "shared-blue", release: 3, lifecycle: "provisioning",
+      createdAt: 1, createdByOperationId: null, helm: {}, heartbeat: {}, lastError: { message: null, at: null },
+    }],
   ]);
-  const writes = vi.fn((ref: { path: string }, patch: object) => {
-    documents.set(ref.path, { ...documents.get(ref.path), ...patch });
-  });
-  const db = {
-    collection: (name: string) => ({ doc: (id: string) => ({ path: `${name}/${id}` }) }),
-    runTransaction: async (run: (tx: object) => Promise<unknown>) => run({
-      get: async (ref: { path: string }) => ({ exists: documents.has(ref.path), data: () => documents.get(ref.path) }),
-      set: writes,
-    }),
-  } as unknown as Firestore;
-  const publish = () => markGatewayLive({ db, log: vi.fn() }, gateway, {
+  const backing = fixtureDocumentsAt(documents);
+  const writes = vi.fn((path: string, row: Record<string, unknown>) => backing.set(path, row));
+  const store = createJournalFixtureStore(journalRowsAtPaths(documents), { documents: { ...backing, set: writes } });
+  const publish = () => markGatewayLive({ store, log: vi.fn() }, gateway, {
     imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway", imageTag: "build-3",
   });
   return { documents, writes, publish };

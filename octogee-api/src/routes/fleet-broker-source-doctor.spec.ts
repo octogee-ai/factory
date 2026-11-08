@@ -2,6 +2,7 @@ import express, { type RequestHandler } from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawBootSentinelStore } from "../lib/openclaw-boot-sentinel.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 const recoveryReads = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("@octogee/core/shared-source-recovery", async original => ({
@@ -15,7 +16,7 @@ const agent = { uid: "uid-alice", slug: "alice", agentId: "octogee-alice-coach",
 const input = { gatewayId, podName, podUid, releaseKey: "older-baked-image-build" };
 function fixture() {
   const data: Record<string, any> = {
-    [`glmGateways/${gatewayId}`]: { gatewayId },
+    [`glmGateways/${gatewayId}`]: { docKind: "runtime", gatewayId, release: 3, lifecycle: "draining" },
     [`gateways/${gatewayId}`]: { gatewayId, ownerUid: null, builderSlug: null, latestRelease: 3, gatewayClass: "shared", desiredStatus: "draining", retirementClaim: null, desiredRelease: 3, liveRelease: 3,
       runtimeRestartFence: { kind: "source-recovery", attemptId: requestId, auditId: requestId, gatewayId, phase: "dispatched", startedAt: 100,
         target: { podName, podUid, sourceSha, images, agents: [agent] },
@@ -30,23 +31,12 @@ function fixture() {
   recovery.schedulerStateRecovery = true;
   Object.assign(data[`gateways/${gatewayId}`].runtimeRestartFence.target, { postgresAgentStores: structuredClone(stores), schedulerStateRecovery: true });
   recoveryReads.read.mockImplementation(async () => ({ root: recovery.root, assignments: recovery.assignments, postgresAgentStores: recovery.postgresAgentStores, schedulerStateRecovery: true }));
-  const ref = (path: string) => ({ path });
-  const db = { doc: ref, collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-    runTransaction: async (body: (txn: any) => Promise<any>) => {
-      const writes: Array<{ path: string; patch: Record<string, unknown> }> = [];
-      const result = await body({ get: async (r: { path: string }) => ({ exists: Object.hasOwn(data, r.path), data: () => data[r.path] }),
-        update: (r: { path: string }, patch: Record<string, unknown>) => writes.push({ path: r.path, patch }) });
-      for (const { path, patch } of writes) for (const [key, value] of Object.entries(patch)) {
-        const parts = key.split("."); let target = data[path]; for (const part of parts.slice(0, -1)) { target = target[part] ??= {}; }
-        target[parts.at(-1)!] = value;
-      }
-      return result;
-    } };
-  const store = createOpenClawBootSentinelStore(db as never, () => 300);
+  const stateStore = createDocumentFixtureStore(data);
+  const store = createOpenClawBootSentinelStore(stateStore, () => 300);
   const fence = () => data[`gateways/${gatewayId}`].runtimeRestartFence;
   const server = express(); server.disable("x-powered-by"); server.use(express.json());
   server.use(((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId, podName, podUid, tokenSource: "ksa" } as never; next(); }) as RequestHandler);
-  server.use("/internal/fleet", createFleetBrokerRoutes({ db: db as never, now: () => 300 }));
+  server.use("/internal/fleet", createFleetBrokerRoutes({ db: {} as never, store: stateStore, now: () => 300 }));
   return { data, store, fence, server };
 }
 

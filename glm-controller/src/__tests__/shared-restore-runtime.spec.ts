@@ -6,6 +6,8 @@ import { recoverSharedSourceRuntime } from "../lib/shared-source-runtime.js";
 import { describe, expect, it, vi } from 'vitest';
 import { FieldValue } from 'firebase-admin/firestore';
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from '@octogee/core/fleet-state';
+import { createDocumentFixtureStore } from '@octogee/core/testing/journal-store';
+import { MalformedRecordError } from '@octogee/core/platform-state';
 import type { Operation } from '@octogee/shared/types/glm';
 import { recoverSharedRestoreRuntime } from '../lib/shared-restore-runtime.js';
 import { processOperation } from '../index.js';
@@ -21,12 +23,15 @@ function harness() {
   const op = { id: 'recover', kind: 'restart-gateway', status: 'running', startedAt: 300,
     input: { gatewayId: 'shared-1', restoreRecovery: { sourceSha: sha, operationId: 'return', images } }, steps: [] } as unknown as Operation;
   const store: Record<string, any> = {
-    'gateways/shared-1': { gatewayClass: 'shared', desiredStatus: 'running', desiredRelease: 1, liveRelease: 1 },
+    'gateways/shared-1': { gatewayId: 'shared-1', createdAt: 1, createdBy: 'test', updatedAt: 1, updatedBy: 'test', latestRelease: 1,
+      desiredRelease: 1, liveRelease: 1, desiredStatus: 'running', configSchemaVersion: 1, profile: 'standard', gatewayClass: 'shared',
+      imageProfile: 'standard', sizingTier: null, gcpProject: null, gatewayContainerSecurityContext: null, serviceAccountName: null,
+      serviceAccount: null, builderAccess: null, ownerUid: null, builderSlug: null, modelBrokerLimits: null, preemption: null },
     'glmOperations/recover': structuredClone(op),
     'glmOperations/return': { kind: 'migrate-customer', status: 'pending', input: { uid: 'u', fromGatewayId: 'builder-alice', toGatewayId: 'shared-1' },
       cutoverCommittedAt: 50, schedulerHandoff: { uid: 'u', slug: 'alice', fromGatewayId: 'builder-alice', toGatewayId: 'shared-1' }, restoreAttempt: intent },
     'users/u': { username: 'alice', provisioning: { status: 'complete', openclaw: { gatewayId: 'shared-1', status: 'complete', restoreFence: structuredClone(intent) } } },
-    'gateways/shared-1/assignments/u': { uid: 'u', slug: 'alice', gatewayId: 'shared-1', epoch: 3, state: 'serving' },
+    'gateways/shared-1/assignments/u': { uid: 'u', slug: 'alice', gatewayId: 'shared-1', source: 'onboarding', epoch: 3, state: 'serving' },
   };
   const value = (row: any, key: string) => key.split('.').reduce((current, part) => current?.[part], row);
   let autoId = 0;
@@ -474,7 +479,7 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.store['users/u'].provisioning.openclaw.restoreFence).toMatchObject({ phase: 'dispatched', attemptId: intent.attemptId });
     const claimStartedAt = h.store['glmOperations/return'].restoreAttempt.claimStartedAt + 1;
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: claimStartedAt, attemptHistory: [] });
-    const stateDeps: FleetStateDeps = { db: h.deps.db, deleteField: () => FieldValue.delete(), serverTimestamp: () => FieldValue.serverTimestamp() };
+    const stateDeps: FleetStateDeps = { store: createDocumentFixtureStore(h.store) };
     const owned = await beginCustomerRestore(stateDeps, { uid: intent.uid, slug: intent.slug, gatewayId: intent.gatewayId,
       fromGatewayId: intent.fromGatewayId, assignmentEpoch: intent.assignmentEpoch, operationId: intent.operationId,
       claimStartedAt, attemptId: 'native-resume' }, { resume: true });
@@ -542,7 +547,7 @@ describe('journaled Shared restore runtime recovery', () => {
     const renewed = h.store['glmOperations/return'].restoreAttempt;
     const claimStartedAt = renewed.claimStartedAt + 1;
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: claimStartedAt, attemptHistory: [] });
-    const stateDeps: FleetStateDeps = { db: h.deps.db, deleteField: () => FieldValue.delete(), serverTimestamp: () => FieldValue.serverTimestamp() };
+    const stateDeps: FleetStateDeps = { store: createDocumentFixtureStore(h.store) };
     const owned = await beginCustomerRestore(stateDeps, { uid: intent.uid, slug: intent.slug, gatewayId: intent.gatewayId,
       fromGatewayId: intent.fromGatewayId, assignmentEpoch: intent.assignmentEpoch, operationId: intent.operationId,
       claimStartedAt, attemptId: 'native-resume' }, { resume: true });
@@ -619,7 +624,7 @@ describe('journaled Shared restore runtime recovery', () => {
     const h = harness(); const before = reauthorize(h);
     const scope = { uid: before.uid, slug: before.slug, gatewayId: before.gatewayId, fromGatewayId: before.fromGatewayId,
       assignmentEpoch: before.assignmentEpoch, operationId: before.operationId, attemptId: 'new-request', claimStartedAt: 300 };
-    const stateDeps: FleetStateDeps = { db: h.deps.db, deleteField: () => FieldValue.delete(), serverTimestamp: () => FieldValue.serverTimestamp() };
+    const stateDeps: FleetStateDeps = { store: createDocumentFixtureStore(h.store) };
     Object.assign(h.store['glmOperations/return'], { status: 'running', startedAt: 300, attemptHistory: [] });
     await expect(beginCustomerRestore(stateDeps, scope, { resume: true })).rejects.toThrow('resumption');
     h.store['glmOperations/return'].status = 'pending';
@@ -682,10 +687,10 @@ describe('journaled Shared restore runtime recovery', () => {
     expect(h.store['gateways/shared-1'].runtimeRestartFence).toBeUndefined();
   });
   it('changes only same-pod images and preserves customer intent and release policy', async () => {
-    const h = harness(); const before = structuredClone(h.store['users/u']);
+    const h = harness(); const before = structuredClone(h.store['users/u']); const root = structuredClone(h.store['gateways/shared-1']);
     await recoverSharedRestoreRuntime(h.deps, h.op, h.ctx);
     expect(h.store['users/u']).toEqual(before);
-    expect(h.store['gateways/shared-1']).toEqual({ gatewayClass: 'shared', desiredStatus: 'running', desiredRelease: 1, liveRelease: 1 });
+    expect(h.store['gateways/shared-1']).toEqual(root);
     expect(h.store['glmOperations/recover'].restoreRuntimeRecovery).toMatchObject({ podUid: 'pod-uid', sourceSha: sha, images });
   });
   it('observes an executed patch after a lost reply without redispatch or a new pod', async () => {
@@ -730,6 +735,10 @@ describe('journaled Shared restore runtime recovery', () => {
 });
 
 describe('journaled Shared source schema repair', () => {
+  function readAuthority(rows: Record<string, any>, operationId: string) {
+    return createDocumentFixtureStore(rows).transaction({ label: 'test.source-authority', readOnly: true },
+      transaction => readSharedSourceRecoveryAuthority(transaction, 'shared-1', operationId));
+  }
   async function sourceHarness(management = false, absent = false) {
     const h = harness();
     for (const key of Object.keys(h.store)) if (key.startsWith('users/') || key.includes('/assignments/') || key === 'glmOperations/return') delete h.store[key];
@@ -739,8 +748,9 @@ describe('journaled Shared source schema repair', () => {
       const error = '/push-rsync-state/shared-1: 500 ' + JSON.stringify({ error: 'push-rsync-state failed', message:
         `OpenClaw snapshot of ${id} failed: SQLite database cannot be snapshotted safely: ${file}. OpenClaw agent database ${file} uses schema version 24; run openclaw doctor --fix before compacting it.` });
       h.store[`users/${uid}`] = { username: slug, provisioning: { openclaw: { gatewayId: 'shared-1', status: 'complete' } } };
-      h.store[`gateways/shared-1/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-1', state: 'serving', epoch: index + 1 };
-      h.store[`users/${uid}/agentStores/${id}`] = { agentId: id, gatewayId: 'shared-1', assignmentEpoch: index + 1, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}` };
+      h.store[`gateways/shared-1/assignments/${uid}`] = { uid, slug, gatewayId: 'shared-1', source: 'onboarding', state: 'serving', epoch: index + 1,
+        createdAt: 1, updatedAt: 1, updatedByOperationId: null };
+      h.store[`users/${uid}/agentStores/${id}`] = { agentId: id, gatewayId: 'shared-1', assignmentEpoch: index + 1, storeId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, schema: `source_${index}`, recordedAt: 1 };
       h.store[`glmOperations/export-${index}`] = { kind: 'migrate-customer', status: 'failed', startedAt: 100, completedAt: 200,
         input: { uid, fromGatewayId: 'shared-1', toGatewayId: 'shared-2' }, error,
         steps: [{ name: 'pre-sync-state', status: 'failed', error }, { name: 'rollback:unmount-target', status: 'done' }] };
@@ -769,7 +779,8 @@ describe('journaled Shared source schema repair', () => {
       }
     }
     if (absent) delete h.store['users/source-0'].provisioning.openclaw.migration;
-    const captured = await (h.deps.db as any).runTransaction((tx: any) => readSharedSourceRecoveryAuthority(h.deps.db, tx, 'shared-1', h.op.id));
+    const { db, ...podDeps } = h.deps, store = createDocumentFixtureStore(h.store);
+    const captured = await readAuthority(h.store, h.op.id);
     h.op.input = { gatewayId: 'shared-1', sourceRecovery: { sourceSha: sha, images, ...captured } };
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
     let ack = true, wrongImage = false, healthyWithoutAck = false, managementFailure = false, changedAfterProbe = false, transportFailure = false;
@@ -807,15 +818,15 @@ describe('journaled Shared source schema repair', () => {
       return { code: 0, stdout: JSON.stringify(result), stderr: '' };
     });
     let clock = Date.now();
-    return { ...h, deps: { ...h.deps, runKubectl, now: () => clock, wait: async () => { clock += 600_000; } },
+    return { ...h, db, deps: { ...podDeps, store, runKubectl, now: () => clock, wait: async () => { clock += 600_000; } },
       setManagementTransportFailure: () => { transportFailure = true; }, setManagementReceipt: (value: string) => { managementReceipt = value; },
       setManagementFailure: (value = true) => { managementFailure = value; }, setChangedAfterProbe: () => { changedAfterProbe = true; },
       setAck: (value: boolean) => { ack = value; }, setWrongImage: () => { wrongImage = true; }, setHealthyWithoutAck: () => { healthyWithoutAck = true; } };
   }
   async function postgresSourceHarness() {
     const h = await sourceHarness(true);
-    const root = h.store['gateways/shared-1'];
-    Object.assign(root, { configSchemaVersion: 1, createdAt: 1, createdBy: 'operator', updatedAt: 1, updatedBy: 'operator',
+    const root = () => h.store['gateways/shared-1'];
+    Object.assign(root(), { configSchemaVersion: 1, createdAt: 1, createdBy: 'operator', updatedAt: 1, updatedBy: 'operator',
       profile: 'standard', imageProfile: 'standard', sizingTier: null, gcpProject: null, gatewayContainerSecurityContext: null,
       serviceAccountName: null, serviceAccount: null, builderAccess: null, modelBrokerLimits: null });
     const payload = { imageRepository: images.gateway.split(':aaaaaaa')[0]!, imageTag: images.gateway.split('octogee-gateway:')[1]!,
@@ -830,13 +841,13 @@ describe('journaled Shared source schema repair', () => {
         'rollback:unmount-target', 'rollback:resume-ingress'].map(name => ({ name, status: 'done' }));
       row.steps.push({ name: 'final-sync-state', status: 'failed', error: row.error });
       row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
-      h.store[`workspaces/${slug}/projects/orbit`] = { agent: { status: 'ready' } };
+      h.store[`workspaces/${slug}/projects/orbit`] = { ownerUid: uid, agent: { status: 'ready' } };
       for (const [agentIndex, agentId] of [`octogee-${slug}-coach`, `octogee-${slug}-proj-orbit-coach`].entries()) {
         h.store[`users/${uid}/agentStores/${agentId}`] = { agentId, gatewayId: 'shared-1', assignmentEpoch: index + 1,
-          storeId: `00000000-0000-4000-8000-${String(index * 2 + agentIndex + 1).padStart(12, '0')}`, schema: `retained_source_${index}_${agentIndex}` };
+          storeId: `00000000-0000-4000-8000-${String(index * 2 + agentIndex + 1).padStart(12, '0')}`, schema: `retained_source_${index}_${agentIndex}`, recordedAt: 1 };
       }
     }
-    const captured = await h.deps.db.runTransaction(tx => readSharedSourceRecoveryAuthority(h.deps.db, tx, 'shared-1', h.op.id));
+    const captured = await readAuthority(h.store, h.op.id);
     expect(captured.postgresAgentStores).toHaveLength(4);
     h.op.input.sourceRecovery = { sourceSha: sha, images, payload, ...captured };
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
@@ -854,8 +865,8 @@ describe('journaled Shared source schema repair', () => {
       };
       if (args.includes('exec')) {
         events.push('management-health');
-        expect(root.runtimeRestartFence.doctor.verifiedAgentIds).toEqual(captured.postgresAgentStores!.map(store => store.agentId));
-        expect(root.desiredRelease).toBe(1); expect(root.runtimeRestartFence).toBeDefined();
+        expect(root().runtimeRestartFence.doctor.verifiedAgentIds).toEqual(captured.postgresAgentStores!.map(store => store.agentId));
+        expect(root().desiredRelease).toBe(1); expect(root().runtimeRestartFence).toBeDefined();
         afterEffect?.('management-health');
         return { code: 0, stdout: JSON.stringify({ version: 1, attemptId: h.op.id, bootId: 'retained-new-image-boot', health: true }), stderr: '' };
       }
@@ -866,11 +877,11 @@ describe('journaled Shared source schema repair', () => {
         const changed = patch.filter((item: any) => item.op !== 'test');
         const event = changed.some((item: any) => item.path === '/spec/paused') ? (changed[0].value ? 'pause-deployment' : 'resume-deployment') : `pin-${kind}`;
         if (event === 'resume-deployment') {
-          expect(root).toMatchObject({ latestRelease: 2, desiredRelease: 2, liveRelease: 1 });
-          expect(root.runtimeRestartFence).toBeUndefined();
+          expect(root()).toMatchObject({ latestRelease: 2, desiredRelease: 2, liveRelease: 1 });
+          expect(root().runtimeRestartFence).toBeUndefined();
           expect(h.store['gateways/shared-1/releases/2'].payload).toEqual(payload);
           expect(h.store[`glmOperations/${h.op.id}`].sourceRuntimeRecovery.managementHealth.health).toBe(true);
-        } else expect(root.runtimeRestartFence.phase).toBe('dispatched');
+        } else expect(root().runtimeRestartFence.phase).toBe('dispatched');
         if (kind === 'pod') {
           expect(deployment.spec.paused).toBe(true);
           for (const workload of [deployment, replicaSet]) expect(Object.fromEntries(workload.spec.template.spec.containers.map((c: any) => [c.name, c.image]))).toEqual(images);
@@ -889,7 +900,7 @@ describe('journaled Shared source schema repair', () => {
         }
         events.push(event); afterEffect?.(event);
       }
-      const fence = root.runtimeRestartFence;
+      const fence = root().runtimeRestartFence;
       if (kind === 'pod' && !args.includes('patch') && fence?.attemptId === h.op.id && fence.installedImage && !fence.doctor.completedAt && acknowledgment !== 'none') {
         const at = h.deps.now();
         fence.doctor = { ...fence.doctor, releaseKey: 'actual-reused-image-tag', startedAt: at, completedAt: at,
@@ -913,7 +924,7 @@ describe('journaled Shared source schema repair', () => {
       row.steps.find((step: any) => step.name === 'final-sync-state').error = row.error;
       row.attemptHistory = [{ attempt: 1, startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, steps: structuredClone(row.steps) }];
     }
-    const captured = await h.deps.db.runTransaction(tx => readSharedSourceRecoveryAuthority(h.deps.db, tx, 'shared-1', h.op.id));
+    const captured = await readAuthority(h.store, h.op.id);
     expect(captured.schedulerStateRecovery).toBe(true);
     h.op.input.sourceRecovery = { ...h.op.input.sourceRecovery, ...captured };
     h.store['glmOperations/recover'].input = structuredClone(h.op.input);
@@ -1025,7 +1036,8 @@ describe('journaled Shared source schema repair', () => {
     expect(h.store['glmOperations/recover'].sourceRuntimeRecovery).toBeUndefined(); expect(h.events).not.toContain('resume-deployment');
   });
   it('refuses an immutable release collision atomically without annotating failed placements or clearing the PostgreSQL fence', async () => {
-    const h = await postgresSourceHarness(), collision = { release: 2, payload: { existing: 'immutable' } };
+    const h = await postgresSourceHarness(), collision = { gatewayId: 'shared-1', release: 2, createdAt: 1, createdBy: 'foreign', sourceRelease: 1,
+      note: 'existing', payloadHash: 'existing', payload: structuredClone(h.op.input.sourceRecovery!.payload) };
     h.store['gateways/shared-1/releases/2'] = structuredClone(collision);
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('refusing to overwrite immutable history');
     expect(h.store['gateways/shared-1/releases/2']).toEqual(collision);
@@ -1050,18 +1062,27 @@ describe('journaled Shared source schema repair', () => {
     h.events.length = 0;
     return { ...h, before, capturedFence };
   }
-  it.each(['paused', 'retired', 'gateway-id', 'gateway-class', 'owner', 'builder-slug'])('refuses completed PostgreSQL recovery unpause after %s root mutation', async changed => {
-    const h = await postgresSourceHarness();
+  function mutateRootAfterCompletion(h: Awaited<ReturnType<typeof postgresSourceHarness>>, mutate: (root: any) => void) {
     h.ctx.assertActiveClaim.mockImplementation(async () => {
-      if (!h.store['glmOperations/recover'].sourceRuntimeRecovery) return;
-      const root = h.store['gateways/shared-1'];
+      if (h.store['glmOperations/recover'].sourceRuntimeRecovery) mutate(h.store['gateways/shared-1']);
+    });
+  }
+  it.each(['paused', 'retired', 'gateway-class', 'owner', 'builder-slug'])('refuses completed PostgreSQL recovery unpause after %s root mutation', async changed => {
+    const h = await postgresSourceHarness();
+    mutateRootAfterCompletion(h, root => {
       if (changed === 'paused' || changed === 'retired') root.desiredStatus = changed;
-      if (changed === 'gateway-id') root.gatewayId = 'foreign-shared';
       if (changed === 'gateway-class') root.gatewayClass = 'builder';
       if (changed === 'owner') root.ownerUid = 'foreign-owner';
       if (changed === 'builder-slug') root.builderSlug = 'foreign-builder';
     });
     await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toThrow('completed source recovery release custody changed');
+    expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.completedAt).toBeGreaterThan(0);
+    expect(h.deployment.spec.paused).toBe(true); expect(h.events).not.toContain('resume-deployment');
+  });
+  it('fails closed on a completed PostgreSQL recovery root that names another gateway before unpausing', async () => {
+    const h = await postgresSourceHarness();
+    mutateRootAfterCompletion(h, root => { root.gatewayId = 'foreign-shared'; });
+    await expect(recoverSharedSourceRuntime(h.deps, h.op, h.ctx)).rejects.toBeInstanceOf(MalformedRecordError);
     expect(h.store['glmOperations/recover'].sourceRuntimeRecovery.completedAt).toBeGreaterThan(0);
     expect(h.deployment.spec.paused).toBe(true); expect(h.events).not.toContain('resume-deployment');
   });
@@ -1125,7 +1146,7 @@ describe('journaled Shared source schema repair', () => {
     h.store['glmGateways/shared-2'] = { docKind: 'runtime', gatewayId: 'shared-2', runtime: 'cluster', release: 1, lifecycle: 'serving',
       heartbeat: { status: 'ready', lastHeartbeatAt: h.deps.now(), mountedCustomers: [], migratingIn: [] } };
     const request = { ...h.store[`glmOperations/${failedId}`].input, operationId: failedId };
-    const input = { db: h.deps.db, now: h.deps.now, platformArtifact: payload } as Parameters<typeof enqueuePlacementMigration>[0];
+    const input = { db: h.db, now: h.deps.now, platformArtifact: payload } as Parameters<typeof enqueuePlacementMigration>[0];
     await expect(enqueuePlacementMigration(input, request)).resolves.toBe(failedId);
     expect(h.store[`glmOperations/${failedId}`].status).toBe('pending');
   });

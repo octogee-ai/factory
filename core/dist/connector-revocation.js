@@ -1,25 +1,16 @@
-function revocableCiphertext(data) {
-    const tokens = data?.tokens;
-    if (typeof tokens?.encryptedRefreshToken === "string" && tokens.encryptedRefreshToken.length > 0) {
-        return tokens.encryptedRefreshToken;
-    }
-    if (typeof tokens?.encryptedAccessToken === "string" && tokens.encryptedAccessToken.length > 0) {
-        return tokens.encryptedAccessToken;
-    }
-    return null;
+function revocableCiphertext(grant) {
+    if (!grant)
+        return null;
+    if (grant.kind !== "connector")
+        throw new Error(`secret ${grant.secretId} is not a connector grant`);
+    return grant.encryptedRefreshToken || grant.encryptedAccessToken || null;
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
 export async function revokeProviderGrant(uid, target, deps) {
     try {
-        const snapshot = await deps.db
-            .collection("users")
-            .doc(uid)
-            .collection("secrets")
-            .doc(target.connectorId)
-            .get();
-        const ciphertext = revocableCiphertext(snapshot.data());
+        const ciphertext = revocableCiphertext(await deps.secrets.get(uid, target.connectorId));
         if (ciphertext === null)
             return;
         const response = await (deps.fetchImpl ?? fetch)(target.revocationUrl, {

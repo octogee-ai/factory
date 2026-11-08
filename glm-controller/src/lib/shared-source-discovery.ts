@@ -78,7 +78,7 @@ catch (error) { process.stderr.write(String(error.message)); process.exitCode = 
 `;
 }
 
-export async function assertSourceRecoveryDiscovery(deps: SharedPodRecoveryDeps, pod: DocumentData,
+export async function assertSourceRecoveryDiscovery(deps: Pick<SharedPodRecoveryDeps, 'namespace' | 'runKubectl'>, pod: DocumentData,
   stores: readonly SourceRecoveryAgentStore[]): Promise<void> {
   const result = await deps.runKubectl(['-n', deps.namespace, 'exec', pod.metadata.name, '-c', 'gateway', '-i', '--', 'node', '--input-type=commonjs'],
     { stdin: sourceRecoveryDiscoveryDriver(pod.metadata.uid, stores), timeoutMs: 30_000 });

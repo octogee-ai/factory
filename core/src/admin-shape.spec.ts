@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildCustomerSummary } from "./admin-shape.js";
+import { buildCustomerSummary, type BrokerCustomerUsage } from "./admin-shape.js";
+import { builderAccountFromData } from "./builder-account.js";
+import { builderRecordFromData } from "./platform-state/firestore/builders.js";
 
 const NOW = Date.UTC(2026, 6, 2, 13, 30);
 const LIVE_SIGNUP_OFFER = {
@@ -13,17 +15,21 @@ const LIVE_SIGNUP_OFFER = {
   endsAt: new Date(NOW + 7 * 24 * 60 * 60 * 1000),
 };
 
+function summarize(uid: string, data: Record<string, unknown>, broker?: BrokerCustomerUsage) {
+  return buildCustomerSummary(builderRecordFromData(uid, data, 0, null), builderAccountFromData(uid, data), broker);
+}
+
 describe("buildCustomerSummary", () => {
   it("carries the account lifecycle so a list can mark customers scheduled for deletion", () => {
-    expect(buildCustomerSummary("u1", { email: "a@b.co" }).accountLifecycleStatus).toBe("active");
-    expect(buildCustomerSummary("u1", {
+    expect(summarize("u1", { email: "a@b.co" }).accountLifecycleStatus).toBe("active");
+    expect(summarize("u1", {
       email: "a@b.co",
       accountLifecycle: { status: "deletion_scheduled", eraseAfter: 1_800_000_000_000 },
     }).accountLifecycleStatus).toBe("deletion_scheduled");
   });
 
   it("normalizes malformed nested customer fields instead of leaking them", () => {
-    const summary = buildCustomerSummary("uid-1", {
+    const summary = summarize("uid-1", {
       email: "builder@example.com",
       subscription: {
         tier: { name: "pro" },
@@ -35,14 +41,9 @@ describe("buildCustomerSummary", () => {
         totalTokensUsed: "a lot",
       },
       provisioning: {
-        openclaw: {
-          agentIds: "agent-1",
-          status: 99,
-        },
         status: "queued",
       },
       mattermost: {
-        userId: 123,
         username: 456,
       },
     });
@@ -65,31 +66,31 @@ describe("buildCustomerSummary", () => {
 
   it("derives `degraded` from the broker window spend, not the legacy throttle field", () => {
     // free tier is always on the house model
-    expect(buildCustomerSummary("u", { subscription: { tier: "free" } }).degraded).toBe(true);
+    expect(summarize("u", { subscription: { tier: "free" } }).degraded).toBe(true);
 
     // a builder on their own credential (BYOT) is never throttled
     expect(
-      buildCustomerSummary("u", { subscription: { tier: "free" }, byotActive: true }).degraded,
+      summarize("u", { subscription: { tier: "free" }, byotActive: true }).degraded,
     ).toBe(false);
 
     // paid tier: under both budgets vs over the burst window vs over the week
     const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
-    expect(buildCustomerSummary("u", paid, { windowCostUsd: 0, now: NOW }).degraded).toBe(false);
-    expect(buildCustomerSummary("u", paid, { windowCostUsd: 9999, now: NOW }).degraded).toBe(false);
-    expect(buildCustomerSummary("u", paid, { weekCostUsd: 9999, now: NOW }).degraded).toBe(false);
+    expect(summarize("u", paid, { windowCostUsd: 0, now: NOW }).degraded).toBe(false);
+    expect(summarize("u", paid, { windowCostUsd: 9999, now: NOW }).degraded).toBe(false);
+    expect(summarize("u", paid, { weekCostUsd: 9999, now: NOW }).degraded).toBe(false);
   });
 
   it("does not label an exhausted active trial as running on HOUSE", () => {
     const trial = { trialGrant: LIVE_SIGNUP_OFFER };
     expect(
-      buildCustomerSummary("u", trial, { windowCostUsd: 9999, now: NOW }).degraded,
+      summarize("u", trial, { windowCostUsd: 9999, now: NOW }).degraded,
     ).toBe(false);
   });
 
   it("shows 0% (not a zero-budget 100%) for owner-credential customers — mirrors the customer surfaces", () => {
     // free/house-only tier + BYOT: weeklyBudgetUsd is 0, so an unguarded percentage
     // would read 100% despite the broker never metering or throttling this traffic.
-    const summary = buildCustomerSummary(
+    const summary = summarize(
       "u",
       { subscription: { tier: "free" }, byotActive: true },
       { windowCostUsd: 5, weekCostUsd: 40, now: NOW },
@@ -100,7 +101,7 @@ describe("buildCustomerSummary", () => {
   });
 
   it("uses broker spend for the window percentage and never renders legacy token windows", () => {
-    const summary = buildCustomerSummary(
+    const summary = summarize(
       "u",
       {
         trialGrant: LIVE_SIGNUP_OFFER,
@@ -131,7 +132,7 @@ describe("buildCustomerSummary", () => {
   });
 
   it("sources cost + metered tokens from the broker rollup, and margin from broker cost", () => {
-    const summary = buildCustomerSummary(
+    const summary = summarize(
       "u",
       {
         selectedTier: "pro",
@@ -148,7 +149,7 @@ describe("buildCustomerSummary", () => {
   });
 
   it("reports the epoch-aligned 4h window refill time", () => {
-    const summary = buildCustomerSummary(
+    const summary = summarize(
       "u",
       { trialGrant: LIVE_SIGNUP_OFFER },
       { windowCostUsd: 0, now: NOW },
@@ -160,19 +161,19 @@ describe("buildCustomerSummary", () => {
   it("caps the window percentage at 100 and treats a zero budget as fully used", () => {
     const paid = { selectedTier: "pro", subscription: { tier: "pro" } };
     expect(
-      buildCustomerSummary("u", paid, { windowCostUsd: 9_999, now: NOW }).percentUsed,
+      summarize("u", paid, { windowCostUsd: 9_999, now: NOW }).percentUsed,
     ).toBe(100);
     // non-subscription plan (builder tier) → zero budget → fully used
     expect(
-      buildCustomerSummary("u", { selectedTier: "builder" }, { now: NOW }).percentUsed,
+      summarize("u", { selectedTier: "builder" }, { now: NOW }).percentUsed,
     ).toBe(100);
   });
 
   it("meters a post-trial free user against the $1 weekly house allowance", () => {
     const free = { subscription: { tier: "trial" } };
-    expect(buildCustomerSummary("u", free, { now: NOW }).percentUsed).toBe(0);
+    expect(summarize("u", free, { now: NOW }).percentUsed).toBe(0);
     expect(
-      buildCustomerSummary("u", free, { windowCostUsd: 9_999, now: NOW }).percentUsed,
+      summarize("u", free, { windowCostUsd: 9_999, now: NOW }).percentUsed,
     ).toBe(100);
   });
 });

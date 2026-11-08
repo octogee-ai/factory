@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import type { Transaction } from "firebase-admin/firestore";
 import { requireAuth } from "../../middleware/auth.js";
 import { db, FieldValue, Timestamp } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import {
   GatewayControlListEntry,
   GatewayControlListResponse,
@@ -15,7 +16,8 @@ import {
 } from "@octogee/shared/types/glm";
 import {
   readGatewayArtifact,
-  readGatewayAuthorization,
+  readGatewayArtifactInStore,
+  readGatewayAuthorizationInStore,
   gatewayRuntimeHeartbeatOf,
   readGatewayRuntimeDoc,
   gatewayAuthorizationFromRootDocument,
@@ -278,8 +280,8 @@ async function builderGatewayEntry(
   const access = await principalAccess(scope, uid, (path) => db.doc(path).get());
   if (access.kind === "denied") return null;
   const [artifact, runtime, ownerAssignment] = await Promise.all([
-    readGatewayArtifact(db, authorization.gateway.gatewayId, authorization.gateway.liveRelease),
-    readGatewayRuntimeDoc(db, authorization.gateway),
+    readGatewayArtifactInStore(platformStateStore, authorization.gateway.gatewayId, authorization.gateway.liveRelease),
+    readGatewayRuntimeDoc(platformStateStore, authorization.gateway),
     db.collection("users").doc(scope.ownerUid).get(),
   ]);
   const heartbeat = gatewayRuntimeHeartbeatOf(runtime, authorization.gateway);
@@ -537,7 +539,7 @@ function registerOpenClawTicketRoute(router: Router, featurePolicy: FeaturePolic
         return;
       }
       const uid = req.uid!;
-      const authorization = await readGatewayAuthorization(db, gatewayId);
+      const authorization = await readGatewayAuthorizationInStore(platformStateStore, gatewayId);
       if (!authorization) {
         res.status(404).json({ error: "not-found" });
         return;

@@ -1,19 +1,10 @@
-import type { Firestore } from "firebase-admin/firestore";
-import { disposableBuilderPrelaunchReserved } from "@octogee/core/disposable-builder-prelaunch";
+import { disposableBuilderPrelaunchReserved, type PrelaunchAuthorityReader } from "@octogee/core/disposable-builder-prelaunch";
+import type { FleetRegistryRecord } from "@octogee/core/platform-state";
 import { timestampMillis } from "@octogee/core/timestamps";
 export { disposableBuilderPrelaunchReserved } from "@octogee/core/disposable-builder-prelaunch";
-import {
-  isGatewayRuntimeDoc,
-} from "@octogee/shared/types/gateway-releases";
 import { gatewayHeartbeatMatchesImageTag } from "@octogee/shared/types/image-tag";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import type { DurableGateway } from "./converge-gateway.js";
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 function sameReleaseResumeReady(gateway: DurableGateway, runtime: { lifecycle: string; heartbeat?: { lastHeartbeatAt?: unknown } }): boolean {
   const heartbeatAt = timestampMillis(runtime.heartbeat?.lastHeartbeatAt);
@@ -24,10 +15,10 @@ function sameReleaseResumeReady(gateway: DurableGateway, runtime: { lifecycle: s
 
 export function runtimeMatchesPrelaunchRelease(
   gateway: DurableGateway,
-  runtime: unknown,
+  runtime: FleetRegistryRecord | null | undefined,
   image: { imageRepository: string; imageTag: string },
 ): boolean {
-  if (!isGatewayRuntimeDoc(runtime) || record(runtime)?.runtime !== "gce-vm") return false;
+  if (!runtime || runtime.runtime !== "gce-vm") return false;
   return [
     gateway.liveRelease !== null && (gateway.liveRelease < gateway.desiredRelease || sameReleaseResumeReady(gateway, runtime)),
     runtime.gatewayId === gateway.gatewayId,
@@ -41,9 +32,9 @@ export function runtimeMatchesPrelaunchRelease(
 }
 
 export async function readDisposableBuilderPrelaunchRefresh(input: {
-  db: Firestore;
+  reader: PrelaunchAuthorityReader;
   gateway: DurableGateway;
-  runtime: unknown;
+  runtime: FleetRegistryRecord | null | undefined;
   image: { imageRepository: string; imageTag: string };
   observedImage: { imageRepository: string | null; imageTag: string | null } | null;
 }): Promise<boolean> {

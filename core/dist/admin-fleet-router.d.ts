@@ -1,11 +1,14 @@
 import { Router } from "express";
-import { type Firestore } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 import { type GatewayClass, type GatewayImageProfile, type GatewayProfile, type GatewayRuntime, type GatewayVmState } from "@octogee/shared/types/glm";
+import { type AssignmentDoc } from "@octogee/shared/types/gateway-releases";
 import { type GatewayPodReplacementSummary } from "@octogee/shared/types/gateway-pod-replacements";
 import type { MigrationProgressRecord } from "@octogee/shared/types/glm";
 import { type SizingTier } from "@octogee/shared/types/sizing";
 import { type GatewayPricingMode } from "@octogee/shared/types/cost-estimator";
 import { type DurableGatewayRoot } from "./gateway-release-append.js";
+import { type BuilderAccountReader } from "./builder-account.js";
+import type { PlatformStateStore } from "./platform-state/store.js";
 import { type CentralReleaseAuthority } from "./artifact-registry.js";
 export interface FleetLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -42,10 +45,8 @@ export interface GatewayPodDiagnostics {
 export interface FleetRouterDeps {
     computerReplacementEnabled?: boolean;
     db: Firestore;
+    store: PlatformStateStore;
     logger: FleetLogger;
-    workspaceSlugsForUser: (data: {
-        username?: string | null;
-    }) => string[];
     provisionGatewayAuthSecret: (opts: {
         gatewayId: string;
         gatewayServiceAccount: string;
@@ -233,7 +234,7 @@ export declare function validateDeployBody(body: unknown): {
         sourceSha: string;
     };
 };
-export declare function projectHandoffProgress(assignmentDocs: ReadonlyArray<FirestoreDocLike>): Map<string, Record<string, MigrationProgressRecord[]>>;
+export declare function projectHandoffProgress(assignments: readonly AssignmentDoc[]): Map<string, Record<string, MigrationProgressRecord[]>>;
 export declare function shapeOperationsHistoryRecord(id: string, data: Record<string, unknown>): Record<string, unknown>;
 export type CustomerSelfDeletionOutcome = {
     kind: "not-found";
@@ -251,8 +252,9 @@ export type CustomerSelfDeletionOutcome = {
     } | null;
 };
 export declare function scheduleCustomerSelfDeletion(opts: {
-    db: Firestore;
-    deps: Pick<FleetRouterDeps, "workspaceSlugsForUser" | "suspendAuthUser" | "revokeConnectorGrantsForUser">;
+    store: PlatformStateStore;
+    accounts: BuilderAccountReader;
+    deps: Pick<FleetRouterDeps, "suspendAuthUser" | "revokeConnectorGrantsForUser">;
     uid: string;
 }): Promise<CustomerSelfDeletionOutcome>;
 export declare function addAdminFleetRoutes(router: Router, deps: FleetRouterDeps): Router;

@@ -1,18 +1,17 @@
-import type { Firestore, Transaction } from "firebase-admin/firestore";
-import { type GatewayDoc } from "@octogee/shared/types/gateway-releases";
+import type { GatewayDoc } from "@octogee/shared/types/gateway-releases";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
+import type { PlatformStateRepositories } from "./platform-state/store.js";
 type DurableGateway = GatewayDoc & GatewayMutableConfig;
+export type PrelaunchAuthorityReader = Pick<PlatformStateRepositories, "builders" | "gateways">;
 export declare function disposableBuilderPrelaunchReserved(input: {
-    db: Firestore;
+    reader: PrelaunchAuthorityReader;
     gateway: DurableGateway;
-    transaction?: Transaction;
     expectedGateway?: DurableGateway;
     activationBoot?: true;
 }): Promise<boolean>;
 export declare function disposableBuilderBootMode(input: {
-    db: Firestore;
+    reader: PrelaunchAuthorityReader;
     gateway: DurableGateway;
-    transaction: Transaction;
 }): Promise<{
     mode: "prelaunch" | "normal" | "activating";
     migrationId?: string;

@@ -9,6 +9,8 @@ import {
   mapProjectAgentState,
   collectProjectAgentStates,
 } from "./customer-snapshot-mapping.js";
+import { MalformedRecordError } from "./platform-state/errors.js";
+import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
 describe("deriveSlug", () => {
   it("prefers provisioning.openclaw.slug, falls back to username", () => {
@@ -236,13 +238,13 @@ describe("mapProjectAgentState", () => {
       mapProjectAgentState(
         "orbit",
         { agent: { activationId: "activation-1", status: "provisioning" } },
-        { mmUserId: "bot-1", personalToken: "pat-1" },
+        { mattermostUserId: "bot-1", personalToken: "pat-1" },
       ),
     ).toEqual({ projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: "activation-1", status: "provisioning" });
   });
 
   it("maps an unminted agent with null credentials", () => {
-    expect(mapProjectAgentState("orbit", { agent: {} }, undefined)).toEqual({
+    expect(mapProjectAgentState("orbit", { agent: {} }, null)).toEqual({
       projectId: "orbit",
       enabled: true,
       mmUserId: null,
@@ -258,7 +260,7 @@ describe("mapProjectAgentState", () => {
           agent: {},
           ...(archive === "commercial" ? { commercialLifecycle: { status: "archived" } } : { status: "archived" }),
         },
-        { mmUserId: "bot-1", personalToken: "pat-1" },
+        { mattermostUserId: "bot-1", personalToken: "pat-1" },
       ),
     ).toEqual({
       projectId: "orbit",
@@ -270,57 +272,51 @@ describe("mapProjectAgentState", () => {
 
   it("keeps an archived entry while a secret lingers (retire pending)", () => {
     expect(
-      mapProjectAgentState("orbit", { agent: {}, commercialLifecycle: { status: "archived" } }, { mmUserId: "bot-1", personalToken: "pat-1" }),
+      mapProjectAgentState("orbit", { agent: {}, commercialLifecycle: { status: "archived" } }, { mattermostUserId: "bot-1", personalToken: "pat-1" }),
     ).toEqual({ projectId: "orbit", enabled: false, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null });
   });
 
   it("returns null when the project has no agent state at all (snapshot stays lean)", () => {
-    expect(mapProjectAgentState("orbit", {}, undefined)).toBeNull();
-    expect(mapProjectAgentState("orbit", { agent: {}, commercialLifecycle: { status: "archived" } }, undefined)).toBeNull();
+    expect(mapProjectAgentState("orbit", {}, null)).toBeNull();
+    expect(mapProjectAgentState("orbit", { agent: {}, commercialLifecycle: { status: "archived" } }, null)).toBeNull();
   });
 
-  it("treats malformed agent/secret shapes as absent", () => {
-    expect(mapProjectAgentState("orbit", { agent: "yes" }, undefined)).toBeNull();
+  it("treats a malformed agent shape and empty credentials as absent", () => {
+    expect(mapProjectAgentState("orbit", { agent: "yes" }, null)).toBeNull();
     expect(
-      mapProjectAgentState("orbit", { agent: {} }, { mmUserId: 7, personalToken: null }),
+      mapProjectAgentState("orbit", { agent: {} }, { mattermostUserId: "", personalToken: "" }),
     ).toEqual({ projectId: "orbit", enabled: true, mmUserId: null, token: null, activationId: null, status: null });
   });
 });
 
-describe("collectProjectAgentStates", () => {
-  function fakeDb(
-    projects: Array<{ id: string; data: Record<string, unknown> }>,
-    secrets: Record<string, Record<string, unknown>>,
-  ) {
-    const secretReads: string[] = [];
-    const db = {
-      collection: (_name: string) => ({
-        doc: (id: string) => ({
-          get: async () => ({ data: () => secrets[id] }),
-          collection: (sub: string) =>
-            sub === "projects"
-              ? { doc: () => { throw new Error("unused"); }, get: async () => ({ docs: projects.map((p) => ({ id: p.id, data: () => p.data })) }) }
-              : {
-                  doc: (secretId: string) => {
-                    secretReads.push(secretId);
-                    return {
-                      get: async () => ({ data: () => secrets[secretId] }),
-                      collection: () => { throw new Error("unused"); },
-                    };
-                  },
-                  get: async () => ({
-                    docs: Object.entries(secrets).map(([id, data]) => ({ id, data: () => data })),
-                  }),
-                },
-        }),
+function projectAgentFixture(
+  projects: Array<{ id: string; data: Record<string, unknown> }>,
+  secrets: Record<string, Record<string, unknown>>,
+) {
+  const db = {
+    collection: (_name: string) => ({
+      doc: (_id: string) => ({
         get: async () => { throw new Error("unused"); },
+        collection: (sub: string) => {
+          expect(sub).toBe("projects");
+          return {
+            doc: () => { throw new Error("unused"); },
+            get: async () => ({ docs: projects.map((p) => ({ id: p.id, data: () => p.data })) }),
+          };
+        },
       }),
-    };
-    return { db, secretReads };
-  }
+      get: async () => { throw new Error("unused"); },
+    }),
+  };
+  const store = createDocumentFixtureStore(Object.fromEntries(
+    Object.entries(secrets).map(([secretId, row]) => [`users/uid-1/secrets/${secretId}`, row]),
+  ));
+  return { db, secrets: store.secrets };
+}
 
-  it("collects live and retire-pending agents, skipping untouched projects without secret reads", async () => {
-    const { db, secretReads } = fakeDb(
+describe("collectProjectAgentStates", () => {
+  it("collects live and retire-pending agents, skipping untouched projects", async () => {
+    const { db, secrets } = projectAgentFixture(
       [
         { id: "orbit", data: { agent: {} } },
         { id: "plain", data: {} },
@@ -332,18 +328,17 @@ describe("collectProjectAgentStates", () => {
       },
     );
 
-    const states = await collectProjectAgentStates(db, "uid-1", "alice");
+    const states = await collectProjectAgentStates(db, secrets, "uid-1", "alice");
 
     expect(states).toEqual([
       { projectId: "orbit", enabled: true, mmUserId: "bot-1", token: "pat-1", activationId: null, status: null },
       { projectId: "old", enabled: false, mmUserId: "bot-2", token: "pat-2", activationId: null, status: null },
     ]);
-    expect(secretReads).toEqual(["projectAgentMattermost-orbit", "projectAgentMattermost-old"]);
   });
 
   it("quarantines a malformed identity without blocking healthy projects or retiring its bot", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { db } = fakeDb([
+    const { db, secrets } = projectAgentFixture([
       { id: "broken", data: { agent: { identity: { name: "Broken" }, kickoff: { status: "pending" } } } },
       { id: "healthy", data: { agent: { identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } } } },
     ], {
@@ -351,7 +346,7 @@ describe("collectProjectAgentStates", () => {
       "projectAgentMattermost-healthy": { mmUserId: "bot-healthy", personalToken: "pat-healthy" },
     });
     try {
-      const states = await collectProjectAgentStates(db, "uid-1", "alice");
+      const states = await collectProjectAgentStates(db, secrets, "uid-1", "alice");
       expect(states).toHaveLength(2);
       expect(states[0]).toEqual({ projectId: "broken", enabled: true, mmUserId: "bot-broken", token: "pat-broken", status: "error", activationId: null });
       expect(states[1]).toMatchObject({ projectId: "healthy", identity: { name: "Chip", emoji: "⛳", persona: "Caddie" } });
@@ -360,44 +355,28 @@ describe("collectProjectAgentStates", () => {
   });
 
   it("drops fully-settled archived agents (no secret left)", async () => {
-    const { db } = fakeDb([{ id: "old", data: { agent: {}, commercialLifecycle: { status: "archived" } } }], {});
+    const { db, secrets } = projectAgentFixture([{ id: "old", data: { agent: {}, commercialLifecycle: { status: "archived" } } }], {});
 
-    expect(await collectProjectAgentStates(db, "uid-1", "alice")).toEqual([]);
+    expect(await collectProjectAgentStates(db, secrets, "uid-1", "alice")).toEqual([]);
+  });
+
+  it("fails closed on a malformed project agent secret", async () => {
+    const { db, secrets } = projectAgentFixture([{ id: "orbit", data: { agent: {} } }], {
+      "projectAgentMattermost-orbit": { mmUserId: 7, personalToken: "pat-1" },
+    });
+
+    await expect(collectProjectAgentStates(db, secrets, "uid-1", "alice")).rejects.toBeInstanceOf(MalformedRecordError);
   });
 });
 
 describe("collectProjectAgentStates — orphaned secrets (deleted projects)", () => {
   it("emits a retire-pending state for a projectAgentMattermost-* secret whose project doc is gone", async () => {
-    const projects: Array<{ id: string; data: Record<string, unknown> }> = [];
-    const secrets: Record<string, Record<string, unknown>> = {
+    const { db, secrets } = projectAgentFixture([], {
       "projectAgentMattermost-ghost": { mmUserId: "bot-ghost", personalToken: "pat-ghost" },
       coachMattermost: { personalToken: "coach-pat" },
-    };
-    const db = {
-      collection: (_name: string) => ({
-        doc: (_id: string) => ({
-          get: async () => ({ data: () => undefined }),
-          collection: (sub: string) =>
-            sub === "projects"
-              ? {
-                  doc: () => { throw new Error("unused"); },
-                  get: async () => ({ docs: projects.map((p) => ({ id: p.id, data: () => p.data })) }),
-                }
-              : {
-                  doc: (secretId: string) => ({
-                    get: async () => ({ data: () => secrets[secretId] }),
-                    collection: () => { throw new Error("unused"); },
-                  }),
-                  get: async () => ({
-                    docs: Object.entries(secrets).map(([id, data]) => ({ id, data: () => data })),
-                  }),
-                },
-        }),
-        get: async () => { throw new Error("unused"); },
-      }),
-    };
+    });
 
-    const states = await collectProjectAgentStates(db, "uid-1", "alice");
+    const states = await collectProjectAgentStates(db, secrets, "uid-1", "alice");
 
     expect(states).toEqual([
       { projectId: "ghost", enabled: false, mmUserId: "bot-ghost", token: "pat-ghost", activationId: null, status: null },

@@ -1,6 +1,6 @@
 import type { OperationAuditAliasOutcome, OperationAuditPartialOutcome, OperationAuditReleaseRolloutLinkage } from "@octogee/shared/types/glm";
-import { type OperationAuditActionClaim, type OperationAuditIntentInput, type OperationsDb } from "./operation-audit.js";
-export type NormalFleetMutationDb = OperationsDb;
+import { type OperationAuditActionClaim, type OperationAuditIntentInput } from "./operation-audit.js";
+import type { PlatformStateStore } from "./platform-state/store.js";
 export declare class FleetMutationIdempotencyError extends Error {
     readonly auditId: string;
     readonly status: "recorded" | "in-progress" | "completed" | "failed";
@@ -33,4 +33,4 @@ export interface NormalFleetMutationInput<T> extends OperationAuditIntentInput {
     action: (claim: OperationAuditActionClaim) => Promise<T>;
     classifyResult?: (result: T) => NormalFleetMutationResult;
 }
-export declare function runNormalFleetMutation<T>(db: NormalFleetMutationDb, input: NormalFleetMutationInput<T>): Promise<T>;
+export declare function runNormalFleetMutation<T>(store: PlatformStateStore, input: NormalFleetMutationInput<T>): Promise<T>;

@@ -1,14 +1,17 @@
-import { type GatewayStatus } from "@octogee/shared/types/fleet-controller";
+import type { GatewayStatus } from "@octogee/shared/types/fleet-controller";
 import { type CustomerMigrationV2GatewayRootFence } from "@octogee/shared/types/glm";
 import { type AssignmentSource, type AssignmentState } from "@octogee/shared/types/gateway-releases";
 import type { FleetBrokerCustomerRestoreAuthority } from "@octogee/shared/types/fleet-broker";
 import { type WorkspaceMigrationPhase } from "@octogee/shared/types/workspace-migration";
+import { type BuilderTierReader } from "./builder-activation-lease.js";
+import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/index.js";
 export interface FleetStateDeps {
-    db: FleetStateFirestore;
-    serverTimestamp: () => unknown;
-    deleteField: () => unknown;
+    store: PlatformStateStore;
     now?: () => Date;
     log?: (msg: string) => void;
+}
+export interface CutoverDeps extends FleetStateDeps {
+    readBuilderTier: BuilderTierReader;
 }
 export declare function setWorkspaceMigrationPhase(deps: FleetStateDeps, params: {
     uid: string;
@@ -94,7 +97,7 @@ export interface CustomerRestoreInput {
     claimStartedAt: number;
     attemptId: string;
 }
-export declare function readCustomerRestoreAuthoritySnapshot(deps: Pick<FleetStateDeps, "db">, scope: {
+export declare function readCustomerRestoreAuthoritySnapshot(deps: Pick<FleetStateDeps, "store">, scope: {
     uid: string;
     slug: string;
     gatewayId: string;
@@ -112,7 +115,11 @@ export interface HeartbeatSnapshot {
     internalUrl: string;
     startedAt: number;
 }
-export declare function writeGatewayHeartbeat(deps: FleetStateDeps, snapshot: HeartbeatSnapshot): Promise<void>;
+export interface GatewayHeartbeatDeps {
+    db: FleetStateFirestore;
+    serverTimestamp: () => unknown;
+}
+export declare function writeGatewayHeartbeat(deps: GatewayHeartbeatDeps, snapshot: HeartbeatSnapshot): Promise<void>;
 export interface CutoverCommitParams {
     uid: string;
     slug: string;
@@ -142,7 +149,7 @@ export interface CutoverCommitParams {
 }
 export declare function legacyForwardRecoveryMatches(operationId: string, input: Record<string, unknown>, handoff: Record<string, unknown>): boolean;
 export declare function migrationCancellationDeferred(operation: Record<string, unknown>, operationId: string): boolean;
-export declare function commitCutoverAtomic(deps: FleetStateDeps, params: CutoverCommitParams): Promise<void>;
+export declare function commitCutoverAtomic(deps: CutoverDeps, params: CutoverCommitParams): Promise<void>;
 export interface UnavailableGatewayRecoveryParams {
     operationId: string;
     kind: "recover-shared-customer";
@@ -156,7 +163,7 @@ export interface UnavailableGatewayRecoveryParams {
     validateTarget?: (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void>;
 }
 export interface UnavailableGatewayRecoveryTargetValidationContext {
-    txn: FleetStateTxn;
+    transaction: PlatformStateTransaction;
     targetGatewayId: string;
     targetRoot: Record<string, unknown>;
     targetRuntime: Record<string, unknown>;

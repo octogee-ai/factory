@@ -22,16 +22,16 @@ export class FleetMutationPartialError extends Error {
         this.name = "FleetMutationPartialError";
     }
 }
-export async function runNormalFleetMutation(db, input) {
+export async function runNormalFleetMutation(store, input) {
     const { action, claimId, classifyResult, idempotencyKey, ...intent } = input;
-    const audit = await recordOperationAuditIntent(db, {
+    const audit = await recordOperationAuditIntent(store, {
         ...intent,
         idempotencyKey: idempotencyKey ?? randomUUID(),
     });
     if (audit.disposition === "existing") {
         throw new FleetMutationIdempotencyError(audit.auditId, audit.status);
     }
-    const claim = await claimOperationAuditAction(db, audit.auditId, {
+    const claim = await claimOperationAuditAction(store, audit.auditId, {
         claimId: claimId ?? randomUUID(),
     });
     let result;
@@ -43,7 +43,7 @@ export async function runNormalFleetMutation(db, input) {
     catch (error) {
         try {
             const partial = error instanceof FleetMutationPartialError ? error : null;
-            await finishOperationAudit(db, audit.auditId, {
+            await finishOperationAudit(store, audit.auditId, {
                 expectedClaimId: claim.claimId,
                 outcome: "failed",
                 error: error instanceof Error ? error.message : String(error),
@@ -59,7 +59,7 @@ export async function runNormalFleetMutation(db, input) {
         }
         throw error;
     }
-    await finishOperationAudit(db, audit.auditId, {
+    await finishOperationAudit(store, audit.auditId, {
         expectedClaimId: claim.claimId,
         ...outcome,
     });

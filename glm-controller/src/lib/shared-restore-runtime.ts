@@ -153,7 +153,7 @@ export function recoveredPodReady(pod: RecordValue, saved: RecordValue, images: 
         status.imageID?.endsWith(`@${image.split('@')[1]}`)));
 }
 
-async function existingOwnedPod(deps: Deps, gatewayId: string): Promise<RecordValue> {
+async function existingOwnedPod(deps: Pick<Deps, 'namespace' | 'runKubectl'>, gatewayId: string): Promise<RecordValue> {
   const pods = (await json(deps, ['get', 'pods', '-l', `gateway-instance=${gatewayId}`])).items;
   if (!Array.isArray(pods) || pods.length !== 1) throw new Error('restore recovery requires one existing pod');
   const pod = pods[0]; validatePod(pod, gatewayId);

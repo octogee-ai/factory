@@ -1,22 +1,10 @@
+import type { SecretsRepository } from "./platform-state/secrets.js";
 export interface ConnectorRevocationTarget {
     connectorId: string;
     revocationUrl: string;
 }
-interface SecretReader {
-    collection(name: string): {
-        doc(uid: string): {
-            collection(name: string): {
-                doc(connectorId: string): {
-                    get(): Promise<{
-                        data(): unknown;
-                    }>;
-                };
-            };
-        };
-    };
-}
 export interface ConnectorRevocationDeps {
-    db: SecretReader;
+    secrets: Pick<SecretsRepository, "get">;
     decryptSecret: (ciphertext: string) => Promise<string>;
     logger: {
         warn: (message: string) => void;
@@ -26,4 +14,3 @@ export interface ConnectorRevocationDeps {
 }
 export declare function revokeProviderGrant(uid: string, target: ConnectorRevocationTarget, deps: ConnectorRevocationDeps): Promise<void>;
 export declare function revokeAllConnectorGrantsForUser(uid: string, targets: readonly ConnectorRevocationTarget[], deps: ConnectorRevocationDeps): Promise<void>;
-export {};

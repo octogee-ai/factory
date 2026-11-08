@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Firestore } from "firebase-admin/firestore";
-import {
-  commitCutoverAtomic,
-  type FleetStateDeps,
-  type FleetStateFirestore,
-} from "@octogee/core/fleet-state";
+import { commitCutoverAtomic, type CutoverDeps } from "@octogee/core/fleet-state";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import {
   GatewayRetirementConflictError,
   claimGatewayRetirementAtomic,
@@ -74,31 +71,55 @@ function makeTxnDb(seed: Record<string, Record<string, unknown>>) {
   return { db, store };
 }
 
+function durableRoot(gatewayId: string, release: number): Record<string, unknown> {
+  return {
+    gatewayId,
+    createdAt: 1,
+    createdBy: "test",
+    updatedAt: 1,
+    updatedBy: "test",
+    latestRelease: release,
+    desiredRelease: release,
+    liveRelease: release,
+    desiredStatus: "running",
+    configSchemaVersion: 1,
+    profile: "standard",
+    gatewayClass: "shared",
+    imageProfile: "standard",
+    sizingTier: null,
+    gcpProject: null,
+    gatewayContainerSecurityContext: null,
+    serviceAccountName: null,
+    serviceAccount: null,
+    builderAccess: null,
+    ownerUid: null,
+    builderSlug: null,
+    modelBrokerLimits: null,
+    preemption: null,
+  };
+}
+
 function migrationCutoverSeed(): Record<string, Record<string, unknown>> {
   return {
-    "users/uid-a": { provisioning: { openclaw: { gatewayId: "source" } } },
-    "gateways/target": {
-      gatewayId: "target",
-      latestRelease: 2,
-      desiredRelease: 2,
-      liveRelease: 2,
-      desiredStatus: "running",
-    },
+    "users/uid-a": { username: "alice", provisioning: { openclaw: { gatewayId: "source" } } },
+    "gateways/target": durableRoot("target", 2),
     "gateways/source/assignments/uid-a": {
       uid: "uid-a",
       slug: "alice",
       gatewayId: "source",
+      source: "onboarding",
       state: "quiescing",
       epoch: 4,
     },
   };
 }
 
-function cutover(db: FleetStateFirestore, now: number) {
-  const deps: FleetStateDeps = {
-    db,
-    serverTimestamp: () => now,
-    deleteField: () => null,
+function cutover(documents: Record<string, Record<string, unknown>>, now: number) {
+  const deps: CutoverDeps = {
+    store: createDocumentFixtureStore(documents),
+    readBuilderTier: async () => {
+      throw new Error("a cutover without a V2 fence never reads the Builder tier");
+    },
     now: () => new Date(now),
     log: vi.fn(),
   };
@@ -117,35 +138,32 @@ function cutover(db: FleetStateFirestore, now: number) {
 
 describe("installed @octogee/core runtime", () => {
   it("ships the lean atomic cutover: assignment move + epoch bump, no roll fence", async () => {
-    const { db, store } = makeTxnDb(migrationCutoverSeed());
+    const documents = migrationCutoverSeed();
 
-    await cutover(db as unknown as FleetStateFirestore, 100_000);
+    await cutover(documents, 100_000);
 
-    expect(store["gateways/target/assignments/uid-a"]).toMatchObject({
+    expect(documents["gateways/target/assignments/uid-a"]).toMatchObject({
       gatewayId: "target",
       state: "serving",
       epoch: 5,
       updatedByOperationId: "op-1",
     });
-    expect(store["gateways/target/assignments/uid-a"]).not.toHaveProperty("revisionId");
-    expect(store["gateways/source/assignments/uid-a"]).toBeUndefined();
-    expect(store["users/uid-a"]).toMatchObject({
-      "provisioning.openclaw.gatewayId": "target",
+    expect(documents["gateways/target/assignments/uid-a"]).not.toHaveProperty("revisionId");
+    expect(documents["gateways/source/assignments/uid-a"]).toBeUndefined();
+    expect(documents["users/uid-a"]).toMatchObject({
+      provisioning: { openclaw: { gatewayId: "target" } },
     });
   });
 
   it("refuses a cutover onto a retirement-claimed target at the transaction boundary", async () => {
-    const seed = migrationCutoverSeed();
-    seed["gateways/target"] = {
-      ...seed["gateways/target"],
+    const documents = migrationCutoverSeed();
+    documents["gateways/target"] = {
+      ...documents["gateways/target"],
       retirementClaim: { operationId: "retire-1" },
     };
-    const { db, store } = makeTxnDb(seed);
 
-    await expect(
-      cutover(db as unknown as FleetStateFirestore, 100_000),
-    ).rejects.toThrow(/retirement claim/i);
-    expect(store["gateways/source/assignments/uid-a"]).toMatchObject({ epoch: 4 });
+    await expect(cutover(documents, 100_000)).rejects.toThrow(/retirement claim/i);
+    expect(documents["gateways/source/assignments/uid-a"]).toMatchObject({ epoch: 4 });
   });
 
   it("ships the atomic retirement fence against candidate config obligations", async () => {

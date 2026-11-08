@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { db } from "../../lib/db.js";
+import { platformStateStore } from "../../lib/platform-state.js";
 import {
   WORKSPACE_GATEWAY_STATUS_MAX_SLUGS,
   type WorkspaceGatewayStatus,
@@ -77,7 +78,7 @@ async function workspaceGatewayStatus(
   if (!authorization) {
     return { workspaceSlug, gatewayId, gatewayClass: null, runtimeStatus: "unknown", activation };
   }
-  const runtime = await readGatewayRuntimeDoc(db, authorization.gateway);
+  const runtime = await readGatewayRuntimeDoc(platformStateStore, authorization.gateway);
   return {
     workspaceSlug,
     gatewayId,

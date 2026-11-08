@@ -1,0 +1,71 @@
+import { pickPlanInputs } from "@octogee/shared/types/billing";
+function map(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function nonEmptyString(value) {
+    return typeof value === "string" && value.length > 0 ? value : null;
+}
+function millis(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+        return value;
+    if (value instanceof Date)
+        return value.getTime();
+    const timestamp = value;
+    return typeof timestamp?.toMillis === "function" ? timestamp.toMillis() : null;
+}
+function distinct(values) {
+    return [...new Set(values.filter((value) => value !== null))];
+}
+export function builderAccountFromData(uid, data) {
+    const subscription = map(data.subscription);
+    const builderSubscription = map(data.builderSubscription);
+    const billing = map(data.billing);
+    const mattermostUsername = map(data.mattermost).username;
+    return {
+        uid,
+        username: nonEmptyString(data.username),
+        email: nonEmptyString(data.email),
+        displayName: nonEmptyString(data.displayName),
+        lastActive: millis(data.lastActive),
+        planInputs: { ...pickPlanInputs(data), ...(data.tier === undefined ? {} : { tier: data.tier }) },
+        byotActive: data.byotActive === true,
+        usage: map(data.usage),
+        mattermostUsername: typeof mattermostUsername === "string" ? mattermostUsername : null,
+        onboardingStep: nonEmptyString(data.onboardingStep),
+        onboardingComplete: data.onboardingComplete === true,
+        stripeCustomerIds: distinct([
+            nonEmptyString(subscription.stripeCustomerId),
+            nonEmptyString(data.stripeCustomerId),
+            nonEmptyString(billing.stripeCustomerId),
+        ]),
+        stripeSubscriptionIds: distinct([
+            nonEmptyString(subscription.stripeSubscriptionId) ??
+                nonEmptyString(subscription.id) ??
+                nonEmptyString(billing.subscriptionId),
+            nonEmptyString(builderSubscription.stripeSubscriptionId) ?? nonEmptyString(builderSubscription.id),
+        ]),
+    };
+}
+function accountOf(snapshot) {
+    return snapshot.exists ? builderAccountFromData(snapshot.id, snapshot.data() ?? {}) : null;
+}
+export function firestoreBuilderAccountReader(db) {
+    const users = () => db.collection("users");
+    return {
+        get: async (uid) => accountOf(await users().doc(uid).get()),
+        getMany: async (uids) => {
+            const unique = [...new Set(uids)];
+            if (unique.length === 0)
+                return new Map();
+            const snapshots = await db.getAll(...unique.map((uid) => users().doc(uid)));
+            return new Map(snapshots.flatMap((snapshot) => {
+                const account = accountOf(snapshot);
+                return account === null ? [] : [[snapshot.id, account]];
+            }));
+        },
+        list: async () => {
+            const snapshot = await users().get();
+            return new Map(snapshot.docs.map((doc) => [doc.id, builderAccountFromData(doc.id, doc.data())]));
+        },
+    };
+}

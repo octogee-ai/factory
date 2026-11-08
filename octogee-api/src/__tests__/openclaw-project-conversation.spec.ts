@@ -3,6 +3,7 @@ import request from "supertest";
 import type { Firestore } from "firebase-admin/firestore";
 import { expect, it } from "vitest";
 import { createOpenClawRuntimeBrokerRoutes } from "../routes/openclaw-runtime-broker.js";
+import { createJournalFixtureStore, journalRowsIn } from "@octogee/core/testing/journal-store";
 
 const OWNER = "a".repeat(26);
 const MEMBER = "b".repeat(26);
@@ -38,7 +39,7 @@ function app() {
     req.boundTenant = { kind: "gateway", gatewayId: "builder-bob" } as Express.Request["boundTenant"];
     next();
   });
-  server.use(createOpenClawRuntimeBrokerRoutes({ db }));
+  server.use(createOpenClawRuntimeBrokerRoutes({ db, store: createJournalFixtureStore(journalRowsIn({})) }));
   return server;
 }
 

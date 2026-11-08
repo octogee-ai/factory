@@ -198,10 +198,13 @@ export function decodeWorkspaceProject(snapshot) {
     const location = projectPath(snapshot.ref.path);
     if (!snapshot.exists || location === null)
         return null;
-    const fields = new FirestoreFields(projectKey(location.workspaceSlug, location.projectSlug), decodeDocumentData(snapshot));
-    return withStoredRevision(snapshot, {
-        workspaceSlug: location.workspaceSlug,
-        projectSlug: location.projectSlug,
+    return withStoredRevision(snapshot, workspaceProjectFromData(location.workspaceSlug, location.projectSlug, decodeDocumentData(snapshot)));
+}
+export function workspaceProjectFromData(workspaceSlug, projectSlug, data) {
+    const fields = new FirestoreFields(projectKey(workspaceSlug, projectSlug), data);
+    return {
+        workspaceSlug,
+        projectSlug,
         ownerUid: fields.string("ownerUid"),
         ownerActive: fields.nullableBoolean("ownerActive"),
         giteaRepoName: fields.nullableString("giteaRepoName"),
@@ -217,22 +220,25 @@ export function decodeWorkspaceProject(snapshot) {
         repoSource: fields.nullableMap("repoSource"),
         agent: fields.nullableMap("agent"),
         updatedAt: fields.nullableNumber("updatedAt"),
-    });
+    };
 }
 export function decodeWorkspaceChannel(snapshot) {
     const location = channelPath(snapshot.ref.path);
     if (!snapshot.exists || location === null)
         return null;
-    const fields = new FirestoreFields(channelKey(location.scope, location.channelId), decodeDocumentData(snapshot));
-    return withStoredRevision(snapshot, {
-        scope: location.scope,
-        channelId: location.channelId,
+    return withStoredRevision(snapshot, workspaceChannelFromData(location.scope, location.channelId, decodeDocumentData(snapshot)));
+}
+export function workspaceChannelFromData(scope, channelId, data) {
+    const fields = new FirestoreFields(channelKey(scope, channelId), data);
+    return {
+        scope,
+        channelId,
         kind: fields.nullableString("kind"),
         mattermostChannelId: fields.nullableString("mattermost.channelId"),
         archivedAt: fields.nullableNumber("archivedAt"),
         createdBy: fields.nullableString("createdBy"),
         createdAt: fields.nullableNumber("createdAt"),
-    });
+    };
 }
 export function decodeAgentIdentity(snapshot) {
     if (!snapshot.exists)

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { COMPUTER_HOME_CHECKPOINT_KEEP, COMPUTER_HOME_CHECKPOINT_MAX_BYTES, type GatewayVmHomeCheckpoint } from "@octogee/shared/types/glm";
 import { ComputerHomeCheckpointError, type ComputerHomeStore } from "../lib/computer-home-checkpoint.js";
 import type { BoundTenant } from "../lib/sa-to-tenant.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const NOW = Date.UTC(2026, 8, 5, 10, 15, 0, 500);
@@ -99,7 +100,7 @@ function harness(input: {
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, computerHomeStore: store, createBlobSignedUrl, now: () => NOW }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), computerHomeStore: store, createBlobSignedUrl, now: () => NOW }));
   const post = (path: string, body: Record<string, unknown>) => request(app).post(`/internal/fleet/computer-home/${path}`).send({ gatewayId: "b-x", slug: "bob", requestedAt: null, ...body });
   return { post, store, createBlobSignedUrl, writes, app };
 }

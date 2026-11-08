@@ -1,6 +1,8 @@
+import type { BuilderAccount } from "./builder-account.js";
+import type { BuilderRecord } from "./platform-state/builders.js";
 export declare function toISODate(val: unknown): string | null;
 export declare function isActiveStatus(status: string): boolean;
-type CustomerDoc = Record<string, unknown>;
+export declare function isoMillis(value: number | null): string | null;
 export interface BrokerCustomerUsage {
     windowCostUsd?: number;
     weekCostUsd?: number;
@@ -40,5 +42,4 @@ export interface CustomerSummary {
     provisioningStatus: string | null;
     accountLifecycleStatus: string;
 }
-export declare function buildCustomerSummary(uid: string, d: CustomerDoc, broker?: BrokerCustomerUsage): CustomerSummary;
-export {};
+export declare function buildCustomerSummary(builder: BuilderRecord, account: BuilderAccount, broker?: BrokerCustomerUsage): CustomerSummary;

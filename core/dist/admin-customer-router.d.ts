@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { type Firestore } from "firebase-admin/firestore";
+import type { BuilderRecord } from "./platform-state/builders.js";
+import type { PlatformStateStore } from "./platform-state/store.js";
 export interface BrokerDailyUsage {
     date: string;
     costUsd: number;
@@ -45,24 +47,18 @@ export interface CustomerRouterLogger {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
 }
-export interface WorkspaceMmContextLite {
-    coachDmChannelId: string | null;
-}
 export interface AdminCustomerRouterDeps {
     db: Firestore;
+    store: PlatformStateStore;
     FieldValue: {
         serverTimestamp: () => unknown;
     };
     logger: CustomerRouterLogger;
-    workspaceSlugsForUser: (data: {
-        username?: string | null;
-    }) => string[];
-    getWorkspaceMmContext: (uid: string, userDataHint: Record<string, unknown>) => Promise<WorkspaceMmContextLite | null>;
 }
 export interface AdminCustomerPlacementProjection {
     managedBy: "cowboy" | "operator";
     gatewayId: string | null;
     gatewayProfile: string | null;
 }
-export declare function projectCustomerPlacement(openclaw: unknown): AdminCustomerPlacementProjection;
+export declare function projectCustomerPlacement(builder: BuilderRecord): AdminCustomerPlacementProjection;
 export declare function addAdminCustomerRoutes(router: Router, deps: AdminCustomerRouterDeps): Router;

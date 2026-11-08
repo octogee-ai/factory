@@ -148,11 +148,13 @@ function createDeletionJobsRepository(session) {
         },
     };
 }
-function decodeArchive(snapshot) {
-    const data = decodeDocumentData(snapshot);
-    const fields = new FirestoreFields(archiveKey(snapshot.id), data);
+export function anonymousArchiveFromData(id, data) {
+    const fields = new FirestoreFields(archiveKey(id), data);
     const { archivedAt: _archivedAt, ...record } = data;
-    return { id: snapshot.id, archivedAt: fields.number("archivedAt"), record };
+    return { id, archivedAt: fields.number("archivedAt"), record };
+}
+function decodeArchive(snapshot) {
+    return anonymousArchiveFromData(snapshot.id, decodeDocumentData(snapshot));
 }
 function assertNoArchivedAt(operation, record) {
     if ("archivedAt" in record)

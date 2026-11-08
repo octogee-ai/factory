@@ -24,15 +24,16 @@ import {
 } from "../../shared/types/glm.js";
 import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, projectGatewayDesiredRootForGateway } from "../../shared/types/gateway-releases.js";
 import {
-  readGatewayAuthorization,
+  readGatewayAuthorizationInStore,
   readGatewayRuntimeHeartbeat,
+  type GatewayStateReader,
 } from "@octogee/core/gateway-live-release";
 import { deploymentEnvironmentSettings } from "@octogee/core/deployment-environment";
 import {
   runNormalFleetMutation,
-  type NormalFleetMutationDb,
   type NormalFleetMutationInput,
 } from "@octogee/core/normal-fleet-mutation";
+import { createFirestorePlatformStateStore, type PlatformStateStore } from "@octogee/core/platform-state";
 import {
   enqueueOperation,
   awaitOperation,
@@ -972,7 +973,7 @@ export async function runForcedGatewayRestart(
   const runKubectl = input.runKubectl ?? localFleetKubectl;
   const runMutation: ForcedGatewayRestartMutationRunner = input.runMutation ??
     ((mutation) => runNormalFleetMutation(
-      input.db as unknown as NormalFleetMutationDb,
+      createFirestorePlatformStateStore({ db: input.db }),
       mutation,
     ));
   return runMutation({
@@ -1038,6 +1039,7 @@ export async function runForcedGatewayRestart(
 
 let args: ParsedFleetArgs = parseFleetArgs([]);
 let db: ReturnType<typeof getFirestore>;
+let platformState: PlatformStateStore;
 let resolvedOperatorUid: Promise<string> | null = null;
 let resolvedFirebaseWebApiKey: Promise<string> | null = null;
 
@@ -1107,6 +1109,7 @@ function initializeFleetCli(argv: string[]): void {
       : `  fleet uses keyless ADC/WIF for ${projectId}; Firebase tokens are signed by ${signerServiceAccountId}.`,
   ));
   db = getFirestore();
+  platformState = createFirestorePlatformStateStore({ db });
   KUBE_CONTEXT = target.kubeContext;
   KUBE_NS = target.namespace;
 }
@@ -1183,7 +1186,7 @@ export interface GatewayHeartbeatView {
   openclawVersion?: string;
   internalUrl?: string;
   mountedCustomers?: string[];
-  lastHeartbeatAt?: FirestoreTs;
+  lastHeartbeatAt?: number;
   lastError?: { message?: string; slug?: string; at?: unknown } | null;
 }
 
@@ -1204,12 +1207,12 @@ export interface FleetGatewayRuntimeEntry {
 }
 
 export async function readFleetGatewayRuntime(
-  reader: Pick<Firestore, "doc">,
+  state: GatewayStateReader,
   gatewayId: string,
 ): Promise<FleetGatewayRuntime | null> {
-  const authorization = await readGatewayAuthorization(reader, gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(state, gatewayId);
   if (!authorization) return null;
-  const heartbeat = await readGatewayRuntimeHeartbeat(reader, authorization.gateway);
+  const heartbeat = await readGatewayRuntimeHeartbeat(state, authorization.gateway);
   return {
     gatewayId,
     desiredStatus: authorization.gateway.desiredStatus,
@@ -1219,12 +1222,12 @@ export async function readFleetGatewayRuntime(
 }
 
 export async function listFleetGatewayRuntimes(
-  reader: Pick<Firestore, "collection" | "doc">,
+  state: GatewayStateReader,
 ): Promise<FleetGatewayRuntimeEntry[]> {
-  const roots = await reader.collection(GATEWAYS_COLLECTION).get();
-  return Promise.all(roots.docs.map(async (root) => ({
-    gatewayId: root.id,
-    runtime: await readFleetGatewayRuntime(reader, root.id),
+  const roots = await state.gateways.roots.list();
+  return Promise.all(roots.map(async (root) => ({
+    gatewayId: root.gatewayId,
+    runtime: await readFleetGatewayRuntime(state, root.gatewayId),
   })));
 }
 
@@ -1355,7 +1358,7 @@ export function visibleFleetGateways(
 async function lsGateways(): Promise<void> {
   const pods = allGatewayPods();
   const { shown: gateways, hiddenRetired } = visibleFleetGateways(
-    await listFleetGatewayRuntimes(db),
+    await listFleetGatewayRuntimes(platformState),
     args.flags.all === true,
     pods.map((pod) => pod.name),
   );
@@ -1383,7 +1386,7 @@ async function lsGateways(): Promise<void> {
 
 async function lsCustomers(): Promise<void> {
   const filter = typeof args.flags.gateway === "string" ? args.flags.gateway : null;
-  const gateways = await listFleetGatewayRuntimes(db);
+  const gateways = await listFleetGatewayRuntimes(platformState);
   const gwMounted: Record<string, Set<string>> = {};
   for (const { gatewayId, runtime } of gateways) {
     if (runtime) {
@@ -1480,7 +1483,7 @@ async function inspectCustomer(slug: string): Promise<void> {
     return;
   }
 
-  const runtime = await readFleetGatewayRuntime(db, oc.gatewayId);
+  const runtime = await readFleetGatewayRuntime(platformState, oc.gatewayId);
   if (!runtime) {
     console.log("\n" + red(`${CROSS} gateways/${oc.gatewayId} has no valid durable root configuration.`));
     return;
@@ -1515,7 +1518,7 @@ console.log("\n" + bold("DRIFT"));
 }
 
 async function inspectGateway(gatewayId: string): Promise<void> {
-  const runtime = await readFleetGatewayRuntime(db, gatewayId);
+  const runtime = await readFleetGatewayRuntime(platformState, gatewayId);
   if (!runtime) {
     console.error(red(`${CROSS} Gateway '${gatewayId}' has no valid durable root configuration.`));
     process.exit(1);
@@ -1644,7 +1647,7 @@ async function addCustomer(slug: string, gatewayId: string, apply: boolean): Pro
     console.error(red(`${CROSS} No user found with slug or username '${slug}'.`));
     process.exit(1);
   }
-  const runtime = await readFleetGatewayRuntime(db, gatewayId);
+  const runtime = await readFleetGatewayRuntime(platformState, gatewayId);
   if (!runtime) {
     console.error(red(`${CROSS} Gateway '${gatewayId}' has no valid durable root configuration.`));
     process.exit(1);
@@ -1742,7 +1745,7 @@ async function migrateCustomerPlan(
     console.log(yellow(`'${slug}' is already on '${toGatewayId}'. Nothing to migrate.`));
     return;
   }
-  const targetRuntime = await readFleetGatewayRuntime(db, toGatewayId);
+  const targetRuntime = await readFleetGatewayRuntime(platformState, toGatewayId);
   if (!targetRuntime) {
     console.error(red(`${CROSS} Target gateway '${toGatewayId}' has no valid durable root configuration.`));
     process.exit(1);

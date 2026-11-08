@@ -1,7 +1,8 @@
 import { disposableBuilderBootMode } from "@octogee/core/disposable-builder-prelaunch";
 import { sharedAgentAnchorMigrationScope, sharedAssignedSourceSurgeAnchorScope } from "../lib/shared-agent-anchor-migration.js";
 import { installWorkspaceBlobBrokerRoute, type WorkspaceBlobStore } from "./fleet-broker-workspace-blob.js";
-import { readCustomerRestoreAuthoritySnapshot, type FleetStateFirestore } from "@octogee/core/fleet-state";
+import { readCustomerRestoreAuthoritySnapshot } from "@octogee/core/fleet-state";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { configuredBuilderPreparationAllowed } from "../lib/builder-preparation.js";
 import { completeProjectAgentReadiness } from "../lib/project-agent-readiness-delivery.js";
 import { parseProjectAgentReadinessReports } from "../lib/project-agent-readiness.js";
@@ -1706,6 +1707,7 @@ interface SnapshotModelDials {
 }
 
 interface LoadSnapshotOptions {
+  store: PlatformStateStore;
   modelDials: SnapshotModelDials;
   gatewayId: string;
   gatewayData: Record<string, unknown> | undefined;
@@ -1726,12 +1728,12 @@ async function loadSnapshot(
     projectCheckoutScope === "workspace-and-projects"
       ? collectProjects(db, slug)
       : Promise.resolve([]),
-    collectProjectAgentStates(db, uid, slug),
+    collectProjectAgentStates(db, options.store.secrets, uid, slug),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
     db.collection("users").doc(uid).collection("system").doc("config").get(),
     admittedRuntimeReset(db, uid, data),
-    readCustomerRestoreAuthoritySnapshot({ db: db as unknown as FleetStateFirestore }, { uid, slug, gatewayId: options.gatewayId }),
+    readCustomerRestoreAuthoritySnapshot({ store: options.store }, { uid, slug, gatewayId: options.gatewayId }),
   ]);
   const coachData = coachSecret.data() as Record<string, unknown> | undefined;
   const agentData = agentSnap.data() as Record<string, unknown> | undefined;
@@ -1845,8 +1847,11 @@ async function userSnapshotAdmission(
   return { data, gatewayData };
 }
 
+type FleetBrokerRouteOptions = { db: Firestore; store: PlatformStateStore } & FleetBrokerRouteDeps;
+
 type ResolvedFleetBrokerRouteDeps = {
   db: Firestore;
+  store: PlatformStateStore;
   resolveFreeTierModel: FreeTierModelResolver;
   resolveBuilderAgentDefault: BuilderAgentDefaultResolver;
   provisionMattermost: NonNullable<FleetBrokerRouteDeps["provisionMattermost"]>;
@@ -1928,10 +1933,11 @@ function resolveFleetBrokerRouteImplementations(
 }
 
 function resolveFleetBrokerRouteDeps(
-  opts: { db: Firestore } & FleetBrokerRouteDeps,
+  opts: FleetBrokerRouteOptions,
 ): ResolvedFleetBrokerRouteDeps {
   return {
     db: opts.db,
+    store: opts.store,
     resolveFreeTierModel: createCachedFreeTierModelResolver({
       db: opts.db,
       onError: (err) => logger.error("fleet-broker free-tier dial resolution failed", { err }),
@@ -1992,7 +1998,7 @@ export function builderIdentityForRoot(value: unknown, gatewayId: string): Build
   };
 }
 
-function installBuilderIdentityRoute(router: Router, db: Firestore): void {
+function installBuilderIdentityRoute(router: Router, store: PlatformStateStore): void {
   router.post("/builder-identity", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -2005,12 +2011,11 @@ function installBuilderIdentityRoute(router: Router, db: Firestore): void {
       res.status(403).json(FORBIDDEN);
       return;
     }
-    const identity = await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(bound.gatewayId));
-      const identity = builderIdentityForRoot(snapshot.data(), bound.gatewayId);
-      if (!nativeBoot || !identity || identity.state !== "claimed") return identity;
-      const gateway = projectGatewayDesiredRootForGateway(snapshot.data(), bound.gatewayId) as GatewayDoc & GatewayMutableConfig;
-      const boot = await disposableBuilderBootMode({ db, transaction, gateway });
+    const identity = await store.transaction({ label: "fleet-broker.builder-identity", readOnly: true }, async (transaction) => {
+      const gateway = await transaction.gateways.roots.get(bound.gatewayId);
+      const identity = builderIdentityForRoot(gateway, bound.gatewayId);
+      if (!nativeBoot || !gateway || !identity || identity.state !== "claimed") return identity;
+      const boot = await disposableBuilderBootMode({ reader: transaction, gateway });
       return { ...identity, bootMode: boot.mode, ...(boot.migrationId ? { activationMigrationId: boot.migrationId } : {}) };
     });
     if (!identity) {
@@ -2106,6 +2111,7 @@ function installSnapshotRoutes(
         doc.id,
         data,
         {
+          store: deps.store,
           gatewayId: bound.gatewayId,
           modelDials,
           gatewayData,
@@ -2133,7 +2139,7 @@ function installSnapshotRoutes(
   });
 
   router.post("/configured-builder-bootstrap", async (req, res) => {
-    await handleConfiguredBuilderBootstrap(db, req, res);
+    await handleConfiguredBuilderBootstrap(db, deps.store, req, res);
   });
 
   router.post("/user-snapshot", async (req, res) => {
@@ -2160,6 +2166,7 @@ function installSnapshotRoutes(
       uid,
       data,
       {
+        store: deps.store,
         gatewayId: bound.gatewayId,
         modelDials: {
           freeTierModelRef: (await deps.resolveFreeTierModel()).ref,
@@ -2196,7 +2203,7 @@ function installSnapshotRoutes(
     const [collectedChannels, coachSecret, projectAgents] = await Promise.all([
       collectChannelBindings(db, slug),
       db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
-      collectProjectAgentStates(db, uid, slug),
+      collectProjectAgentStates(db, deps.store.secrets, uid, slug),
     ]);
     const coach = snapshotCoachFields(
       coachSecret.data() as Record<string, unknown> | undefined,
@@ -2809,7 +2816,7 @@ function installOpenClawBootRoutes(
   deps: ResolvedFleetBrokerRouteDeps,
 ): void {
   installAgentAnchorRoutes(router, deps);
-  const store = createOpenClawBootSentinelStore(deps.db, deps.now);
+  const store = createOpenClawBootSentinelStore(deps.store, deps.now);
 
   router.post("/openclaw-boot/claim", async (req, res) => {
     const bound = boundGateway(req, res);
@@ -2958,6 +2965,7 @@ function configuredBuilderProjectCredentials(
 
 async function handleConfiguredBuilderBootstrap(
   db: Firestore,
+  store: PlatformStateStore,
   req: Request,
   res: Response,
 ): Promise<void> {
@@ -2989,7 +2997,7 @@ async function handleConfiguredBuilderBootstrap(
     db.collection("users").doc(uid).get(),
     db.collection("users").doc(uid).collection("secrets").doc("coachMattermost").get(),
     db.collection("agents").doc(uid).get(),
-    collectProjectAgentStates(db, uid, request.slug),
+    collectProjectAgentStates(db, store.secrets, uid, request.slug),
   ]);
   let bootstrap: FleetBrokerConfiguredBuilderBootstrap | null;
   try {
@@ -4426,11 +4434,11 @@ function installAgentRoutes(router: Router, deps: ResolvedFleetBrokerRouteDeps):
   });
 }
 
-export function createFleetBrokerRoutes(opts: { db: Firestore } & FleetBrokerRouteDeps): Router {
+export function createFleetBrokerRoutes(opts: FleetBrokerRouteOptions): Router {
   const router = Router();
   const deps = resolveFleetBrokerRouteDeps(opts);
   installSnapshotRoutes(router, deps);
-  installBuilderIdentityRoute(router, deps.db);
+  installBuilderIdentityRoute(router, deps.store);
   installProvisioningRoutes(router, deps);
   installGatewayOpsRoutes(router, deps);
   installVmRuntimeRoutes(router, deps);

@@ -5,27 +5,6 @@ import {
   type OpenClawAgentConfig,
   type OpenClawConfig,
 } from "./config.js";
-import { db } from "./firebase.js";
-
-export const agentToUid = new Map<string, string>();
-
-export async function loadAgentToUidMapping(): Promise<void> {
-  const snap = await db
-    .collection("users")
-    .where("provisioning.openclaw.status", "==", "complete")
-    .get();
-
-  for (const doc of snap.docs) {
-    const oc = doc.data().provisioning?.openclaw;
-    if (oc?.agentId)                    agentToUid.set(oc.agentId, doc.id);
-    if (Array.isArray(oc?.agentIds))    oc.agentIds.forEach((id: string) => agentToUid.set(id, doc.id));
-  }
-  log(`agent-map: loaded ${agentToUid.size} entries`);
-}
-
-export function registerAgentIds(uid: string, agentIds: string[]): void {
-  agentIds.forEach(id => agentToUid.set(id, uid));
-}
 
 type AgentConfig = NonNullable<OpenClawConfig["agents"]>;
 type AgentDefaults = NonNullable<AgentConfig["defaults"]>;

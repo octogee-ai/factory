@@ -2,7 +2,7 @@ import type { FleetBrokerProjectAgent } from "@octogee/shared/types/fleet-broker
 import { createServiceLogger } from "@octogee/shared/server/service-logger";
 const logger = createServiceLogger("provisioner");
 import type { UserSnapshot } from "./customer-lifecycle.js";
-import { projectAgentSecretDocId } from "./mattermost/project-agent.js";
+import type { MattermostTokenSecret, SecretsRepository } from "./platform-state/secrets.js";
 import { parseAgentModelSelections } from "@octogee/shared/types/agent-models";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { projectAgentConfigured, projectRepoSourceFromDoc, type ProjectAgentStatus, type ProjectAgentIdentity } from "@octogee/shared/types/project";
@@ -65,20 +65,18 @@ function projectAgentArchived(projectData: Record<string, unknown>): boolean {
     (commercialLifecycle as { status?: unknown }).status === "archived");
 }
 
+export type ProjectAgentCredential = Pick<MattermostTokenSecret, "mattermostUserId" | "personalToken">;
+
 export function mapProjectAgentState(
   projectId: string,
   projectData: Record<string, unknown>,
-  secretData: Record<string, unknown> | undefined,
+  credential: ProjectAgentCredential | null,
 ): FleetBrokerProjectAgent | null {
   const agent = projectData.agent;
   const requestedEnabled = projectAgentConfigured(agent);
   const enabled = requestedEnabled && !projectAgentArchived(projectData);
-  const mmUserId =
-    typeof secretData?.mmUserId === "string" && secretData.mmUserId ? secretData.mmUserId : null;
-  const token =
-    typeof secretData?.personalToken === "string" && secretData.personalToken
-      ? secretData.personalToken
-      : null;
+  const mmUserId = credential?.mattermostUserId || null;
+  const token = credential?.personalToken || null;
   if (!enabled && mmUserId === null && token === null) return null;
   try {
     return {
@@ -108,40 +106,31 @@ export interface ProjectAgentSnapshotDb {
   collection(name: string): SnapshotCollectionRef;
 }
 
-// Vegas: collect per-project agent states for a snapshot. The secret is read
-// only for projects whose doc carries an agent field — untouched projects
-// cost no extra reads and can have no lingering secret to retire.
-const PROJECT_AGENT_SECRET_PREFIX = projectAgentSecretDocId("");
-
 export async function collectProjectAgentStates(
   db: ProjectAgentSnapshotDb,
+  secrets: Pick<SecretsRepository, "list">,
   uid: string,
   slug: string,
 ): Promise<Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>> {
-  const snap = await db.collection("workspaces").doc(slug).collection("projects").get();
+  const [snap, projectSecrets] = await Promise.all([
+    db.collection("workspaces").doc(slug).collection("projects").get(),
+    secrets.list(uid, "project-agent-mattermost"),
+  ]);
+  const credentials = new Map(projectSecrets.flatMap((secret) =>
+    secret.kind === "connector" || !secret.projectId ? [] : [[secret.projectId, secret] as const]));
   const out: Array<NonNullable<ReturnType<typeof mapProjectAgentState>>> = [];
   const seenProjects = new Set<string>();
   for (const doc of snap.docs) {
     const data = doc.data() ?? {};
     if (data.agent === undefined) continue;
     seenProjects.add(doc.id);
-    const secretSnap = await db
-      .collection("users").doc(uid)
-      .collection("secrets").doc(projectAgentSecretDocId(doc.id))
-      .get();
-    const state = mapProjectAgentState(doc.id, data, secretSnap.data());
+    const state = mapProjectAgentState(doc.id, data, credentials.get(doc.id) ?? null);
     if (state) out.push(state);
   }
 
-  // Deleting a project removes the doc that carries the agent flag — the
-  // lingering secret is then the only retire trigger left. Surface each
-  // orphaned projectAgentMattermost-* secret as a retire-pending state.
-  const secretsSnap = await db.collection("users").doc(uid).collection("secrets").get();
-  for (const doc of secretsSnap.docs) {
-    if (!doc.id.startsWith(PROJECT_AGENT_SECRET_PREFIX)) continue;
-    const projectId = doc.id.slice(PROJECT_AGENT_SECRET_PREFIX.length);
-    if (!projectId || seenProjects.has(projectId)) continue;
-    const state = mapProjectAgentState(projectId, {}, doc.data());
+  for (const [projectId, credential] of credentials) {
+    if (seenProjects.has(projectId)) continue;
+    const state = mapProjectAgentState(projectId, {}, credential);
     if (state) out.push(state);
   }
   return out;

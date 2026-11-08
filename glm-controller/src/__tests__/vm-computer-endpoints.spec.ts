@@ -156,6 +156,7 @@ describe("first-boot VM gateway handoff", () => {
     await expect(refineGatewayConvergenceAction({
       passDeps: {
         db: { collection: () => ({ doc: () => ({ get: async () => ({ exists: true, data: () => gateway }) }) }) } as never,
+        store: {} as never,
         reconcileSurgeHandoff,
       },
       gateway,

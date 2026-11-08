@@ -1,5 +1,6 @@
 function operationRecord(input) {
     return {
+        id: input.operationId,
         kind: input.kind,
         status: "pending",
         createdBy: input.createdBy,
@@ -24,6 +25,7 @@ export function buildCustomerDeletionPlan(input) {
     return {
         lifecycle,
         job: {
+            deletionId: input.deletionId,
             version: 1,
             uid: input.uid,
             slug: input.slug,
@@ -32,10 +34,12 @@ export function buildCustomerDeletionPlan(input) {
             requestedAt: input.requestedAt,
             eraseAfter: input.eraseAfter,
             currentGatewayId: input.currentGatewayId,
-            stripeCustomerIds: input.stripeCustomerIds,
-            stripeSubscriptionIds: input.stripeSubscriptionIds,
             suspensionOperationId: input.suspensionOperationId,
             erasureOperationId: input.erasureOperationId,
+            productContext: {
+                stripeCustomerIds: input.stripeCustomerIds,
+                stripeSubscriptionIds: input.stripeSubscriptionIds,
+            },
         },
         suspensionOperation: operationRecord({
             kind: "suspend-customer",

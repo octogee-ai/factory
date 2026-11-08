@@ -5,6 +5,7 @@ import * as os from "os";
 import { FieldValue } from "firebase-admin/firestore";
 import { requireAuth, requireInternalServiceAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
+import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
 import {
   deleteSecret,
   writeSecret,
@@ -53,7 +54,7 @@ import {
 } from "@octogee/shared/types/model-credentials";
 import { pickPlanInputs } from "@octogee/shared/types/billing";
 import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
-import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
+import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 
 const router = Router();
 const BYOSUB_PROVIDER_ORDER: ByosubProvider[] = ["openai", "anthropic"];
@@ -76,7 +77,7 @@ async function subscriptionRuntimeFor(
   resolved: { gatewayId: string },
 ): Promise<SubscriptionRuntimeState> {
   const [authorization, userSnap] = await Promise.all([
-    readGatewayAuthorization(db, resolved.gatewayId),
+    readGatewayAuthorizationInStore(platformStateStore, resolved.gatewayId),
     db.collection("users").doc(uid).get(),
   ]);
   if (authorization?.kind !== "durable" || !userSnap.exists) return "unavailable";
@@ -94,7 +95,7 @@ async function hasReadySubscriptionRuntime(
 }
 
 async function hasPrivateSubscriptionGateway(gatewayId: string): Promise<boolean> {
-  const authorization = await readGatewayAuthorization(db, gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(platformStateStore, gatewayId);
   return authorization?.kind === "durable" && authorization.config.gatewayClass !== "shared";
 }
 
@@ -271,7 +272,7 @@ router.post(
         res.status(400).json({ error: "No provisioned workspace/gateway for this user" });
         return;
       }
-      const authorization = await readGatewayAuthorization(db, resolved.gatewayId);
+      const authorization = await readGatewayAuthorizationInStore(platformStateStore, resolved.gatewayId);
       if (authorization?.kind !== "durable") {
         res.status(409).json({ error: "Assigned runtime is unavailable" });
         return;
@@ -286,7 +287,8 @@ router.post(
       const epoch = assignment.exists ? assignment.data()?.epoch : undefined;
       const observedAt = Date.now();
       const result = await requestBuilderActivationLease({
-        db,
+        store: platformStateStore,
+        readBuilderTier,
         uid,
         reportingGatewayId: resolved.gatewayId,
         assignmentEpoch: typeof epoch === "number" ? epoch : undefined,

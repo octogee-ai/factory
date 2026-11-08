@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
 import { db } from "../lib/db.js";
+import { platformStateStore, readBuilderTier } from "../lib/platform-state.js";
 import { mintTicket } from "../lib/gateway-ticket.js";
 import { resolveActivityConversation } from "../lib/activity-conversation.js";
 import { isMattermostPostId } from '@octogee/shared/types/mattermost-session-route';
@@ -26,7 +27,12 @@ router.post("/runtime-activity", requireAuth, async (req: Request, res: Response
       res.status(400).json({ error: "gatewayId is required" });
       return;
     }
-    const recorded = await recordBuilderRuntimeActivity({ db, uid: req.uid!, gatewayId: body.gatewayId });
+    const recorded = await recordBuilderRuntimeActivity({
+      store: platformStateStore,
+      readBuilderTier,
+      uid: req.uid!,
+      gatewayId: body.gatewayId,
+    });
     res.json({ recorded });
   } catch (error) { next(error); }
 });
@@ -64,7 +70,8 @@ async function requestRuntimeDemand(input: {
     ? assignmentSnap.data() as Record<string, unknown>
     : undefined;
   return requestBuilderActivationLease({
-    db,
+    store: platformStateStore,
+    readBuilderTier,
     uid: input.uid,
     reportingGatewayId,
     assignmentEpoch:

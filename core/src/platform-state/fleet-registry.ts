@@ -24,7 +24,7 @@ export interface FleetRegistryVmFields {
   readonly vmImages?: OpaqueMap;
   readonly vmEgress?: GatewayVmEgressState;
   readonly surgeCrashLoopEvictions?: OpaqueMap;
-  readonly openclawHealthyBuild?: OpaqueMap;
+  readonly openclawHealthyBuild?: string;
 }
 
 export type FleetRegistryRecord = Omit<GatewayRuntimeDoc, "docKind"> & FleetRegistryVmFields;

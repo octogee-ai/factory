@@ -6,52 +6,55 @@ import { operationAuditMutationFingerprint } from "./operation-audit.js";
 export class SharedSourceRecoveryConflict extends Error {
 }
 const UNMATCHED_ROUTE_AGENT_ID = "octogee-unmatched-route";
+const STORE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SCHEMA_PATTERN = /^[a-z_][a-z0-9_]{0,62}$/;
 const conflict = (message) => { throw new SharedSourceRecoveryConflict(message); };
 function rootIdentity(root) {
     return Object.fromEntries(["gatewayId", "gatewayClass", "ownerUid", "builderSlug", "desiredStatus", "desiredRelease", "liveRelease", "latestRelease"]
         .map(key => [key, root[key]]));
 }
 function validRoot(root, gatewayId) {
-    return [root.gatewayId === gatewayId, root.gatewayClass === "shared", root.ownerUid === null, root.builderSlug === null,
+    return root !== null && [root.gatewayId === gatewayId, root.gatewayClass === "shared", root.ownerUid === null, root.builderSlug === null,
         root.allocation == null, root.retirementClaim == null, ["running", "draining"].includes(root.desiredStatus),
-        Number.isSafeInteger(root.liveRelease), root.liveRelease > 0, root.liveRelease === root.desiredRelease].every(Boolean);
+        Number.isSafeInteger(root.liveRelease), (root.liveRelease ?? 0) > 0, root.liveRelease === root.desiredRelease].every(Boolean);
 }
-function assignmentIdentity(uid, assignment, gatewayId) {
-    const slug = assignment.slug;
-    if (![assignment.uid === uid, assignment.gatewayId === gatewayId, assignment.state === "serving",
-        typeof slug === "string", /^[a-z0-9][a-z0-9-]*$/.test(slug), Number.isSafeInteger(assignment.epoch), assignment.epoch >= 0].every(Boolean)) {
+function capturedAssignment(stored) {
+    const { revision: _revision, ...assignment } = stored;
+    return assignment;
+}
+function assignmentIdentity(stored) {
+    const assignment = capturedAssignment(stored), slug = assignment.slug;
+    if (assignment.state !== "serving" || !/^[a-z0-9][a-z0-9-]*$/.test(slug))
         conflict("source recovery assignment is unavailable");
+    return { uid: assignment.uid, slug, agentId: `octogee-${slug}-coach`, assignmentEpoch: assignment.epoch, assignment };
+}
+function builderMatches(builder, identity, gatewayId) {
+    return builder !== undefined && [builder.slug === identity.slug, builder.gateway?.gatewayId === gatewayId, builder.openclaw.status === "complete",
+        builder.fences.migration === undefined, builder.fences.restoreFence === undefined, builder.fences.sourceTransferFence === undefined].every(Boolean);
+}
+function liveProjectAgent(project) {
+    return projectAgentConfigured(project.agent) && project.status !== "archived" && project.commercialLifecycleStatus !== "archived";
+}
+function ownedSourceStore(record, identity) {
+    if (record.kind !== "agent" || !agentIdBelongsToSlug(record.agentId, identity.slug) || record.gatewayId !== identity.assignment.gatewayId ||
+        record.assignmentEpoch !== identity.assignmentEpoch || !STORE_ID_PATTERN.test(record.storeId) || !SCHEMA_PATTERN.test(record.schema)) {
+        return conflict("source recovery PostgreSQL anchor custody changed");
     }
-    return { uid, slug, agentId: `octogee-${slug}-coach`, assignmentEpoch: assignment.epoch, assignment };
+    return { uid: identity.uid, slug: identity.slug, assignmentEpoch: identity.assignmentEpoch,
+        agentId: record.agentId, storeId: record.storeId, schema: record.schema };
 }
-function userMatches(user, identity, gatewayId) {
-    const state = user.provisioning?.openclaw ?? {};
-    return [user.username === identity.slug, state.gatewayId === gatewayId, state.status === "complete",
-        state.migration === undefined, state.restoreFence === undefined, state.sourceTransferFence === undefined,
-        state.runtimeRestartFence === undefined].every(Boolean);
+function sourceAgentStore(record) {
+    return record.kind !== "gateway-state" && !(record.kind === "agent" && record.agentId === UNMATCHED_ROUTE_AGENT_ID);
 }
-export async function readPostgresSourceAgentStores(db, tx, assignments) {
+export async function readPostgresSourceAgentStores(transaction, assignments) {
     const stores = [];
     for (const identity of assignments) {
         const [records, projects] = await Promise.all([
-            tx.get(db.collection("users").doc(identity.uid).collection("agentStores")),
-            tx.get(db.collection("workspaces").doc(identity.slug).collection("projects")),
+            transaction.builders.agentStores.list(identity.uid),
+            transaction.workspaces.projects.list(identity.slug),
         ]);
-        const required = [identity.agentId, ...projects.docs.filter(project => {
-                const data = project.data();
-                return projectAgentConfigured(data.agent) && data.status !== "archived" && data.commercialLifecycle?.status !== "archived";
-            }).map(project => projectAgentId(identity.slug, project.id))];
-        const owned = records.docs.filter(record => record.id !== "_gateway-state" &&
-            !(record.id === UNMATCHED_ROUTE_AGENT_ID && record.data().agentId === UNMATCHED_ROUTE_AGENT_ID)).map(record => {
-            const row = record.data();
-            if (row.agentId !== record.id || !agentIdBelongsToSlug(record.id, identity.slug) || row.gatewayId !== identity.assignment.gatewayId ||
-                row.assignmentEpoch !== identity.assignmentEpoch || typeof row.storeId !== "string" ||
-                !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(row.storeId) ||
-                typeof row.schema !== "string" || !/^[a-z_][a-z0-9_]{0,62}$/.test(row.schema))
-                conflict("source recovery PostgreSQL anchor custody changed");
-            return { uid: identity.uid, slug: identity.slug, assignmentEpoch: identity.assignmentEpoch,
-                agentId: record.id, storeId: row.storeId, schema: row.schema };
-        });
+        const required = [identity.agentId, ...projects.filter(liveProjectAgent).map(project => projectAgentId(identity.slug, project.projectSlug))];
+        const owned = records.filter(sourceAgentStore).map(record => ownedSourceStore(record, identity));
         if (required.some(agentId => !owned.some(store => store.agentId === agentId)))
             conflict("source recovery PostgreSQL roster is incomplete");
         stores.push(...owned);
@@ -81,33 +84,37 @@ function pristineOutbound(row, gatewayId, sourceUids) {
             "firstStartedAt", "lastProgressAt", "resumeCount", "lastResumedAt", "error", "output", "rolledBack"]
             .every(key => row[key] === undefined)].every(Boolean);
 }
-async function assertNoSourceTransferTask(db, tx, gatewayId) {
-    const tasks = await tx.get(db.collection('glmMigrationTransferTasks').where('status', 'in', ['pending', 'running']));
-    if (tasks.docs.some(row => [row.data().sourceGatewayId, row.data().targetGatewayId].includes(gatewayId)))
-        conflict('source recovery transfer task is active');
+function competingSourceOperation(operation, request) {
+    const row = operation;
+    return operation.id !== request.ownOperationId &&
+        (operationTouchesSource(row, request.gatewayId) || request.sourceUids.has(row.input?.uid)) &&
+        !(request.fenced && pristineOutbound(row, request.gatewayId, request.sourceUids));
 }
-export async function readSharedSourceRecoveryAuthority(db, tx, gatewayId, ownOperationId, predecessorId) {
-    const [rootSnap, roster, active] = await Promise.all([
-        tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.collection(`gateways/${gatewayId}/assignments`)),
-        tx.get(db.collection("glmOperations").where("status", "in", ["pending", "running"])),
+async function assertNoSourceTransferTask(transaction, gatewayId) {
+    const tasks = await transaction.migrationTasks.listByStatus(["running"]);
+    if (tasks.some(task => [task.sourceGatewayId, task.targetGatewayId].includes(gatewayId)))
+        conflict("source recovery transfer task is active");
+}
+export async function readSharedSourceRecoveryAuthority(transaction, gatewayId, ownOperationId, predecessorId) {
+    const [root, roster, active] = await Promise.all([
+        transaction.gateways.roots.get(gatewayId), transaction.gateways.assignments.list(gatewayId),
+        transaction.journal.operations.listByStatus(["pending", "running"]),
     ]);
-    const root = rootSnap.data() ?? {};
     if (!validRoot(root, gatewayId) || (!ownOperationId && root.runtimeRestartFence !== undefined))
-        conflict("source recovery gateway authority is unavailable");
-    const assignments = roster.docs.map(row => assignmentIdentity(row.id, row.data(), gatewayId)).sort((a, b) => a.uid.localeCompare(b.uid));
+        return conflict("source recovery gateway authority is unavailable");
+    const assignments = roster.map(assignmentIdentity).sort((a, b) => a.uid.localeCompare(b.uid));
     if (!assignments.length || new Set(assignments.map(row => row.slug)).size !== assignments.length)
         conflict("source recovery roster is unavailable");
     const sourceUids = new Set(assignments.map(row => row.uid));
     const fenced = [ownOperationId, predecessorId].some(owner => ownedSourceFence(root, owner, assignments));
-    if (active.docs.some(row => row.id !== ownOperationId && (operationTouchesSource(row.data(), gatewayId) || sourceUids.has(row.data().input?.uid)) &&
-        !(fenced && pristineOutbound(row.data(), gatewayId, sourceUids)))) {
+    if (active.some(operation => competingSourceOperation(operation, { gatewayId, ownOperationId, sourceUids, fenced }))) {
         conflict("another source operation is active");
     }
-    const users = await Promise.all(assignments.map(row => tx.get(db.doc(`users/${row.uid}`))));
-    if (users.some((user, index) => !userMatches(user.data() ?? {}, assignments[index], gatewayId)))
+    const builders = await transaction.builders.records.getMany(assignments.map(row => row.uid));
+    if (assignments.some(identity => !builderMatches(builders.get(identity.uid), identity, gatewayId)))
         conflict("source recovery customer authority changed");
-    await assertNoSourceTransferTask(db, tx, gatewayId);
-    const postgresAgentStores = await readPostgresSourceAgentStores(db, tx, assignments);
+    await assertNoSourceTransferTask(transaction, gatewayId);
+    const postgresAgentStores = await readPostgresSourceAgentStores(transaction, assignments);
     return { root: rootIdentity(root), assignments, postgresAgentStores, schedulerStateRecovery: true };
 }
 export function assertSharedSourceRecoveryUnchanged(current, captured) {
@@ -170,9 +177,9 @@ export function assertSharedSourceRecoveryPredecessor(request) {
     return { operationId, input: capturedInput, inputFingerprint: operationAuditMutationFingerprint(row.input),
         startedAt: row.startedAt, completedAt: row.completedAt, error: row.error, fence };
 }
-export async function readSharedSourceRecoverySupersession(db, tx, gatewayId, operationId) {
-    const [root, prior, source] = await Promise.all([tx.get(db.doc(`gateways/${gatewayId}`)), tx.get(db.doc(`glmOperations/${operationId}`)),
-        readSharedSourceRecoveryAuthority(db, tx, gatewayId, operationId)]);
+export async function readSharedSourceRecoverySupersession(transaction, gatewayId, operationId) {
+    const [root, prior, source] = await Promise.all([transaction.gateways.roots.get(gatewayId), transaction.journal.operations.get(operationId),
+        readSharedSourceRecoveryAuthority(transaction, gatewayId, operationId)]);
     return { source, supersede: assertSharedSourceRecoveryPredecessor({ gatewayId, operationId,
-            row: prior.data() ?? {}, fence: root.data()?.runtimeRestartFence, source }) };
+            row: prior ?? {}, fence: root?.runtimeRestartFence ?? {}, source }) };
 }

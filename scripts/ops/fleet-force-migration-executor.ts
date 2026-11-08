@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
-import type { OperationsDb } from "@octogee/core/operation-audit";
+import { createFirestorePlatformStateStore } from "@octogee/core/platform-state";
 import {
   readForceMigrationPlan, readForceMigrationPlanInTransaction, readForceMigrationSource,
   type ForceMigrationTarget, type OwnedMigrationRestart,
@@ -64,7 +64,7 @@ export async function runForcedMigration(input: {
   if (recovery.completed) return recovery.completed;
   const plan = await readForceMigrationPlan(db, target, recovery.owned);
   const pod = recovery.owned ? boundPod(recovery.owned.fence) : await transport.capture(target.fromGatewayId);
-  return runNormalFleetMutation(db as unknown as OperationsDb, {
+  return runNormalFleetMutation(createFirestorePlatformStateStore({ db }), {
     actor, forced: true, what: recovery.owned ? "Observe forced migration recovery" : "Force source gateway restart for blocked migration",
     why: "Operator accepts interruption of the dedicated Builder gateway while preserving its pod, disk, and existing migration",
     target: { ...target, sourceEpoch: plan.sourceEpoch }, preActionStatus: { ...plan },

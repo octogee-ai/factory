@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
-import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 
 import {
   addAdminFleetRoutes,
@@ -14,6 +14,14 @@ import {
   shapeOperationsHistoryRecord,
   type GatewayPodDiagnostics,
 } from "./admin-fleet-router.js";
+import {
+  createJournalFixtureStore,
+  journalRowsAtPaths,
+  journalRowsIn,
+  type FixtureDocuments,
+} from "./testing/journal-store.js";
+import { firestoreBuilderAccountReader } from "./builder-account.js";
+import type { PlatformStateTransaction } from "./platform-state/store.js";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
@@ -764,6 +772,72 @@ function mkCollection(
   return query();
 }
 
+type HarnessDocs = Record<string, Record<string, unknown>>;
+
+function harnessDocuments(input: {
+  collections: Record<string, HarnessDocs>;
+  assignments: Record<string, HarnessDocs>;
+  singletons: Record<string, { get: () => Record<string, unknown> | undefined; set: (row: Record<string, unknown>) => void }>;
+}): FixtureDocuments {
+  const locate = (path: string): readonly [HarnessDocs, string] => {
+    const segments = path.split("/");
+    if (segments.length === 2) return [input.collections[segments[0]] ??= {}, segments[1]];
+    if (segments.length === 4 && segments[0] === "gateways" && segments[2] === "assignments") {
+      return [input.assignments[segments[1]] ??= {}, segments[3]];
+    }
+    throw new Error(`the admin fleet route harness does not store ${path}`);
+  };
+  const entries = (): Array<readonly [string, Record<string, unknown>]> => [
+    ...Object.entries(input.collections).flatMap(([name, docs]) =>
+      Object.entries(docs).map(([id, row]) => [`${name}/${id}`, row] as const)),
+    ...Object.entries(input.assignments).flatMap(([gatewayId, docs]) =>
+      Object.entries(docs).map(([uid, row]) => [`gateways/${gatewayId}/assignments/${uid}`, row] as const)),
+  ];
+  return {
+    get: (path) => {
+      if (path in input.singletons) return input.singletons[path].get();
+      const [docs, id] = locate(path);
+      return docs[id];
+    },
+    set: (path, row) => {
+      if (path in input.singletons) {
+        input.singletons[path].set(row);
+        return;
+      }
+      const [docs, id] = locate(path);
+      docs[id] = row;
+    },
+    delete: (path) => {
+      const [docs, id] = locate(path);
+      delete docs[id];
+    },
+    children: (collectionPath) => entries().flatMap(([path, row]) => {
+      if (!path.startsWith(`${collectionPath}/`)) return [];
+      const id = path.slice(collectionPath.length + 1);
+      return id.includes("/") ? [] : [[id, row] as const];
+    }),
+    group: (collectionId) => entries().filter(([path]) => {
+      const segments = path.split("/");
+      return segments.length % 2 === 0 && segments[segments.length - 2] === collectionId;
+    }),
+  };
+}
+
+function rosterAssignmentSeed(gatewayId: string, uid: string, row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    uid,
+    gatewayId,
+    slug: uid,
+    source: "onboarding",
+    state: "serving",
+    epoch: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    updatedByOperationId: null,
+    ...row,
+  };
+}
+
 function mkAdminFleetRouteApp(opts: {
   config: Record<string, unknown>;
   users: Record<string, Record<string, unknown>>;
@@ -787,97 +861,47 @@ function mkAdminFleetRouteApp(opts: {
     users: { ...opts.users },
     operations: { ...(opts.operations ?? {}) },
   };
-  // The pool derives from the shared-class root query. A test that names pool
-  // members in `config` without seeding their roots gets them synthesized into
-  // that query only, so the rest of the fleet projection sees the seeded roots.
   const poolRoots: Record<string, Record<string, unknown>> = { ...(opts.gateways ?? {}) };
   for (const gatewayId of (sharedGatewayIds as string[] | undefined) ?? []) {
     poolRoots[gatewayId] ??= durableGatewayRoot(gatewayId, { liveRelease: 1 });
   }
-  const gatewaysCollection = mkCollection(opts.gateways ?? {});
-  const poolQueryCollection = mkCollection(poolRoots);
-  let operationId = 0;
-  const assignmentDocs = Object.values(opts.assignments ?? {}).flatMap((byUid) =>
-    Object.entries(byUid).map(([uid, data]) => ({ id: uid, data: () => data })),
-  );
+  const assignments = Object.fromEntries(Object.entries(opts.assignments ?? {}).map(([gatewayId, byUid]) => [
+    gatewayId,
+    Object.fromEntries(Object.entries(byUid).map(([uid, row]) => [uid, rosterAssignmentSeed(gatewayId, uid, row)])),
+  ]));
+  const documents = harnessDocuments({
+    collections: {
+      users: state.users,
+      gateways: poolRoots,
+      [GLM_GATEWAYS_COLLECTION]: opts.glmGateways ?? {},
+      [GLM_OPERATIONS_COLLECTION]: state.operations,
+    },
+    assignments,
+    singletons: {
+      "config/orchestrator": {
+        get: () => state.config,
+        set: (row) => { state.config = row; },
+      },
+    },
+  });
   const db = {
     doc: vi.fn((path: string) => {
-      const assignment = /^gateways\/([^/]+)\/assignments\/([^/]+)$/.exec(path);
-      if (assignment) {
-        const [, gatewayId, uid] = assignment;
-        const data = opts.assignments?.[gatewayId]?.[uid];
-        return {
-          get: vi.fn(async () => ({
-            exists: data !== undefined,
-            data: () => data,
-          })),
-        };
-      }
-      expect(path).toBe("config/orchestrator");
-      return {
-        get: vi.fn(async () => ({
-          exists: true,
-          data: () => state.config,
-        })),
-        set: vi.fn(async (update: Record<string, unknown>) => {
-          state.config = { ...state.config, ...update };
-        }),
-      };
+      const uid = /^users\/([^/]+)$/.exec(path)?.[1];
+      expect(uid).toBeDefined();
+      return mkCollection(state.users).doc(uid!);
     }),
     collection: vi.fn((name: string) => {
-      if (name === "users") return mkCollection(state.users);
-      if (name === GLM_GATEWAYS_COLLECTION) return mkCollection(opts.glmGateways ?? {});
-      if (name === "gateways") {
-        return { ...gatewaysCollection, where: poolQueryCollection.where };
-      }
-      if (name === GLM_OPERATIONS_COLLECTION) {
-        return mkCollection(state.operations, () => `operation-${++operationId}`);
-      }
-      return mkCollection({});
+      expect(name).toBe("users");
+      return mkCollection(state.users);
     }),
-    runTransaction: vi.fn(async (body: (transaction: {
-      get: (ref: { get: () => Promise<unknown> }) => Promise<unknown>;
-      create: (ref: { set: (data: Record<string, unknown>) => Promise<void> }, data: Record<string, unknown>) => void;
-      delete: (ref: { delete: () => Promise<void> }) => void;
-      update: (
-        ref: { update: (patch: Record<string, unknown>) => Promise<void> },
-        patch: Record<string, unknown>,
-      ) => void;
-    }) => Promise<unknown>) => {
-      const pendingDeletes: Array<() => Promise<void>> = [];
-      const pendingUpdates: Array<() => Promise<void>> = [];
-      const pendingCreates: Array<() => Promise<void>> = [];
-      const result = await body({
-        get: (ref) => ref.get(),
-        create: (ref, data) => {
-          pendingCreates.push(() => ref.set(data));
-        },
-        delete: (ref) => {
-          pendingDeletes.push(() => ref.delete());
-        },
-        update: (ref, patch) => {
-          pendingUpdates.push(() => ref.update(patch));
-        },
-      });
-      for (const create of pendingCreates) await create();
-      for (const update of pendingUpdates) await update();
-      for (const remove of pendingDeletes) await remove();
-      return result;
-    }),
-    collectionGroup: vi.fn((name: string) => ({
-      get: vi.fn(async () => ({
-        docs: name === "assignments" ? assignmentDocs : [],
-        size: name === "assignments" ? assignmentDocs.length : 0,
-      })),
-    })),
   } as unknown as Firestore;
 
   const app = express();
   app.use(express.json());
   addAdminFleetRoutes(app, {
     db,
+    store: createJournalFixtureStore(journalRowsIn(state.operations), { documents }),
     logger: { info: vi.fn(), warn: vi.fn() },
-    workspaceSlugsForUser: (data) => data.username ? [data.username] : [],
     provisionGatewayAuthSecret: vi.fn(async () => ({})),
     listGatewayBuilds: vi.fn(async () => []),
     requestNativeReturnSourceRecovery: opts.requestNativeReturnSourceRecovery,
@@ -948,6 +972,42 @@ function durableGatewayRoot(
     modelBrokerLimits: null,
     preemption: null,
     ...overrides,
+  };
+}
+
+function builderGatewayRoot(
+  gatewayId: string,
+  ownerUid: string,
+  builderSlug: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return durableGatewayRoot(gatewayId, {
+    liveRelease: 1,
+    profile: "builder",
+    gatewayClass: "builder",
+    imageProfile: "builder",
+    sizingTier: "xs",
+    ownerUid,
+    builderSlug,
+    ...overrides,
+  });
+}
+
+function runtimeDoc(
+  gatewayId: string,
+  heartbeat: Record<string, unknown> = { status: "ready", mountedCustomers: [] },
+): Record<string, unknown> {
+  return {
+    docKind: "runtime",
+    gatewayId,
+    release: 1,
+    lifecycle: "serving",
+    helm: {
+      imageRepository: "us-central1-docker.pkg.dev/octogee/octogee/gateway",
+      imageTag: "1234567",
+    },
+    heartbeat: { version: "1234567", lastHeartbeatAt: 1_000, startedAt: 500, ...heartbeat },
+    lastError: { message: null, at: null },
   };
 }
 
@@ -1368,6 +1428,7 @@ describe("fleet gateway projection", () => {
 
     expect(fleet.body.gateways).toEqual([
       expect.objectContaining({ gatewayId: oldGatewayId, desiredStatus: "retired" }),
+      expect.objectContaining({ gatewayId: "shared-blue" }),
     ]);
     expect(fleet.body.disposableCapacity.disposableInstances).toBe(1);
   });
@@ -1766,8 +1827,8 @@ describe("fleet gateway projection", () => {
         },
       },
       gateways: {
-        "run-alice": {
-          gatewayId: "run-alice",
+        "run-alice": durableGatewayRoot("run-alice", {
+          gatewayClass: "builder",
           ownerUid: "uid-alice",
           allocation: {
             kind: "disposable-builder",
@@ -1775,7 +1836,7 @@ describe("fleet gateway projection", () => {
             generation: 3,
             claimedByUid: "uid-alice",
           },
-        },
+        }),
       },
     });
 
@@ -2001,8 +2062,7 @@ describe("manual disposable runtime return", () => {
         },
       },
       gateways: {
-        [targetGatewayId]: {
-          gatewayId: targetGatewayId,
+        [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
           gatewayClass: "builder",
           ownerUid: "uid-alice",
           allocation: {
@@ -2011,7 +2071,7 @@ describe("manual disposable runtime return", () => {
             generation: 3,
             claimedByUid: "uid-alice",
           },
-        },
+        }),
       },
       assignments: {
         [targetGatewayId]: {
@@ -2094,7 +2154,7 @@ describe("manual disposable runtime return", () => {
     const { app, state } = mkAdminFleetRouteApp({ config: {}, requestNativeReturnSourceRecovery,
       users: { admin: { username: "ceckert-test", provisioning: { openclaw: { gatewayId: source,
         activationLease: { leaseId: "lease114", generation: 114, status: "returning", targetGatewayId: source, returnOperationId: operationId } } } } },
-      gateways: { [source]: { gatewayClass: "builder", ownerUid: "admin", allocation: { kind: "disposable-builder", claimedByUid: "admin", leaseId: "lease114", generation: 114 } } },
+      gateways: { [source]: durableGatewayRoot(source, { gatewayClass: "builder", ownerUid: "admin", allocation: { kind: "disposable-builder", claimedByUid: "admin", leaseId: "lease114", generation: 114 } }) },
       assignments: { [source]: { admin: { uid: "admin", gatewayId: source, state: "serving", epoch: 25 } } },
       operations: { [operationId]: { kind: "migrate-customer", status: "failed", inputUid: "admin", rolledBack: false,
         input: { uid: "admin", fromGatewayId: source, toGatewayId: "shared-old", source: "builder-activation-lease" },
@@ -2129,8 +2189,7 @@ describe("manual disposable runtime return", () => {
         },
       },
       gateways: {
-        [targetGatewayId]: {
-          gatewayId: targetGatewayId,
+        [targetGatewayId]: durableGatewayRoot(targetGatewayId, {
           gatewayClass: "builder",
           ownerUid: "uid-alice",
           allocation: {
@@ -2139,7 +2198,7 @@ describe("manual disposable runtime return", () => {
             generation: 3,
             claimedByUid: "uid-alice",
           },
-        },
+        }),
       },
       assignments: {
         [targetGatewayId]: {
@@ -2247,8 +2306,8 @@ describe("manual disposable runtime return", () => {
         },
       },
       gateways: {
-        "run-alice": {
-          gatewayId: "run-alice",
+        "run-alice": durableGatewayRoot("run-alice", {
+          gatewayClass: "builder",
           ownerUid: "uid-alice",
           allocation: {
             kind: "disposable-builder",
@@ -2256,7 +2315,7 @@ describe("manual disposable runtime return", () => {
             generation: 3,
             claimedByUid: "uid-alice",
           },
-        },
+        }),
       },
       assignments: {
         "shared-blue": {
@@ -2396,31 +2455,29 @@ describe("onboarding placement (post-cohorts)", () => {
     );
   });
 
-  it("returns the placement config with default-gateway warnings", async () => {
+  it("warns when no shared gateway anchors onboarding placement", async () => {
     const { app } = mkAdminFleetRouteApp({
-      config: { defaultGatewayId: "gw-missing" },
+      config: {},
       users: {},
-      glmGateways: {
-        "gw-shared": { gatewayClass: "shared", desiredStatus: "running" },
-      },
+      gateways: { "gw-builder": builderGatewayRoot("gw-builder", "uid-owner", "owner") },
     });
 
     const res = await request(app).get("/onboarding-placement").expect(200);
 
     expect(res.body.config).toEqual({
-      defaultGatewayId: "gw-missing",
-      sharedGatewayIds: ["gw-missing"],
+      defaultGatewayId: null,
+      sharedGatewayIds: [],
       sharedGatewayAutoscaling: { enabled: true, buildersPerGateway: 10 },
     });
     expect(res.body.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "default-gateway-missing", gatewayId: "gw-missing" }),
+        expect.objectContaining({ code: "default-gateway-missing", severity: "error" }),
       ]),
     );
-    const shared = res.body.gateways.find(
-      (g: { gatewayId: string }) => g.gatewayId === "gw-shared",
+    const builder = res.body.gateways.find(
+      (g: { gatewayId: string }) => g.gatewayId === "gw-builder",
     );
-    expect(shared).toMatchObject({ assignableAsDefault: false, defaultTarget: false });
+    expect(builder).toMatchObject({ assignableAsDefault: false, defaultTarget: false });
   });
 
   it("surfaces the DURABLE roster state + epoch from the assignment doc", async () => {
@@ -2470,17 +2527,13 @@ describe("onboarding placement (post-cohorts)", () => {
           provisioning: { openclaw: { slug: "alice", gatewayId: "shared-a" } },
         },
       },
+      gateways: {
+        "shared-a": durableGatewayRoot("shared-a", { liveRelease: 1 }),
+        "shared-c": durableGatewayRoot("shared-c", { liveRelease: 1, desiredStatus: "draining" }),
+      },
       glmGateways: {
-        "shared-a": {
-          gatewayClass: "shared",
-          desiredStatus: "running",
-          heartbeat: { status: "ready", mountedCustomers: [] },
-        },
-        "shared-c": {
-          gatewayClass: "shared",
-          desiredStatus: "draining",
-          heartbeat: { status: "ready", mountedCustomers: ["alice"] },
-        },
+        "shared-a": runtimeDoc("shared-a", { status: "ready", mountedCustomers: [] }),
+        "shared-c": runtimeDoc("shared-c", { status: "ready", mountedCustomers: ["alice"] }),
       },
       assignments: {
         "shared-c": {
@@ -2649,14 +2702,9 @@ describe("onboarding placement (post-cohorts)", () => {
           },
         },
       },
-      glmGateways: {
-        "default-blue": { gatewayId: "default-blue", gatewayClass: "shared", desiredStatus: "running" },
-        "bender-blue": {
-          gatewayId: "bender-blue",
-          gatewayClass: "builder",
-          desiredStatus: "running",
-          ownerUid: "uid-ceckert",
-          builderSlug: "ceckert",
+      gateways: {
+        "default-blue": durableGatewayRoot("default-blue", { liveRelease: 1 }),
+        "bender-blue": builderGatewayRoot("bender-blue", "uid-ceckert", "ceckert", {
           allocation: {
             kind: "disposable-builder",
             schemaVersion: 1,
@@ -2664,10 +2712,11 @@ describe("onboarding placement (post-cohorts)", () => {
             generation: 1,
             claimedByUid: "uid-ceckert",
           },
-          // Readiness/mounted telemetry relocated to glmGateways/{id}.heartbeat
-          // (cutover step 2); the flat gateways/{id} writer is contracted.
-          heartbeat: { status: "ready", mountedCustomers: ["ceckert"] },
-        },
+        }),
+      },
+      glmGateways: {
+        "default-blue": runtimeDoc("default-blue"),
+        "bender-blue": runtimeDoc("bender-blue", { status: "ready", mountedCustomers: ["ceckert"] }),
       },
     });
 
@@ -2700,19 +2749,13 @@ describe("onboarding placement (post-cohorts)", () => {
           provisioning: { openclaw: { slug: "bob", gatewayId: "default-green" } },
         },
       },
+      gateways: {
+        "default-blue": durableGatewayRoot("default-blue", { liveRelease: 1 }),
+        "default-green": durableGatewayRoot("default-green", { liveRelease: 1 }),
+      },
       glmGateways: {
-        "default-blue": {
-          gatewayId: "default-blue",
-          gatewayClass: "shared",
-          desiredStatus: "running",
-          heartbeat: { status: "ready", mountedCustomers: [] },
-        },
-        "default-green": {
-          gatewayId: "default-green",
-          gatewayClass: "shared",
-          desiredStatus: "running",
-          heartbeat: { status: "ready", mountedCustomers: ["bob"] },
-        },
+        "default-blue": runtimeDoc("default-blue", { status: "ready", mountedCustomers: [] }),
+        "default-green": runtimeDoc("default-green", { status: "ready", mountedCustomers: ["bob"] }),
       },
     });
 
@@ -2735,14 +2778,9 @@ describe("onboarding placement (post-cohorts)", () => {
           provisioning: { openclaw: { slug: "stale", gatewayId: "stale-builder" } },
         },
       },
-      glmGateways: {
-        "default-blue": { gatewayId: "default-blue", gatewayClass: "shared", desiredStatus: "running" },
-        "stale-builder": {
-          gatewayId: "stale-builder",
-          gatewayClass: "builder",
-          desiredStatus: "running",
-          ownerUid: "uid-stale",
-          builderSlug: "stale",
+      gateways: {
+        "default-blue": durableGatewayRoot("default-blue", { liveRelease: 1 }),
+        "stale-builder": builderGatewayRoot("stale-builder", "uid-stale", "stale", {
           allocation: {
             kind: "disposable-builder",
             schemaVersion: 1,
@@ -2750,8 +2788,11 @@ describe("onboarding placement (post-cohorts)", () => {
             generation: 1,
             claimedByUid: "uid-stale",
           },
-          heartbeat: { status: "ready", mountedCustomers: ["stale"] },
-        },
+        }),
+      },
+      glmGateways: {
+        "default-blue": runtimeDoc("default-blue"),
+        "stale-builder": runtimeDoc("stale-builder", { status: "ready", mountedCustomers: ["stale"] }),
       },
     });
 
@@ -2774,139 +2815,84 @@ describe("account deletion revokes connector grants at the provider first", () =
     const calls: string[] = [];
     const remaining = { ...users };
     const added: Record<string, unknown>[] = [];
-    const operationDocsRead = { count: 0 };
-    let autoId = 0;
-    let transactionTail = Promise.resolve();
-    const ref = (path: string) => ({
-      id: path.split("/").at(-1)!,
-      path,
-      get: async () => ({
-        id: path.split("/").at(-1)!,
-        exists: path in otherDocs,
-        data: () => otherDocs[path],
+    const operationQueries: Array<{ uid: string; statuses: readonly string[] | undefined }> = [];
+    const userId = (path: string) => /^users\/([^/]+)$/.exec(path)?.[1];
+    const entries = (): Array<readonly [string, Record<string, unknown>]> => [
+      ...Object.entries(remaining).map(([uid, row]) => [`users/${uid}`, row] as const),
+      ...Object.entries(otherDocs),
+    ];
+    const documents: FixtureDocuments = {
+      get: (path) => {
+        const uid = userId(path);
+        return uid === undefined ? otherDocs[path] : remaining[uid];
+      },
+      set: (path, row) => {
+        calls.push(`set:${path}`);
+        added.push(row);
+        const uid = userId(path);
+        if (uid === undefined) otherDocs[path] = row;
+        else remaining[uid] = row;
+      },
+      delete: (path) => {
+        calls.push(`delete:${path}`);
+        const uid = userId(path);
+        if (uid === undefined) delete otherDocs[path];
+        else delete remaining[uid];
+      },
+      children: (collectionPath) => entries().flatMap(([path, row]) => {
+        if (!path.startsWith(`${collectionPath}/`)) return [];
+        const id = path.slice(collectionPath.length + 1);
+        return id.includes("/") ? [] : [[id, row] as const];
       }),
-      collection: (name: string) => ref(`${path}/${name}`),
-      doc: (id = `auto-${++autoId}`) => ref(`${path}/${id}`),
-    });
-    const queryCollection = (
-      name: string,
-      collectionGroup: boolean,
-      filters: Array<{ field: string; op: string; value: unknown }> = [],
-    ) => {
-      const chain = {
-        collectionName: name,
-        where: (field: string, op: string, value: unknown) =>
-          queryCollection(name, collectionGroup, [...filters, { field, op, value }]),
-        get: async () => {
-          const docs = Object.entries(otherDocs)
-            .filter(([path, data]) => {
-              const parts = path.split("/");
-              const inCollection = collectionGroup
-                ? parts.at(-2) === name
-                : parts.length === 2 && parts[0] === name;
-              return inCollection && filters.every(({ field, op, value }) => {
-                const actual = field.split(".").reduce<unknown>((current, part) =>
-                  current && typeof current === "object"
-                    ? (current as Record<string, unknown>)[part]
-                    : undefined, data);
-                return op === "in" ? (value as unknown[]).includes(actual) : actual === value;
-              });
-            })
-            .map(([path, data]) => ({
-              id: path.split("/").at(-1)!,
-              ref: ref(path),
-              data: () => data,
-            }));
-          if (name === "glmOperations") operationDocsRead.count += docs.length;
-          return { docs };
-        },
-        doc: (id = `op-${++autoId}`) => ref(`${name}/${id}`),
-      };
-      return chain;
+      group: (collectionId) => entries().filter(([path]) => {
+        const segments = path.split("/");
+        return segments.length % 2 === 0 && segments[segments.length - 2] === collectionId;
+      }),
     };
+    const fixture = createJournalFixtureStore(journalRowsAtPaths(otherDocs), { documents, serializeTransactions: true });
+    const recordingOperationQueries = (transaction: PlatformStateTransaction): PlatformStateTransaction => {
+      const operations = transaction.journal.operations;
+      const journal = {
+        ...transaction.journal,
+        operations: new Proxy(operations, {
+          get: (target, method) => method === "listForUid"
+            ? async (uid: string, filter: { statuses?: readonly string[] }) => {
+              operationQueries.push({ uid, statuses: filter.statuses });
+              return target.listForUid(uid, filter as Parameters<typeof target.listForUid>[1]);
+            }
+            : Reflect.get(target, method),
+        }),
+      };
+      return new Proxy(transaction, {
+        get: (target, property) => property === "journal" ? journal : Reflect.get(target, property),
+      });
+    };
+    const store = new Proxy(fixture, {
+      get: (target, property) => property === "transaction"
+        ? <T>(options: { label: string; readOnly?: boolean }, body: (transaction: PlatformStateTransaction) => Promise<T>) =>
+          target.transaction(options, (transaction) => body(recordingOperationQueries(transaction)))
+        : Reflect.get(target, property),
+    });
+    const userDoc = (id: string) => ({
+      get: async () => ({ id, exists: id in remaining, data: () => remaining[id] }),
+    });
     const db = {
       collection: (name: string) => {
-        if (name === "users") {
-          return {
-            doc: (id: string) => ({
-              id,
-              path: `users/${id}`,
-              get: async () => ({
-                id,
-                exists: id in remaining,
-                data: () => remaining[id],
-              }),
-              collection: (sub: string) => ref(`users/${id}/${sub}`),
-            }),
-          };
-        }
-        return queryCollection(name, false);
-      },
-      doc: (path: string) => ref(path),
-      collectionGroup: (name: string) => queryCollection(name, true),
-      batch: () => ({
-        update: (target: { path?: string }, data: Record<string, unknown>) => {
-          calls.push(`batch:update:${target.path ?? "unknown"}`);
-          added.push(data);
-        },
-        set: (target: { path: string }, data: Record<string, unknown>) => {
-          calls.push(`batch:set:${target.path.split("/")[0]}`);
-          added.push(data);
-        },
-        delete: (target: { path: string }) => {
-          calls.push(`batch:delete:${target.path}`);
-        },
-        commit: async () => {
-          calls.push("batch:commit");
-        },
-      }),
-      runTransaction: <T>(callback: (transaction: {
-        get: (target: { path?: string; collectionName?: string }) => Promise<unknown>;
-        update: (target: { path: string }, data: Record<string, unknown>) => void;
-        set: (target: { path: string }, data: Record<string, unknown>) => void;
-        delete: (target: { path: string }) => void;
-      }) => Promise<T>) => {
-        const transaction = {
-          get: async (target: { path?: string; collectionName?: string }) => {
-            if (target.path?.startsWith("users/")) {
-              const id = target.path.split("/")[1]!;
-              return { exists: id in remaining, data: () => remaining[id] };
-            }
-            if (typeof (target as { get?: unknown }).get === "function") {
-              return (target as { get(): Promise<unknown> }).get();
-            }
-            throw new Error("unexpected transaction read");
-          },
-        update: (target: { path: string }, data: Record<string, unknown>) => {
-            calls.push(`batch:update:${target.path}`);
-            added.push(data);
-            if (target.path.startsWith("users/")) {
-              const id = target.path.split("/")[1]!;
-              remaining[id] = { ...remaining[id], ...data };
-            } else if (target.path in otherDocs) {
-              otherDocs[target.path] = { ...otherDocs[target.path], ...data };
-          }
-        },
-        create: (target: { path: string }, data: Record<string, unknown>) => {
-          calls.push(`batch:create:${target.path.split("/")[0]}`);
-          added.push(data);
-          otherDocs[target.path] = data;
-        },
-        set: (target: { path: string }, data: Record<string, unknown>) => {
-            calls.push(`batch:set:${target.path.split("/")[0]}`);
-            added.push(data);
-            otherDocs[target.path] = data;
-          },
-          delete: (target: { path: string }) => {
-            calls.push(`batch:delete:${target.path}`);
-            delete otherDocs[target.path];
-          },
+        expect(name).toBe("users");
+        return {
+          doc: userDoc,
+          get: async () => ({
+            docs: Object.entries(remaining).map(([id, data]) => ({ id, data: () => data })),
+          }),
         };
-        const execution = transactionTail.then(() => callback(transaction));
-        transactionTail = execution.then(() => undefined, () => undefined);
-        return execution;
+      },
+      doc: (path: string) => {
+        const uid = userId(path);
+        expect(uid).toBeDefined();
+        return userDoc(uid!);
       },
     } as unknown as Firestore;
+    const accounts = firestoreBuilderAccountReader(db);
 
     const app = express();
     app.use(express.json());
@@ -2915,7 +2901,6 @@ describe("account deletion revokes connector grants at the provider first", () =
       next();
     });
     const deletionDeps = {
-      workspaceSlugsForUser: (data: { username?: string | null }) => (data.username ? [String(data.username)] : []),
       suspendAuthUser: vi.fn(async (uid: string) => {
         calls.push(`suspend-auth:${uid}`);
       }),
@@ -2925,21 +2910,22 @@ describe("account deletion revokes connector grants at the provider first", () =
     };
     addAdminFleetRoutes(app, {
       db,
+      store,
       logger: { info: vi.fn(), warn: vi.fn() },
       provisionGatewayAuthSecret: vi.fn(async () => ({})),
       listGatewayBuilds: vi.fn(async () => []),
       ...deletionDeps,
     });
-    return { app, db, deletionDeps, calls, added, remaining, otherDocs, operationDocsRead };
+    return { app, store, accounts, deletionDeps, calls, added, remaining, otherDocs, operationQueries };
   }
 
   it("lets a customer schedule their own deletion on the 90-day retention path, journaled under their uid", async () => {
-    const { db, deletionDeps, calls, added, remaining } = makeDeleteApp({
+    const { store, accounts, deletionDeps, calls, added, remaining, otherDocs } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
     const before = Date.now();
 
-    const outcome = await scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" });
+    const outcome = await scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
 
     if (outcome.kind !== "scheduled") throw new Error(`unexpected outcome ${outcome.kind}`);
     expect(outcome.incompleteStep).toBeNull();
@@ -2952,19 +2938,21 @@ describe("account deletion revokes connector grants at the provider first", () =
       expect.objectContaining({ requestedBy: "u2", status: "suspension_pending" }),
       expect.objectContaining({ kind: "suspend-customer", inputUid: "u2", createdBy: "u2" }),
       expect.objectContaining({ kind: "erase-customer", inputUid: "u2", nextAttemptAt: outcome.eraseAfter }),
-      expect.objectContaining({ actor: "u2", why: "Customer account deletion request" }),
+    ]));
+    expect(Object.values(otherDocs)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recordType: "audit", actor: "u2", why: "Customer account deletion request", status: "completed" }),
     ]));
     expect(calls).toContain("suspend-auth:u2");
     expect(calls).toContain("revoke:u2");
   });
 
   it("reports a customer's deletion as scheduled even when the immediate sign-out fails, naming the step", async () => {
-    const { db, deletionDeps, remaining } = makeDeleteApp({
+    const { store, accounts, deletionDeps, remaining } = makeDeleteApp({
       u2: { username: "acme", email: "c@d.co" },
     });
     deletionDeps.suspendAuthUser.mockRejectedValueOnce(new Error("identity platform unavailable"));
 
-    const outcome = await scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" });
+    const outcome = await scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" });
 
     expect(outcome).toMatchObject({
       kind: "scheduled",
@@ -2976,11 +2964,11 @@ describe("account deletion revokes connector grants at the provider first", () =
   it.each(["restoreFence", "sourceTransferFence"])(
     "tells a customer their workspace is busy, not already deleted, while a %s holds it",
     async (fence) => {
-      const { db, deletionDeps, calls, remaining } = makeDeleteApp({
+      const { store, accounts, deletionDeps, calls, remaining } = makeDeleteApp({
         u1: { username: "alice", provisioning: { openclaw: { [fence]: { phase: "dispatched" }, gatewayId: "shared-1" } } },
       });
 
-      await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u1" }))
+      await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" }))
         .resolves.toEqual({ kind: "workspace-busy" });
       expect(remaining.u1.accountLifecycle).toBeUndefined();
       expect(calls).not.toContain("suspend-auth:u1");
@@ -2992,16 +2980,16 @@ describe("account deletion revokes connector grants at the provider first", () =
     const input = { uid: "u1", fromGatewayId: "shared-1", toGatewayId: "shared-2" };
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1" } } };
     const assignmentPath = "gateways/shared-1/assignments/u1";
-    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", state: "quiescing", epoch: 3 };
+    const assignment = { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "migrate-customer", state: "quiescing", epoch: 3 };
     const recovery = scenario.startsWith("legacy") ? { schedulerHandoff: {
       ...input, slug: "alice", migrationId: "mig-move-1:scheduler:1:claim:100",
       forwardRecovery: { schemaVersion: 1, phase: "source-flushed", sourceEpoch: 3 },
     } } : { customerMigrationV2: { operationId, uid: "u1", sourceGatewayId: "shared-1", targetGatewayId: "shared-2", phase: "sourceQuiesced" } };
-    const { db, deletionDeps, calls, remaining, otherDocs, added } = makeDeleteApp({ u1: user }, {
+    const { store, accounts, deletionDeps, calls, remaining, otherDocs, added } = makeDeleteApp({ u1: user }, {
       [assignmentPath]: assignment,
       [`glmOperations/${operationId}`]: { kind: "migrate-customer", status: scenario.endsWith("pending") ? "pending" : "running", inputUid: "u1", input, ...recovery },
     });
-    await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
+    await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u1" })).resolves.toEqual({ kind: "workspace-busy" });
     expect(remaining.u1).toEqual(user);
     expect(otherDocs[assignmentPath]).toEqual(assignment);
     expect(added.some(row => row.kind === "suspend-customer" || row.kind === "erase-customer" || row.status === "suspension_pending")).toBe(false);
@@ -3009,22 +2997,22 @@ describe("account deletion revokes connector grants at the provider first", () =
   });
 
   it("reports a deletion in progress when the customer's suspension is already queued", async () => {
-    const { db, deletionDeps, calls } = makeDeleteApp(
+    const { store, accounts, deletionDeps, calls } = makeDeleteApp(
       { u2: { username: "acme" } },
       { "glmOperations/suspend-1": { kind: "suspend-customer", status: "pending", inputUid: "u2" } },
     );
 
-    await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" }))
+    await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
       .resolves.toEqual({ kind: "conflict" });
     expect(calls).not.toContain("suspend-auth:u2");
   });
 
   it("refuses a second self-deletion while one is already scheduled", async () => {
-    const { db, deletionDeps, calls } = makeDeleteApp({
+    const { store, accounts, deletionDeps, calls } = makeDeleteApp({
       u2: { username: "acme", accountLifecycle: { status: "deletion_scheduled", deletionId: "d1" } },
     });
 
-    await expect(scheduleCustomerSelfDeletion({ db, deps: deletionDeps, uid: "u2" }))
+    await expect(scheduleCustomerSelfDeletion({ store, accounts, deps: deletionDeps, uid: "u2" }))
       .resolves.toEqual({ kind: "conflict" });
     expect(calls).not.toContain("suspend-auth:u2");
   });
@@ -3036,14 +3024,14 @@ describe("account deletion revokes connector grants at the provider first", () =
         { kind: "migrate-customer", status: "failed", inputUid: "u2" },
       ]),
     );
-    const { app, operationDocsRead } = makeDeleteApp(
+    const { app, operationQueries } = makeDeleteApp(
       { u2: { username: "acme", email: "c@d.co" } },
       history,
     );
 
     await request(app).post("/customer/u2/delete").expect(202);
 
-    expect(operationDocsRead.count).toBe(0);
+    expect(operationQueries).toEqual([{ uid: "u2", statuses: ["pending", "running"] }]);
   });
 
   it.each(["failed", "succeeded"])("refuses unassignment after a restore operation is %s while its fence remains", async (status) => {
@@ -3061,8 +3049,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(response.body.error).toMatch(/restore/);
     expect(remaining.u1).toEqual(user);
     expect(otherDocs[assignmentPath]).toEqual(assignment);
-    expect(calls).not.toContain("batch:update:users/u1");
-    expect(calls).not.toContain(`batch:delete:${assignmentPath}`);
+    expect(calls).not.toContain("set:users/u1");
+    expect(calls).not.toContain(`delete:${assignmentPath}`);
   });
 
   it("restores the operator Park command without migrating a serving Builder", async () => {
@@ -3072,24 +3060,24 @@ describe("account deletion revokes connector grants at the provider first", () =
       [path]: { uid: "u1", slug: "alice", gatewayId: "shared-1", source: "repair", state: "serving", epoch: 3 },
     });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
-    expect(remaining.u1["provisioning.openclaw.managedBy"]).toBe("operator");
-    expect(remaining.u1["provisioning.openclaw.gatewayId"]).toEqual(FieldValue.delete());
+    expect(remaining.u1.provisioning.openclaw.managedBy).toBe("operator");
+    expect(remaining.u1.provisioning.openclaw.gatewayId).toBeUndefined();
     expect(remaining.u1.provisioning.openclaw.agentIds).toEqual(["octogee-alice-coach"]);
     expect(otherDocs[path]).toBeUndefined();
     await request(app).patch("/customers/u1/placement").send({ managedBy: "cowboy" }).expect(200);
-    expect(remaining.u1["provisioning.openclaw.managedBy"]).toBe("cowboy");
+    expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
   });
 
   it("releases an old provisioned parked Builder through the current placement eligibility gate", async () => {
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { managedBy: "operator", status: "complete" } } } });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "cowboy" }).expect(200);
-    expect(remaining.u1["provisioning.status"]).toBe("complete");
-    expect(remaining.u1["provisioning.openclaw.managedBy"]).toBe("cowboy");
+    expect(remaining.u1.provisioning.status).toBe("complete");
+    expect(remaining.u1.provisioning.openclaw.managedBy).toBe("cowboy");
   });
 
   it("also pauses the Builder's dedicated gateway when parking it", async () => {
     const { app, otherDocs } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "builder-alice" } } } }, {
-      "gateways/builder-alice": { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" },
+      "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }),
       "gateways/builder-alice/assignments/u1": { uid: "u1", slug: "alice", gatewayId: "builder-alice", source: "repair", state: "serving", epoch: 3 },
     });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
@@ -3097,19 +3085,18 @@ describe("account deletion revokes connector grants at the provider first", () =
   });
 
   it("retains dedicated source custody while parked and resumes that exact gateway", async () => {
-    const lease = { status: "active", generation: 4, targetGatewayId: "builder-alice" };
+    const lease = { leaseId: "lease-4", status: "active", generation: 4, targetGatewayId: "builder-alice" };
     const assignment = { uid: "u1", slug: "alice", gatewayId: "builder-alice", source: "repair", state: "serving", epoch: 3 };
     const { app, remaining, otherDocs, calls } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "builder-alice", activationLease: lease, status: "complete" } } } }, {
-      "gateways/builder-alice": { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" },
+      "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }),
       "gateways/builder-alice/assignments/u1": assignment,
     });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("paused");
     expect(otherDocs["gateways/builder-alice/assignments/u1"]).toEqual(assignment);
     expect(remaining.u1.provisioning.openclaw.activationLease).toEqual(lease);
-    expect(remaining.u1["provisioning.openclaw.gatewayId"]).toBeUndefined();
-    expect(remaining.u1["provisioning.openclaw.activationLease"]).toBeUndefined();
-    expect(calls).not.toContain("batch:delete:gateways/builder-alice/assignments/u1");
+    expect(remaining.u1.provisioning.openclaw.gatewayId).toBe("builder-alice");
+    expect(calls).not.toContain("delete:gateways/builder-alice/assignments/u1");
     await request(app).patch("/customers/u1/placement").send({ managedBy: "cowboy" }).expect(200);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
   });
@@ -3119,7 +3106,6 @@ describe("account deletion revokes connector grants at the provider first", () =
     const { app, remaining } = makeDeleteApp({ u1: { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: lease } } } });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(200);
     expect(remaining.u1.provisioning.openclaw.activationLease).toEqual(lease);
-    expect(remaining.u1["provisioning.openclaw.activationLease"]).toBeUndefined();
   });
 
   it("requires a requested activation to settle before parking its source", async () => {
@@ -3130,15 +3116,15 @@ describe("account deletion revokes connector grants at the provider first", () =
   });
 
   it("refuses parking while a different allocated activation target still needs its lease", async () => {
-    const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: { status: "provisioning", generation: 4, targetGatewayId: "builder-alice" } } } };
-    const { app, remaining, otherDocs } = makeDeleteApp({ u1: user }, { "gateways/builder-alice": { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" } });
+    const user = { username: "alice", provisioning: { openclaw: { gatewayId: "shared-1", activationLease: { leaseId: "lease-4", status: "provisioning", generation: 4, targetGatewayId: "builder-alice" } } } };
+    const { app, remaining, otherDocs } = makeDeleteApp({ u1: user }, { "gateways/builder-alice": durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: "u1", desiredStatus: "running" }) });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
     expect(remaining.u1).toEqual(user);
     expect(otherDocs["gateways/builder-alice"].desiredStatus).toBe("running");
   });
 
   it.each(["foreign-owner", "runtime-fence", "retirement"])("does not bypass a dedicated gateway %s when parking", async reason => {
-    const root = { gatewayClass: "builder", ownerUid: reason === "foreign-owner" ? "u2" : "u1", desiredStatus: "running", ...(reason === "runtime-fence" ? { runtimeRestartFence: { phase: "dispatched" } } : {}), ...(reason === "retirement" ? { retirementClaim: { phase: "claimed" } } : {}) };
+    const root = durableGatewayRoot("builder-alice", { gatewayClass: "builder", ownerUid: reason === "foreign-owner" ? "u2" : "u1", desiredStatus: "running", ...(reason === "runtime-fence" ? { runtimeRestartFence: { phase: "dispatched" } } : {}), ...(reason === "retirement" ? { retirementClaim: { phase: "claimed" } } : {}) });
     const user = { username: "alice", provisioning: { openclaw: { gatewayId: "builder-alice" } } };
     const { app, otherDocs, remaining } = makeDeleteApp({ u1: user }, { "gateways/builder-alice": root });
     await request(app).patch("/customers/u1/placement").send({ managedBy: "operator", gatewayId: null }).expect(409);
@@ -3192,8 +3178,8 @@ describe("account deletion revokes connector grants at the provider first", () =
     expect(response.body.error).toMatch(/source transfer/);
     expect(remaining.u1).toEqual(user);
     expect(otherDocs[assignmentPath]).toEqual(assignment);
-    expect(calls).not.toContain("batch:update:users/u1");
-    expect(calls).not.toContain(`batch:delete:${assignmentPath}`);
+    expect(calls).not.toContain("set:users/u1");
+    expect(calls).not.toContain(`delete:${assignmentPath}`);
   });
 
   it("refuses suspension while an ambiguous source transfer holds customer authority", async () => {
@@ -3315,6 +3301,11 @@ describe("account deletion revokes connector grants at the provider first", () =
       },
       {
         "customerDeletionJobs/delete-3": {
+          version: 1,
+          uid: "u3",
+          status: "hibernating",
+          requestedAt: 1,
+          eraseAfter: Date.now() + 90 * 24 * 60 * 60 * 1_000,
           erasureOperationId: "erase-3",
         },
         "glmOperations/erase-3": {
@@ -3335,7 +3326,7 @@ describe("account deletion revokes connector grants at the provider first", () =
       erasureOperationId: "erase-3",
     });
     expect(added).toEqual(expect.arrayContaining([
-      expect.objectContaining({ "accountLifecycle.eraseAfter": expect.any(Number) }),
+      expect.objectContaining({ accountLifecycle: expect.objectContaining({ eraseAfter: expect.any(Number) }) }),
       expect.objectContaining({ eraseAfter: expect.any(Number) }),
       expect.objectContaining({ nextAttemptAt: expect.any(Number) }),
     ]));

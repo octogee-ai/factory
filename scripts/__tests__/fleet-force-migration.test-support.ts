@@ -1,5 +1,6 @@
 import type { OperationsDocRef, OperationsTransaction } from "@octogee/core/operation-audit";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
+import { keepJournalRowsIn } from "./journal-fixture-store.test-support.js";
 
 export const forceMigrationTarget = { operationId: "move-1", uid: "u1", slug: "alice", fromGatewayId: "builder-a", toGatewayId: "shared-b" };
 
@@ -68,5 +69,6 @@ export function forceMigrationHarness() {
       return result;
     },
   };
+  keepJournalRowsIn(db, docs);
   return { db: db as unknown as Firestore, docs, writes, op: () => docs.get("glmOperations/move-1")!, beforeTransaction: (hook: typeof beforeTransaction) => { beforeTransaction = hook; } };
 }

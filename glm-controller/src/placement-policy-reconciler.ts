@@ -77,6 +77,7 @@ import {
 import {
   InvalidSharedGatewayAutoscalingConfigError,
   readSharedGatewayPoolConfig,
+  readSharedGatewayPoolConfigInStore,
   readSharedGatewayAutoscalingConfig,
 } from "@octogee/core/shared-gateway-pool-read";
 import {
@@ -90,12 +91,12 @@ import {
   clearRetiredBuilderActivationPreparation,
   commitRecoveredDisposableRuntimeResetAtomic,
   commitUnavailableGatewayRecoveryAtomic,
-  type FleetStateFirestore,
   type RecoveredDisposableRuntimeResetParams,
   type UnavailableGatewayRecoveryParams,
   type UnavailableGatewayRecoveryTargetValidationContext,
 } from "@octogee/core/fleet-state";
 import { supersedeRollingSharedGatewayRoll } from "@octogee/core/shared-gateway-roll-recovery";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import {
   resolveContinuousBuilderPlacement,
   resolveLiveActivationTargetGatewayId,
@@ -2803,6 +2804,7 @@ function activeMigration(doc: QueryDocumentSnapshot): PlacementPolicyMigration |
 
 interface FirestorePlacementPolicyInput {
   db: Firestore;
+  store: PlatformStateStore;
   prepareBuilderHome?: (request: AllocateDisposableGatewayInput) => Promise<boolean>;
   informer: FleetInformer;
   namespace: string;
@@ -3411,12 +3413,10 @@ async function readPlacementPolicySnapshot(
 }
 
 function unavailableRecoveryTargetFence(
-  input: FirestorePlacementPolicyInput,
   request: UnavailableGatewayRecoveryParams,
 ): (context: UnavailableGatewayRecoveryTargetValidationContext) => Promise<void> {
   return async (context) => {
-    const transaction = context.txn as unknown as Transaction;
-    const pool = await readSharedGatewayPoolConfig(input.db, transaction);
+    const pool = await readSharedGatewayPoolConfigInStore(context.transaction);
     if (
       pool === null ||
       pool.sharedGatewayIds.length !== request.sharedGatewayIds.length ||
@@ -4539,6 +4539,7 @@ function isRetryableBuilderRetirementFailure(error: unknown, gatewayId: string):
 
 async function deleteRetiredDisposableGatewayFirestore(
   input: FirestorePlacementPolicyInput,
+  store: PlatformStateStore,
   request: DeleteRetiredDisposableGatewayInput,
 ): Promise<boolean> {
   const operationId = placementRetireOperationId(request.ownerUid, request.gatewayId, request.generation);
@@ -4599,11 +4600,7 @@ async function deleteRetiredDisposableGatewayFirestore(
     return false;
   }
   if (verdict !== "delete") return false;
-  const preparationCleared = await clearRetiredBuilderActivationPreparation({
-    db: input.db as unknown as FleetStateFirestore,
-    serverTimestamp: () => FieldValue.serverTimestamp(),
-    deleteField: () => FieldValue.delete(),
-  }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, generation: request.generation, retirementOperationId: operationId });
+  const preparationCleared = await clearRetiredBuilderActivationPreparation({ store }, { uid: request.ownerUid, targetGatewayId: request.gatewayId, generation: request.generation, retirementOperationId: operationId });
   if (preparationCleared) input.log(`[placement-policy] cleared failed preparation for retired target ${request.gatewayId}`);
   await Promise.all([
     input.db.collection(GLM_OPERATIONS_COLLECTION).doc(recoverOperationId).delete(),
@@ -4622,6 +4619,7 @@ async function deleteRetiredDisposableGatewayFirestore(
 export function createFirestorePlacementPolicyReconcilerDeps(
   input: FirestorePlacementPolicyInput,
 ): PlacementPolicyReconcilerDeps {
+  const { store } = input;
   return {
     now: input.now,
     log: input.log,
@@ -4642,25 +4640,18 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     completeActivationLease: (request) => completeActivationLeaseFirestore(input, request),
     failActivationLease: (request) => failActivationLeaseFirestore(input, request),
     recoverUnavailableGateway: (request) => commitUnavailableGatewayRecoveryAtomic({
-      db: input.db as unknown as FleetStateFirestore,
+      store,
       now: () => new Date(input.now()),
-      serverTimestamp: () => FieldValue.serverTimestamp(),
-      deleteField: () => FieldValue.delete(),
     }, {
       ...request,
-      validateTarget: unavailableRecoveryTargetFence(input, request),
+      validateTarget: unavailableRecoveryTargetFence(request),
     }),
     recoverDisposableRuntimeReset: (request) =>
       commitRecoveredDisposableRuntimeResetAtomic({
-        db: input.db as unknown as FleetStateFirestore,
+        store,
         now: () => new Date(input.now()),
-        serverTimestamp: () => FieldValue.serverTimestamp(),
-        deleteField: () => FieldValue.delete(),
       }, request),
-    supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({
-      db: input.db,
-      now: input.now,
-    }, request),
+    supersedeRollingSharedGateway: (request) => supersedeRollingSharedGatewayRoll({ store, now: input.now }, request),
     recoverUnreachableDisposableGateway: (request) =>
       recoverUnreachableDisposableGatewayFirestore(input, request),
     readBuilderActivity: (request) => readBuilderActivityFirestore(input, request),
@@ -4668,7 +4659,7 @@ export function createFirestorePlacementPolicyReconcilerDeps(
     supersedePendingSharedDrainMove: (request) => supersedePendingSharedDrainMove(input, request),
     retireOwnedGateway: (request) => retireOwnedGatewayFirestore(input, request),
     deleteRetiredDisposableGateway: (request) =>
-      deleteRetiredDisposableGatewayFirestore(input, request),
+      deleteRetiredDisposableGatewayFirestore(input, store, request),
   };
 }
 

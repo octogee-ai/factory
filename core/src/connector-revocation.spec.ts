@@ -6,6 +6,7 @@ import {
   type ConnectorRevocationDeps,
   type ConnectorRevocationTarget,
 } from "./connector-revocation.js";
+import { createDocumentFixtureStore } from "./testing/journal-store.js";
 
 const google: ConnectorRevocationTarget = {
   connectorId: "google",
@@ -19,17 +20,10 @@ function depsFor(
   const warnings: string[] = [];
   return {
     warnings,
-    db: {
-      collection: () => ({
-        doc: (uid: string) => ({
-          collection: () => ({
-            doc: (connectorId: string) => ({
-              get: async () => ({ data: () => secrets[`${uid}/${connectorId}`] }),
-            }),
-          }),
-        }),
-      }),
-    } as unknown as ConnectorRevocationDeps["db"],
+    secrets: createDocumentFixtureStore(Object.fromEntries(Object.entries(secrets).map(([key, row]) => {
+      const [uid, connectorId] = key.split("/");
+      return [`users/${uid}/secrets/${connectorId}`, row as Record<string, unknown>];
+    }))).secrets,
     decryptSecret: async (ciphertext: string) => ciphertext.replace("enc:", "plain:"),
     logger: { warn: (message: string) => warnings.push(message) },
     fetchImpl,
@@ -93,15 +87,7 @@ describe("revokeProviderGrant", () => {
   it("logs and resolves when reading the stored grant fails", async () => {
     const warnings: string[] = [];
     const deps = {
-      db: {
-        collection: () => ({
-          doc: () => ({
-            collection: () => ({
-              doc: () => ({ get: async () => { throw new Error("firestore unavailable"); } }),
-            }),
-          }),
-        }),
-      } as unknown as ConnectorRevocationDeps["db"],
+      secrets: { get: async () => { throw new Error("firestore unavailable"); } },
       decryptSecret: vi.fn(async () => "plain"),
       logger: { warn: (message: string) => warnings.push(message) },
       fetchImpl: vi.fn(async () => ({ ok: true, status: 200 }) as Response),
@@ -111,6 +97,30 @@ describe("revokeProviderGrant", () => {
 
     expect(warnings.join(" ")).toContain("firestore unavailable");
     expect(deps.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses to revoke with a malformed stored grant and logs why", async () => {
+    const deps = depsFor(
+      { "u1/google": { tokens: { encryptedRefreshToken: 42, encryptedAccessToken: "enc:access" } } },
+      vi.fn(async () => ({ ok: true, status: 200 }) as Response),
+    );
+
+    await expect(revokeProviderGrant("u1", google, deps)).resolves.toBeUndefined();
+
+    expect(deps.fetchImpl).not.toHaveBeenCalled();
+    expect(deps.warnings.join(" ")).toContain("tokens.encryptedRefreshToken");
+  });
+
+  it("refuses to treat a Mattermost token as a connector grant", async () => {
+    const deps = depsFor(
+      { "u1/mattermost": { personalToken: "mm-token" } },
+      vi.fn(async () => ({ ok: true, status: 200 }) as Response),
+    );
+
+    await revokeProviderGrant("u1", { connectorId: "mattermost", revocationUrl: "https://mm.example/revoke" }, deps);
+
+    expect(deps.fetchImpl).not.toHaveBeenCalled();
+    expect(deps.warnings.join(" ")).toContain("is not a connector grant");
   });
 
   it("logs provider failures without throwing", async () => {
@@ -129,21 +139,16 @@ describe("revokeAllConnectorGrantsForUser", () => {
   it("continues to later providers after one grant cannot be read", async () => {
     const posted: string[] = [];
     const warnings: string[] = [];
+    const microsoft = createDocumentFixtureStore({
+      "users/u1/secrets/microsoft": { tokens: { encryptedRefreshToken: "enc:microsoft" } },
+    }).secrets;
     const deps = {
-      db: {
-        collection: () => ({
-          doc: () => ({
-            collection: () => ({
-              doc: (connectorId: string) => ({
-                get: async () => {
-                  if (connectorId === "google") throw new Error("google read failed");
-                  return { data: () => ({ tokens: { encryptedRefreshToken: "enc:microsoft" } }) };
-                },
-              }),
-            }),
-          }),
-        }),
-      } as unknown as ConnectorRevocationDeps["db"],
+      secrets: {
+        get: async (uid: string, connectorId: string) => {
+          if (connectorId === "google") throw new Error("google read failed");
+          return microsoft.get(uid, connectorId);
+        },
+      },
       decryptSecret: async (ciphertext: string) => ciphertext.replace("enc:", "plain:"),
       logger: { warn: (message: string) => warnings.push(message) },
       fetchImpl: vi.fn(async (url: string | URL | Request) => {

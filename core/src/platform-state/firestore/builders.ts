@@ -93,7 +93,7 @@ const LEASE_STATUSES: readonly BuilderActivationLeaseStatus[] = [
 
 const SLUG_PATH = "provisioning.openclaw.slug";
 const MATTERMOST_USER_ID_PATH = "mattermost.userId";
-const ACTIVATION_LEASE_PATH = "provisioning.openclaw.activationLease";
+export const BUILDER_ACTIVATION_LEASE_PATH = "provisioning.openclaw.activationLease";
 const AGENT_IDS_PATH = "provisioning.openclaw.agentIds";
 const ACTIVATED_AGENTS_PATH = "provisioning.openclaw.activatedAgents";
 const COMPUTER_INSTANCE_ID_PATH = "provisioning.computer.instanceId";
@@ -106,7 +106,7 @@ const PROVISIONING_PATHS = {
   gitCreatedAt: "provisioning.git.createdAt",
 } as const satisfies Record<keyof BuilderProvisioning, string>;
 
-const MIRROR_PATHS = {
+export const BUILDER_MIRROR_PATHS = {
   gatewayId: "provisioning.openclaw.gatewayId",
   gatewayAssignedAt: "provisioning.openclaw.gatewayAssignedAt",
   gatewayProfile: "provisioning.openclaw.gatewayProfile",
@@ -125,7 +125,7 @@ const OPENCLAW_PATHS = {
   toolchain: "provisioning.openclaw.toolchain",
 } as const satisfies Record<keyof BuilderOpenClawState, string>;
 
-const FENCE_PATHS = {
+export const BUILDER_FENCE_PATHS = {
   restoreFence: "provisioning.openclaw.restoreFence",
   sourceTransferFence: "provisioning.openclaw.sourceTransferFence",
   computerRecovery: "provisioning.computerRecovery",
@@ -289,22 +289,22 @@ function decodeSlug(fields: StoredFields, data: PlainObject): string | null {
 }
 
 function decodeActivationLease(fields: StoredFields): BuilderActivationLease | null {
-  const lease = fields.map<BuilderActivationLease>(ACTIVATION_LEASE_PATH);
+  const lease = fields.map<BuilderActivationLease>(BUILDER_ACTIVATION_LEASE_PATH);
   if (lease === undefined) return null;
-  fields.requiredString(`${ACTIVATION_LEASE_PATH}.leaseId`);
-  fields.requiredNumber(`${ACTIVATION_LEASE_PATH}.generation`);
-  fields.requiredOneOf(`${ACTIVATION_LEASE_PATH}.status`, LEASE_STATUSES);
+  fields.requiredString(`${BUILDER_ACTIVATION_LEASE_PATH}.leaseId`);
+  fields.requiredNumber(`${BUILDER_ACTIVATION_LEASE_PATH}.generation`);
+  fields.requiredOneOf(`${BUILDER_ACTIVATION_LEASE_PATH}.status`, LEASE_STATUSES);
   return lease;
 }
 
 function decodeGatewayMirror(fields: StoredFields): BuilderGatewayMirror | null {
-  const gatewayId = fields.string(MIRROR_PATHS.gatewayId);
+  const gatewayId = fields.string(BUILDER_MIRROR_PATHS.gatewayId);
   if (gatewayId === undefined) return null;
   return present<BuilderGatewayMirror>({
     gatewayId,
-    gatewayAssignedAt: fields.number(MIRROR_PATHS.gatewayAssignedAt),
-    gatewayProfile: fields.oneOf(MIRROR_PATHS.gatewayProfile, GATEWAY_PROFILES),
-    controlUiEnabled: fields.boolean(MIRROR_PATHS.controlUiEnabled),
+    gatewayAssignedAt: fields.number(BUILDER_MIRROR_PATHS.gatewayAssignedAt),
+    gatewayProfile: fields.oneOf(BUILDER_MIRROR_PATHS.gatewayProfile, GATEWAY_PROFILES),
+    controlUiEnabled: fields.boolean(BUILDER_MIRROR_PATHS.controlUiEnabled),
   });
 }
 
@@ -317,11 +317,14 @@ function builderRevision(user: DocumentSnapshot, config: DocumentSnapshot | unde
 
 export function decodeBuilder(snapshot: DocumentSnapshot, config: DocumentSnapshot | undefined): Stored<BuilderRecord> | null {
   if (!snapshot.exists) return null;
-  const role = decodeRole(snapshot.id, config);
-  const data = decodeDocumentData(snapshot);
-  const fields = new StoredFields(builderKey(snapshot.id), data);
-  const record: BuilderRecord = {
-    uid: snapshot.id,
+  const record = builderRecordFromData(snapshot.id, decodeDocumentData(snapshot), snapshot.updateTime!.toMillis(), decodeRole(snapshot.id, config));
+  return { ...record, revision: builderRevision(snapshot, config) };
+}
+
+export function builderRecordFromData(uid: string, data: PlainObject, updatedAt: number, role: BuilderRole | null): BuilderRecord {
+  const fields = new StoredFields(builderKey(uid), data);
+  return {
+    uid,
     slug: decodeSlug(fields, data),
     mattermostUserId: fields.string(MATTERMOST_USER_ID_PATH) ?? null,
     admitted: data.onboardingStep === ADMITTED_STEP,
@@ -329,7 +332,7 @@ export function decodeBuilder(snapshot: DocumentSnapshot, config: DocumentSnapsh
     workspaceId: fields.string(TOP_LEVEL_PATHS.workspaceId) ?? null,
     role,
     createdAt: fields.number("createdAt") ?? null,
-    updatedAt: snapshot.updateTime!.toMillis(),
+    updatedAt,
     provisioning: present<BuilderProvisioning>({
       status: fields.string(PROVISIONING_PATHS.status),
       startedAt: fields.number(PROVISIONING_PATHS.startedAt),
@@ -355,12 +358,12 @@ export function decodeBuilder(snapshot: DocumentSnapshot, config: DocumentSnapsh
     accountLifecycle: fields.map<AccountLifecycle>(TOP_LEVEL_PATHS.accountLifecycle) ?? null,
     activationLease: decodeActivationLease(fields),
     fences: present<BuilderFences>({
-      restoreFence: fields.map(FENCE_PATHS.restoreFence),
-      sourceTransferFence: fields.map(FENCE_PATHS.sourceTransferFence),
-      computerRecovery: fields.map(FENCE_PATHS.computerRecovery),
-      migration: fields.map(FENCE_PATHS.migration),
-      pendingNativeSchedulerRetirement: fields.map(FENCE_PATHS.pendingNativeSchedulerRetirement),
-      runtimeReset: fields.map(FENCE_PATHS.runtimeReset),
+      restoreFence: fields.map(BUILDER_FENCE_PATHS.restoreFence),
+      sourceTransferFence: fields.map(BUILDER_FENCE_PATHS.sourceTransferFence),
+      computerRecovery: fields.map(BUILDER_FENCE_PATHS.computerRecovery),
+      migration: fields.map(BUILDER_FENCE_PATHS.migration),
+      pendingNativeSchedulerRetirement: fields.map(BUILDER_FENCE_PATHS.pendingNativeSchedulerRetirement),
+      runtimeReset: fields.map(BUILDER_FENCE_PATHS.runtimeReset),
     }),
     home: present<BuilderHomeState>({
       computer: fields.map(HOME_PATHS.computer),
@@ -373,7 +376,6 @@ export function decodeBuilder(snapshot: DocumentSnapshot, config: DocumentSnapsh
       projectStorageNativeBoot: fields.map(HOME_PATHS.projectStorageNativeBoot),
     }),
   };
-  return { ...record, revision: builderRevision(snapshot, config) };
 }
 
 function mappedGroup(group: object, paths: Readonly<Record<string, string>>, groupName: string): PlainObject {
@@ -385,7 +387,7 @@ function mappedGroup(group: object, paths: Readonly<Record<string, string>>, gro
   return fields;
 }
 
-function builderPatchFields(patch: object): PlainObject {
+export function builderPatchPaths(patch: object): PlainObject {
   const fields: PlainObject = {};
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined || key === "role") continue;
@@ -397,7 +399,11 @@ function builderPatchFields(patch: object): PlainObject {
       throw new TypeError(`builder patch ${key} has no stored field`);
     }
   }
-  return encodePatch(fields, STORED_AS_NUMBERS);
+  return fields;
+}
+
+function builderPatchFields(patch: object): PlainObject {
+  return encodePatch(builderPatchPaths(patch), STORED_AS_NUMBERS);
 }
 
 function builderFenceMismatch(record: RecordKey, field: string, expected: unknown, actual: unknown): FenceMismatchError {
@@ -521,6 +527,7 @@ type BuilderRecordReadMethod =
   | "listByGateway"
   | "listGatewayFenceHolders"
   | "listAdmitted"
+  | "listAll"
   | "listByOpenClawStatus"
   | "list";
 
@@ -575,7 +582,7 @@ function builderRecordReads(access: BuilderRecordAccess): Pick<BuilderRecordsRep
     },
 
     listByGateway(gatewayId, filter = {}) {
-      let query: Query = collection().where(MIRROR_PATHS.gatewayId, "==", gatewayId);
+      let query: Query = collection().where(BUILDER_MIRROR_PATHS.gatewayId, "==", gatewayId);
       if (filter.openclawStatus !== undefined) query = query.where(OPENCLAW_PATHS.status, "==", filter.openclawStatus);
       if (filter.limit !== undefined) query = query.limit(filter.limit);
       return queryRecords("builders.records.listByGateway", [query]);
@@ -585,10 +592,10 @@ function builderRecordReads(access: BuilderRecordAccess): Pick<BuilderRecordsRep
       const name = "builders.records.listGatewayFenceHolders";
       const results = await Promise.all(
         [
-          MIRROR_PATHS.gatewayId,
-          `${FENCE_PATHS.sourceTransferFence}.sourceGatewayId`,
-          `${FENCE_PATHS.sourceTransferFence}.targetGatewayId`,
-          `${FENCE_PATHS.computerRecovery}.gatewayId`,
+          BUILDER_MIRROR_PATHS.gatewayId,
+          `${BUILDER_FENCE_PATHS.sourceTransferFence}.sourceGatewayId`,
+          `${BUILDER_FENCE_PATHS.sourceTransferFence}.targetGatewayId`,
+          `${BUILDER_FENCE_PATHS.computerRecovery}.gatewayId`,
         ].map((path) => session.query(name, collection().where(path, "==", gatewayId))),
       );
       const configs = await readSystemConfigs(session, name, uniqueByUid(results.flatMap((result) => result.docs)));
@@ -600,6 +607,10 @@ function builderRecordReads(access: BuilderRecordAccess): Pick<BuilderRecordsRep
 
     listAdmitted() {
       return queryRecords("builders.records.listAdmitted", [collection().where("onboardingStep", "==", ADMITTED_STEP)]);
+    },
+
+    listAll() {
+      return queryRecords("builders.records.listAll", [collection()]);
     },
 
     listByOpenClawStatus(openclawStatus) {
@@ -695,8 +706,8 @@ function builderRecordWrites(access: BuilderRecordAccess): Omit<BuilderRecordsRe
 
     async setGatewayMirror(uid, mirror, fence) {
       const fields = isClearField(mirror)
-        ? Object.fromEntries(Object.values(MIRROR_PATHS).map((path) => [path, mirror]))
-        : mappedGroup(mirror, MIRROR_PATHS, "gateway");
+        ? Object.fromEntries(Object.values(BUILDER_MIRROR_PATHS).map((path) => [path, mirror]))
+        : mappedGroup(mirror, BUILDER_MIRROR_PATHS, "gateway");
       await update("builders.records.setGatewayMirror", uid, encodePatch(fields, STORED_AS_NUMBERS), fence);
     },
 
@@ -715,7 +726,7 @@ function builderRecordWrites(access: BuilderRecordAccess): Omit<BuilderRecordsRe
     },
 
     async setActivationLease(uid, lease, fence) {
-      const data = encodePatch({ [ACTIVATION_LEASE_PATH]: lease }, STORED_AS_NUMBERS);
+      const data = encodePatch({ [BUILDER_ACTIVATION_LEASE_PATH]: lease }, STORED_AS_NUMBERS);
       await updateActivationLease("builders.records.setActivationLease", uid, fence, () => data);
     },
 
@@ -724,7 +735,7 @@ function builderRecordWrites(access: BuilderRecordAccess): Omit<BuilderRecordsRe
       if (Object.hasOwn(patch, "leaseId") || Object.hasOwn(patch, "generation")) {
         throw new TypeError("an activation lease patch cannot change its leaseId or generation");
       }
-      const data = encodePatch(patch, STORED_AS_NUMBERS, ACTIVATION_LEASE_PATH);
+      const data = encodePatch(patch, STORED_AS_NUMBERS, BUILDER_ACTIVATION_LEASE_PATH);
       await updateActivationLease(name, uid, fence, (lease) => {
         if (lease === null) throw builderFenceMismatch(builderKey(uid), "activationLease", "present", null);
         return data;
@@ -734,7 +745,7 @@ function builderRecordWrites(access: BuilderRecordAccess): Omit<BuilderRecordsRe
     async setFence(uid, fenceName, value, expected) {
       const name = "builders.records.setFence";
       const key = builderKey(uid);
-      const data = encodePatch({ [FENCE_PATHS[fenceName]]: value }, STORED_AS_NUMBERS);
+      const data = encodePatch({ [BUILDER_FENCE_PATHS[fenceName]]: value }, STORED_AS_NUMBERS);
       if (expected === undefined) {
         await session.update(name, key, ref(uid), data);
         return;
@@ -847,9 +858,12 @@ export function agentStoreKeyOf(record: AgentStoreRecord): string {
 }
 
 function decodeAgentStore(uid: string, snapshot: DocumentSnapshot): Stored<AgentStoreRecord> {
-  const storeKey = snapshot.id;
+  return { ...agentStoreFromData(uid, snapshot.id, decodeDocumentData(snapshot)), revision: revisionOf(snapshot) };
+}
+
+export function agentStoreFromData(uid: string, storeKey: string, data: PlainObject): AgentStoreRecord {
   const key = agentStoreKey(uid, storeKey);
-  const fields = new StoredFields(key, decodeDocumentData(snapshot));
+  const fields = new StoredFields(key, data);
   const common = {
     storeId: fields.requiredString("storeId"),
     schema: fields.requiredString("schema"),
@@ -857,7 +871,6 @@ function decodeAgentStore(uid: string, snapshot: DocumentSnapshot): Stored<Agent
     generation: fields.number("generation") ?? null,
     assignmentEpoch: fields.number("assignmentEpoch") ?? null,
     recordedAt: fields.requiredNumber("recordedAt"),
-    revision: revisionOf(snapshot),
   };
   if (storeKey === GATEWAY_STATE_STORE_KEY) {
     if (fields.string("kind") !== GATEWAY_STATE_KIND) throw new MalformedRecordError(key, "kind is not gateway-state");
@@ -1034,7 +1047,7 @@ function withRoles(query: Query, configs: Map<string, DocumentSnapshot>): Firest
 export const firestoreBuildersWatchSource: FirestoreWatchSourceFactory<"builders"> = (db, filter) => {
   let query: Query = usersCollection(db);
   if (filter.uid !== undefined) query = query.where(FieldPath.documentId(), "==", filter.uid);
-  if (filter.gatewayId !== undefined) query = query.where(MIRROR_PATHS.gatewayId, "==", filter.gatewayId);
+  if (filter.gatewayId !== undefined) query = query.where(BUILDER_MIRROR_PATHS.gatewayId, "==", filter.gatewayId);
   const configs = new Map<string, DocumentSnapshot>();
   const target: FirestoreQueryWatchTarget<BuilderRecord> = {
     query: withRoles(query, configs),

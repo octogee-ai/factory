@@ -1,18 +1,25 @@
 import { isDeepStrictEqual } from "node:util";
-import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 import { updateRuntimeRestart, type RuntimeRestartFence } from "@octogee/core/gateway-runtime-restart";
+import { builderRuntimeMutationFenced } from "@octogee/core/gateway-retirement-claim";
 import { createRestartDriverDeps } from "@octogee/core/gateway-restart-probe";
-import { runNormalFleetMutation, type NormalFleetMutationDb, type NormalFleetMutationInput } from "@octogee/core/normal-fleet-mutation";
-import { isOperationAuditRecord } from "../../shared/types/glm.js";
-import { customerRuntimeMutationFenced, isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash } from "../../shared/types/gateway-releases.js";
+import { runNormalFleetMutation, type NormalFleetMutationInput } from "@octogee/core/normal-fleet-mutation";
+import {
+  createFirestorePlatformStateStore,
+  type GatewayRelease,
+  type GatewayRoot,
+  type OperationAuditRow,
+  type PlatformStateTransaction,
+} from "@octogee/core/platform-state";
+import { isReleasePayload, projectGatewayDesiredRootForGateway, releasePayloadHash } from "../../shared/types/gateway-releases.js";
 import type { FleetKubectlRunner } from "./fleet.js";
 
 interface Authority {
-  root: DocumentData;
+  root: GatewayRoot;
   fence: RuntimeRestartFence;
-  restart: DocumentData;
-  force: DocumentData;
-  release: DocumentData;
+  restart: OperationAuditRow;
+  force: OperationAuditRow;
+  release: GatewayRelease;
   images: Record<string, string>;
 }
 
@@ -28,11 +35,22 @@ interface KubernetesResource {
     containerStatuses?: Array<{ name: string; ready?: boolean; state?: { running?: unknown }; imageID?: string }> };
 }
 
-async function readAuthority(db: Firestore, tx: Transaction, gatewayId: string, forceAuditId: string): Promise<Authority> {
-  const root = (await tx.get(db.doc(`gateways/${gatewayId}`))).data() ?? {};
-  const desired = projectGatewayDesiredRootForGateway(root, gatewayId);
-  if (!desired || desired.gatewayClass !== "builder" || desired.desiredStatus !== "running" || root.retirementClaim != null ||
-    (root.runtime !== undefined && root.runtime !== "cluster") || !Number.isSafeInteger(root.liveRelease) || root.liveRelease < 1 || root.liveRelease !== root.desiredRelease) {
+function withoutRevision<T extends { readonly revision: unknown }>(record: T): Omit<T, "revision"> {
+  const { revision: _revision, ...rest } = record;
+  return rest;
+}
+
+function rootRuntime(root: GatewayRoot): unknown {
+  return (root as { readonly runtime?: unknown }).runtime;
+}
+
+async function readAuthority(transaction: PlatformStateTransaction, gatewayId: string, forceAuditId: string): Promise<Authority> {
+  const stored = await transaction.gateways.roots.get(gatewayId);
+  const root = stored && withoutRevision(stored);
+  const desired = root && projectGatewayDesiredRootForGateway(root, gatewayId);
+  const liveRelease = root?.liveRelease;
+  if (!root || !desired || desired.gatewayClass !== "builder" || desired.desiredStatus !== "running" || root.retirementClaim != null ||
+    (rootRuntime(root) !== undefined && rootRuntime(root) !== "cluster") || typeof liveRelease !== "number" || !Number.isSafeInteger(liveRelease) || liveRelease < 1 || liveRelease !== root.desiredRelease) {
     throw new Error("restart resolution requires a converged running Builder gateway");
   }
   const fence = root.runtimeRestartFence as RuntimeRestartFence | undefined;
@@ -41,42 +59,43 @@ async function readAuthority(db: Firestore, tx: Transaction, gatewayId: string, 
     !validId(fence.target?.podUid) || typeof fence.target?.podName !== "string" || !fence.target.podName.startsWith(`octogee-gateway-${gatewayId}-`)) {
     throw new Error("restart resolution requires the exact dispatched process fence");
   }
-  const [restartDoc, forceDoc, releaseDoc] = await Promise.all([
-    tx.get(db.doc(`glmOperations/${fence.auditId}`)), tx.get(db.doc(`glmOperations/${forceAuditId}`)),
-    tx.get(db.doc(`gateways/${gatewayId}/releases/${root.liveRelease}`)),
+  const [restartRecord, forceRecord, release] = await Promise.all([
+    transaction.journal.audits.get(fence.auditId), transaction.journal.audits.get(forceAuditId),
+    transaction.gateways.releases.get(gatewayId, liveRelease),
   ]);
-  const restart = restartDoc.data() ?? {}, force = forceDoc.data() ?? {}, release = releaseDoc.data() ?? {};
-  if (!isOperationAuditRecord(restart) || restart.status !== "failed" || restart.target.gatewayId !== gatewayId ||
+  const restart = restartRecord && withoutRevision(restartRecord), force = forceRecord && withoutRevision(forceRecord);
+  if (!restart || restart.status !== "failed" || restart.target.gatewayId !== gatewayId ||
     restart.mutation.kind !== "process" || restart.mutation.attemptId !== fence.attemptId ||
-    !isOperationAuditRecord(force) || force.status !== "completed" || force.outcome !== "completed" || force.forced !== true || force.actor !== "operator" ||
+    !force || force.status !== "completed" || force.outcome !== "completed" || force.forced !== true || force.actor !== "operator" ||
     force.mutation.kind !== "restart-gateway" || force.mutation.mode !== "force-pod-delete" || force.mutation.gatewayId !== gatewayId ||
     force.target.gatewayId !== gatewayId || force.target.podName !== fence.target.podName || force.target.podUid !== fence.target.podUid ||
     force.actionStartedAt! < restart.completedAt! || force.actionStartedAt! < fence.startedAt || force.completedAt! < force.actionStartedAt!) {
     throw new Error("completed force audit does not supersede the held restart");
   }
-  const payload = release.payload;
-  if (release.gatewayId !== gatewayId || release.release !== root.liveRelease || !isReleasePayload(payload) ||
+  const payload = release?.payload;
+  if (!release || release.gatewayId !== gatewayId || release.release !== liveRelease || !isReleasePayload(payload) ||
     release.payloadHash !== releasePayloadHash(payload) || !payload.profileImages?.builder || !payload.gatewayEdgeImage) {
     throw new Error("restart resolution release images are unavailable");
   }
-  await assertNoCustody(db, tx, gatewayId, root.ownerUid);
+  await assertNoCustody(transaction, gatewayId, root.ownerUid);
   return { root, fence, restart, force, release, images: {
     gateway: `${payload.profileImages.builder.imageRepository}:${payload.profileImages.builder.imageTag}`,
     "gateway-edge": `${payload.gatewayEdgeImage.imageRepository}:${payload.gatewayEdgeImage.imageTag}`,
   } };
 }
 
-async function assertNoCustody(db: Firestore, tx: Transaction, gatewayId: string, ownerUid: string): Promise<void> {
-  const [sources, targets, users, operations, tasks] = await Promise.all([
-    tx.get(db.collection("users").where("provisioning.openclaw.sourceTransferFence.sourceGatewayId", "==", gatewayId)),
-    tx.get(db.collection("users").where("provisioning.openclaw.sourceTransferFence.targetGatewayId", "==", gatewayId)),
-    tx.get(db.collection("users").where("provisioning.openclaw.gatewayId", "==", gatewayId)),
-    tx.get(db.collection("glmOperations").where("status", "in", ["pending", "running"])),
-    tx.get(db.collection("glmMigrationTransferTasks").where("status", "in", ["pending", "running"])),
+async function assertNoCustody(transaction: PlatformStateTransaction, gatewayId: string, ownerUid: string | null): Promise<void> {
+  const [holders, operations, tasks] = await Promise.all([
+    transaction.builders.records.listGatewayFenceHolders(gatewayId),
+    transaction.journal.operations.listByStatus(["pending", "running"]),
+    transaction.migrationTasks.listByStatus(["running"]),
   ]);
-  const touches = (input: DocumentData) => [input.gatewayId, input.fromGatewayId, input.toGatewayId, input.sourceGatewayId, input.targetGatewayId].includes(gatewayId);
-  if (!sources.empty || !targets.empty || users.docs.some(doc => customerRuntimeMutationFenced(doc.data())) ||
-    operations.docs.some(doc => touches(doc.data().input ?? {}) || touches(doc.data().customerMigrationV2 ?? {}) || doc.data().input?.uid === ownerUid) || tasks.docs.some(doc => touches(doc.data()))) {
+  const touches = (record: object | undefined) => {
+    const ids = (record ?? {}) as { gatewayId?: unknown; fromGatewayId?: unknown; toGatewayId?: unknown; sourceGatewayId?: unknown; targetGatewayId?: unknown };
+    return [ids.gatewayId, ids.fromGatewayId, ids.toGatewayId, ids.sourceGatewayId, ids.targetGatewayId].includes(gatewayId);
+  };
+  if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 || holders.assigned.some(builderRuntimeMutationFenced) ||
+    operations.some(operation => touches(operation.input) || touches(operation.customerMigrationV2) || operation.input?.uid === ownerUid) || tasks.some(touches)) {
     throw new Error("restart resolution is blocked by active gateway custody");
   }
 }
@@ -132,7 +151,7 @@ function observeReplacement(input: Input, authority: Authority) {
     metadata.deletionTimestamp || metadata.labels?.["gateway-instance"] !== input.gatewayId ||
     !metadata.ownerReferences?.some(ref => owned.has(ref.uid) && ref.controller === true) || status.phase !== "Running" ||
     !status.conditions?.some(row => row.type === "Ready" && row.status === "True") ||
-    !Number.isFinite(Date.parse(metadata.creationTimestamp ?? "")) || Date.parse(metadata.creationTimestamp ?? "") < authority.force.actionStartedAt || deployment.metadata?.deletionTimestamp ||
+    !Number.isFinite(Date.parse(metadata.creationTimestamp ?? "")) || Date.parse(metadata.creationTimestamp ?? "") < authority.force.actionStartedAt! || deployment.metadata?.deletionTimestamp ||
     !validId(deployment.metadata?.uid) || deployment.spec?.replicas !== 1 || deployment.status?.readyReplicas !== 1 ||
     typeof deployment.metadata.generation !== "number" || !Number.isSafeInteger(deployment.metadata.generation) || deployment.metadata.generation < 1 ||
     typeof deployment.status.observedGeneration !== "number" || !Number.isSafeInteger(deployment.status.observedGeneration) ||
@@ -149,12 +168,14 @@ function observeReplacement(input: Input, authority: Authority) {
 
 export async function resolveForcedGatewayRestart(input: Input) {
   if (!validId(input.gatewayId) || !validId(input.forceAuditId)) throw new Error("restart resolution requires exact gateway and force audit IDs");
-  const authority = await input.db.runTransaction(tx => readAuthority(input.db, tx, input.gatewayId, input.forceAuditId));
+  const store = createFirestorePlatformStateStore({ db: input.db });
+  const authority = await store.transaction({ label: "fleet-resolve-forced-restart.read", readOnly: true }, transaction =>
+    readAuthority(transaction, input.gatewayId, input.forceAuditId));
   const replacement = observeReplacement(input, authority);
   const proof = JSON.parse(transport(input)(["exec", replacement.podName, "-c", "gateway", "-i", "--", "node", "--input-type=commonjs"], nativeProbeSource()));
   if (!validBoot(proof.bootId) || proof.health !== true) throw new Error("replacement native health is unverified");
   if (!input.apply) return { applied: false, forceAuditId: input.forceAuditId, heldFence: authority.fence, replacement, native: proof };
-  const runMutation = input.runMutation ?? (<T>(mutation: NormalFleetMutationInput<T>) => runNormalFleetMutation(input.db as unknown as NormalFleetMutationDb, mutation));
+  const runMutation = input.runMutation ?? (<T>(mutation: NormalFleetMutationInput<T>) => runNormalFleetMutation(store, mutation));
   return runMutation({
     actor: "operator", forced: true, what: "resolve forced gateway restart", why: "verified pod replacement supersedes an unresolved process restart",
     target: { gatewayId: input.gatewayId, restartAttemptId: authority.fence.attemptId, forceAuditId: input.forceAuditId },
@@ -162,9 +183,9 @@ export async function resolveForcedGatewayRestart(input: Input) {
     mutation: { kind: "resolve-forced-restart", forceAuditId: input.forceAuditId, restartAttemptId: authority.fence.attemptId, replacementPodUid: replacement.podUid },
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     action: async claim => {
-      await updateRuntimeRestart(input.db, authority.fence, null, async (tx, root) => {
-        const current = await readAuthority(input.db, tx, input.gatewayId, input.forceAuditId);
-        if (!isDeepStrictEqual(root, authority.root) || !isDeepStrictEqual(current, authority) ||
+      await updateRuntimeRestart(store, authority.fence, null, async (transaction, root) => {
+        const current = await readAuthority(transaction, input.gatewayId, input.forceAuditId);
+        if (!isDeepStrictEqual(withoutRevision(root), authority.root) || !isDeepStrictEqual(current, authority) ||
           !isDeepStrictEqual(observeReplacement(input, current), replacement)) throw new Error("restart resolution authority changed");
       });
       return { auditId: claim.auditId, forceAuditId: input.forceAuditId, restartAttemptId: authority.fence.attemptId, replacementPodUid: replacement.podUid };

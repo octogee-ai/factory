@@ -1,15 +1,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/db", () => {
-  const ADMIN_UID = "admin-user";
-
-  const users: Record<string, any> = {
-    "admin-user": {
-      provisioning: {},
-    },
-  };
-
+const { records } = vi.hoisted(() => {
   function durableRoot(gatewayId: string) {
     return {
       gatewayId,
@@ -56,39 +48,50 @@ vi.mock("../lib/db", () => {
     };
   }
 
-  const gatewayRoots: Record<string, any> = {
-    "gw-test-primary": durableRoot("gw-test-primary"),
-    "gw-test-secondary": durableRoot("gw-test-secondary"),
-    "gw-test-stale": durableRoot("gw-test-stale"),
-  };
-
-  const gatewayRevisions: Record<string, any> = {
-    "gw-test-primary": servingRuntime("gw-test-primary", {
+  const records = new Map<string, Record<string, unknown>>([
+    ["users/admin-user", { provisioning: {} }],
+    ["gateways/gw-test-primary", durableRoot("gw-test-primary")],
+    ["gateways/gw-test-secondary", durableRoot("gw-test-secondary")],
+    ["gateways/gw-test-stale", durableRoot("gw-test-stale")],
+    ["glmGateways/gw-test-primary", servingRuntime("gw-test-primary", {
       status: "ready",
       version: "abc1234",
       openclawVersion: "v1.2.3",
       mountedCustomers: ["alice", "bob", "christopher"],
-      lastHeartbeatAt: { toDate: () => new Date(Date.now() - 2_000) },
-    }),
-    "gw-test-secondary": servingRuntime("gw-test-secondary", {
+      lastHeartbeatAt: Date.now() - 2_000,
+    })],
+    ["glmGateways/gw-test-secondary", servingRuntime("gw-test-secondary", {
       status: "ready",
       version: "def5678",
       openclawVersion: "v1.2.3",
       mountedCustomers: ["dana"],
-      lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5_000) },
-    }),
-    "gw-test-stale": servingRuntime(
+      lastHeartbeatAt: Date.now() - 5_000,
+    })],
+    ["glmGateways/gw-test-stale", servingRuntime(
       "gw-test-stale",
       {
         status: "ready",
         version: "ghi9012",
         openclawVersion: "v1.2.3",
         mountedCustomers: [],
-        lastHeartbeatAt: { toDate: () => new Date(Date.now() - 5 * 60_000) },
+        lastHeartbeatAt: Date.now() - 5 * 60_000,
       },
-      { slug: "frodo", message: "git clone timeout", at: { toDate: () => new Date() } },
-    ),
+      { slug: "frodo", message: "git clone timeout", at: Date.now() },
+    )],
+  ]);
+  return { records };
+});
+
+vi.mock("@octogee/core/platform-state", async (importOriginal) => {
+  const { createDocumentFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+    createFirestorePlatformStateStore: () => createDocumentFixtureStore(records),
   };
+});
+
+vi.mock("../lib/db", () => {
+  const ADMIN_UID = "admin-user";
 
   function makeQuery(docs: Array<{ id: string; data: () => any }>) {
     return {
@@ -99,16 +102,18 @@ vi.mock("../lib/db", () => {
     };
   }
 
+  function userDocs() {
+    return [...records.entries()].flatMap(([path, data]) =>
+      path.startsWith("users/") ? [{ id: path.slice("users/".length), data: () => data }] : []);
+  }
+
   function collection(path: string): any {
     if (path === "users") {
       return {
-        get: async () => ({
-          docs: Object.keys(users).map((id) => ({ id, data: () => users[id] })),
-          size: Object.keys(users).length,
-        }),
+        get: async () => ({ docs: userDocs(), size: userDocs().length }),
         doc: (uid: string) => ({
           id: uid,
-          get: async () => ({ exists: !!users[uid], data: () => users[uid] }),
+          get: async () => ({ exists: records.has(`users/${uid}`), data: () => records.get(`users/${uid}`) }),
           collection: () => ({
             doc: () => ({
               get: async () => ({ exists: false, data: () => undefined }),
@@ -116,14 +121,6 @@ vi.mock("../lib/db", () => {
           }),
         }),
       };
-    }
-    if (path === "gateways") {
-      const docs = Object.keys(gatewayRoots).map((id) => ({ id, data: () => gatewayRoots[id] }));
-      return makeQuery(docs);
-    }
-    if (path === "glmGateways") {
-      const docs = Object.keys(gatewayRevisions).map((id) => ({ id, data: () => gatewayRevisions[id] }));
-      return makeQuery(docs);
     }
     return makeQuery([]);
   }

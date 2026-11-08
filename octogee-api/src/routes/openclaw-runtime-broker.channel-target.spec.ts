@@ -9,6 +9,7 @@ vi.mock("@octogee/core/assigned-roster", () => ({
 }));
 
 import { createOpenClawRuntimeBrokerRoutes } from "./openclaw-runtime-broker.js";
+import { createJournalFixtureStore, journalRowsIn } from "@octogee/core/testing/journal-store";
 
 type ChannelDoc = { path: string; channelId: string };
 
@@ -40,7 +41,7 @@ function app() {
     req.boundTenant = { kind: "gateway", gatewayId: "gw-alice", ownerUid: "uid-alice" };
     next();
   });
-  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db }));
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db, store: createJournalFixtureStore(journalRowsIn({})) }));
   return app;
 }
 

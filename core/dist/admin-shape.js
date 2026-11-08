@@ -22,39 +22,39 @@ function stringAt(src, key, fallback = "") {
     const value = src[key];
     return typeof value === "string" ? value : fallback;
 }
-function nullableStringAt(src, key) {
-    const value = src[key];
-    return typeof value === "string" ? value : null;
-}
 function numberAt(src, key, fallback = 0) {
     const value = src[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function stringArrayAt(src, key) {
-    const value = src[key];
-    return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+export function isoMillis(value) {
+    return value === null ? null : new Date(value).toISOString();
 }
-function displayNameFor(d) {
-    const email = stringAt(d, "email");
-    return stringAt(d, "displayName") || stringAt(d, "username") || email.split("@")[0] || "(unknown)";
+function displayNameFor(account) {
+    return account.displayName || account.username || (account.email ?? "").split("@")[0] || "(unknown)";
 }
-export function buildCustomerSummary(uid, d, broker = {}) {
-    const subscription = objectAt(d, "subscription");
+function builderSummaryFields(builder) {
+    return {
+        mattermostConnected: (builder.mattermostUserId ?? "").length > 0,
+        agentCount: builder.agents.agentIds.length,
+        createdAt: isoMillis(builder.createdAt),
+        provisioningStatus: builder.openclaw.status ?? builder.provisioning.status ?? null,
+        accountLifecycleStatus: builder.accountLifecycle?.status ?? "active",
+    };
+}
+export function buildCustomerSummary(builder, account, broker = {}) {
+    const subscription = objectAt(account.planInputs, "subscription");
     const now = broker.now ?? Date.now();
-    const plan = resolveBillingProfile(d, new Date(now));
+    const plan = resolveBillingProfile(account.planInputs, new Date(now));
     const tierConfig = getTierConfig(plan.tier);
     const subscriptionStatus = stringAt(subscription, "status", "trial");
-    const usage = objectAt(d, "usage");
-    const provisioning = objectAt(d, "provisioning");
-    const openclaw = objectAt(provisioning, "openclaw");
-    const mattermost = objectAt(d, "mattermost");
+    const usage = account.usage;
     const windowCostUsd = broker.windowCostUsd ?? 0;
     const weekCostUsd = broker.weekCostUsd ?? 0;
     const costUsd = broker.totalCostUsd ?? 0;
     // Owner-credential (BYOSUB/BYOT) traffic never lands in a spend window, so a
     // percentage against a zero budget would misleadingly read 100% — mirror the
     // customer surfaces and show 0. The broker never throttles them either.
-    const onOwnerCredential = d.byotActive === true;
+    const onOwnerCredential = account.byotActive;
     const degraded = spendDegradeState({
         modelAccess: plan.modelAccess,
         windowCostUsd,
@@ -64,20 +64,19 @@ export function buildCustomerSummary(uid, d, broker = {}) {
         onOwnerCredential,
         houseFallback: plan.houseFallback,
     }).degraded;
-    const agentIds = stringArrayAt(openclaw, "agentIds");
     const revenueUsd = isActiveStatus(subscriptionStatus)
         ? tierConfig.monthlyPrice
         : 0;
     return {
-        uid,
-        displayName: displayNameFor(d),
-        email: stringAt(d, "email"),
-        username: stringAt(d, "username"),
+        uid: builder.uid,
+        displayName: displayNameFor(account),
+        email: account.email ?? "",
+        username: account.username ?? "",
         tier: plan.tier,
         effectiveTier: plan.effectiveTier,
         trialDaysRemaining: plan.trialDaysRemaining,
         subscriptionStatus,
-        byotActive: d.byotActive === true,
+        byotActive: account.byotActive,
         windowCostUsd,
         windowBudgetUsd: plan.windowBudgetUsd,
         weekCostUsd,
@@ -90,15 +89,10 @@ export function buildCustomerSummary(uid, d, broker = {}) {
         costUsd,
         degraded,
         lastActive: toISODate(usage.lastUpdated),
-        mattermostConnected: typeof mattermost.userId === "string" && mattermost.userId.length > 0,
-        mattermostUsername: nullableStringAt(mattermost, "username"),
-        agentCount: agentIds.length,
-        createdAt: toISODate(d.createdAt),
+        mattermostUsername: account.mattermostUsername,
         percentUsed: onOwnerCredential ? 0 : spendWindowPercentUsed(windowCostUsd, plan.windowBudgetUsd),
         revenueUsd,
         marginUsd: revenueUsd - costUsd,
-        provisioningStatus: nullableStringAt(openclaw, "status") ??
-            nullableStringAt(provisioning, "status"),
-        accountLifecycleStatus: nullableStringAt(objectAt(d, "accountLifecycle"), "status") ?? "active",
+        ...builderSummaryFields(builder),
     };
 }

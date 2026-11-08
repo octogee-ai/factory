@@ -1,29 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createOpenClawBootSentinelStore } from "./openclaw-boot-sentinel.js";
 
 const gatewayId = "ceckert-m-f6736258";
 const boot = { gatewayId, podName: "octogee-gateway-ceckert-m-f6736258-abc123-def45", podUid: "boot-1", releaseKey: "62cab13@sha256:abc" };
 
+const runtime = { docKind: "runtime", gatewayId, release: 1, lifecycle: "serving", status: "running" };
+
 function fixture() {
   const data: Record<string, Record<string, unknown>> = {
-    [`glmGateways/${gatewayId}`]: { gatewayId, status: "running" },
-    [`gateways/${gatewayId}`]: { gatewayId, gatewayClass: "builder" },
+    [`glmGateways/${gatewayId}`]: structuredClone(runtime),
+    [`gateways/${gatewayId}`]: { gatewayId, gatewayClass: "builder", desiredRelease: 1, latestRelease: 1, desiredStatus: "running" },
   };
-  const ref = (path: string) => ({ path });
-  const db = {
-    doc: ref,
-    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-    runTransaction: async (body: (txn: unknown) => Promise<unknown>) => {
-      const writes: Array<{ path: string; patch: Record<string, unknown> }> = [];
-      const result = await body({
-        get: async (r: { path: string }) => ({ exists: Object.hasOwn(data, r.path), data: () => data[r.path] }),
-        update: (r: { path: string }, patch: Record<string, unknown>) => writes.push({ path: r.path, patch }),
-      });
-      for (const { path, patch } of writes) Object.assign(data[path], patch);
-      return result;
-    },
-  };
-  return { data, store: createOpenClawBootSentinelStore(db as never, () => 300) };
+  return { data, store: createOpenClawBootSentinelStore(createDocumentFixtureStore(data), () => 300) };
 }
 
 describe("OpenClaw boot sentinel", () => {
@@ -37,18 +26,27 @@ describe("OpenClaw boot sentinel", () => {
     const f = fixture();
     await f.store.claim(boot);
     await f.store.claim(boot);
-    expect(f.data[`glmGateways/${gatewayId}`]).toEqual({ gatewayId, status: "running" });
+    expect(f.data[`glmGateways/${gatewayId}`]).toEqual(runtime);
   });
 
   it("records the healthy OpenClaw build and nothing else on completion", async () => {
     const f = fixture();
     await f.store.claim(boot);
     await expect(f.store.complete({ ...boot, openclawBuild: "e".repeat(40) })).resolves.toBe(true);
-    expect(f.data[`glmGateways/${gatewayId}`]).toEqual({ gatewayId, status: "running", openclawHealthyBuild: "e".repeat(40) });
+    expect(f.data[`glmGateways/${gatewayId}`]).toEqual({ ...runtime, openclawHealthyBuild: "e".repeat(40) });
   });
 
   it("refuses a claim for a gateway without a runtime document", async () => {
     const f = fixture();
     await expect(f.store.claim({ ...boot, gatewayId: "missing" })).resolves.toBeNull();
+  });
+
+  it("treats a registry document that is not a runtime record as a missing runtime", async () => {
+    const f = fixture();
+    const { docKind: _docKind, ...legacy } = runtime;
+    f.data[`glmGateways/${gatewayId}`] = legacy;
+    await expect(f.store.claim(boot)).resolves.toBeNull();
+    await expect(f.store.complete({ ...boot, openclawBuild: "e".repeat(40) })).resolves.toBe(false);
+    expect(f.data[`glmGateways/${gatewayId}`]).toEqual(legacy);
   });
 });

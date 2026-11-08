@@ -1,98 +1,109 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-interface FsCall {
-  collection: string;
-  op: "add" | "doc.delete" | "doc.update" | "batch.set" | "batch.update" | "batch.delete";
-  docId?: string;
-  data?: Record<string, unknown>;
-}
+type Row = Record<string, unknown>;
 
-const fsCalls: FsCall[] = [];
-let usersDocs: Record<string, Record<string, unknown>> = {};
-let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
+let usersDocs: Record<string, Row> = {};
+let glmOperationsDocs: Array<{ id: string; data: Row }> = [];
+let deletionJobsDocs: Record<string, Row> = {};
+let assignmentDocs: Record<string, Record<string, Row>> = {};
+const secretDocs: Record<string, Record<string, Row>> = {};
+const storeWrites: Array<{ op: "set" | "delete"; path: string; row?: Row }> = [];
 const authDisabledUids: string[] = [];
 const authRevokedUids: string[] = [];
 let authNextError: Error | null = null;
 const loggedWarnings: string[] = [];
 
-vi.mock("../lib/db", () => {
-  let autoId = 0;
-  let transactionTail = Promise.resolve();
-  function whereChain(
-    collectionName: string,
-    filters: Array<{ field: string; value: unknown }> = [],
-  ) {
-    return {
-      __collection: collectionName,
-      __filters: filters,
-      where: (field: string, _op: string, value: unknown) =>
-        whereChain(collectionName, [...filters, { field, value }]),
-      orderBy: () => whereChain(collectionName, filters),
-      limit: () => whereChain(collectionName, filters),
-      get: async () => {
-        if (collectionName === "glmOperations") {
-          const docs = glmOperationsDocs.filter((d) =>
-            filters.every((f) => {
-              const v = d.data[f.field];
-              if (Array.isArray(f.value)) {
-                return (f.value as unknown[]).includes(v);
-              }
-              return v === f.value;
-            }),
-          );
-          return {
-            docs: docs.map((d) => ({ id: d.id, data: () => d.data })),
-            size: docs.length,
-          };
-        }
-        return { docs: [], size: 0 };
-      },
-    };
-  }
+function documentMap(collectionPath: string): Record<string, Row> {
+  if (collectionPath === "users") return usersDocs;
+  if (collectionPath === "customerDeletionJobs") return deletionJobsDocs;
+  if (/^gateways\/[^/]+\/assignments$/.test(collectionPath)) return assignmentDocs[collectionPath] ??= {};
+  if (/^users\/[^/]+\/secrets$/.test(collectionPath)) return secretDocs[collectionPath] ??= {};
+  throw new Error(`admin delete fixture has no collection ${collectionPath}`);
+}
 
+function splitPath(path: string): [string, string] {
+  const at = path.lastIndexOf("/");
+  return [path.slice(0, at), path.slice(at + 1)];
+}
+
+const fixtureDocuments = {
+  get: (path: string): Row | undefined => {
+    const [collectionPath, id] = splitPath(path);
+    if (collectionPath === "glmOperations") return glmOperationsDocs.find((doc) => doc.id === id)?.data;
+    return documentMap(collectionPath)[id];
+  },
+  set: (path: string, row: Row): void => {
+    storeWrites.push({ op: "set", path, row });
+    const [collectionPath, id] = splitPath(path);
+    if (collectionPath !== "glmOperations") {
+      documentMap(collectionPath)[id] = row;
+      return;
+    }
+    const entry = glmOperationsDocs.find((doc) => doc.id === id);
+    if (entry) entry.data = row;
+    else glmOperationsDocs.unshift({ id, data: row });
+  },
+  delete: (path: string): void => {
+    storeWrites.push({ op: "delete", path });
+    const [collectionPath, id] = splitPath(path);
+    if (collectionPath === "glmOperations") glmOperationsDocs = glmOperationsDocs.filter((doc) => doc.id !== id);
+    else delete documentMap(collectionPath)[id];
+  },
+  children: (collectionPath: string): Array<readonly [string, Row]> =>
+    collectionPath === "glmOperations"
+      ? glmOperationsDocs.map((doc) => [doc.id, doc.data] as const)
+      : Object.entries(documentMap(collectionPath)),
+  group: (collectionId: string): Array<readonly [string, Row]> => {
+    if (collectionId !== "assignments") throw new Error(`admin delete fixture has no collection group ${collectionId}`);
+    return Object.entries(assignmentDocs).flatMap(([collectionPath, docs]) =>
+      Object.entries(docs).map(([uid, row]) => [`${collectionPath}/${uid}`, row] as const));
+  },
+};
+
+function operationWrites(): Row[] {
+  return storeWrites.flatMap((write) =>
+    write.op === "set" && write.path.startsWith("glmOperations/") && typeof write.row?.kind === "string" ? [write.row] : []);
+}
+
+vi.mock("@octogee/core/platform-state", async (importOriginal) => {
+  const { createJournalFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+    createFirestorePlatformStateStore: () => createJournalFixtureStore(
+      {
+        get: (id) => glmOperationsDocs.find((doc) => doc.id === id)?.data,
+        set: (id, row) => {
+          const entry = glmOperationsDocs.find((doc) => doc.id === id);
+          if (entry) entry.data = row;
+          else glmOperationsDocs.unshift({ id, data: row });
+        },
+      },
+      {
+        documents: {
+          get: (path) => fixtureDocuments.get(path),
+          set: (path, row) => fixtureDocuments.set(path, row),
+          delete: (path) => fixtureDocuments.delete(path),
+          children: (collectionPath) => fixtureDocuments.children(collectionPath),
+          group: (collectionId) => fixtureDocuments.group(collectionId),
+        },
+        serializeTransactions: true,
+      },
+    ),
+  };
+});
+
+vi.mock("../lib/db", () => {
   function collection(name: string): any {
     return {
-      add: async (data: Record<string, unknown>) => {
-        const id = `op-${glmOperationsDocs.length + 1}`;
-        fsCalls.push({ collection: name, op: "add", docId: id, data });
-        if (name === "glmOperations") glmOperationsDocs.unshift({ id, data });
-        return { id };
-      },
-      doc: (requestedId?: string) => {
-        const docId = requestedId ?? `auto-${++autoId}`;
-        return {
+      doc: (docId: string) => ({
         id: docId,
-        __collection: name,
         get: async () => {
-          if (name === "users") {
-            const data = usersDocs[docId];
-            return { exists: data !== undefined, data: () => data };
-          }
-          if (name === "glmOperations") {
-            const entry = glmOperationsDocs.find((candidate) => candidate.id === docId);
-            return { exists: entry !== undefined, data: () => entry?.data };
-          }
-          return { exists: false, data: () => undefined };
+          const data = name === "users" ? usersDocs[docId] : undefined;
+          return { exists: data !== undefined, data: () => data };
         },
         collection: (sub: string) => collection(sub),
-        set: async (data: Record<string, unknown>) => {
-          fsCalls.push({ collection: name, op: "batch.set", docId, data });
-          if (name === "glmOperations") glmOperationsDocs.unshift({ id: docId, data });
-        },
-        delete: async () => {
-          fsCalls.push({ collection: name, op: "doc.delete", docId });
-          if (name === "users") delete usersDocs[docId];
-        },
-        update: async (data: Record<string, unknown>) => {
-          fsCalls.push({ collection: name, op: "doc.update", docId, data });
-        },
-        };
-      },
-      where: (field: string, op: string, value: unknown) =>
-        whereChain(name, [{ field, value }]),
-      orderBy: () => whereChain(name),
-      limit: () => whereChain(name),
+      }),
       get: async () => ({ docs: [], size: 0 }),
     };
   }
@@ -100,72 +111,10 @@ vi.mock("../lib/db", () => {
   return {
     db: {
       collection,
-      collectionGroup: (name: string) => whereChain(name),
       doc: (path: string) => {
         const [name, id] = path.split("/");
         return collection(name).doc(id);
       },
-      getAll: async () => [],
-      runTransaction: <T>(callback: (transaction: {
-        get: (target: any) => Promise<any>;
-        set: (target: any, data: Record<string, unknown>) => void;
-        update: (target: any, data: Record<string, unknown>) => void;
-        delete: (target: any) => void;
-      }) => Promise<T>) => {
-        const transaction = {
-          get: async (target: any) => {
-            if (target.__collection === "users" && typeof target.id === "string") {
-              const data = usersDocs[target.id];
-              return { exists: data !== undefined, data: () => data };
-            }
-            if (typeof target.get === "function") return target.get();
-            throw new Error("unexpected transaction read");
-          },
-          set: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
-            const collectionName = ref.__collection ?? "unknown";
-            fsCalls.push({ collection: collectionName, op: "batch.set", docId: ref.id, data });
-            if (collectionName === "glmOperations") {
-              glmOperationsDocs.unshift({ id: ref.id, data });
-            }
-          },
-          create: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
-            const collectionName = ref.__collection ?? "unknown";
-            fsCalls.push({ collection: collectionName, op: "batch.set", docId: ref.id, data });
-            if (collectionName === "glmOperations") {
-              glmOperationsDocs.unshift({ id: ref.id, data });
-            }
-          },
-          update: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
-            const collectionName = ref.__collection ?? "unknown";
-            fsCalls.push({ collection: collectionName, op: "batch.update", docId: ref.id, data });
-            if (collectionName === "users") {
-              usersDocs[ref.id] = { ...usersDocs[ref.id], ...data };
-            }
-            if (collectionName === "glmOperations") {
-              const entry = glmOperationsDocs.find((candidate) => candidate.id === ref.id);
-              if (entry) entry.data = { ...entry.data, ...data };
-            }
-          },
-          delete: (ref: { id: string; __collection?: string }) => {
-            fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.delete", docId: ref.id });
-          },
-        };
-        const execution = transactionTail.then(() => callback(transaction));
-        transactionTail = execution.then(() => undefined, () => undefined);
-        return execution;
-      },
-      batch: () => ({
-        set: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
-          fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.set", docId: ref.id, data });
-        },
-        update: (ref: { id: string; __collection?: string }, data: Record<string, unknown>) => {
-          fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.update", docId: ref.id, data });
-        },
-        delete: (ref: { id: string; __collection?: string }) => {
-          fsCalls.push({ collection: ref.__collection ?? "unknown", op: "batch.delete", docId: ref.id });
-        },
-        commit: async () => undefined,
-      }),
     },
     FieldValue: { serverTimestamp: () => "now", delete: () => "delete" },
     Timestamp: { now: () => ({ toDate: () => new Date() }) },
@@ -217,9 +166,11 @@ function buildApp() {
 }
 
 beforeEach(() => {
-  fsCalls.length = 0;
+  storeWrites.length = 0;
   usersDocs = {};
   glmOperationsDocs = [];
+  deletionJobsDocs = {};
+  assignmentDocs = {};
   authDisabledUids.length = 0;
   authRevokedUids.length = 0;
   authNextError = null;
@@ -277,10 +228,7 @@ describe("POST /api/admin/customer/:uid/delete — has-slug branch", () => {
       suspensionOperationId: expect.any(String),
       erasureOperationId: expect.any(String),
     });
-    const operationWrites = fsCalls.filter(
-      (call) => call.collection === "glmOperations" && call.op === "batch.set",
-    );
-    expect(operationWrites.map((call) => call.data)).toEqual(expect.arrayContaining([
+    expect(operationWrites()).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "suspend-customer", inputUid: "uid-alice" }),
       expect.objectContaining({ kind: "erase-customer", inputUid: "uid-alice" }),
     ]));
@@ -306,7 +254,8 @@ usersDocs["uid-alice"] = {
     };
     await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
     expect(authDisabledUids).toEqual(["uid-alice"]);
-    expect(fsCalls.find((c) => c.collection === "users" && c.op === "doc.delete")).toBeUndefined();
+    expect(storeWrites).not.toContainEqual({ op: "delete", path: "users/uid-alice" });
+    expect(usersDocs["uid-alice"]).toBeDefined();
   });
 });
 
@@ -318,7 +267,8 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
     expect(res.body).toMatchObject({ status: "deletion_scheduled", slug: null });
     expect(authDisabledUids).toEqual(["uid-bob"]);
     expect(authRevokedUids).toEqual(["uid-bob"]);
-    expect(fsCalls.some((c) => c.collection === "users" && c.op === "doc.delete")).toBe(false);
+    expect(storeWrites).not.toContainEqual({ op: "delete", path: "users/uid-bob" });
+    expect(usersDocs["uid-bob"]).toBeDefined();
   });
 
   it("treats an already-missing Auth account as an idempotent suspension success", async () => {
@@ -327,7 +277,7 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
     authNextError = e;
     const res = await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
     expect(res.status).toBe(202);
-    expect(fsCalls.some((c) => c.collection === "glmOperations" && c.op === "batch.set")).toBe(true);
+    expect(operationWrites()).toHaveLength(2);
   });
 
   it("does NOT swallow other auth errors (e.g. quota) just because they mention 'user-not-found'", async () => {
@@ -360,11 +310,7 @@ describe("POST /api/admin/customer/:uid/delete — no-slug lifecycle", () => {
   it("enqueues lifecycle operations even when provisioning never produced a slug", async () => {
     usersDocs["uid-bob"] = { email: "bob@example.com" };
     await request(buildApp()).post("/api/admin/customer/uid-bob/delete");
-    expect(fsCalls.filter(
-      (c) => c.collection === "glmOperations" &&
-        c.op === "batch.set" &&
-        typeof c.data?.kind === "string",
-    )).toHaveLength(2);
+    expect(operationWrites()).toHaveLength(2);
   });
 });
 
@@ -385,13 +331,10 @@ describe("POST /api/admin/customer/:uid/delete — Stripe cleanup context", () =
       },
     };
     await request(buildApp()).post("/api/admin/customer/uid-alice/delete");
-    const job = fsCalls.find(
-      (call) => call.collection === "customerDeletionJobs" && call.op === "batch.set",
-    );
-    expect(job?.data).toMatchObject({
+    expect(Object.values(deletionJobsDocs)).toEqual([expect.objectContaining({
       stripeCustomerIds: ["cus_abc"],
       stripeSubscriptionIds: ["sub_personal", "sub_builder"],
-    });
+    })]);
     expect(loggedWarnings).toEqual([]);
   });
 

@@ -24,6 +24,7 @@ describe("buildCustomerDeletionPlan", () => {
       eraseAfter: 20_000,
     });
     expect(plan.job).toMatchObject({
+      deletionId: "delete-random",
       version: 1,
       uid: "uid-alice",
       slug: "alice",
@@ -32,18 +33,22 @@ describe("buildCustomerDeletionPlan", () => {
       requestedAt: 10_000,
       eraseAfter: 20_000,
       currentGatewayId: "gw-alice",
-      stripeCustomerIds: ["cus_1"],
-      stripeSubscriptionIds: ["sub_personal", "sub_builder"],
+      productContext: {
+        stripeCustomerIds: ["cus_1"],
+        stripeSubscriptionIds: ["sub_personal", "sub_builder"],
+      },
       suspensionOperationId: "suspend-random",
       erasureOperationId: "erase-random",
     });
     expect(plan.suspensionOperation).toMatchObject({
+      id: "suspend-random",
       kind: "suspend-customer",
       status: "pending",
       inputUid: "uid-alice",
       input: { uid: "uid-alice", deletionId: "delete-random" },
     });
     expect(plan.erasureOperation).toMatchObject({
+      id: "erase-random",
       kind: "erase-customer",
       status: "pending",
       nextAttemptAt: 20_000,

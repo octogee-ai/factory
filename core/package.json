@@ -13,6 +13,10 @@
       "types": "./dist/platform-state/index.d.ts",
       "default": "./dist/platform-state/index.js"
     },
+    "./testing/journal-store": {
+      "types": "./dist/testing/journal-store.d.ts",
+      "default": "./dist/testing/journal-store.js"
+    },
     "./project-coach-workspaces": {
       "types": "./dist/project-coach-workspaces.d.ts",
       "default": "./dist/project-coach-workspaces.js"
@@ -72,6 +76,10 @@
     "./auth-profile-sqlite": {
       "types": "./dist/auth-profile-sqlite.d.ts",
       "default": "./dist/auth-profile-sqlite.js"
+    },
+    "./builder-account": {
+      "types": "./dist/builder-account.d.ts",
+      "default": "./dist/builder-account.js"
     },
     "./builder-activation-lease": {
       "types": "./dist/builder-activation-lease.d.ts",

@@ -1,69 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { requestBuilderActivationLease } from "../dist/builder-activation-lease.js";
+import type { PlatformStateStore } from "./platform-state/store.js";
 
-type Data = Record<string, unknown>;
-
-function fakeDb(seed: Record<string, Data>) {
-  const docs = structuredClone(seed);
-  return {
-    doc: (path: string) => ({ path }),
-    runTransaction: async <T>(body: (transaction: {
-      get(ref: { path: string }): Promise<{ exists: boolean; data(): Data | undefined }>;
-      update(ref: { path: string }, patch: Data): void;
-    }) => Promise<T>): Promise<T> => body({
-      get: async (ref) => ({
-        exists: docs[ref.path] !== undefined,
-        data: () => docs[ref.path],
-      }),
-      update: vi.fn(),
-    }),
+function parkedBuilderStore(): PlatformStateStore {
+  const builder = {
+    uid: "uid-alice",
+    slug: "alice",
+    gateway: { gatewayId: "shared-blue" },
+    accountLifecycle: null,
+    fences: {},
+    activationLease: {
+      leaseId: "lease-old",
+      generation: 7,
+      status: "parked",
+      eventKey: "run-start:run-1",
+      sizingTier: "xs",
+    },
   };
+  const assignment = {
+    uid: "uid-alice",
+    slug: "alice",
+    gatewayId: "shared-blue",
+    source: "onboarding",
+    state: "serving",
+    epoch: 4,
+  };
+  const transaction = {
+    builders: { records: { get: async () => builder } },
+    gateways: { assignments: { get: async () => assignment } },
+  };
+  return {
+    builders: transaction.builders,
+    transaction: async (_options: unknown, body: (tx: unknown) => Promise<unknown>) => body(transaction),
+  } as unknown as PlatformStateStore;
 }
 
 describe("@octogee/core/builder-activation-lease runtime artifact", () => {
   it("acknowledges a late parked duplicate without allocating another generation", async () => {
-    const db = fakeDb({
-      "users/uid-alice": {
-        username: "alice",
-        onboardingStep: "complete",
-        provisioning: {
-          status: "complete",
-          openclaw: {
-            gatewayId: "shared-blue",
-            slug: "alice",
-            activationLease: {
-              leaseId: "lease-old",
-              generation: 7,
-              status: "parked",
-              eventKey: "run-start:run-1",
-              sizingTier: "xs",
-            },
-          },
-        },
-        trialGrant: {
-          schemaVersion: 3,
-          offerId: "builder-signup",
-          offerVersion: 1,
-          personalTier: "personal",
-          builderTier: "hobby",
-          configHash: "config-a",
-          claimedAt: 1_000,
-          endsAt: 999_999,
-        },
-      },
-      "gateways/shared-blue/assignments/uid-alice": {
-        uid: "uid-alice",
-        slug: "alice",
-        gatewayId: "shared-blue",
-        state: "serving",
-        epoch: 4,
-      },
-    });
     const leaseIdFactory = vi.fn(() => "lease-new");
 
     await expect(requestBuilderActivationLease({
-      db: db as never,
+      store: parkedBuilderStore(),
+      readBuilderTier: async () => "hobby",
       uid: "uid-alice",
       reportingGatewayId: "shared-blue",
       assignmentEpoch: 4,

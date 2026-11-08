@@ -63,6 +63,7 @@ function passDeps(
         doc: () => ({ get: async () => ({ exists: true, data: () => current }) }),
       }),
     } as never,
+    store: {} as never,
     reconcileSurgeHandoff,
   };
 }
@@ -77,9 +78,9 @@ describe("gateway convergence surge wiring", () => {
       allocation: { kind: "disposable-builder" },
     } as DurableGateway;
 
-    await expect(shouldReconcileDisposablePrelaunch({} as never, prelaunch)).resolves.toBe(true);
-    await expect(shouldReconcileDisposablePrelaunch({} as never, gateway())).resolves.toBe(false);
-    await expect(shouldReconcileDisposablePrelaunch({} as never, { ...prelaunch, liveRelease: 2 })).resolves.toBe(false);
+    await expect(shouldReconcileDisposablePrelaunch({} as never, {} as never, prelaunch)).resolves.toBe(true);
+    await expect(shouldReconcileDisposablePrelaunch({} as never, {} as never, gateway())).resolves.toBe(false);
+    await expect(shouldReconcileDisposablePrelaunch({} as never, {} as never, { ...prelaunch, liveRelease: 2 })).resolves.toBe(false);
   });
 
   it("marks a release live only after handoff and the desired-build heartbeat agree", async () => {

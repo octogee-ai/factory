@@ -27,7 +27,7 @@ vi.mock("../lib/db.js", () => ({
   db: { doc: firestore.doc, collection: firestore.collection },
 }));
 vi.mock("@octogee/core/gateway-live-release", () => ({
-  readGatewayAuthorization: (...args: unknown[]) => firestore.readGatewayAuthorization(...args),
+  readGatewayAuthorizationInStore: (...args: unknown[]) => firestore.readGatewayAuthorization(...args),
 }));
 
 const ssoStart = vi.fn();

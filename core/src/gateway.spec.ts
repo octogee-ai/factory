@@ -1,61 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-
-const h = vi.hoisted(() => ({
-  get: vi.fn(),
-  where: vi.fn(),
-  collection: vi.fn(),
-}));
-
-vi.mock("./firebase.js", () => ({
-  db: {
-    collection: h.collection,
-  },
-}));
-
-import { agentToUid, applyGatewayDefaults, loadAgentToUidMapping } from "./gateway.js";
-
-beforeEach(() => {
-  agentToUid.clear();
-  h.get.mockReset();
-  h.where.mockReset();
-  h.collection.mockReset();
-  h.collection.mockReturnValue({ where: h.where });
-  h.where.mockReturnValue({ get: h.get });
-});
-
-describe("loadAgentToUidMapping", () => {
-  it("loads both legacy and multi-agent ids from completed user provisioning docs", async () => {
-    h.get.mockResolvedValue({
-      docs: [
-        {
-          id: "uid-1",
-          data: () => ({
-            provisioning: { openclaw: { agentId: "octogee-acme-coach" } },
-          }),
-        },
-        {
-          id: "uid-2",
-          data: () => ({
-            provisioning: {
-              openclaw: {
-                agentIds: ["octogee-beta-coach", "octogee-beta-research"],
-              },
-            },
-          }),
-        },
-      ],
-    });
-
-    await loadAgentToUidMapping();
-
-    expect(h.collection).toHaveBeenCalledWith("users");
-    expect(h.where).toHaveBeenCalledWith("provisioning.openclaw.status", "==", "complete");
-    expect(agentToUid.get("octogee-acme-coach")).toBe("uid-1");
-    expect(agentToUid.get("octogee-beta-coach")).toBe("uid-2");
-    expect(agentToUid.get("octogee-beta-research")).toBe("uid-2");
-  });
-});
+import { applyGatewayDefaults } from "./gateway.js";
 
 describe("applyGatewayDefaults", () => {
   it("raises low concurrency and timeout defaults without taking over model ownership", () => {

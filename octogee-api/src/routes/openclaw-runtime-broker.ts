@@ -30,7 +30,12 @@ import {
 import { projectGatewayDesiredRootForGateway } from "@octogee/shared/types/gateway-releases";
 import { projectAgentSecretDocId } from "@octogee/core/mattermost/project-agent";
 import { readAssignedSlugsForGateway } from "@octogee/core/assigned-roster";
-import { requestBuilderActivationLease } from "@octogee/core/builder-activation-lease";
+import {
+  firestoreBuilderTierReader,
+  requestBuilderActivationLease,
+  type BuilderTierReader,
+} from "@octogee/core/builder-activation-lease";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import { deriveExpectedAgentId } from "../../../gateway-edge/src/chat-proxy/openclaw/frame-filter.js";
 import {
   ActivityReceiptConflictError,
@@ -847,11 +852,18 @@ function hasDisposableBuilderRuntime(userData: Record<string, unknown>): boolean
   return tier !== null && BUILDER_TIERS[tier].instance !== null;
 }
 
+interface ActivityDemandDeps {
+  db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
+}
+
 async function requestChatActivityDemand(
-  db: Firestore,
+  deps: ActivityDemandDeps,
   gatewayId: string,
   activity: ChatActivity,
 ): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  const { db } = deps;
   const ownerUid = await resolveChannelOwnerUid(db, gatewayId, activity.channelId);
   if (ownerUid === "forbidden") return { statusCode: 403, body: FORBIDDEN };
   if (!ownerUid) return { statusCode: 404, body: { error: "not_found" } };
@@ -866,7 +878,8 @@ async function requestChatActivityDemand(
   const epoch = assignment.data()?.epoch;
   const observedAt = Date.now();
   const result = await requestBuilderActivationLease({
-    db,
+    store: deps.store,
+    readBuilderTier: deps.readBuilderTier,
     uid: ownerUid,
     reportingGatewayId: gatewayId,
     assignmentEpoch: typeof epoch === "number" ? epoch : undefined,
@@ -1122,8 +1135,9 @@ function mountSessionContextRoute(
 
 function mountActivityRoutes(
   router: Router,
-  db: Firestore,
+  deps: ActivityDemandDeps,
 ): void {
+  const { db } = deps;
   router.post("/activity/agent-identity", async (req, res) => {
     const bound = boundGateway(req, res);
     if (!bound) return;
@@ -1212,7 +1226,7 @@ function mountActivityRoutes(
       res.status(400).json({ error: "invalid_chat_activity" });
       return;
     }
-    const result = await requestChatActivityDemand(db, bound.gatewayId, activity);
+    const result = await requestChatActivityDemand(deps, bound.gatewayId, activity);
     res.status(result.statusCode).json(result.body);
   });
 
@@ -1417,11 +1431,12 @@ function mountFinalReplyRoutes(router: Router, db: Firestore): void {
 
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
+  store: PlatformStateStore;
 }): Router {
   const router = Router();
-  const { db } = opts;
+  const { db, store } = opts;
   mountUserAndWsRoutes(router, db);
-  mountActivityRoutes(router, db);
+  mountActivityRoutes(router, { db, store, readBuilderTier: firestoreBuilderTierReader(db) });
   mountFinalReplyRoutes(router, db);
   return router;
 }

@@ -96,6 +96,16 @@ describe.skipIf(!dsn)("PostgreSQL Builder records: queries", () => {
     expect(uids((await records.listGatewayFenceHolders("g2")).sourceTransferSource)).toEqual(["bob"]);
   });
 
+  it("lists every Builder including unadmitted records without createdAt and retains roles", async () => {
+    const { records } = fixture();
+    await seedFleet(fixture());
+
+    const all = await records.listAll();
+    expect(uids(all)).toEqual(["alice", "bob", "carol", "dave"]);
+    expect(all.find((record) => record.uid === "alice")!.role).toBe("admin");
+    expect(all.find((record) => record.uid === "dave")!.createdAt).toBeNull();
+  });
+
   it("lists newest first by createdAt, pages with a uid cursor, and leaves out records without createdAt", async () => {
     const { records } = fixture();
     await seedFleet(fixture());

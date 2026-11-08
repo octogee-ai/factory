@@ -2,6 +2,38 @@ import { randomUUID } from "node:crypto";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
 import { resolveBuilderTier } from "@octogee/shared/types/billing";
 import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+export function firestoreBuilderTierReader(db) {
+    return async (uid, now) => {
+        const snapshot = await db.doc(`users/${uid}`).get();
+        return snapshot.exists ? resolveBuilderTier(snapshot.data(), new Date(now)) : null;
+    };
+}
+const BUILDER_TIER_READ_ATTEMPTS = 3;
+export class BuilderTierChangedError extends Error {
+    uid;
+    constructor(uid) {
+        super(`Builder ${uid} changed while its tier was read`);
+        this.uid = uid;
+        this.name = "BuilderTierChangedError";
+    }
+}
+export async function withCurrentBuilderTier(input, run) {
+    for (let attempt = 1;; attempt += 1) {
+        const revision = (await input.store.builders.records.get(input.uid))?.revision ?? null;
+        const tier = await input.readBuilderTier(input.uid, input.now);
+        const assertCurrent = (builder) => {
+            if ((builder?.revision ?? null) !== revision)
+                throw new BuilderTierChangedError(input.uid);
+        };
+        try {
+            return await run({ tier, assertCurrent });
+        }
+        catch (error) {
+            if (!(error instanceof BuilderTierChangedError) || attempt === BUILDER_TIER_READ_ATTEMPTS)
+                throw error;
+        }
+    }
+}
 function activeActivityLease(lease, gatewayId) {
     return lease.status === "active" && nonEmptyString(lease.leaseId) !== null &&
         positiveInteger(lease.generation) !== null && lease.targetGatewayId === gatewayId &&
@@ -15,25 +47,29 @@ export async function recordBuilderRuntimeActivity(input) {
     const now = input.now ?? Date.now();
     if (!Number.isFinite(now) || now <= 0)
         throw new Error("invalid runtime activity time");
-    const userRef = input.db.doc(`users/${input.uid}`);
-    const assignmentRef = input.db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`);
-    return input.db.runTransaction(async (transaction) => {
-        const [user, assignment] = await Promise.all([transaction.get(userRef), transaction.get(assignmentRef)]);
-        const data = user.data();
-        const lease = data ? userLease(data) : null;
-        const assigned = assignment.data();
-        if (!data || !lease || !activeActivityLease(lease, input.gatewayId) ||
-            userGatewayId(data) !== input.gatewayId ||
-            !servingActivityAssignment(assigned, input.uid, input.gatewayId) ||
-            "result" in activationDemandEligibility(data, now))
+    const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now };
+    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
+        const [builder, assignment] = await Promise.all([
+            transaction.builders.records.get(input.uid),
+            transaction.gateways.assignments.get(input.gatewayId, input.uid),
+        ]);
+        assertCurrent(builder);
+        const lease = builder?.activationLease ?? null;
+        if (!builder || !lease || !activeActivityLease(lease, input.gatewayId) ||
+            builder.gateway?.gatewayId !== input.gatewayId ||
+            !servingActivityAssignment(assignment, input.uid, input.gatewayId) ||
+            "result" in activationDemandEligibility(builder, entitlementTier))
             return false;
         const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
-        if (now - previous >= 60_000)
-            transaction.update(userRef, {
-                "provisioning.openclaw.activationLease.lastActiveAt": now,
+        if (now - previous >= 60_000) {
+            await transaction.builders.records.patchActivationLease(input.uid, { lastActiveAt: now }, {
+                leaseId: lease.leaseId,
+                generation: lease.generation,
+                status: ["active"],
             });
+        }
         return true;
-    });
+    }));
 }
 function record(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -45,21 +81,6 @@ function nonEmptyString(value) {
 }
 function positiveInteger(value) {
     return Number.isSafeInteger(value) && value > 0 ? value : null;
-}
-function userGatewayId(userData) {
-    const provisioning = record(userData.provisioning);
-    const openclaw = record(provisioning?.openclaw);
-    return nonEmptyString(openclaw?.gatewayId);
-}
-function userLease(userData) {
-    const provisioning = record(userData.provisioning);
-    const openclaw = record(provisioning?.openclaw);
-    return record(openclaw?.activationLease);
-}
-function builderSlug(userData) {
-    const provisioning = record(userData.provisioning);
-    const openclaw = record(provisioning?.openclaw);
-    return nonEmptyString(openclaw?.slug) ?? nonEmptyString(userData.username);
 }
 function invalidRequest(input) {
     if (!nonEmptyString(input.reportingGatewayId) ||
@@ -79,8 +100,8 @@ function invalidRequest(input) {
     return null;
 }
 function sourceFenceMatches(input) {
-    const assignment = input.assignmentData;
-    return userGatewayId(input.userData) === input.reportingGatewayId &&
+    const assignment = input.assignment;
+    return input.builder.gateway?.gatewayId === input.reportingGatewayId &&
         assignment?.uid === input.uid &&
         assignment.gatewayId === input.reportingGatewayId &&
         assignment.state === "serving" &&
@@ -125,8 +146,8 @@ function parkedDuplicateBody(lease) {
         },
     };
 }
-function activationDemandEligibility(userData, now) {
-    if (!accountAllowsInteractiveAccess(userData)) {
+function activationDemandEligibility(builder, entitlementTier) {
+    if (!accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
         return {
             result: {
                 statusCode: 403,
@@ -137,7 +158,6 @@ function activationDemandEligibility(userData, now) {
             },
         };
     }
-    const entitlementTier = resolveBuilderTier(userData, new Date(now));
     if (!entitlementTier) {
         return {
             result: {
@@ -162,7 +182,7 @@ function activationDemandEligibility(userData, now) {
             },
         };
     }
-    const slug = builderSlug(userData);
+    const slug = nonEmptyString(builder.slug);
     if (!slug) {
         return {
             result: {
@@ -235,29 +255,25 @@ export async function requestBuilderActivationLease(input) {
     const eventKey = input.eventKey;
     const cause = input.cause;
     const observedAt = input.observedAt;
-    const userRef = input.db.doc(`users/${input.uid}`);
-    const assignmentRef = input.db.doc(`gateways/${reportingGatewayId}/assignments/${input.uid}`);
-    return input.db.runTransaction(async (transaction) => {
-        const [userSnapshot, assignmentSnapshot] = await Promise.all([
-            transaction.get(userRef),
-            transaction.get(assignmentRef),
+    const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
+    return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
+        const [builder, assignment] = await Promise.all([
+            transaction.builders.records.get(input.uid),
+            transaction.gateways.assignments.get(reportingGatewayId, input.uid),
         ]);
-        if (!userSnapshot.exists) {
+        assertCurrent(builder);
+        if (!builder) {
             return {
                 statusCode: 404,
                 body: { code: "user-not-found", error: "user not found", uid: input.uid },
             };
         }
-        const userData = userSnapshot.data();
-        const assignmentData = assignmentSnapshot.exists
-            ? assignmentSnapshot.data()
-            : undefined;
         if (!sourceFenceMatches({
             uid: input.uid,
             reportingGatewayId,
             assignmentEpoch,
-            userData,
-            assignmentData,
+            builder,
+            assignment,
         })) {
             return {
                 statusCode: 409,
@@ -269,17 +285,18 @@ export async function requestBuilderActivationLease(input) {
                 },
             };
         }
-        if (record(userData.provisioning)?.computerRecovery != null) {
+        if (builder.fences.computerRecovery !== undefined) {
             return {
                 statusCode: 409,
                 body: { code: "builder-computer-recovery-in-progress", error: "computer recovery is in progress" },
             };
         }
-        const eligibility = activationDemandEligibility(userData, input.now ?? Date.now());
+        const eligibility = activationDemandEligibility(builder, entitlementTier);
         if ("result" in eligibility)
             return eligibility.result;
-        const { entitlementTier, sizingTier, slug } = eligibility;
-        const existing = userLease(userData);
+        const { sizingTier, slug } = eligibility;
+        const existing = builder.activationLease;
+        const leaseFence = { leaseId: existing?.leaseId ?? null, generation: existing?.generation ?? null };
         const duplicate = parkedDuplicateForEvent(existing, eventKey);
         if (duplicate)
             return duplicate;
@@ -292,9 +309,7 @@ export async function requestBuilderActivationLease(input) {
             sourceAssignmentEpoch: assignmentEpoch,
         });
         if (returningLease) {
-            transaction.update(userRef, {
-                "provisioning.openclaw.activationLease": returningLease,
-            });
+            await transaction.builders.records.setActivationLease(input.uid, returningLease, leaseFence);
             return demandBody({
                 lease: returningLease,
                 status: "returning",
@@ -311,9 +326,7 @@ export async function requestBuilderActivationLease(input) {
             sourceAssignmentEpoch: assignmentEpoch,
         });
         if (adoptedLease) {
-            transaction.update(userRef, {
-                "provisioning.openclaw.activationLease": adoptedLease,
-            });
+            await transaction.builders.records.setActivationLease(input.uid, adoptedLease, leaseFence);
             return demandBody({
                 lease: adoptedLease,
                 status: String(adoptedLease.status),
@@ -334,14 +347,12 @@ export async function requestBuilderActivationLease(input) {
             builderSlug: slug,
             sourceGatewayId: reportingGatewayId,
             sourceAssignmentEpoch: assignmentEpoch,
-            entitlementTier,
+            entitlementTier: eligibility.entitlementTier,
             sizingTier,
         };
-        transaction.update(userRef, {
-            "provisioning.openclaw.activationLease": next,
-        });
+        await transaction.builders.records.setActivationLease(input.uid, next, leaseFence);
         return demandBody({ lease: next, status: "requested", sizingTier });
-    });
+    }));
 }
 function runtimeOperationSuffix(gatewayId, generation) {
     if (gatewayId.length === 0)

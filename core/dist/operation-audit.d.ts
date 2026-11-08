@@ -1,4 +1,5 @@
 import { type OperationAuditAliasOutcome, type OperationAuditAliasPlan, type OperationAuditPartialOutcome, type OperationAuditRecord, type OperationAuditReleaseRolloutLinkage, type OperationAuditTestProvenance } from "@octogee/shared/types/glm";
+import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/store.js";
 export interface OperationsDocSnapshot {
     exists: boolean;
     id: string;
@@ -71,7 +72,7 @@ export declare class OperationAuditRecordTypeError extends Error {
     constructor(auditId: string);
 }
 export declare class OperationAuditSchemaError extends Error {
-    constructor(auditId: string);
+    constructor(auditId: string, options?: ErrorOptions);
 }
 export declare class OperationAuditRecoveryContractError extends Error {
     constructor(auditId: string);
@@ -89,9 +90,9 @@ export declare class OperationAuditIdempotencyConflictError extends Error {
 export declare function operationAuditMutationFingerprint(mutation: Record<string, unknown>): string;
 export declare function operationAuditDocumentId(idempotencyKey: string): string;
 export declare function buildOperationAuditIntent(opts: OperationAuditIntentInput): OperationAuditIntent;
-export declare function stageOperationAuditIntent(db: OperationsDb, transaction: OperationsTransaction, intent: OperationAuditIntent): Promise<RecordedOperationAuditIntent>;
-export declare function recordOperationAuditIntent(db: OperationsDb, opts: OperationAuditIntentInput): Promise<RecordedOperationAuditIntent>;
-export declare function claimOperationAuditAction(db: OperationsDb, auditId: string, opts: ClaimOperationAuditActionInput): Promise<OperationAuditActionClaim>;
+export declare function stageOperationAuditIntentInStore(transaction: PlatformStateTransaction, intent: OperationAuditIntent): Promise<RecordedOperationAuditIntent>;
+export declare function recordOperationAuditIntent(store: PlatformStateStore, opts: OperationAuditIntentInput): Promise<RecordedOperationAuditIntent>;
+export declare function claimOperationAuditAction(store: PlatformStateStore, auditId: string, opts: ClaimOperationAuditActionInput): Promise<OperationAuditActionClaim>;
 export type FinishOperationAuditInput = {
     outcome: "completed";
     expectedClaimId: string;
@@ -115,6 +116,6 @@ export type FinishOperationAuditInput = {
     now?: () => number;
 };
 export declare const OPERATION_AUDIT_RETENTION_MS: number;
-export declare function finishOperationAudit(db: OperationsDb, auditId: string, opts: FinishOperationAuditInput): Promise<void>;
-export declare function runWithOperationAuditIntent<T>(db: OperationsDb, opts: OperationAuditIntentInput, claimOpts: ClaimOperationAuditActionInput, action: (claim: OperationAuditActionClaim) => Promise<T>): Promise<T>;
-export declare function resumeOperationAuditAction<T>(db: OperationsDb, opts: RecoverOperationAuditActionInput, action: (claim: OperationAuditActionClaim) => Promise<T>): Promise<T>;
+export declare function finishOperationAudit(store: PlatformStateStore, auditId: string, opts: FinishOperationAuditInput): Promise<void>;
+export declare function runWithOperationAuditIntent<T>(store: PlatformStateStore, opts: OperationAuditIntentInput, claimOpts: ClaimOperationAuditActionInput, action: (claim: OperationAuditActionClaim) => Promise<T>): Promise<T>;
+export declare function resumeOperationAuditAction<T>(store: PlatformStateStore, opts: RecoverOperationAuditActionInput, action: (claim: OperationAuditActionClaim) => Promise<T>): Promise<T>;

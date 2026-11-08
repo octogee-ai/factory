@@ -1,26 +1,24 @@
 import { builderActivateOperationId } from "./builder-activation-lease.js";
-import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, projectGatewayDesiredRootForGateway, type GatewayDoc } from "@octogee/shared/types/gateway-releases";
+import type { GatewayDoc } from "@octogee/shared/types/gateway-releases";
 import type { GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
-type DurableGateway = GatewayDoc & GatewayMutableConfig;
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
+import type { BuilderActivationLease, BuilderRecord } from "./platform-state/builders.js";
+import type { PlatformStateRepositories } from "./platform-state/store.js";
 
-function prelaunchStatusMatches(gatewayId: string, generation: number, lease: Record<string, unknown>, activationBoot: boolean): boolean {
+type DurableGateway = GatewayDoc & GatewayMutableConfig;
+
+export type PrelaunchAuthorityReader = Pick<PlatformStateRepositories, "builders" | "gateways">;
+
+function prelaunchStatusMatches(gatewayId: string, generation: number, lease: BuilderActivationLease, activationBoot: boolean): boolean {
   return lease.status === "provisioning" && lease.activationOperationId === undefined && lease.activatingAt === undefined ||
-    activationBoot && ["provisioning", "activating"].includes(String(lease.status)) &&
+    activationBoot && ["provisioning", "activating"].includes(lease.status) &&
     lease.activationOperationId === builderActivateOperationId(gatewayId, generation);
 }
 
-function prelaunchLease(gateway: DurableGateway, userData: unknown, activationBoot = false): Record<string, unknown> | null {
-  const user = record(userData);
-  const openclaw = record(record(user?.provisioning)?.openclaw);
-  const lease = record(openclaw?.activationLease);
+function prelaunchLease(gateway: DurableGateway, builder: BuilderRecord | null, activationBoot = false): BuilderActivationLease | null {
+  const lease = builder?.activationLease ?? null;
   const allocation = gateway.allocation;
-  if (!user || !accountAllowsInteractiveAccess(user) || !lease || !allocation) return null;
+  if (!builder || !accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle }) || !lease || !allocation) return null;
   return [
     gateway.desiredStatus === "running",
     gateway.gatewayClass === "builder",
@@ -33,8 +31,8 @@ function prelaunchLease(gateway: DurableGateway, userData: unknown, activationBo
     lease.activeAt === undefined,
     typeof lease.sourceGatewayId === "string",
     lease.sourceGatewayId !== gateway.gatewayId,
-    openclaw?.gatewayId === lease.sourceGatewayId,
-    openclaw?.slug === gateway.builderSlug,
+    builder.gateway?.gatewayId === lease.sourceGatewayId,
+    builder.slug === gateway.builderSlug,
     lease.builderSlug === gateway.builderSlug,
     Number.isSafeInteger(lease.sourceAssignmentEpoch),
   ].every(Boolean) ? lease : null;
@@ -51,51 +49,42 @@ function samePrelaunchAllocation(gateway: DurableGateway, expected: DurableGatew
 }
 
 export async function disposableBuilderPrelaunchReserved(input: {
-  db: Firestore;
+  reader: PrelaunchAuthorityReader;
   gateway: DurableGateway;
-  transaction?: Transaction;
   expectedGateway?: DurableGateway;
   activationBoot?: true;
 }): Promise<boolean> {
-  const { db, gateway, transaction, expectedGateway } = input;
+  const { reader, gateway, expectedGateway } = input;
   if (expectedGateway && !samePrelaunchAllocation(gateway, expectedGateway)) return false;
   if (gateway.gatewayClass !== "builder" || gateway.allocation?.kind !== "disposable-builder" || !gateway.ownerUid) {
     return false;
   }
-  const userRef = db.collection("users").doc(gateway.ownerUid);
-  const user = await (transaction ? transaction.get(userRef) : userRef.get());
-  const lease = prelaunchLease(gateway, user.data(), input.activationBoot);
+  const lease = prelaunchLease(gateway, await reader.builders.records.get(gateway.ownerUid), input.activationBoot);
   if (!lease) return false;
-  const sourceRef = db.collection(GATEWAYS_COLLECTION).doc(lease.sourceGatewayId as string);
-  const assignmentRef = sourceRef.collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(gateway.ownerUid);
-  const targetAssignments = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId)
-    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).limit(1);
-  const [source, assignment, target] = await Promise.all([
-    transaction ? transaction.get(sourceRef) : sourceRef.get(),
-    transaction ? transaction.get(assignmentRef) : assignmentRef.get(),
-    transaction ? transaction.get(targetAssignments) : targetAssignments.get(),
+  const sourceGatewayId = lease.sourceGatewayId!;
+  const [sourceRoot, assigned, targetEmpty] = await Promise.all([
+    reader.gateways.roots.get(sourceGatewayId),
+    reader.gateways.assignments.get(sourceGatewayId, gateway.ownerUid),
+    reader.gateways.assignments.isEmpty(gateway.gatewayId),
   ]);
-  const sourceRoot = projectGatewayDesiredRootForGateway(source.data(), lease.sourceGatewayId as string);
-  const assigned = assignment.data();
   if (!assigned || sourceRoot?.gatewayClass !== "shared") return false;
   return [
     assigned.uid === gateway.ownerUid,
     assigned.slug === gateway.builderSlug,
-    assigned.gatewayId === lease.sourceGatewayId,
+    assigned.gatewayId === sourceGatewayId,
     assigned.state === "serving",
     assigned.epoch === lease.sourceAssignmentEpoch,
-    target.empty,
+    targetEmpty,
   ].every(Boolean);
 }
 
-
-function activationLeaseMatches(gateway: DurableGateway, lease: Record<string, unknown> | null): lease is Record<string, unknown> {
+function activationLeaseMatches(gateway: DurableGateway, lease: BuilderActivationLease | null): lease is BuilderActivationLease {
   return Boolean(lease && lease.leaseId === gateway.allocation?.leaseId && lease.generation === gateway.allocation?.generation &&
     lease.targetGatewayId === gateway.gatewayId && gateway.allocation?.claimedByUid === gateway.ownerUid && lease.builderSlug === gateway.builderSlug);
 }
 
-function activationBootMode(gateway: DurableGateway, lease: Record<string, unknown>): { mode: "prelaunch" | "normal" | "activating"; migrationId?: string } {
-  if (["active", "returning", "failed"].includes(String(lease.status))) return { mode: "normal" };
+function activationBootMode(gateway: DurableGateway, lease: BuilderActivationLease): { mode: "prelaunch" | "normal" | "activating"; migrationId?: string } {
+  if (["active", "returning", "failed"].includes(lease.status)) return { mode: "normal" };
   if (lease.status === "activating" || (lease.status === "provisioning" && lease.activationOperationId !== undefined)) {
     if (typeof lease.activationOperationId !== "string" || lease.activationOperationId !== builderActivateOperationId(gateway.gatewayId, gateway.allocation!.generation)) {
       throw new Error("Builder activation operation is unavailable");
@@ -106,27 +95,22 @@ function activationBootMode(gateway: DurableGateway, lease: Record<string, unkno
   return { mode: "prelaunch" };
 }
 
-async function hasServingBuilderAssignment(input: {
-  db: Firestore; gateway: DurableGateway; transaction: Transaction;
-}, userData: Record<string, unknown>, ownerUid: string): Promise<boolean> {
-  const { gateway, db, transaction } = input;
-  if (record(record(userData.provisioning)?.openclaw)?.gatewayId !== gateway.gatewayId) return false;
-  const assigned = (await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId)
-    .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).doc(ownerUid))).data();
-  return assigned?.uid === ownerUid && assigned.state === "serving";
+async function hasServingBuilderAssignment(reader: PrelaunchAuthorityReader, gateway: DurableGateway, builder: BuilderRecord): Promise<boolean> {
+  if (builder.gateway?.gatewayId !== gateway.gatewayId) return false;
+  const assigned = await reader.gateways.assignments.get(gateway.gatewayId, builder.uid);
+  return assigned?.uid === builder.uid && assigned.state === "serving";
 }
 
 export async function disposableBuilderBootMode(input: {
-  db: Firestore; gateway: DurableGateway; transaction: Transaction;
+  reader: PrelaunchAuthorityReader; gateway: DurableGateway;
 }): Promise<{ mode: "prelaunch" | "normal" | "activating"; migrationId?: string }> {
-  const { gateway, db, transaction } = input;
+  const { gateway, reader } = input;
   if (gateway.gatewayClass !== "builder" || gateway.allocation?.kind !== "disposable-builder") return { mode: "normal" };
   if (!gateway.ownerUid) throw new Error("Builder prelaunch owner is unavailable");
-  const user = await transaction.get(db.collection("users").doc(gateway.ownerUid));
-  const data = user.data();
-  if (!data) throw new Error("Builder prelaunch owner is unavailable");
-  if (await hasServingBuilderAssignment(input, data, gateway.ownerUid)) return { mode: "normal" };
-  const lease = record(record(record(data.provisioning)?.openclaw)?.activationLease);
+  const builder = await reader.builders.records.get(gateway.ownerUid);
+  if (!builder) throw new Error("Builder prelaunch owner is unavailable");
+  if (await hasServingBuilderAssignment(reader, gateway, builder)) return { mode: "normal" };
+  const lease = builder.activationLease;
   if (!activationLeaseMatches(gateway, lease)) {
     throw new Error("Builder activation authority is inconsistent");
   }

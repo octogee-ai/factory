@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { FieldValue, type DocumentData, type Firestore, type Transaction } from "firebase-admin/firestore";
+import type { GatewayRoot } from "./platform-state/gateways.js";
+import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 
-export interface RuntimeRestartFence {
+export type RuntimeRestartFence = {
   attemptId: string;
   auditId: string;
   gatewayId: string;
@@ -10,20 +11,18 @@ export interface RuntimeRestartFence {
   phase: "reserved" | "dispatched" | "acknowledged";
   target?: Record<string, unknown>;
   acknowledgement?: Record<string, unknown>;
-}
+};
 
 export async function updateRuntimeRestart(
-  db: Firestore,
+  store: PlatformStateStore,
   current: RuntimeRestartFence,
   next: RuntimeRestartFence | null,
-  validate?: (transaction: Transaction, root: DocumentData) => Promise<void>,
+  validate?: (transaction: PlatformStateTransaction, root: Stored<GatewayRoot>) => Promise<void>,
 ): Promise<void> {
-  await db.runTransaction(async transaction => {
-    const ref = db.doc(`gateways/${current.gatewayId}`);
-    const root = await transaction.get(ref);
-    const data = root.data();
-    if (!data || !isDeepStrictEqual(data.runtimeRestartFence, current)) throw new Error("gateway runtime restart fence changed");
-    await validate?.(transaction, data);
-    transaction.update(ref, { runtimeRestartFence: next ?? FieldValue.delete() });
+  await store.transaction({ label: "gateway-runtime-restart.update" }, async (transaction) => {
+    const root = await transaction.gateways.roots.get(current.gatewayId);
+    if (!root || !isDeepStrictEqual(root.runtimeRestartFence, current)) throw new Error("gateway runtime restart fence changed");
+    await validate?.(transaction, root);
+    await transaction.gateways.roots.compareAndSetRuntimeRestartFence(current.gatewayId, current, next);
   });
 }

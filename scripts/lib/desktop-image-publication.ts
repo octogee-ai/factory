@@ -1,6 +1,7 @@
 import { GoogleAuth } from 'google-auth-library';
 import { randomUUID } from 'node:crypto';
 import { runWithOperationAuditIntent } from '@octogee/core/operation-audit';
+import { createFirestorePlatformStateStore } from '@octogee/core/platform-state';
 import { createCentralReleaseAuthority } from '@octogee/core/artifact-registry';
 import { deploymentEnvironmentSettings } from '@octogee/core/deployment-environment';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -111,7 +112,7 @@ export async function runDesktopArchivePrune(input: {
   console.log(JSON.stringify(plan, null, 2));
   if (!input.apply || plan.remove.length === 0) return plan;
   let applied = plan;
-  await runWithOperationAuditIntent(input.db, {
+  await runWithOperationAuditIntent(createFirestorePlatformStateStore({ db: input.db }), {
     actor: input.actor, forced: false, what: 'Prune archived desktop images', why: input.why,
     target: { environment: input.environment }, preActionStatus: plan,
     mutation: { action: 'prune-desktop-archive' },
@@ -259,7 +260,7 @@ export async function runDesktopImagePublication(input: {
     console.log(`desktop image: ${publication.project} family already serves ${publication.image}`);
     return;
   }
-  await runWithOperationAuditIntent(input.db, {
+  await runWithOperationAuditIntent(createFirestorePlatformStateStore({ db: input.db }), {
     actor: input.actor, forced: false, what: 'Publish desktop image', why: input.why,
     target: { environment: input.environment }, preActionStatus: plan,
     mutation: { action: 'publish-desktop-image' },

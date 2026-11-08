@@ -4,7 +4,7 @@ export const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 export function sharedClassGatewayQuery(db) {
     return db.collection(GATEWAYS_COLLECTION).where("gatewayClass", "==", "shared");
 }
-export function sharedPoolMemberRootsFromSnapshot(snapshot) {
+function sharedPoolMemberRootsFromSnapshot(snapshot) {
     return snapshot.docs.map((doc) => {
         const data = doc.data();
         return {
@@ -14,13 +14,21 @@ export function sharedPoolMemberRootsFromSnapshot(snapshot) {
         };
     });
 }
-export async function readSharedPoolMemberRoots(db, transaction) {
+async function readSharedPoolMemberRoots(db, transaction) {
     const query = sharedClassGatewayQuery(db);
     const snapshot = transaction ? await transaction.get(query) : await query.get();
     return sharedPoolMemberRootsFromSnapshot(snapshot);
 }
 export async function readSharedGatewayPoolConfig(db, transaction) {
     return deriveSharedGatewayPoolConfig(await readSharedPoolMemberRoots(db, transaction));
+}
+export async function readSharedGatewayPoolConfigInStore(transaction) {
+    const roots = await transaction.gateways.roots.list({ gatewayClass: "shared" });
+    return deriveSharedGatewayPoolConfig(roots.map((root) => ({
+        gatewayId: root.gatewayId,
+        gatewayClass: root.gatewayClass,
+        desiredStatus: root.desiredStatus,
+    })));
 }
 export class InvalidSharedGatewayAutoscalingConfigError extends Error {
     constructor() {

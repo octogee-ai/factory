@@ -244,10 +244,14 @@ export function decodeWorkspaceMember(snapshot: DocumentSnapshot): Stored<Worksp
 export function decodeWorkspaceProject(snapshot: DocumentSnapshot): Stored<WorkspaceProject> | null {
   const location = projectPath(snapshot.ref.path);
   if (!snapshot.exists || location === null) return null;
-  const fields = new FirestoreFields(projectKey(location.workspaceSlug, location.projectSlug), decodeDocumentData(snapshot));
-  return withStoredRevision<WorkspaceProject>(snapshot, {
-    workspaceSlug: location.workspaceSlug,
-    projectSlug: location.projectSlug,
+  return withStoredRevision(snapshot, workspaceProjectFromData(location.workspaceSlug, location.projectSlug, decodeDocumentData(snapshot)));
+}
+
+export function workspaceProjectFromData(workspaceSlug: string, projectSlug: string, data: PlainObject): WorkspaceProject {
+  const fields = new FirestoreFields(projectKey(workspaceSlug, projectSlug), data);
+  return {
+    workspaceSlug,
+    projectSlug,
     ownerUid: fields.string("ownerUid"),
     ownerActive: fields.nullableBoolean("ownerActive"),
     giteaRepoName: fields.nullableString("giteaRepoName"),
@@ -263,22 +267,26 @@ export function decodeWorkspaceProject(snapshot: DocumentSnapshot): Stored<Works
     repoSource: fields.nullableMap("repoSource"),
     agent: fields.nullableMap("agent"),
     updatedAt: fields.nullableNumber("updatedAt"),
-  });
+  };
 }
 
 export function decodeWorkspaceChannel(snapshot: DocumentSnapshot): Stored<WorkspaceChannel> | null {
   const location = channelPath(snapshot.ref.path);
   if (!snapshot.exists || location === null) return null;
-  const fields = new FirestoreFields(channelKey(location.scope, location.channelId), decodeDocumentData(snapshot));
-  return withStoredRevision<WorkspaceChannel>(snapshot, {
-    scope: location.scope,
-    channelId: location.channelId,
+  return withStoredRevision(snapshot, workspaceChannelFromData(location.scope, location.channelId, decodeDocumentData(snapshot)));
+}
+
+export function workspaceChannelFromData(scope: WorkspaceChannelScope, channelId: string, data: PlainObject): WorkspaceChannel {
+  const fields = new FirestoreFields(channelKey(scope, channelId), data);
+  return {
+    scope,
+    channelId,
     kind: fields.nullableString("kind"),
     mattermostChannelId: fields.nullableString("mattermost.channelId"),
     archivedAt: fields.nullableNumber("archivedAt"),
     createdBy: fields.nullableString("createdBy"),
     createdAt: fields.nullableNumber("createdAt"),
-  });
+  };
 }
 
 export function decodeAgentIdentity(snapshot: DocumentSnapshot): Stored<BuilderAgentIdentity> | null {

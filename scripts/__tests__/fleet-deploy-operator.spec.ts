@@ -42,16 +42,16 @@ describe("TEST fleet operator release mutation", () => {
   it("journals a PROD Builder release in the PROD environment", async () => {
     const { db, root } = database();
     await deployFleetBuilder(db, { gatewayId: root.gatewayId }, manifest, payload, "prod");
-    expect(mocks.mutate).toHaveBeenCalledWith(db, expect.objectContaining({ target: { gatewayId: root.gatewayId, environment: "prod" } }));
+    expect(mocks.mutate).toHaveBeenCalledWith(expect.objectContaining({ transaction: expect.any(Function) }), expect.objectContaining({ target: { gatewayId: root.gatewayId, environment: "prod" } }));
   });
   it("uses the ordinary audit wrapper and immutable append without changing paused status", async () => {
     const { db, root } = database();
     expect(await deployFleetBuilder(db, { gatewayId: root.gatewayId }, manifest, payload, "test")).toEqual({ release: 2, operationId: "roll-2" });
-    expect(mocks.mutate).toHaveBeenCalledWith(db, expect.objectContaining({
+    expect(mocks.mutate).toHaveBeenCalledWith(expect.objectContaining({ transaction: expect.any(Function) }), expect.objectContaining({
       forced: false, target: { gatewayId: "b-paused", environment: "test" },
       mutation: { kind: "deploy-gateway-build", gatewayId: "b-paused", sourceSha: manifest.sourceSha, manifestDigest: manifest.manifestDigest },
     }));
-    expect(mocks.append).toHaveBeenCalledWith(db, expect.objectContaining({ gateway: root, payload, artifact: payload, sourceRelease: 1, origin: "operator" }));
+    expect(mocks.append).toHaveBeenCalledWith(mocks.mutate.mock.calls[0]![0], expect.objectContaining({ gateway: root, payload, artifact: payload, sourceRelease: 1, origin: "operator" }));
     expect(root.desiredStatus).toBe("paused");
   });
   it.each([new GatewayRetirementConflictError("transfer busy"), new StaleGatewayReleaseError("b-paused", 1, 2)])("defers typed owned mutation races: %s", async (error) => {
@@ -74,7 +74,7 @@ describe("TEST fleet operator release mutation", () => {
     vi.stubEnv("RELEASE_REASON", "Ship TEST from Cloud Build 123");
     const { db } = database();
     await deployFleetBuilder(db, { gatewayId: "b-paused" }, manifest, payload, "test");
-    expect(mocks.mutate).toHaveBeenCalledWith(db, expect.objectContaining({ actor: "operator:chris", why: "Ship TEST from Cloud Build 123" }));
+    expect(mocks.mutate).toHaveBeenCalledWith(expect.objectContaining({ transaction: expect.any(Function) }), expect.objectContaining({ actor: "operator:chris", why: "Ship TEST from Cloud Build 123" }));
   });
   it("revalidates Builder class before writing an audit or release", async () => {
     const { db } = database("shared");

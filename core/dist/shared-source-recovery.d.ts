@@ -1,10 +1,12 @@
-import type { DocumentData, Firestore, Transaction } from "firebase-admin/firestore";
+import type { DocumentData } from "firebase-admin/firestore";
+import type { GatewayAssignment } from "./platform-state/gateways.js";
+import type { PlatformStateTransaction } from "./platform-state/store.js";
 export interface SourceRecoveryAssignment {
     uid: string;
     slug: string;
     agentId: string;
     assignmentEpoch: number;
-    assignment: DocumentData;
+    assignment: GatewayAssignment;
 }
 export interface SourceRecoveryAgentStore {
     uid: string;
@@ -22,8 +24,8 @@ export interface SharedSourceRecoveryAuthority {
 }
 export declare class SharedSourceRecoveryConflict extends Error {
 }
-export declare function readPostgresSourceAgentStores(db: Firestore, tx: Transaction, assignments: SourceRecoveryAssignment[]): Promise<SourceRecoveryAgentStore[]>;
-export declare function readSharedSourceRecoveryAuthority(db: Firestore, tx: Transaction, gatewayId: string, ownOperationId?: string, predecessorId?: string): Promise<SharedSourceRecoveryAuthority>;
+export declare function readPostgresSourceAgentStores(transaction: PlatformStateTransaction, assignments: readonly SourceRecoveryAssignment[]): Promise<SourceRecoveryAgentStore[]>;
+export declare function readSharedSourceRecoveryAuthority(transaction: PlatformStateTransaction, gatewayId: string, ownOperationId?: string, predecessorId?: string): Promise<SharedSourceRecoveryAuthority>;
 export declare function assertSharedSourceRecoveryUnchanged(current: SharedSourceRecoveryAuthority, captured: SharedSourceRecoveryAuthority): void;
 export interface SharedSourceRecoverySupersession {
     operationId: string;
@@ -41,7 +43,7 @@ export declare function assertSharedSourceRecoveryPredecessor(request: {
     fence: DocumentData;
     source: SharedSourceRecoveryAuthority;
 }): SharedSourceRecoverySupersession;
-export declare function readSharedSourceRecoverySupersession(db: Firestore, tx: Transaction, gatewayId: string, operationId: string): Promise<{
+export declare function readSharedSourceRecoverySupersession(transaction: PlatformStateTransaction, gatewayId: string, operationId: string): Promise<{
     source: SharedSourceRecoveryAuthority;
     supersede: SharedSourceRecoverySupersession;
 }>;

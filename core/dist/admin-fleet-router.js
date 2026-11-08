@@ -1,33 +1,32 @@
 import { migrationCancellationDeferred } from "./fleet-state.js";
 import { readSharedSourceRecoveryAuthority, readSharedSourceRecoverySupersession, SharedSourceRecoveryConflict } from "./shared-source-recovery.js";
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { FieldValue, } from "firebase-admin/firestore";
-import { GLM_GATEWAYS_COLLECTION, GLM_OPERATIONS_COLLECTION, isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
+import { isOperationAuditRecord, isOperationAuditRow, GATEWAY_CLASSES, GATEWAY_IMAGE_PROFILES, GATEWAY_PROFILES, NEW_GATEWAY_ID_REQUIREMENT, resolveUserGatewayControlState, isValidNewGatewayId, isGatewayClass, isGatewayProfile, resolveGatewayClass, resolveGatewayImageProfile, resolveGatewayRuntime, deriveGatewayIdentity, } from "@octogee/shared/types/glm";
 import { deploymentTargetsForEnvironment } from "./deployment-environment.js";
 import { DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS, } from "@octogee/shared/types/platform-config";
-import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GATEWAY_ASSIGNMENTS_SUBCOLLECTION, GATEWAY_RELEASES_SUBCOLLECTION, commitPlacementAtomic, customerRestoreFencePresent, customerRuntimeMutationFenced, isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
+import { accountAllowsInteractiveAccess, } from "@octogee/shared/types/account-lifecycle";
+import { isReleasePayload, isGatewayRuntimeDoc, } from "@octogee/shared/types/gateway-releases";
 import { isGatewayPodReplacements, summarizeGatewayPodReplacements, } from "@octogee/shared/types/gateway-pod-replacements";
-import { parseAssignmentDoc, readAssignmentDocsForGateway } from "./assignment-doc.js";
-import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayRelease, } from "./gateway-live-release.js";
+import { GATEWAY_CONFIG_SCHEMA_VERSION, InitialGatewayReleaseConflictError, gatewayArtifactFromReleasePayload, isGatewayMutableConfigForGateway, writeInitialGatewayReleaseInStore, } from "./gateway-live-release.js";
 import { projectReleaseHistory } from "./gateway-release-history.js";
 import { resolveContinuousBuilderPlacement, resolveLiveActivationTargetGatewayId, } from "@octogee/shared/types/orchestrator-placement";
 import { parseSharedGatewayAutoscalingConfig, } from "@octogee/shared/types/shared-gateway-pool";
-import { readSharedGatewayAutoscalingConfig, readSharedGatewayPoolConfig, } from "./shared-gateway-pool-read.js";
+import { InvalidSharedGatewayAutoscalingConfigError, ORCHESTRATOR_CONFIG_DOC_PATH, readSharedGatewayPoolConfigInStore, } from "./shared-gateway-pool-read.js";
 import { SIZING_TIERS, resolveSizingTier, } from "@octogee/shared/types/sizing";
 import { SPOT_PRICE_MULTIPLIER, estimateGatewayMonthlyCost, } from "@octogee/shared/types/cost-estimator";
 import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import { IMAGE_TAG_PATTERN } from "./image-tag.js";
-import { builderReturnOperationId, placementRetireOperationId, requestBuilderActivationLease, } from "./builder-activation-lease.js";
+import { builderReturnOperationId, firestoreBuilderTierReader, placementRetireOperationId, requestBuilderActivationLease, } from "./builder-activation-lease.js";
 import { addAdminComputerRoutes } from "./admin-computer-router.js";
-import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfenced, claimGatewayRetirementAtomic, } from "./gateway-retirement-claim.js";
+import { GatewayRetirementConflictError, assertGatewayRuntimeMutationUnfencedInStore, builderRuntimeMutationFenced, claimGatewayRetirementInStore, } from "./gateway-retirement-claim.js";
 import { appendGatewayRelease, asDurableGatewayRoot, InvalidGatewayRootError, StaleGatewayReleaseError, } from "./gateway-release-append.js";
 import { findActiveGatewayMigration, GatewayMigrationInFlightError, } from "./fleet-operation-lock.js";
-import { CUSTOMER_DELETION_JOBS_COLLECTION, buildCustomerDeletionSchedule, } from "@octogee/shared/types/account-lifecycle";
+import { buildCustomerDeletionSchedule } from "@octogee/shared/types/account-lifecycle";
 import { buildCustomerDeletionPlan } from "./customer-deletion-plan.js";
 import { FleetMutationIdempotencyError, runNormalFleetMutation, } from "./normal-fleet-mutation.js";
 import { OperationAuditIdempotencyConflictError } from "./operation-audit.js";
+import { firestoreBuilderAccountReader, } from "./builder-account.js";
 import { centralGatewayReleasePayload, } from "./artifact-registry.js";
 function rejectPersistenceInBody(body) {
     if (body.persistence === undefined)
@@ -115,17 +114,84 @@ export function resolveFleetNamespace(env = process.env) {
     const ns = env.K8S_NAMESPACE;
     return typeof ns === "string" && ns.length > 0 ? ns : "octogee";
 }
-const FLEET_RUNTIME_CONFIG_DOC_PATH = "config/orchestrator";
 export const ERR_SHARED_POOL_RIDES_PLATFORM_RELEASE = "shared pool rides the platform release; deploy the platform instead";
-async function readOnboardingRuntimeConfig(deps) {
-    const [pool, sharedGatewayAutoscaling] = await Promise.all([
-        readSharedGatewayPoolConfig(deps.db),
-        readSharedGatewayAutoscalingConfig(deps.db),
+function sharedGatewayAutoscalingOf(config) {
+    const autoscaling = config === null
+        ? parseSharedGatewayAutoscalingConfig(undefined)
+        : config.sharedGatewayAutoscaling;
+    if (autoscaling === null)
+        throw new InvalidSharedGatewayAutoscalingConfigError();
+    return autoscaling;
+}
+async function readOnboardingRuntimeConfigInStore(transaction) {
+    const [pool, orchestrator] = await Promise.all([
+        readSharedGatewayPoolConfigInStore(transaction),
+        transaction.config.orchestrator.get(),
     ]);
     return {
         defaultGatewayId: pool?.defaultGatewayId ?? "",
         sharedGatewayIds: pool?.sharedGatewayIds ?? [],
-        sharedGatewayAutoscaling,
+        sharedGatewayAutoscaling: sharedGatewayAutoscalingOf(orchestrator),
+    };
+}
+function presentFields(fields) {
+    return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null));
+}
+function builderUserData(builder, account) {
+    return presentFields({
+        ...account?.planInputs,
+        username: account?.username,
+        email: account?.email,
+        lastActive: account?.lastActive,
+        accountLifecycle: builder.accountLifecycle,
+        provisioning: presentFields({
+            ...builder.provisioning,
+            ...builder.home,
+            computerRecovery: builder.fences.computerRecovery,
+            pendingNativeSchedulerRetirement: builder.fences.pendingNativeSchedulerRetirement,
+            openclaw: presentFields({
+                ...builder.openclaw,
+                ...builder.gateway,
+                slug: builder.slug,
+                activationLease: builder.activationLease,
+                restoreFence: builder.fences.restoreFence,
+                sourceTransferFence: builder.fences.sourceTransferFence,
+                migration: builder.fences.migration,
+                runtimeReset: builder.fences.runtimeReset,
+            }),
+        }),
+    });
+}
+function builderUserDoc(builder, account) {
+    const data = builderUserData(builder, account);
+    return { id: builder.uid, data: () => data };
+}
+function recordDoc(id, record) {
+    const { revision: _revision, id: _id, ...data } = record;
+    return { id, data: () => data };
+}
+function operationDocs(operations) {
+    return operations.map((operation) => recordDoc(operation.id, operation));
+}
+function runtimeRecordDoc(record) {
+    return recordDoc(record.gatewayId, { docKind: "runtime", ...record });
+}
+async function readFleetSnapshot(store) {
+    const [roots, runtimes, builders, assignments] = await Promise.all([
+        store.gateways.roots.list(),
+        store.fleetRegistry.list(),
+        store.builders.records.listAll(),
+        store.gateways.assignments.listAll(),
+    ]);
+    return { roots, runtimes, builders, assignments };
+}
+function builderUserDocs(builders, accounts) {
+    return builders.map((builder) => builderUserDoc(builder, accounts.get(builder.uid)));
+}
+function fleetGatewayDocs(snapshot) {
+    return {
+        gatewayDocs: snapshot.roots.map((root) => recordDoc(root.gatewayId, root)),
+        glmDocs: snapshot.runtimes.map(runtimeRecordDoc),
     };
 }
 function readUserOpenclaw(data) {
@@ -237,7 +303,7 @@ function accountLifecycleWarning(input) {
         return null;
     }
     const operation = latestOperation(input.operations, (candidate) => candidate.kind === "erase-customer" && operationUid(candidate) === input.uid);
-    const slug = resolveCustomerSlug(input.data, (data) => asStringOrNull(data.username) ? [asStringOrNull(data.username)] : []) ?? asStringOrNull(operation?.input.builderSlug);
+    const slug = resolveCustomerSlug(input.data) ?? asStringOrNull(operation?.input.builderSlug);
     const expiresAt = toMillis(lifecycle.eraseAfter);
     return {
         code: "account-deletion-pending",
@@ -315,7 +381,7 @@ function projectionAssignment(assignmentsByUid, uid, mirroredGatewayId) {
         (assignments.length === 1 ? assignments[0] : null);
 }
 function buildCustomerPlacementProjection(input) {
-    const slug = resolveCustomerSlug(input.data, (userData) => asStringOrNull(userData.username) ? [asStringOrNull(userData.username)] : []);
+    const slug = resolveCustomerSlug(input.data);
     const mirroredGatewayId = readUserGatewayId(input.data);
     const assignment = projectionAssignment(input.assignmentsByUid, input.uid, mirroredGatewayId);
     const assignedGatewayId = assignment?.gatewayId ?? mirroredGatewayId;
@@ -372,15 +438,12 @@ function countBy(items, key) {
     }
     return out;
 }
-function indexAssignmentDocs(docs) {
+function indexAssignmentsByUid(assignments) {
     const byUid = new Map();
-    for (const doc of docs) {
-        const parsed = parseAssignmentDoc(doc.id, doc.data());
-        if (!parsed)
-            continue;
-        const assignments = byUid.get(parsed.uid) ?? [];
-        assignments.push(parsed);
-        byUid.set(parsed.uid, assignments);
+    for (const assignment of assignments) {
+        const forUid = byUid.get(assignment.uid) ?? [];
+        forUid.push(assignment);
+        byUid.set(assignment.uid, forUid);
     }
     return byUid;
 }
@@ -390,7 +453,7 @@ function buildOnboardingPlacementResponse(opts) {
         glmDocs: opts.glmDocs,
     });
     const heartbeatByGatewayId = indexFirestoreDocs(opts.gatewayDocs);
-    const assignmentsByUid = indexAssignmentDocs(opts.assignmentDocs);
+    const assignmentsByUid = indexAssignmentsByUid(opts.assignments);
     const operations = opts.operationDocs.map((doc) => shapeOnboardingOperation(doc.id, doc.data()));
     const mountedBySlug = mountedGatewayBySlug(glmByGatewayId);
     const customers = opts.userDocs
@@ -525,28 +588,19 @@ function buildOnboardingPlacementResponse(opts) {
         generatedAt: new Date().toISOString(),
     };
 }
-async function readAdminOnboardingPlacementResponse(deps) {
-    const [config, glmSnap, gatewaySnap, usersSnap, operationsSnap, assignmentSnap,] = await Promise.all([
-        readOnboardingRuntimeConfig(deps),
-        deps.db.collection(GLM_GATEWAYS_COLLECTION).get(),
-        deps.db.collection("gateways").get(),
-        deps.db.collection("users").get(),
-        deps.db
-            .collection(GLM_OPERATIONS_COLLECTION)
-            .orderBy("createdAt", "desc")
-            .limit(200)
-            .get(),
-        // One collection-group read pulls every gateways/{gw}/assignments/{uid}
-        // across the fleet — the durable roster the panel reads (PR7).
-        deps.db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
+async function readAdminOnboardingPlacementResponse(store, accounts) {
+    const [config, snapshot, recent, accountsByUid] = await Promise.all([
+        store.transaction({ label: "admin.fleet.onboardingPlacementConfig", readOnly: true }, readOnboardingRuntimeConfigInStore),
+        readFleetSnapshot(store),
+        store.journal.listRecent({ limit: 200 }),
+        accounts.list(),
     ]);
     return buildOnboardingPlacementResponse({
         config,
-        glmDocs: glmSnap.docs,
-        gatewayDocs: gatewaySnap.docs,
-        userDocs: usersSnap.docs,
-        operationDocs: operationsSnap.docs,
-        assignmentDocs: assignmentSnap.docs,
+        ...fleetGatewayDocs(snapshot),
+        userDocs: builderUserDocs(snapshot.builders, accountsByUid),
+        operationDocs: operationDocs(recent.items),
+        assignments: snapshot.assignments,
     });
 }
 function indexGlmDocs(docs) {
@@ -601,17 +655,9 @@ function fleetProjectionOperationIds(userDocs, gatewaysById) {
     }
     return [...ids].sort();
 }
-async function readFleetProjectionOperations(db, operationIds) {
-    const docs = await Promise.all(operationIds.map(async (operationId) => {
-        const snapshot = await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get();
-        if (!snapshot.exists)
-            return null;
-        return {
-            id: operationId,
-            data: () => (snapshot.data() ?? {}),
-        };
-    }));
-    return docs.filter((doc) => doc !== null);
+async function readFleetProjectionOperations(store, operationIds) {
+    const found = await store.journal.operations.getMany(operationIds);
+    return operationDocs([...found.values()]);
 }
 function indexFirestoreDocs(docs) {
     const out = new Map();
@@ -641,21 +687,12 @@ function projectDurableGatewayRuntime(root, runtime) {
         podReplacements: runtime.podReplacements,
     };
 }
-// The admin surface is addressed by the durable gateway identity. Runtime
-// observations come from the gateway's bare-id runtime doc; legacy bare GLM
-// docs remain a display fallback solely while a root is genuinely absent.
 function indexAdminGatewayRuntimeDocs(input) {
     const rawGlmById = indexGlmDocs(input.glmDocs);
     const rootsById = indexDurableGatewayRoots(input.gatewayDocs);
-    const gatewayDocIds = new Set(input.gatewayDocs.map((doc) => doc.id));
     const out = new Map();
     for (const [gatewayId, root] of rootsById) {
         out.set(gatewayId, projectDurableGatewayRuntime(root, exactRuntimeDoc(root, rawGlmById.get(gatewayId))));
-    }
-    for (const [gatewayId, glmDoc] of rawGlmById) {
-        if (gatewayDocIds.has(gatewayId) || isGatewayRuntimeDoc(glmDoc))
-            continue;
-        out.set(gatewayId, glmDoc);
     }
     return out;
 }
@@ -731,18 +768,6 @@ function shouldProjectDesiredOnlyGateway(glmDoc) {
 function isPlainRecord(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
 }
-function hasDurableGatewayRootMarkers(data) {
-    if (!isPlainRecord(data))
-        return false;
-    return [
-        "latestRelease",
-        "desiredRelease",
-        "liveRelease",
-        "liveRevisionId",
-        "trafficRevisionId",
-        "configSchemaVersion",
-    ].some((field) => Object.prototype.hasOwnProperty.call(data, field));
-}
 function exactRuntimeDoc(root, data) {
     if (!isGatewayRuntimeDoc(data) || data.gatewayId !== root.gatewayId) {
         return null;
@@ -752,16 +777,18 @@ function exactRuntimeDoc(root, data) {
 function runtimeHeartbeat(runtime) {
     return runtime && isPlainRecord(runtime.heartbeat) ? runtime.heartbeat : null;
 }
-async function readDurableGatewayRuntime(db, gatewayId) {
-    const rootSnap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-    const root = rootSnap.exists ? asDurableGatewayRoot(rootSnap.data(), gatewayId) : null;
+function durableRootOf(stored, gatewayId) {
+    return stored === null ? null : asDurableGatewayRoot(recordDoc(gatewayId, stored).data(), gatewayId);
+}
+async function readDurableGatewayRuntime(store, gatewayId) {
+    const [stored, registry] = await Promise.all([
+        store.gateways.roots.get(gatewayId),
+        store.fleetRegistry.get(gatewayId),
+    ]);
+    const root = durableRootOf(stored, gatewayId);
     if (!root)
         return null;
-    const runtimeSnap = await db
-        .collection(GLM_GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .get();
-    const runtime = runtimeSnap.exists ? exactRuntimeDoc(root, runtimeSnap.data()) : null;
+    const runtime = registry === null ? null : exactRuntimeDoc(root, runtimeRecordDoc(registry).data());
     return { root, runtime, heartbeat: runtimeHeartbeat(runtime) };
 }
 function gatewayRetirementBlocker(gatewayId, runtime) {
@@ -775,8 +802,8 @@ function gatewayRetirementBlocker(gatewayId, runtime) {
     }
     return null;
 }
-async function readGatewayRegistrationReadiness(db, gatewayId) {
-    const runtime = await readDurableGatewayRuntime(db, gatewayId);
+async function readGatewayRegistrationReadiness(store, gatewayId) {
+    const runtime = await readDurableGatewayRuntime(store, gatewayId);
     return {
         registered: runtime !== null,
         gatewayClass: runtime?.root.gatewayClass ?? null,
@@ -1194,10 +1221,10 @@ function validRestoreRecoveryBody(body) {
         validRecoverySupersession(body) &&
         Object.keys(body).every(key => ["sourceSha", "operationId", "reauthorizeAttemptId", "supersedeRecoveryId"].includes(key));
 }
-async function capturedRestoreAttempt(db, operationId, attemptId) {
+async function capturedRestoreAttempt(store, operationId, attemptId) {
     if (attemptId === undefined)
         return undefined;
-    return (await db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()).data()?.restoreAttempt;
+    return (await store.journal.operations.get(operationId))?.restoreAttempt;
 }
 function failedRecoveryOperationMatches(previous, gatewayId) {
     return previous?.kind === OP_KIND_RESTART_GATEWAY && previous.status === "failed" &&
@@ -1210,12 +1237,12 @@ function recoveryPredecessorFenceMatches(input) {
         fence.gatewayId === gatewayId && fence.phase === "dispatched" &&
         fence.target?.restoreOperationId === operationId && isDeepStrictEqual(fence.target?.images, images);
 }
-async function capturedRecoveryPredecessor(db, gatewayId, operationId, predecessorId, reauthorize) {
+async function capturedRecoveryPredecessor(store, gatewayId, operationId, predecessorId, reauthorize) {
     const [root, predecessor] = await Promise.all([
-        db.collection("gateways").doc(gatewayId).get(), db.collection(GLM_OPERATIONS_COLLECTION).doc(predecessorId).get(),
+        store.gateways.roots.get(gatewayId), store.journal.operations.get(predecessorId),
     ]);
-    const previous = predecessor.data();
-    const fence = root.data()?.runtimeRestartFence;
+    const previous = predecessor === null ? undefined : recordDoc(predecessorId, predecessor).data();
+    const fence = root?.runtimeRestartFence;
     const recovery = previous?.input?.restoreRecovery;
     if (recovery?.operationId !== operationId ||
         !recoveryPredecessorFenceMatches({ fence, predecessorId, gatewayId, operationId, images: recovery.images }))
@@ -1504,33 +1531,8 @@ function readUserGatewayId(data) {
     const openclaw = provisioning.openclaw ?? {};
     return asStringOrNull(openclaw.gatewayId);
 }
-function resolveCustomerSlug(userData, workspaceSlugsForUser) {
-    const provisioning = userData.provisioning ?? {};
-    const openclaw = provisioning.openclaw ?? {};
-    const openclawSlug = asStringOrNull(openclaw.slug);
-    return (openclawSlug ??
-        workspaceSlugsForUser(userData)[0] ??
-        null);
-}
-function resolveStripeRefs(userData) {
-    const subscription = userData.subscription ?? {};
-    const builderSubscription = userData.builderSubscription ?? {};
-    const billing = userData.billing ?? {};
-    const subscriptionIds = [
-        asStringOrNull(subscription.stripeSubscriptionId) ??
-            asStringOrNull(subscription.id) ??
-            asStringOrNull(billing.subscriptionId),
-        asStringOrNull(builderSubscription.stripeSubscriptionId) ??
-            asStringOrNull(builderSubscription.id),
-    ].filter((value) => value !== null);
-    return {
-        customerIds: [...new Set([
-                asStringOrNull(subscription.stripeCustomerId),
-                asStringOrNull(userData.stripeCustomerId),
-                asStringOrNull(billing.stripeCustomerId),
-            ].filter((value) => value !== null))],
-        subscriptionIds: [...new Set(subscriptionIds)],
-    };
+function resolveCustomerSlug(userData) {
+    return asStringOrNull(readUserOpenclaw(userData).slug) ?? asStringOrNull(userData.username);
 }
 function classifyUserPlacement(uid, data, gateways) {
     const provisioning = data.provisioning ?? {};
@@ -1686,12 +1688,11 @@ function attachHandoffProgress(gateways, byGateway) {
         gateway.handoffProgress = byGateway.get(gateway.gateway) ?? {};
     }
 }
-export function projectHandoffProgress(assignmentDocs) {
+export function projectHandoffProgress(assignments) {
     const byGateway = new Map();
-    for (const doc of assignmentDocs) {
-        const assignment = parseAssignmentDoc(doc.id, doc.data());
-        const progress = assignment?.handoffProgress;
-        if (!assignment || !progress || progress.length === 0)
+    for (const assignment of assignments) {
+        const progress = assignment.handoffProgress;
+        if (!progress || progress.length === 0)
             continue;
         const newest = [...progress].sort((a, b) => b.at - a.at)[0];
         if (assignment.state === "serving" && newest.status !== "failed")
@@ -1705,29 +1706,24 @@ export function projectHandoffProgress(assignmentDocs) {
 function isUnresolvedMigrationFailure(data) {
     return data.kind === OP_KIND_MIGRATE_CUSTOMER && (data.status === "failed" || data.status === "rolled-back");
 }
-async function listUnresolvedOperationDocs(db, limit) {
+async function listUnresolvedOperationDocs(store, limit) {
     const [inFlight, assignments] = await Promise.all([
-        db.collection(GLM_OPERATIONS_COLLECTION).where("status", "in", ["pending", "running"]).get(),
-        db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
+        store.journal.operations.listByStatus(["pending", "running"]),
+        store.gateways.assignments.listAll(),
     ]);
-    const byId = new Map(inFlight.docs.map((doc) => [doc.id, { id: doc.id, data: () => (doc.data() ?? {}) }]));
+    const inFlightIds = new Set(inFlight.map((operation) => operation.id));
     const pointed = new Set();
-    for (const assignment of assignments.docs) {
-        const operationId = asStringOrNull(assignment.data()?.updatedByOperationId);
-        if (operationId && !byId.has(operationId))
+    for (const assignment of assignments) {
+        const operationId = asStringOrNull(assignment.updatedByOperationId);
+        if (operationId && !inFlightIds.has(operationId))
             pointed.add(operationId);
     }
-    const snaps = await Promise.all([...pointed].map((operationId) => db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId).get()));
-    const pointedFailures = [];
-    for (const snap of snaps) {
-        const data = (snap.data() ?? {});
-        if (snap.exists && isUnresolvedMigrationFailure(data))
-            pointedFailures.push({ id: snap.id, data: () => data });
-    }
-    const createdAt = (doc) => coerceNumberOrNull(doc.data().createdAt) ?? 0;
-    const newestFirst = (docs) => docs.sort((a, b) => createdAt(b) - createdAt(a));
-    const inFlightCapped = newestFirst([...byId.values()]).slice(0, limit);
-    return newestFirst([...pointedFailures, ...inFlightCapped]);
+    const pointedOperations = await store.journal.operations.getMany([...pointed]);
+    const pointedFailures = [...pointedOperations.values()].filter((operation) => isUnresolvedMigrationFailure({ ...operation }));
+    const createdAt = (operation) => coerceNumberOrNull(operation.createdAt) ?? 0;
+    const newestFirst = (operations) => operations.sort((a, b) => createdAt(b) - createdAt(a));
+    const inFlightCapped = newestFirst([...inFlight]).slice(0, limit);
+    return operationDocs(newestFirst([...pointedFailures, ...inFlightCapped]));
 }
 export function shapeOperationsHistoryRecord(id, data) {
     if (isOperationAuditRow(data) && !isOperationAuditRecord(data)) {
@@ -1737,11 +1733,6 @@ export function shapeOperationsHistoryRecord(id, data) {
         return shapeValidOperationAuditHistoryRecord(id, data);
     }
     return { id, ...data };
-}
-function serializeCustomerLookup(doc) {
-    const data = doc.data();
-    const currentGatewayId = data?.provisioning?.openclaw?.gatewayId ?? null;
-    return { uid: doc.id, currentGatewayId };
 }
 async function projectGatewaySummaryWithDiagnostics(deps, doc, glmDoc, now) {
     const summary = projectGatewaySummary(doc, glmDoc, now);
@@ -1855,9 +1846,8 @@ function operationGatewayId(input) {
     }
     return null;
 }
-async function createOperation(db, opts) {
-    const ref = await db.collection(GLM_OPERATIONS_COLLECTION).add(operationDoc(opts, Date.now()));
-    return ref.id;
+async function createOperation(store, opts) {
+    return store.transaction({ label: "admin.fleet.createOperation" }, (transaction) => transaction.journal.operations.enqueue(operationDoc(opts, Date.now())));
 }
 function operationDoc(opts, createdAt) {
     const gatewayId = operationGatewayId(opts.input);
@@ -1876,22 +1866,8 @@ function operationDoc(opts, createdAt) {
         ...(inputUid !== null ? { inputUid } : {}),
     };
 }
-async function readGatewayDoc(db, gatewayId) {
-    const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
-    if (!snap.exists)
-        return null;
-    return asDurableGatewayRoot(snap.data(), gatewayId);
-}
-async function readRelease(db, gatewayId, release) {
-    const snap = await db
-        .collection(GATEWAYS_COLLECTION)
-        .doc(gatewayId)
-        .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-        .doc(String(release))
-        .get();
-    if (!snap.exists)
-        return null;
-    return snap.data();
+async function readGatewayDoc(store, gatewayId) {
+    return durableRootOf(await store.gateways.roots.get(gatewayId), gatewayId);
 }
 function releaseSourceShaFromBody(value) {
     return typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
@@ -2098,21 +2074,10 @@ function buildDurableGatewayPatch(args) {
     }
     return { ok: { patch, config } };
 }
-async function findConflictingGatewayOp(db, gatewayId) {
-    const pendingOps = await db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .where("status", "in", ["pending", "running"])
-        .get();
-    const conflicting = pendingOps.docs.find((d) => {
-        const opData = d.data();
-        return opData?.input?.gatewayId === gatewayId;
-    });
-    if (!conflicting)
-        return null;
-    return {
-        id: conflicting.id,
-        kind: conflicting.data()?.kind ?? null,
-    };
+async function findConflictingGatewayOp(store, gatewayId) {
+    const pendingOps = await store.journal.operations.listByStatus(["pending", "running"]);
+    const conflicting = pendingOps.find((operation) => operation.input.gatewayId === gatewayId);
+    return conflicting ? { id: conflicting.id, kind: conflicting.kind } : null;
 }
 async function resolveRollbackRelease(args) {
     const release = Number(args.requestedRelease);
@@ -2126,7 +2091,7 @@ async function resolveRollbackRelease(args) {
             },
         };
     }
-    const gateway = await readGatewayDoc(args.db, args.gatewayId);
+    const gateway = await readGatewayDoc(args.store, args.gatewayId);
     if (!gateway) {
         return {
             error: {
@@ -2154,7 +2119,7 @@ async function resolveRollbackRelease(args) {
             },
         };
     }
-    const target = await readRelease(args.db, args.gatewayId, release);
+    const target = await args.store.gateways.releases.get(args.gatewayId, release);
     if (!target) {
         return {
             error: {
@@ -2163,7 +2128,7 @@ async function resolveRollbackRelease(args) {
             },
         };
     }
-    const previous = await readRelease(args.db, args.gatewayId, gateway.latestRelease);
+    const previous = await args.store.gateways.releases.get(args.gatewayId, gateway.latestRelease);
     if (!previous) {
         return {
             error: {
@@ -2201,7 +2166,7 @@ async function resolveRollbackRelease(args) {
             },
         };
     }
-    const conflicting = await findConflictingGatewayOp(args.db, args.gatewayId);
+    const conflicting = await findConflictingGatewayOp(args.store, args.gatewayId);
     if (conflicting) {
         return {
             error: {
@@ -2227,12 +2192,12 @@ async function resolveRollbackRelease(args) {
         },
     };
 }
-async function ensureGatewayCreateIsUnique(db, body) {
-    const [legacy, durable] = await Promise.all([
-        db.collection(GLM_GATEWAYS_COLLECTION).doc(body.gatewayId).get(),
-        db.collection(GATEWAYS_COLLECTION).doc(body.gatewayId).get(),
+async function ensureGatewayCreateIsUnique(store, body) {
+    const [runtime, durable] = await Promise.all([
+        store.fleetRegistry.get(body.gatewayId),
+        store.gateways.roots.get(body.gatewayId),
     ]);
-    if (legacy.exists || durable.exists) {
+    if (runtime !== null || durable !== null) {
         return {
             error: {
                 status: 409,
@@ -2246,149 +2211,124 @@ async function ensureGatewayCreateIsUnique(db, body) {
     return { ok: true };
 }
 async function accelerateScheduledCustomerErasure(opts) {
-    const deletionId = asStringOrNull(opts.lifecycle.deletionId);
-    if (!deletionId) {
-        return {
-            status: 409,
-            body: { error: "Scheduled deletion is missing its deletion id" },
-        };
-    }
-    const deletionRef = opts.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc(deletionId);
-    const deletionSnap = await deletionRef.get();
-    const deletion = deletionSnap.data();
-    const erasureOperationId = asStringOrNull(deletion?.erasureOperationId);
-    if (!deletionSnap.exists || !erasureOperationId) {
-        return {
-            status: 409,
-            body: {
-                error: "Scheduled deletion is missing its durable erasure operation",
-                deletionId,
-            },
-        };
-    }
-    const erasureRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc(erasureOperationId);
-    const erasureSnap = await erasureRef.get();
-    const erasure = erasureSnap.data();
-    const runnable = erasureSnap.exists &&
-        erasure?.kind === "erase-customer" &&
-        (erasure.status === "pending" || erasure.status === "running");
-    if (!runnable) {
-        return {
-            status: 409,
-            body: {
-                error: "Scheduled erasure operation is not runnable",
-                deletionId,
-                erasureOperationId,
-            },
-        };
-    }
-    const now = Date.now();
-    const batch = opts.db.batch();
-    batch.update(opts.userRef, { "accountLifecycle.eraseAfter": now });
-    batch.update(deletionRef, { eraseAfter: now, updatedAt: now });
-    batch.update(erasureRef, { nextAttemptAt: now });
-    await batch.commit();
-    return {
-        status: 202,
-        body: {
-            status: "erasure_requested",
-            deletionId,
-            erasureOperationId,
-            eraseAfter: now,
-        },
-    };
-}
-async function claimCustomerDeletion(opts) {
-    const userRef = opts.db.collection("users").doc(opts.uid);
-    const deletionRef = opts.db.collection(CUSTOMER_DELETION_JOBS_COLLECTION).doc();
-    const suspensionRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc();
-    const erasureRef = opts.db.collection(GLM_OPERATIONS_COLLECTION).doc();
-    return opts.db.runTransaction(async (transaction) => {
-        const userSnap = await transaction.get(userRef);
-        if (!userSnap.exists)
-            return { kind: "not-found" };
-        const userData = userSnap.data() ?? {};
-        if (customerRuntimeMutationFenced(userData)) {
-            return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: null };
-        }
-        const lifecycle = isPlainRecord(userData.accountLifecycle)
-            ? userData.accountLifecycle
-            : undefined;
-        if (lifecycle?.status === "deletion_scheduled" || lifecycle?.status === "erasing") {
+    return opts.store.transaction({ label: "admin.fleet.accelerateCustomerErasure" }, async (transaction) => {
+        const lifecycle = (await transaction.builders.records.get(opts.uid))?.accountLifecycle ?? null;
+        const deletionId = asStringOrNull(lifecycle?.deletionId);
+        if (!lifecycle || !deletionId) {
             return {
-                kind: "conflict",
-                runtimeFenced: false,
-                deletionId: asStringOrNull(lifecycle.deletionId),
-                operationId: null,
+                status: 409,
+                body: { error: "Scheduled deletion is missing its deletion id" },
             };
         }
-        const inFlight = await transaction.get(inFlightOperationsForUid(opts.db, opts.uid));
-        const forwardMigration = inFlight.docs.find(doc => {
-            const operation = doc.data();
-            return operation.kind === "migrate-customer" && migrationCancellationDeferred(operation, doc.id);
-        });
-        if (forwardMigration) {
-            return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: forwardMigration.id };
-        }
-        const conflict = inFlight.docs.find((doc) => {
-            const data = doc.data();
-            return ((data.kind === "suspend-customer" || data.kind === "erase-customer") &&
-                (data.status === "pending" || data.status === "running"));
-        });
-        if (conflict) {
+        const deletion = await transaction.jobs.deletions.get(deletionId);
+        const erasureOperationId = asStringOrNull(deletion?.erasureOperationId);
+        if (!erasureOperationId) {
             return {
-                kind: "conflict",
-                runtimeFenced: false,
-                deletionId: null,
-                operationId: conflict.id,
+                status: 409,
+                body: {
+                    error: "Scheduled deletion is missing its durable erasure operation",
+                    deletionId,
+                },
+            };
+        }
+        const erasure = await transaction.journal.operations.get(erasureOperationId);
+        const runnable = erasure?.kind === "erase-customer" &&
+            (erasure.status === "pending" || erasure.status === "running");
+        if (!runnable) {
+            return {
+                status: 409,
+                body: {
+                    error: "Scheduled erasure operation is not runnable",
+                    deletionId,
+                    erasureOperationId,
+                },
             };
         }
         const now = Date.now();
+        await transaction.builders.records.patch(opts.uid, { accountLifecycle: { ...lifecycle, eraseAfter: now } });
+        await transaction.jobs.deletions.patch(deletionId, { eraseAfter: now, updatedAt: now });
+        await transaction.journal.operations.patch(erasureOperationId, { nextAttemptAt: now });
+        return {
+            status: 202,
+            body: {
+                status: "erasure_requested",
+                deletionId,
+                erasureOperationId,
+                eraseAfter: now,
+            },
+        };
+    });
+}
+function isCustomerDeletionConflict(operation) {
+    return (operation.kind === "suspend-customer" || operation.kind === "erase-customer") &&
+        (operation.status === "pending" || operation.status === "running");
+}
+async function customerDeletionConflict(transaction, builder) {
+    if (builderRuntimeMutationFenced(builder)) {
+        return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: null };
+    }
+    const lifecycle = builder.accountLifecycle;
+    if (lifecycle?.status === "deletion_scheduled" || lifecycle?.status === "erasing") {
+        return {
+            kind: "conflict",
+            runtimeFenced: false,
+            deletionId: asStringOrNull(lifecycle.deletionId),
+            operationId: null,
+        };
+    }
+    const inFlight = await inFlightOperationsForUid(transaction, builder.uid);
+    const forwardMigration = inFlight.find((operation) => operation.kind === OP_KIND_MIGRATE_CUSTOMER && migrationCancellationDeferred({ ...operation }, operation.id));
+    if (forwardMigration) {
+        return { kind: "conflict", runtimeFenced: true, deletionId: null, operationId: forwardMigration.id };
+    }
+    const conflict = inFlight.find(isCustomerDeletionConflict);
+    return conflict
+        ? { kind: "conflict", runtimeFenced: false, deletionId: null, operationId: conflict.id }
+        : null;
+}
+async function claimCustomerDeletion(opts) {
+    const account = await opts.accounts.get(opts.uid);
+    const deletionId = randomUUID();
+    const suspensionOperationId = randomUUID();
+    const erasureOperationId = randomUUID();
+    return opts.store.transaction({ label: "admin.fleet.claimCustomerDeletion" }, async (transaction) => {
+        const builder = await transaction.builders.records.get(opts.uid);
+        if (!builder)
+            return { kind: "not-found" };
+        const conflict = await customerDeletionConflict(transaction, builder);
+        if (conflict)
+            return conflict;
+        const now = Date.now();
         const schedule = buildCustomerDeletionSchedule({ now, eraseNow: opts.eraseNow });
-        const slug = resolveCustomerSlug(userData, opts.workspaceSlugsForUser);
-        const currentGatewayId = readUserGatewayId(userData);
-        const stripe = resolveStripeRefs(userData);
+        const currentGatewayId = builder.gateway?.gatewayId ?? null;
         const plan = buildCustomerDeletionPlan({
             uid: opts.uid,
-            slug,
+            slug: builder.slug,
             currentGatewayId,
             requestedBy: opts.requestedBy,
             requestedAt: schedule.requestedAt,
             eraseAfter: schedule.eraseAfter,
-            deletionId: deletionRef.id,
-            suspensionOperationId: suspensionRef.id,
-            erasureOperationId: erasureRef.id,
-            stripeCustomerIds: stripe.customerIds,
-            stripeSubscriptionIds: stripe.subscriptionIds,
+            deletionId,
+            suspensionOperationId,
+            erasureOperationId,
+            stripeCustomerIds: [...(account?.stripeCustomerIds ?? [])],
+            stripeSubscriptionIds: [...(account?.stripeSubscriptionIds ?? [])],
         });
-        transaction.update(userRef, {
-            accountLifecycle: plan.lifecycle,
-            ...(currentGatewayId
-                ? {
-                    "provisioning.openclaw.gatewayId": FieldValue.delete(),
-                    "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
-                    "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                    "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
-                }
-                : {}),
-        });
-        transaction.set(deletionRef, plan.job);
-        transaction.set(suspensionRef, plan.suspensionOperation);
-        transaction.set(erasureRef, plan.erasureOperation);
         if (currentGatewayId) {
-            transaction.delete(opts.db
-                .collection(GATEWAYS_COLLECTION)
-                .doc(currentGatewayId)
-                .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-                .doc(opts.uid));
+            await transaction.gateways.assignments.delete(currentGatewayId, opts.uid);
+            await transaction.builders.records.setGatewayMirror(opts.uid, { clear: true });
         }
+        await transaction.builders.records.patch(opts.uid, { accountLifecycle: plan.lifecycle });
+        await transaction.jobs.deletions.create(plan.job);
+        await transaction.journal.operations.create(plan.suspensionOperation);
+        await transaction.journal.operations.create(plan.erasureOperation);
         return {
             kind: "created",
-            deletionId: deletionRef.id,
-            suspensionOperationId: suspensionRef.id,
-            erasureOperationId: erasureRef.id,
+            deletionId,
+            suspensionOperationId,
+            erasureOperationId,
             eraseAfter: schedule.eraseAfter,
-            slug,
+            slug: builder.slug,
         };
     });
 }
@@ -2465,11 +2405,11 @@ function respondToCustomerDeletionAdmission(admission, res, logger, uid) {
 }
 async function claimAndCleanupCustomerDeletion(opts) {
     const claimed = await claimCustomerDeletion({
-        db: opts.db,
+        store: opts.store,
+        accounts: opts.accounts,
         uid: opts.uid,
         requestedBy: opts.requestedBy,
         eraseNow: opts.eraseNow,
-        workspaceSlugsForUser: opts.deps.workspaceSlugsForUser,
     });
     if (claimed.kind !== "created")
         return claimed;
@@ -2499,14 +2439,14 @@ async function claimAndCleanupCustomerDeletion(opts) {
 }
 const CUSTOMER_SELF_DELETION_REASON = "Customer account deletion request";
 export async function scheduleCustomerSelfDeletion(opts) {
-    const userSnap = await opts.db.collection("users").doc(opts.uid).get();
-    if (!userSnap.exists)
+    const builder = await opts.store.builders.records.get(opts.uid);
+    if (!builder)
         return { kind: "not-found" };
-    const lifecycle = userSnap.data()?.accountLifecycle;
+    const lifecycle = builder.accountLifecycle ?? undefined;
     const lifecycleStatus = lifecycle?.status ?? null;
     if (customerDeletionIsActive(lifecycle))
         return { kind: "conflict" };
-    const outcome = await runNormalFleetMutation(opts.db, {
+    const outcome = await runNormalFleetMutation(opts.store, {
         actor: opts.uid,
         forced: false,
         what: "schedule customer deletion",
@@ -2516,7 +2456,8 @@ export async function scheduleCustomerSelfDeletion(opts) {
         mutation: { kind: "schedule-customer-deletion", uid: opts.uid, eraseNow: false },
         classifyResult: (result) => classifyCustomerDeletion(result, opts.uid),
         action: async () => claimAndCleanupCustomerDeletion({
-            db: opts.db,
+            store: opts.store,
+            accounts: opts.accounts,
             deps: opts.deps,
             uid: opts.uid,
             requestedBy: opts.uid,
@@ -2580,27 +2521,22 @@ function classifyReasonedActivationLeaseMutation(result) {
     }
     return { outcome: "completed" };
 }
-function projectOperationForMigrationLock(doc) {
-    const operation = doc.data();
+function migrationLockRef(operation) {
     return {
-        id: doc.id,
-        kind: typeof operation.kind === "string" ? operation.kind : "",
-        status: typeof operation.status === "string" ? operation.status : "",
+        id: operation.id,
+        kind: operation.kind,
+        status: operation.status,
         input: operation.input,
         customerMigrationV2: operation.customerMigrationV2,
     };
 }
 const IN_FLIGHT_OPERATION_STATUSES = ["pending", "running"];
-function inFlightOperationsForUid(db, uid) {
-    return db
-        .collection(GLM_OPERATIONS_COLLECTION)
-        .where("inputUid", "==", uid)
-        .where("status", "in", [...IN_FLIGHT_OPERATION_STATUSES]);
+function inFlightOperationsForUid(transaction, uid) {
+    return transaction.journal.operations.listForUid(uid, { statuses: [...IN_FLIGHT_OPERATION_STATUSES] });
 }
-function isInFlightCustomerMigration(doc) {
-    const data = doc.data();
-    return data.kind === OP_KIND_MIGRATE_CUSTOMER &&
-        (data.status === "pending" || data.status === "running");
+function isInFlightCustomerMigration(operation) {
+    return operation.kind === OP_KIND_MIGRATE_CUSTOMER &&
+        (operation.status === "pending" || operation.status === "running");
 }
 function gatewayCreationBodyError(body) {
     const persistenceError = rejectPersistenceInBody(body);
@@ -2676,7 +2612,7 @@ async function performAddGatewayMutation(opts) {
         throw new GatewayAuthSecretProvisionError(error instanceof Error ? error.message : String(error));
     }
     try {
-        await writeInitialGatewayRelease(opts.db, {
+        await writeInitialGatewayReleaseInStore(opts.store, {
             gatewayId: opts.body.gatewayId,
             createdBy: opts.createdBy,
             now: opts.now,
@@ -2693,7 +2629,7 @@ async function performAddGatewayMutation(opts) {
         };
     }
     try {
-        const operationId = await createOperation(opts.db, {
+        const operationId = await createOperation(opts.store, {
             kind: "add-gateway",
             createdBy: opts.createdBy,
             input: {
@@ -2725,8 +2661,7 @@ function activationLeaseForTermination(data, leaseId, generation) {
     return resolved;
 }
 function sharedAssignmentServesBuilder(input) {
-    return input.exists &&
-        input.assignment?.uid === input.uid &&
+    return input.assignment?.uid === input.uid &&
         input.assignment.gatewayId === input.gatewayId &&
         input.assignment.state === "serving" &&
         Number.isSafeInteger(input.assignment.epoch);
@@ -2735,8 +2670,7 @@ function disposableRuntimeMatchesTermination(input) {
     const allocation = isPlainRecord(input.target?.allocation)
         ? input.target.allocation
         : null;
-    return input.exists &&
-        input.target?.ownerUid === input.uid &&
+    return input.target?.ownerUid === input.uid &&
         allocation?.kind === "disposable-builder" &&
         allocation.claimedByUid === input.uid &&
         allocation.leaseId === input.leaseId &&
@@ -2753,13 +2687,11 @@ function runtimeTerminationCanStart(lease, now) {
         now - statusAt > BUILDER_RUNTIME_STALE_AFTER_MS;
     return lease.status === "failed" || stale;
 }
-async function requestActivationLeaseTermination(db, transaction, input) {
-    const userRef = db.collection("users").doc(input.uid);
-    const userSnapshot = await transaction.get(userRef);
-    if (!userSnapshot.exists)
+async function requestActivationLeaseTermination(transaction, input) {
+    const builder = await transaction.builders.records.get(input.uid);
+    if (!builder)
         return { kind: "not-found" };
-    const data = userSnapshot.data();
-    const resolved = activationLeaseForTermination(data, input.leaseId, input.generation);
+    const resolved = activationLeaseForTermination(builderUserData(builder, null), input.leaseId, input.generation);
     if (!resolved) {
         return { kind: "conflict", reason: "lease generation changed" };
     }
@@ -2774,12 +2706,8 @@ async function requestActivationLeaseTermination(db, transaction, input) {
             reason: "Builder is not authoritative on the shared gateway",
         };
     }
-    const assignmentSnapshot = await transaction.get(db.doc(`gateways/${sharedGatewayId}/assignments/${input.uid}`));
-    const assignment = assignmentSnapshot.exists
-        ? assignmentSnapshot.data()
-        : undefined;
+    const assignment = await transaction.gateways.assignments.get(sharedGatewayId, input.uid);
     if (!sharedAssignmentServesBuilder({
-        exists: assignmentSnapshot.exists,
         assignment,
         uid: input.uid,
         gatewayId: sharedGatewayId,
@@ -2793,10 +2721,8 @@ async function requestActivationLeaseTermination(db, transaction, input) {
         toMillis(lease.operatorTerminateRequestedAt) !== null) {
         return { kind: "adopted" };
     }
-    const targetSnapshot = await transaction.get(db.collection(GATEWAYS_COLLECTION).doc(targetGatewayId));
-    const target = targetSnapshot.data();
+    const target = await transaction.gateways.roots.get(targetGatewayId);
     if (!disposableRuntimeMatchesTermination({
-        exists: targetSnapshot.exists,
         target,
         uid: input.uid,
         leaseId: input.leaseId,
@@ -2813,13 +2739,13 @@ async function requestActivationLeaseTermination(db, transaction, input) {
             reason: "runtime is neither failed nor stale",
         };
     }
-    transaction.update(userRef, {
-        "provisioning.openclaw.activationLease.status": "returning",
-        "provisioning.openclaw.activationLease.returnRequestedAt": input.requestedAt,
-        "provisioning.openclaw.activationLease.returnRequestedBy": input.requestedBy,
-        "provisioning.openclaw.activationLease.operatorTerminateRequestedAt": input.requestedAt,
-        "provisioning.openclaw.activationLease.operatorTerminateRequestedBy": input.requestedBy,
-    });
+    await transaction.builders.records.patchActivationLease(input.uid, {
+        status: "returning",
+        returnRequestedAt: input.requestedAt,
+        returnRequestedBy: input.requestedBy,
+        operatorTerminateRequestedAt: input.requestedAt,
+        operatorTerminateRequestedBy: input.requestedBy,
+    }, { leaseId: input.leaseId, generation: input.generation });
     return { kind: "requested" };
 }
 const WORKSPACE_IDENTITIES_NOT_INITIALIZED = "OpenClaw workspace identities are not initialized for this boot";
@@ -2883,31 +2809,27 @@ function retryableBuilderReturnLease(data, operationId) {
     }
     return { lease, targetGatewayId, returnOperationId };
 }
-async function readBuilderReturnRetryState(db, transaction, input) {
-    const [assignmentSnapshot, targetSnapshot, operationSnapshot] = await Promise.all([
-        transaction.get(db.doc(`gateways/${input.targetGatewayId}/assignments/${input.uid}`)),
-        transaction.get(db.collection(GATEWAYS_COLLECTION).doc(input.targetGatewayId)),
-        transaction.get(db.collection(GLM_OPERATIONS_COLLECTION).doc(input.returnOperationId)),
+async function readBuilderReturnRetryState(transaction, input) {
+    const [assignment, target, operation] = await Promise.all([
+        transaction.gateways.assignments.get(input.targetGatewayId, input.uid),
+        transaction.gateways.roots.get(input.targetGatewayId),
+        transaction.journal.operations.get(input.returnOperationId),
     ]);
     return {
-        assignmentExists: assignmentSnapshot.exists,
-        assignment: assignmentSnapshot.exists ? assignmentSnapshot.data() : undefined,
-        targetExists: targetSnapshot.exists,
-        target: targetSnapshot.exists ? targetSnapshot.data() : undefined,
-        operation: operationSnapshot.exists ? operationSnapshot.data() : undefined,
+        assignment,
+        target,
+        operation: operation === null ? undefined : recordDoc(operation.id, operation).data(),
     };
 }
 function matchesBuilderReturnRetryState(input) {
     return [
         sharedAssignmentServesBuilder({
-            exists: input.state.assignmentExists,
             assignment: input.state.assignment,
             uid: input.uid,
             gatewayId: input.targetGatewayId,
         }),
         input.state.target?.gatewayClass === "builder",
         disposableRuntimeMatchesTermination({
-            exists: input.state.targetExists,
             target: input.state.target,
             uid: input.uid,
             leaseId: asStringOrNull(input.lease.leaseId) ?? "",
@@ -2920,22 +2842,15 @@ function matchesBuilderReturnRetryState(input) {
         }),
     ].every(Boolean);
 }
-function requestBuilderReturnRetry(db, transaction, input) {
-    transaction.update(db.collection(GLM_OPERATIONS_COLLECTION).doc(input.returnOperationId), {
-        retryRequestedAt: input.requestedAt,
-        retryRequestedBy: input.requestedBy,
-    });
-}
-async function retryActivationLeaseReturn(db, transaction, input) {
-    const userRef = db.collection("users").doc(input.uid);
-    const userSnapshot = await transaction.get(userRef);
-    if (!userSnapshot.exists)
+async function retryActivationLeaseReturn(transaction, input) {
+    const builder = await transaction.builders.records.get(input.uid);
+    if (!builder)
         return { kind: "not-found" };
-    const retryLease = retryableBuilderReturnLease(userSnapshot.data(), input.operationId);
+    const retryLease = retryableBuilderReturnLease(builderUserData(builder, null), input.operationId);
     if (!retryLease) {
         return { kind: "conflict", reason: "Builder return is no longer retryable" };
     }
-    const state = await readBuilderReturnRetryState(db, transaction, {
+    const state = await readBuilderReturnRetryState(transaction, {
         uid: input.uid,
         targetGatewayId: retryLease.targetGatewayId,
         returnOperationId: retryLease.returnOperationId,
@@ -2948,63 +2863,113 @@ async function retryActivationLeaseReturn(db, transaction, input) {
     })) {
         return { kind: "conflict", reason: "Builder return no longer matches its original lease" };
     }
-    requestBuilderReturnRetry(db, transaction, {
-        returnOperationId: retryLease.returnOperationId,
-        requestedAt: input.requestedAt,
-        requestedBy: input.requestedBy,
+    await transaction.journal.operations.patch(retryLease.returnOperationId, {
+        retryRequestedAt: input.requestedAt,
+        retryRequestedBy: input.requestedBy,
     });
     return { kind: "retried" };
 }
-async function readPlatformRuntimeConfig(db) {
-    const snapshot = await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).get();
-    const stored = snapshot.data()?.disposableGatewayIdleMs;
-    if (stored === undefined) {
-        return { disposableGatewayIdleMs: DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS };
+async function placementBuilderRejection(transaction, builder, uid, gatewayId) {
+    if (builder !== null && builderRuntimeMutationFenced(builder)) {
+        return {
+            kind: "rejected",
+            reason: builder.fences.restoreFence !== undefined ? "restore-in-progress" : "source-transfer-in-progress",
+        };
     }
-    if (typeof stored !== "number" || !Number.isSafeInteger(stored) || stored < 0) {
-        throw new Error("config/orchestrator.disposableGatewayIdleMs must be a nonnegative safe integer");
+    if (!accountAllowsInteractiveAccess({ accountLifecycle: builder?.accountLifecycle })) {
+        return { kind: "rejected", reason: "account-not-interactive" };
     }
-    return { disposableGatewayIdleMs: stored };
+    const currentGatewayId = builder?.gateway?.gatewayId;
+    if (currentGatewayId !== undefined && currentGatewayId !== gatewayId &&
+        await transaction.gateways.assignments.get(currentGatewayId, uid) !== null) {
+        return { kind: "rejected", reason: "assigned-elsewhere" };
+    }
+    return null;
 }
-async function setOperatorParkedBuilderGatewayStatus(db, txn, gatewayId, input) {
-    const gatewayRef = db.doc(`gateways/${gatewayId}`);
-    const gateway = (await txn.get(gatewayRef)).data();
+async function commitAdminPlacementInStore(store, input) {
+    const gatewayId = input.mirror.gatewayId;
+    return store.transaction({ label: "admin.fleet.assignCustomer" }, async (transaction) => {
+        const builder = await transaction.builders.records.get(input.uid);
+        const rejection = await placementBuilderRejection(transaction, builder, input.uid, gatewayId);
+        if (rejection)
+            return rejection;
+        const stored = await transaction.gateways.roots.get(gatewayId);
+        if (stored === null) {
+            await transaction.builders.records.setGatewayMirror(input.uid, input.mirror);
+            return { kind: "mirror-only" };
+        }
+        const root = durableRootOf(stored, gatewayId);
+        if (root === null)
+            return { kind: "rejected", reason: "gateway-root-invalid" };
+        if (root.desiredStatus !== "running")
+            return { kind: "rejected", reason: "gateway-not-running" };
+        const runtime = await transaction.fleetRegistry.get(gatewayId);
+        if (runtime?.lifecycle !== "serving")
+            return { kind: "rejected", reason: "gateway-not-serving" };
+        const existing = input.assignmentWrite === "create-if-missing"
+            ? await transaction.gateways.assignments.get(gatewayId, input.uid)
+            : null;
+        await transaction.builders.records.setGatewayMirror(input.uid, input.mirror);
+        if (existing !== null)
+            return { kind: "assignment-preserved" };
+        await transaction.gateways.assignments.put({
+            uid: input.uid,
+            slug: input.slug,
+            gatewayId,
+            source: "repair",
+            state: "serving",
+            epoch: 0,
+            createdAt: input.now,
+            updatedAt: input.now,
+            updatedByOperationId: null,
+        });
+        return { kind: "assigned", release: root.liveRelease };
+    });
+}
+function builderMountOf(builder) {
+    return { currentGatewayId: builder?.gateway?.gatewayId ?? null, builderSlug: builder?.slug ?? null };
+}
+async function readPlatformRuntimeConfig(store) {
+    const config = await store.config.orchestrator.get();
+    return { disposableGatewayIdleMs: config?.disposableGatewayIdleMs ?? DEFAULT_DISPOSABLE_GATEWAY_IDLE_MS };
+}
+async function setOperatorParkedBuilderGatewayStatus(transaction, gatewayId, input) {
+    const gateway = await transaction.gateways.roots.get(gatewayId);
     if (gateway?.gatewayClass !== "builder")
         return { dedicated: false };
     if (gateway.ownerUid !== input.uid || gateway.desiredStatus === "retired" || gateway.runtimeRestartFence !== undefined || gateway.retirementClaim != null) {
         return { dedicated: true, error: "dedicated gateway ownership or runtime outcome must settle before changing parking" };
     }
-    txn.update(gatewayRef, { desiredStatus: input.desiredStatus, updatedAt: Date.now(), updatedBy: input.actor ?? "unknown" });
+    await transaction.gateways.roots.patch(gatewayId, { desiredStatus: input.desiredStatus, updatedAt: Date.now(), updatedBy: input.actor ?? "unknown" });
     return { dedicated: true };
 }
-async function updateOperatorParkingGateway(db, txn, input) {
+async function updateOperatorParkingGateway(transaction, input) {
     if (!input.gatewayId)
         return { dedicated: false };
-    const assignmentRef = db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`);
-    const assignmentSnapshot = await txn.get(assignmentRef);
-    const assignment = parseAssignmentDoc(input.uid, assignmentSnapshot.data());
+    const assignment = await transaction.gateways.assignments.get(input.gatewayId, input.uid);
     if (assignment && assignment.state !== "serving")
         return { dedicated: false, error: `customer roster state ${assignment.state} must settle before changing parking` };
-    const gateway = await setOperatorParkedBuilderGatewayStatus(db, txn, input.gatewayId, { ...input, desiredStatus: input.park ? "paused" : "running" });
+    const gateway = await setOperatorParkedBuilderGatewayStatus(transaction, input.gatewayId, { ...input, desiredStatus: input.park ? "paused" : "running" });
     if (gateway.error)
         return gateway;
     if (input.park && !gateway.dedicated)
-        txn.delete(assignmentRef);
+        await transaction.gateways.assignments.delete(input.gatewayId, input.uid);
     return gateway;
 }
-function parkingHasUnsettledAllocation(openclaw, gatewayId) {
-    const lease = openclaw.activationLease;
+function parkingHasUnsettledAllocation(lease, gatewayId) {
     if (lease?.status === "requested")
         return true;
     return typeof lease?.targetGatewayId === "string" && lease.targetGatewayId !== gatewayId && lease.status !== "parked";
 }
 // eslint-disable-next-line max-lines-per-function -- factory mounts ~15 admin routes; splitting it would scatter the contract across files for no readability gain
 export function addAdminFleetRoutes(router, deps) {
-    const { db, logger } = deps;
+    const { db, logger, store } = deps;
+    const readBuilderTier = firestoreBuilderTierReader(db);
+    const accounts = firestoreBuilderAccountReader(db);
     async function runAdminFleetMutation(input) {
         const actor = input.req;
         const headerKey = input.req.get("Idempotency-Key")?.trim();
-        return runNormalFleetMutation(db, {
+        return runNormalFleetMutation(store, {
             actor: actor.uid ?? "unknown",
             forced: input.forced === true,
             what: input.what,
@@ -3020,10 +2985,10 @@ export function addAdminFleetRoutes(router, deps) {
                 : {}),
         });
     }
-    addAdminComputerRoutes(router, { db, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
+    addAdminComputerRoutes(router, { store, replacementEnabled: deps.computerReplacementEnabled, journal: runAdminFleetMutation });
     router.get("/platform-runtime-config", async (_req, res, next) => {
         try {
-            res.json(await readPlatformRuntimeConfig(db));
+            res.json(await readPlatformRuntimeConfig(store));
         }
         catch (error) {
             next(error);
@@ -3039,16 +3004,16 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const config = { disposableGatewayIdleMs: body.disposableGatewayIdleMs };
-            const previous = await readPlatformRuntimeConfig(db);
+            const previous = await readPlatformRuntimeConfig(store);
             await runAdminFleetMutation({
                 req,
                 what: "set platform gateway idle return duration",
                 why: ADMIN_FLEET_REQUEST_REASON,
-                target: { configPath: FLEET_RUNTIME_CONFIG_DOC_PATH },
+                target: { configPath: ORCHESTRATOR_CONFIG_DOC_PATH },
                 preActionStatus: { ...previous },
                 mutation: { ...config },
                 action: async () => {
-                    await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set(config, { merge: true });
+                    await store.config.orchestrator.patch(config);
                 },
             });
             res.json(config);
@@ -3077,11 +3042,7 @@ export function addAdminFleetRoutes(router, deps) {
             preActionStatus: { lifecycleStatus },
             mutation: { kind: "accelerate-customer-erasure", uid: input.uid },
             classifyResult: classifyErasureAcceleration,
-            action: async () => accelerateScheduledCustomerErasure({
-                db,
-                userRef: input.userRef,
-                lifecycle,
-            }),
+            action: async () => accelerateScheduledCustomerErasure({ store, uid: input.uid }),
         });
         input.res.status(acceleration.status).json(acceleration.body);
         return true;
@@ -3094,20 +3055,17 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(400).json({ error: "eraseNow must be a boolean" });
                 return;
             }
-            const userRef = db.collection("users").doc(uid);
-            const userSnap = await userRef.get();
-            if (!userSnap.exists) {
+            const builder = await store.builders.records.get(uid);
+            if (!builder) {
                 res.status(404).json({ error: "User not found", uid });
                 return;
             }
-            const userData = userSnap.data() ?? {};
-            const existingLifecycle = userData.accountLifecycle;
+            const existingLifecycle = builder.accountLifecycle ?? undefined;
             const existingStatus = existingLifecycle?.status;
             const activeDeletionHandled = await handleActiveCustomerDeletion({
                 req,
                 res,
                 uid,
-                userRef,
                 lifecycle: existingLifecycle,
                 eraseNow: body.eraseNow,
             });
@@ -3123,7 +3081,8 @@ export function addAdminFleetRoutes(router, deps) {
                 mutation: { kind: "schedule-customer-deletion", uid, eraseNow: body.eraseNow === true },
                 classifyResult: (result) => classifyCustomerDeletion(result, uid),
                 action: async () => claimAndCleanupCustomerDeletion({
-                    db,
+                    store,
+                    accounts,
                     deps,
                     uid,
                     requestedBy: actor.uid ?? "unknown",
@@ -3138,21 +3097,17 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/gateways", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap, assignmentSnap] = await Promise.all([
-                db.collection("gateways").get(),
-                db.collection(GLM_GATEWAYS_COLLECTION).get(),
-                db.collection("users").get(),
-                db.collectionGroup(GATEWAY_ASSIGNMENTS_SUBCOLLECTION).get(),
+            const [snapshot, sharedPoolConfig] = await Promise.all([
+                readFleetSnapshot(store),
+                store.transaction({ label: "admin.fleet.gatewaysSharedPool", readOnly: true }, readSharedGatewayPoolConfigInStore),
             ]);
-            const handoffProgressByGateway = projectHandoffProgress(assignmentSnap.docs);
-            const glmByGatewayId = indexAdminGatewayRuntimeDocs({
-                gatewayDocs: gwSnap.docs,
-                glmDocs: glmSnap.docs,
-            });
-            const operationDocs = await readFleetProjectionOperations(db, fleetProjectionOperationIds(usersSnap.docs, glmByGatewayId));
-            const operationsById = indexGlmDocs(operationDocs);
+            const userDocs = builderUserDocs(snapshot.builders, new Map());
+            const handoffProgressByGateway = projectHandoffProgress(snapshot.assignments);
+            const glmByGatewayId = indexAdminGatewayRuntimeDocs(fleetGatewayDocs(snapshot));
+            const projectionOperations = await readFleetProjectionOperations(store, fleetProjectionOperationIds(userDocs, glmByGatewayId));
+            const operationsById = indexGlmDocs(projectionOperations);
             const now = Date.now();
-            const builderRuntimes = usersSnap.docs.flatMap((doc) => {
+            const builderRuntimes = userDocs.flatMap((doc) => {
                 const runtime = projectBuilderRuntime(doc, glmByGatewayId, operationsById, now);
                 return runtime ? [runtime] : [];
             });
@@ -3207,9 +3162,8 @@ export function addAdminFleetRoutes(router, deps) {
                     targetPodCount: target?.podDiagnostics?.totalPods ?? null,
                 };
             });
-            const sharedPoolConfig = await readSharedGatewayPoolConfig(db);
             const sharedGatewayIds = new Set(sharedPoolConfig?.sharedGatewayIds ?? []);
-            const parkedBuilders = usersSnap.docs.filter((doc) => {
+            const parkedBuilders = userDocs.filter((doc) => {
                 const resolved = activationLeaseFromUser(doc.data());
                 return (resolved?.lease.status === "parked" &&
                     sharedGatewayIds.has(asStringOrNull(resolved.openclaw.gatewayId) ?? ""));
@@ -3219,7 +3173,7 @@ export function addAdminFleetRoutes(router, deps) {
                 builderRuntimes: builderRuntimeViews,
                 disposableCapacity: {
                     ...projectDisposableFleetCapacity(gateways, builderRuntimeViews, parkedBuilders),
-                    operatorParkedBuilders: usersSnap.docs.filter((doc) => readUserOpenclaw(doc.data()).managedBy === "operator").length,
+                    operatorParkedBuilders: snapshot.builders.filter((builder) => builder.openclaw.managedBy === "operator").length,
                 },
                 stats: rollupFleetStats(gateways.filter((gateway) => gateway.desiredStatus !== "retired")),
                 namespace: resolveFleetNamespace(),
@@ -3232,7 +3186,7 @@ export function addAdminFleetRoutes(router, deps) {
     });
     router.get("/onboarding-placement", async (_req, res, next) => {
         try {
-            res.json(await readAdminOnboardingPlacementResponse(deps));
+            res.json(await readAdminOnboardingPlacementResponse(store, accounts));
         }
         catch (e) {
             next(e);
@@ -3247,10 +3201,13 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const [pool, current] = await Promise.all([
-                readSharedGatewayPoolConfig(db),
-                readSharedGatewayAutoscalingConfig(db).catch(() => null),
-            ]);
+            const [pool, orchestrator] = await store.transaction({ label: "admin.fleet.sharedPoolAutoscaling", readOnly: true }, (transaction) => Promise.all([
+                readSharedGatewayPoolConfigInStore(transaction),
+                transaction.config.orchestrator.get(),
+            ]));
+            const current = orchestrator === null
+                ? sharedGatewayAutoscalingOf(null)
+                : orchestrator.sharedGatewayAutoscaling;
             const actor = req;
             const updatedBy = actor.uid ?? "unknown";
             await runAdminFleetMutation({
@@ -3261,14 +3218,14 @@ export function addAdminFleetRoutes(router, deps) {
                 preActionStatus: { sharedGatewayAutoscaling: current },
                 mutation: { kind: "set-shared-gateway-autoscaling", autoscaling },
                 action: async () => {
-                    await db.doc(FLEET_RUNTIME_CONFIG_DOC_PATH).set({
+                    await store.config.orchestrator.patch({
                         sharedGatewayAutoscaling: autoscaling,
                         placementUpdatedAt: Date.now(),
                         placementUpdatedBy: updatedBy,
-                    }, { merge: true });
+                    });
                 },
             });
-            res.json(await readAdminOnboardingPlacementResponse(deps));
+            res.json(await readAdminOnboardingPlacementResponse(store, accounts));
         }
         catch (e) {
             next(e);
@@ -3294,7 +3251,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             // Registration is either doc; readiness comes from the relocated
             // glmGateways/{id}.heartbeat (cutover step 2), not the flat status.
-            const target = await readGatewayRegistrationReadiness(db, toGatewayId);
+            const target = await readGatewayRegistrationReadiness(store, toGatewayId);
             if (!target.registered) {
                 res.status(404).json({ error: "target gateway not registered", gatewayId: toGatewayId });
                 return;
@@ -3314,26 +3271,20 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const pendingOps = await db
-                .collection(GLM_OPERATIONS_COLLECTION)
-                .where("status", "in", ["pending", "running"])
-                .get();
+            const pendingOps = await store.journal.operations.listByStatus(["pending", "running"]);
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
             const enqueued = [];
             const adopted = [];
             const rejected = [];
             for (const uid of [...new Set(uids)]) {
-                const userSnap = await db.collection("users").doc(uid).get();
-                if (!userSnap.exists) {
+                const builder = await store.builders.records.get(uid);
+                if (!builder) {
                     rejected.push({ uid, reason: "user-not-found" });
                     continue;
                 }
-                const userData = userSnap.data();
-                const currentGatewayId = readUserGatewayId(userData);
-                const builderSlug = userData
-                    ? resolveCustomerSlug(userData, deps.workspaceSlugsForUser)
-                    : null;
+                const currentGatewayId = builder.gateway?.gatewayId ?? null;
+                const builderSlug = builder.slug;
                 if (currentGatewayId === toGatewayId) {
                     rejected.push({ uid, reason: "already-on-target", currentGatewayId });
                     continue;
@@ -3342,13 +3293,9 @@ export function addAdminFleetRoutes(router, deps) {
                     rejected.push({ uid, reason: "source-gateway-mismatch", currentGatewayId });
                     continue;
                 }
-                const existing = pendingOps.docs.find((doc) => {
-                    const data = doc.data();
-                    const input = isPlainRecord(data.input) ? data.input : {};
-                    return (data.kind === OP_KIND_MIGRATE_CUSTOMER &&
-                        (data.inputUid === uid || input.uid === uid) &&
-                        input.toGatewayId === toGatewayId);
-                });
+                const existing = pendingOps.find((operation) => operation.kind === OP_KIND_MIGRATE_CUSTOMER &&
+                    (operation.inputUid === uid || operation.input.uid === uid) &&
+                    operation.input.toGatewayId === toGatewayId);
                 if (existing) {
                     adopted.push({ uid, operationId: existing.id });
                     continue;
@@ -3374,7 +3321,7 @@ export function addAdminFleetRoutes(router, deps) {
                         source: "admin-bulk-repair",
                     },
                     idempotencyScope: `bulk-migration:${uid}`,
-                    action: async () => createOperation(db, {
+                    action: async () => createOperation(store, {
                         kind: OP_KIND_MIGRATE_CUSTOMER,
                         createdBy,
                         input: operationInput,
@@ -3395,9 +3342,9 @@ export function addAdminFleetRoutes(router, deps) {
             next(e);
         }
     });
-    function activeDistributionGateways(glmById, legacyById) {
+    function activeDistributionGateways(glmById, rootsById) {
         const gateways = new Map();
-        for (const gatewayId of new Set([...glmById.keys(), ...legacyById.keys()])) {
+        for (const gatewayId of new Set([...glmById.keys(), ...rootsById.keys()])) {
             if (projectDesiredStatus(glmById.get(gatewayId)) === "retired")
                 continue;
             const hb = effectiveHeartbeatDoc(gatewayId, glmById.get(gatewayId))?.data();
@@ -3412,17 +3359,15 @@ export function addAdminFleetRoutes(router, deps) {
     }
     router.get("/customer-distribution", async (_req, res, next) => {
         try {
-            const [gwSnap, glmSnap, usersSnap] = await Promise.all([
-                db.collection("gateways").get(),
-                db.collection(GLM_GATEWAYS_COLLECTION).get(),
-                db.collection("users").get(),
+            const [roots, runtimes, builders, accountsByUid] = await Promise.all([
+                store.gateways.roots.list(),
+                store.fleetRegistry.list(),
+                store.builders.records.listAll(),
+                accounts.list(),
             ]);
-            const legacyById = indexFirestoreDocs(gwSnap.docs);
-            const glmById = indexAdminGatewayRuntimeDocs({
-                gatewayDocs: gwSnap.docs,
-                glmDocs: glmSnap.docs,
-            });
-            const gateways = activeDistributionGateways(glmById, legacyById);
+            const rootsById = new Map(roots.map((root) => [root.gatewayId, root]));
+            const glmById = indexAdminGatewayRuntimeDocs(fleetGatewayDocs({ roots, runtimes }));
+            const gateways = activeDistributionGateways(glmById, rootsById);
             const assignedByGateway = new Map();
             const mountedByGateway = new Map();
             const pendingPlacements = [];
@@ -3430,7 +3375,7 @@ export function addAdminFleetRoutes(router, deps) {
             let assigned = 0;
             let unassigned = 0;
             let mounted = 0;
-            for (const doc of usersSnap.docs) {
+            for (const doc of builderUserDocs(builders, accountsByUid)) {
                 const data = doc.data();
                 if (!userSlug(data))
                     continue;
@@ -3476,15 +3421,11 @@ export function addAdminFleetRoutes(router, deps) {
     router.get("/gateways/:id/details", async (req, res, next) => {
         try {
             const id = req.params.id;
-            const [runtime, glmSnap, usersSnap, opsSnap] = await Promise.all([
-                readDurableGatewayRuntime(db, id),
-                db.collection(GLM_GATEWAYS_COLLECTION).doc(id).get(),
-                db.collection("users").get(),
-                db
-                    .collection(GLM_OPERATIONS_COLLECTION)
-                    .where("gatewayId", "==", id)
-                    .limit(50)
-                    .get(),
+            const [runtime, builders, accountsByUid, gatewayOperations] = await Promise.all([
+                readDurableGatewayRuntime(store, id),
+                store.builders.records.listAll(),
+                accounts.list(),
+                store.journal.operations.listByGateway(id, 50),
             ]);
             if (!runtime) {
                 res
@@ -3494,7 +3435,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const mountedSlugs = readMountedSlugs(runtime.heartbeat ?? {});
             const mountedCustomers = [];
-            for (const doc of usersSnap.docs) {
+            for (const doc of builderUserDocs(builders, accountsByUid)) {
                 const data = doc.data();
                 const slug = userSlug(data);
                 if (!slug || !mountedSlugs.has(slug))
@@ -3502,14 +3443,14 @@ export function addAdminFleetRoutes(router, deps) {
                 mountedCustomers.push(buildMountedCustomer(doc.id, data, slug));
             }
             mountedCustomers.sort((a, b) => a.slug.localeCompare(b.slug));
-            const recentOperations = opsSnap.docs
+            const recentOperations = operationDocs(gatewayOperations)
                 .map((d) => shapeDrawerOperation(d.id, d.data()))
                 .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
                 .slice(0, 20);
             res.json({
                 mountedCustomers,
                 recentOperations,
-                control: projectGatewayControl(runtime.root, glmSnap.exists ? glmSnap.data() : undefined),
+                control: projectGatewayControl(runtime.root, runtime.runtime ? { ...runtime.runtime } : undefined),
                 generatedAt: new Date().toISOString(),
             });
         }
@@ -3528,13 +3469,12 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const targetGatewayId = body.gatewayId;
-            const userSnap = await db.collection("users").doc(uid).get();
-            if (!userSnap.exists) {
+            const builder = await store.builders.records.get(uid);
+            if (!builder) {
                 res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
                 return;
             }
-            const userData = (userSnap.data() ?? {});
-            const target = await readDurableGatewayRuntime(db, targetGatewayId);
+            const target = await readDurableGatewayRuntime(store, targetGatewayId);
             if (!target) {
                 res.status(404).json({
                     error: ERR_GATEWAY_NOT_FOUND,
@@ -3566,7 +3506,7 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const currentGid = userData.provisioning?.openclaw?.gatewayId;
+            const currentGid = builder.gateway?.gatewayId;
             const controlState = resolveUserGatewayControlState({
                 gatewayClass: target.root.gatewayClass,
                 profile: target.root.profile ?? undefined,
@@ -3575,11 +3515,7 @@ export function addAdminFleetRoutes(router, deps) {
                 builderAccess: target.root.builderAccess ?? undefined,
             }, uid);
             const gatewayProfile = controlState.gatewayProfile;
-            // Mirror AND the revision assignment doc commit together
-            // (commitPlacementAtomic): on a backfilled gateway the customer gets a
-            // serving assignment on the resolved revision instead of being left a
-            // gap user; a legacy gateway keeps the mirror-only update byte-for-byte.
-            const slug = resolveCustomerSlug(userData, deps.workspaceSlugsForUser);
+            const slug = builder.slug;
             if (!slug) {
                 res.status(409).json({
                     error: "customer has no canonical slug",
@@ -3602,17 +3538,15 @@ export function addAdminFleetRoutes(router, deps) {
                 classifyResult: (result) => result.kind === "rejected"
                     ? { outcome: "failed", error: `target revision not placeable: ${result.reason}` }
                     : { outcome: "completed" },
-                action: async () => commitPlacementAtomic(db, {
+                action: async () => commitAdminPlacementInStore(store, {
                     uid,
                     slug,
-                    gatewayId: targetGatewayId,
-                    source: "repair",
                     now: Date.now(),
                     assignmentWrite: currentGid === targetGatewayId ? "create-if-missing" : "upsert",
-                    mirrorPatch: {
-                        "provisioning.openclaw.gatewayId": targetGatewayId,
-                        "provisioning.openclaw.gatewayProfile": gatewayProfile,
-                        "provisioning.openclaw.controlUiEnabled": controlState.controlUiEnabled,
+                    mirror: {
+                        gatewayId: targetGatewayId,
+                        gatewayProfile,
+                        controlUiEnabled: controlState.controlUiEnabled,
                     },
                 }),
             });
@@ -3649,7 +3583,6 @@ export function addAdminFleetRoutes(router, deps) {
             const uid = req.params.uid;
             const leaseId = body.leaseId;
             const generation = body.generation;
-            const userRef = db.collection("users").doc(uid);
             const outcome = await runAdminFleetMutation({
                 req,
                 what: "cancel builder activation lease",
@@ -3658,12 +3591,11 @@ export function addAdminFleetRoutes(router, deps) {
                 preActionStatus: {},
                 mutation: { kind: "cancel-activation-lease", uid, leaseId, generation },
                 classifyResult: classifyReasonedActivationLeaseMutation,
-                action: async () => db.runTransaction(async (transaction) => {
-                    const snapshot = await transaction.get(userRef);
-                    if (!snapshot.exists)
+                action: async () => store.transaction({ label: "admin.fleet.cancelActivationLease" }, async (transaction) => {
+                    const builder = await transaction.builders.records.get(uid);
+                    if (!builder)
                         return { kind: "not-found" };
-                    const resolved = activationLeaseFromUser(snapshot.data());
-                    const lease = resolved?.lease;
+                    const lease = builder.activationLease;
                     if (!lease ||
                         lease.leaseId !== leaseId ||
                         lease.generation !== generation) {
@@ -3680,9 +3612,7 @@ export function addAdminFleetRoutes(router, deps) {
                             reason: "activation request has already allocated a disposable runtime",
                         };
                     }
-                    transaction.update(userRef, {
-                        "provisioning.openclaw.activationLease": FieldValue.delete(),
-                    });
+                    await transaction.builders.records.setActivationLease(uid, { clear: true }, { leaseId, generation });
                     return { kind: "cancelled" };
                 }),
             });
@@ -3716,7 +3646,7 @@ export function addAdminFleetRoutes(router, deps) {
             const leaseId = body.leaseId;
             const generation = body.generation;
             const now = Date.now();
-            const sharedPoolConfig = await readSharedGatewayPoolConfig(db);
+            const sharedPoolConfig = await store.transaction({ label: "admin.fleet.terminateSharedPool", readOnly: true }, readSharedGatewayPoolConfigInStore);
             if (sharedPoolConfig === null) {
                 res.status(409).json({ error: "shared pool has no members" });
                 return;
@@ -3729,7 +3659,7 @@ export function addAdminFleetRoutes(router, deps) {
                 preActionStatus: { defaultGatewayId: sharedPoolConfig.defaultGatewayId },
                 mutation: { kind: "terminate-activation-lease", uid, leaseId, generation },
                 classifyResult: classifyActivationLeaseTermination,
-                action: async () => db.runTransaction((transaction) => requestActivationLeaseTermination(db, transaction, {
+                action: async () => store.transaction({ label: "admin.fleet.terminateActivationLease" }, (transaction) => requestActivationLeaseTermination(transaction, {
                     uid,
                     leaseId,
                     generation,
@@ -3770,7 +3700,6 @@ export function addAdminFleetRoutes(router, deps) {
             }
             const uid = req.params.uid;
             const actor = req;
-            const userRef = db.collection("users").doc(uid);
             const requestedAt = Date.now();
             const outcome = await runAdminFleetMutation({
                 req,
@@ -3785,13 +3714,11 @@ export function addAdminFleetRoutes(router, deps) {
                     generation: body.generation,
                 },
                 classifyResult: classifyActivationLeaseReturn,
-                action: async () => db.runTransaction(async (transaction) => {
-                    const snapshot = await transaction.get(userRef);
-                    if (!snapshot.exists)
+                action: async () => store.transaction({ label: "admin.fleet.returnActivationLease" }, async (transaction) => {
+                    const builder = await transaction.builders.records.get(uid);
+                    if (!builder)
                         return { kind: "not-found" };
-                    const data = snapshot.data();
-                    const resolved = activationLeaseFromUser(data);
-                    const lease = resolved?.lease;
+                    const lease = builder.activationLease;
                     if (!lease ||
                         lease.leaseId !== body.leaseId ||
                         lease.generation !== body.generation ||
@@ -3804,10 +3731,10 @@ export function addAdminFleetRoutes(router, deps) {
                     if (toMillis(lease.returnRequestedAt) !== null) {
                         return { kind: "adopted" };
                     }
-                    transaction.update(userRef, {
-                        "provisioning.openclaw.activationLease.returnRequestedAt": requestedAt,
-                        "provisioning.openclaw.activationLease.returnRequestedBy": actor.uid ?? "unknown",
-                    });
+                    await transaction.builders.records.patchActivationLease(uid, {
+                        returnRequestedAt: requestedAt,
+                        returnRequestedBy: actor.uid ?? "unknown",
+                    }, { leaseId: lease.leaseId, generation: lease.generation });
                     return { kind: "requested" };
                 }),
             });
@@ -3867,7 +3794,7 @@ export function addAdminFleetRoutes(router, deps) {
                 classifyResult: classifyReasonedActivationLeaseMutation,
                 action: async () => {
                     const input = { uid, operationId, requestedAt: Date.now(), requestedBy: req.uid ?? "unknown" };
-                    const ordinary = await db.runTransaction(transaction => retryActivationLeaseReturn(db, transaction, input));
+                    const ordinary = await store.transaction({ label: "admin.fleet.retryActivationLeaseReturn" }, (transaction) => retryActivationLeaseReturn(transaction, input));
                     if (ordinary.kind === "conflict" && await deps.requestNativeReturnSourceRecovery?.(input))
                         return { kind: "retried" };
                     return ordinary;
@@ -3893,21 +3820,16 @@ export function addAdminFleetRoutes(router, deps) {
             const actor = req;
             const createdBy = actor.uid ?? "unknown";
             const now = Date.now();
-            const userSnap = await db.collection("users").doc(uid).get();
-            if (!userSnap.exists) {
+            const builder = await store.builders.records.get(uid);
+            if (!builder) {
                 res.status(404).json({ error: ERR_USER_NOT_FOUND, uid });
                 return;
             }
-            const reportingGatewayId = readUserGatewayId(userSnap.data());
-            const assignmentSnap = reportingGatewayId
-                ? await db.doc(`gateways/${reportingGatewayId}/assignments/${uid}`).get()
+            const reportingGatewayId = builder.gateway?.gatewayId ?? null;
+            const assignment = reportingGatewayId
+                ? await store.gateways.assignments.get(reportingGatewayId, uid)
                 : null;
-            const assignmentData = assignmentSnap?.exists
-                ? assignmentSnap.data()
-                : undefined;
-            const assignmentEpoch = typeof assignmentData?.epoch === "number"
-                ? assignmentData.epoch
-                : undefined;
+            const assignmentEpoch = assignment?.epoch;
             const result = await runAdminFleetMutation({
                 req,
                 what: "request builder activation lease",
@@ -3927,7 +3849,8 @@ export function addAdminFleetRoutes(router, deps) {
                     }
                     : { outcome: "completed" },
                 action: async () => requestBuilderActivationLease({
-                    db,
+                    store,
+                    readBuilderTier,
                     uid,
                     reportingGatewayId: reportingGatewayId ?? undefined,
                     assignmentEpoch,
@@ -3960,7 +3883,7 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const body = parsed.ok;
-            const uniqueness = await ensureGatewayCreateIsUnique(db, body);
+            const uniqueness = await ensureGatewayCreateIsUnique(store, body);
             if ("error" in uniqueness) {
                 res.status(uniqueness.error.status).json(uniqueness.error.body);
                 return;
@@ -3998,7 +3921,7 @@ export function addAdminFleetRoutes(router, deps) {
                     },
                     classifyResult: (outcome) => classifyAddGatewayMutation(outcome, body.gatewayId, artifact),
                     action: async () => performAddGatewayMutation({
-                        db,
+                        store,
                         provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
                         gatewayServiceAccount,
                         body,
@@ -4031,24 +3954,14 @@ export function addAdminFleetRoutes(router, deps) {
         try {
             const id = req.params.id;
             const body = (req.body ?? {});
-            const rootRef = db.collection(GATEWAYS_COLLECTION).doc(id);
-            const rootSnap = await rootRef.get();
-            const rootData = rootSnap.exists
-                ? rootSnap.data()
-                : undefined;
-            if (!rootSnap.exists) {
+            const stored = await store.gateways.roots.get(id);
+            if (!stored) {
                 res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
                 return;
             }
-            const root = asDurableGatewayRoot(rootData, id);
+            const root = durableRootOf(stored, id);
             if (!root) {
-                const invalidRoot = hasDurableGatewayRootMarkers(rootData);
-                res
-                    .status(invalidRoot ? 409 : 404)
-                    .json({
-                    error: invalidRoot ? "gateway durable root is invalid" : ERR_GATEWAY_NOT_FOUND,
-                    gatewayId: id,
-                });
+                res.status(409).json({ error: "gateway durable root is invalid", gatewayId: id });
                 return;
             }
             const built = buildDurableGatewayPatch({
@@ -4074,17 +3987,12 @@ export function addAdminFleetRoutes(router, deps) {
                 classifyResult: (result) => result.ok
                     ? { outcome: "completed" }
                     : { outcome: "failed", error: result.error },
-                action: async () => db.runTransaction(async (txn) => {
-                    const [currentSnap, activeOperations] = await Promise.all([
-                        txn.get(rootRef),
-                        txn.get(db
-                            .collection(GLM_OPERATIONS_COLLECTION)
-                            .where("status", "in", ["pending", "running"])),
+                action: async () => store.transaction({ label: "admin.fleet.patchGateway" }, async (transaction) => {
+                    const [currentStored, activeOperations] = await Promise.all([
+                        transaction.gateways.roots.get(id),
+                        transaction.journal.operations.listByStatus(["pending", "running"]),
                     ]);
-                    const currentData = currentSnap.exists
-                        ? currentSnap.data()
-                        : undefined;
-                    const current = asDurableGatewayRoot(currentData, id);
+                    const current = durableRootOf(currentStored, id);
                     if (!current)
                         return { ok: false, error: ERR_GATEWAY_NOT_FOUND };
                     if (current.desiredStatus === "retired" || current.retirementClaim != null) {
@@ -4093,7 +4001,7 @@ export function addAdminFleetRoutes(router, deps) {
                             error: "gateway has a current retirement claim",
                         };
                     }
-                    const migrationConflict = findActiveGatewayMigration(id, activeOperations.docs.map(projectOperationForMigrationLock));
+                    const migrationConflict = findActiveGatewayMigration(id, activeOperations.map(migrationLockRef));
                     if (migrationConflict) {
                         return {
                             ok: false,
@@ -4101,14 +4009,14 @@ export function addAdminFleetRoutes(router, deps) {
                         };
                     }
                     try {
-                        await assertGatewayRuntimeMutationUnfenced(db, txn, id);
+                        await assertGatewayRuntimeMutationUnfencedInStore(transaction, id);
                     }
                     catch (error) {
                         if (!(error instanceof GatewayRetirementConflictError))
                             throw error;
                         return { ok: false, error: error.message };
                     }
-                    txn.update(rootRef, {
+                    await transaction.gateways.roots.patch(id, {
                         ...built.ok.patch,
                         updatedAt: Date.now(),
                         updatedBy,
@@ -4133,7 +4041,7 @@ export function addAdminFleetRoutes(router, deps) {
             const createdBy = actor.uid ?? "unknown";
             const retainData = isTruthyQueryFlag(req.query.retainData);
             const retainServiceAccount = isTruthyQueryFlag(req.query.retainServiceAccount);
-            const runtime = await readDurableGatewayRuntime(db, id);
+            const runtime = await readDurableGatewayRuntime(store, id);
             if (!runtime) {
                 res
                     .status(404)
@@ -4156,7 +4064,7 @@ export function addAdminFleetRoutes(router, deps) {
             // Refuse synchronously while any customer is still assigned — the
             // controller's retire arm enforces the same gate, but a 409 here spares
             // the operator a marked-retired-then-blocked gateway.
-            const assignments = await readAssignmentDocsForGateway(db, id);
+            const assignments = await store.gateways.assignments.list(id);
             if (assignments.length > 0) {
                 res.status(409).json({
                     error: "gateway still has assigned customers; migrate them off before retiring",
@@ -4174,8 +4082,7 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const opRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-            const operationId = opRef.id;
+            const operationId = randomUUID();
             const createdAt = Date.now();
             try {
                 await runAdminFleetMutation({
@@ -4193,8 +4100,8 @@ export function addAdminFleetRoutes(router, deps) {
                         ...(retainData ? { retainData: true } : {}),
                         ...(retainServiceAccount ? { retainServiceAccount: true } : {}),
                     },
-                    action: async () => claimGatewayRetirementAtomic({
-                        db,
+                    action: async () => claimGatewayRetirementInStore({
+                        store,
                         gatewayId: id,
                         operationId,
                         operation: {
@@ -4241,9 +4148,9 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(503).json({ error: "immutable build manifests are unavailable" });
                 return;
             }
-            const captured = await db.runTransaction(async (tx) => predecessorId === undefined
-                ? { source: await readSharedSourceRecoveryAuthority(db, tx, gatewayId), supersede: undefined }
-                : readSharedSourceRecoverySupersession(db, tx, gatewayId, predecessorId), { readOnly: true });
+            const captured = await store.transaction({ label: "admin.fleet.recoverSource", readOnly: true }, async (transaction) => predecessorId === undefined
+                ? { source: await readSharedSourceRecoveryAuthority(transaction, gatewayId), supersede: undefined }
+                : readSharedSourceRecoverySupersession(transaction, gatewayId, predecessorId));
             const { source, supersede } = captured;
             const manifest = await centralManifestForSourceSha(deps.releaseAuthority, sourceSha);
             const payload = centralGatewayReleasePayload(manifest);
@@ -4261,7 +4168,7 @@ export function addAdminFleetRoutes(router, deps) {
                     } } };
             const operationId = await runAdminFleetMutation({ req, what: "repair Shared source before export", why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId }, preActionStatus: source.root, mutation: input,
-                action: async () => createOperation(db, { kind: OP_KIND_RESTART_GATEWAY, createdBy: req.uid ?? "unknown", input }) });
+                action: async () => createOperation(store, { kind: OP_KIND_RESTART_GATEWAY, createdBy: req.uid ?? "unknown", input }) });
             res.status(202).json({ gatewayId, sourceSha, operationId });
         }
         catch (error) {
@@ -4283,7 +4190,7 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(400).json({ error: "sourceSha and restore operationId are required" });
                 return;
             }
-            const gateway = await readGatewayDoc(db, id);
+            const gateway = await readGatewayDoc(store, id);
             if (!gateway || gateway.gatewayClass !== "shared" || gateway.desiredStatus === "retired") {
                 res.status(409).json({ error: "restore recovery requires a live Shared gateway" });
                 return;
@@ -4292,13 +4199,13 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(503).json({ error: "immutable build manifests are unavailable" });
                 return;
             }
-            const reauthorize = await capturedRestoreAttempt(db, operationId, reauthorizeAttemptId);
+            const reauthorize = await capturedRestoreAttempt(store, operationId, reauthorizeAttemptId);
             if (reauthorizeAttemptId !== undefined && reauthorize?.attemptId !== reauthorizeAttemptId) {
                 res.status(409).json({ error: "retained restore attempt changed" });
                 return;
             }
             const supersede = supersedeRecoveryId === undefined ? undefined :
-                await capturedRecoveryPredecessor(db, id, operationId, supersedeRecoveryId, reauthorize);
+                await capturedRecoveryPredecessor(store, id, operationId, supersedeRecoveryId, reauthorize);
             if (supersedeRecoveryId !== undefined && !supersede) {
                 res.status(409).json({ error: "failed restore recovery predecessor changed" });
                 return;
@@ -4308,7 +4215,7 @@ export function addAdminFleetRoutes(router, deps) {
             const input = restoreRecoveryOperationInput({ gatewayId: id, operationId, sourceSha, payload, reauthorize, supersede });
             const queued = await runAdminFleetMutation({ req, what: "recover fenced Shared restore runtime", why: ADMIN_FLEET_REQUEST_REASON,
                 target: { gatewayId: id, operationId }, preActionStatus: { desiredRelease: gateway.desiredRelease },
-                mutation: input, action: async () => createOperation(db, {
+                mutation: input, action: async () => createOperation(store, {
                     kind: OP_KIND_RESTART_GATEWAY, createdBy: req.uid ?? "unknown", input,
                 }) });
             res.status(202).json({ gatewayId: id, sourceSha, operationId: queued });
@@ -4322,7 +4229,7 @@ export function addAdminFleetRoutes(router, deps) {
     router.post("/gateways/:id/restart", async (req, res, next) => {
         try {
             const id = req.params.id;
-            const gateway = await readGatewayDoc(db, id);
+            const gateway = await readGatewayDoc(store, id);
             if (!gateway) {
                 res
                     .status(404)
@@ -4333,21 +4240,13 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(409).json({ error: "cannot restart a retired gateway", gatewayId: id });
                 return;
             }
-            const pendingOps = await db
-                .collection(GLM_OPERATIONS_COLLECTION)
-                .where("status", "in", ["pending", "running"])
-                .get();
-            const conflicting = pendingOps.docs.find((d) => {
-                const opData = d.data();
-                return opData?.input?.gatewayId === id;
-            });
+            const conflicting = await findConflictingGatewayOp(store, id);
             if (conflicting) {
                 res.status(409).json({
                     error: ERR_GATEWAY_OPERATION_IN_FLIGHT,
                     gatewayId: id,
                     operationId: conflicting.id,
-                    kind: conflicting.data()?.kind ??
-                        null,
+                    kind: conflicting.kind,
                 });
                 return;
             }
@@ -4361,7 +4260,7 @@ export function addAdminFleetRoutes(router, deps) {
                     desiredRelease: gateway.desiredRelease,
                 },
                 mutation: { kind: "restart-gateway", gatewayId: id },
-                action: async () => createOperation(db, {
+                action: async () => createOperation(store, {
                     kind: "restart-gateway",
                     createdBy: req.uid ?? "unknown",
                     input: { gatewayId: id },
@@ -4381,7 +4280,7 @@ export function addAdminFleetRoutes(router, deps) {
                 res.status(validation.error.status).json(validation.error.body);
                 return;
             }
-            const gateway = await readGatewayDoc(db, id);
+            const gateway = await readGatewayDoc(store, id);
             if (!gateway) {
                 res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
                 return;
@@ -4421,7 +4320,7 @@ export function addAdminFleetRoutes(router, deps) {
                         sourceSha,
                         manifestDigest: manifest.manifestDigest,
                     },
-                    action: async () => appendGatewayRelease(db, {
+                    action: async () => appendGatewayRelease(store, {
                         gateway,
                         artifact,
                         payload,
@@ -4454,19 +4353,13 @@ export function addAdminFleetRoutes(router, deps) {
     router.get("/gateways/:id/releases", async (req, res, next) => {
         try {
             const id = req.params.id;
-            const gateway = await readGatewayDoc(db, id);
+            const gateway = await readGatewayDoc(store, id);
             if (!gateway) {
                 res.status(404).json({ error: ERR_GATEWAY_NOT_FOUND, gatewayId: id });
                 return;
             }
-            const snap = await db
-                .collection(GATEWAYS_COLLECTION)
-                .doc(id)
-                .collection(GATEWAY_RELEASES_SUBCOLLECTION)
-                .orderBy("release", "desc")
-                .get();
-            const docs = snap.docs.map((d) => d.data());
-            const history = projectReleaseHistory({ gateway, releases: docs });
+            const docs = await store.gateways.releases.list(id, "desc");
+            const history = projectReleaseHistory({ gateway, releases: [...docs] });
             const payloadByRelease = new Map(docs.map((r) => [r.release, r.payload]));
             const releases = history.map((entry) => ({
                 ...entry,
@@ -4492,7 +4385,7 @@ export function addAdminFleetRoutes(router, deps) {
             const now = Date.now();
             const body = (req.body ?? {});
             const resolved = await resolveRollbackRelease({
-                db,
+                store,
                 gatewayId: id,
                 requestedRelease: req.params.n,
                 body,
@@ -4520,7 +4413,7 @@ export function addAdminFleetRoutes(router, deps) {
                         artifact,
                         note,
                     },
-                    action: async () => appendGatewayRelease(db, {
+                    action: async () => appendGatewayRelease(store, {
                         gateway,
                         artifact,
                         createdBy,
@@ -4547,22 +4440,9 @@ export function addAdminFleetRoutes(router, deps) {
     router.get("/customers/by-slug/:slug", async (req, res, next) => {
         try {
             const slug = req.params.slug;
-            const slugSnap = await db
-                .collection("users")
-                .where("provisioning.openclaw.slug", "==", slug)
-                .limit(1)
-                .get();
-            if (slugSnap.size > 0) {
-                res.json(serializeCustomerLookup(slugSnap.docs[0]));
-                return;
-            }
-            const usernameSnap = await db
-                .collection("users")
-                .where("username", "==", slug)
-                .limit(1)
-                .get();
-            if (usernameSnap.size > 0) {
-                res.json(serializeCustomerLookup(usernameSnap.docs[0]));
+            const builder = await store.builders.records.findBySlug(slug);
+            if (builder) {
+                res.json({ uid: builder.uid, currentGatewayId: builder.gateway?.gatewayId ?? null });
                 return;
             }
             res.status(404).json({ error: "customer not found", slug });
@@ -4572,13 +4452,8 @@ export function addAdminFleetRoutes(router, deps) {
         }
     });
     async function findInFlightMigrateOp(uid) {
-        const opsSnap = await inFlightOperationsForUid(db, uid).get();
-        const doc = opsSnap.docs.find((d) => {
-            const data = d.data();
-            return (data.kind === OP_KIND_MIGRATE_CUSTOMER &&
-                (data.status === "pending" || data.status === "running"));
-        });
-        return doc ? { id: doc.id } : null;
+        const operation = (await inFlightOperationsForUid(store, uid)).find(isInFlightCustomerMigration);
+        return operation ? { id: operation.id } : null;
     }
     router.patch("/customers/:uid/placement", async (req, res, next) => {
         try {
@@ -4590,52 +4465,49 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const uid = req.params.uid;
-            const userRef = db.collection("users").doc(uid);
-            const before = await userRef.get();
+            const before = await store.builders.records.get(uid);
             const outcome = await runAdminFleetMutation({
                 req,
                 what: park ? "park builder" : "release builder to Cowboy",
                 why: ADMIN_FLEET_REQUEST_REASON,
                 target: { uid },
-                preActionStatus: { gatewayId: readUserGatewayId(before.data()) },
+                preActionStatus: { gatewayId: before?.gateway?.gatewayId ?? null },
                 mutation: { kind: park ? "park-builder" : "place-builder", uid },
                 classifyResult: result => result.status >= 400
                     ? { outcome: "failed", error: String(result.body.error) }
                     : { outcome: "completed" },
-                action: () => db.runTransaction(async (txn) => {
-                    const [user, operations] = await Promise.all([txn.get(userRef), txn.get(inFlightOperationsForUid(db, uid))]);
-                    if (!user.exists)
+                action: () => store.transaction({ label: "admin.fleet.customerPlacement" }, async (transaction) => {
+                    const [builder, operations] = await Promise.all([
+                        transaction.builders.records.get(uid),
+                        inFlightOperationsForUid(transaction, uid),
+                    ]);
+                    if (!builder)
                         return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
-                    if (customerRuntimeMutationFenced(user.data()))
+                    if (builderRuntimeMutationFenced(builder))
                         return { status: 409, body: { error: "customer restore or source transfer is unresolved — cannot change placement", uid } };
-                    const inFlight = operations.docs.find(isInFlightCustomerMigration);
+                    const inFlight = operations.find(isInFlightCustomerMigration);
                     if (inFlight)
                         return { status: 409, body: { error: "customer migration is pending or running — cannot change placement", operationId: inFlight.id, uid } };
-                    const gatewayId = readUserGatewayId(user.data());
-                    if (park && parkingHasUnsettledAllocation(readUserOpenclaw(user.data() ?? {}), gatewayId)) {
+                    const gatewayId = builder.gateway?.gatewayId ?? null;
+                    if (park && parkingHasUnsettledAllocation(builder.activationLease, gatewayId)) {
                         return { status: 409, body: { error: "allocated activation target must settle before parking", uid } };
                     }
-                    const gateway = await updateOperatorParkingGateway(db, txn, { gatewayId, uid, actor: req.uid, park });
+                    const gateway = await updateOperatorParkingGateway(transaction, { gatewayId, uid, actor: req.uid, park });
                     if (gateway.error)
                         return { status: 409, body: { error: gateway.error, uid } };
                     if (release) {
-                        txn.update(userRef, {
-                            "provisioning.openclaw.managedBy": "cowboy",
-                            ...(readProvisioningStatus(user.data() ?? {}) === "complete" ? { "provisioning.status": "complete" } : {}),
+                        const provisioningComplete = (builder.provisioning.status ?? builder.openclaw.status) === "complete";
+                        await transaction.builders.records.patch(uid, {
+                            openclaw: { managedBy: "cowboy" },
+                            ...(provisioningComplete ? { provisioning: { status: "complete" } } : {}),
                         });
                         return { status: 200, body: { uid, managedBy: "cowboy" } };
                     }
+                    await transaction.builders.records.patch(uid, { openclaw: { managedBy: "operator" } });
                     if (gateway.dedicated) {
-                        txn.update(userRef, { "provisioning.openclaw.managedBy": "operator" });
                         return { status: 200, body: { uid, parked: true, gatewayId, managedBy: "operator" } };
                     }
-                    txn.update(userRef, {
-                        "provisioning.openclaw.managedBy": "operator",
-                        "provisioning.openclaw.gatewayId": FieldValue.delete(),
-                        "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
-                        "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                        "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
-                    });
+                    await transaction.builders.records.setGatewayMirror(uid, { clear: true });
                     return { status: 200, body: { uid, parked: true, managedBy: "operator" } };
                 }),
             });
@@ -4666,7 +4538,7 @@ export function addAdminFleetRoutes(router, deps) {
             }
             // Registration is either doc; readiness comes from the relocated
             // glmGateways/{id}.heartbeat (cutover step 2).
-            const target = await readGatewayRegistrationReadiness(db, body.to);
+            const target = await readGatewayRegistrationReadiness(store, body.to);
             if (!target.registered) {
                 res.status(404).json({
                     error: "target gateway not registered",
@@ -4689,12 +4561,7 @@ export function addAdminFleetRoutes(router, deps) {
                 });
                 return;
             }
-            const userSnap = await db.collection("users").doc(uid).get();
-            const userData = userSnap.data();
-            const currentGatewayId = readUserGatewayId(userData);
-            const builderSlug = userData
-                ? resolveCustomerSlug(userData, deps.workspaceSlugsForUser)
-                : null;
+            const { currentGatewayId, builderSlug } = builderMountOf(await store.builders.records.get(uid));
             if (currentGatewayId === body.to) {
                 res.status(409).json({
                     error: "customer is already mounted on the target gateway",
@@ -4717,7 +4584,7 @@ export function addAdminFleetRoutes(router, deps) {
                     ...(currentGatewayId ? { fromGatewayId: currentGatewayId } : {}),
                     toGatewayId: body.to,
                 },
-                action: async () => createOperation(db, {
+                action: async () => createOperation(store, {
                     kind: OP_KIND_MIGRATE_CUSTOMER,
                     createdBy,
                     input: {
@@ -4746,10 +4613,8 @@ export function addAdminFleetRoutes(router, deps) {
     router.post("/customers/:uid/unassign", async (req, res, next) => {
         try {
             const uid = req.params.uid;
-            const userBefore = await db.collection("users").doc(uid).get();
-            const preActionGatewayId = userBefore.exists
-                ? readUserGatewayId(userBefore.data())
-                : null;
+            const userBefore = await store.builders.records.get(uid);
+            const preActionGatewayId = userBefore?.gateway?.gatewayId ?? null;
             const outcome = await runAdminFleetMutation({
                 req,
                 what: "unassign builder from gateway",
@@ -4769,28 +4634,24 @@ export function addAdminFleetRoutes(router, deps) {
                             : `unassign returned ${result.status}`,
                     }
                     : { outcome: "completed" },
-                action: async () => db.runTransaction(async (txn) => {
-                    const userRef = db.collection("users").doc(uid);
-                    const userSnap = await txn.get(userRef);
-                    if (!userSnap.exists) {
+                action: async () => store.transaction({ label: "admin.fleet.unassignCustomer" }, async (transaction) => {
+                    const builder = await transaction.builders.records.get(uid);
+                    if (!builder) {
                         return { status: 404, body: { error: ERR_USER_NOT_FOUND, uid } };
                     }
-                    if (customerRuntimeMutationFenced(userSnap.data())) {
-                        const action = customerRestoreFencePresent(userSnap.data()) ? "restore" : "source transfer";
+                    if (builderRuntimeMutationFenced(builder)) {
+                        const action = builder.fences.restoreFence !== undefined ? "restore" : "source transfer";
                         return { status: 409, body: { error: `customer ${action} outcome is unresolved — cannot unassign`, uid } };
                     }
-                    const currentGatewayId = readUserGatewayId(userSnap.data());
+                    const currentGatewayId = builder.gateway?.gatewayId ?? null;
                     if (!currentGatewayId) {
                         return { status: 409, body: { error: "customer is already unassigned", uid } };
                     }
-                    const assignmentRef = db
-                        .collection(GATEWAYS_COLLECTION)
-                        .doc(currentGatewayId)
-                        .collection(GATEWAY_ASSIGNMENTS_SUBCOLLECTION)
-                        .doc(uid);
-                    const assignmentSnap = await txn.get(assignmentRef);
-                    const opsSnap = await txn.get(inFlightOperationsForUid(db, uid));
-                    const inFlight = opsSnap.docs.find(isInFlightCustomerMigration);
+                    const [assignment, operations] = await Promise.all([
+                        transaction.gateways.assignments.get(currentGatewayId, uid),
+                        inFlightOperationsForUid(transaction, uid),
+                    ]);
+                    const inFlight = operations.find(isInFlightCustomerMigration);
                     if (inFlight) {
                         return {
                             status: 409,
@@ -4801,7 +4662,6 @@ export function addAdminFleetRoutes(router, deps) {
                             },
                         };
                     }
-                    const assignment = parseAssignmentDoc(uid, assignmentSnap.exists ? assignmentSnap.data() : undefined);
                     if (assignment && assignment.state !== "serving") {
                         return {
                             status: 409,
@@ -4812,16 +4672,8 @@ export function addAdminFleetRoutes(router, deps) {
                             },
                         };
                     }
-                    // Drop the durable assignment AND the mirror together, so no stale
-                    // roster entry outlives the placement and no stale
-                    // gateway profile or control authorization survives the gateway it described.
-                    txn.delete(assignmentRef);
-                    txn.update(userRef, {
-                        "provisioning.openclaw.gatewayId": FieldValue.delete(),
-                        "provisioning.openclaw.gatewayAssignedAt": FieldValue.delete(),
-                        "provisioning.openclaw.gatewayProfile": FieldValue.delete(),
-                        "provisioning.openclaw.controlUiEnabled": FieldValue.delete(),
-                    });
+                    await transaction.gateways.assignments.delete(currentGatewayId, uid);
+                    await transaction.builders.records.setGatewayMirror(uid, { clear: true });
                     return {
                         status: 200,
                         body: {
@@ -4877,7 +4729,7 @@ export function addAdminFleetRoutes(router, deps) {
                     targetRelease: body.targetRelease,
                     imageTag: body.imageTag,
                 },
-                action: async () => createOperation(db, {
+                action: async () => createOperation(store, {
                     kind: "rollout",
                     createdBy,
                     input: {
@@ -4938,12 +4790,8 @@ export function addAdminFleetRoutes(router, deps) {
                 return;
             }
             const docs = status === "unresolved"
-                ? await listUnresolvedOperationDocs(db, limit)
-                : (await db
-                    .collection(GLM_OPERATIONS_COLLECTION)
-                    .orderBy("createdAt", "desc")
-                    .limit(limit)
-                    .get()).docs;
+                ? await listUnresolvedOperationDocs(store, limit)
+                : operationDocs((await store.journal.listRecent({ limit })).items);
             const operations = docs.map((doc) => shapeOperationsHistoryRecord(doc.id, doc.data()));
             res.json({ operations, generatedAt: new Date().toISOString() });
         }

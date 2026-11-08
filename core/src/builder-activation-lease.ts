@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
 
 import { accountAllowsInteractiveAccess } from "@octogee/shared/types/account-lifecycle";
-import { resolveBuilderTier } from "@octogee/shared/types/billing";
-import { BUILDER_TIERS } from "@octogee/shared/types/billing-tiers";
+import { resolveBuilderTier, type TierResolvable } from "@octogee/shared/types/billing";
+import { BUILDER_TIERS, type BuilderTierName } from "@octogee/shared/types/billing-tiers";
+import type { BuilderActivationLease, BuilderRecord } from "./platform-state/builders.js";
+import type { GatewayAssignment } from "./platform-state/gateways.js";
+import type { PlatformStateStore, Stored } from "./platform-state/store.js";
 
 export type BuilderRuntimeDemandCause =
   | "run-start"
@@ -16,8 +19,50 @@ export type BuilderActivationLeaseResult = {
   body: Record<string, unknown>;
 };
 
+export type BuilderTierReader = (uid: string, now: number) => Promise<BuilderTierName | null>;
+
+export function firestoreBuilderTierReader(db: Pick<Firestore, "doc">): BuilderTierReader {
+  return async (uid, now) => {
+    const snapshot = await db.doc(`users/${uid}`).get();
+    return snapshot.exists ? resolveBuilderTier(snapshot.data() as TierResolvable, new Date(now)) : null;
+  };
+}
+
+const BUILDER_TIER_READ_ATTEMPTS = 3;
+
+export class BuilderTierChangedError extends Error {
+  constructor(readonly uid: string) {
+    super(`Builder ${uid} changed while its tier was read`);
+    this.name = "BuilderTierChangedError";
+  }
+}
+
+export interface CurrentBuilderTier {
+  readonly tier: BuilderTierName | null;
+  readonly assertCurrent: (builder: Stored<BuilderRecord> | null) => void;
+}
+
+export async function withCurrentBuilderTier<T>(
+  input: { store: PlatformStateStore; readBuilderTier: BuilderTierReader; uid: string; now: number },
+  run: (current: CurrentBuilderTier) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    const revision = (await input.store.builders.records.get(input.uid))?.revision ?? null;
+    const tier = await input.readBuilderTier(input.uid, input.now);
+    const assertCurrent = (builder: Stored<BuilderRecord> | null): void => {
+      if ((builder?.revision ?? null) !== revision) throw new BuilderTierChangedError(input.uid);
+    };
+    try {
+      return await run({ tier, assertCurrent });
+    } catch (error) {
+      if (!(error instanceof BuilderTierChangedError) || attempt === BUILDER_TIER_READ_ATTEMPTS) throw error;
+    }
+  }
+}
+
 export interface BuilderRuntimeDemandRequest {
-  db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
   uid: string;
   reportingGatewayId?: string;
   assignmentEpoch?: number;
@@ -29,42 +74,48 @@ export interface BuilderRuntimeDemandRequest {
   leaseIdFactory?: () => string;
 }
 
-function activeActivityLease(lease: Record<string, unknown>, gatewayId: string): boolean {
+function activeActivityLease(lease: BuilderActivationLease, gatewayId: string): boolean {
   return lease.status === "active" && nonEmptyString(lease.leaseId) !== null &&
     positiveInteger(lease.generation) !== null && lease.targetGatewayId === gatewayId &&
     lease.returnRequestedAt === undefined;
 }
 
-function servingActivityAssignment(assigned: Record<string, unknown> | undefined, uid: string, gatewayId: string): boolean {
+function servingActivityAssignment(assigned: GatewayAssignment | null, uid: string, gatewayId: string): boolean {
   return assigned?.uid === uid && assigned.gatewayId === gatewayId && assigned.state === "serving" &&
-    Number.isSafeInteger(assigned.epoch) && (assigned.epoch as number) >= 0;
+    Number.isSafeInteger(assigned.epoch) && assigned.epoch >= 0;
 }
 
 export async function recordBuilderRuntimeActivity(input: {
-  db: Firestore;
+  store: PlatformStateStore;
+  readBuilderTier: BuilderTierReader;
   uid: string;
   gatewayId: string;
   now?: number;
 }): Promise<boolean> {
   const now = input.now ?? Date.now();
   if (!Number.isFinite(now) || now <= 0) throw new Error("invalid runtime activity time");
-  const userRef = input.db.doc(`users/${input.uid}`);
-  const assignmentRef = input.db.doc(`gateways/${input.gatewayId}/assignments/${input.uid}`);
-  return input.db.runTransaction(async transaction => {
-    const [user, assignment] = await Promise.all([transaction.get(userRef), transaction.get(assignmentRef)]);
-    const data = user.data();
-    const lease = data ? userLease(data) : null;
-    const assigned = assignment.data();
-    if (!data || !lease || !activeActivityLease(lease, input.gatewayId) ||
-      userGatewayId(data) !== input.gatewayId ||
-      !servingActivityAssignment(assigned, input.uid, input.gatewayId) ||
-      "result" in activationDemandEligibility(data, now)) return false;
+  const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now };
+  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.activity" }, async (transaction) => {
+    const [builder, assignment] = await Promise.all([
+      transaction.builders.records.get(input.uid),
+      transaction.gateways.assignments.get(input.gatewayId, input.uid),
+    ]);
+    assertCurrent(builder);
+    const lease = builder?.activationLease ?? null;
+    if (!builder || !lease || !activeActivityLease(lease, input.gatewayId) ||
+      builder.gateway?.gatewayId !== input.gatewayId ||
+      !servingActivityAssignment(assignment, input.uid, input.gatewayId) ||
+      "result" in activationDemandEligibility(builder, entitlementTier)) return false;
     const previous = typeof lease.lastActiveAt === "number" ? lease.lastActiveAt : 0;
-    if (now - previous >= 60_000) transaction.update(userRef, {
-      "provisioning.openclaw.activationLease.lastActiveAt": now,
-    });
+    if (now - previous >= 60_000) {
+      await transaction.builders.records.patchActivationLease(input.uid, { lastActiveAt: now }, {
+        leaseId: lease.leaseId,
+        generation: lease.generation,
+        status: ["active"],
+      });
+    }
     return true;
-  });
+  }));
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -79,24 +130,6 @@ function nonEmptyString(value: unknown): string | null {
 
 function positiveInteger(value: unknown): number | null {
   return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : null;
-}
-
-function userGatewayId(userData: Record<string, unknown>): string | null {
-  const provisioning = record(userData.provisioning);
-  const openclaw = record(provisioning?.openclaw);
-  return nonEmptyString(openclaw?.gatewayId);
-}
-
-function userLease(userData: Record<string, unknown>): Record<string, unknown> | null {
-  const provisioning = record(userData.provisioning);
-  const openclaw = record(provisioning?.openclaw);
-  return record(openclaw?.activationLease);
-}
-
-function builderSlug(userData: Record<string, unknown>): string | null {
-  const provisioning = record(userData.provisioning);
-  const openclaw = record(provisioning?.openclaw);
-  return nonEmptyString(openclaw?.slug) ?? nonEmptyString(userData.username);
 }
 
 function invalidRequest(input: BuilderRuntimeDemandRequest): BuilderActivationLeaseResult | null {
@@ -123,11 +156,11 @@ function sourceFenceMatches(input: {
   uid: string;
   reportingGatewayId: string;
   assignmentEpoch: number;
-  userData: Record<string, unknown>;
-  assignmentData: Record<string, unknown> | undefined;
+  builder: BuilderRecord;
+  assignment: GatewayAssignment | null;
 }): boolean {
-  const assignment = input.assignmentData;
-  return userGatewayId(input.userData) === input.reportingGatewayId &&
+  const assignment = input.assignment;
+  return input.builder.gateway?.gatewayId === input.reportingGatewayId &&
     assignment?.uid === input.uid &&
     assignment.gatewayId === input.reportingGatewayId &&
     assignment.state === "serving" &&
@@ -196,10 +229,10 @@ type ActivationDemandEligibility =
     };
 
 function activationDemandEligibility(
-  userData: Record<string, unknown>,
-  now: number,
+  builder: BuilderRecord,
+  entitlementTier: BuilderTierName | null,
 ): ActivationDemandEligibility {
-  if (!accountAllowsInteractiveAccess(userData)) {
+  if (!accountAllowsInteractiveAccess({ accountLifecycle: builder.accountLifecycle ?? undefined })) {
     return {
       result: {
         statusCode: 403,
@@ -210,7 +243,6 @@ function activationDemandEligibility(
       },
     };
   }
-  const entitlementTier = resolveBuilderTier(userData, new Date(now));
   if (!entitlementTier) {
     return {
       result: {
@@ -235,7 +267,7 @@ function activationDemandEligibility(
       },
     };
   }
-  const slug = builderSlug(userData);
+  const slug = nonEmptyString(builder.slug);
   if (!slug) {
     return {
       result: {
@@ -260,13 +292,13 @@ function parkedDuplicateForEvent(
 }
 
 function returningLeaseWithPendingDemand(input: {
-  lease: Record<string, unknown> | null;
+  lease: BuilderActivationLease | null;
   eventKey: string;
   cause: BuilderRuntimeDemandCause;
   observedAt: number;
   sourceGatewayId: string;
   sourceAssignmentEpoch: number;
-}): Record<string, unknown> | null {
+}): BuilderActivationLease | null {
   const { lease } = input;
   if (
     lease?.status !== "returning" ||
@@ -292,7 +324,7 @@ function returningLeaseWithPendingDemand(input: {
 }
 
 function adoptedActivationLease(
-  lease: Record<string, unknown> | null,
+  lease: BuilderActivationLease | null,
   input: {
     eventKey: string;
     cause: BuilderRuntimeDemandCause;
@@ -301,7 +333,7 @@ function adoptedActivationLease(
     sourceGatewayId: string;
     sourceAssignmentEpoch: number;
   },
-): Record<string, unknown> | null {
+): BuilderActivationLease | null {
   if (!existingLeaseCanAdopt(lease)) return null;
   const targetlessRequested =
     lease!.status === "requested" && lease!.targetGatewayId === undefined;
@@ -336,32 +368,26 @@ export async function requestBuilderActivationLease(
   const eventKey = input.eventKey!;
   const cause = input.cause!;
   const observedAt = input.observedAt!;
-  const userRef = input.db.doc(`users/${input.uid}`);
-  const assignmentRef = input.db.doc(
-    `gateways/${reportingGatewayId}/assignments/${input.uid}`,
-  );
+  const tierRead = { store: input.store, readBuilderTier: input.readBuilderTier, uid: input.uid, now: input.now ?? Date.now() };
 
-  return input.db.runTransaction(async (transaction) => {
-    const [userSnapshot, assignmentSnapshot] = await Promise.all([
-      transaction.get(userRef),
-      transaction.get(assignmentRef),
+  return withCurrentBuilderTier(tierRead, ({ tier: entitlementTier, assertCurrent }) => input.store.transaction({ label: "builder-activation-lease.request" }, async (transaction) => {
+    const [builder, assignment] = await Promise.all([
+      transaction.builders.records.get(input.uid),
+      transaction.gateways.assignments.get(reportingGatewayId, input.uid),
     ]);
-    if (!userSnapshot.exists) {
+    assertCurrent(builder);
+    if (!builder) {
       return {
         statusCode: 404,
         body: { code: "user-not-found", error: "user not found", uid: input.uid },
       };
     }
-    const userData = userSnapshot.data() as Record<string, unknown>;
-    const assignmentData = assignmentSnapshot.exists
-      ? assignmentSnapshot.data() as Record<string, unknown>
-      : undefined;
     if (!sourceFenceMatches({
       uid: input.uid,
       reportingGatewayId,
       assignmentEpoch,
-      userData,
-      assignmentData,
+      builder,
+      assignment,
     })) {
       return {
         statusCode: 409,
@@ -373,19 +399,17 @@ export async function requestBuilderActivationLease(
         },
       };
     }
-    if (record(userData.provisioning)?.computerRecovery != null) {
+    if (builder.fences.computerRecovery !== undefined) {
       return {
         statusCode: 409,
         body: { code: "builder-computer-recovery-in-progress", error: "computer recovery is in progress" },
       };
     }
-    const eligibility = activationDemandEligibility(
-      userData,
-      input.now ?? Date.now(),
-    );
+    const eligibility = activationDemandEligibility(builder, entitlementTier);
     if ("result" in eligibility) return eligibility.result;
-    const { entitlementTier, sizingTier, slug } = eligibility;
-    const existing = userLease(userData);
+    const { sizingTier, slug } = eligibility;
+    const existing = builder.activationLease;
+    const leaseFence = { leaseId: existing?.leaseId ?? null, generation: existing?.generation ?? null };
     const duplicate = parkedDuplicateForEvent(existing, eventKey);
     if (duplicate) return duplicate;
     const returningLease = returningLeaseWithPendingDemand({
@@ -397,9 +421,7 @@ export async function requestBuilderActivationLease(
       sourceAssignmentEpoch: assignmentEpoch,
     });
     if (returningLease) {
-      transaction.update(userRef, {
-        "provisioning.openclaw.activationLease": returningLease,
-      });
+      await transaction.builders.records.setActivationLease(input.uid, returningLease, leaseFence);
       return demandBody({
         lease: returningLease,
         status: "returning",
@@ -416,9 +438,7 @@ export async function requestBuilderActivationLease(
       sourceAssignmentEpoch: assignmentEpoch,
     });
     if (adoptedLease) {
-      transaction.update(userRef, {
-        "provisioning.openclaw.activationLease": adoptedLease,
-      });
+      await transaction.builders.records.setActivationLease(input.uid, adoptedLease, leaseFence);
       return demandBody({
         lease: adoptedLease,
         status: String(adoptedLease.status),
@@ -427,7 +447,7 @@ export async function requestBuilderActivationLease(
       });
     }
     const generation = (positiveInteger(existing?.generation) ?? 0) + 1;
-    const next = {
+    const next: BuilderActivationLease = {
       leaseId: (input.leaseIdFactory ?? randomUUID)(),
       generation,
       status: "requested",
@@ -439,14 +459,12 @@ export async function requestBuilderActivationLease(
       builderSlug: slug,
       sourceGatewayId: reportingGatewayId,
       sourceAssignmentEpoch: assignmentEpoch,
-      entitlementTier,
+      entitlementTier: eligibility.entitlementTier,
       sizingTier,
     };
-    transaction.update(userRef, {
-      "provisioning.openclaw.activationLease": next,
-    });
+    await transaction.builders.records.setActivationLease(input.uid, next, leaseFence);
     return demandBody({ lease: next, status: "requested", sizingTier });
-  });
+  }));
 }
 
 function runtimeOperationSuffix(gatewayId: string, generation: number): string {

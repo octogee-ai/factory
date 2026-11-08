@@ -94,7 +94,7 @@ function nullableField(data, field, accepts) {
 }
 const isString = (value) => typeof value === "string";
 const isNumber = (value) => typeof value === "number" && Number.isFinite(value);
-function parseOrchestratorConfig(data) {
+export function parseOrchestratorConfig(data) {
     const sharedGatewayAutoscaling = parseSharedGatewayAutoscalingConfig(data.sharedGatewayAutoscaling);
     if (sharedGatewayAutoscaling === null) {
         logger.error("config/orchestrator.sharedGatewayAutoscaling is invalid; reading it as null", {

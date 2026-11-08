@@ -564,6 +564,7 @@ type BuilderRecordReadMethod =
   | "listGatewayFenceHolders"
   | "listAdmitted"
   | "listByOpenClawStatus"
+  | "listAll"
   | "list";
 
 function builderRecordReads(session: PostgresSession): Pick<BuilderRecordsRepository, BuilderRecordReadMethod> {
@@ -635,6 +636,10 @@ function builderRecordReads(session: PostgresSession): Pick<BuilderRecordsReposi
     listByOpenClawStatus(openclawStatus) {
       const text = selectBuilders("b.openclaw_status = $1::text", BY_UID);
       return selectRecords(session, "builders.records.listByOpenClawStatus", text, [openclawStatus]);
+    },
+
+    listAll() {
+      return selectRecords(session, "builders.records.listAll", selectBuilders("TRUE", BY_UID), []);
     },
 
     async list(page): Promise<Page<Stored<BuilderRecord>>> {

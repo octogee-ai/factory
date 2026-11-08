@@ -1,9 +1,10 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, FieldValue } from "../lib/db.js";
+import { platformStateStore } from "../lib/platform-state.js";
 import { logger } from "../middleware/logging.js";
 import { triggerGatewayModelCredentialSync } from "../lib/byot-sync-trigger.js";
-import { readGatewayAuthorization } from "@octogee/core/gateway-live-release";
+import { readGatewayAuthorizationInStore } from "@octogee/core/gateway-live-release";
 import { byotSnapshotProjectionFromSystemConfig } from "@octogee/core/customer-snapshot-mapping";
 import {
   agentIdBelongsToSlug,
@@ -78,7 +79,7 @@ async function readSubscriptionProviders(uid: string) {
 async function isBuilderRuntime(req: Request): Promise<boolean> {
   const gatewayId = gatewayIdFromRequest(req);
   if (!gatewayId) return false;
-  const authorization = await readGatewayAuthorization(db, gatewayId);
+  const authorization = await readGatewayAuthorizationInStore(platformStateStore, gatewayId);
   return authorization?.kind === "durable" && authorization.config.gatewayClass === "builder";
 }
 

@@ -1,7 +1,7 @@
-import type { Firestore, Transaction } from "firebase-admin/firestore";
 import { type GatewayDoc, type ReleasePayload } from "@octogee/shared/types/gateway-releases";
 import { type GatewayMutableConfig } from "@octogee/shared/types/gateway-mutable-config";
 import { type GatewayArtifact } from "./gateway-live-release.js";
+import type { PlatformStateStore, PlatformStateTransaction } from "./platform-state/store.js";
 export type DurableGatewayRoot = GatewayDoc & GatewayMutableConfig;
 export declare function asDurableGatewayRoot(data: unknown, gatewayId: string): DurableGatewayRoot | null;
 export declare class StaleGatewayReleaseError extends Error {
@@ -30,19 +30,18 @@ export interface AppendGatewayReleaseArgs {
     origin?: "automatic" | "operator";
 }
 export declare function rolloutOperationInput(gatewayId: string, targetRelease: number, artifact: GatewayArtifact): Record<string, unknown>;
-export declare function appendGatewayRelease(db: Firestore, args: AppendGatewayReleaseArgs): Promise<{
+export declare function appendGatewayRelease(store: PlatformStateStore, args: AppendGatewayReleaseArgs): Promise<{
     release: number;
     operationId: string | null;
 }>;
-interface RecoveredGatewayReleaseInput {
+export interface RecoveredGatewayReleaseInput {
     gatewayId: string;
     operationId: string;
     claimedStartedAt: number | null;
     payload: ReleasePayload;
     now: number;
 }
-export declare function recordRecoveredGatewayRelease(db: Firestore, transaction: Transaction, input: RecoveredGatewayReleaseInput): Promise<{
+export declare function recordRecoveredGatewayReleaseInStore(transaction: PlatformStateTransaction, input: RecoveredGatewayReleaseInput): Promise<{
     release: number;
     operationId: string;
 }>;
-export {};

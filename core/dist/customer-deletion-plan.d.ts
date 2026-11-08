@@ -1,3 +1,6 @@
+import type { AccountLifecycle } from "@octogee/shared/types/account-lifecycle";
+import type { CustomerDeletionJob } from "./platform-state/jobs.js";
+import type { OperationRecord } from "./platform-state/operations.js";
 interface CustomerDeletionPlanInput {
     uid: string;
     slug: string | null;
@@ -12,9 +15,9 @@ interface CustomerDeletionPlanInput {
     stripeSubscriptionIds: string[];
 }
 export declare function buildCustomerDeletionPlan(input: CustomerDeletionPlanInput): {
-    lifecycle: Record<string, unknown>;
-    job: Record<string, unknown>;
-    suspensionOperation: Record<string, unknown>;
-    erasureOperation: Record<string, unknown>;
+    lifecycle: AccountLifecycle;
+    job: CustomerDeletionJob;
+    suspensionOperation: OperationRecord;
+    erasureOperation: OperationRecord;
 };
 export {};

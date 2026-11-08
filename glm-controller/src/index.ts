@@ -11,7 +11,8 @@ import { createBuilderHomeProvider } from "./lib/builder-home-provider.js";
 import { createHomeCopyClient } from "./lib/compute-home-copy.js";
 import type { ComputeRequest } from "./lib/compute-vm.js";
 import { assertBuilderRuntimeStorage } from "./builder-runtime-storage.js";
-import { runNormalFleetMutation, type NormalFleetMutationDb } from "@octogee/core/normal-fleet-mutation";
+import { runNormalFleetMutation } from "@octogee/core/normal-fleet-mutation";
+import { createFirestorePlatformStateStore, MissingRecordError, type PlatformStateStore, type SecretsRepository } from "@octogee/core/platform-state";
 import { restartGatewayProcess, restartGatewayDeployment } from './lib/runtime-restart-transport.js';
 import { assertMigrationRestartUnfenced } from './lib/runtime-restart-coordinator.js';
 import { assertOwnerOperationUnfenced } from './lib/computer-recovery-fence.js';
@@ -288,8 +289,11 @@ import {
   completeWorkspaceMigrationRecovery,
   assertWorkspaceMigrationRecoveryAuthority,
   assertWorkspaceMigrationSourcePreparationAuthority,
+  type CutoverDeps,
+  type FleetStateDeps,
   type FleetStateFirestore,
 } from "@octogee/core/fleet-state";
+import { firestoreBuilderTierReader } from "@octogee/core/builder-activation-lease";
 import {
   provisionGatewayAuthSecret,
   deleteSecret,
@@ -303,7 +307,6 @@ import {
 import {
   deploymentSettingsForRuntime,
 } from "@octogee/core/deployment-environment";
-import { workspaceSlugsForUser } from "@octogee/core/workspace-slugs";
 import {
   deleteAuthUserTolerantOfMissing,
   disableAuthUserAndRevokeSessions,
@@ -514,6 +517,7 @@ function createGatewayDeploymentRestarter(
 
 interface ControllerDeps {
   db: Firestore;
+  store: PlatformStateStore;
   helm: HelmRunner;
   kubeOps?: KubeOps;
   modelKeySourceIssuer?: GatewayModelKeySourceIssuer;
@@ -562,13 +566,13 @@ export function gatewayComputeProjectId(env: Record<string, string | undefined> 
 function createGatewayComputeClient(logFn: (msg: string) => void) {
   return createGatewayVmClient({
     projectId: gatewayComputeProjectId(),
-    journalHomeResize: (input, action) => runNormalFleetMutation(getFirestore() as unknown as NormalFleetMutationDb, {
+    journalHomeResize: (input, action) => runNormalFleetMutation(createFirestorePlatformStateStore({ db: getFirestore() }), {
       actor: "cowboy", forced: false, what: "expand-builder-home", why: "Apply the Builder tier home allowance", target: { ownerUid: input.ownerUid, disk: input.home.name, zone: input.home.zone, projectId: input.home.projectId }, preActionStatus: { diskId: input.home.id, sizeGb: input.home.sizeGb }, mutation: { sizeGb: input.sizeGb }, action,
     }),
-    journalMachineType: (input, action) => runNormalFleetMutation(getFirestore() as unknown as NormalFleetMutationDb, {
+    journalMachineType: (input, action) => runNormalFleetMutation(createFirestorePlatformStateStore({ db: getFirestore() }), {
       actor: "cowboy", forced: false, what: "resize-builder-computer", why: "Apply the Builder tier capacity before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { machineType: input.machineType }, action,
     }),
-    journalProvisioningModel: (input, action) => runNormalFleetMutation(getFirestore() as unknown as NormalFleetMutationDb, {
+    journalProvisioningModel: (input, action) => runNormalFleetMutation(createFirestorePlatformStateStore({ db: getFirestore() }), {
       actor: "cowboy", forced: false, what: "reprovision-builder-computer", why: "Apply the Builder tier provisioning model before starting its parked computer", target: { instanceName: input.instanceName, zone: input.zone, projectId: gatewayComputeProjectId() }, preActionStatus: {}, mutation: { provisioningModel: input.provisioningModel }, action,
     }),
     log: logFn,
@@ -932,6 +936,7 @@ async function syncDurableRuntimeDependencies(
 
 interface GatewayConvergencePassDeps {
   db: Firestore;
+  store: PlatformStateStore;
   helm: HelmRunner;
   kubeOps: KubeOps;
   chartFingerprint: string;
@@ -959,12 +964,13 @@ function isInitialDisposableBuilderPrelaunch(gateway: DurableGateway): boolean {
 
 export async function shouldReconcileDisposablePrelaunch(
   db: Firestore,
+  store: PlatformStateStore,
   gateway: DurableGateway | null,
 ): Promise<boolean> {
   if (gateway === null) return false;
   if (isInitialDisposableBuilderPrelaunch(gateway)) return true;
   if (gateway.liveRelease === null || gateway.liveRelease > gateway.desiredRelease ||
-    !(await disposableBuilderPrelaunchReserved({ db, gateway }))) return false;
+    !(await disposableBuilderPrelaunchReserved({ reader: store, gateway }))) return false;
   const runtime = await db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId).get();
   const data = runtime.data();
   return data?.runtime === "gce-vm" &&
@@ -1038,7 +1044,7 @@ function gatewayNeedsLiveVerification(gateway: DurableGateway, runtime: GatewayR
 }
 
 export async function refineGatewayConvergenceAction(input: {
-  passDeps: Pick<GatewayConvergencePassDeps, "db" | "reconcileSurgeHandoff">;
+  passDeps: Pick<GatewayConvergencePassDeps, "db" | "store" | "reconcileSurgeHandoff">;
   gateway: DurableGateway;
   artifact: ReleasePayload | null;
   pendingArtifact?: ReleasePayload | null;
@@ -1066,7 +1072,7 @@ export async function refineGatewayConvergenceAction(input: {
   }
   const desiredImage = gatewayImageFor(gateway, artifact);
   const prelaunchRefresh = await readDisposableBuilderPrelaunchRefresh({
-    db: passDeps.db, gateway, runtime, image: desiredImage, observedImage: helmObserved,
+    reader: passDeps.store, gateway, runtime, image: desiredImage, observedImage: helmObserved,
   });
   const handoff = await reconcileGatewaySurgeHandoff({
     passDeps,
@@ -1320,57 +1326,50 @@ function runtimeBuilderIdentity(gateway: DurableGateway): { builderIdentity?: Ru
 }
 
 export async function markGatewayLive(
-  passDeps: Pick<GatewayConvergencePassDeps, "db" | "log">,
+  passDeps: Pick<GatewayConvergencePassDeps, "store" | "log">,
   gateway: DurableGateway,
   artifact: ReleasePayload,
   prelaunchRefresh = false,
 ): Promise<void> {
-  const { db, log } = passDeps;
+  const { store, log } = passDeps;
   const initialDisposablePrelaunch = isInitialDisposableBuilderPrelaunch(gateway);
   const imageTag = gatewayImageFor(gateway, artifact).imageTag;
   const now = Date.now();
-  const markedLive = await db.runTransaction(async (txn) => {
-    const rootRef = db.collection(GATEWAYS_COLLECTION).doc(gateway.gatewayId);
-    const glmRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(gateway.gatewayId);
-    const rootSnap = await txn.get(rootRef);
-    const root = projectGatewayDesiredRootForGateway(
-      rootSnap.exists ? rootSnap.data() : undefined,
-      gateway.gatewayId,
-    );
-    if (!cowboyMayMarkGatewayLive(root, gateway.desiredRelease) ||
-      root?.desiredStatus !== gateway.desiredStatus || rootSnap.data()?.runtimeRestartFence !== undefined ||
-      rootSnap.data()?.retirementClaim != null) return false;
-    if (prelaunchRefresh) {
-      const runtime = await txn.get(glmRef);
-      if (!root || !runtimeMatchesPrelaunchRelease(root, runtime.data(), gatewayImageFor(root, artifact)) ||
-        !(await disposableBuilderPrelaunchReserved({ db, gateway: root, transaction: txn, expectedGateway: gateway }))) {
-        log(`[converge-gateway] ${gateway.gatewayId} prelaunch reservation changed; deferring release`);
-        return false;
-      }
-    }
-    txn.set(
-      rootRef,
-      { liveRelease: gateway.desiredRelease, updatedAt: now, updatedBy: "converge-gateway" },
-      { merge: true },
-    );
+  const markedLive = await store.transaction({ label: "converge-gateway.mark-live" }, async (transaction) => {
+    const root = await transaction.gateways.roots.get(gateway.gatewayId);
+    if (!root || !cowboyMayMarkGatewayLive(root, gateway.desiredRelease) ||
+      root.desiredStatus !== gateway.desiredStatus || root.runtimeRestartFence !== undefined ||
+      root.retirementClaim != null) return false;
     const runtimePatch = markLiveRuntimePatch(gateway);
+    const runtime = prelaunchRefresh || runtimePatch ? await transaction.fleetRegistry.get(gateway.gatewayId) : null;
+    if (prelaunchRefresh && (!runtimeMatchesPrelaunchRelease(root, runtime, gatewayImageFor(root, artifact)) ||
+      !(await disposableBuilderPrelaunchReserved({ reader: transaction, gateway: root, expectedGateway: gateway })))) {
+      log(`[converge-gateway] ${gateway.gatewayId} prelaunch reservation changed; deferring release`);
+      return false;
+    }
+    await transaction.gateways.roots.patch(
+      gateway.gatewayId,
+      { liveRelease: gateway.desiredRelease, updatedAt: now, updatedBy: "converge-gateway" },
+      { updatedAt: root.updatedAt },
+    );
     if (runtimePatch) {
-      txn.set(glmRef, {
+      if (!runtime) throw new MissingRecordError({ aggregate: "fleet-registry", key: gateway.gatewayId });
+      await transaction.fleetRegistry.patch(gateway.gatewayId, {
         ...runtimePatch,
         ...(initialDisposablePrelaunch
           ? {
               heartbeat: {
+                ...runtime.heartbeat,
                 status: "booting",
                 version: versionFromImageTag(imageTag),
                 internalUrl: gatewayServiceInternalUrl(gateway.gatewayId),
                 startedAt: now,
                 lastHeartbeatAt: now,
                 mountedCustomers: [],
-                lastError: null,
               },
             }
           : {}),
-      }, { merge: true });
+      });
     }
     return true;
   });
@@ -2100,11 +2099,7 @@ async function runClaimedOperation(
         const restore = {
           ...scope, operationId: op.id, claimStartedAt: op.startedAt, attemptId: randomUUID(),
         };
-        const stateDeps = {
-          db: deps.db as unknown as FleetStateFirestore,
-          serverTimestamp: () => FieldValue.serverTimestamp(),
-          deleteField: () => FieldValue.delete(),
-        };
+        const stateDeps: FleetStateDeps = { store: deps.store };
         const owned = await runGatewayRuntimeExclusive(() => beginCustomerRestore(stateDeps, restore, { resume }));
         return () => acknowledgeCustomerRestore(stateDeps, owned);
       },
@@ -2314,6 +2309,7 @@ export function buildGatewayHeartbeatPollerDeps(
   privateKey: string,
   informer: FleetInformer,
 ): GatewayHeartbeatPollerDeps {
+  const store = createFirestorePlatformStateStore({ db });
   const recoverComputer = createBackgroundGatewayRecovery(
     (gatewayId) => runGatewayRuntimeExclusive(async () => { await vmGatewayRuntimeRef.current?.recoverUnreachable(gatewayId); }),
     log,
@@ -2353,7 +2349,7 @@ export function buildGatewayHeartbeatPollerDeps(
         gatewayId,
       );
       if (gateway?.desiredStatus === "running" && gateway.gatewayClass === "builder") recoverComputer(gatewayId);
-      if (await shouldReconcileDisposablePrelaunch(db, gateway)) {
+      if (await shouldReconcileDisposablePrelaunch(db, store, gateway)) {
         requestReconcileTickRef.fire?.(gatewayId);
       }
     },
@@ -2516,6 +2512,7 @@ function startControllerBackgroundTasks({
   const stopPlacementPolicyReconciler = startPlacementPolicyReconciler(
     createFirestorePlacementPolicyReconcilerDeps({
       db,
+      store: deps.store,
       prepareBuilderHome,
       informer,
       namespace: NAMESPACE,
@@ -2536,13 +2533,13 @@ function startControllerBackgroundTasks({
   const decryptConnectorSecret = createConnectorSecretDecryptor();
   const stopHttp = startHttpServer({
     db,
+    store: createFirestorePlatformStateStore({ db }),
     log,
     port: HTTP_PORT,
     verifyIdToken: async (token) => {
       const decoded = await getAuth().verifyIdToken(token, true);
       return { uid: decoded.uid };
     },
-    workspaceSlugsForUser,
     provisionGatewayAuthSecret,
     listGatewayBuilds,
     ...CENTRAL_RELEASE_ROUTE_DEPS,
@@ -2558,7 +2555,7 @@ function startControllerBackgroundTasks({
     suspendAuthUser: (uid) => disableAuthUserAndRevokeSessions(uid, getAuth()),
     revokeConnectorGrantsForUser: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
-        db,
+        secrets: createFirestorePlatformStateStore({ db }).secrets,
         decryptSecret: decryptConnectorSecret,
         logger: { warn: log },
       }),
@@ -2607,10 +2604,11 @@ function progressJournalDeps(db: Firestore, logFn: (message: string) => void): P
 
 function buildSurgeHandoffDeps(input: {
   db: Firestore;
+  store: PlatformStateStore;
   runKubectl: KubectlSubprocess;
   privateKey: string;
 }): SurgeCustomerHandoffDeps {
-  const { db, runKubectl, privateKey } = input;
+  const { db, store, runKubectl, privateKey } = input;
   return {
     ...createSurgePodTransport({
       privateKey,
@@ -2665,19 +2663,9 @@ function buildSurgeHandoffDeps(input: {
       return retained;
     },
     readSystemConfigCommit: (pod) => readPodSystemConfigCommit(runKubectl, NAMESPACE, pod),
-    markSharedSurgeForwardRecovery: (assignment) => markSharedSurgeForwardRecovery(
-      { db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log }, assignment),
-    rebindSharedSurgeForwardRecovery: (assignment) => rebindSharedSurgeForwardRecovery(
-      { db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log }, assignment),
-    markAssignment: (assignment) => markAssignmentState(
-      {
-        db: db as unknown as FleetStateFirestore,
-        serverTimestamp: () => FieldValue.serverTimestamp(),
-        deleteField: () => FieldValue.delete(),
-        log,
-      },
-      assignment,
-    ),
+    markSharedSurgeForwardRecovery: (assignment) => markSharedSurgeForwardRecovery({ store, log }, assignment),
+    rebindSharedSurgeForwardRecovery: (assignment) => rebindSharedSurgeForwardRecovery({ store, log }, assignment),
+    markAssignment: (assignment) => markAssignmentState({ store, log }, assignment),
     readOwnerOperation: async (operationId) => {
       const snapshot = await db
         .collection(GLM_OPERATIONS_COLLECTION)
@@ -2734,7 +2722,7 @@ function createBootUpgradeJournal(db: Firestore): VmGatewayRuntimeDeps["journalB
       const desired = projectGatewayDesiredRootForGateway(root.data(), input.gatewayId);
       if (desired?.desiredStatus !== "running" || desired.ownerUid !== input.ownerUid) throw new Error("gateway is no longer starting for this computer owner");
     });
-    await runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+    await runNormalFleetMutation(createFirestorePlatformStateStore({ db }), {
       actor: "cowboy", forced: false, what: "upgrade-builder-boot", why: "Use the current computer image on boot while retaining the Builder home",
       target: { gatewayId: input.gatewayId }, preActionStatus: { instanceId: input.instanceId }, mutation: { imageId: input.imageId },
       action: () => work(assertAuthority),
@@ -2750,6 +2738,7 @@ function agentStoreDsns(): { adminDsn: string; clientDsn: string } {
 }
 
 async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime> {
+  const store = createFirestorePlatformStateStore({ db });
   const runKubectl: KubectlSubprocess = (args, opts) => spawnKubectl(args, opts);
   const authSecretEnsurer = createAuthSecretEnsurer({
     runKubectl,
@@ -2899,6 +2888,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
   );
   const surgeHandoffDeps = buildSurgeHandoffDeps({
     db,
+    store,
     runKubectl,
     privateKey: fleetControllerPrivateKey,
   });
@@ -2906,6 +2896,7 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
   const runGatewayConvergence = (gatewayIds?: readonly string[]) =>
     runGatewayConvergencePass({
       db,
+      store,
       helm,
       kubeOps,
       chartFingerprint,
@@ -2920,11 +2911,12 @@ async function createControllerRuntime(db: Firestore): Promise<ControllerRuntime
     syncFleetIngress: handlerSyncFleetIngress, privateKey: fleetControllerPrivateKey,
     modelKeySourceIssuer, prepareGatewayConfig, chartFingerprint,
     runRuntimeRecovery: convergeGateways.runExclusive,
-    prepareMigrationAgentStores, nativeReturnRecovery,
+    prepareMigrationAgentStores, nativeReturnRecovery, store,
   });
 
   const deps: ControllerDeps = {
     db,
+    store,
     helm,
     kubeOps,
     modelKeySourceIssuer,
@@ -3171,6 +3163,7 @@ function migrationProjectCheckoutScope(
 // eslint-disable-next-line complexity -- Mirrors the octogee-api fleet broker snapshot shape.
 export async function readMigrationUserSnapshot(
   db: Firestore,
+  secrets: Pick<SecretsRepository, "list">,
   uid: string,
   toGatewayId?: string,
 ): Promise<FleetBrokerUserSnapshot | null> {
@@ -3189,7 +3182,7 @@ export async function readMigrationUserSnapshot(
     toGatewayId
       ? db.collection(GATEWAYS_COLLECTION).doc(toGatewayId).get()
       : Promise.resolve(null),
-    collectProjectAgentStates(db, uid, slug),
+    collectProjectAgentStates(db, secrets, uid, slug),
   ]);
   const projectDocs = projectSnap.docs;
   const channels = await collectMigrationChannelBindings(workspaceChannels.docs, projectDocs);
@@ -3262,14 +3255,17 @@ async function buildHandlers(
     runRuntimeRecovery: (work: () => Promise<void>) => Promise<void>;
     prepareMigrationAgentStores: PrepareMigrationAgentStores;
     nativeReturnRecovery: ReturnType<typeof createNativeReturnSourceRecoveryOwner>;
+    store: PlatformStateStore;
   },
 ): Promise<OperationHandlers> {
-  const { privateKey, modelKeySourceIssuer } = fleetOps;
+  const { privateKey, modelKeySourceIssuer, store } = fleetOps;
   if (!privateKey) {
     throw new Error(
       "FLEET_CONTROLLER_PRIVATE_KEY is not set — required for migrate-customer. Refusing to start with stub handlers.",
     );
   }
+  const stateDeps: FleetStateDeps = { store, log: logFn };
+  const cutoverDeps: CutoverDeps = { ...stateDeps, readBuilderTier: firestoreBuilderTierReader(db) };
 
   const addGateway = createAddGatewayHandler({
     helm,
@@ -3323,8 +3319,7 @@ async function buildHandlers(
   });
   const migrateCustomer = createMigrateCustomerHandler({
     prepareBuilderRecoveryTarget: input => prepareBuilderRecoveryTarget({
-      assertAuthority: recovery => assertWorkspaceMigrationRecoveryAuthority({ db: db as unknown as FleetStateFirestore,
-        serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, recovery),
+      assertAuthority: recovery => assertWorkspaceMigrationRecoveryAuthority(stateDeps, recovery),
       targetAssigned: async gatewayId => {
         const [assignments, users] = await Promise.all([
           readAssignmentDocsForGateway(db, gatewayId),
@@ -3336,11 +3331,11 @@ async function buildHandlers(
       holdTargetOpenClaw: recoveryTargetTransport.holdTargetOpenClaw!,
       unreserveTargetOpenClaw: recoveryTargetTransport.unreserveTargetOpenClaw!,
     }, input),
-    assertMigrationRecoveryAuthority: (input) => assertWorkspaceMigrationRecoveryAuthority({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
-    assertMigrationSourcePreparationAuthority: (input) => assertWorkspaceMigrationSourcePreparationAuthority({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
-    completeMigrationRecovery: (input) => completeWorkspaceMigrationRecovery({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
-    clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
-    setMigrationPhase: (input) => setWorkspaceMigrationPhase({ db: db as unknown as FleetStateFirestore, serverTimestamp: () => FieldValue.serverTimestamp(), deleteField: () => FieldValue.delete(), log: logFn }, input),
+    assertMigrationRecoveryAuthority: (input) => assertWorkspaceMigrationRecoveryAuthority(stateDeps, input),
+    assertMigrationSourcePreparationAuthority: (input) => assertWorkspaceMigrationSourcePreparationAuthority(stateDeps, input),
+    completeMigrationRecovery: (input) => completeWorkspaceMigrationRecovery(stateDeps, input),
+    clearMigrationPreparation: (input) => clearWorkspaceMigrationPreparation(stateDeps, input),
+    setMigrationPhase: (input) => setWorkspaceMigrationPhase(stateDeps, input),
     reportMigrationProgress: async (gatewayId, event) => {
       const url = await resolveGatewayUrlFromFirestore(db, gatewayId);
       await reportMigrationProgress({ privateKey, resolveGatewayUrl: () => url }, gatewayId, event);
@@ -3367,7 +3362,7 @@ async function buildHandlers(
       if (!slug || !currentGatewayId) return null;
       return { slug, currentGatewayId };
     },
-    readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, uid, toGatewayId),
+    readUserSnapshot: (uid, toGatewayId) => readMigrationUserSnapshot(db, store.secrets, uid, toGatewayId),
     readPrivateProjectCoachWorkspace: async (gatewayId, slug) => readPrivateProjectCoachWorkspace({
       baseUrl: await resolveGatewayUrlFromFirestore(db, gatewayId, { allowUnready: true }),
       gatewayId, privateKey, privateProjectCoachSlug: slug, timeoutMs: GATEWAY_HEALTH_TIMEOUT_MS,
@@ -3382,12 +3377,7 @@ async function buildHandlers(
       (await readReleasePayloadFromFirestore(db, gatewayId, release))?.openclawSourceSha ?? null,
     commitCutover: async (commit) => {
       await commitCutoverAtomic(
-        {
-          db: db as unknown as FleetStateFirestore,
-          serverTimestamp: () => FieldValue.serverTimestamp(),
-          deleteField: () => FieldValue.delete(),
-          log: logFn,
-        },
+        cutoverDeps,
         {
           uid: commit.uid,
           slug: commit.slug,
@@ -3440,15 +3430,7 @@ async function buildHandlers(
     // The roster quiesce gate: written "quiescing" before the source quiesce
     // RPC, restored "serving" on a pre-cutover rollback (fleet-migration-runner).
     setAssignmentState: async (input) => {
-      await markAssignmentState(
-        {
-          db: db as unknown as FleetStateFirestore,
-          serverTimestamp: () => FieldValue.serverTimestamp(),
-          deleteField: () => FieldValue.delete(),
-          log: logFn,
-        },
-        input,
-      );
+      await markAssignmentState(stateDeps, input);
     },
     readGatewayRootFence: async (gatewayId) => {
       const snap = await db.collection(GATEWAYS_COLLECTION).doc(gatewayId).get();
@@ -3459,12 +3441,7 @@ async function buildHandlers(
     },
     commitV2Cutover: async (input) => {
       await commitCutoverAtomic(
-        {
-          db: db as unknown as FleetStateFirestore,
-          serverTimestamp: () => FieldValue.serverTimestamp(),
-          deleteField: () => FieldValue.delete(),
-          log: logFn,
-        },
+        cutoverDeps,
         {
           uid: input.uid,
           slug: input.slug,
@@ -3560,7 +3537,7 @@ async function buildHandlers(
     }, input),
     verifyRetirementClaim: ({ gatewayId, operationId, version }) =>
       verifyGatewayRetirementClaimAtomic({
-        db,
+        store,
         gatewayId,
         operationId,
         version,
@@ -3732,7 +3709,7 @@ async function buildHandlers(
 
   const restartGateway = createRestartGatewayHandler({
     recoverRestore: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedRestoreRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
-    recoverSource: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedSourceRuntime({ db, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
+    recoverSource: (op, ctx) => fleetOps.runRuntimeRecovery(() => recoverSharedSourceRuntime({ store, namespace: NAMESPACE, sourceSha: process.env.BUILD_SHA ?? '', runKubectl: spawnKubectl }, op, ctx)),
     kubeOps: {...kubeOps,restartOpenClawInPlace: async ({name}) => {
       const gatewayId=name.slice('octogee-gateway-'.length);
       if(name!==deploymentNameForInstance(gatewayId))throw new Error('gateway restart deployment identity mismatch');
@@ -3794,7 +3771,7 @@ async function buildHandlers(
         await assertAuthority();
         await withGatewayRuntimeMutation(db, gatewayId, async () => undefined, options?.forceOwnerUid ? operationId : undefined);
       };
-      return runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+      return runNormalFleetMutation(store, {
         actor: "cowboy", forced: !!options?.forceOwnerUid, what: "replace-builder-platform-boot", why: options?.forceOwnerUid ? "Operator accepted possible boot data loss for retained computer recovery" : "Replace a stopped platform image while retaining the exact Builder home and pinned recovery images",
         target: { gatewayId, operationId }, preActionStatus: {}, mutation: { retainedHome: true, ...(options?.forceOwnerUid ? { forceOwnerUid: options.forceOwnerUid } : {}) },
         action: () => runtime.replaceStoppedComputer(gatewayId, operationId, assertCurrent, options),
@@ -4212,7 +4189,7 @@ function buildSuspendCustomerHandler(
     },
     revokeConnectorGrants: (uid) =>
       revokeAllConnectorGrantsForUser(uid, CONNECTOR_OAUTH_REVOCATION_TARGETS, {
-        db,
+        secrets: createFirestorePlatformStateStore({ db }).secrets,
         decryptSecret: decryptConnectorSecret,
         logger: { warn: logFn },
       }),
@@ -4325,7 +4302,7 @@ function createBuilderHomeServices(db: Firestore, log: (message: string) => void
     const result = await client.request({ url, method, ...(body === undefined ? {} : { data: body }) });
     return { status: result.status, data: result.data };
   };
-  const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(db as unknown as NormalFleetMutationDb, {
+  const homeJournal = <T>(what: string, uid: string, action: () => Promise<T>) => runNormalFleetMutation(createFirestorePlatformStateStore({ db }), {
     actor: "cowboy", forced: false, what, why: "Migrate the Builder home without removing its verified source", target: { ownerUid: uid }, preActionStatus: {}, mutation: { action: what }, action,
   });
   const provider = createBuilderHomeProvider({ db, projectId: gatewayComputeProjectId(), environment: COMPUTER_ENVIRONMENT,

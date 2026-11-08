@@ -1,9 +1,11 @@
 import type { FleetBrokerProjectAgent } from "@octogee/shared/types/fleet-broker";
 import type { UserSnapshot } from "./customer-lifecycle.js";
+import type { MattermostTokenSecret, SecretsRepository } from "./platform-state/secrets.js";
 type ChannelBinding = UserSnapshot["channels"][number];
 export declare function mapWorkspaceChannelDoc(data: Record<string, unknown>): ChannelBinding | null;
 export declare function mapProjectChannelDoc(projectId: string, data: Record<string, unknown>): ChannelBinding | null;
-export declare function mapProjectAgentState(projectId: string, projectData: Record<string, unknown>, secretData: Record<string, unknown> | undefined): FleetBrokerProjectAgent | null;
+export type ProjectAgentCredential = Pick<MattermostTokenSecret, "mattermostUserId" | "personalToken">;
+export declare function mapProjectAgentState(projectId: string, projectData: Record<string, unknown>, credential: ProjectAgentCredential | null): FleetBrokerProjectAgent | null;
 interface SnapshotDocSnap {
     id: string;
     data(): Record<string, unknown> | undefined;
@@ -23,7 +25,7 @@ interface SnapshotCollectionRef {
 export interface ProjectAgentSnapshotDb {
     collection(name: string): SnapshotCollectionRef;
 }
-export declare function collectProjectAgentStates(db: ProjectAgentSnapshotDb, uid: string, slug: string): Promise<Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>>;
+export declare function collectProjectAgentStates(db: ProjectAgentSnapshotDb, secrets: Pick<SecretsRepository, "list">, uid: string, slug: string): Promise<Array<NonNullable<ReturnType<typeof mapProjectAgentState>>>>;
 export declare function deriveSlug(uid: string, data: Record<string, unknown>): string;
 type SnapshotSystemConfig = NonNullable<UserSnapshot["systemConfig"]>;
 export interface ByotSnapshotProjection {

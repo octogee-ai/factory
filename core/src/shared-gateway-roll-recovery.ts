@@ -1,32 +1,23 @@
-import type { Firestore } from "firebase-admin/firestore";
-
+import { GATEWAY_UNREACHABLE_AFTER_MS } from "@octogee/shared/types/fleet-controller";
 import {
-  GATEWAY_UNREACHABLE_AFTER_MS,
-  GATEWAYS_COLLECTION,
-} from "@octogee/shared/types/fleet-controller";
-import {
-  GLM_GATEWAYS_COLLECTION,
-  GLM_OPERATIONS_COLLECTION,
-} from "@octogee/shared/types/glm";
-import {
-  GATEWAY_RELEASES_SUBCOLLECTION,
   hasFreshReadyKubernetesObservation,
-  isGatewayRuntimeDoc,
   isReleasePayload,
   projectGatewayDesiredRootForGateway,
   releasePayloadHash,
   type GatewayRuntimeDoc,
-  type ReleaseDoc,
   type ReleasePayload,
 } from "@octogee/shared/types/gateway-releases";
 import type { SharedGatewayPoolConfig } from "@octogee/shared/types/shared-gateway-pool";
 import { gatewayArtifactFromReleasePayload } from "./gateway-live-release.js";
-import { readSharedGatewayPoolConfig } from "./shared-gateway-pool-read.js";
+import { readSharedGatewayPoolConfigInStore } from "./shared-gateway-pool-read.js";
 import {
   FleetMutationIdempotencyError,
   runNormalFleetMutation,
-  type NormalFleetMutationDb,
 } from "./normal-fleet-mutation.js";
+import type { FleetRegistryRecord } from "./platform-state/fleet-registry.js";
+import type { GatewayAssignment, GatewayRelease, GatewayRoot } from "./platform-state/gateways.js";
+import type { OperationRecord } from "./platform-state/operations.js";
+import type { PlatformStateStore, Stored } from "./platform-state/store.js";
 
 const ACTOR = "glm-controller-placement-policy";
 
@@ -44,7 +35,7 @@ export type SupersedeRollingSharedGatewayRollResult =
   | { kind: "not-eligible" };
 
 export interface SharedGatewayRollRecoveryDeps {
-  db: Firestore;
+  store: PlatformStateStore;
   now: () => number;
 }
 
@@ -66,23 +57,12 @@ function isPositiveRelease(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
-function snapshotData(snapshot: { exists: boolean; data(): unknown }): unknown {
-  if (!snapshot.exists) return undefined;
-  return snapshot.data();
+function gatewayRootOf(root: Stored<GatewayRoot> | undefined, gatewayId: string) {
+  return projectGatewayDesiredRootForGateway(root, gatewayId);
 }
 
-function gatewayRootFromSnapshot(
-  snapshot: { exists: boolean; data(): unknown },
-  gatewayId: string,
-) {
-  return projectGatewayDesiredRootForGateway(snapshotData(snapshot), gatewayId);
-}
-
-function gatewayRuntimeFromSnapshot(
-  snapshot: { exists: boolean; data(): unknown },
-): GatewayRuntimeDoc | null {
-  const value = snapshotData(snapshot);
-  return isGatewayRuntimeDoc(value) ? value : null;
+function gatewayRuntimeOf(record: Stored<FleetRegistryRecord> | undefined): GatewayRuntimeDoc | null {
+  return record === undefined ? null : { ...record, docKind: "runtime" };
 }
 
 function runtimeIsServingLiveRelease(
@@ -119,27 +99,24 @@ function sourceHasFreshMissingKubernetesObservation(
 }
 
 function targetRosterIsServing(
-  assignments: ReadonlyArray<{ data(): Record<string, unknown> }>,
+  assignments: readonly GatewayAssignment[],
   runtime: GatewayRuntimeDoc | null,
 ): boolean {
   const mounted = new Set(runtime?.heartbeat.mountedCustomers ?? []);
-  return assignments.every((assignment) => {
-    const data = assignment.data();
-    return data.state === "serving" &&
-      typeof data.slug === "string" &&
-      mounted.has(data.slug);
-  });
+  return assignments.every((assignment) =>
+    assignment.state === "serving" &&
+    typeof assignment.slug === "string" &&
+    mounted.has(assignment.slug));
 }
 
 function activeMigrationTargetsGateway(
-  operations: ReadonlyArray<{ data(): Record<string, unknown> }>,
+  operations: readonly OperationRecord[],
   gatewayId: string,
 ): boolean {
   return operations.some((operation) => {
-    const data = operation.data();
-    if (data.kind !== "migrate-customer") return false;
-    const input = data.input;
-    const migration = data.customerMigrationV2;
+    if (operation.kind !== "migrate-customer") return false;
+    const input: unknown = operation.input;
+    const migration: unknown = operation.customerMigrationV2;
     const fields = [
       input && typeof input === "object" && !Array.isArray(input)
         ? input as Record<string, unknown>
@@ -158,11 +135,11 @@ function activeMigrationTargetsGateway(
 }
 
 function matchingRecoveryOperation(
-  value: Record<string, unknown> | undefined,
+  value: OperationRecord,
   input: SupersedeRollingSharedGatewayRollInput,
   release: number,
 ): boolean {
-  const operationInput = value?.input;
+  const operationInput: unknown = value.input;
   if (!operationInput || typeof operationInput !== "object" || Array.isArray(operationInput)) {
     return false;
   }
@@ -171,7 +148,7 @@ function matchingRecoveryOperation(
   if (!recovery || typeof recovery !== "object" || Array.isArray(recovery)) return false;
   const detail = recovery as Record<string, unknown>;
   return [
-    value?.kind === "rollout",
+    value.kind === "rollout",
     record.gatewayId === input.targetGatewayId,
     record.targetRelease === release,
     detail.sourceGatewayId === input.sourceGatewayId,
@@ -187,8 +164,8 @@ interface RecoveryRollState {
   pool: SharedGatewayPoolConfig | null;
   runtime: GatewayRuntimeDoc | null;
   sourceRuntime: GatewayRuntimeDoc | null;
-  assignments: ReadonlyArray<{ data(): Record<string, unknown> }>;
-  operations: ReadonlyArray<{ data(): Record<string, unknown> }>;
+  assignments: readonly GatewayAssignment[];
+  operations: readonly OperationRecord[];
   now: number;
 }
 
@@ -215,58 +192,69 @@ function recoveryRollIsEligible(
   ].every(Boolean);
 }
 
-function validReleasePayloadFromSnapshot(
-  snapshot: { exists: boolean; data(): unknown },
-): ReleasePayload | null {
-  const sourceRelease = snapshotData(snapshot) as ReleaseDoc | undefined;
-  const payload = sourceRelease?.payload;
+function validReleasePayload(release: GatewayRelease | null): ReleasePayload | null {
+  const payload = release?.payload;
   if (!payload || !isReleasePayload(payload)) return null;
-  return sourceRelease.payloadHash === releasePayloadHash(payload) ? payload : null;
+  return release.payloadHash === releasePayloadHash(payload) ? payload : null;
+}
+
+function recoveryRolloutOperation(
+  input: SupersedeRollingSharedGatewayRollInput,
+  operationId: string,
+  release: number,
+  payload: ReleasePayload,
+  now: number,
+): OperationRecord {
+  const artifact = gatewayArtifactFromReleasePayload(payload);
+  return {
+    id: operationId,
+    kind: "rollout",
+    status: "pending",
+    origin: "automatic",
+    createdBy: ACTOR,
+    createdAt: now,
+    startedAt: null,
+    completedAt: null,
+    input: {
+      gatewayId: input.targetGatewayId,
+      targetRelease: release,
+      imageTag: artifact.imageTag,
+      imageRepository: artifact.imageRepository,
+      sharedPeerRollRecovery: {
+        sourceGatewayId: input.sourceGatewayId,
+        targetGatewayId: input.targetGatewayId,
+        supersededRelease: input.expectedDesiredRelease,
+        sourceRelease: input.expectedLiveRelease,
+      },
+    },
+    steps: [],
+    gatewayId: input.targetGatewayId,
+  };
 }
 
 async function appendRecoveryRollback(
   deps: SharedGatewayRollRecoveryDeps,
   input: SupersedeRollingSharedGatewayRollInput,
 ): Promise<SupersedeRollingSharedGatewayRollResult> {
-  const { db } = deps;
-  const targetRef = db.collection(GATEWAYS_COLLECTION).doc(input.targetGatewayId);
-  const sourceRef = db.collection(GATEWAYS_COLLECTION).doc(input.sourceGatewayId);
-  const runtimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.targetGatewayId);
-  const sourceRuntimeRef = db.collection(GLM_GATEWAYS_COLLECTION).doc(input.sourceGatewayId);
-  const targetAssignments = targetRef.collection("assignments");
-  const activeOperations = db
-    .collection(GLM_OPERATIONS_COLLECTION)
-    .where("status", "in", ["pending", "running"]);
   const operationId = recoveryOperationId(input);
-  const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc(operationId);
-  return db.runTransaction(async (txn) => {
-    const [
-      targetSnapshot,
-      sourceSnapshot,
-      runtimeSnapshot,
-      sourceRuntimeSnapshot,
-      pool,
-      operationSnapshot,
-      assignmentsSnapshot,
-      operationsSnapshot,
-    ] = await Promise.all([
-      txn.get(targetRef),
-      txn.get(sourceRef),
-      txn.get(runtimeRef),
-      txn.get(sourceRuntimeRef),
-      readSharedGatewayPoolConfig(db, txn),
-      txn.get(operationRef),
-      txn.get(targetAssignments),
-      txn.get(activeOperations),
+  return deps.store.transaction({ label: "shared-gateway-roll-recovery.append" }, async (transaction) => {
+    const gatewayIds = [input.targetGatewayId, input.sourceGatewayId];
+    const [roots, runtimes, pool, operation, assignments, operations] = await Promise.all([
+      transaction.gateways.roots.getMany(gatewayIds),
+      transaction.fleetRegistry.getMany(gatewayIds),
+      readSharedGatewayPoolConfigInStore(transaction),
+      transaction.journal.operations.get(operationId),
+      transaction.gateways.assignments.list(input.targetGatewayId),
+      transaction.journal.operations.listByStatus(["pending", "running"]),
     ]);
     const state: RecoveryRollState = {
-      target: gatewayRootFromSnapshot(targetSnapshot, input.targetGatewayId),
-      source: gatewayRootFromSnapshot(sourceSnapshot, input.sourceGatewayId),
+      target: gatewayRootOf(roots.get(input.targetGatewayId), input.targetGatewayId),
+      source: gatewayRootOf(roots.get(input.sourceGatewayId), input.sourceGatewayId),
       pool,
-      runtime: gatewayRuntimeFromSnapshot(runtimeSnapshot),
-      sourceRuntime: gatewayRuntimeFromSnapshot(sourceRuntimeSnapshot),
-      assignments: assignmentsSnapshot.docs,
-      operations: operationsSnapshot.docs,
+      runtime: gatewayRuntimeOf(runtimes.get(input.targetGatewayId)),
+      sourceRuntime: gatewayRuntimeOf(runtimes.get(input.sourceGatewayId)),
+      assignments,
+      operations,
       now: deps.now(),
     };
     if (!state.target || !recoveryRollIsEligible(state, input)) {
@@ -276,69 +264,41 @@ async function appendRecoveryRollback(
     if (!isPositiveRelease(release)) {
       throw new Error(`shared peer recovery release is invalid for ${input.targetGatewayId}`);
     }
-    if (operationSnapshot.exists) {
-      return matchingRecoveryOperation(operationSnapshot.data(), input, release)
+    if (operation !== null) {
+      return matchingRecoveryOperation(operation, input, release)
         ? { kind: "already-scheduled", release, operationId }
         : { kind: "not-eligible" };
     }
-    const [sourceReleaseSnapshot, replacementReleaseSnapshot] = await Promise.all([
-      txn.get(targetRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(input.expectedLiveRelease))),
-      txn.get(targetRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release))),
+    const [sourceRelease, replacementRelease] = await Promise.all([
+      transaction.gateways.releases.get(input.targetGatewayId, input.expectedLiveRelease),
+      transaction.gateways.releases.get(input.targetGatewayId, release),
     ]);
-    if (replacementReleaseSnapshot.exists) {
+    if (replacementRelease !== null) {
       throw new Error(
         `shared peer recovery release ${input.targetGatewayId}/r${release} already exists`,
       );
     }
-    const payload = validReleasePayloadFromSnapshot(sourceReleaseSnapshot);
+    const payload = validReleasePayload(sourceRelease);
     if (!payload) {
       throw new Error(
         `shared peer recovery source release ${input.targetGatewayId}/r${input.expectedLiveRelease} is invalid`,
       );
     }
-    const artifact = gatewayArtifactFromReleasePayload(payload);
-    const releaseDocument: ReleaseDoc = {
+    await transaction.gateways.releases.append({
       gatewayId: input.targetGatewayId,
-      release,
+      expectedLatestRelease: state.target.latestRelease,
       createdAt: state.now,
       createdBy: ACTOR,
       sourceRelease: input.expectedLiveRelease,
       note: `shared peer recovery from ${input.sourceGatewayId}`,
+      payload,
       payloadHash: releasePayloadHash(payload),
-      payload: payload as ReleasePayload,
-    };
-    txn.create(
-      targetRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release)),
-      releaseDocument as unknown as Record<string, unknown>,
-    );
-    txn.update(targetRef, {
-      latestRelease: release,
-      updatedAt: state.now,
+      activate: false,
       updatedBy: ACTOR,
     });
-    txn.create(operationRef, {
-      kind: "rollout",
-      status: "pending",
-      origin: "automatic",
-      createdBy: ACTOR,
-      createdAt: state.now,
-      startedAt: null,
-      completedAt: null,
-      input: {
-        gatewayId: input.targetGatewayId,
-        targetRelease: release,
-        imageTag: artifact.imageTag,
-        imageRepository: artifact.imageRepository,
-        sharedPeerRollRecovery: {
-          sourceGatewayId: input.sourceGatewayId,
-          targetGatewayId: input.targetGatewayId,
-          supersededRelease: input.expectedDesiredRelease,
-          sourceRelease: input.expectedLiveRelease,
-        },
-      },
-      steps: [],
-      gatewayId: input.targetGatewayId,
-    });
+    await transaction.journal.operations.create(
+      recoveryRolloutOperation(input, operationId, release, payload, state.now),
+    );
     return { kind: "scheduled", release, operationId };
   });
 }
@@ -348,7 +308,7 @@ export async function supersedeRollingSharedGatewayRoll(
   input: SupersedeRollingSharedGatewayRollInput,
 ): Promise<SupersedeRollingSharedGatewayRollResult> {
   try {
-    return await runNormalFleetMutation(deps.db as unknown as NormalFleetMutationDb, {
+    return await runNormalFleetMutation(deps.store, {
       actor: ACTOR,
       forced: false,
       what: "supersede rolling shared gateway",
@@ -387,11 +347,10 @@ export async function supersedeRollingSharedGatewayRoll(
     });
   } catch (error) {
     if (!(error instanceof FleetMutationIdempotencyError)) throw error;
-    const audit = await deps.db.collection(GLM_OPERATIONS_COLLECTION).doc(error.auditId).get();
-    const data = audit.exists ? audit.data() : undefined;
-    const linkage = data?.releaseRollout;
+    const audit = await deps.store.journal.audits.get(error.auditId);
+    const linkage = audit?.releaseRollout;
     if (
-      data?.status === "completed" &&
+      audit?.status === "completed" &&
       linkage &&
       typeof linkage === "object" &&
       typeof (linkage as Record<string, unknown>).rolloutOperationId === "string" &&

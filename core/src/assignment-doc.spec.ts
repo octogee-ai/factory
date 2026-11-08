@@ -3,7 +3,6 @@ import * as assignmentDoc from "./assignment-doc.js";
 import {
   readAssignmentDoc,
   readAssignmentDocsForGateway,
-  deleteAssignmentDoc,
 } from "./assignment-doc.js";
 
 // Firestore fake with a single gateways/{id}/assignments subcollection.
@@ -13,8 +12,6 @@ function mkAssignmentDb(seed: Record<string, Record<string, unknown>> = {}) {
     const [gatewayId, uid] = key.split("/");
     (store[gatewayId] ??= {})[uid] = data;
   }
-  const sets: Array<{ gatewayId: string; uid: string; data: Record<string, unknown> }> = [];
-  const deletes: Array<{ gatewayId: string; uid: string }> = [];
   const db = {
     collection: vi.fn((name: string) => {
       if (name !== "gateways") throw new Error(`unexpected collection ${name}`);
@@ -22,20 +19,11 @@ function mkAssignmentDb(seed: Record<string, Record<string, unknown>> = {}) {
         doc: (gatewayId: string) => ({
           collection: (sub: string) => {
             if (sub !== "assignments") throw new Error(`unexpected subcollection ${sub}`);
-            const bucket = () => (store[gatewayId] ??= {});
             return {
               doc: (uid: string) => ({
                 get: async () => {
                   const data = store[gatewayId]?.[uid];
                   return { exists: !!data, data: () => data };
-                },
-                set: async (data: Record<string, unknown>) => {
-                  bucket()[uid] = data;
-                  sets.push({ gatewayId, uid, data });
-                },
-                delete: async () => {
-                  delete store[gatewayId]?.[uid];
-                  deletes.push({ gatewayId, uid });
                 },
               }),
               get: async () => ({
@@ -50,7 +38,7 @@ function mkAssignmentDb(seed: Record<string, Record<string, unknown>> = {}) {
       };
     }),
   };
-  return { db, store, sets, deletes };
+  return { db, store };
 }
 
 const ASSIGNMENT = {
@@ -156,13 +144,5 @@ describe("readAssignmentDoc", () => {
 describe("assignment write surface", () => {
   it("does not export the superseded non-atomic writer", () => {
     expect("writeAssignmentDoc" in assignmentDoc).toBe(false);
-  });
-});
-
-describe("deleteAssignmentDoc", () => {
-  it("removes the assignment", async () => {
-    const { db, deletes } = mkAssignmentDb({ "default/uid-alice": ASSIGNMENT });
-    await deleteAssignmentDoc(db as never, "default", "uid-alice");
-    expect(deletes).toEqual([{ gatewayId: "default", uid: "uid-alice" }]);
   });
 });

@@ -7,6 +7,7 @@ import { GATEWAY_CREDENTIAL_ROUTES } from "../index.js";
 import { createGatewayCredentialAuth } from "../middleware/gateway-credential-auth.js";
 import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcement.js";
 import { gatewayVmPodName } from "@octogee/shared/types/glm";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 function harness(metadata: Record<string, unknown> = { generation: "17", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" }) {
@@ -19,7 +20,7 @@ function harness(metadata: Record<string, unknown> = { generation: "17", size: "
   }));
   const app = express(); app.disable("x-powered-by"); app.use(express.json());
   app.use((req, _res, next) => { req.boundTenant = { kind: "gateway", gatewayId: "b-owner" }; next(); });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, readBlobMetadata, createBlobSignedUrl }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), readBlobMetadata, createBlobSignedUrl }));
   return { app, readBlobMetadata, createBlobSignedUrl };
 }
 
@@ -129,7 +130,7 @@ function preparingHarness(scenario = "valid") {
       podName: gatewayVmPodName("b-owner", "4242"), podUid: scenario === "wrong-credential" ? "9999" : "4242" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "b-owner" }), logger: { warn: vi.fn() } });
   app.use((req, res, next) => GATEWAY_CREDENTIAL_ROUTES.has(req.path) ? credentialAuth(req, res, next) : next());
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, readBlobMetadata, createBlobSignedUrl }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), readBlobMetadata, createBlobSignedUrl }));
   return { app, owner, operation, readBlobMetadata, createBlobSignedUrl };
 }
 

@@ -206,6 +206,22 @@ export async function assertGatewayRuntimeMutationUnfenced(db, transaction, gate
         throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
     }
 }
+export function builderRuntimeMutationFenced(builder) {
+    return builder.fences.restoreFence !== undefined || builder.fences.sourceTransferFence !== undefined;
+}
+export async function assertGatewayRuntimeMutationUnfencedInStore(transaction, gatewayId, allowedComputerRecoveryOperationId) {
+    const root = await transaction.gateways.roots.get(gatewayId);
+    if (root?.runtimeRestartFence !== undefined) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} runtime restart outcome is unresolved`);
+    }
+    const holders = await transaction.builders.records.listGatewayFenceHolders(gatewayId);
+    if (holders.computerRecovery.some(builder => !allowedComputerRecoveryOperationId || builder.fences.computerRecovery?.operationId !== allowedComputerRecoveryOperationId)) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} computer recovery is in progress`);
+    }
+    if (holders.sourceTransferSource.length > 0 || holders.sourceTransferTarget.length > 0 || holders.assigned.some(builderRuntimeMutationFenced)) {
+        throw new GatewayRetirementConflictError(`gateway ${gatewayId} source transfer outcome is unresolved`);
+    }
+}
 export async function claimGatewayRetirementAtomic(input) {
     const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
     const operationRef = input.db
@@ -276,16 +292,76 @@ export async function claimGatewayRetirementAtomic(input) {
         return { version };
     });
 }
+function activeMigrationConflict(gatewayId, operations) {
+    return findActiveGatewayMigration(gatewayId, operations.map((operation) => ({
+        id: operation.id,
+        kind: operation.kind,
+        status: operation.status,
+        input: operation.input,
+        customerMigrationV2: operation.customerMigrationV2,
+    }))) !== null;
+}
+function inspectRetirementRuntime(input, root, runtime) {
+    if (root.desiredRelease !== root.liveRelease) {
+        throw unconvergedRetirementError(input.gatewayId, runtime);
+    }
+    const inspection = runningRetirementError(input.gatewayId, runtime, input.now, root.liveRelease, input.telemetryObservedAfter);
+    if (inspection.error) {
+        throw inspection.telemetryUnavailable
+            ? new GatewayRetirementTelemetryUnavailableError(inspection.error)
+            : new GatewayRetirementConflictError(inspection.error);
+    }
+    return inspection.liveRuntimeIdentity;
+}
+export async function claimGatewayRetirementInStore(input) {
+    return input.store.transaction({ label: "gateway-retirement.claim" }, async (transaction) => {
+        const [stored, activeOperations] = await Promise.all([
+            transaction.gateways.roots.get(input.gatewayId),
+            transaction.journal.operations.listByStatus(["pending", "running"]),
+        ]);
+        const { rootData } = claimableGatewayRetirementRoot(input.gatewayId, stored ?? undefined);
+        if (activeMigrationConflict(input.gatewayId, activeOperations)) {
+            throw new GatewayRetirementConflictError(`customer migration is in flight for gateway ${input.gatewayId}`);
+        }
+        await assertGatewayRuntimeMutationUnfencedInStore(transaction, input.gatewayId);
+        let liveRuntimeIdentity = null;
+        if (rootData.desiredStatus !== "paused" && rootData.liveRelease != null) {
+            const registry = await transaction.fleetRegistry.get(input.gatewayId);
+            liveRuntimeIdentity = inspectRetirementRuntime(input, rootData, registry === null ? undefined : { ...registry, docKind: "runtime" });
+        }
+        const version = nextRetirementVersion(rootData.retirementVersion);
+        const claim = {
+            operationId: input.operationId,
+            version,
+            claimedAt: input.now,
+            phase: "claimed",
+            liveRelease: rootData.liveRelease,
+            liveRuntimeIdentity,
+            previousDesiredStatus: rootData.desiredStatus,
+        };
+        await transaction.gateways.roots.patch(input.gatewayId, {
+            desiredStatus: "retired",
+            retirementVersion: version,
+            retirementClaim: claim,
+            updatedAt: input.now,
+            updatedBy: input.updatedBy,
+        }, { retirementVersion: rootData.retirementVersion ?? null, updatedAt: rootData.updatedAt });
+        await transaction.journal.operations.put({
+            ...input.operation,
+            id: input.operationId,
+            input: { ...input.operation.input, retirementClaimVersion: version },
+        });
+        return { version };
+    });
+}
 function matchingRetirementClaim(root, operationId, version) {
     const claim = readClaim(root.retirementClaim);
     return claim?.operationId === operationId && claim.version === version ? claim : null;
 }
 export async function verifyGatewayRetirementClaimAtomic(input) {
-    const rootRef = input.db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
-    return input.db.runTransaction(async (transaction) => {
-        const rootSnap = await transaction.get(rootRef);
-        const root = rootSnap.exists ? rootSnap.data() : undefined;
-        if (!isPlainRecord(root)) {
+    return input.store.transaction({ label: "gateway-retirement.verify", readOnly: true }, async (transaction) => {
+        const root = await transaction.gateways.roots.get(input.gatewayId);
+        if (root === null) {
             return { ok: false, error: `gateway ${input.gatewayId} durable root is unavailable` };
         }
         const claim = matchingRetirementClaim(root, input.operationId, input.version);
@@ -302,7 +378,7 @@ export async function verifyGatewayRetirementClaimAtomic(input) {
             };
         }
         try {
-            await assertGatewayRuntimeMutationUnfenced(input.db, transaction, input.gatewayId);
+            await assertGatewayRuntimeMutationUnfencedInStore(transaction, input.gatewayId);
         }
         catch (error) {
             if (!(error instanceof GatewayRetirementConflictError))

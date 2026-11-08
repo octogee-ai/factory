@@ -104,23 +104,25 @@ function secretsCollection(session: FirestoreSession, uid: string): CollectionRe
 
 function decodeSecret(uid: string, snapshot: DocumentSnapshot): Stored<BuilderSecret> | null {
   if (!snapshot.exists) return null;
-  const secretId = snapshot.id;
+  return withStoredRevision(snapshot, builderSecretFromData(uid, snapshot.id, decodeDocumentData(snapshot)));
+}
+
+export function builderSecretFromData(uid: string, secretId: string, data: Record<string, unknown>): BuilderSecret {
   const kind = secretKindOf(secretId);
-  const data = decodeDocumentData(snapshot);
   const fields = new FirestoreFields(secretKey(uid, secretId), data);
   if (kind === "connector") {
     const tokens = fields.nullableMap("tokens");
     const otherTokenFields = tokens === null ? {} : without(tokens, ["encryptedAccessToken", "encryptedRefreshToken"]);
     const detail = without(data, ["tokens"]);
-    return withStoredRevision<BuilderSecret>(snapshot, {
+    return {
       kind,
       secretId,
       encryptedAccessToken: fields.nullableString("tokens.encryptedAccessToken"),
       encryptedRefreshToken: fields.nullableString("tokens.encryptedRefreshToken"),
       detail: tokens === null || Object.keys(otherTokenFields).length === 0 ? detail : { ...detail, tokens: otherTokenFields },
-    });
+    };
   }
-  return withStoredRevision<BuilderSecret>(snapshot, {
+  return {
     kind,
     secretId,
     projectId: kind === "project-agent-mattermost" ? secretId.slice(PROJECT_AGENT_SECRET_PREFIX.length) : null,
@@ -128,7 +130,7 @@ function decodeSecret(uid: string, snapshot: DocumentSnapshot): Stored<BuilderSe
     mattermostUserId: fields.nullableString(mattermostUserIdField(kind)),
     createdAt: fields.nullableNumber("createdAt"),
     rotatedAt: fields.nullableNumber("rotatedAt"),
-  });
+  };
 }
 
 function encodeSecret(secret: BuilderSecretInput): DocumentData {
@@ -173,8 +175,8 @@ export function createFirestoreSecretsRepository(session: FirestoreSession): Sec
 
     async list(uid, kind) {
       const snapshot = await session.query("secrets.list", secretsCollection(session, uid));
-      const secrets = snapshot.docs.map((doc) => decodeSecret(uid, doc)).filter(isPresent);
-      return kind === undefined ? secrets : secrets.filter((secret) => secret.kind === kind);
+      const docs = kind === undefined ? snapshot.docs : snapshot.docs.filter((doc) => secretKindOf(doc.id) === kind);
+      return docs.map((doc) => decodeSecret(uid, doc)).filter(isPresent);
     },
 
     async put(uid, secret) {

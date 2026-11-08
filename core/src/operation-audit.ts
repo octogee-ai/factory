@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import { Timestamp } from "firebase-admin/firestore";
 import {
-  GLM_OPERATIONS_COLLECTION,
   OPERATION_AUDIT_RECORD_TYPE,
   OPERATION_AUDIT_SCHEMA_VERSION,
   type OperationAuditAliasOutcome,
@@ -12,7 +10,11 @@ import {
   type OperationAuditTestProvenance,
   isOperationAuditRecord,
   isOperationAuditRow,
+  type GlmOperationRecord,
 } from "@octogee/shared/types/glm";
+import { MalformedRecordError } from "./platform-state/errors.js";
+import type { JournalRepositories, OperationAuditPatch } from "./platform-state/operations.js";
+import type { PlatformStateStore, PlatformStateTransaction, Stored } from "./platform-state/store.js";
 
 export interface OperationsDocSnapshot {
   exists: boolean;
@@ -105,8 +107,8 @@ export class OperationAuditRecordTypeError extends Error {
 }
 
 export class OperationAuditSchemaError extends Error {
-  constructor(auditId: string) {
-    super(`operation audit ${auditId} has an unsupported or malformed schema`);
+  constructor(auditId: string, options?: ErrorOptions) {
+    super(`operation audit ${auditId} has an unsupported or malformed schema`, options);
     this.name = "OperationAuditSchemaError";
   }
 }
@@ -225,46 +227,59 @@ function assertMatchingAuditIntent(
   return { ...data, id: auditId };
 }
 
-export async function stageOperationAuditIntent(
-  db: OperationsDb,
-  transaction: OperationsTransaction,
+async function readJournalRow(
+  journal: JournalRepositories,
+  auditId: string,
+): Promise<Stored<GlmOperationRecord> | null> {
+  try {
+    return await journal.getRecord(auditId);
+  } catch (error) {
+    if (error instanceof MalformedRecordError) throw new OperationAuditSchemaError(auditId, { cause: error });
+    throw error;
+  }
+}
+
+export async function stageOperationAuditIntentInStore(
+  transaction: PlatformStateTransaction,
   intent: OperationAuditIntent,
 ): Promise<RecordedOperationAuditIntent> {
-  const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc(intent.id);
-  const existing = await transaction.get(ref);
-  if (!existing.exists) {
-    transaction.create(ref, intent.document);
+  const existing = await readJournalRow(transaction.journal, intent.id);
+  if (existing === null) {
+    await transaction.journal.audits.create({ ...intent.document, id: intent.id });
     return { auditId: intent.id, disposition: "created", status: "recorded" };
   }
-  const audit = assertMatchingAuditIntent(intent.id, existing.data(), intent);
+  const audit = assertMatchingAuditIntent(intent.id, { ...existing }, intent);
   return { auditId: intent.id, disposition: "existing", status: audit.status };
 }
 
 export async function recordOperationAuditIntent(
-  db: OperationsDb,
+  store: PlatformStateStore,
   opts: OperationAuditIntentInput,
 ): Promise<RecordedOperationAuditIntent> {
   const intent = buildOperationAuditIntent(opts);
-  return db.runTransaction((transaction) => stageOperationAuditIntent(db, transaction, intent));
+  return store.transaction({ label: "operation-audit.record-intent" }, (transaction) =>
+    stageOperationAuditIntentInStore(transaction, intent),
+  );
 }
 
-function requireOperationAuditRecord(auditId: string, snapshot: OperationsDocSnapshot): OperationAuditRecord {
-  if (!snapshot.exists) throw new OperationAuditMissingError(auditId);
-  const data = snapshot.data();
-  if (!isOperationAuditRow(data)) throw new OperationAuditRecordTypeError(auditId);
-  if (!isOperationAuditRecord(data)) throw new OperationAuditSchemaError(auditId);
-  return { ...data, id: auditId };
+async function requireOperationAuditRecord(
+  journal: JournalRepositories,
+  auditId: string,
+): Promise<OperationAuditRecord> {
+  const row = await readJournalRow(journal, auditId);
+  if (row === null) throw new OperationAuditMissingError(auditId);
+  if (!isOperationAuditRow(row)) throw new OperationAuditRecordTypeError(auditId);
+  return row as OperationAuditRecord;
 }
 
 export async function claimOperationAuditAction(
-  db: OperationsDb,
+  store: PlatformStateStore,
   auditId: string,
   opts: ClaimOperationAuditActionInput,
 ): Promise<OperationAuditActionClaim> {
   if (opts.claimId.length === 0) throw new Error("operation audit action claim ID is required");
-  const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc(auditId);
-  return db.runTransaction(async (transaction) => {
-    const audit = requireOperationAuditRecord(auditId, await transaction.get(ref));
+  return store.transaction({ label: "operation-audit.claim" }, async (transaction) => {
+    const audit = await requireOperationAuditRecord(transaction.journal, auditId);
     if (audit.status !== "recorded" || audit.lifecycleStage !== "intent-recorded") {
       throw new OperationAuditStateError(
         auditId,
@@ -273,13 +288,17 @@ export async function claimOperationAuditAction(
       );
     }
     const now = opts.now ?? Date.now;
-    transaction.update(ref, {
-      status: "in-progress",
-      lifecycleStage: "action-started",
-      actionClaimId: opts.claimId,
-      actionStartedAt: now(),
-      actionRecoveryCount: 0,
-    });
+    await transaction.journal.audits.patch(
+      auditId,
+      {
+        status: "in-progress",
+        lifecycleStage: "action-started",
+        actionClaimId: opts.claimId,
+        actionStartedAt: now(),
+        actionRecoveryCount: 0,
+      },
+      { status: ["recorded"] },
+    );
     return { auditId, claimId: opts.claimId, externalIdempotencyKey: auditId, recovery: false };
   });
 }
@@ -289,17 +308,11 @@ export type FinishOperationAuditInput =
   | { outcome: "partial"; expectedClaimId: string; aliasOutcomes?: OperationAuditAliasOutcome[]; partialOutcome: OperationAuditPartialOutcome; releaseRollout?: OperationAuditReleaseRolloutLinkage; now?: () => number }
   | { outcome: "failed"; expectedClaimId: string; aliasOutcomes?: OperationAuditAliasOutcome[]; partialOutcome?: OperationAuditPartialOutcome; releaseRollout?: OperationAuditReleaseRolloutLinkage; error: string; now?: () => number };
 
-// `completedAt` is a plain epoch number, which a native Firestore TTL policy
-// cannot read; `expireAt` is its Timestamp twin. Terminal rows only — a row that
-// can still change must never carry an expiry.
 export const OPERATION_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
-function auditExpiry(completedAt: number): Timestamp {
-  return Timestamp.fromMillis(completedAt + OPERATION_AUDIT_RETENTION_MS);
-}
-
-function completionPatch(opts: FinishOperationAuditInput): Record<string, unknown> {
+function completionPatch(opts: FinishOperationAuditInput): OperationAuditPatch {
   const completedAt = (opts.now ?? Date.now)();
+  const expireAt = completedAt + OPERATION_AUDIT_RETENTION_MS;
   if (opts.outcome === "failed") {
     return {
       status: "failed",
@@ -310,7 +323,7 @@ function completionPatch(opts: FinishOperationAuditInput): Record<string, unknow
       ...(opts.releaseRollout ? { releaseRollout: opts.releaseRollout } : {}),
       error: opts.error,
       completedAt,
-      expireAt: auditExpiry(completedAt),
+      expireAt,
     };
   }
   return {
@@ -321,18 +334,17 @@ function completionPatch(opts: FinishOperationAuditInput): Record<string, unknow
     ...(opts.outcome === "partial" ? { partialOutcome: opts.partialOutcome } : {}),
     ...(opts.releaseRollout ? { releaseRollout: opts.releaseRollout } : {}),
     completedAt,
-    expireAt: auditExpiry(completedAt),
+    expireAt,
   };
 }
 
 export async function finishOperationAudit(
-  db: OperationsDb,
+  store: PlatformStateStore,
   auditId: string,
   opts: FinishOperationAuditInput,
 ): Promise<void> {
-  const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc(auditId);
-  await db.runTransaction(async (transaction) => {
-    const audit = requireOperationAuditRecord(auditId, await transaction.get(ref));
+  await store.transaction({ label: "operation-audit.finish" }, async (transaction) => {
+    const audit = await requireOperationAuditRecord(transaction.journal, auditId);
     if (audit.status !== "in-progress" || audit.lifecycleStage !== "action-started") {
       throw new OperationAuditStateError(
         auditId,
@@ -347,12 +359,12 @@ export async function finishOperationAudit(
         `claim ${opts.expectedClaimId}`,
       );
     }
-    transaction.update(ref, completionPatch(opts));
+    await transaction.journal.audits.patch(auditId, completionPatch(opts), { actionClaimId: opts.expectedClaimId });
   });
 }
 
 async function runClaimedOperationAuditAction<T>(
-  db: OperationsDb,
+  store: PlatformStateStore,
   claim: OperationAuditActionClaim,
   action: (claim: OperationAuditActionClaim) => Promise<T>,
 ): Promise<T> {
@@ -361,7 +373,7 @@ async function runClaimedOperationAuditAction<T>(
     result = await action(claim);
   } catch (error) {
     try {
-      await finishOperationAudit(db, claim.auditId, {
+      await finishOperationAudit(store, claim.auditId, {
         expectedClaimId: claim.claimId,
         outcome: "failed",
         error: error instanceof Error ? error.message : String(error),
@@ -374,7 +386,7 @@ async function runClaimedOperationAuditAction<T>(
     }
     throw error;
   }
-  await finishOperationAudit(db, claim.auditId, {
+  await finishOperationAudit(store, claim.auditId, {
     expectedClaimId: claim.claimId,
     outcome: "completed",
   });
@@ -382,18 +394,18 @@ async function runClaimedOperationAuditAction<T>(
 }
 
 export async function runWithOperationAuditIntent<T>(
-  db: OperationsDb,
+  store: PlatformStateStore,
   opts: OperationAuditIntentInput,
   claimOpts: ClaimOperationAuditActionInput,
   action: (claim: OperationAuditActionClaim) => Promise<T>,
 ): Promise<T> {
-  const audit = await recordOperationAuditIntent(db, opts);
-  const claim = await claimOperationAuditAction(db, audit.auditId, claimOpts);
-  return runClaimedOperationAuditAction(db, claim, action);
+  const audit = await recordOperationAuditIntent(store, opts);
+  const claim = await claimOperationAuditAction(store, audit.auditId, claimOpts);
+  return runClaimedOperationAuditAction(store, claim, action);
 }
 
 export async function resumeOperationAuditAction<T>(
-  db: OperationsDb,
+  store: PlatformStateStore,
   opts: RecoverOperationAuditActionInput,
   action: (claim: OperationAuditActionClaim) => Promise<T>,
 ): Promise<T> {
@@ -410,9 +422,8 @@ export async function resumeOperationAuditAction<T>(
   if (!Number.isFinite(opts.staleAfterMs) || opts.staleAfterMs <= 0) {
     throw new Error("operation audit recovery requires a positive finite stale lease duration");
   }
-  const ref = db.collection(GLM_OPERATIONS_COLLECTION).doc(opts.auditId);
-  const claim = await db.runTransaction(async (transaction) => {
-    const audit = requireOperationAuditRecord(opts.auditId, await transaction.get(ref));
+  const claim = await store.transaction({ label: "operation-audit.resume" }, async (transaction) => {
+    const audit = await requireOperationAuditRecord(transaction.journal, opts.auditId);
     if (audit.status !== "in-progress" || audit.lifecycleStage !== "action-started") {
       throw new OperationAuditStateError(
         opts.auditId,
@@ -433,11 +444,15 @@ export async function resumeOperationAuditAction<T>(
     if (now < staleAt) {
       throw new OperationAuditClaimNotStaleError(opts.auditId, audit.actionClaimId, staleAt);
     }
-    transaction.update(ref, {
-      actionClaimId: opts.recoveryClaimId,
-      actionStartedAt: now,
-      actionRecoveryCount: (audit.actionRecoveryCount ?? 0) + 1,
-    });
+    await transaction.journal.audits.patch(
+      opts.auditId,
+      {
+        actionClaimId: opts.recoveryClaimId,
+        actionStartedAt: now,
+        actionRecoveryCount: (audit.actionRecoveryCount ?? 0) + 1,
+      },
+      { actionClaimId: opts.expectedClaimId, actionStartedAt: audit.actionStartedAt },
+    );
     return {
       auditId: opts.auditId,
       claimId: opts.recoveryClaimId,
@@ -445,5 +460,5 @@ export async function resumeOperationAuditAction<T>(
       recovery: true,
     } satisfies OperationAuditActionClaim;
   });
-  return runClaimedOperationAuditAction(db, claim, action);
+  return runClaimedOperationAuditAction(store, claim, action);
 }

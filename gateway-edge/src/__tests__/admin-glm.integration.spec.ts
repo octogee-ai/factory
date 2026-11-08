@@ -1,20 +1,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FieldValue } from "firebase-admin/firestore";
 import { releasePayloadHash } from "@octogee/shared/types/gateway-releases";
 
-interface FirestoreCall {
-  collection: string;
-  op: "add" | "doc.set" | "doc.update" | "batch.commit" | "transaction.commit";
-  docId?: string;
-  data?: Record<string, unknown>;
-  options?: Record<string, unknown>;
-}
-
-let transactionCommitFailures = 0;
-let nextOperationAddError: Error | null = null;
-
-const calls: FirestoreCall[] = [];
 let glmOperationsDocs: Array<{ id: string; data: Record<string, unknown> }> = [];
 let glmGatewaysDocs: Record<string, Record<string, unknown>> = {};
 let gatewaysDocs: Record<string, Record<string, unknown>> = {};
@@ -27,11 +14,89 @@ let gatewayAssignmentsDocs: Record<string, Record<string, unknown>> = {};
 let usersDocs: Record<string, Record<string, unknown>> = {};
 let workspacesDocs: Record<string, Record<string, unknown>> = {};
 let configDocs: Record<string, Record<string, unknown>> = {};
+let sideEffects: string[] = [];
+let failingStoreTransaction: string | null = null;
 
-function commandOperationCall() {
-  return calls.find(
-    (call) => call.collection === "glmOperations" && typeof call.data?.kind === "string",
-  );
+type FixtureCollection = Record<string, Record<string, unknown>>;
+
+function fixtureCollection(collectionPath: string): { docs: FixtureCollection; prefix: string } {
+  const [root, gatewayId, subcollection, ...rest] = collectionPath.split("/");
+  const topLevel: Record<string, FixtureCollection | undefined> = {
+    gateways: gatewaysDocs,
+    users: usersDocs,
+    glmGateways: glmGatewaysDocs,
+    config: configDocs,
+  };
+  const gatewaySubcollections: Record<string, FixtureCollection | undefined> = {
+    releases: gatewayReleasesDocs,
+    assignments: gatewayAssignmentsDocs,
+  };
+  const docs = gatewayId === undefined
+    ? topLevel[root]
+    : root === "gateways" && rest.length === 0
+      ? gatewaySubcollections[subcollection]
+      : undefined;
+  if (docs === undefined) throw new Error(`admin-glm fixture has no collection ${collectionPath}`);
+  return { docs, prefix: gatewayId === undefined ? "" : `${gatewayId}/` };
+}
+
+function splitDocumentPath(path: string): [string, string] {
+  const at = path.lastIndexOf("/");
+  return [path.slice(0, at), path.slice(at + 1)];
+}
+
+function readFixtureDocument(path: string): Record<string, unknown> | undefined {
+  const [collectionPath, id] = splitDocumentPath(path);
+  if (collectionPath === "glmOperations") return glmOperationsDocs.find((doc) => doc.id === id)?.data;
+  const { docs, prefix } = fixtureCollection(collectionPath);
+  return docs[`${prefix}${id}`];
+}
+
+function writeFixtureDocument(path: string, row: Record<string, unknown>): void {
+  sideEffects.push(`set ${path}`);
+  const [collectionPath, id] = splitDocumentPath(path);
+  if (collectionPath !== "glmOperations") {
+    const { docs, prefix } = fixtureCollection(collectionPath);
+    docs[`${prefix}${id}`] = row;
+    return;
+  }
+  const entry = glmOperationsDocs.find((doc) => doc.id === id);
+  if (entry) entry.data = row;
+  else glmOperationsDocs.unshift({ id, data: row });
+}
+
+function deleteFixtureDocument(path: string): void {
+  sideEffects.push(`delete ${path}`);
+  const [collectionPath, id] = splitDocumentPath(path);
+  if (collectionPath === "glmOperations") {
+    glmOperationsDocs = glmOperationsDocs.filter((doc) => doc.id !== id);
+    return;
+  }
+  const { docs, prefix } = fixtureCollection(collectionPath);
+  delete docs[`${prefix}${id}`];
+}
+
+function fixtureGroup(collectionId: string): Array<[string, Record<string, unknown>]> {
+  if (collectionId !== "assignments") throw new Error(`admin-glm fixture has no collection group ${collectionId}`);
+  return Object.entries(gatewayAssignmentsDocs).map(([key, row]) => {
+    const [gatewayId, uid] = key.split("/");
+    return [`gateways/${gatewayId}/assignments/${uid}`, row];
+  });
+}
+
+function fixtureChildren(collectionPath: string): Array<[string, Record<string, unknown>]> {
+  if (collectionPath === "glmOperations") return glmOperationsDocs.map((doc) => [doc.id, doc.data]);
+  const { docs, prefix } = fixtureCollection(collectionPath);
+  return Object.entries(docs).flatMap(([key, row]): Array<[string, Record<string, unknown>]> =>
+    key.startsWith(prefix) ? [[key.slice(prefix.length), row]] : []);
+}
+
+function storedOperation(operationId: string): Record<string, unknown> | undefined {
+  return glmOperationsDocs.find((doc) => doc.id === operationId)?.data;
+}
+
+function commandOperation(): Record<string, unknown> | undefined {
+  return glmOperationsDocs.find((doc) => typeof doc.data.kind === "string" && doc.data.recordType !== "audit")?.data;
 }
 
 function readNestedField(data: Record<string, unknown>, path: string): unknown {
@@ -43,7 +108,34 @@ function readNestedField(data: Record<string, unknown>, path: string): unknown {
   return cursor;
 }
 
+vi.mock("@octogee/core/platform-state", async (importOriginal) => {
+  const { createJournalFixtureStore } = await import("@octogee/core/testing/journal-store");
+  return {
+    ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+    createFirestorePlatformStateStore: () => createJournalFixtureStore(
+      {
+        get: (id) => readFixtureDocument(`glmOperations/${id}`),
+        set: (id, row) => writeFixtureDocument(`glmOperations/${id}`, row),
+      },
+      {
+        documents: {
+          get: readFixtureDocument,
+          set: writeFixtureDocument,
+          delete: deleteFixtureDocument,
+          children: fixtureChildren,
+          group: fixtureGroup,
+        },
+        beforeTransaction: (label) => {
+          sideEffects.push(`begin ${label}`);
+          if (label === failingStoreTransaction) throw new Error(`simulated ${label} transaction failure`);
+        },
+      },
+    ),
+  };
+});
+
 vi.mock("../lib/db", () => {
+  let autoId = 0;
   function whereChain(
     collectionName: string,
     filter?: { field: string; value: unknown },
@@ -135,7 +227,6 @@ vi.mock("../lib/db", () => {
         return { exists: true, data: () => ({}) };
       },
       set: async (data: Record<string, unknown>, options?: Record<string, unknown>) => {
-        calls.push({ collection: name, op: "doc.set", docId, data, options });
         if (name === "glmGateways") glmGatewaysDocs[docId] = data;
         if (name === "glmOperations") glmOperationsDocs.unshift({ id: docId, data });
         if (name === "users") usersDocs[docId] = data;
@@ -147,7 +238,6 @@ vi.mock("../lib/db", () => {
         }
       },
       update: async (data: Record<string, unknown>) => {
-        calls.push({ collection: name, op: "doc.update", docId, data });
         if (name === "glmGateways" && glmGatewaysDocs[docId]) {
           glmGatewaysDocs[docId] = { ...glmGatewaysDocs[docId], ...data };
         }
@@ -179,17 +269,14 @@ vi.mock("../lib/db", () => {
                 return { id: uid, exists: d !== undefined, data: () => d };
               },
               set: async (data: Record<string, unknown>) => {
-                calls.push({ collection: `${name}/${docId}/assignments`, op: "doc.set", docId: uid, data });
                 gatewayAssignmentsDocs[key(uid)] = data;
               },
               update: async (data: Record<string, unknown>) => {
-                calls.push({ collection: `${name}/${docId}/assignments`, op: "doc.update", docId: uid, data });
                 if (gatewayAssignmentsDocs[key(uid)]) {
                   gatewayAssignmentsDocs[key(uid)] = { ...gatewayAssignmentsDocs[key(uid)], ...data };
                 }
               },
               delete: async () => {
-                calls.push({ collection: `${name}/${docId}/assignments`, op: "doc.delete", docId: uid });
                 delete gatewayAssignmentsDocs[key(uid)];
               },
             }),
@@ -212,7 +299,6 @@ vi.mock("../lib/db", () => {
               return { id: rid, exists: d !== undefined, data: () => d };
             },
             set: async (data: Record<string, unknown>) => {
-              calls.push({ collection: `${name}/${docId}/${subName}`, op: "doc.set", docId: rid, data });
               gatewayReleasesDocs[key(rid)] = data;
             },
           }),
@@ -238,19 +324,12 @@ vi.mock("../lib/db", () => {
   function collection(name: string): any {
     return {
       add: async (data: Record<string, unknown>) => {
-        if (name === "glmOperations" && nextOperationAddError) {
-          const error = nextOperationAddError;
-          nextOperationAddError = null;
-          throw error;
-        }
-        const id = `doc-${calls.length}`;
-        calls.push({ collection: name, op: "add", docId: id, data });
+        const id = `doc-${++autoId}`;
         if (name === "glmOperations") glmOperationsDocs.unshift({ id, data });
         return { id };
       },
-
-doc: (docId?: string) => {
-        const id = docId ?? `auto-${calls.length}-${name}`;
+      doc: (docId?: string) => {
+        const id = docId ?? `auto-${++autoId}-${name}`;
         return makeDocRef(name, id);
       },
       orderBy: () => whereChain(name),
@@ -301,7 +380,6 @@ function makeBatch() {
       },
       commit: async () => {
         for (const fn of pending) await fn();
-        calls.push({ collection: "<batch>", op: "batch.commit" });
       },
     };
   }
@@ -341,12 +419,7 @@ function makeBatch() {
           },
         };
         const result = await body(txn);
-        if (transactionCommitFailures > 0) {
-          transactionCommitFailures -= 1;
-          throw new Error("simulated transaction commit failure");
-        }
         for (const fn of pending) await fn();
-        calls.push({ collection: "<transaction>", op: "transaction.commit" });
         return result;
       },
       batch: () => makeBatch(),
@@ -376,8 +449,9 @@ vi.mock("@octogee/core/secret-manager", () => ({
       throw e;
     }
     provisionerCalls.push(params);
+    sideEffects.push(`provision ${params.gatewayId}`);
     if (provisionerConcurrentGatewayId === params.gatewayId) {
-      gatewaysDocs[params.gatewayId] = { gatewayId: params.gatewayId };
+      seedDurableGateway(params.gatewayId);
       provisionerConcurrentGatewayId = null;
     }
     return { secretName: `projects/octogee-test/secrets/gateway-auth-token-${params.gatewayId}`, created: true };
@@ -516,7 +590,6 @@ function seedRetirableGateway(gatewayId: string) {
 }
 
 beforeEach(() => {
-  calls.length = 0;
   glmOperationsDocs = [];
   glmGatewaysDocs = {};
   gatewaysDocs = {};
@@ -531,8 +604,8 @@ beforeEach(() => {
   builderCalls.length = 0;
   nextBuildsResult = [];
   nextBuildsError = null;
-  transactionCommitFailures = 0;
-  nextOperationAddError = null;
+  sideEffects = [];
+  failingStoreTransaction = null;
   process.env.GATEWAY_SERVICE_ACCOUNT = "octogee-gateway@octogee-test.iam.gserviceaccount.com";
 });
 
@@ -638,11 +711,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(res.body).toMatchObject({ gatewayId: "created-canary" });
     expect(res.body.operationId).toBeTruthy();
 
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite?.docId).toBe("created-canary");
-    expect(gwWrite?.data).toMatchObject({
+    expect(gatewaysDocs["created-canary"]).toMatchObject({
       gatewayId: "created-canary",
       desiredStatus: "running",
       createdBy: "admin-user",
@@ -651,25 +720,15 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     });
     expect(glmGatewaysDocs["created-canary"]).toBeUndefined();
 
-    const opWrite = commandOperationCall();
-    expect(opWrite?.data).toMatchObject({
+    expect(commandOperation()).toMatchObject({
       kind: "add-gateway",
       status: "pending",
       createdBy: "admin-user",
       gatewayId: "created-canary",
     });
 
-    expect(gatewaysDocs["created-canary"]).toMatchObject({
+    expect(gatewayReleasesDocs["created-canary/1"]).toMatchObject({
       gatewayId: "created-canary",
-      latestRelease: 1,
-      desiredRelease: 1,
-      desiredStatus: "running",
-    });
-    const releaseWrite = calls.find(
-      (c) => c.collection === "gateways/created-canary/releases" && c.op === "doc.set",
-    );
-    expect(releaseWrite?.docId).toBe("1");
-    expect(releaseWrite?.data).toMatchObject({
       release: 1,
       sourceRelease: null,
       payload: { imageTag: "abc1234" },
@@ -687,7 +746,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
   });
 
   it("records a partial audit when the initial release exists but the add operation cannot be enqueued", async () => {
-    nextOperationAddError = new Error("operation store unavailable");
+    failingStoreTransaction = "admin.fleet.createOperation";
 
     await request(buildApp()).post("/api/admin/gateways").send({
       gatewayId: "partial-canary",
@@ -754,9 +813,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/reserved for roll roles/);
-      expect(
-        calls.find((c) => c.collection === "glmGateways" && c.docId === gatewayId),
-      ).toBeUndefined();
+      expect(gatewaysDocs[gatewayId]).toBeUndefined();
     }
   });
 
@@ -769,10 +826,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
       sizingTier: "l",
     });
     expect(res.status).toBe(202);
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite?.data).toMatchObject({
+    expect(gatewaysDocs["created-shared"]).toMatchObject({
       profile: null,
       gatewayClass: "shared",
       imageProfile: "standard",
@@ -795,7 +849,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/profile.*standard.*builder/i);
     expect(provisionerCalls).toEqual([]);
-    expect(calls.find((c) => c.collection === "gateways" && c.op === "doc.set")).toBeUndefined();
+    expect(gatewaysDocs.jack).toBeUndefined();
   });
 
   it("rejects manually creating an owner builder gateway before side effects", async () => {
@@ -810,7 +864,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
-    expect(calls.find((c) => c.collection === "gateways" && c.op === "doc.set")).toBeUndefined();
+    expect(gatewaysDocs.jack).toBeUndefined();
   });
 
   it("rejects manually creating owner gateways without an owner before side effects", async () => {
@@ -824,10 +878,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite).toBeUndefined();
+    expect(gatewaysDocs.jack).toBeUndefined();
   });
 
   it("rejects owner fields on shared gateways before side effects", async () => {
@@ -841,10 +892,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/shared gateway creation does not accept owner fields/);
     expect(provisionerCalls).toEqual([]);
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite).toBeUndefined();
+    expect(gatewaysDocs["shared-with-owner"]).toBeUndefined();
   });
 
   it("rejects owner gateway creation before looking up a supplied owner", async () => {
@@ -859,10 +907,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Builder gateways.*disposable lifecycle/);
     expect(provisionerCalls).toEqual([]);
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite).toBeUndefined();
+    expect(gatewaysDocs.ghost).toBeUndefined();
   });
 
   it("rejects unknown sizingTier values on create with 400", async () => {
@@ -875,10 +920,7 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/sizingTier/);
-    const gwWrite = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(gwWrite).toBeUndefined();
+    expect(gatewaysDocs["invalid-tier"]).toBeUndefined();
   });
 
   it("provisions the gateway-auth-token Secret Manager shell before writing the durable root", async () => {
@@ -895,6 +937,10 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
         gatewayServiceAccount: "octogee-gateway@octogee-test.iam.gserviceaccount.com",
       },
     ]);
+    expect(sideEffects.filter((effect) => effect.endsWith("secret-ready"))).toEqual([
+      "provision secret-ready",
+      "set gateways/secret-ready",
+    ]);
   });
 
   it("does NOT write the durable root if SM provisioning fails — operator gets 502 with detail", async () => {
@@ -907,8 +953,8 @@ describe("POST /api/admin/gateways — create durable state + op", () => {
     });
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/auth-token/);
-    const gwWrite = calls.find((c) => c.collection === "gateways" && c.op === "doc.set");
-    expect(gwWrite).toBeUndefined();
+    expect(gatewaysDocs["secret-failure"]).toBeUndefined();
+    expect(gatewayReleasesDocs["secret-failure/1"]).toBeUndefined();
   });
 
   it("returns 500 if GATEWAY_SERVICE_ACCOUNT is not configured (cluster misconfigured)", async () => {
@@ -1170,10 +1216,7 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .send({ desiredStatus: "burning" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/desiredStatus/);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update).toBeUndefined();
+    expect(sideEffects).not.toContain("set gateways/canary");
   });
 
   it("rejects desiredStatus=retired — retirement must go through DELETE for full teardown", async () => {
@@ -1184,10 +1227,7 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .send({ desiredStatus: "retired" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/DELETE \/gateways\/:id/);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update).toBeUndefined();
+    expect(sideEffects).not.toContain("set gateways/canary");
   });
 
   it("accepts desiredStatus=paused for the pause/resume flow", async () => {
@@ -1197,10 +1237,7 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .patch("/api/admin/gateways/canary")
       .send({ desiredStatus: "paused" });
     expect(res.status).toBe(202);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update?.data).toMatchObject({ desiredStatus: "paused" });
+    expect(gatewaysDocs.canary).toMatchObject({ desiredStatus: "paused" });
   });
 
   it("updates the sizingTier field when a valid tier is supplied", async () => {
@@ -1210,10 +1247,7 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .patch("/api/admin/gateways/canary")
       .send({ sizingTier: "l" });
     expect(res.status).toBe(202);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update?.data).toMatchObject({ sizingTier: "l" });
+    expect(gatewaysDocs.canary).toMatchObject({ sizingTier: "l" });
   });
 
   it("rejects unknown sizingTier values with 400 (does not write garbage to Firestore)", async () => {
@@ -1224,10 +1258,7 @@ describe("PATCH /api/admin/gateways/:id — update desired state", () => {
       .send({ sizingTier: "bogus-tier" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/durable gateway configuration/);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update).toBeUndefined();
+    expect(sideEffects).not.toContain("set gateways/canary");
   });
 });
 
@@ -1262,7 +1293,7 @@ describe("POST /api/admin/gateways — body type guards", () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/gatewayId/i);
     }
-    expect(calls.some((c) => c.collection === "glmGateways")).toBe(false);
+    expect(gatewaysDocs).toEqual({});
     expect(provisionerCalls).toEqual([]);
   });
 });
@@ -1293,16 +1324,12 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
-    );
-    expect(update?.data).toMatchObject({
+    expect(gatewaysDocs.canary).toMatchObject({
       desiredStatus: "retired",
       retirementVersion: 1,
       retirementClaim: { operationId: res.body.operationId, version: 1 },
     });
-    const op = commandOperationCall();
-    expect(op?.data).toMatchObject({
+    expect(storedOperation(res.body.operationId)).toMatchObject({
       kind: "retire-gateway",
       createdBy: "admin-user",
       input: { gatewayId: "canary", retirementClaimVersion: 1 },
@@ -1316,10 +1343,10 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(res.status).toBe(202);
     expect(res.body.retainData).toBe(false);
     expect(res.body.retainServiceAccount).toBe(false);
-    const op = commandOperationCall();
-    expect(op?.data.input).toMatchObject({ gatewayId: "canary" });
-    expect(op?.data.input.retainData).toBeUndefined();
-    expect(op?.data.input.retainServiceAccount).toBeUndefined();
+    const input = storedOperation(res.body.operationId)?.input as Record<string, unknown> | undefined;
+    expect(input).toMatchObject({ gatewayId: "canary" });
+    expect(input?.retainData).toBeUndefined();
+    expect(input?.retainServiceAccount).toBeUndefined();
   });
 
   it("passes retainData + retainServiceAccount through to the retire-gateway operation", async () => {
@@ -1331,8 +1358,7 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(res.status).toBe(202);
     expect(res.body.retainData).toBe(true);
     expect(res.body.retainServiceAccount).toBe(true);
-    const op = commandOperationCall();
-    expect(op?.data.input).toMatchObject({
+    expect(storedOperation(res.body.operationId)?.input).toMatchObject({
       gatewayId: "canary",
       retainData: true,
       retainServiceAccount: true,
@@ -1354,10 +1380,8 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/still has mounted customers/i);
     expect(res.body.mountedCustomers).toEqual(["alice", "bob"]);
-    const update = calls.find(
-      (c) => c.collection === "gateways" && c.op === "doc.update",
-    );
-    expect(update).toBeUndefined();
+    expect(gatewaysDocs.canary).toMatchObject({ desiredStatus: "running" });
+    expect(gatewaysDocs.canary.retirementClaim).toBeUndefined();
   });
 
   it("fails closed when the runtime telemetry is unavailable", async () => {
@@ -1377,28 +1401,26 @@ describe("DELETE /api/admin/gateways/:id — retire", () => {
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(202);
 
-    const updateIdx = calls.findIndex(
-      (c) => c.collection === "gateways" && c.op === "doc.set",
+    const claimAt = sideEffects.indexOf("begin gateway-retirement.claim");
+    const nextTransactionAt = sideEffects.findIndex(
+      (effect, index) => index > claimAt && effect.startsWith("begin "),
     );
-    const opIdx = calls.findIndex(
-      (call) => call.collection === "glmOperations" && typeof call.data?.kind === "string",
-    );
-    const commitIdx = calls.findIndex(
-      (call, index) => index > opIdx && call.op === "transaction.commit",
-    );
-    expect(updateIdx).toBeGreaterThanOrEqual(0);
-    expect(opIdx).toBeGreaterThanOrEqual(0);
-    expect(commitIdx).toBeGreaterThan(updateIdx);
-    expect(commitIdx).toBeGreaterThan(opIdx);
+    expect(claimAt).toBeGreaterThanOrEqual(0);
+    expect(nextTransactionAt).toBeGreaterThan(claimAt);
+    expect(sideEffects.slice(claimAt + 1, nextTransactionAt)).toEqual([
+      "set gateways/canary",
+      `set glmOperations/${res.body.operationId}`,
+    ]);
   });
 
-  it("rolls back both claim writes if the transaction commit fails", async () => {
+  it("rolls back both claim writes if the claim transaction fails", async () => {
     seedRetirableGateway("canary");
-    transactionCommitFailures = 1;
+    failingStoreTransaction = "gateway-retirement.claim";
     const app = buildApp();
     const res = await request(app).delete("/api/admin/gateways/canary");
     expect(res.status).toBe(500);
-    
+
+    expect(sideEffects).toContain("begin gateway-retirement.claim");
     expect(gatewaysDocs["canary"]).toMatchObject({ desiredStatus: "running" });
     expect(glmOperationsDocs.find((d) => d.data.kind === "retire-gateway")).toBeUndefined();
   });
@@ -1413,8 +1435,7 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
       .post("/api/admin/gateways/bender/restart")
       .send({});
     expect(res.status).toBe(202);
-    const op = commandOperationCall();
-    expect(op?.data).toMatchObject({
+    expect(commandOperation()).toMatchObject({
       kind: "restart-gateway",
       input: { gatewayId: "bender" },
       createdBy: "admin-user",
@@ -1427,7 +1448,7 @@ describe("POST /api/admin/gateways/:id/restart — rotate the pod via kubectl ro
       .post("/api/admin/gateways/gw-missing/restart")
       .send({});
     expect(res.status).toBe(404);
-    expect(calls.find((c) => c.collection === "glmOperations")).toBeUndefined();
+    expect(commandOperation()).toBeUndefined();
   });
 
   it("does NOT gate on mountedCustomers — restart is operator intent", async () => {
@@ -1477,8 +1498,7 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
       .post("/api/admin/customers/uid-alice/migrate")
       .send({ to: "canary" });
     expect(res.status).toBe(202);
-    const op = commandOperationCall();
-    expect(op?.data).toMatchObject({
+    expect(commandOperation()).toMatchObject({
       kind: "migrate-customer",
       status: "pending",
       input: {
@@ -1553,8 +1573,8 @@ describe("POST /api/admin/customers/:uid/migrate — start migration", () => {
       .send({ to: "canary" });
     expect(res.status).toBe(409);
     expect(res.body.operationId).toBe("op-mig-live");
-    const created = calls.find((c) => c.collection === "glmOperations" && c.op === "add");
-    expect(created).toBeUndefined();
+    expect(glmOperationsDocs.filter((doc) => doc.data.recordType !== "audit").map((doc) => doc.id))
+      .toEqual(["op-mig-live"]);
   });
 });
 
@@ -1570,13 +1590,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
       .send({});
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ unassigned: true, uid: "uid-alice", from: "default-green" });
-    const update = calls.find(
-      (c) => c.collection === "users" && c.op === "doc.update" && c.docId === "uid-alice",
-    );
-    expect(update?.data?.["provisioning.openclaw.gatewayId"]).toEqual(FieldValue.delete());
-    expect(update?.data?.["provisioning.openclaw.gatewayAssignedAt"]).toEqual(FieldValue.delete());
-    expect(update?.data?.["provisioning.openclaw.gatewayProfile"]).toEqual(FieldValue.delete());
-    expect(update?.data?.["provisioning.openclaw.controlUiEnabled"]).toEqual(FieldValue.delete());
+    expect(usersDocs["uid-alice"].provisioning).toEqual({ openclaw: { slug: "alice" } });
   });
 
   it("returns 404 for an unknown customer", async () => {
@@ -1617,8 +1631,7 @@ describe("POST /api/admin/customers/:uid/unassign — clear assignment, let reco
       .send({});
     expect(res.status).toBe(409);
     expect(res.body.operationId).toBe("op-mig-1");
-    const update = calls.find((c) => c.collection === "users" && c.op === "doc.update");
-    expect(update).toBeUndefined();
+    expect(sideEffects).not.toContain("set users/uid-alice");
   });
 });
 
@@ -1631,8 +1644,7 @@ describe("POST /api/admin/rollouts — composite operation", () => {
       imageTag: "def5678",
     });
     expect(res.status).toBe(202);
-    const op = commandOperationCall();
-    expect(op?.data).toMatchObject({
+    expect(commandOperation()).toMatchObject({
       kind: "rollout",
       status: "pending",
       input: { gatewayId: "default", targetRelease: 2, imageTag: "def5678" },
@@ -1830,12 +1842,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
       .send({ gatewayId: "default" });
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({ uid: "uid-dave", gatewayId: "default" });
-    const update = calls.find(
-      (c) => c.collection === "users" && c.op === "doc.update",
-    );
-    expect(update?.data).toMatchObject({
-      "provisioning.openclaw.gatewayId": "default",
-    });
+    expect(usersDocs["uid-dave"]).toHaveProperty("provisioning.openclaw.gatewayId", "default");
   });
 
   it("rejects assigning a Builder to an owner gateway", async () => {
@@ -1863,14 +1870,8 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Builder gateway placement is managed by the disposable lifecycle/);
 
-    const grant = calls.find(
-      (c) => c.collection === "glmGateways" && c.op === "doc.update" && c.docId === "gw-operator",
-    );
-    expect(grant).toBeUndefined();
-    const userUpdate = calls.find(
-      (c) => c.collection === "users" && c.op === "doc.update" && c.docId === "uid-dave",
-    );
-    expect(userUpdate).toBeUndefined();
+    expect(sideEffects).not.toContain("set glmGateways/gw-operator");
+    expect(sideEffects).not.toContain("set users/uid-dave");
   });
 
   it("returns 400 when gatewayId is missing", async () => {
@@ -1930,14 +1931,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
       .send({ gatewayId: "default" });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body).toMatchObject({ repaired: true, gatewayId: "default" });
-    expect(calls).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        collection: "gateways/default/assignments",
-        op: "doc.set",
-        docId: "uid-alice",
-        data: expect.objectContaining({ source: "repair", slug: "alice" }),
-      }),
-    ]));
+    expect(gatewayAssignmentsDocs["default/uid-alice"]).toMatchObject({ source: "repair", slug: "alice" });
   });
 
   it("preserves an in-flight assignment when same-target repair races a roll", async () => {
@@ -1954,9 +1948,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
       uid: "uid-alice",
       slug: "alice",
       gatewayId: "default",
-      revisionId: "default-r1",
-      release: 1,
-      source: "migration",
+      source: "migrate-customer",
       state: "quiescing",
       epoch: 7,
       updatedAt: 90,
@@ -1970,13 +1962,7 @@ describe("POST /api/admin/customers/:uid/assign — initial placement", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(gatewayAssignmentsDocs["default/uid-alice"]).toEqual(existing);
-    expect(calls).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        collection: "gateways/default/assignments",
-        op: "doc.set",
-        docId: "uid-alice",
-      }),
-    ]));
+    expect(sideEffects).not.toContain("set gateways/default/assignments/uid-alice");
   });
 
   it("rejects assignment when the builder has no canonical slug", async () => {

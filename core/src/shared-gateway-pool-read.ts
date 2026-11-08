@@ -7,6 +7,7 @@ import {
   type SharedGatewayPoolConfig,
   type SharedPoolMemberRoot,
 } from "@octogee/shared/types/shared-gateway-pool";
+import type { PlatformStateTransaction } from "./platform-state/store.js";
 
 export const ORCHESTRATOR_CONFIG_DOC_PATH = "config/orchestrator";
 
@@ -14,7 +15,7 @@ export function sharedClassGatewayQuery(db: Firestore): Query {
   return db.collection(GATEWAYS_COLLECTION).where("gatewayClass", "==", "shared");
 }
 
-export function sharedPoolMemberRootsFromSnapshot(snapshot: QuerySnapshot): SharedPoolMemberRoot[] {
+function sharedPoolMemberRootsFromSnapshot(snapshot: QuerySnapshot): SharedPoolMemberRoot[] {
   return snapshot.docs.map((doc) => {
     const data = doc.data() as Record<string, unknown>;
     return {
@@ -25,7 +26,7 @@ export function sharedPoolMemberRootsFromSnapshot(snapshot: QuerySnapshot): Shar
   });
 }
 
-export async function readSharedPoolMemberRoots(
+async function readSharedPoolMemberRoots(
   db: Firestore,
   transaction?: Transaction,
 ): Promise<SharedPoolMemberRoot[]> {
@@ -39,6 +40,17 @@ export async function readSharedGatewayPoolConfig(
   transaction?: Transaction,
 ): Promise<SharedGatewayPoolConfig | null> {
   return deriveSharedGatewayPoolConfig(await readSharedPoolMemberRoots(db, transaction));
+}
+
+export async function readSharedGatewayPoolConfigInStore(
+  transaction: PlatformStateTransaction,
+): Promise<SharedGatewayPoolConfig | null> {
+  const roots = await transaction.gateways.roots.list({ gatewayClass: "shared" });
+  return deriveSharedGatewayPoolConfig(roots.map((root) => ({
+    gatewayId: root.gatewayId,
+    gatewayClass: root.gatewayClass,
+    desiredStatus: root.desiredStatus,
+  })));
 }
 
 export class InvalidSharedGatewayAutoscalingConfigError extends Error {

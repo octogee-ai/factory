@@ -11,6 +11,8 @@ import {
 } from "../index";
 import { FieldValue } from "firebase-admin/firestore";
 import { acknowledgeCustomerRestore, beginCustomerRestore, type FleetStateDeps } from "@octogee/core/fleet-state";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
+import { createJournalFixtureStore, journalRowsIn, type FixtureDocuments } from "@octogee/core/testing/journal-store";
 import { ComputerCreationPendingError, FinalHomeCheckpointPendingError } from "../vm-computer-lifecycle";
 import { runGatewayRuntimeExclusive } from "../lib/gateway-runtime-mutation";
 import { reconcileSurgeCustomerHandoff } from "../surge-customer-handoff";
@@ -174,6 +176,28 @@ function makeDb(input: {
       throw new Error(`unexpected collection ${name}`);
     },
   } as unknown as Parameters<typeof startReconciler>[0]["db"];
+}
+
+type Rows = Record<string, Record<string, unknown>>;
+
+function fixtureStoreOver(collections: { roots: Rows; runtimes: Rows; users: Rows; operations: Rows; assignments: Rows }): PlatformStateStore {
+  const locate = (path: string): [Rows, string] => {
+    const [collection, id, sub, uid, ...rest] = path.split("/");
+    if (rest.length === 0 && collection === "gateways" && sub === "assignments" && uid !== undefined) return [collections.assignments, `${id}/${uid}`];
+    if (sub === undefined && collection === "gateways") return [collections.roots, id];
+    if (sub === undefined && collection === "glmGateways") return [collections.runtimes, id];
+    if (sub === undefined && collection === "users") return [collections.users, id];
+    if (sub === undefined && collection === "glmOperations") return [collections.operations, id];
+    throw new Error(`unexpected document ${path}`);
+  };
+  const documents: FixtureDocuments = {
+    get: (path) => { const [rows, id] = locate(path); return rows[id]; },
+    set: (path, row) => { const [rows, id] = locate(path); rows[id] = row; },
+    delete: (path) => { const [rows, id] = locate(path); delete rows[id]; },
+    children: (collectionPath) => { throw new Error(`unexpected collection listing ${collectionPath}`); },
+    group: (collectionId) => { throw new Error(`unexpected collection group ${collectionId}`); },
+  };
+  return createJournalFixtureStore(journalRowsIn(collections.operations), { documents });
 }
 
 function releaseArtifact(
@@ -703,6 +727,7 @@ describe("gateway convergence pass outcomes", () => {
     };
     const deps = {
       db: makeDb({ roots, runtimes, callbacks: {}, releases: Object.fromEntries(ids.map(id => [id, { 2: releaseArtifact(id, 2, "abc1234") }])) }),
+      store: fixtureStoreOver({ roots, runtimes, users: {}, operations: {}, assignments: {} }),
       helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async (_input: { gatewayId: string; desiredImageTag: string }) => ({ ready: true })),
@@ -846,20 +871,21 @@ describe("gateway convergence pass outcomes", () => {
     const operations = { return: { kind: "migrate-customer", status: "running", startedAt: 100,
       input: { uid: "u", fromGatewayId: "builder-alice", toGatewayId: gatewayId }, cutoverCommittedAt: 50,
       schedulerHandoff: { uid: "u", slug: "alice", fromGatewayId: "builder-alice", toGatewayId: gatewayId } } };
-    const db = makeDb({ roots, runtimes, users, operations, callbacks: {},
+    const assignments = { [`${gatewayId}/u`]: { uid: "u", slug: "alice", gatewayId, source: "onboarding", epoch: 3, state: "serving" } };
+    const db = makeDb({ roots, runtimes, users, operations, assignments, callbacks: {},
       releases: { [gatewayId]: { 2: releaseArtifact(gatewayId, 2, "abc1234") } },
-      assignments: { [`${gatewayId}/u`]: { uid: "u", slug: "alice", gatewayId, epoch: 3, state: "serving" } },
     });
+    const store = fixtureStoreOver({ roots, runtimes, users, operations, assignments });
     const helm = {
       upsertInstance: vi.fn(async (_opts: Record<string, unknown>) => {}), removeInstance: vi.fn(async () => {}),
       readDeployedInstances: vi.fn(async () => ({ [gatewayId]: { gatewayId, enabled: true, release: 2,
         image: { repository: "us-central1-docker.pkg.dev/octogee/octogee/octogee-gateway", tag: "abc1234" },
         chartFingerprint: "chart", deploymentIntentFingerprint: "stale-intent", replicas: 1 } })),
     };
-    const deps = { db, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
+    const deps = { db, store, helm: helm as never, kubeOps: {} as never, chartFingerprint: "chart",
       prepareGatewayConfig: vi.fn(async (config: any) => config),
       reconcileSurgeHandoff: vi.fn(async () => ({ ready: true })), log: vi.fn() };
-    const stateDeps: FleetStateDeps = { db, deleteField: () => FieldValue.delete(), serverTimestamp: () => FieldValue.serverTimestamp() };
+    const stateDeps: FleetStateDeps = { store };
     return { roots, runtimes, users, operations, deps, helm, stateDeps };
   }
 

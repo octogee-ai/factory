@@ -3,6 +3,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import type { BoundTenant } from "../lib/sa-to-tenant.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 
 const bundle = {
@@ -40,7 +41,7 @@ function appWith(docs: Record<string, Record<string, unknown>>, bound: BoundTena
     if (bound) req.boundTenant = bound;
     next();
   });
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, now: () => 5_000 }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), now: () => 5_000 }));
   return app;
 }
 

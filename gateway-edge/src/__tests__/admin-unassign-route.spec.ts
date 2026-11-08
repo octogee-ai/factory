@@ -17,9 +17,30 @@ const state: {
   store: Record<string, StoredDoc | undefined>;
 } = { store: {} };
 
-function isDeleteTransform(v: unknown): boolean {
-  return (v as { constructor?: { name?: string } })?.constructor?.name === "DeleteTransform";
-}
+vi.mock("@octogee/core/platform-state", async (importOriginal) => {
+  const { createJournalFixtureStore, fixtureDocumentsAt } = await import("@octogee/core/testing/journal-store");
+  const documents = () => fixtureDocumentsAt(state.store);
+  return {
+    ...(await importOriginal<typeof import("@octogee/core/platform-state")>()),
+    createFirestorePlatformStateStore: () => createJournalFixtureStore(
+      {
+        get: (id) => state.store[`glmOperations/${id}`],
+        set: (id, row) => {
+          state.store[`glmOperations/${id}`] = row;
+        },
+      },
+      {
+        documents: {
+          get: (path) => documents().get(path),
+          set: (path, row) => documents().set(path, row),
+          delete: (path) => documents().delete(path),
+          children: (collectionPath) => documents().children(collectionPath),
+          group: (collectionId) => documents().group(collectionId),
+        },
+      },
+    ),
+  };
+});
 
 vi.mock("../lib/db", () => {
   function docRef(path: string): any {
@@ -141,7 +162,7 @@ function buildApp() {
 
 function seedMountedUser(uid: string, gatewayId: string) {
   state.store[`users/${uid}`] = {
-    provisioning: { openclaw: { gatewayId, gatewayProfile: "shared", controlUiEnabled: true } },
+    provisioning: { openclaw: { gatewayId, gatewayProfile: "standard", controlUiEnabled: true } },
   };
 }
 
@@ -179,12 +200,7 @@ describe("POST /api/admin/customers/:uid/unassign", () => {
     expect(res.body).toMatchObject({ unassigned: true, uid: "u-serving", from: "gw-blue" });
     // Assignment doc gone (P1-2): the durable roster is no longer contaminated.
     expect(state.store["gateways/gw-blue/assignments/u-serving"]).toBeUndefined();
-    // Mirror fields cleared via FieldValue.delete() (real firebase-admin transform).
-    const mirror = state.store["users/u-serving"] as Record<string, unknown>;
-    expect(isDeleteTransform(mirror["provisioning.openclaw.gatewayId"])).toBe(true);
-    expect(isDeleteTransform(mirror["provisioning.openclaw.gatewayProfile"])).toBe(true);
-    expect(isDeleteTransform(mirror["provisioning.openclaw.controlUiEnabled"])).toBe(true);
-    expect(isDeleteTransform(mirror["provisioning.openclaw.gatewayAssignedAt"])).toBe(true);
+    expect(state.store["users/u-serving"]).toEqual({ provisioning: { openclaw: {} } });
   });
 
   it("is NOT destructive — never deletes the user doc", async () => {

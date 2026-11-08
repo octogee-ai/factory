@@ -12,6 +12,7 @@ import { createTenantEnforcementMiddleware } from "../middleware/tenant-enforcem
 import { SIDECAR_BROKER_TOKEN_AUDIENCE, SIDECAR_BROKER_TOKEN_HEADER } from "@octogee/core/internal-fetch";
 import { storeWorkspaceBlob, WorkspaceStorageQuotaError } from "../../../gateway-edge/src/lib/workspace-blob.js";
 import { divertWorktreeBinaries } from "../../../gateway-edge/src/lib/binary-diversion.js";
+import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { createFleetBrokerRoutes } from "./fleet-broker.js";
 import { MAX_UPLOAD_BYTES } from "../../../gateway-edge/src/routes/workspace/upload.js";
 
@@ -40,7 +41,7 @@ function harness() {
     reviewer: async () => ({ authenticated: true, saName: "octogee-gw-shared-alice", namespace: "octogee-test", audiences: [SIDECAR_BROKER_TOKEN_AUDIENCE], podUid: "pod-alice", podName: "pod-alice" }),
     mapIdentity: async () => ({ kind: "gateway", gatewayId: "shared-alice" }) });
   app.use((req, res, next) => SIDECAR_BROKER_ROUTES.has(req.path) ? auth(req, res, next) : next());
-  app.use("/internal/fleet", createFleetBrokerRoutes({ db, workspaceBlobStore: store }));
+  app.use("/internal/fleet", createFleetBrokerRoutes({ db, store: createDocumentFixtureStore({}), workspaceBlobStore: store }));
   return { app, docs, store };
 }
 

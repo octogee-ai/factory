@@ -1,10 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { GATEWAYS_COLLECTION } from "@octogee/shared/types/fleet-controller";
-import { GLM_OPERATIONS_COLLECTION } from "@octogee/shared/types/glm";
-import { GATEWAY_RELEASES_SUBCOLLECTION, isGatewayDesiredDoc, isReleasePayload, releasePayloadHash, } from "@octogee/shared/types/gateway-releases";
+import { isGatewayDesiredDoc, isReleasePayload, releasePayloadHash, } from "@octogee/shared/types/gateway-releases";
 import { projectGatewayMutableConfigForGateway, } from "@octogee/shared/types/gateway-mutable-config";
 import { gatewayArtifactFromReleasePayload } from "./gateway-live-release.js";
-import { assertGatewayRuntimeMutationUnfenced, GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
+import { assertGatewayRuntimeMutationUnfencedInStore, GatewayRetirementConflictError } from "./gateway-retirement-claim.js";
 export function asDurableGatewayRoot(data, gatewayId) {
     if (!isGatewayDesiredDoc(data) || data.gatewayId !== gatewayId)
         return null;
@@ -53,9 +51,8 @@ export function rolloutOperationInput(gatewayId, targetRelease, artifact) {
         imageRepository: artifact.imageRepository,
     };
 }
-async function currentRootForAppend(transaction, gatewayRef, args) {
-    const snapshot = await transaction.get(gatewayRef);
-    const current = asDurableGatewayRoot(snapshot.data(), args.gateway.gatewayId);
+function currentRootForAppend(stored, args) {
+    const current = asDurableGatewayRoot(stored, args.gateway.gatewayId);
     if (!current)
         throw new InvalidGatewayRootError(args.gateway.gatewayId);
     assertOwnerUnchanged(current, args.gateway);
@@ -67,10 +64,12 @@ async function currentRootForAppend(transaction, gatewayRef, args) {
     }
     return current;
 }
-async function assertReleaseIsNew(transaction, gatewayRef, gatewayId, release) {
-    const releaseRef = gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release));
-    if (await transaction.get(releaseRef).then((snapshot) => snapshot.exists)) {
-        throw new Error(`appendGatewayRelease: gateways/${gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`);
+function immutableHistoryError(gatewayId, release) {
+    return new Error(`appendGatewayRelease: gateways/${gatewayId}/releases/${release} already exists — refusing to overwrite immutable history`);
+}
+async function assertStoredReleaseIsNew(transaction, gatewayId, release) {
+    if (await transaction.gateways.releases.get(gatewayId, release) !== null) {
+        throw immutableHistoryError(gatewayId, release);
     }
 }
 function releasePayloadFor(args) {
@@ -80,39 +79,19 @@ function releasePayloadFor(args) {
     }
     return payload;
 }
-export async function appendGatewayRelease(db, args) {
-    const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(args.gateway.gatewayId);
-    const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-    return db.runTransaction(async (transaction) => {
-        const current = await currentRootForAppend(transaction, gatewayRef, args);
-        await assertGatewayRuntimeMutationUnfenced(db, transaction, args.gateway.gatewayId);
+export async function appendGatewayRelease(store, args) {
+    return store.transaction({ label: "gateway-release.append" }, async (transaction) => {
+        const current = currentRootForAppend(await transaction.gateways.roots.get(args.gateway.gatewayId), args);
+        await assertGatewayRuntimeMutationUnfencedInStore(transaction, args.gateway.gatewayId);
         const release = current.latestRelease + 1;
-        await assertReleaseIsNew(transaction, gatewayRef, args.gateway.gatewayId, release);
+        await assertStoredReleaseIsNew(transaction, args.gateway.gatewayId, release);
         const payload = releasePayloadFor(args);
-        writeGatewayRelease(transaction, gatewayRef, operationRef, args, { release, payload });
-        return { release, operationId: operationRef.id };
+        const operationId = await appendStoredGatewayRelease(transaction, args, { release, payload });
+        return { release, operationId };
     });
 }
-function writeGatewayRelease(transaction, gatewayRef, operationRef, args, record) {
-    const { release, payload, activate = false } = record;
-    const releaseDoc = {
-        gatewayId: args.gateway.gatewayId,
-        release,
-        createdAt: args.now,
-        createdBy: args.createdBy,
-        sourceRelease: args.sourceRelease,
-        note: args.note,
-        payloadHash: releasePayloadHash(payload),
-        payload,
-    };
-    transaction.set(gatewayRef.collection(GATEWAY_RELEASES_SUBCOLLECTION).doc(String(release)), releaseDoc);
-    transaction.update(gatewayRef, {
-        latestRelease: release,
-        ...(activate ? { desiredRelease: release } : {}),
-        updatedAt: args.now,
-        updatedBy: args.createdBy,
-    });
-    transaction.set(operationRef, {
+function rolloutOperation(args, release, payload) {
+    return {
         kind: "rollout",
         status: "pending",
         createdBy: args.createdBy,
@@ -123,7 +102,23 @@ function writeGatewayRelease(transaction, gatewayRef, operationRef, args, record
         input: rolloutOperationInput(args.gateway.gatewayId, release, gatewayArtifactFromReleasePayload(payload)),
         steps: [],
         gatewayId: args.gateway.gatewayId,
+    };
+}
+async function appendStoredGatewayRelease(transaction, args, record) {
+    const { release, payload, activate = false } = record;
+    await transaction.gateways.releases.append({
+        gatewayId: args.gateway.gatewayId,
+        expectedLatestRelease: release - 1,
+        createdAt: args.now,
+        createdBy: args.createdBy,
+        sourceRelease: args.sourceRelease,
+        note: args.note,
+        payload,
+        payloadHash: releasePayloadHash(payload),
+        activate,
+        updatedBy: args.createdBy,
     });
+    return transaction.journal.operations.enqueue(rolloutOperation(args, release, payload));
 }
 function recoveredSharedRoot(current) {
     return current !== null && current.gatewayClass === "shared" && current.ownerUid === null && current.builderSlug === null &&
@@ -146,25 +141,32 @@ function recoveredReleaseDoctor(fence, operationId, images) {
 function recoveredDoctorTiming(doctor) {
     return doctor !== undefined && Number.isSafeInteger(doctor.startedAt) && Number.isSafeInteger(doctor.completedAt) && doctor.completedAt >= doctor.startedAt;
 }
-export async function recordRecoveredGatewayRelease(db, transaction, input) {
-    const gatewayRef = db.collection(GATEWAYS_COLLECTION).doc(input.gatewayId);
-    const [snapshot, operation] = await Promise.all([transaction.get(gatewayRef),
-        transaction.get(db.collection(GLM_OPERATIONS_COLLECTION).doc(input.operationId))]);
-    const current = asDurableGatewayRoot(snapshot.data(), input.gatewayId), op = operation.data();
-    const recovery = op?.input?.sourceRecovery, fence = snapshot.data()?.runtimeRestartFence;
-    const images = { gateway: `${input.payload.imageRepository}:${input.payload.imageTag}`,
-        "gateway-edge": `${input.payload.gatewayEdgeImage?.imageRepository}:${input.payload.gatewayEdgeImage?.imageTag}` };
-    if (!recoveredSharedRoot(current) || !recoveredReleaseOperation(op, input) || !recoveredReleasePayload(recovery, input.payload, images) ||
-        !recoveredReleaseDoctor(fence, input.operationId, images)) {
+function recoveredReleaseImages(payload) {
+    return { gateway: `${payload.imageRepository}:${payload.imageTag}`,
+        "gateway-edge": `${payload.gatewayEdgeImage?.imageRepository}:${payload.gatewayEdgeImage?.imageTag}` };
+}
+function recoveredReleaseRoot(root, op, input) {
+    const current = asDurableGatewayRoot(root, input.gatewayId), images = recoveredReleaseImages(input.payload);
+    if (!recoveredSharedRoot(current) || !recoveredReleaseOperation(op, input) ||
+        !recoveredReleasePayload(op?.input?.sourceRecovery, input.payload, images) ||
+        !recoveredReleaseDoctor(root?.runtimeRestartFence, input.operationId, images)) {
         throw new Error("recovered Shared release authority changed");
     }
-    const release = current.latestRelease + 1;
-    await assertReleaseIsNew(transaction, gatewayRef, input.gatewayId, release);
-    const operationRef = db.collection(GLM_OPERATIONS_COLLECTION).doc();
-    writeGatewayRelease(transaction, gatewayRef, operationRef, {
+    return current;
+}
+function recoveredReleaseArgs(current, input) {
+    return {
         gateway: current, artifact: gatewayArtifactFromReleasePayload(input.payload), payload: input.payload,
         createdBy: input.operationId, now: input.now, sourceRelease: current.liveRelease,
         note: "Stopped-source PostgreSQL repair", origin: "operator",
-    }, { release, payload: input.payload, activate: true });
-    return { release, operationId: operationRef.id };
+    };
+}
+export async function recordRecoveredGatewayReleaseInStore(transaction, input) {
+    const [root, operation] = await Promise.all([transaction.gateways.roots.get(input.gatewayId),
+        transaction.journal.operations.get(input.operationId)]);
+    const current = recoveredReleaseRoot(root ?? undefined, operation ?? undefined, input);
+    const release = current.latestRelease + 1;
+    await assertStoredReleaseIsNew(transaction, input.gatewayId, release);
+    const operationId = await appendStoredGatewayRelease(transaction, recoveredReleaseArgs(current, input), { release, payload: input.payload, activate: true });
+    return { release, operationId };
 }

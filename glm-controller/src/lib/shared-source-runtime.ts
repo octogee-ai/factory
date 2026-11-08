@@ -1,16 +1,18 @@
 import { assertSourceRecoveryDiscovery } from './shared-source-discovery.js';
 import { managementHealthDriverSource } from './runtime-restart-driver.js';
 import { isDeepStrictEqual } from 'node:util';
-import { FieldValue, type DocumentData, type Transaction } from 'firebase-admin/firestore';
+import type { DocumentData } from 'firebase-admin/firestore';
 import type { Operation } from '@octogee/shared/types/glm';
 import { assertSharedSourceRecoveryUnchanged, assertSharedSourceRecoveryPredecessor, readSharedSourceRecoveryAuthority, type SharedSourceRecoveryAuthority, type SharedSourceRecoverySupersession } from '@octogee/core/shared-source-recovery';
+import type { GatewayRoot, GatewayRuntimeRestartFenceValue, PlatformStateStore, PlatformStateTransaction, Stored } from '@octogee/core/platform-state';
 import type { OperationContext } from '../operation-router.js';
 import { assertRecoveryImages, existingOwnedPod, imagePatch, json, recoveredPodReady, type SharedPodRecoveryDeps } from './shared-restore-runtime.js';
 import { captureSourceRecoveryWorkload, pinSourceRecoveryImages, resumeSourceRecoveryWorkload, type SourceRecoveryWorkload } from './shared-source-images.js';
-import { recordRecoveredGatewayRelease } from '@octogee/core/gateway-release-append';
+import { recordRecoveredGatewayReleaseInStore } from '@octogee/core/gateway-release-append';
 import { isReleasePayload, type ReleasePayload } from '@octogee/shared/types/gateway-releases';
 
 type Row = DocumentData;
+type Deps = Omit<SharedPodRecoveryDeps, 'db'> & { store: PlatformStateStore };
 interface SourceRecovery extends SharedSourceRecoveryAuthority { sourceSha: string; images: Record<string, string>; payload?: ReleasePayload; supersede?: SharedSourceRecoverySupersession }
 const object = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
 function sourceRecovery(op: Operation, deployedSha: string): SourceRecovery {
@@ -28,17 +30,23 @@ function sourceRecovery(op: Operation, deployedSha: string): SourceRecovery {
   }
   return input as SourceRecovery;
 }
-async function authority(deps: SharedPodRecoveryDeps, tx: Transaction, op: Operation, input: SourceRecovery): Promise<Row> {
+async function authority(tx: PlatformStateTransaction, op: Operation, input: SourceRecovery): Promise<Stored<GatewayRoot>> {
   const gatewayId = op.input.gatewayId as string;
-  const [claim, root, captured] = await Promise.all([
-    tx.get(deps.db.doc(`glmOperations/${op.id}`)), tx.get(deps.db.doc(`gateways/${gatewayId}`)),
-    readSharedSourceRecoveryAuthority(deps.db, tx, gatewayId, op.id, input.supersede?.operationId),
+  const [current, root, captured] = await Promise.all([
+    tx.journal.operations.get(op.id), tx.gateways.roots.get(gatewayId),
+    readSharedSourceRecoveryAuthority(tx, gatewayId, op.id, input.supersede?.operationId),
   ]);
-  const current = claim.data();
   if (current?.status !== 'running' || current.startedAt !== op.startedAt || current.cancellationRequestedAt !== undefined ||
     !isDeepStrictEqual(current.input, op.input)) throw new Error('source recovery operation claim changed');
   assertSharedSourceRecoveryUnchanged(captured, input);
-  return root.data()!;
+  if (root === null) throw new Error('source recovery gateway authority is unavailable');
+  return root;
+}
+function ownedFence(root: Stored<GatewayRoot>, op: Operation, input: SourceRecovery, pod: Row): GatewayRuntimeRestartFenceValue {
+  const fence = root.runtimeRestartFence;
+  if (fence === undefined) throw new Error('source recovery runtime fence changed');
+  assertOwnedFence(fence, op, input, pod);
+  return fence;
 }
 function expectedAgents(input: SourceRecovery): Row[] {
   return input.assignments.map(({ uid, slug, agentId, assignmentEpoch }) => ({ uid, slug, agentId, assignmentEpoch }));
@@ -56,21 +64,21 @@ function assertOwnedFence(fence: Row, op: Operation, input: SourceRecovery, pod:
   }
   if (target.schedulerStateRecovery !== input.schedulerStateRecovery) throw new Error('source recovery scheduler custody changed');
 }
-async function reserve(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, workload?: SourceRecoveryWorkload): Promise<void> {
-  await deps.db.runTransaction(async tx => {
-    const root = await authority(deps, tx, op, input);
-    if (root.runtimeRestartFence !== undefined) {
-      if (root.runtimeRestartFence.attemptId === op.id) { assertOwnedFence(object(root.runtimeRestartFence), op, input, pod); return; }
+async function reserve(deps: Deps, op: Operation, input: SourceRecovery, pod: Row, workload?: SourceRecoveryWorkload): Promise<void> {
+  await deps.store.transaction({ label: 'shared-source-runtime.reserve' }, async tx => {
+    const root = await authority(tx, op, input);
+    const existing = root.runtimeRestartFence;
+    if (existing !== undefined) {
+      if (existing.attemptId === op.id) { assertOwnedFence(existing, op, input, pod); return; }
       await transferPredecessor({ deps, tx, op, input, pod, root, workload }); return;
     }
     if (input.supersede) throw new Error('captured source recovery predecessor fence is absent');
-    const fence = newFence(deps, op, input, pod, workload);
-    tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: fence });
+    await tx.gateways.roots.compareAndSetRuntimeRestartFence(root.gatewayId, null, newFence(deps, op, input, pod, workload));
   });
 }
-function newFence(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, workload?: SourceRecoveryWorkload): Row {
+function newFence(deps: Deps, op: Operation, input: SourceRecovery, pod: Row, workload?: SourceRecoveryWorkload): GatewayRuntimeRestartFenceValue {
   if (input.postgresAgentStores && !workload) throw new Error('PostgreSQL source recovery workload is unavailable');
-  return { kind: 'source-recovery', attemptId: op.id, auditId: op.id, gatewayId: op.input.gatewayId,
+  return { kind: 'source-recovery', attemptId: op.id, auditId: op.id, gatewayId: op.input.gatewayId as string,
       startedAt: (deps.now ?? Date.now)(), phase: 'reserved', doctor: { requestId: op.id },
       target: { podName: pod.metadata.name, podUid: pod.metadata.uid, sourceSha: input.sourceSha, images: input.images,
         originalImages: Object.fromEntries(pod.spec.containers.map((container: Row) => [container.name, container.image])),
@@ -78,13 +86,15 @@ function newFence(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecov
         schedulerStateRecovery: input.schedulerStateRecovery,
         ...(input.postgresAgentStores ? { postgresAgentStores: input.postgresAgentStores, workload } : {}) } };
 }
-async function transferPredecessor(request: { deps: SharedPodRecoveryDeps; tx: Transaction; op: Operation; input: SourceRecovery; pod: Row; root: Row; workload?: SourceRecoveryWorkload }): Promise<void> {
+async function transferPredecessor(request: {
+  deps: Deps; tx: PlatformStateTransaction; op: Operation; input: SourceRecovery; pod: Row; root: Stored<GatewayRoot>; workload?: SourceRecoveryWorkload;
+}): Promise<void> {
   const { deps, tx, op, input, pod, root } = request;
-  const supersede = input.supersede;
-  if (!supersede || supersede.operationId === op.id) throw new Error('source recovery predecessor is unavailable');
-  const prior = await tx.get(deps.db.doc(`glmOperations/${supersede.operationId}`));
-  const captured = assertSharedSourceRecoveryPredecessor({ gatewayId: op.input.gatewayId as string, operationId: supersede.operationId,
-    row: object(prior.data()), fence: object(root.runtimeRestartFence), source: input });
+  const supersede = input.supersede, predecessorFence = root.runtimeRestartFence;
+  if (!supersede || supersede.operationId === op.id || predecessorFence === undefined) throw new Error('source recovery predecessor is unavailable');
+  const prior = await tx.journal.operations.get(supersede.operationId);
+  const captured = assertSharedSourceRecoveryPredecessor({ gatewayId: root.gatewayId, operationId: supersede.operationId,
+    row: object(prior), fence: predecessorFence, source: input });
   if (!isDeepStrictEqual(captured, supersede)) throw new Error('source recovery predecessor changed');
   const old = object(supersede.input.sourceRecovery);
   assertRecoveryImages(object(old.images), old.sourceSha);
@@ -93,8 +103,8 @@ async function transferPredecessor(request: { deps: SharedPodRecoveryDeps; tx: T
     throw new Error('source recovery predecessor workload changed');
   }
   assertPredecessorPodImages(pod, old.images);
-  tx.update(deps.db.doc(`glmOperations/${supersede.operationId}`), { cancellationRequestedAt: (deps.now ?? Date.now)(), sourceRecoverySupersededBy: op.id });
-  tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: newFence(deps, op, input, pod, request.workload) });
+  await tx.journal.operations.patch(supersede.operationId, { cancellationRequestedAt: (deps.now ?? Date.now)(), sourceRecoverySupersededBy: op.id });
+  await tx.gateways.roots.compareAndSetRuntimeRestartFence(root.gatewayId, predecessorFence, newFence(deps, op, input, pod, request.workload));
 }
 function assertPredecessorPodImages(pod: Row, oldImages: Row): void {
   for (const [name, image] of Object.entries(oldImages)) {
@@ -103,12 +113,11 @@ function assertPredecessorPodImages(pod: Row, oldImages: Row): void {
       !status.imageID.endsWith(`@${String(image).split('@')[1]}`)) throw new Error('source recovery predecessor Pod image changed');
   }
 }
-async function dispatch(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row): Promise<Row> {
-  return deps.db.runTransaction(async tx => {
-    const root = await authority(deps, tx, op, input), fence = object(root.runtimeRestartFence);
-    assertOwnedFence(fence, op, input, pod);
+async function dispatch(deps: Deps, op: Operation, input: SourceRecovery, pod: Row): Promise<Row> {
+  return deps.store.transaction({ label: 'shared-source-runtime.dispatch' }, async tx => {
+    const root = await authority(tx, op, input), fence = ownedFence(root, op, input, pod);
     imagePatch(pod, fence, input.images);
-    tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { 'runtimeRestartFence.phase': 'dispatched' });
+    await tx.gateways.roots.compareAndSetRuntimeRestartFence(root.gatewayId, fence, { ...fence, phase: 'dispatched' });
     return fence;
   });
 }
@@ -127,34 +136,33 @@ function doctorComplete(fence: Row, input: SourceRecovery): boolean {
     image.podUid === fence.target.podUid, typeof image.gatewayImageId === 'string',
     String(image.gatewayImageId).endsWith(`@${input.images.gateway!.split('@')[1]}`)].every(Boolean);
 }
-async function recordInstalled(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, imageID: string): Promise<boolean> {
-  return deps.db.runTransaction(async tx => {
-    const root = await authority(deps, tx, op, input), fence = object(root.runtimeRestartFence);
-    assertOwnedFence(fence, op, input, pod);
+async function recordInstalled(deps: Deps, op: Operation, input: SourceRecovery, pod: Row, imageID: string): Promise<boolean> {
+  return deps.store.transaction({ label: 'shared-source-runtime.recordInstalled' }, async tx => {
+    const root = await authority(tx, op, input), fence = ownedFence(root, op, input, pod);
     const proof = { podUid: pod.metadata.uid, gatewayImageId: imageID, verifiedAt: (deps.now ?? Date.now)() };
     if (fence.installedImage !== undefined) {
-      if (fence.installedImage.podUid !== proof.podUid || fence.installedImage.gatewayImageId !== imageID) throw new Error('source recovery installed image proof changed');
+      const installed = object(fence.installedImage);
+      if (installed.podUid !== proof.podUid || installed.gatewayImageId !== imageID) throw new Error('source recovery installed image proof changed');
       return false;
     }
-    tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { 'runtimeRestartFence.installedImage': proof });
+    await tx.gateways.roots.compareAndSetRuntimeRestartFence(root.gatewayId, fence, { ...fence, installedImage: proof });
     return true;
   });
 }
-async function finish(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, pod: Row, managementHealth?: Row): Promise<void> {
-  await deps.db.runTransaction(async tx => {
-    const root = await authority(deps, tx, op, input), fence = object(root.runtimeRestartFence);
-    assertOwnedFence(fence, op, input, pod);
+async function finish(deps: Deps, op: Operation, input: SourceRecovery, pod: Row, managementHealth?: Row): Promise<void> {
+  await deps.store.transaction({ label: 'shared-source-runtime.finish' }, async tx => {
+    const root = await authority(tx, op, input), fence: Row = ownedFence(root, op, input, pod);
     if (!managementHealth) throw new Error('source management health is unavailable');
     if (!doctorComplete(fence, input) || !recoveredPodReady(pod, fence.target, input.images)) throw new Error('source repair acknowledgment is unavailable');
     const completedAt = (deps.now ?? Date.now)();
-    const release = input.postgresAgentStores ? await recordRecoveredGatewayRelease(deps.db, tx, {
-      gatewayId: op.input.gatewayId as string, operationId: op.id, claimedStartedAt: op.startedAt, payload: input.payload!, now: completedAt,
+    const release = input.postgresAgentStores ? await recordRecoveredGatewayReleaseInStore(tx, {
+      gatewayId: root.gatewayId, operationId: op.id, claimedStartedAt: op.startedAt, payload: input.payload!, now: completedAt,
     }) : undefined;
-    tx.update(deps.db.doc(`glmOperations/${op.id}`), { sourceRuntimeRecovery: { gatewayId: op.input.gatewayId,
+    await tx.journal.operations.patch(op.id, { sourceRuntimeRecovery: { gatewayId: root.gatewayId,
       sourceSha: input.sourceSha, images: input.images, podUid: pod.metadata.uid, doctor: fence.doctor, installedImage: fence.installedImage,
       ...(release ? { release, workload: fence.target.workload } : {}),
       ...(managementHealth ? { managementHealth } : {}), completedAt } });
-    tx.update(deps.db.doc(`gateways/${op.input.gatewayId}`), { runtimeRestartFence: FieldValue.delete() });
+    await tx.gateways.roots.patch(root.gatewayId, { runtimeRestartFence: { clear: true } });
   });
 }
 function ownsPausedSourceWorkload(fence: Row, op: Operation, input: SourceRecovery): boolean {
@@ -163,28 +171,28 @@ function ownsPausedSourceWorkload(fence: Row, op: Operation, input: SourceRecove
     predecessor !== undefined && fence.attemptId === predecessor.operationId && isDeepStrictEqual(fence, predecessor.fence));
 }
 async function preflightNewPostgresSource(request: {
-  deps: SharedPodRecoveryDeps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; ownFence: Row;
+  deps: Deps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; ownFence: Row;
 }): Promise<void> {
   const { deps, op, input, ctx, pod, ownFence } = request;
   if (!input.postgresAgentStores || Object.keys(ownFence).length !== 0) return;
   await ctx.assertActiveClaim!();
-  await deps.db.runTransaction(async tx => { await authority(deps, tx, op, input); }, { readOnly: true });
+  await deps.store.transaction({ label: 'shared-source-runtime.preflight', readOnly: true }, async tx => { await authority(tx, op, input); });
   await assertSourceRecoveryDiscovery(deps, pod, input.postgresAgentStores);
   await ctx.assertActiveClaim!();
   const currentPod = await json(deps, ['get', 'pod', pod.metadata.name]);
   if (currentPod.metadata?.uid !== pod.metadata.uid || currentPod.metadata.deletionTimestamp) throw new Error('source discovery Pod custody changed');
 }
-export async function recoverSharedSourceRuntime(deps: SharedPodRecoveryDeps, op: Operation, ctx: OperationContext): Promise<void> {
+export async function recoverSharedSourceRuntime(deps: Deps, op: Operation, ctx: OperationContext): Promise<void> {
   const input = sourceRecovery(op, deps.sourceSha), gatewayId = op.input.gatewayId as string;
   if (!ctx.assertActiveClaim) throw new Error('source recovery operation claim is unavailable');
   await ctx.assertActiveClaim();
-  const prior = object((await deps.db.doc(`glmOperations/${op.id}`).get()).data()?.sourceRuntimeRecovery);
+  const prior = object((await deps.store.journal.operations.get(op.id))?.sourceRuntimeRecovery);
   if (prior.completedAt > 0 && prior.sourceSha === input.sourceSha && isDeepStrictEqual(prior.images, input.images)) {
     if (input.postgresAgentStores) await resumeRecoveredSource(deps, op, input, ctx);
     return;
   }
   const pod = await existingOwnedPod(deps, gatewayId);
-  const ownFence = object((await deps.db.doc(`gateways/${gatewayId}`).get()).data()?.runtimeRestartFence);
+  const ownFence = object((await deps.store.gateways.roots.get(gatewayId))?.runtimeRestartFence);
   const workload = input.postgresAgentStores ? await captureSourceRecoveryWorkload(deps, gatewayId, pod,
     ownsPausedSourceWorkload(ownFence, op, input)) : undefined;
   await preflightNewPostgresSource({ deps, op, input, ctx, pod, ownFence });
@@ -192,7 +200,7 @@ export async function recoverSharedSourceRuntime(deps: SharedPodRecoveryDeps, op
   const saved = await dispatch(deps, op, input, pod);
   if (workload) await pinSourceRecoveryImages(deps, workload, input.images, saved.target.originalImages, async () => {
     await ctx.assertActiveClaim!();
-    await deps.db.runTransaction(async tx => assertOwnedFence(object((await authority(deps, tx, op, input)).runtimeRestartFence), op, input, pod), { readOnly: true });
+    await deps.store.transaction({ label: 'shared-source-runtime.assertOwnedFence', readOnly: true }, async tx => { ownedFence(await authority(tx, op, input), op, input, pod); });
   });
   if (Object.entries(input.images).some(([name, image]) => pod.spec.containers.find((container: Row) => container.name === name)?.image !== image)) {
     await ctx.assertActiveClaim();
@@ -213,13 +221,13 @@ function completedSourceReceiptMatches(current: Row, op: Operation, input: Sourc
     isDeepStrictEqual(current.input, op.input) && proof.sourceSha === input.sourceSha && isDeepStrictEqual(proof.images, input.images) &&
     proof.completedAt > 0 && Boolean(proof.workload) && Number.isSafeInteger(proof.release?.release);
 }
-async function resumeRecoveredSource(deps: SharedPodRecoveryDeps, op: Operation, input: SourceRecovery, ctx: OperationContext): Promise<void> {
+async function resumeRecoveredSource(deps: Deps, op: Operation, input: SourceRecovery, ctx: OperationContext): Promise<void> {
   const read = async () => {
     await ctx.assertActiveClaim!();
-    const [current, root] = await Promise.all([deps.db.doc(`glmOperations/${op.id}`).get(), deps.db.doc(`gateways/${op.input.gatewayId}`).get()]);
-    const proof = object(current.data()?.sourceRuntimeRecovery);
-    if (!completedSourceReceiptMatches(object(current.data()), op, input) ||
-        !completedSourceRootMatches(object(root.data()), input, proof.release.release)) {
+    const [current, root] = await Promise.all([deps.store.journal.operations.get(op.id), deps.store.gateways.roots.get(op.input.gatewayId as string)]);
+    const proof = object(current?.sourceRuntimeRecovery);
+    if (!completedSourceReceiptMatches(object(current), op, input) ||
+        !completedSourceRootMatches(object(root), input, proof.release.release)) {
       throw new Error('completed source recovery release custody changed');
     }
     return proof;
@@ -231,7 +239,7 @@ function sourceRepairTimeout(): number {
   return 1_200_000;
 }
 async function waitForSourceRepair(request: {
-  deps: SharedPodRecoveryDeps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; saved: Row;
+  deps: Deps; op: Operation; input: SourceRecovery; ctx: OperationContext; pod: Row; saved: Row;
 }): Promise<void> {
   const { deps, op, input, ctx, pod, saved } = request;
   const gatewayId = op.input.gatewayId as string;
@@ -244,7 +252,7 @@ async function waitForSourceRepair(request: {
     imagePatch(current, saved, input.images);
     const imageID = installedGateway(current, input);
     if (imageID && await recordInstalled(deps, op, input, current, imageID)) continue;
-    const root = object((await deps.db.doc(`gateways/${gatewayId}`).get()).data()), fence = object(root.runtimeRestartFence);
+    const fence = object((await deps.store.gateways.roots.get(gatewayId))?.runtimeRestartFence);
     assertOwnedFence(fence, op, input, current);
     if (fence.doctor?.error !== undefined) throw new Error('source Doctor failed; outcome remains fenced');
     if (doctorComplete(fence, input) && recoveredPodReady(current, fence.target, input.images)) {
@@ -261,7 +269,7 @@ async function waitForSourceRepair(request: {
   throw new Error('source repair is not ready; outcome remains fenced');
 }
 
-async function managementHealth(deps: SharedPodRecoveryDeps, op: Operation, pod: Row): Promise<Row> {
+async function managementHealth(deps: Deps, op: Operation, pod: Row): Promise<Row> {
   const result = await deps.runKubectl(['-n', deps.namespace, 'exec', pod.metadata.name, '-c', 'gateway', '-i', '--', 'node', '--input-type=commonjs'],
     { stdin: managementHealthDriverSource(op.id), timeoutMs: 50_000 }).catch(cause => {
       throw new Error('source management health unconfirmed; outcome remains fenced', { cause });

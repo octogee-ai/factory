@@ -11,14 +11,12 @@ import {
   type GatewayPodDiagnostics,
 } from "@octogee/core/admin-fleet-router";
 import type { CentralReleaseAuthority } from "@octogee/core/artifact-registry";
+import type { PlatformStateStore } from "@octogee/core/platform-state";
 import {
   GLM_GATEWAYS_COLLECTION,
   GLM_OPERATIONS_COLLECTION,
 } from "@octogee/shared/types/glm";
-import {
-  addAdminCustomerRoutes,
-  type WorkspaceMmContextLite,
-} from "@octogee/core/admin-customer-router";
+import { addAdminCustomerRoutes } from "@octogee/core/admin-customer-router";
 import {
   createRequireAdmin,
   type RequireAdminDeps,
@@ -55,11 +53,9 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
 
 export interface HttpServerDeps {
   db: Firestore;
+  store: PlatformStateStore;
   verifyIdToken: RequireAdminDeps["verifyIdToken"];
   log: (msg: string) => void;
-  workspaceSlugsForUser: (data: {
-    username?: string | null;
-  }) => string[];
   provisionGatewayAuthSecret: (opts: {
     gatewayId: string;
     gatewayServiceAccount: string;
@@ -281,16 +277,15 @@ export function createHttpServer(deps: HttpServerDeps): Express {
 
   addAdminCustomerRoutes(adminRouter, {
     db: deps.db,
+    store: deps.store,
     FieldValue,
     logger: adaptLogger(deps.log),
-    workspaceSlugsForUser: deps.workspaceSlugsForUser,
-    getWorkspaceMmContext: (uid, hint) => readMmContextFromFirestore(deps.db, uid, hint),
   });
   addAdminFleetRoutes(adminRouter, {
     computerReplacementEnabled: true,
     db: deps.db,
+    store: deps.store,
     logger: adaptLogger(deps.log),
-    workspaceSlugsForUser: deps.workspaceSlugsForUser,
     provisionGatewayAuthSecret: deps.provisionGatewayAuthSecret,
     listGatewayBuilds: deps.listGatewayBuilds,
     releaseEnvironment: deps.releaseEnvironment,
@@ -304,21 +299,6 @@ export function createHttpServer(deps: HttpServerDeps): Express {
   app.use("/api/admin", adminRouter);
 
   return app;
-}
-
-async function readMmContextFromFirestore(
-  db: Firestore,
-  uid: string,
-  hint: Record<string, unknown>,
-): Promise<WorkspaceMmContextLite | null> {
-  const userData = hint as { username?: string; workspaceId?: string } | undefined;
-  if (!userData) return null;
-  const slug = userData.username ?? userData.workspaceId;
-  if (!slug) return null;
-  const channelSnap = await db.doc(`workspaces/${slug}/channels/coach-dm`).get();
-  if (!channelSnap.exists) return { coachDmChannelId: null };
-  const channelData = channelSnap.data() as { mattermost?: { channelId?: string } } | undefined;
-  return { coachDmChannelId: channelData?.mattermost?.channelId ?? null };
 }
 
 export function startHttpServer(
