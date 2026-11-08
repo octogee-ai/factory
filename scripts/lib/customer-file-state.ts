@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { isValidUsername } from "../../shared/types/identity.js";
 import { brokerTokenExpiryDirectory, removeBrokerTokenExpiriesForSlug } from "./broker-token-refresh.js";
 import { OPENCLAW_DIR } from "./config.js";
+import { clearMigratingInPin } from "./local-coach-wired.js";
 
 const run = promisify(execFile);
 const DEPARTED_CUSTOMER_GIT_STATE_ROOTS = [
@@ -70,4 +71,5 @@ export async function removeDepartedCustomerFileState(
   }
   removeBrokerTokenExpiriesForSlug(brokerTokenExpiryDirectory(root), slug, log);
   await fs.rm(workspace, { recursive: true, force: true });
+  clearMigratingInPin(path.join(root, "customers"), slug);
 }

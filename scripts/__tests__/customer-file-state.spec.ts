@@ -5,8 +5,10 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { customerFileStatePaths, flushAllCustomerFiles, flushCustomerFiles, removeDepartedCustomerFileState } from "../lib/customer-file-state.js";
 
+import { _resetMigratingInProcessPinsForTests, isMigratingInPinned, listMigratingInSlugs, writeMigratingInPin } from "../lib/local-coach-wired.js";
+
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => { _resetMigratingInProcessPinsForTests(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 it("requires confirmed Shared remote saves before acknowledging all-customer lifecycle flush", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
@@ -104,4 +106,26 @@ it("removes a customer named quarantine without touching other customers' quaran
   await removeDepartedCustomerFileState("quarantine", { root, log: vi.fn() });
   await expect(fs.stat(othersQuarantine)).resolves.toBeDefined();
   await expect(fs.stat(path.join(root, "git-metadata", "quarantine"))).rejects.toThrow(/ENOENT/);
+});
+
+it.each([false, true])("clears the departed customer's migration pin when its directory was already removed: %s", async (alreadyRemoved) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  const customers = path.join(root, "customers");
+  writeMigratingInPin(customers, "alice");
+  writeMigratingInPin(customers, "bob");
+  if (alreadyRemoved) await fs.rm(path.join(customers, "alice"), { recursive: true });
+  expect(isMigratingInPinned(customers, "alice", 60_000)).toBe(true);
+  await removeDepartedCustomerFileState("alice", { root, log: vi.fn() });
+  await expect(fs.stat(path.join(customers, "alice"))).rejects.toThrow(/ENOENT/);
+  expect(listMigratingInSlugs(customers, 60_000)).toEqual(["bob"]);
+});
+
+it("retains the migration pin when departed customer cleanup fails", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "customer-file-state-")); roots.push(root);
+  const customers = path.join(root, "customers");
+  writeMigratingInPin(customers, "alice");
+  await fs.mkdir(path.join(root, "secrets"), { recursive: true });
+  await fs.writeFile(path.join(root, "secrets", "agent-model-token-expiry"), "");
+  await expect(removeDepartedCustomerFileState("alice", { root, log: vi.fn() })).rejects.toThrow(/ENOTDIR/);
+  expect(isMigratingInPinned(customers, "alice", 60_000)).toBe(true);
 });
