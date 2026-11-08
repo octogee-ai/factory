@@ -1,6 +1,6 @@
 import { createDocumentFixtureStore } from "@octogee/core/testing/journal-store";
 import { describe, expect, it, vi } from "vitest";
-import type { NotificationEvent } from "../../../../gateway-edge/src/notifications/types.js";
+import type { UserNotification } from "../../lib/user-notifications.js";
 import {
   TENANT_DENIAL_NOTIFICATION_BUCKET_MS,
   createTenantDenialReporter,
@@ -11,10 +11,10 @@ const NOW = 1_800_000_000_000;
 
 function harness(opts: {
   users?: Record<string, Record<string, unknown>>;
-  fanOut?: (event: NotificationEvent, targetUserIds: string[]) => Promise<{ eventId: string; delivered: string[]; deduplicated: string[]; failed: Array<{ uid: string; error: string }> }>;
+  fanOut?: (event: UserNotification, targetUserIds: string[]) => Promise<{ eventId: string; delivered: string[]; deduplicated: string[]; failed: Array<{ uid: string; error: string }> }>;
 } = {}) {
   const logger = { warn: vi.fn(), error: vi.fn() };
-  const fanOut = vi.fn(opts.fanOut ?? (async (event: NotificationEvent, targetUserIds: string[]) =>
+  const fanOut = vi.fn(opts.fanOut ?? (async (event: UserNotification, targetUserIds: string[]) =>
     ({ eventId: event.eventId, delivered: targetUserIds, deduplicated: [], failed: [] })));
   const users = opts.users ?? {
     "uid-alice": {
@@ -29,7 +29,7 @@ function harness(opts: {
       Object.entries(users).map(([uid, data]) => [`users/${uid}`, data]),
     )),
     logger,
-    fanOut,
+    notifyUsers: fanOut,
     now: () => NOW,
   });
   return { report, logger, fanOut };
@@ -93,6 +93,20 @@ describe("tenant denial reporter", () => {
       },
       ["uid-alice"],
     );
+  });
+
+  it("still logs the denial when the platform has no notifier", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const report = createTenantDenialReporter({
+      store: createDocumentFixtureStore({}),
+      logger,
+      now: () => NOW,
+    });
+
+    await report(DELEGATE_DENIAL);
+
+    expect(logger.warn).toHaveBeenCalledWith("[tenant-enforcement] denied", expect.objectContaining({ path: DELEGATE_DENIAL.path }));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it("names the project for a project agent and resolves that agent's Builder", async () => {

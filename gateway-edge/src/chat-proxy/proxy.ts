@@ -66,7 +66,7 @@ import {
 } from "./openclaw/activity-binding-registry.js";
 import { createActivityMmClientFactory } from "./openclaw/mm-client.js";
 import { createDirectActivityTargetHandler } from "./openclaw/direct-activity-target.js";
-import { createFinalReplyIntakeHandler } from "../notifications/final-reply-intake.js";
+import { createFinalReplyIntakeHandler } from "./final-reply-intake.js";
 import { createVoiceWsUpgradeHandler } from "../voice/route.js";
 import type { AgentEventSource } from "../voice/brain.js";
 import { SileroVad } from "../voice/silero-vad.js";

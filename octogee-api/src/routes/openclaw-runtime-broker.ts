@@ -1,8 +1,7 @@
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";
 import { notifyNativeFinalReply, parseFinalReply, ReplyBindingDeniedError, type FinalReplyIdentity, type FinalReplyTarget } from "@octogee/core/native-final-reply";
 import { readFinalReplyPost, verifyFinalReplyChannel } from "../lib/native-final-reply-mattermost.js";
-import { buildCoachDmEvent } from "../../../gateway-edge/src/notifications/chat-notifier.js";
-import { fanOutNotification } from "../../../gateway-edge/src/notifications/pipeline.js";
+import type { FinalReplyNotifier } from "../lib/user-notifications.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
 import { createVoicePostingGrant } from "../lib/voice-posting-grant.js";
 import {
@@ -65,6 +64,7 @@ interface RuntimeBrokerDeps {
   db: Firestore;
   store: PlatformStateStore;
   readBuilderTier: BuilderTierReader;
+  notifyFinalReply?: FinalReplyNotifier;
 }
 
 interface AgentIdentity {
@@ -1471,10 +1471,7 @@ function mountFinalReplyRoutes(router: Router, deps: RuntimeBrokerDeps): void {
         resolveReplyTarget: (identity, channelId, peerId) => resolveFinalReplyTarget(deps, bound.gatewayId, identity, channelId, peerId),
         getPost: readFinalReplyPost,
         verifyChannel: verifyFinalReplyChannel,
-        notify: async (signal, uid) => {
-          const result = await fanOutNotification(buildCoachDmEvent({ ...signal, createdAt: 0 }), [uid]);
-          if (result.failed.length) throw new Error("final reply notification delivery failed");
-        },
+        notify: (signal, uid) => deps.notifyFinalReply?.(signal, uid) ?? Promise.resolve(),
       });
       res.status(202).json({ accepted: true });
     } catch (error) {
@@ -1488,9 +1485,15 @@ function mountFinalReplyRoutes(router: Router, deps: RuntimeBrokerDeps): void {
 export function createOpenClawRuntimeBrokerRoutes(opts: {
   db: Firestore;
   store: PlatformStateStore;
+  notifyFinalReply?: FinalReplyNotifier;
 }): Router {
   const router = Router();
-  const deps: RuntimeBrokerDeps = { db: opts.db, store: opts.store, readBuilderTier: firestoreBuilderTierReader(opts.db) };
+  const deps: RuntimeBrokerDeps = {
+    db: opts.db,
+    store: opts.store,
+    readBuilderTier: firestoreBuilderTierReader(opts.db),
+    notifyFinalReply: opts.notifyFinalReply,
+  };
   mountUserAndWsRoutes(router, deps);
   mountActivityRoutes(router, deps);
   mountFinalReplyRoutes(router, deps);

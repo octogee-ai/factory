@@ -1,7 +1,7 @@
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { parseAgentId } from "@octogee/shared/types/identity";
 import { logger as defaultLogger } from "../../../gateway-edge/src/middleware/logging.js";
-import type { FanOutResult, NotificationEvent } from "../../../gateway-edge/src/notifications/types.js";
+import type { UserNotification, UserNotifier } from "../lib/user-notifications.js";
 import { findAssignedUserByAgentId } from "../routes/fleet-broker.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
 
@@ -23,14 +23,13 @@ export interface TenantDenial {
 
 export type TenantDenialReporter = (denial: TenantDenial) => Promise<void>;
 
-type FanOut = (event: NotificationEvent, targetUserIds: string[]) => Promise<FanOutResult>;
 
 type DenialLogger = Pick<typeof defaultLogger, "warn" | "error">;
 
 export interface TenantDenialReporterOptions {
   store: PlatformStateRepositories;
   logger?: DenialLogger;
-  fanOut?: FanOut;
+  notifyUsers?: UserNotifier;
   now?: () => number;
 }
 
@@ -54,7 +53,7 @@ function agentLabel(agentId: string | null): string {
 export function tenantDenialNotification(
   denial: TenantDenial & { tenant: { kind: "gateway"; gatewayId: string } },
   now: number,
-): NotificationEvent {
+): UserNotification {
   return {
     eventId: tenantDenialEventId(denial, now),
     category: "system.security",
@@ -78,14 +77,8 @@ async function resolveAffectedUid(
   return tenant.ownerUid ?? null;
 }
 
-async function defaultFanOut(event: NotificationEvent, targetUserIds: string[]): Promise<FanOutResult> {
-  const { fanOutNotification } = await import("../../../gateway-edge/src/notifications/index.js");
-  return fanOutNotification(event, targetUserIds);
-}
-
 export function createTenantDenialReporter(opts: TenantDenialReporterOptions): TenantDenialReporter {
   const logger = opts.logger ?? defaultLogger;
-  const fanOut = opts.fanOut ?? defaultFanOut;
   const now = opts.now ?? Date.now;
 
   return async (denial) => {
@@ -107,8 +100,9 @@ export function createTenantDenialReporter(opts: TenantDenialReporterOptions): T
         logger.warn("[tenant-enforcement] denial names no assigned Builder; inbox notification skipped", fields);
         return;
       }
+      if (!opts.notifyUsers) return;
       const event = tenantDenialNotification(gatewayDenial, now());
-      const result = await fanOut(event, [uid]);
+      const result = await opts.notifyUsers(event, [uid]);
       if (result.failed.length > 0) {
         logger.error("[tenant-enforcement] denial notification failed", { ...fields, uid, eventId: event.eventId, failed: result.failed });
       }

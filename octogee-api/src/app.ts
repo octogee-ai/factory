@@ -49,6 +49,7 @@ import { createModelKeyIssuerRoutes } from "./routes/model-key-issuer.js";
 import { operatorRailRegistry, type ModelBrokerRailRegistry } from "./lib/model-broker-rails.js";
 import { createDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { createFeatureRoutes } from "./routes/features.js";
+import type { ProductNotifications } from "./lib/user-notifications.js";
 import { DisabledFeatureFlagProvider, FeaturePolicy } from "./lib/feature-policy.js";
 import { createBuilderGatewayRoutes } from "../../gateway-edge/src/routes/builder/gateways.js";
 import { createProjectCreateRoutes } from "../../gateway-edge/src/routes/projects/create.js";
@@ -201,6 +202,7 @@ export interface ProductExtension {
   validateBoot(): void;
   createRuntime(input: { metricsRegistry: Registry }): ProductRuntime;
   modelBrokerRails?: ModelBrokerRailRegistry;
+  notifications?: ProductNotifications;
 }
 
 export interface PlatformAppOptions {
@@ -338,9 +340,10 @@ function clusterRouteOverrides(
   voiceCatalog: VoiceCatalog,
   prewarmProjectRunCapacity: () => Promise<void>,
   productRoutes: ClusterRouteTable,
+  notifications?: ProductNotifications,
 ) {
   return {
-    mmRestProxyHandler: createMmRestProxyHandler(platformStateStore),
+    mmRestProxyHandler: createMmRestProxyHandler(platformStateStore, notifications),
     mattermostMintRoutes: createMattermostMintRoutes(platformStateStore),
     productRoutes,
     builderGatewaysRoutes: createBuilderGatewayRoutes({ featurePolicy }),
@@ -522,7 +525,12 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     store: platformStateStore,
     metrics: tenantBindingMetrics,
   });
-  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({ db, store: platformStateStore, enforceWhen: shouldEnforceTenantBinding });
+  const tenantEnforcementMiddleware = createTenantEnforcementMiddleware({
+    db,
+    store: platformStateStore,
+    enforceWhen: shouldEnforceTenantBinding,
+    notifyUsers: opts.product?.notifications?.notifyUsers,
+  });
   const gatewayCredentialReviewer = opts.gatewayCredentialReviewer ?? createGatewayIdentityReviewer({
     reviewerTokenPath: IN_CLUSTER_IDENTITY_TOKEN_PATH,
     caPath: IN_CLUSTER_IDENTITY_CA_PATH,
@@ -642,6 +650,7 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
     voiceOpenAiApiKey ? createOpenAiVoiceCatalog(voiceOpenAiApiKey) : createVoiceCatalog(voiceRelayConfig, { log: voiceRelayLog }),
     () => projectRunControlPlane.prewarm(),
     product?.clusterRoutes(productRouteDeps) ?? [],
+    opts.product?.notifications,
   ));
   mountRouteTable(app, product?.apiRoutes(productRouteDeps) ?? []);
   mountRouteTable(app, product?.internalRoutes(productRouteDeps) ?? []);
@@ -653,7 +662,11 @@ export function createPlatformApp(opts: PlatformAppOptions = {}) {
   app.use("/internal/chat-artifacts", chatArtifacts.worker);
   // octogee-api-only: broker the gateway-edge OpenClaw runtime Firestore
   // dependencies so cattle pods do not need ADC/datastore reach.
-  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({ db, store: platformStateStore }));
+  app.use("/internal/openclaw", createOpenClawRuntimeBrokerRoutes({
+    db,
+    store: platformStateStore,
+    notifyFinalReply: opts.product?.notifications?.notifyFinalReply,
+  }));
   // octogee-api-only: voice relay. gateway-edge Talk engines stream microphone
   // audio and fetch speech here so provider keys never reach a gateway pod.
   app.use("/internal/voice", createVoiceRelayRoutes({ config: voiceRelayConfig, nativeOpenAi: Boolean(voiceOpenAiApiKey), log: voiceRelayLog }));

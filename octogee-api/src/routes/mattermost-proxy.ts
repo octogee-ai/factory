@@ -3,10 +3,7 @@ import { Router, type Request, type Response } from "express";
 import type { PlatformStateRepositories } from "@octogee/core/platform-state";
 import { requireAuth } from "../../../gateway-edge/src/middleware/auth.js";
 import { forwardMmRest } from "../../../gateway-edge/src/chat-proxy/mm-proxy/rest.js";
-import {
-  createProductionChatPostNotifier,
-  type ChatPostNotifier,
-} from "../lib/chat-post-notifier.js";
+import type { CreatedPostObserver, ProductNotifications } from "../lib/user-notifications.js";
 
 const MM_INTERNAL_URL = process.env.MM_INTERNAL_URL || "";
 
@@ -113,11 +110,13 @@ export function isCreatePostRequest(method: string | undefined, url: string | un
 
 export function createMmRestProxyHandler(
   store: Pick<PlatformStateRepositories, "builders" | "workspaces">,
+  notifications?: Pick<ProductNotifications, "createPostObserver">,
 ): (req: Request, res: Response) => void {
-  let chatPostNotifier: ChatPostNotifier | null = null;
-  const notifier = (): ChatPostNotifier => {
-    chatPostNotifier ??= createProductionChatPostNotifier({ mmInternalUrl: MM_INTERNAL_URL, store });
-    return chatPostNotifier;
+  let postObserver: CreatedPostObserver | null = null;
+  const observer = (): CreatedPostObserver | null => {
+    if (!notifications) return null;
+    postObserver ??= notifications.createPostObserver(store);
+    return postObserver;
   };
   return (req, res) => {
     if (!MM_INTERNAL_URL) {
@@ -130,9 +129,9 @@ export function createMmRestProxyHandler(
       {
         mmInternalUrl: MM_INTERNAL_URL,
         log: (msg) => logger.warn(msg),
-        captureResponse: (incoming) => isCreatePostRequest(incoming.method, incoming.url),
+        captureResponse: (incoming) => notifications !== undefined && isCreatePostRequest(incoming.method, incoming.url),
         onCapturedResponse: (captured) => {
-          void notifier().handleCreatedPost({ ...captured, authorization });
+          void observer()?.handleCreatedPost({ ...captured, authorization });
         },
       },
       req,

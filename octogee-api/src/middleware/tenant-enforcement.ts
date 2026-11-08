@@ -8,6 +8,7 @@ import { GATEWAY_BINDING_MISMATCH_REASON, RETIRED_COMPUTER_BINDING_DENIAL_REASON
 import { db as defaultDb } from "../../../gateway-edge/src/lib/db.js";
 import { hasRunningCustomerMigration } from "../lib/running-customer-migration.js";
 import { normalizeTenantPolicyPath } from "../lib/tenant-route-policy.js";
+import type { UserNotifier } from "../lib/user-notifications.js";
 import { logger, redactRequestPath } from "../../../gateway-edge/src/middleware/logging.js";
 import {
   createTenantDenialReporter,
@@ -43,6 +44,7 @@ export interface TenantEnforcementOptions {
   db?: Pick<Firestore, "collection">;
   store: PlatformStateRepositories;
   onDenied?: TenantDenialReporter;
+  notifyUsers?: UserNotifier;
   onAccess?: TenantAccessRecorder;
   enforceWhen?: (req: Request) => boolean;
 }
@@ -492,7 +494,7 @@ export function createTenantEnforcementMiddleware(
   opts: TenantEnforcementOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
   const readers: EnforcementReaders = { db: opts.db ?? defaultDb, store: opts.store };
-  const onDenied = opts.onDenied ?? createTenantDenialReporter({ store: opts.store });
+  const onDenied = opts.onDenied ?? createTenantDenialReporter({ store: opts.store, notifyUsers: opts.notifyUsers });
   const onAccess = opts.onAccess ?? logAccess;
   const deny = (req: Request, res: Response, outcome: AccessOutcome, reason: string): void => {
     outcome.decision = "denied";

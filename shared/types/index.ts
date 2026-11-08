@@ -214,13 +214,6 @@ export { redactSecrets, redactStructuredSecrets } from './secret-redaction.js';
 export { summarizeToolArgs, summarizeToolOutput } from './tool-format.js';
 
 export type {
-  NotificationCategory,
-  DeliveryChannel,
-  NotificationAction,
-  InboxDocument,
-} from './notifications.js';
-
-export type {
   GatewayStatus,
   GatewayState,
   GatewayLastError,
