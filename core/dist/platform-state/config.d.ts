@@ -31,9 +31,12 @@ export interface OrchestratorConfig {
     readonly placementUpdatedAt: number | null;
     readonly placementUpdatedBy: string | null;
 }
-export type OrchestratorConfigPatch = RecordPatch<OrchestratorConfig>;
+export type OrchestratorConfigPatch = RecordPatch<Omit<OrchestratorConfig, "sharedGatewayAutoscaling">> & {
+    readonly sharedGatewayAutoscaling?: SharedGatewayAutoscalingConfig;
+};
 export interface OrchestratorConfigRepository {
     get(): Promise<Stored<OrchestratorConfig> | null>;
+    getSizingProfile(sizingKey: string): Promise<GatewaySizingProfile>;
     patch(patch: OrchestratorConfigPatch, fence?: {
         readonly revision?: Revision;
     }): Promise<void>;
@@ -65,9 +68,12 @@ export interface MattermostAdminIdentity {
     readonly proxyUrl: string | null;
     readonly updatedAt: number;
 }
+export type MattermostAdminIdentityInput = Omit<MattermostAdminIdentity, "updatedAt"> & {
+    readonly updatedAt: TimeInput;
+};
 export interface MattermostAdminRepository {
     get(): Promise<Stored<MattermostAdminIdentity> | null>;
-    put(identity: MattermostAdminIdentity): Promise<void>;
+    put(identity: MattermostAdminIdentityInput): Promise<void>;
 }
 export type ConfigRecord = {
     readonly kind: "orchestrator";

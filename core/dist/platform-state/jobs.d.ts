@@ -1,19 +1,19 @@
-import type { OpaqueMap, Page, PageRequest, RecordPatch, Revision, Stored } from "./store.js";
+import type { ClearField, OpaqueMap, Page, PageRequest, RecordPatch, Revision, Stored } from "./store.js";
 export type CustomerDeletionJobStatus = "suspension_pending" | "suspending" | "hibernating" | "product_verification_pending" | "verified_pending_completion" | "verified";
 export interface CustomerDeletionJob {
     readonly deletionId: string;
     readonly version: 1;
-    readonly uid: string;
-    readonly slug: string | null;
+    readonly uid?: string;
+    readonly slug?: string | null;
     readonly status: CustomerDeletionJobStatus;
-    readonly requestedBy: string;
+    readonly requestedBy?: string;
     readonly requestedAt: number;
     readonly eraseAfter: number;
-    readonly currentGatewayId: string | null;
-    readonly erasureOperationId: string;
-    readonly suspensionOperationId: string;
+    readonly currentGatewayId?: string | null;
+    readonly erasureOperationId?: string;
+    readonly suspensionOperationId?: string;
     readonly cleanupContext?: OpaqueMap;
-    readonly postgresAgentStoreTargets?: OpaqueMap;
+    readonly postgresAgentStoreTargets?: readonly OpaqueMap[];
     readonly sharedAgentStoreCleanup?: OpaqueMap;
     readonly retiredGatewayProofs?: Readonly<Record<string, OpaqueMap>>;
     readonly archiveId?: string;
@@ -24,7 +24,9 @@ export interface CustomerDeletionJob {
     readonly completedAt?: number;
     readonly updatedAt?: number;
 }
-export type CustomerDeletionJobPatch = RecordPatch<Omit<CustomerDeletionJob, "retiredGatewayProofs">, "deletionId" | "version" | "uid" | "requestedBy" | "requestedAt">;
+export type CustomerDeletionJobPatch = RecordPatch<Omit<CustomerDeletionJob, "retiredGatewayProofs">, "deletionId" | "version" | "requestedAt"> & {
+    readonly retiredGatewayProofs?: ClearField;
+};
 export interface CustomerDeletionJobFence {
     readonly revision?: Revision;
     readonly status?: readonly CustomerDeletionJobStatus[];
@@ -60,17 +62,19 @@ export interface AgentImportRecord {
     readonly record: OpaqueMap;
 }
 export type AgentImportPointerName = "latest" | "export-latest";
+export interface AgentImportPointer {
+    readonly importId: string;
+    readonly slug: string | null;
+    readonly updatedAt: number | null;
+}
 export interface AgentImportsRepository {
     get(uid: string, importId: string): Promise<Stored<AgentImportRecord> | null>;
     listExpired(now: number, limit: number): Promise<readonly Stored<AgentImportRecord>[]>;
     listForUid(uid: string): Promise<readonly Stored<AgentImportRecord>[]>;
     put(record: AgentImportRecord): Promise<void>;
     delete(uid: string, importId: string): Promise<void>;
-    getPointer(uid: string, pointer: AgentImportPointerName): Promise<Stored<{
-        readonly importId: string;
-        readonly updatedAt: number;
-    }> | null>;
-    putPointer(uid: string, pointer: AgentImportPointerName, importId: string, updatedAt: number): Promise<void>;
+    getPointer(uid: string, pointer: AgentImportPointerName): Promise<Stored<AgentImportPointer> | null>;
+    putPointer(uid: string, pointer: AgentImportPointerName, value: AgentImportPointer): Promise<void>;
     deletePointer(uid: string, pointer: AgentImportPointerName): Promise<void>;
 }
 export interface JobRepositories {

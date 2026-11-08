@@ -7,8 +7,8 @@ export interface SharedPoolScalerState {
   readonly actionSequence: number;
   readonly lastActionAt: number | null;
   readonly replacements: readonly SharedPoolReplacement[];
-  readonly lastAction: OpaqueMap | null;
-  readonly updatedAt: number;
+  readonly lastAction?: OpaqueMap | null;
+  readonly updatedAt?: number;
 }
 
 export type SharedPoolScalerPatch = RecordPatch<SharedPoolScalerState, "schemaVersion">;

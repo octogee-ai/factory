@@ -1,16 +1,21 @@
-import type { OpaqueMap, RecordPatch, Revision, Stored, TimeInput } from "./store.js";
+import type { ClearField, OpaqueMap, RecordPatch, Revision, Stored, TimeInput } from "./store.js";
 
 export interface WorkspaceRecord {
   readonly slug: string;
   readonly id: string;
   readonly ownerUid: string;
-  readonly ownerActive: boolean;
+  readonly ownerActive: boolean | null;
   readonly mattermostTeamId: string | null;
   readonly giteaOrgName: string | null;
   readonly giteaRepoName: string | null;
   readonly createdAt: number | null;
   readonly updatedAt: number | null;
 }
+
+export type WorkspaceInput = Omit<WorkspaceRecord, "createdAt" | "updatedAt"> & {
+  readonly createdAt: TimeInput | null;
+  readonly updatedAt: TimeInput | null;
+};
 
 export type WorkspacePatch = RecordPatch<Omit<WorkspaceRecord, "updatedAt">, "slug" | "id"> & {
   readonly updatedAt?: TimeInput;
@@ -19,7 +24,7 @@ export type WorkspacePatch = RecordPatch<Omit<WorkspaceRecord, "updatedAt">, "sl
 export interface WorkspaceRecordsRepository {
   get(slug: string): Promise<Stored<WorkspaceRecord> | null>;
   listByOwner(ownerUid: string): Promise<readonly Stored<WorkspaceRecord>[]>;
-  put(record: WorkspaceRecord): Promise<void>;
+  put(record: WorkspaceInput): Promise<void>;
   patch(slug: string, patch: WorkspacePatch, fence?: { readonly revision?: Revision }): Promise<void>;
   delete(slug: string): Promise<void>;
 }
@@ -46,7 +51,7 @@ export interface WorkspaceProject {
   readonly workspaceSlug: string;
   readonly projectSlug: string;
   readonly ownerUid: string;
-  readonly ownerActive: boolean;
+  readonly ownerActive: boolean | null;
   readonly giteaRepoName: string | null;
   readonly provisioningState: string | null;
   readonly provisioningError: string | null;
@@ -54,14 +59,24 @@ export interface WorkspaceProject {
   readonly visibility: string | null;
   readonly checkoutEnabled: boolean | null;
   readonly status: string | null;
-  readonly archived: boolean;
+  readonly archived: boolean | null;
+  readonly archivedAt: number | null;
   readonly commercialLifecycleStatus: string | null;
   readonly repoSource: OpaqueMap | null;
   readonly agent: OpaqueMap | null;
   readonly updatedAt: number | null;
 }
 
-export type WorkspaceProjectPatch = RecordPatch<Omit<WorkspaceProject, "updatedAt">, "workspaceSlug" | "projectSlug"> & {
+export type WorkspaceProjectInput = Omit<WorkspaceProject, "archivedAt" | "updatedAt"> & {
+  readonly archivedAt: TimeInput | null;
+  readonly updatedAt: TimeInput | null;
+};
+
+export type WorkspaceProjectPatch = RecordPatch<
+  Omit<WorkspaceProject, "archivedAt" | "updatedAt">,
+  "workspaceSlug" | "projectSlug"
+> & {
+  readonly archivedAt?: TimeInput | ClearField | null;
   readonly updatedAt?: TimeInput;
 };
 
@@ -70,7 +85,7 @@ export interface WorkspaceProjectsRepository {
   list(workspaceSlug: string): Promise<readonly Stored<WorkspaceProject>[]>;
   listByOwner(ownerUid: string, workspaceSlug?: string): Promise<readonly Stored<WorkspaceProject>[]>;
   listAll(): Promise<readonly Stored<WorkspaceProject>[]>;
-  put(project: WorkspaceProject): Promise<void>;
+  put(project: WorkspaceProjectInput): Promise<void>;
   patch(
     workspaceSlug: string,
     projectSlug: string,
@@ -88,7 +103,7 @@ export interface WorkspaceChannelScope {
 export interface WorkspaceChannel {
   readonly scope: WorkspaceChannelScope;
   readonly channelId: string;
-  readonly kind: string;
+  readonly kind: string | null;
   readonly mattermostChannelId: string | null;
   readonly archivedAt: number | null;
   readonly createdBy: string | null;

@@ -10,3 +10,5 @@ export type * from "./operations.js";
 export type * from "./secrets.js";
 export type * from "./store.js";
 export type * from "./workspaces.js";
+export { AlreadyExistsError, BackendFailureError, ContentionExhaustedError, DuplicateRecordError, FenceMismatchError, isPlatformStateError, MalformedRecordError, MissingRecordError, UnsupportedOperationError, } from "./errors.js";
+export { createFirestorePlatformStateStore, type FirestorePlatformStateStoreOptions, } from "./firestore/store.js";

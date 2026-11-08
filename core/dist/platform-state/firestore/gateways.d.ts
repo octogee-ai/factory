@@ -1,0 +1,11 @@
+import type { DocumentSnapshot } from "firebase-admin/firestore";
+import type { GatewayAssignment, GatewayRepositories, GatewayRoot } from "../gateways.js";
+import type { Stored } from "../store.js";
+import type { FirestoreSession } from "./session.js";
+import type { FirestoreWatchSourceFactory } from "./watch.js";
+export declare function decodeGatewayRoot(snapshot: DocumentSnapshot): Stored<GatewayRoot> | null;
+export declare function decodeGatewayAssignmentData(gatewayId: string, uid: string, data: Record<string, unknown>): GatewayAssignment;
+export declare function decodeGatewayAssignment(snapshot: DocumentSnapshot): Stored<GatewayAssignment> | null;
+export declare function createFirestoreGatewayRepositories(session: FirestoreSession): GatewayRepositories;
+export declare const firestoreGatewaysWatchSource: FirestoreWatchSourceFactory<"gateways">;
+export declare const firestoreAssignmentsWatchSource: FirestoreWatchSourceFactory<"assignments">;

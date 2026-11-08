@@ -29,6 +29,7 @@ export const JOBS = {
   desktop: "desktop",
   desktopPackage: "desktop-package",
   firestoreRules: "firestore-rules",
+  coreEmulator: "core-emulator",
   customerLifecycleEmulator: "customer-lifecycle-emulator",
   functionsEmulator: "functions-emulator",
   gatewayEdgeEmulator: "gateway-edge-emulator",
@@ -151,6 +152,7 @@ export const STANDALONE_JOBS: readonly JobKey[] = [
   JOBS.app,
   JOBS.desktopPackage,
   JOBS.firestoreRules,
+  JOBS.coreEmulator,
   JOBS.customerLifecycleEmulator,
   JOBS.functionsEmulator,
   JOBS.gatewayEdgeEmulator,
@@ -170,7 +172,7 @@ export interface Ownership {
 
 // dir-prefix → owned jobs. Resolution picks the LONGEST match.
 export const OWNERSHIP: readonly Ownership[] = [
-  { dir: "core/", jobs: [JOBS.core] },
+  { dir: "core/", jobs: [JOBS.core, JOBS.coreEmulator] },
   { dir: "test-helpers/", jobs: [JOBS.testHelpers] },
   { dir: "gateway-edge/", jobs: [JOBS.gatewayEdge, JOBS.gatewayEdgeEmulator] },
   { dir: "octogee-api/", jobs: [JOBS.octogeeApi, JOBS.octogeeApiEmulator] },
@@ -276,6 +278,7 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "scripts/ops/run-emulator-vitest.mjs",
     jobs: [
+      JOBS.coreEmulator,
       JOBS.functionsEmulator,
       JOBS.gatewayEdgeEmulator,
       JOBS.glmControllerEmulator,
@@ -301,6 +304,7 @@ export const EDGES: readonly ScopeEdge[] = [
   {
     when: "test-helpers/",
     jobs: [
+      JOBS.coreEmulator,
       JOBS.gatewayEdge,
       JOBS.gatewayEdgeEmulator,
       JOBS.octogeeApi,
@@ -310,7 +314,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.tests,
     ],
     reason:
-      "@octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
+      "@octogee/test-helpers (firestore-emulator) is consumed by the core + gateway-edge + octogee-api + functions emulator specs; test-helpers/package.json's firebase-admin range is also swept by tests/specs/firebase-admin-major-alignment.spec.ts",
   },
   {
     when: "gateway-edge/",
@@ -409,6 +413,7 @@ export const EDGES: readonly ScopeEdge[] = [
       JOBS.app,
       JOBS.artifactWorker,
       JOBS.core,
+      JOBS.coreEmulator,
       JOBS.functions,
       JOBS.functionsEmulator,
       JOBS.gatewayEdge,

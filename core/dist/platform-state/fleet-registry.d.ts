@@ -20,7 +20,7 @@ export interface FleetRegistryVmFields {
 }
 export type FleetRegistryRecord = Omit<GatewayRuntimeDoc, "docKind"> & FleetRegistryVmFields;
 export type FleetRegistryPatch = RecordPatch<FleetRegistryRecord, "gatewayId" | "createdAt">;
-export type FleetHeartbeatReport = Omit<GatewayHeartbeatObservation, "lastHeartbeatAt">;
+export type FleetHeartbeatReport = Pick<GatewayHeartbeatObservation, "status" | "mountedCustomers"> & Partial<Omit<GatewayHeartbeatObservation, "status" | "mountedCustomers" | "lastHeartbeatAt">>;
 export interface FleetRegistryFence {
     readonly revision?: Revision;
     readonly lifecycle?: readonly FleetRegistryRecord["lifecycle"][];

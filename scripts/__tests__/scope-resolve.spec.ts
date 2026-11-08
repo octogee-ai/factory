@@ -172,16 +172,18 @@ describe("unit package gates", () => {
 });
 
 describe("resolveScope — cross-package hazard edges", () => {
-  it("core/ change runs the core job + every consumer (they compile its re-export shims)", () => {
+  it("core/ change runs the core job, its emulator suite + every consumer (they compile its re-export shims)", () => {
     // @octogee/core is consumed (via scripts/lib shims today) by scripts +
     // octogee-api + gateway-edge + glm-controller. Editing core must re-run
-    // them all, plus the core job itself (which also guards committed dist/)
+    // them all, plus the core job itself (which also guards committed dist/),
+    // core's own Firestore emulator suite
     // + tests (tests/specs' readSrc() helpers fall back to core/src directly
     // for logic that moved out of scripts/lib, e.g. model-credential-materializer).
     expectJobs(
       ["core/src/workspace-slugs.ts"],
       [
         "core",
+        "core-emulator",
         "scripts",
         "customer-lifecycle-emulator",
         "octogee-api",
@@ -195,13 +197,14 @@ describe("resolveScope — cross-package hazard edges", () => {
   });
 
   it("test-helpers/ change runs the test-helpers job + its emulator-spec consumers", () => {
-    // @octogee/test-helpers (firestore-emulator) is consumed by the gateway-edge,
-    // octogee-api, and functions emulator specs, + tests (its package.json's
-    // firebase-admin range is swept by firebase-admin-major-alignment.spec.ts).
+    // @octogee/test-helpers (firestore-emulator) is consumed by the core,
+    // gateway-edge, octogee-api, and functions emulator specs, + tests (its
+    // package.json's firebase-admin range is swept by firebase-admin-major-alignment.spec.ts).
     expectJobs(
       ["test-helpers/src/firestore-emulator.ts"],
       [
         "test-helpers",
+        "core-emulator",
         "gateway-edge",
         "gateway-edge-emulator",
         "octogee-api",
@@ -256,6 +259,7 @@ describe("resolveScope — cross-package hazard edges", () => {
       ["scripts/ops/run-emulator-vitest.mjs"],
       [
         "scripts",
+        "core-emulator",
         "customer-lifecycle-emulator",
         "functions-emulator",
         "gateway-edge-emulator",
@@ -302,7 +306,7 @@ describe("resolveScope — consumer scoping", () => {
   it("a shared/ change runs its consumers, not desktop, Obsidian or gateway extension packages", () => {
     const r = resolveScope(["shared/types/openclaw-wire.ts"]);
     expect(r.everything).toBe(false);
-    expect(r.jobs).toEqual(expect.arrayContaining(["shared", "app", "gateway-edge", "octogee-api-emulator", "tests"]));
+    expect(r.jobs).toEqual(expect.arrayContaining(["shared", "app", "core-emulator", "gateway-edge", "octogee-api-emulator", "tests"]));
     expect(r.jobs.some(job => job === "desktop" || job === "obsidian-connect" || job === "firestore-rules" || (job.startsWith("octogee-") && job.endsWith("-tools")))).toBe(false);
   });
 
@@ -394,6 +398,7 @@ describe("toGhaOutputs", () => {
     expect(out.run_app).toBe(true);
     expect(out.run_desktop_package).toBe(true);
     expect(out.run_firestore_rules).toBe(true);
+    expect(out.run_core_emulator).toBe(true);
     expect(out.run_customer_lifecycle_emulator).toBe(true);
     expect(out.run_functions_emulator).toBe(true);
     expect(out.run_gateway_edge_emulator).toBe(true);
@@ -406,6 +411,7 @@ describe("toGhaOutputs", () => {
     expect(out.test_matrix).toEqual([]);
     expect(out.any).toBe(false);
     expect(out.run_app).toBe(false);
+    expect(out.run_core_emulator).toBe(false);
     expect(out.run_glm_controller_emulator).toBe(false);
   });
 });
@@ -417,6 +423,7 @@ describe("serializeGhaOutputs", () => {
     expect(lines).toContain("any=true");
     expect(lines).toContain("run_functions_emulator=true");
     expect(lines).toContain("run_glm_controller_emulator=false");
+    expect(lines).toContain("run_core_emulator=false");
     expect(lines).toContain("run_app=false");
     expect(lines).toContain("run_octogee_api_emulator=false");
     // test_matrix must be single-line valid JSON (fromJSON() reads it in the workflow)

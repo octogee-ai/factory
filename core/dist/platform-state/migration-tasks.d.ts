@@ -16,7 +16,7 @@ export interface MigrationTransferTask {
     readonly status: MigrationTransferTaskStatus;
     readonly attempt: number;
     readonly attemptId: string;
-    readonly leaseOwner: string;
+    readonly leaseOwner: string | null;
     readonly leasePod: MigrationTransferLeasePod | null;
     readonly leaseExpiresAt: number | null;
     readonly leaseRestartCount: number | null;

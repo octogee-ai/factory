@@ -35,7 +35,11 @@ export interface ClearField {
 export type Clearable<T> = T | ClearField;
 
 export type RecordPatch<T, Fixed extends keyof T = never> = {
-  readonly [K in Exclude<keyof T, Fixed>]?: undefined extends T[K] ? Clearable<Exclude<T[K], undefined>> : T[K];
+  readonly [K in Exclude<keyof T, Fixed>]?: undefined extends T[K]
+    ? Clearable<Exclude<T[K], undefined>>
+    : null extends T[K]
+      ? Clearable<T[K]>
+      : T[K];
 };
 
 export type Revision = string & { readonly __platformStateRevision: true };

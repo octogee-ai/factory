@@ -79,9 +79,9 @@ export interface BuilderHomeState {
     readonly homeCapacity?: OpaqueMap;
     readonly projectStorageNativeBoot?: OpaqueMap;
 }
-export interface BuilderAgentMembership {
-    readonly agentId: string;
-    readonly activated: boolean;
+export interface BuilderAgentRoster {
+    readonly agentIds: readonly string[];
+    readonly activatedAgents: readonly string[];
 }
 export type BuilderPersona = OpaqueMap;
 export interface BuilderRecord {
@@ -97,7 +97,7 @@ export interface BuilderRecord {
     readonly provisioning: BuilderProvisioning;
     readonly gateway: BuilderGatewayMirror | null;
     readonly openclaw: BuilderOpenClawState;
-    readonly agents: readonly BuilderAgentMembership[];
+    readonly agents: BuilderAgentRoster;
     readonly accountLifecycle: AccountLifecycle | null;
     readonly activationLease: BuilderActivationLease | null;
     readonly fences: BuilderFences;
@@ -159,7 +159,8 @@ export interface BuilderRecordsRepository {
     admit(uid: string, input: AdmitBuilderInput): Promise<void>;
     setGatewayMirror(uid: string, mirror: Clearable<BuilderGatewayMirrorInput>, fence?: BuilderFence): Promise<void>;
     addAgents(uid: string, agentIds: readonly string[]): Promise<void>;
-    setActivatedAgents(uid: string, agentIds: readonly string[]): Promise<void>;
+    removeAgents(uid: string, agentIds: readonly string[]): Promise<void>;
+    setActivatedAgents(uid: string, activatedAgents: readonly string[]): Promise<void>;
     setActivationLease(uid: string, lease: Clearable<BuilderActivationLease>, fence: ActivationLeaseFence): Promise<void>;
     patchActivationLease(uid: string, patch: RecordPatch<BuilderActivationLease, "leaseId" | "generation">, fence: ActivationLeaseFence): Promise<void>;
     setFence<F extends BuilderFenceName>(uid: string, fence: F, value: Clearable<NonNullable<BuilderFences[F]>>, expected?: NonNullable<BuilderFences[F]> | "absent"): Promise<void>;
@@ -192,7 +193,9 @@ export type AgentStoreAnchor = {
 };
 export type AgentStoreRecord = AgentStoreAnchor & {
     readonly gatewayId: string | null;
+    readonly generation: number | null;
     readonly assignmentEpoch: number | null;
+    readonly recordedAt: number;
 };
 export interface AgentStoresRepository {
     list(uid: string): Promise<readonly Stored<AgentStoreRecord>[]>;
