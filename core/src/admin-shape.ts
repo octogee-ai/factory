@@ -1,12 +1,9 @@
 import { getTierConfig } from "@octogee/shared/types/billing-tiers";
-import {
-  resolveBillingProfile,
-  spendDegradeState,
-  spendWindowPercentUsed,
-} from "@octogee/shared/types/billing";
+import { resolveBillingProfile, spendDegradeState } from "@octogee/shared/types/billing";
 import {
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_WEEK_WINDOW_MS,
+  spendWindowPercentUsed,
   usageWindowStartMs,
   weekWindowStartMs,
 } from "@octogee/shared/types/model-broker-usage";

@@ -1,4 +1,3 @@
-import { WINDOW_LENGTH_HOURS } from "./billing.js";
 // Storage contract for the LLM egress broker's per-owner usage metering. Single
 // source so the broker (octogee-api, write side) and the usage panel (gateway-edge,
 // read side) can never drift on collection names or the window-key math.
@@ -11,6 +10,7 @@ export const MODEL_BROKER_CREDITS_COLLECTION = "modelBrokerCredits";
 export const MODEL_BROKER_CREDIT_TOPUPS_COLLECTION = "modelBrokerCreditTopups";
 export const MODEL_BROKER_TOKENS_COLLECTION = "modelBrokerTokens";
 export const MODEL_BROKER_GATEWAY_POINTERS_COLLECTION = "modelBrokerGatewayTokens";
+export const WINDOW_LENGTH_HOURS = 4;
 export const MODEL_BROKER_USAGE_WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
 // Epoch-aligned fixed weeks (epoch day 0 was a Thursday, so weeks reset
 // Thursday 00:00 UTC) — same one-doc-read shape as the 4h windows, no
@@ -34,4 +34,16 @@ export function rateWindowStartMs(now) {
 }
 export function modelBrokerWindowDocId(ownerKey, windowStartMs) {
     return `${ownerKey}_${windowStartMs}`;
+}
+export function spendWindowPercentUsed(costUsd, budgetUsd) {
+    if (budgetUsd <= 0)
+        return 100;
+    return Math.min(100, Math.round((costUsd / budgetUsd) * 100));
+}
+export function exhaustedSpendBudget(input) {
+    if (input.weekCostUsd >= input.weekBudgetUsd)
+        return "week";
+    if (input.windowCostUsd >= input.windowBudgetUsd)
+        return "window";
+    return null;
 }

@@ -159,3 +159,47 @@ describe("operator rail", () => {
     })).rejects.toMatchObject({ code: "credits_exhausted" });
   });
 });
+
+describe("operator rail spend throttle", () => {
+  const under = {
+    modelAccess: "catalog" as const,
+    windowCostUsd: 1,
+    windowBudgetUsd: 4,
+    weekCostUsd: 2,
+    weekBudgetUsd: 20,
+    onOwnerCredential: false,
+    houseFallback: false,
+    creditBalanceUsd: 9,
+  };
+
+  it("stays clear while budgets have room", () => {
+    expect(operatorRail.throttle(under)).toEqual({
+      degraded: false,
+      blocked: false,
+      reason: null,
+      creditBalanceVisible: false,
+    });
+  });
+
+  it("blocks a spent budget when no house model is configured, whatever the credit balance", () => {
+    expect(operatorRail.throttle({ ...under, windowCostUsd: 4 })).toEqual({
+      degraded: false,
+      blocked: true,
+      reason: "window_exhausted",
+      creditBalanceVisible: false,
+    });
+  });
+
+  it("degrades a spent budget onto the house model when one is configured", () => {
+    expect(operatorRail.throttle({ ...under, weekCostUsd: 20, houseFallback: true })).toEqual({
+      degraded: true,
+      blocked: false,
+      reason: "week_exhausted",
+      creditBalanceVisible: false,
+    });
+  });
+
+  it("ignores spend on the owner's own credential", () => {
+    expect(operatorRail.throttle({ ...under, weekCostUsd: 20, onOwnerCredential: true }).blocked).toBe(false);
+  });
+});

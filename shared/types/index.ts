@@ -155,7 +155,6 @@ export type {
 } from './member.js';
 
 export {
-  WINDOW_LENGTH_HOURS,
   WINDOWS_PER_DAY,
   WINDOWS_PER_WEEK,
   WINDOW_BURST_MULTIPLIER,

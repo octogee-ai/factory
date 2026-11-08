@@ -1,5 +1,3 @@
-import { WINDOW_LENGTH_HOURS } from "./billing.js";
-
 // Storage contract for the LLM egress broker's per-owner usage metering. Single
 // source so the broker (octogee-api, write side) and the usage panel (gateway-edge,
 // read side) can never drift on collection names or the window-key math.
@@ -25,6 +23,7 @@ export interface ModelBrokerCreditAutoTopUp {
   amountUsd: number;
 }
 
+export const WINDOW_LENGTH_HOURS = 4;
 export const MODEL_BROKER_USAGE_WINDOW_MS = WINDOW_LENGTH_HOURS * 60 * 60 * 1000;
 // Epoch-aligned fixed weeks (epoch day 0 was a Thursday, so weeks reset
 // Thursday 00:00 UTC) — same one-doc-read shape as the 4h windows, no
@@ -53,4 +52,30 @@ export function rateWindowStartMs(now: number): number {
 
 export function modelBrokerWindowDocId(ownerKey: string, windowStartMs: number): string {
   return `${ownerKey}_${windowStartMs}`;
+}
+
+export type ModelAccess = "house_only" | "catalog";
+
+export function spendWindowPercentUsed(costUsd: number, budgetUsd: number): number {
+  if (budgetUsd <= 0) return 100;
+  return Math.min(100, Math.round((costUsd / budgetUsd) * 100));
+}
+
+export type SpendBudgetWindow = "week" | "window";
+
+export function exhaustedSpendBudget(input: {
+  windowCostUsd: number;
+  windowBudgetUsd: number;
+  weekCostUsd: number;
+  weekBudgetUsd: number;
+}): SpendBudgetWindow | null {
+  if (input.weekCostUsd >= input.weekBudgetUsd) return "week";
+  if (input.windowCostUsd >= input.windowBudgetUsd) return "window";
+  return null;
+}
+
+export interface SpendThrottleState {
+  degraded: boolean;
+  blocked: boolean;
+  reason: string | null;
 }

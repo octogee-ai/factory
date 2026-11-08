@@ -1,7 +1,7 @@
 import { FieldValue, } from "firebase-admin/firestore";
 import { formatUsageLogLine } from "./usage-log-line.js";
 import { extractRole, startUsageEventTailer, } from "./usage-log-tailer.js";
-import { WINDOW_LENGTH_HOURS, } from "@octogee/shared/types/billing";
+import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/model-broker-usage";
 import { isValidUsername } from "@octogee/shared/types/identity";
 export { extractRole, findSessionFiles, parseLineForUsage } from "./usage-log-tailer.js";
 function workspaceIdFromAgentId(agentId) {

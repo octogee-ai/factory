@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  exhaustedSpendBudget,
   MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_RATE_WINDOW_MS,
   MODEL_BROKER_RATE_WINDOWS_COLLECTION,
@@ -11,6 +12,7 @@ import {
   MODEL_BROKER_WEEK_WINDOWS_COLLECTION,
   modelBrokerWindowDocId,
   rateWindowStartMs,
+  spendWindowPercentUsed,
   usageWindowStartMs,
   weekWindowStartMs,
   windowOwnerKey,
@@ -52,5 +54,34 @@ describe("model broker usage storage contract", () => {
     expect(modelBrokerWindowDocId("owner-1", Date.UTC(2026, 6, 2))).toBe(
       `owner-1_${Date.UTC(2026, 6, 2)}`,
     );
+  });
+});
+
+describe("spendWindowPercentUsed", () => {
+  it("maps window spend onto a clamped 0-100 percentage", () => {
+    expect(spendWindowPercentUsed(0, 2)).toBe(0);
+    expect(spendWindowPercentUsed(1, 2)).toBe(50);
+    expect(spendWindowPercentUsed(2, 2)).toBe(100);
+    expect(spendWindowPercentUsed(5, 2)).toBe(100);
+  });
+
+  it("treats a zero budget (free / post-trial) as fully used", () => {
+    expect(spendWindowPercentUsed(0, 0)).toBe(100);
+  });
+});
+
+describe("exhaustedSpendBudget", () => {
+  const under = { windowCostUsd: 1, windowBudgetUsd: 4, weekCostUsd: 2, weekBudgetUsd: 20 };
+
+  it("reports no exhaustion while both budgets have room", () => {
+    expect(exhaustedSpendBudget(under)).toBeNull();
+  });
+
+  it("reports the window when only the window is spent", () => {
+    expect(exhaustedSpendBudget({ ...under, windowCostUsd: 4 })).toBe("window");
+  });
+
+  it("reports the week ahead of the window when both are spent", () => {
+    expect(exhaustedSpendBudget({ ...under, windowCostUsd: 4, weekCostUsd: 20 })).toBe("week");
   });
 });

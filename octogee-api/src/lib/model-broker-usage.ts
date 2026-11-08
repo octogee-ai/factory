@@ -6,7 +6,7 @@ import type {
   Transaction,
 } from "firebase-admin/firestore";
 
-import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/billing";
+import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/model-broker-usage";
 import { modelCatalogEntryFor } from "@octogee/shared/types/model-catalog";
 import {
   MODEL_BROKER_CREDITS_COLLECTION,

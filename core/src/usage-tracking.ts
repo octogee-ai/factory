@@ -11,9 +11,7 @@ import {
   type LogFn,
   type UsageData,
 } from "./usage-log-tailer.js";
-import {
-  WINDOW_LENGTH_HOURS,
-} from "@octogee/shared/types/billing";
+import { WINDOW_LENGTH_HOURS } from "@octogee/shared/types/model-broker-usage";
 import { isValidUsername } from "@octogee/shared/types/identity";
 export { extractRole, findSessionFiles, parseLineForUsage } from "./usage-log-tailer.js";
 export type { LogFn, UsageData, UsageEvent } from "./usage-log-tailer.js";

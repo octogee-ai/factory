@@ -13,6 +13,7 @@ export interface ModelBrokerCreditAutoTopUp {
     thresholdUsd: number;
     amountUsd: number;
 }
+export declare const WINDOW_LENGTH_HOURS = 4;
 export declare const MODEL_BROKER_USAGE_WINDOW_MS: number;
 export declare const MODEL_BROKER_WEEK_WINDOW_MS: number;
 export declare const MODEL_BROKER_RATE_WINDOW_MS: number;
@@ -24,3 +25,17 @@ export declare function usageWindowStartMs(now: number): number;
 export declare function weekWindowStartMs(now: number): number;
 export declare function rateWindowStartMs(now: number): number;
 export declare function modelBrokerWindowDocId(ownerKey: string, windowStartMs: number): string;
+export type ModelAccess = "house_only" | "catalog";
+export declare function spendWindowPercentUsed(costUsd: number, budgetUsd: number): number;
+export type SpendBudgetWindow = "week" | "window";
+export declare function exhaustedSpendBudget(input: {
+    windowCostUsd: number;
+    windowBudgetUsd: number;
+    weekCostUsd: number;
+    weekBudgetUsd: number;
+}): SpendBudgetWindow | null;
+export interface SpendThrottleState {
+    degraded: boolean;
+    blocked: boolean;
+    reason: string | null;
+}

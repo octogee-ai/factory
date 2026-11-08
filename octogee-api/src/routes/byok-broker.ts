@@ -14,12 +14,11 @@ import { firestoreBuilderAccountReader, type BuilderAccount, type BuilderAccount
 import type { BuilderRecord, PlatformStateRepositories, PlatformStateStore } from "@octogee/core/platform-state";
 import {
   resolveBillingProfile,
-  spendDegradeState,
-  spendWindowPercentUsed,
   type BillingProfile,
   signupOfferBudgetForOwner,
 } from "@octogee/shared/types/billing";
 import {
+  spendWindowPercentUsed,
   MODEL_BROKER_CREDITS_COLLECTION,
   MODEL_BROKER_USAGE_WINDOW_MS,
   MODEL_BROKER_USAGE_WINDOWS_COLLECTION,
@@ -183,6 +182,8 @@ function credentialPathFor(
 
 function deriveSpendStatus(input: {
   plan: BillingProfile;
+  railId: string;
+  rails: ModelBrokerRailRegistry;
   credentialPath: string;
   windowData: Record<string, unknown> | undefined;
   weekData: Record<string, unknown> | undefined;
@@ -198,7 +199,7 @@ function deriveSpendStatus(input: {
   const onOwnerCredential =
     input.credentialPath === "byok_api_key" || input.credentialPath === "byosub";
   const creditBalanceUsd = financeNumber(input.creditData?.balanceUsd);
-  const throttle = spendDegradeState({
+  const throttle = input.rails.rail(input.railId).throttle({
     modelAccess: plan.modelAccess,
     windowCostUsd,
     windowBudgetUsd: plan.windowBudgetUsd,
@@ -208,18 +209,12 @@ function deriveSpendStatus(input: {
     houseFallback: plan.houseFallback,
     creditBalanceUsd,
   });
-  const subscriptionUsingCredits =
-    plan.rail === "subscription" &&
-    !plan.houseFallback &&
-    !onOwnerCredential &&
-    (weekCostUsd >= plan.weeklyBudgetUsd || windowCostUsd >= plan.windowBudgetUsd);
   return {
     windowCostUsd,
     weekCostUsd,
     onOwnerCredential,
     creditBalanceUsd,
     throttle,
-    subscriptionUsingCredits,
   };
 }
 
@@ -227,10 +222,11 @@ interface UsageReaders {
   db: Firestore;
   store: PlatformStateRepositories;
   accounts: BuilderAccountReader;
+  rails: ModelBrokerRailRegistry;
 }
 
 async function agentUsageStatusPayload(
-  { db, store }: Pick<UsageReaders, "db" | "store">,
+  { db, store, rails }: Pick<UsageReaders, "db" | "store" | "rails">,
   gatewayId: string,
   assigned: { uid: string; account: BuilderAccount },
   nowMs: number,
@@ -258,6 +254,7 @@ async function agentUsageStatusPayload(
     ]);
 
   const plan = resolveBillingProfile(assigned.account.planInputs, new Date(nowMs));
+  const railId = rails.resolveOwnerProfile({ ...assigned.account.planInputs }, assigned.uid, nowMs)?.rail ?? rails.defaultRailId;
   if (!authorization) {
     throw new Error(
       `durable root config unavailable for gateways/${gatewayId}`,
@@ -269,6 +266,8 @@ async function agentUsageStatusPayload(
   );
   const spend = deriveSpendStatus({
     plan,
+    railId,
+    rails,
     credentialPath: credential.path,
     windowData: windowSnap.data(),
     weekData: weekSnap.data(),
@@ -299,10 +298,7 @@ async function agentUsageStatusPayload(
       blocked: spend.throttle.blocked,
       reason: spend.throttle.reason,
     },
-    credits:
-      plan.rail === "prepaid_credits" || spend.subscriptionUsingCredits
-        ? { balanceUsd: spend.creditBalanceUsd }
-        : null,
+    credits: spend.throttle.creditBalanceVisible ? { balanceUsd: spend.creditBalanceUsd } : null,
     credential,
   };
 }
@@ -635,7 +631,7 @@ function registerAgentUsageStatusRoute(
 }
 
 async function privateBrokerInspectionPayload(
-  readers: Pick<UsageReaders, "db" | "store">,
+  readers: Pick<UsageReaders, "db" | "store" | "rails">,
   gatewayId: string,
   assigned: { uid: string; account: BuilderAccount },
   agentId: string,
@@ -883,10 +879,11 @@ export function createByokBrokerRoutes(opts: {
   const now = opts.now ?? Date.now;
   const readCredentialSecret = opts.readSecret ?? readSecret;
   const writeByosubCredential = opts.writeByosubCredential ?? addSecretVersionKeepingLatest;
-  const readers: UsageReaders = { db, store, accounts: firestoreBuilderAccountReader(db) };
+  const rails = opts.rails ?? operatorRailRegistry();
+  const readers: UsageReaders = { db, store, accounts: firestoreBuilderAccountReader(db), rails };
 
   registerCredentialMaterializationRoutes(router, db, store, readCredentialSecret, writeByosubCredential);
-  registerAgentModelTokenRoute(router, store, readers.accounts, now, opts.rails ?? operatorRailRegistry());
+  registerAgentModelTokenRoute(router, store, readers.accounts, now, rails);
   registerPrivateBrokerInspection(router, readers, now);
 
   registerAgentUsageStatusRoute(

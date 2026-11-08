@@ -1,5 +1,11 @@
 import type { OwnedSignupOfferBudget } from "@octogee/shared/types/billing";
 
+import {
+  exhaustedSpendBudget,
+  type ModelAccess,
+  type SpendThrottleState,
+} from "@octogee/shared/types/model-broker-usage";
+
 import type { DegradeOutcome, GateDecisionAllowed, RailGateContext, SpendBudgets } from "./model-broker-gate.js";
 import type { OwnerModelBrokerGrant } from "./model-broker-limits.js";
 import type { ModelBrokerUsageStore } from "./model-broker-usage.js";
@@ -35,6 +41,21 @@ export interface RailAllowanceResult {
   signupOfferBudget?: OwnedSignupOfferBudget;
 }
 
+export interface RailSpendObservation {
+  modelAccess: ModelAccess;
+  windowCostUsd: number;
+  windowBudgetUsd: number;
+  weekCostUsd: number;
+  weekBudgetUsd: number;
+  onOwnerCredential: boolean;
+  houseFallback: boolean;
+  creditBalanceUsd: number;
+}
+
+export interface RailSpendThrottle extends SpendThrottleState {
+  creditBalanceVisible: boolean;
+}
+
 export interface ModelBrokerRail {
   readonly id: string;
   requiresGate(grant: OwnerModelBrokerGrant, ownerUid: string | null): boolean;
@@ -42,6 +63,7 @@ export interface ModelBrokerRail {
   budgetExhausted(ctx: RailGateContext): Promise<DegradeOutcome>;
   usingCredits(grant: OwnerModelBrokerGrant, gate: GateDecisionAllowed, ownerUid: string | null): boolean;
   allowance(input: RailAllowanceInput): Promise<RailAllowanceResult>;
+  throttle(observation: RailSpendObservation): RailSpendThrottle;
   logFields(grant: OwnerModelBrokerGrant): Record<string, unknown>;
 }
 
@@ -120,6 +142,16 @@ export const operatorRail: ModelBrokerRail = {
     requireSpendWindowAllowance(input, async () => {
       throw new WebResearchError("allowance_exhausted", 429, "Platform allowance exhausted");
     }),
+  throttle: (observation) => {
+    const exhausted = observation.onOwnerCredential ? null : exhaustedSpendBudget(observation);
+    if (!exhausted) return { degraded: false, blocked: false, reason: null, creditBalanceVisible: false };
+    return {
+      degraded: observation.houseFallback,
+      blocked: !observation.houseFallback,
+      reason: `${exhausted}_exhausted`,
+      creditBalanceVisible: false,
+    };
+  },
   logFields: () => ({}),
 };
 
