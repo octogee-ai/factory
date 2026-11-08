@@ -8,7 +8,6 @@ describe("mattermost public barrel", () => {
       BUILDER_PAT_DESCRIPTION: expect.any(String),
       COACH_PAT_DESCRIPTION: expect.any(String),
       customerChannelMembers: expect.any(Function),
-      createOrRestoreChannel: expect.any(Function),
       createProjectChannel: expect.any(Function),
       destroyMmChannel: expect.any(Function),
       destroyMmUser: expect.any(Function),

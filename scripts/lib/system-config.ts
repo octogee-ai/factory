@@ -24,7 +24,6 @@ import {
   GIT_SSH_HOST,
 } from "./config.js";
 import {
-  createGiteaUser,
   generateCustomerSshKey,
   gitExec,
   customerSshKeyPath,
@@ -34,10 +33,7 @@ import {
   systemConfigRepoName,
   workspaceGiteaOrg,
 } from "./gitea-naming.js";
-import {
-  ensureGiteaOrgForWorkspace,
-  ensureSystemConfigRepo,
-} from "./gitea-admin-broker-client.js";
+import { brokeredGitHost } from "./gitea-admin-broker-client.js";
 import { systemConfigFingerprint } from "./system-config-watcher.js";
 import {
   mattermostAccountSecretRef,
@@ -631,9 +627,9 @@ function enableBuilderBrowser(config: UnknownRecord): boolean {
 
 async function ensureIdentityAndRepo(slug: string, log: (msg: string) => void): Promise<void> {
   const pubKey = generateCustomerSshKey(slug);
-  await createGiteaUser(slug, pubKey);
-  await ensureGiteaOrgForWorkspace(slug);
-  await ensureSystemConfigRepo(slug);
+  await brokeredGitHost.registerKey(slug, pubKey);
+  await brokeredGitHost.ensureOwner(slug);
+  await brokeredGitHost.ensureRepo(slug, { kind: "system-config" });
   log(`[system_config] broker ensured Gitea user/org/${systemConfigRepoName()} for ${slug}`);
 }
 

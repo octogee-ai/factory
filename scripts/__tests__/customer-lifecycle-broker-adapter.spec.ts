@@ -248,7 +248,7 @@ vi.mock("@octogee/core/project-coach-workspaces", async (importOriginal) => {
 });
 vi.mock("../lib/gitea-admin-broker-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/gitea-admin-broker-client.js")>();
-  return { ...actual, ensureProjectCoachRepo: vi.fn(async () => undefined) };
+  return { ...actual, brokeredGitHost: { ...actual.brokeredGitHost, ensureRepo: vi.fn(async () => undefined) } };
 });
 
 const gitMocks = vi.hoisted(() => ({
@@ -1143,8 +1143,8 @@ describe("buildBrokeredLifecycleAdapter migration import activation", () => {
       const snapshot = { ...f.snapshot, repoUrl: "git@gitea:octogee/tester10-workspace.git", projectAgents: [], projects: [], restoreAuthority: assignedRestoreAuthority(), runtimeMutationFenced: true };
       vi.mocked(f.client.userSnapshot).mockResolvedValue(snapshot);
       const original = Buffer.from("# Restored from durable Git\r\n- Name: Authored restored name 🐙\r\n");
-      const adapter = { ...f.adapter, hasCustomerSshKey: () => true, readLocalCustomerPubKey: () => "ssh-ed25519 TEST", readGiteaCustomerPubKeys: async () => ["ssh-ed25519 TEST"], createGiteaUser: async () => undefined,
-        ensureGiteaOrg: async () => undefined, hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => { await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), original); return true; },
+      const adapter = { ...f.adapter, hasCustomerSshKey: () => true, readLocalCustomerPubKey: () => "ssh-ed25519 TEST", gitHost: { ...f.adapter.gitHost, listKeys: async () => ["ssh-ed25519 TEST"], registerKey: async () => undefined,
+        ensureOwner: async () => undefined }, hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => { await fs.writeFile(path.join(f.workspace, "IDENTITY.md"), original); return true; },
         removePartialWorkspace: async () => undefined,
         ensureCustomerDirectories: () => undefined, writeCustomerTemplateFiles: async () => undefined, blobSyncForSlug: async () => undefined,
         restoreByosubForAgent: async () => ({ restored: false, present: false }), isBuilderGateway: () => false };

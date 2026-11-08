@@ -1,5 +1,27 @@
 import { describe, it, expect, vi } from "vitest";
+import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { mintAndPersistCoachToken } from "../lib/mattermost.js";
+
+type MmFake = (method: string, endpoint: string, body?: any) => Promise<unknown>;
+
+function hostDeps(deps: { db: any; now: () => unknown; log: (msg: string) => void; mmApiCall: MmFake }) {
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const endpoint = String(input).replace("http://mm.test/api/v4", "");
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    const result = await deps.mmApiCall(init?.method ?? "GET", endpoint, body);
+    return new Response(JSON.stringify(result ?? null), { status: 200 });
+  }) as typeof fetch;
+  return {
+    db: deps.db,
+    now: deps.now,
+    channelHost: createMattermostChannelHost({
+      baseUrl: "http://mm.test",
+      adminToken: "admin",
+      fetch: fetchImpl,
+      log: deps.log,
+    }),
+  };
+}
 
 function mkDeps() {
   const setSpy = vi.fn().mockResolvedValue(undefined);
@@ -46,7 +68,7 @@ describe("mintAndPersistCoachToken", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postResult: { token: "pat-abc123" } });
 
-    await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(deps.mmApiCall).toHaveBeenCalledWith(
       "POST",
@@ -59,7 +81,7 @@ describe("mintAndPersistCoachToken", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postResult: { token: "pat-abc123" } });
 
-    await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(deps.collection1).toHaveBeenCalledWith("users");
     expect(deps.doc1).toHaveBeenCalledWith("uid-chris");
@@ -78,7 +100,7 @@ describe("mintAndPersistCoachToken", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postResult: { token: "pat-abc123" } });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toEqual({ token: "pat-abc123" });
   });
@@ -87,7 +109,7 @@ describe("mintAndPersistCoachToken", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postResult: {} });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toBeNull();
     expect(deps.setSpy).not.toHaveBeenCalled();
@@ -97,7 +119,7 @@ describe("mintAndPersistCoachToken", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postError: new Error("mm down") });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toBeNull();
     expect(deps.setSpy).not.toHaveBeenCalled();
@@ -107,7 +129,7 @@ describe("mintAndPersistCoachToken", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ postResult: { token: "pat-abc123" } });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "");
 
     expect(result).toBeNull();
     expect(deps.mmApiCall).not.toHaveBeenCalled();
@@ -127,7 +149,7 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
       postResult: { token: "pat-new" },
     });
 
-    await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     const revokeCalls = deps.mmApiCall.mock.calls.filter(
       (c: any[]) => c[0] === "POST" && c[1] === "/users/tokens/revoke",
@@ -142,7 +164,7 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
     const deps = mkDeps();
     deps.mmApiCall = scriptMm({ tokens: [], postResult: { token: "pat-new" } });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toEqual({ token: "pat-new" });
     const revokeCalls = deps.mmApiCall.mock.calls.filter(
@@ -158,7 +180,7 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
       postResult: { token: "pat-new" },
     });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toEqual({ token: "pat-new" });
     expect(deps.log).toHaveBeenCalled();
@@ -174,7 +196,7 @@ describe("mintAndPersistCoachToken — replace-not-append (PR3 P0 #2)", () => {
       postResult: { token: "pat-new" },
     });
 
-    const result = await mintAndPersistCoachToken(deps, "uid-chris", "coach-mm-id-1");
+    const result = await mintAndPersistCoachToken(hostDeps(deps), "uid-chris", "coach-mm-id-1");
 
     expect(result).toEqual({ token: "pat-new" });
     expect(deps.log).toHaveBeenCalled();

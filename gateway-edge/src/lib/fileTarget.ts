@@ -3,7 +3,7 @@ import { db } from "./db.js";
 import { readProject } from "./firestoreReads.js";
 import { USERNAME_RE } from "@octogee/shared/types/identity";
 import { readConnectorAccessToken } from "./connector-tokens.js";
-import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "./gitea-naming.js";
+import { workspaceGiteaOrg, workspaceRepoName, projectRepoName } from "@octogee/core/gitea-naming";
 import { logger } from "../middleware/logging.js";
 import { resolveCommercialEntitlements } from "@octogee/shared/types/commercial-entitlements";
 import { isCanonicalWorkspaceMembership } from "@octogee/core/gateway-principal-access";

@@ -3,7 +3,7 @@ import { strictRateLimit } from "../../middleware/security.js";
 import { db, FieldValue } from "../../lib/db.js";
 import { mmApi } from "../../lib/mattermost.js";
 import { giteaApi } from "../../lib/gitea.js";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
 import { logger } from "../../middleware/logging.js";
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";

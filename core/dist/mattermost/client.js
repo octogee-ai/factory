@@ -91,7 +91,7 @@ export async function mmApiCallStrict(method, endpoint, body) {
         return null;
     return await response.json();
 }
-function isIdempotentMmError(body) {
+export function isIdempotentMmError(body) {
     for (const id of IDEMPOTENT_MM_ERROR_IDS) {
         if (body.includes(`"id":"${id}"`))
             return true;

@@ -230,6 +230,22 @@ it("transfers only the selected customer's Git metadata", () => {
   expect(findPathTraversalViolation(["git-metadata/alice/../../bob/index"], "alice", "final")).not.toBeNull();
 });
 
+function mkGitHost(
+  overrides: Partial<CustomerLifecycleAdapter["gitHost"]> = {},
+): CustomerLifecycleAdapter["gitHost"] {
+  const unexpected = (name: string) => vi.fn(async () => {
+    throw new Error(`unexpected call to gitHost.${name} in migration handler test`);
+  });
+  return {
+    registerKey: vi.fn(async () => undefined),
+    listKeys: unexpected("listKeys"),
+    releaseKey: unexpected("releaseKey"),
+    ensureOwner: unexpected("ensureOwner"),
+    ensureRepo: unexpected("ensureRepo"),
+    ...overrides,
+  };
+}
+
 function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerLifecycleAdapter {
   const everythingElseThrows = new Proxy(
     {},
@@ -256,7 +272,7 @@ function mkAdapter(overrides: Partial<CustomerLifecycleAdapter> = {}): CustomerL
     prepareImportDir: vi.fn(async () => "/tmp/import"),
     prepareKeyImportDir: vi.fn(async () => "/tmp/import"),
     readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 LOCAL chris@gateway"),
-    createGiteaUser: vi.fn(async () => undefined),
+    gitHost: mkGitHost(),
     activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
     projectCheckoutScope: vi.fn(() => "workspace-and-projects"),
     listProjectsNeedingClone: vi.fn(async () => []),
@@ -634,7 +650,7 @@ describe("createQuiesceHandler", () => {
 
 describe("createFlushHandler", () => {
   it("reclaims the source SSH key before a migration-final durable flush", async () => {
-    const createGiteaUser = vi.fn(async () => undefined);
+    const registerKey = vi.fn(async () => undefined);
     const flushLocalState = vi.fn(async () => ({
       ok: true,
       durationMs: 12,
@@ -642,7 +658,7 @@ describe("createFlushHandler", () => {
     }));
     const adapter = mkAdapter({
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 SOURCE chris@gateway"),
-      createGiteaUser,
+      gitHost: mkGitHost({ registerKey }),
     });
     const handler = createFlushHandler(mkDeps({ adapter, flushLocalState }));
     const body = { migrationId: "mig-1", slug: "chris", reason: "migration-final" };
@@ -654,11 +670,11 @@ describe("createFlushHandler", () => {
     await handler(req, res, vi.fn());
 
     expect(getStatus()).toBe(200);
-    expect(createGiteaUser).toHaveBeenCalledWith(
+    expect(registerKey).toHaveBeenCalledWith(
       "chris",
       "ssh-ed25519 SOURCE chris@gateway",
     );
-    expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(registerKey.mock.invocationCallOrder[0]).toBeLessThan(
       flushLocalState.mock.invocationCallOrder[0],
     );
   });
@@ -1075,8 +1091,7 @@ describe("createRestoreHandler", () => {
     const adapter = mkAdapter({
       hasCustomerSshKey: vi.fn(() => true),
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TEST"),
-      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 TEST"]),
-      ensureGiteaOrg: vi.fn(async () => undefined),
+      gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 TEST"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
       ensureCustomerDirectories: vi.fn(),
@@ -1108,7 +1123,7 @@ describe("createRestoreHandler", () => {
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     const adapter = mkAdapter({
       hasCustomerSshKey: vi.fn(() => true), readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TEST"),
-      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 TEST"]), ensureGiteaOrg: vi.fn(async () => undefined),
+      gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 TEST"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false), cloneWorkspaceRepo: vi.fn(async () => true),
       ensureCustomerDirectories: vi.fn(), writeCustomerTemplateFiles: vi.fn(async () => undefined),
       blobSyncForSlug: vi.fn(async () => undefined), restoreByosubForAgent: vi.fn(async () => ({ restored: false, present: false })),
@@ -1158,7 +1173,7 @@ describe("createRestoreHandler", () => {
   it("passes signed Shared restore scope through the post-Git roster publication owner", async () => {
     const applyAddCustomerConfigPatch = vi.fn(async () => ({ elapsedMs: 1 }));
     const adapter = mkAdapter({ isBuilderGateway: () => false, hasCustomerSshKey: () => true,
-      readLocalCustomerPubKey: () => "ssh-ed25519 TEST", readGiteaCustomerPubKeys: async () => ["ssh-ed25519 TEST"], ensureGiteaOrg: async () => undefined,
+      readLocalCustomerPubKey: () => "ssh-ed25519 TEST", gitHost: mkGitHost({ listKeys: async () => ["ssh-ed25519 TEST"], ensureOwner: async () => undefined }),
       hasWorkspaceGitDir: () => false, cloneWorkspaceRepo: async () => true, ensureCustomerDirectories: () => undefined,
       writeCustomerTemplateFiles: async () => undefined, blobSyncForSlug: async () => undefined,
       restoreByosubForAgent: async () => ({ restored: false, present: false }), applyAddCustomerConfigPatch });
@@ -1182,8 +1197,7 @@ describe("createRestoreHandler", () => {
       }),
       hasCustomerSshKey: vi.fn(() => true),
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
-      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 local"]),
-      ensureGiteaOrg: vi.fn(async () => undefined),
+      gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 local"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
       ensureCustomerDirectories: vi.fn(),
@@ -1290,8 +1304,7 @@ describe("createRestoreHandler", () => {
       loadUserSnapshot: vi.fn(async () => currentSnapshot),
       hasCustomerSshKey: vi.fn(() => true),
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 local"),
-      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 local"]),
-      ensureGiteaOrg: vi.fn(async () => undefined),
+      gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 local"]), ensureOwner: vi.fn(async () => undefined) }),
       hasWorkspaceGitDir: vi.fn(() => false),
       cloneWorkspaceRepo: vi.fn(async () => true),
       ensureCustomerDirectories: vi.fn(),
@@ -1899,7 +1912,7 @@ describe("queued-rsync migration control handlers", () => {
     const markCustomerMigratingIn = vi.fn();
     const onMounted = vi.fn();
     const recordAppliedFingerprint = vi.fn();
-    const createGiteaUser = vi.fn(async () => undefined);
+    const registerKey = vi.fn(async () => undefined);
     let pendingProjects = [{ projectSlug: "camp", giteaRepoName: "chris-camp" }];
     const cloneProjectRepo = vi.fn(async () => {
       pendingProjects = [];
@@ -1908,7 +1921,7 @@ describe("queued-rsync migration control handlers", () => {
     const adapter = mkAdapter({
       markCustomerMigratingIn,
       readLocalCustomerPubKey: vi.fn(() => "ssh-ed25519 TARGET chris@gateway"),
-      createGiteaUser,
+      gitHost: mkGitHost({ registerKey }),
       activateImportedCustomer: vi.fn(async () => ({ appliedFingerprint: "fp-chris" })),
       listProjectsNeedingClone: vi.fn(async () => pendingProjects),
       cloneProjectRepo,
@@ -1929,12 +1942,12 @@ describe("queued-rsync migration control handlers", () => {
 
     expect(getStatus()).toBe(200);
     expect(markCustomerMigratingIn).toHaveBeenCalledWith("chris");
-    expect(createGiteaUser).toHaveBeenCalledWith(
+    expect(registerKey).toHaveBeenCalledWith(
       "chris",
       "ssh-ed25519 TARGET chris@gateway",
     );
     expect(adapter.activateImportedCustomer).toHaveBeenCalledWith("chris", expect.objectContaining({ migrationId: body.migrationId }));
-    expect(createGiteaUser.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(registerKey.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(adapter.activateImportedCustomer).mock.invocationCallOrder[0],
     );
     expect(cloneProjectRepo).toHaveBeenCalledWith(
@@ -1962,7 +1975,7 @@ describe("queued-rsync migration control handlers", () => {
     await createActivateImportHandler(mkDeps({ adapter }))(mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn());
     expect(response.getStatus()).toBe(500);
     expect(adapter.activateImportedCustomer).not.toHaveBeenCalled();
-    expect(adapter.createGiteaUser).not.toHaveBeenCalled();
+    expect(adapter.gitHost.registerKey).not.toHaveBeenCalled();
   });
 
   it("does not activate a standard migration while a project checkout is still missing", async () => {
@@ -3087,7 +3100,7 @@ describe("queued-rsync migration control handlers", () => {
       isConfiguredBuilderCustomer: vi.fn(slug => slug === "chris"),
       configuredBuilderOverlayPresent: vi.fn(() => true),
       hasCustomerSshKey: vi.fn(() => true),
-      readGiteaCustomerPubKeys: vi.fn(async () => ["ssh-ed25519 LOCAL chris@gateway"]),
+      gitHost: mkGitHost({ listKeys: vi.fn(async () => ["ssh-ed25519 LOCAL chris@gateway"]) }),
       hasWorkspaceGitDir: vi.fn(() => true),
       hasGitRemote: vi.fn(() => true),
       prepareImportDir: vi.fn(async () => stateDir),
@@ -5436,7 +5449,7 @@ describe("createResumeHandler", () => {
   it("reclaims the retained key before resuming the signed customer's channels and voice", async () => {
     let releaseClaim!: () => void;
     const claimPending = new Promise<void>(resolve => { releaseClaim = resolve; });
-    const adapter = mkAdapter({ createGiteaUser: vi.fn(() => claimPending) });
+    const adapter = mkAdapter({ gitHost: mkGitHost({ registerKey: vi.fn(() => claimPending) }) });
     const deps = mkDeps({ adapter });
     const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
     const response = mkResponse();
@@ -5444,7 +5457,7 @@ describe("createResumeHandler", () => {
       mkRequest(body, { signature: signForPod(body.migrationId, JSON.stringify(body)) }), response.res, vi.fn(),
     );
     try {
-      expect(adapter.createGiteaUser).toHaveBeenCalledExactlyOnceWith("chris", "ssh-ed25519 LOCAL chris@gateway");
+      expect(adapter.gitHost.registerKey).toHaveBeenCalledExactlyOnceWith("chris", "ssh-ed25519 LOCAL chris@gateway");
       expect(adapter.resumeCustomer).not.toHaveBeenCalled();
       expect(deps.voiceMigration).not.toHaveBeenCalled();
     } finally {
@@ -5459,7 +5472,7 @@ describe("createResumeHandler", () => {
   it.each(["missing-key", "broker-failure"])("refuses resume effects after %s", async failure => {
     const adapter = mkAdapter(failure === "missing-key"
       ? { readLocalCustomerPubKey: vi.fn(() => null) }
-      : { createGiteaUser: vi.fn(async () => { throw new Error("key reclaim denied"); }) });
+      : { gitHost: mkGitHost({ registerKey: vi.fn(async () => { throw new Error("key reclaim denied"); }) }) });
     const deps = mkDeps({ adapter });
     const body = { migrationId: SAMPLE_QUIESCE.migrationId, slug: "chris" };
     const response = mkResponse();
@@ -5473,12 +5486,10 @@ describe("createResumeHandler", () => {
     });
     expect(adapter.resumeCustomer).not.toHaveBeenCalled();
     expect(deps.voiceMigration).not.toHaveBeenCalled();
-    if (failure === "missing-key") expect(adapter.createGiteaUser).not.toHaveBeenCalled();
+    if (failure === "missing-key") expect(adapter.gitHost.registerKey).not.toHaveBeenCalled();
   });
 
   it("reclaims the source key so a stale failed target release cannot remove it", async () => {
-    vi.stubEnv("GITEA_URL", "http://gitea.test:3000");
-    vi.stubEnv("GITEA_TOKEN", "synthetic-admin-token");
     const sourceOwner = "builder/source-pod";
     const targetOwner = "shared/failed-target-pod";
     const inheritedKey = "ssh-ed25519 INHERITED chris@gateway";
@@ -5503,13 +5514,17 @@ describe("createResumeHandler", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     try {
-      const { ensureGiteaUser, deleteGiteaUserPubKey } = await import("../../gateway-edge/src/lib/gitea-admin.js");
-      await ensureGiteaUser("chris", inheritedKey, sourceOwner);
-      await ensureGiteaUser("chris", inheritedKey, targetOwner);
+      const { createGiteaGitHost } = await import("@octogee/core/git-host");
+      const gitea = createGiteaGitHost({
+        apiBaseUrl: "http://gitea.test:3000/api/v1",
+        token: () => "synthetic-admin-token",
+      });
+      await gitea.registerKey("chris", inheritedKey, sourceOwner);
+      await gitea.registerKey("chris", inheritedKey, targetOwner);
       expect(keys).toEqual([{ id: 2, title: keyTitle(targetOwner), key: inheritedKey }]);
       const adapter = mkAdapter({
         readLocalCustomerPubKey: vi.fn(() => inheritedKey),
-        createGiteaUser: vi.fn((slug, key) => ensureGiteaUser(slug, key, sourceOwner)),
+        gitHost: mkGitHost({ registerKey: vi.fn((slug, key) => gitea.registerKey(slug, key, sourceOwner)) }),
         resumeCustomer: vi.fn(async () => {
           expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
         }),
@@ -5522,7 +5537,7 @@ describe("createResumeHandler", () => {
       );
       expect(response.getStatus()).toBe(200);
       expect(adapter.resumeCustomer).toHaveBeenCalledExactlyOnceWith("chris", { migrationId: body.migrationId });
-      await deleteGiteaUserPubKey("chris", inheritedKey, targetOwner);
+      await gitea.releaseKey("chris", inheritedKey, targetOwner);
       expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
       const retried = mkResponse();
       await createResumeHandler(deps)(
@@ -5530,7 +5545,7 @@ describe("createResumeHandler", () => {
       );
       expect(retried.getStatus()).toBe(200);
       expect(keys).toEqual([{ id: 3, title: keyTitle(sourceOwner), key: inheritedKey }]);
-      expect(adapter.createGiteaUser).toHaveBeenCalledTimes(2);
+      expect(adapter.gitHost.registerKey).toHaveBeenCalledTimes(2);
       expect(adapter.resumeCustomer).toHaveBeenCalledTimes(2);
       expect(deps.voiceMigration).toHaveBeenCalledTimes(2);
     } finally {
@@ -5545,7 +5560,7 @@ describe("createResumeHandler", () => {
     await createResumeHandler(deps)(mkRequest(SAMPLE_QUIESCE, { signature: "bad" }), response.res, vi.fn());
     expect(response.getStatus()).toBe(401);
     expect(adapter.readLocalCustomerPubKey).not.toHaveBeenCalled();
-    expect(adapter.createGiteaUser).not.toHaveBeenCalled();
+    expect(adapter.gitHost.registerKey).not.toHaveBeenCalled();
     expect(adapter.resumeCustomer).not.toHaveBeenCalled();
     expect(deps.voiceMigration).not.toHaveBeenCalled();
   });

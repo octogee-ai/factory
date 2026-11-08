@@ -101,24 +101,17 @@ import { readPostgresAgentAnchor } from "@octogee/core/agent-postgres";
 import {
   cloneProjectRepo,
   cloneWorkspaceRepo,
-  createGiteaUser,
   customerRepositoryHasCanonicalRemote,
   customerSshKeyPath,
   deleteCustomerSshKey,
   generateCustomerSshKey,
   initWorkspaceRepo,
   projectCheckoutMatchesSource,
-  readGiteaCustomerPubKeys,
   readLocalCustomerPubKey,
   removePartialWorkspace,
   setRepoSshCommand,
 } from "./git.js";
-import {
-  ensureGiteaOrgForWorkspace,
-  ensureSystemConfigRepo,
-  ensureProjectCoachRepo,
-  releaseGiteaUserKey,
-} from "./gitea-admin-broker-client.js";
+import { brokeredGitHost } from "./gitea-admin-broker-client.js";
 import {
   hasMountedMarker,
   clearMountedMarker,
@@ -633,7 +626,7 @@ async function projectsNeedingClone(ctx: BrokerCtx, slug: string, projects: read
 async function restoreGithubCoachWorkspaces(slug: string, projects: readonly string[], signal?: AbortSignal): Promise<void> {
   if (projects.length === 0) return;
   signal?.throwIfAborted();
-  await ensureProjectCoachRepo(slug);
+  await brokeredGitHost.ensureRepo(slug, { kind: "project-coaches" });
   await restoreProjectCoachWorkspaces({ customerDir: path.join(CUSTOMERS_DIR, slug), slug, projects, assertCurrent: async () => {
     signal?.throwIfAborted();
   } });
@@ -2562,13 +2555,9 @@ export function buildBrokeredLifecycleAdapter(
     initWorkspaceRepoFromExistingDir: (customerCtx) => initWorkspaceRepo(customerCtx.customerDir, customerCtx.slug),
     hasCustomerSshKey: (slug) => fs.existsSync(customerSshKeyPath(slug)),
     generateCustomerSshKey,
-    createGiteaUser,
-    ensureGiteaOrg: ensureGiteaOrgForWorkspace,
-    ensureSystemConfigRepo,
+    gitHost: brokeredGitHost,
     readLocalCustomerPubKey,
-    readGiteaCustomerPubKeys,
     deleteCustomerSshKey,
-    releaseGiteaUserKey,
     blobSyncForSlug: async (slug) => {
       await blobSyncForSlug(slug, { store: createBrokeredBlobStore(opts.client) });
     },

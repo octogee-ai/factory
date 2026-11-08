@@ -36,7 +36,7 @@ vi.mock("child_process", async (importOriginal) => {
     }) as typeof actual.execFileSync,
   };
 });
-vi.mock("../lib/gitea-admin-broker-client.js", () => ({ repoExists: async () => true }));
+vi.mock("../lib/gitea-admin-broker-client.js", () => ({ brokeredGitHost: { repoExists: async () => true } }));
 
 const { OPENCLAW_DIR, CUSTOMERS_DIR, CUSTOMER_KEYS_DIR } = await import("../lib/config.js");
 const { cloneWorkspaceRepo, workspaceTreeState } = await import("../lib/git.js");

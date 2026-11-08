@@ -9,7 +9,7 @@ import {
 import {
   workspaceGiteaOrg, workspaceRepoName, projectRepoName, systemConfigRepoName,
 } from "./gitea-naming.js";
-import * as giteaBroker from "./gitea-admin-broker-client.js";
+import { brokeredGitHost } from "./gitea-admin-broker-client.js";
 import { cloneGithubProjectViaBroker } from "./github-project-clone-broker.js";
 import { notesWelcomeSeed } from "@octogee/core/templates/project-seeds";
 
@@ -604,10 +604,6 @@ export function generateCustomerSshKey(slug: string): string {
   return fs.readFileSync(pubPath, "utf-8").trim();
 }
 
-export async function readGiteaCustomerPubKeys(slug: string): Promise<string[]> {
-  return giteaBroker.readGiteaUserPubKeys(slug);
-}
-
 export async function deleteCustomerSshKey(slug: string): Promise<void> {
   const keyDir = path.join(CUSTOMER_KEYS_DIR, slug);
   await fs.promises.rm(keyDir, { recursive: true, force: true });
@@ -639,13 +635,6 @@ export function listLocalCustomerPubKeys(): LocalCustomerPubKey[] {
       return { slug: entry.name, pubKey };
     })
     .sort((a, b) => a.slug.localeCompare(b.slug));
-}
-
-// Ensures the per-customer Gitea user exists and its SSH key is registered.
-// The admin work happens in the gateway-edge sidecar; this is the provisioner's
-// thin call into it. Throws (loud) on failure — the mount retries.
-export async function createGiteaUser(slug: string, pubKey: string): Promise<void> {
-  await giteaBroker.ensureGiteaUser(slug, pubKey);
 }
 
 function sshRemoteUrl(org: string, repoName: string): string {
@@ -787,7 +776,7 @@ function unsafeLocalRepositoryConfigKey(cwd: string): string | null {
 }
 
 // Workspace + project clones run over the per-customer SSH key. The key is
-// registered (createGiteaUser) before any clone in the mount flow, so there is
+// registered (registerKey) before any clone in the mount flow, so there is
 // no admin-token HTTP fallback: a missing key is a loud failure the reconcile
 // heals by regenerating + re-registering. Repo existence is checked through the
 // admin broker (no admin token on this container).
@@ -890,7 +879,7 @@ export async function cloneWorkspaceRepo(slug: string, _repoUrl?: string): Promi
 
   let exists: boolean;
   try {
-    exists = await giteaBroker.repoExists(org, repoName);
+    exists = await brokeredGitHost.repoExists({ owner: org, repo: repoName });
   } catch (err: unknown) {
     log(`⚠ [git] Gitea repo-exists check failed for ${org}/${repoName}: ${errMessage(err)}`);
     return false;
@@ -1129,7 +1118,7 @@ async function replaceProjectRepoCheckout(
       log(`⚠ [git] Cannot switch ${slug}/${projectSlug} — per-customer SSH key missing`);
       return false;
     }
-    if (!(await giteaBroker.repoExists(workspaceGiteaOrg(slug), giteaRepoName))) return false;
+    if (!(await brokeredGitHost.repoExists({ owner: workspaceGiteaOrg(slug), repo: giteaRepoName }))) return false;
   }
 
   const parent = path.dirname(dest);
@@ -1308,7 +1297,7 @@ async function cloneGiteaProjectRepo(
 
   let exists: boolean;
   try {
-    exists = await giteaBroker.repoExists(org, giteaRepoName);
+    exists = await brokeredGitHost.repoExists({ owner: org, repo: giteaRepoName });
   } catch (err: unknown) {
     log(`⚠ [git] Gitea repo-exists check failed for ${org}/${giteaRepoName}: ${errMessage(err)}`);
     return false;
@@ -1758,7 +1747,7 @@ export async function initWorkspaceRepo(
   coachDir: string,
   slug: string,
   deps: InitWorkspaceRepoDeps = {
-    ensureWorkspaceRepo: giteaBroker.ensureWorkspaceRepo,
+    ensureWorkspaceRepo: (workspaceSlug) => brokeredGitHost.ensureRepo(workspaceSlug, { kind: "workspace" }),
     prepareRepository: setRepoSshCommand,
   },
 ): Promise<string | null> {
@@ -1875,7 +1864,7 @@ export async function initProjectRepo(
   }
 
   try {
-    await giteaBroker.ensureProjectRepo(slug, projectName);
+    await brokeredGitHost.ensureRepo(slug, { kind: "project", projectSlug: projectName });
   } catch (err) {
     log(`⚠ [git] Failed to create project repo ${org}/${repoName}: ${errMessage(err)}`);
     return null;

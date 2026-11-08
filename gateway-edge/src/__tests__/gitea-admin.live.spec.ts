@@ -4,14 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
-import {
-  deleteGiteaUserPubKey,
-  ensureGiteaOrgForWorkspace,
-  ensureWorkspaceRepo,
-  ensureGiteaUser,
-  readGiteaUserPubKeys,
-  repoExists,
-} from "../lib/gitea-admin.js";
+import { gitHost } from "../lib/git-host.js";
 
 // Live gate for PLATFORM-CREDENTIAL-BROKERING PR2: the provisioner's Gitea ADMIN ops
 // moved off the OpenClaw gateway container into this gateway-edge lib (the sidecar
@@ -23,7 +16,7 @@ import {
 //   RUN_LIVE=1 GITEA_TOKEN=$(…admin secret…) GITEA_URL=http://localhost:3000 \
 //     npx vitest run src/__tests__/gitea-admin.live.spec.ts
 //
-// (gitea-admin.ts reads GITEA_URL/GITEA_TOKEN from env; GITEA_URL is the origin — the lib
+// (git-host.ts reads GITEA_URL/GITEA_TOKEN from env; GITEA_URL is the origin — the lib
 // appends /api/v1.)
 
 const RUN_LIVE = process.env.RUN_LIVE === "1" && !!process.env.GITEA_TOKEN;
@@ -53,27 +46,27 @@ describe.skipIf(!RUN_LIVE)("gitea-admin — live against real Gitea (relocated p
   it("keeps predecessor and successor pod keys readable back (idempotent)", async () => {
     const predecessor = freshPubKey();
     const successor = freshPubKey();
-    await ensureGiteaUser(SLUG, predecessor);
-    await ensureGiteaUser(SLUG, successor);
-    expect(await readGiteaUserPubKeys(SLUG)).toEqual(
+    await gitHost().registerKey(SLUG, predecessor);
+    await gitHost().registerKey(SLUG, successor);
+    expect(await gitHost().listKeys(SLUG)).toEqual(
       expect.arrayContaining([predecessor, successor]),
     );
-    await ensureGiteaUser(SLUG, successor);
-    expect(await readGiteaUserPubKeys(SLUG)).toEqual(
+    await gitHost().registerKey(SLUG, successor);
+    expect(await gitHost().listKeys(SLUG)).toEqual(
       expect.arrayContaining([predecessor, successor]),
     );
-    await deleteGiteaUserPubKey(SLUG, predecessor);
-    expect(await readGiteaUserPubKeys(SLUG)).toEqual([successor]);
+    await gitHost().releaseKey(SLUG, predecessor);
+    expect(await gitHost().listKeys(SLUG)).toEqual([successor]);
   }, 30_000);
 
   it("ensures org + builders team + member, then creates the workspace repo (idempotent)", async () => {
-    await ensureGiteaOrgForWorkspace(SLUG);
-    await ensureGiteaOrgForWorkspace(SLUG); // 422-tolerant re-ensure
+    await gitHost().ensureOwner(SLUG);
+    await gitHost().ensureOwner(SLUG); // 422-tolerant re-ensure
 
-    expect(await repoExists(SLUG, "workspace")).toBe(false);
-    await ensureWorkspaceRepo(SLUG);
-    await ensureWorkspaceRepo(SLUG); // 409-tolerant re-ensure
-    expect(await repoExists(SLUG, "workspace")).toBe(true);
-    expect(await repoExists(SLUG, "no-such-repo")).toBe(false);
+    expect(await gitHost().repoExists({ owner: SLUG, repo: "workspace" })).toBe(false);
+    await gitHost().ensureRepo(SLUG, { kind: "workspace" });
+    await gitHost().ensureRepo(SLUG, { kind: "workspace" }); // 409-tolerant re-ensure
+    expect(await gitHost().repoExists({ owner: SLUG, repo: "workspace" })).toBe(true);
+    expect(await gitHost().repoExists({ owner: SLUG, repo: "no-such-repo" })).toBe(false);
   }, 30_000);
 });

@@ -61,18 +61,8 @@ function mkDeps(overrides: Partial<DeprovisionCustomerDeps> = {}): DeprovisionCu
     loadCleanupContext: vi.fn(async () => mkCleanup()),
     unmountFromGateway: vi.fn(async () => "unmounted" as const),
     cloudCleanup: {
-      gitea: {
-        deleteRepo: vi.fn(async () => undefined),
-        deleteOrg: vi.fn(async () => undefined),
-        deleteGiteaUser: vi.fn(async () => undefined),
-      },
-      mattermost: {
-        destroyUser: vi.fn(async () => undefined),
-        destroyChannel: vi.fn(async () => undefined),
-        destroyTeam: vi.fn(async () => undefined),
-        getUserChannels: vi.fn(async () => []),
-        userExists: vi.fn(async () => false),
-      },
+      git: { eraseOwner: vi.fn(async () => undefined) },
+      channels: { erase: vi.fn(async () => undefined) },
       nukeUserFirestore: vi.fn(async () => undefined),
       deleteCustomerStorage: vi.fn(async () => undefined),
       deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
@@ -135,7 +125,7 @@ describe("createDeprovisionCustomerHandler — orphan path (no gateway)", () => 
     expect(deps.unmountFromGateway).not.toHaveBeenCalled();
     expect(ctx.reported[0]).toMatchObject({ name: "unmount-gateway", status: "skipped" });
     
-    expect(deps.cloudCleanup.gitea.deleteRepo).toHaveBeenCalled();
+    expect(deps.cloudCleanup.git.eraseOwner).toHaveBeenCalled();
   });
 });
 
@@ -183,20 +173,12 @@ describe("createDeprovisionCustomerHandler — cloud step failure", () => {
   it("returns success=false with the partial-failure summary when a cloud step fails", async () => {
     const deps = mkDeps({
       cloudCleanup: {
-        gitea: {
-          deleteRepo: vi.fn(async () => {
+        git: {
+          eraseOwner: vi.fn(async () => {
             throw new Error("gitea boom");
           }),
-          deleteOrg: vi.fn(async () => undefined),
-          deleteGiteaUser: vi.fn(),
         },
-        mattermost: {
-          destroyUser: vi.fn(),
-          destroyChannel: vi.fn(),
-          destroyTeam: vi.fn(),
-          getUserChannels: vi.fn(async () => []),
-          userExists: vi.fn(async () => false),
-        },
+        channels: { erase: vi.fn() },
         nukeUserFirestore: vi.fn(),
         deleteCustomerStorage: vi.fn(),
         deleteCredentialSecrets: vi.fn(),

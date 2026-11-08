@@ -2,7 +2,7 @@ import { storeUploadedWorkspaceBlob as storeWorkspaceBlob } from "../../lib/proj
 import { Router, Request, Response, NextFunction } from "express";
 import { logger } from "../../middleware/logging.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
-import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
+import { workspaceGiteaOrg, workspaceRepoName } from "@octogee/core/gitea-naming";
 import {
   WorkspaceStorageQuotaError,
 } from "../../lib/workspace-blob.js";

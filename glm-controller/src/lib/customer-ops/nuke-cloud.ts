@@ -1,14 +1,13 @@
 
 
-import type { GiteaCleanupClient } from "./gitea.js";
-import type { MmCleanupClient } from "./mattermost.js";
+import type { ManagedChannelHost } from "@octogee/core/channel-host";
+import type { ManagedGitHost } from "@octogee/core/git-host";
 
 export interface NukeCloudCtx {
   uid: string;
   currentOperationId: string;
   slug: string;
   email: string | null;
-  giteaOrg: string;
 
   repoNames: string[];
 
@@ -52,8 +51,8 @@ export interface NukeCloudStepResult {
 }
 
 export interface NukeCloudDeps {
-  gitea: GiteaCleanupClient;
-  mattermost: MmCleanupClient;
+  git: Pick<ManagedGitHost, "eraseOwner">;
+  channels: Pick<ManagedChannelHost, "erase">;
 
   nukeUserFirestore: (
     uid: string,
@@ -92,39 +91,22 @@ if (!ctx.slug) {
 } else {
   results.push(
     await runStep("gitea", log, async () => {
-      for (const repoName of ctx.repoNames) {
-        await deps.gitea.deleteRepo(ctx.giteaOrg, repoName);
-      }
-      await deps.gitea.deleteOrg(ctx.giteaOrg);
-      await deps.gitea.deleteGiteaUser(ctx.slug);
+      await deps.git.eraseOwner(ctx.slug, ctx.repoNames);
     }),
   );
 }
 
 results.push(
     await runStep("mattermost", log, async () => {
-      if (ctx.mmUserId && ctx.workspaceTeamId) {
-        const channelIds = await deps.mattermost.getUserChannels(
-          ctx.mmUserId,
-          ctx.workspaceTeamId,
-        );
-        for (const id of channelIds) {
-          await deps.mattermost.destroyChannel(id);
-        }
-      }
-      if (ctx.mmUserId) await deps.mattermost.destroyUser(ctx.mmUserId);
-      if (ctx.adminChannelId) {
-        await deps.mattermost.destroyChannel(ctx.adminChannelId);
-      }
-      if (ctx.mmCoachUserId) {
-        await deps.mattermost.destroyUser(ctx.mmCoachUserId);
-      }
-      for (const userId of ctx.projectAgentMmUserIds) {
-        await deps.mattermost.destroyUser(userId);
-      }
-      if (ctx.workspaceTeamId) {
-        await deps.mattermost.destroyTeam(ctx.workspaceTeamId);
-      }
+      await deps.channels.erase({
+        teamId: ctx.workspaceTeamId,
+        ownerUserId: ctx.mmUserId,
+        channelIds: ctx.adminChannelId ? [ctx.adminChannelId] : [],
+        userIds: [
+          ...(ctx.mmCoachUserId ? [ctx.mmCoachUserId] : []),
+          ...ctx.projectAgentMmUserIds,
+        ],
+      });
     }),
   );
 

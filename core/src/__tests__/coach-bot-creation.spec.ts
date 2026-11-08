@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PROVISION_SRC = path.resolve(__dirname, "../mattermost/provision.ts");
+const CHANNEL_HOST_SRC = path.resolve(__dirname, "../channel-host/mattermost.ts");
 const PROFILE_SYNC_SRC = path.resolve(__dirname, "../mattermost/profile-sync.ts");
 const GATEWAY_EDGE_AGENTS_SRC = path.resolve(
   __dirname,
@@ -18,17 +19,28 @@ const COACH_IDENTITY_SRC = path.resolve(
 );
 
 describe("coach is a MM bot — creation contract", () => {
-  it("provision.ts creates the coach via POST /bots, not POST /users", () => {
+  it("provision.ts creates the coach as a bot, not a user", () => {
     const src = fs.readFileSync(PROVISION_SRC, "utf-8");
 
-const coachIdx = src.indexOf("const coachUsername = `${slug}-coach`");
+    const coachIdx = src.indexOf("const coachUsername = `${slug}-coach`");
     expect(coachIdx).toBeGreaterThan(-1);
 
-const botCreateIdx = src.indexOf('mmApiCall("POST", "/bots"', coachIdx);
+    const botCreateIdx = src.indexOf("host.ensureBot(", coachIdx);
     expect(botCreateIdx).toBeGreaterThan(coachIdx);
 
-const userCreateAfterCoach = src.indexOf('mmApiCall("POST", "/users"', coachIdx);
+    const userCreateAfterCoach = src.indexOf("host.ensureUser(", coachIdx);
     expect(userCreateAfterCoach).toBe(-1);
+  });
+
+  it("the Mattermost channel host creates bots via POST /bots with display_name", () => {
+    const src = fs.readFileSync(CHANNEL_HOST_SRC, "utf-8");
+    const ensureBotIdx = src.indexOf("async ensureBot(");
+    expect(ensureBotIdx).toBeGreaterThan(-1);
+    const block = src.slice(ensureBotIdx, src.indexOf("ensureChannel:", ensureBotIdx));
+    expect(block).toMatch(/"POST", "\/bots"/);
+    expect(block).toMatch(/display_name:\s*displayName/);
+    expect(block).not.toMatch(/first_name:/);
+    expect(block).not.toMatch(/nickname:/);
   });
 
   it("provision.ts passes display_name (not first_name/nickname) on bot create", () => {
@@ -36,8 +48,8 @@ const userCreateAfterCoach = src.indexOf('mmApiCall("POST", "/users"', coachIdx)
     const coachIdx = src.indexOf("const coachUsername = `${slug}-coach`");
     const blockEnd = src.indexOf("if (!coachMmUser)", coachIdx);
     const block = src.slice(coachIdx, blockEnd);
-    expect(block).toMatch(/display_name:\s*"Octo"/);
-    expect(block).not.toMatch(/first_name:/);
+    expect(block).toMatch(/displayName:\s*"Octo"/);
+    expect(block).not.toMatch(/firstName:/);
     expect(block).not.toMatch(/nickname:/);
   });
 });

@@ -27,6 +27,7 @@ import { MissingRecordError } from "./platform-state/errors.js";
 import { CREW_IDENTITY } from "./crew.js";
 import { workspaceRepoName } from "./gitea-naming.js";
 import { provisionMattermostUser } from "./mattermost.js";
+import type { ManagedChannelHost } from "./channel-host/types.js";
 import { notifyNewSignup } from "./notifications.js";
 import { writeTierTemplateFiles as writeTierTemplateFilesImpl } from "./tier-template-files.js";
 
@@ -259,6 +260,7 @@ export function buildRemoveCustomerConfig(
 
 export async function provisionMattermost(
   ctx: ProvisioningContext,
+  channelHost: ManagedChannelHost,
 ): Promise<MmUpdate> {
   const data = ctx.userData as UserDataShape;
   const vibe = data.onboarding?.vibe ?? null;
@@ -273,7 +275,7 @@ export async function provisionMattermost(
       (data.displayName?.split(" ").slice(1).join(" ")) ||
       "",
     photoURL: data.photoURL || "",
-  });
+  }, channelHost);
 }
 
 export function upsertMattermostBindingByAgentAndPeer(

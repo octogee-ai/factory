@@ -1,4 +1,5 @@
 import type { MmUpdate } from "./customer-lifecycle.js";
+import type { ManagedChannelHost } from "./channel-host/types.js";
 export { listTierTemplateFiles, writeTierTemplateFiles, } from "./tier-template-files.js";
 export interface AgentBinding {
     agentId: string;
@@ -68,7 +69,7 @@ export declare function registerCoachAgent(ctx: ProvisioningContext, config: Ope
 export declare function buildCoachAgentEntry(ctx: ProvisioningContext): AgentEntry;
 export declare function buildCoachBindings(current: unknown, coachAgentId: string, slug: string, mmUpdate: MmUpdate): AgentBinding[];
 export declare function buildRemoveCustomerConfig(current: OpenclawConfigShape & Record<string, unknown>, slug: string, agentId: string): OpenclawConfigShape & Record<string, unknown>;
-export declare function provisionMattermost(ctx: ProvisioningContext): Promise<MmUpdate>;
+export declare function provisionMattermost(ctx: ProvisioningContext, channelHost: ManagedChannelHost): Promise<MmUpdate>;
 export declare function upsertMattermostBindingByAgentAndPeer(bindings: AgentBinding[], binding: AgentBinding & {
     match: {
         peer: {

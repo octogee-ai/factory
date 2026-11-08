@@ -3,30 +3,6 @@ import { projectGeneralChannelName, } from "@octogee/shared/types/identity";
 import { computeProjectChannelDisplayName } from "@octogee/shared/types/display-names";
 import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
-export async function createOrRestoreChannel(teamId, name, displayName, type, purpose) {
-    let channel = (await mmApiCall("POST", "/channels", {
-        team_id: teamId, name, display_name: displayName, type, purpose,
-    }));
-    if (channel)
-        return channel;
-    channel = (await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`));
-    if (channel)
-        return channel;
-    const archived = await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}?include_deleted=true`);
-    if (isArchivedChannel(archived, name)) {
-        channel = (await mmApiCall("POST", `/channels/${archived.id}/restore`));
-        if (channel)
-            log(`[mattermost] restored archived channel: ${name}`);
-        return channel;
-    }
-    return null;
-}
-function isArchivedChannel(candidate, name) {
-    if (typeof candidate !== "object" || candidate === null)
-        return false;
-    const channel = candidate;
-    return channel.name === name && typeof channel.id === "string" && (channel.delete_at ?? 0) > 0;
-}
 export async function createProjectChannel(teamId, // workspace team ID (Phase 4: team-per-workspace)
 slug, projectSlug, customerMmUserId, projectName) {
     const MM_ADMIN_USER_ID = process.env.MM_ADMIN_USER_ID;

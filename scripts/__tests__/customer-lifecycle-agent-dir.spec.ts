@@ -38,7 +38,7 @@ vi.mock("@octogee/core/project-coach-workspaces", async (importOriginal) => {
 });
 vi.mock("../lib/gitea-admin-broker-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/gitea-admin-broker-client.js")>();
-  return { ...actual, ensureProjectCoachRepo: coachGit.ensure };
+  return { ...actual, brokeredGitHost: { ...actual.brokeredGitHost, ensureRepo: coachGit.ensure } };
 });
 
 interface RuntimeMock {
@@ -330,7 +330,7 @@ describe("customer lifecycle config patch agent directories", () => {
         path.join(tempRoot, "customers", "alice", ...(github ? [".system", "project-coaches"] : ["projects"]), "orbit"),
       ]);
       if (github) {
-        expect(coachGit.ensure).toHaveBeenCalledWith("alice");
+        expect(coachGit.ensure).toHaveBeenCalledWith("alice", { kind: "project-coaches" });
         expect(coachGit.restore.mock.invocationCallOrder.at(-1)).toBeLessThan(agentsCreate.mock.invocationCallOrder.at(-1)!);
         expect(fsSync.existsSync(path.join(tempRoot, "customers", "alice", "projects", "orbit"))).toBe(false);
       }

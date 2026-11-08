@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { internalFetch } from "../lib/internal-fetch.js";
-import * as broker from "../lib/gitea-admin-broker-client.js";
+import { brokeredGitHost as broker } from "../lib/gitea-admin-broker-client.js";
 
 vi.mock("../lib/internal-fetch.js", () => ({ internalFetch: vi.fn() }));
 
@@ -22,7 +22,7 @@ function lastCall(): { url: string; method: string; body: unknown } {
   };
 }
 
-describe("gitea-admin-broker-client → Gitea admin broker", () => {
+describe("brokeredGitHost → Gitea admin broker", () => {
   beforeEach(() => {
     delete process.env.GATEWAY_EDGE_INTERNAL_URL;
     delete process.env.GITEA_ADMIN_BROKER_URL;
@@ -33,9 +33,9 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     delete process.env.GITEA_ADMIN_BROKER_URL;
   });
 
-  it("ensureGiteaUser POSTs slug + pubKey to the local sidecar", async () => {
+  it("registerKey POSTs slug + pubKey to the local sidecar", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureGiteaUser("acme", "ssh-ed25519 AAA");
+    await broker.registerKey("acme", "ssh-ed25519 AAA");
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/ensure-user`,
       method: "POST",
@@ -43,9 +43,9 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
-  it("releaseGiteaUserKey POSTs the retiring pod's exact public key", async () => {
+  it("releaseKey POSTs the retiring pod's exact public key", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.releaseGiteaUserKey("acme", "ssh-ed25519 OLD predecessor");
+    await broker.releaseKey("acme", "ssh-ed25519 OLD predecessor");
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/release-user-key`,
       method: "POST",
@@ -55,12 +55,12 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
 
   it("fails loud when the sidecar returns a non-2xx (no silent success)", async () => {
     mockFetch.mockResolvedValueOnce(reply(502, { error: "gitea down" }));
-    await expect(broker.ensureGiteaUser("acme", "k")).rejects.toThrow(/502/);
+    await expect(broker.registerKey("acme", "k")).rejects.toThrow(/502/);
   });
 
-  it("readGiteaUserPubKeys GETs and returns every active pod key", async () => {
+  it("listKeys GETs and returns every active pod key", async () => {
     mockFetch.mockResolvedValueOnce(reply(200, { pubKeys: ["ssh-ed25519 OLD", "ssh-ed25519 WANT"] }));
-    expect(await broker.readGiteaUserPubKeys("acme")).toEqual([
+    expect(await broker.listKeys("acme")).toEqual([
       "ssh-ed25519 OLD",
       "ssh-ed25519 WANT",
     ]);
@@ -70,14 +70,14 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
-  it("readGiteaUserPubKeys passes through an empty list", async () => {
+  it("listKeys passes through an empty list", async () => {
     mockFetch.mockResolvedValueOnce(reply(200, { pubKeys: [] }));
-    expect(await broker.readGiteaUserPubKeys("acme")).toEqual([]);
+    expect(await broker.listKeys("acme")).toEqual([]);
   });
 
-  it("ensureGiteaOrgForWorkspace POSTs slug", async () => {
+  it("ensureOwner POSTs slug", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureGiteaOrgForWorkspace("acme");
+    await broker.ensureOwner("acme");
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/ensure-org`,
       method: "POST",
@@ -85,9 +85,9 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
-  it("ensureWorkspaceRepo POSTs slug", async () => {
+  it("ensureRepo workspace POSTs slug to the workspace route", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureWorkspaceRepo("acme");
+    await broker.ensureRepo("acme", { kind: "workspace" });
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/ensure-workspace-repo`,
       method: "POST",
@@ -95,9 +95,9 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
-  it("ensureSystemConfigRepo POSTs slug", async () => {
+  it("ensureRepo system-config POSTs slug to the system config route", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureSystemConfigRepo("acme");
+    await broker.ensureRepo("acme", { kind: "system-config" });
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/ensure-system-config-repo`,
       method: "POST",
@@ -105,9 +105,9 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
-  it("ensureProjectRepo POSTs slug + projectName", async () => {
+  it("ensureRepo project POSTs slug + projectName to the project route", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureProjectRepo("acme", "mygame");
+    await broker.ensureRepo("acme", { kind: "project", projectSlug: "mygame" });
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/ensure-project-repo`,
       method: "POST",
@@ -115,9 +115,19 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     });
   });
 
+  it("ensureRepo project-coaches POSTs slug to the coach repo route", async () => {
+    mockFetch.mockResolvedValueOnce(reply(204));
+    await broker.ensureRepo("acme", { kind: "project-coaches" });
+    expect(lastCall()).toMatchObject({
+      url: `${DEFAULT_BASE}/internal/gitea/ensure-project-coach-repo`,
+      method: "POST",
+      body: { slug: "acme" },
+    });
+  });
+
   it("repoExists GETs and returns the boolean", async () => {
     mockFetch.mockResolvedValueOnce(reply(200, { exists: false }));
-    expect(await broker.repoExists("acme", "workspace")).toBe(false);
+    expect(await broker.repoExists({ owner: "acme", repo: "workspace" })).toBe(false);
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/repo-exists?org=acme&repo=workspace`,
       method: "GET",
@@ -126,7 +136,7 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
 
   it("archiveRepo POSTs org + repo", async () => {
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.archiveRepo("acme", "workspace");
+    await broker.archiveRepo({ owner: "acme", repo: "workspace" });
     expect(lastCall()).toMatchObject({
       url: `${DEFAULT_BASE}/internal/gitea/archive-repo`,
       method: "POST",
@@ -137,7 +147,7 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
   it("honors GATEWAY_EDGE_INTERNAL_URL override", async () => {
     process.env.GATEWAY_EDGE_INTERNAL_URL = "http://localhost:9999";
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureWorkspaceRepo("acme");
+    await broker.ensureRepo("acme", { kind: "workspace" });
     expect(lastCall().url).toBe("http://localhost:9999/internal/gitea/ensure-workspace-repo");
   });
 
@@ -145,7 +155,7 @@ describe("gitea-admin-broker-client → Gitea admin broker", () => {
     process.env.GATEWAY_EDGE_INTERNAL_URL = "http://localhost:9999";
     process.env.GITEA_ADMIN_BROKER_URL = "http://octogee-api.octogee-test.svc.cluster.local:3001";
     mockFetch.mockResolvedValueOnce(reply(204));
-    await broker.ensureWorkspaceRepo("acme");
+    await broker.ensureRepo("acme", { kind: "workspace" });
     expect(lastCall().url).toBe(
       "http://octogee-api.octogee-test.svc.cluster.local:3001/internal/gitea/ensure-workspace-repo",
     );

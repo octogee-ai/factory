@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createMmCleanupClient } from "../lib/customer-ops/mattermost";
+import { createMattermostChannelHost } from "@octogee/core/channel-host";
 import { nukeUserCloudSide, type NukeCloudCtx, type NukeCloudDeps } from "../lib/customer-ops/nuke-cloud";
 
 function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
@@ -8,7 +8,6 @@ function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
     currentOperationId: "erase-1",
     slug: "alice",
     email: "alice@example.com",
-    giteaOrg: "alice",
     repoNames: ["workspace", "blog"],
     projectSlugs: ["blog"],
     workspaceTeamId: "team-1",
@@ -28,18 +27,8 @@ function mkCtx(overrides: Partial<NukeCloudCtx> = {}): NukeCloudCtx {
 
 function mkDeps(overrides: Partial<NukeCloudDeps> = {}): NukeCloudDeps {
   return {
-    gitea: {
-      deleteRepo: vi.fn(async () => undefined),
-      deleteOrg: vi.fn(async () => undefined),
-      deleteGiteaUser: vi.fn(async () => undefined),
-    },
-    mattermost: {
-      destroyUser: vi.fn(async () => undefined),
-      destroyChannel: vi.fn(async () => undefined),
-      destroyTeam: vi.fn(async () => undefined),
-      getUserChannels: vi.fn(async () => ["mm-c-1", "mm-c-2"]),
-      userExists: vi.fn(async () => false),
-    },
+    git: { eraseOwner: vi.fn(async () => undefined) },
+    channels: { erase: vi.fn(async () => undefined) },
     nukeUserFirestore: vi.fn(async () => undefined),
     deleteCustomerStorage: vi.fn(async () => undefined),
     deleteHostingSites: vi.fn(async () => ({ deleted: 0 })),
@@ -113,14 +102,10 @@ describe("nukeUserCloudSide — happy path", () => {
     expect(stuck.find((r) => r.key === "auth")).toEqual({ key: "auth", ok: true, skipped: true });
   });
 
-  it("Gitea step deletes every repo + the user", async () => {
+  it("Gitea step erases every repo, the owner, and the user", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.gitea.deleteRepo).toHaveBeenCalledTimes(2);
-    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("alice", "workspace");
-    expect(deps.gitea.deleteRepo).toHaveBeenCalledWith("alice", "blog");
-    expect(deps.gitea.deleteOrg).toHaveBeenCalledWith("alice");
-    expect(deps.gitea.deleteGiteaUser).toHaveBeenCalledWith("alice");
+    expect(deps.git.eraseOwner).toHaveBeenCalledWith("alice", ["workspace", "blog"]);
   });
 
   it("direct and group memberships do not block permanent Mattermost user and team erasure", async () => {
@@ -138,8 +123,8 @@ describe("nukeUserCloudSide — happy path", () => {
         status: path.endsWith("/direct") || path.endsWith("/group") ? 400 : 200,
       });
     }) as unknown as typeof fetch;
-    const mattermost = createMmCleanupClient({ baseUrl: "https://mm.test", adminToken: "admin", fetchImpl });
-    const deps = mkDeps({ mattermost });
+    const channels = createMattermostChannelHost({ baseUrl: "https://mm.test", adminToken: "admin", fetch: fetchImpl });
+    const deps = mkDeps({ channels });
     const results = await nukeUserCloudSide(mkCtx(), deps);
     expect(results.find(result => result.key === "mattermost")).toMatchObject({ ok: true });
     expect(deletes).toEqual([
@@ -153,18 +138,15 @@ describe("nukeUserCloudSide — happy path", () => {
     expect(deps.deleteAuthUser).toHaveBeenCalled();
   });
 
-  it("MM step destroys all user channels then the user, plus admin channel + coach + team", async () => {
+  it("MM step erases the owner's channels and user, plus admin channel + coach + project agents + team", async () => {
     const deps = mkDeps();
     await nukeUserCloudSide(mkCtx(), deps);
-    expect(deps.mattermost.getUserChannels).toHaveBeenCalledWith("mm-u-1", "team-1");
-    expect(deps.mattermost.destroyChannel).toHaveBeenCalledWith("mm-c-1");
-    expect(deps.mattermost.destroyChannel).toHaveBeenCalledWith("mm-c-2");
-    expect(deps.mattermost.destroyChannel).toHaveBeenCalledWith("mm-c-admin");
-    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-u-1");
-    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-coach-1");
-    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-project-1");
-    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-project-2");
-    expect(deps.mattermost.destroyTeam).toHaveBeenCalledWith("team-1");
+    expect(deps.channels.erase).toHaveBeenCalledWith({
+      teamId: "team-1",
+      ownerUserId: "mm-u-1",
+      channelIds: ["mm-c-admin"],
+      userIds: ["mm-coach-1", "mm-project-1", "mm-project-2"],
+    });
   });
 
   it("MM step gracefully handles missing IDs (raw signup with no MM bootstrap)", async () => {
@@ -179,9 +161,12 @@ describe("nukeUserCloudSide — happy path", () => {
       }),
       deps,
     );
-    expect(deps.mattermost.destroyUser).not.toHaveBeenCalled();
-    expect(deps.mattermost.destroyTeam).not.toHaveBeenCalled();
-    expect(deps.mattermost.destroyChannel).not.toHaveBeenCalled();
+    expect(deps.channels.erase).toHaveBeenCalledWith({
+      teamId: null,
+      ownerUserId: null,
+      channelIds: [],
+      userIds: [],
+    });
   });
 
   it("permanently deletes a known Mattermost user even when the workspace team is already gone", async () => {
@@ -190,19 +175,19 @@ describe("nukeUserCloudSide — happy path", () => {
       mkCtx({ workspaceTeamId: null, mmUserId: "mm-u-orphan" }),
       deps,
     );
-    expect(deps.mattermost.getUserChannels).not.toHaveBeenCalled();
-    expect(deps.mattermost.destroyUser).toHaveBeenCalledWith("mm-u-orphan");
+    expect(deps.channels.erase).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: null, ownerUserId: "mm-u-orphan" }),
+    );
   });
 });
 
 describe("nukeUserCloudSide — partial failure", () => {
   it("continues subsequent steps when one fails; reports per-step error", async () => {
     const deps = mkDeps({
-      gitea: {
-        deleteRepo: vi.fn(async () => {
+      git: {
+        eraseOwner: vi.fn(async () => {
           throw new Error("gitea down");
         }),
-        deleteGiteaUser: vi.fn(),
       },
     });
     const results = await nukeUserCloudSide(mkCtx(), deps);

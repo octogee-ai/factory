@@ -445,6 +445,14 @@
     "./agent-postgres": {
       "types": "./dist/agent-postgres.d.ts",
       "default": "./dist/agent-postgres.js"
+    },
+    "./channel-host": {
+      "types": "./dist/channel-host/index.d.ts",
+      "default": "./dist/channel-host/index.js"
+    },
+    "./git-host": {
+      "types": "./dist/git-host/index.d.ts",
+      "default": "./dist/git-host/index.js"
     }
   },
   "typesVersions": {
@@ -739,6 +747,12 @@
       ],
       "agent-postgres": [
         "dist/agent-postgres.d.ts"
+      ],
+      "channel-host": [
+        "dist/channel-host/index.d.ts"
+      ],
+      "git-host": [
+        "dist/git-host/index.d.ts"
       ]
     }
   },

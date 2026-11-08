@@ -434,8 +434,8 @@ async function ensureSshKeyAndGitea(adapter, slug, reclaimExistingSshKey = false
 async function registerFirstTimeSshKey(adapter, slug) {
     const pubKey = adapter.generateCustomerSshKey(slug);
     try {
-        await adapter.createGiteaUser(slug, pubKey);
-        const giteaPubKeys = await adapter.readGiteaCustomerPubKeys(slug);
+        await adapter.gitHost.registerKey(slug, pubKey);
+        const giteaPubKeys = await adapter.gitHost.listKeys(slug);
         if (!giteaPubKeys.some((candidate) => pubKeysMatch(candidate, pubKey))) {
             throw new Error(`Gitea did not register the new SSH key (giteaPub=${giteaPubKeys.length === 0 ? "absent" : "mismatch"})`);
         }
@@ -452,7 +452,7 @@ async function resyncSshKeyIfDrifted(adapter, slug, reclaimExistingSshKey) {
         await adapter.deleteCustomerSshKey(slug).catch(() => { });
         throw new Error(`[add:${slug}] SSH key dir exists but pubkey is unreadable; cleared, retry will regenerate`);
     }
-    const giteaPubKeys = await adapter.readGiteaCustomerPubKeys(slug);
+    const giteaPubKeys = await adapter.gitHost.listKeys(slug);
     const registered = giteaPubKeys.some((candidate) => pubKeysMatch(candidate, localPub));
     if (!reclaimExistingSshKey && registered)
         return [];
@@ -461,20 +461,20 @@ async function resyncSshKeyIfDrifted(adapter, slug, reclaimExistingSshKey) {
     if (reclaimExistingSshKey && registered)
         reason = "ownership reclaim";
     adapter.log(`[add:${slug}] resync triggered: ${reason}`);
-    await adapter.createGiteaUser(slug, localPub);
-    const recheck = await adapter.readGiteaCustomerPubKeys(slug);
+    await adapter.gitHost.registerKey(slug, localPub);
+    const recheck = await adapter.gitHost.listKeys(slug);
     if (!recheck.some((candidate) => pubKeysMatch(candidate, localPub))) {
         throw new Error(`[add:${slug}] SSH key resync did not persist in Gitea`);
     }
     return ["ssh-key-resync"];
 }
 async function ensureWorkspaceRepo(adapter, uid, snapshot, ctx) {
-    await adapter.ensureGiteaOrg(snapshot.slug);
+    await adapter.gitHost.ensureOwner(snapshot.slug);
     // A builder born onto a shared pod never runs the non-shared pre-boot
     // restore, which is the only other thing that creates this repo. Without it
     // the migration flush reads a head that does not exist and the move retries
     // forever (#3196).
-    await adapter.ensureSystemConfigRepo(snapshot.slug);
+    await adapter.gitHost.ensureRepo(snapshot.slug, { kind: "system-config" });
     return convergeWorkspaceCheckout(adapter, uid, snapshot, ctx);
 }
 async function convergeWorkspaceCheckout(adapter, uid, snapshot, ctx) {
@@ -801,7 +801,7 @@ async function releaseUnmountedGiteaKey(adapter, slug) {
     if (pubKey === null)
         return false;
     try {
-        await adapter.releaseGiteaUserKey(slug, pubKey);
+        await adapter.gitHost.releaseKey(slug, pubKey);
     }
     catch (err) {
         adapter.log(`⚠ [remove:${slug}] Gitea key release failed; local keypair kept for the preStop release: ${String(err)}`);

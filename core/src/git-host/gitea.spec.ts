@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const OLD_ENV = { ...process.env };
+import { createGiteaGitHost } from "./gitea.js";
+
 const BASE = "http://gitea.test:3000/api/v1";
 
 function res(status: number, body: unknown = {}): Response {
@@ -22,31 +23,26 @@ function keyTitle(owner: string): string {
   return `octogee-gateway-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
 }
 
-describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", () => {
+describe("createGiteaGitHost — managed Gitea admin operations", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  let host: ReturnType<typeof createGiteaGitHost>;
 
   beforeEach(() => {
-    process.env.GITEA_URL = "http://gitea.test:3000";
-    process.env.GITEA_TOKEN = "admin-tok";
-    process.env.K8S_NAMESPACE = "octogee";
     fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    vi.resetModules();
+    host = createGiteaGitHost({
+      apiBaseUrl: BASE,
+      token: () => "admin-tok",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    process.env = { ...OLD_ENV };
-  });
-
-  describe("ensureGiteaUser", () => {
+  describe("registerKey", () => {
     it("creates the ws-<slug> user and registers the octogee-gateway ssh key", async () => {
       fetchMock
         .mockResolvedValueOnce(res(201, { id: 1 })) // POST /admin/users
         .mockResolvedValueOnce(res(200, [])) // GET existing keys
         .mockResolvedValueOnce(res(201, { id: 9 })); // POST key
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await ensureGiteaUser("acme", "ssh-ed25519 AAAABBB octogee-acme@gateway");
+      await host.registerKey("acme", "ssh-ed25519 AAAABBB octogee-acme@gateway");
 
       const calls = callsTo(fetchMock);
       expect(calls[0]).toMatchObject({ url: `${BASE}/admin/users`, method: "POST" });
@@ -74,8 +70,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         .mockResolvedValueOnce(res(status, { message: "user already exists" }))
         .mockResolvedValueOnce(res(200, []))
         .mockResolvedValueOnce(res(201, {}));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).resolves.toBeUndefined();
+      await expect(host.registerKey("acme", "ssh-ed25519 K")).resolves.toBeUndefined();
     });
 
     it("does not hide a conflict when the expected user cannot be reconciled", async () => {
@@ -84,8 +79,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         .mockResolvedValueOnce(res(404))
         .mockResolvedValueOnce(res(404))
         .mockResolvedValueOnce(res(404));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).rejects.toThrow(/register-key.*404/);
+      await expect(host.registerKey("acme", "ssh-ed25519 K")).rejects.toThrow(/register-key.*404/);
       expect(callsTo(fetchMock)).not.toContainEqual(expect.objectContaining({ method: "DELETE" }));
     });
 
@@ -97,8 +91,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
           { id: 8, title: "other", key: "ssh-ed25519 OTHER" },
         ]))
         .mockResolvedValueOnce(res(201, {})); // POST new key
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await ensureGiteaUser("acme", "ssh-ed25519 NEW");
+      await host.registerKey("acme", "ssh-ed25519 NEW");
 
       const calls = callsTo(fetchMock);
       expect(calls).not.toContainEqual(expect.objectContaining({ method: "DELETE" }));
@@ -113,8 +106,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
           { id: 7, title: "octogee-gateway-old", key: "ssh-ed25519 OLD predecessor" },
           { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 WANT current-pod" },
         ]));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await ensureGiteaUser("acme", "ssh-ed25519 WANT another-comment");
+      await host.registerKey("acme", "ssh-ed25519 WANT another-comment");
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
@@ -131,10 +123,8 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         ]))
         .mockResolvedValueOnce(res(204))
         .mockResolvedValueOnce(res(201, {}));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-
       await expect(
-        ensureGiteaUser("acme", "ssh-ed25519 WANT successor-pod", "bender/pod-new"),
+        host.registerKey("acme", "ssh-ed25519 WANT successor-pod", "bender/pod-new"),
       ).resolves.toBeUndefined();
 
       expect(callsTo(fetchMock)).toEqual([
@@ -167,10 +157,8 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         .mockResolvedValueOnce(res(500, { message: "target registration failed" }))
         .mockResolvedValueOnce(res(200, []))
         .mockResolvedValueOnce(res(201, {}));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-
       await expect(
-        ensureGiteaUser("acme", inheritedKey, "bender/pod-new"),
+        host.registerKey("acme", inheritedKey, "bender/pod-new"),
       ).rejects.toThrow(/register-key.*500.*target registration failed/);
 
       const calls = callsTo(fetchMock);
@@ -215,10 +203,8 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         }
         throw new Error(`unexpected request: ${method} ${path}`);
       });
-      const { ensureGiteaUser, deleteGiteaUserPubKey } = await import("../gitea-admin.js");
-
-      await ensureGiteaUser("acme", inheritedKey, successorOwner);
-      await deleteGiteaUserPubKey("acme", inheritedKey, predecessorOwner);
+      await host.registerKey("acme", inheritedKey, successorOwner);
+      await host.releaseKey("acme", inheritedKey, predecessorOwner);
 
       expect(keys).toEqual([{
         id: 10,
@@ -239,8 +225,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         ]))
         .mockResolvedValueOnce(res(204))
         .mockResolvedValueOnce(res(201, {}));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await ensureGiteaUser("acme", "ssh-ed25519 NEW", "bender/pod-new");
+      await host.registerKey("acme", "ssh-ed25519 NEW", "bender/pod-new");
 
       const calls = callsTo(fetchMock);
       expect(calls.filter((call) => call.method === "DELETE")).toEqual([
@@ -266,9 +251,8 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
           title: "octogee-gateway-current",
           key: "ssh-ed25519 WANT current-pod",
         }]));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
       await expect(
-        ensureGiteaUser("acme", "ssh-ed25519 WANT another-comment"),
+        host.registerKey("acme", "ssh-ed25519 WANT another-comment"),
       ).resolves.toBeUndefined();
     });
 
@@ -276,8 +260,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       fetchMock
         .mockResolvedValueOnce(res(422, {}))
         .mockResolvedValueOnce(res(500, { message: "database unavailable" }));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await expect(ensureGiteaUser("acme", "ssh-ed25519 WANT")).rejects.toThrow(
+      await expect(host.registerKey("acme", "ssh-ed25519 WANT")).rejects.toThrow(
         /list-keys.*500.*database unavailable/,
       );
     });
@@ -287,18 +270,16 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         .mockResolvedValueOnce(res(201, {}))
         .mockResolvedValueOnce(res(200, []))
         .mockResolvedValueOnce(res(500, { message: "boom" }));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).rejects.toThrow();
+      await expect(host.registerKey("acme", "ssh-ed25519 K")).rejects.toThrow();
     });
 
     it("throws when user creation fails with a non-conflict status", async () => {
       fetchMock.mockResolvedValueOnce(res(500, { message: "down" }));
-      const { ensureGiteaUser } = await import("../gitea-admin.js");
-      await expect(ensureGiteaUser("acme", "ssh-ed25519 K")).rejects.toThrow();
+      await expect(host.registerKey("acme", "ssh-ed25519 K")).rejects.toThrow();
     });
   });
 
-  describe("readGiteaUserPubKeys", () => {
+  describe("listKeys and primaryKey", () => {
     it("returns every managed gateway key so overlapping pods can verify membership", async () => {
       fetchMock.mockResolvedValueOnce(
         res(200, [
@@ -307,8 +288,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
           { id: 3, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor\n" },
         ]),
       );
-      const { readGiteaUserPubKeys } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKeys("acme")).toEqual([
+      expect(await host.listKeys("acme")).toEqual([
         "ssh-ed25519 WANT octogee",
         "ssh-ed25519 NEXT successor",
       ]);
@@ -323,24 +303,21 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor" },
         { id: 2, title: "octogee-gateway", key: "ssh-ed25519 OLD predecessor" },
       ]));
-      const { readGiteaUserPubKey } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKey("acme")).toBe("ssh-ed25519 OLD predecessor");
+      expect(await host.primaryKey("acme")).toBe("ssh-ed25519 OLD predecessor");
     });
 
     it("returns an empty list on 404 (user not provisioned)", async () => {
       fetchMock.mockResolvedValueOnce(res(404, {}));
-      const { readGiteaUserPubKeys } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKeys("acme")).toEqual([]);
+      expect(await host.listKeys("acme")).toEqual([]);
     });
 
     it("returns an empty list when no managed gateway key is present", async () => {
       fetchMock.mockResolvedValueOnce(res(200, [{ id: 1, title: "other", key: "x" }]));
-      const { readGiteaUserPubKeys } = await import("../gitea-admin.js");
-      expect(await readGiteaUserPubKeys("acme")).toEqual([]);
+      expect(await host.listKeys("acme")).toEqual([]);
     });
   });
 
-  describe("deleteGiteaUserPubKey", () => {
+  describe("releaseKey", () => {
     it("removes only the retiring predecessor key and preserves the successor key", async () => {
       fetchMock
         .mockResolvedValueOnce(res(200, [
@@ -348,8 +325,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
           { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor" },
         ]))
         .mockResolvedValueOnce(res(204));
-      const { deleteGiteaUserPubKey } = await import("../gitea-admin.js");
-      await deleteGiteaUserPubKey("acme", "ssh-ed25519 OLD retiring-comment");
+      await host.releaseKey("acme", "ssh-ed25519 OLD retiring-comment");
 
       expect(callsTo(fetchMock)).toEqual([
         expect.objectContaining({
@@ -367,8 +343,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       fetchMock.mockResolvedValueOnce(res(200, [
         { id: 7, title: "octogee-gateway-predecessor", key: "ssh-ed25519 OLD" },
       ]));
-      const { deleteGiteaUserPubKey } = await import("../gitea-admin.js");
-      await deleteGiteaUserPubKey("acme", "ssh-ed25519 OLD", "bender/pod-new");
+      await host.releaseKey("acme", "ssh-ed25519 OLD", "bender/pod-new");
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
@@ -377,22 +352,20 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
       fetchMock.mockResolvedValueOnce(res(200, [
         { id: 9, title: "octogee-gateway-new", key: "ssh-ed25519 NEXT successor" },
       ]));
-      const { deleteGiteaUserPubKey } = await import("../gitea-admin.js");
       await expect(
-        deleteGiteaUserPubKey("acme", "ssh-ed25519 OLD retiring-comment"),
+        host.releaseKey("acme", "ssh-ed25519 OLD retiring-comment"),
       ).resolves.toBeUndefined();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("ensureGiteaOrgForWorkspace", () => {
+  describe("ensureOwner", () => {
     it("creates org + builders team + adds the ws user as member", async () => {
       fetchMock
         .mockResolvedValueOnce(res(201, {})) // POST /orgs
         .mockResolvedValueOnce(res(201, { id: 5 })) // POST /orgs/acme/teams
         .mockResolvedValueOnce(res(204)); // PUT member
-      const { ensureGiteaOrgForWorkspace } = await import("../gitea-admin.js");
-      await ensureGiteaOrgForWorkspace("acme");
+      await host.ensureOwner("acme");
 
       const calls = callsTo(fetchMock);
       expect(calls[0]).toMatchObject({ url: `${BASE}/orgs`, method: "POST" });
@@ -408,8 +381,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
         .mockResolvedValueOnce(res(422, {})) // team exists
         .mockResolvedValueOnce(res(200, [{ id: 9, name: "builders" }])) // GET teams
         .mockResolvedValueOnce(res(204)); // PUT member
-      const { ensureGiteaOrgForWorkspace } = await import("../gitea-admin.js");
-      await ensureGiteaOrgForWorkspace("acme");
+      await host.ensureOwner("acme");
 
       const calls = callsTo(fetchMock);
       expect(calls[2]).toMatchObject({ url: `${BASE}/orgs/acme/teams`, method: "GET" });
@@ -417,11 +389,10 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
     });
   });
 
-  describe("ensureWorkspaceRepo", () => {
+  describe("ensureRepo workspace", () => {
     it("creates the private workspace repo with auto_init false", async () => {
       fetchMock.mockResolvedValueOnce(res(201, {}));
-      const { ensureWorkspaceRepo } = await import("../gitea-admin.js");
-      await ensureWorkspaceRepo("acme");
+      await host.ensureRepo("acme", { kind: "workspace" });
 
       const c = callsTo(fetchMock)[0];
       expect(c).toMatchObject({ url: `${BASE}/orgs/acme/repos`, method: "POST" });
@@ -430,16 +401,14 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
 
     it("treats 409 (already exists) as success", async () => {
       fetchMock.mockResolvedValueOnce(res(409, {}));
-      const { ensureWorkspaceRepo } = await import("../gitea-admin.js");
-      await expect(ensureWorkspaceRepo("acme")).resolves.toBeUndefined();
+      await expect(host.ensureRepo("acme", { kind: "workspace" })).resolves.toBeUndefined();
     });
   });
 
-  describe("ensureSystemConfigRepo", () => {
+  describe("ensureRepo system-config", () => {
     it("creates the private system_config repo with auto_init false", async () => {
       fetchMock.mockResolvedValueOnce(res(201, {}));
-      const { ensureSystemConfigRepo } = await import("../gitea-admin.js");
-      await ensureSystemConfigRepo("acme");
+      await host.ensureRepo("acme", { kind: "system-config" });
 
       const c = callsTo(fetchMock)[0];
       expect(c).toMatchObject({ url: `${BASE}/orgs/acme/repos`, method: "POST" });
@@ -448,16 +417,14 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
 
     it("treats 409 (already exists) as success", async () => {
       fetchMock.mockResolvedValueOnce(res(409, {}));
-      const { ensureSystemConfigRepo } = await import("../gitea-admin.js");
-      await expect(ensureSystemConfigRepo("acme")).resolves.toBeUndefined();
+      await expect(host.ensureRepo("acme", { kind: "system-config" })).resolves.toBeUndefined();
     });
   });
 
-  describe("ensureProjectRepo", () => {
+  describe("ensureRepo project", () => {
     it("creates the private project repo named after the project", async () => {
       fetchMock.mockResolvedValueOnce(res(201, {}));
-      const { ensureProjectRepo } = await import("../gitea-admin.js");
-      await ensureProjectRepo("acme", "mygame");
+      await host.ensureRepo("acme", { kind: "project", projectSlug: "mygame" });
 
       const c = callsTo(fetchMock)[0];
       expect(c).toMatchObject({ url: `${BASE}/orgs/acme/repos`, method: "POST" });
@@ -468,23 +435,20 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
   describe("repoExists", () => {
     it("returns true on 200", async () => {
       fetchMock.mockResolvedValueOnce(res(200, { id: 1 }));
-      const { repoExists } = await import("../gitea-admin.js");
-      expect(await repoExists("acme", "workspace")).toBe(true);
+      expect(await host.repoExists({ owner: "acme", repo: "workspace" })).toBe(true);
       expect(callsTo(fetchMock)[0]).toMatchObject({ url: `${BASE}/repos/acme/workspace`, method: "GET" });
     });
 
     it("returns false on 404", async () => {
       fetchMock.mockResolvedValueOnce(res(404, {}));
-      const { repoExists } = await import("../gitea-admin.js");
-      expect(await repoExists("acme", "workspace")).toBe(false);
+      expect(await host.repoExists({ owner: "acme", repo: "workspace" })).toBe(false);
     });
   });
 
-  describe("archiveRepo", () => {
+  describe("archiveRepo and restoreRepo", () => {
     it("PATCHes archived:true", async () => {
       fetchMock.mockResolvedValueOnce(res(200, {}));
-      const { archiveRepo } = await import("../gitea-admin.js");
-      await archiveRepo("acme", "workspace");
+      await host.archiveRepo({ owner: "acme", repo: "workspace" });
 
       const c = callsTo(fetchMock)[0];
       expect(c).toMatchObject({ url: `${BASE}/repos/acme/workspace`, method: "PATCH" });
@@ -493,8 +457,7 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
 
     it("PATCHes archived:false when paid project access returns", async () => {
       fetchMock.mockResolvedValueOnce(res(200, {}));
-      const { setRepoArchived } = await import("../gitea-admin.js");
-      await setRepoArchived("acme", "workspace", false);
+      await host.restoreRepo({ owner: "acme", repo: "workspace" });
 
       const c = callsTo(fetchMock)[0];
       expect(c).toMatchObject({ url: `${BASE}/repos/acme/workspace`, method: "PATCH" });
@@ -503,16 +466,67 @@ describe("gateway-edge gitea-admin — provisioner admin ops on GITEA_TOKEN", ()
 
     it("tolerates 404 (repo already gone) as a no-op", async () => {
       fetchMock.mockResolvedValueOnce(res(404, {}));
-      const { archiveRepo } = await import("../gitea-admin.js");
-      await expect(archiveRepo("acme", "workspace")).resolves.toBeUndefined();
+      await expect(host.archiveRepo({ owner: "acme", repo: "workspace" })).resolves.toBeUndefined();
     });
   });
 
-  it("refuses to start a request when GITEA_TOKEN is unset", async () => {
-    delete process.env.GITEA_TOKEN;
-    vi.resetModules();
-    const { repoExists } = await import("../gitea-admin.js");
-    await expect(repoExists("acme", "workspace")).rejects.toThrow(/GITEA_TOKEN/);
+  it("refuses to start a request when the admin token is unavailable", async () => {
+    const tokenless = createGiteaGitHost({
+      apiBaseUrl: BASE,
+      token: () => {
+        throw new Error("GITEA_TOKEN not configured");
+      },
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(tokenless.repoExists({ owner: "acme", repo: "workspace" })).rejects.toThrow(/GITEA_TOKEN/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("ensureRepo project-coaches", () => {
+    it("creates the private project coaches repo on main", async () => {
+      fetchMock.mockResolvedValueOnce(res(201, {}));
+      await host.ensureRepo("acme", { kind: "project-coaches" });
+
+      const c = callsTo(fetchMock)[0];
+      expect(c).toMatchObject({ url: `${BASE}/orgs/acme/repos`, method: "POST" });
+      expect(c.body).toMatchObject({
+        name: "project_coaches",
+        private: true,
+        default_branch: "main",
+        auto_init: false,
+      });
+    });
+
+    it("fails loud with the role's operation name", async () => {
+      fetchMock.mockResolvedValueOnce(res(500, { message: "boom" }));
+      await expect(host.ensureRepo("acme", { kind: "project-coaches" })).rejects.toThrow(
+        /create-project-coach-repo failed: 500 boom/,
+      );
+    });
+  });
+
+  describe("eraseOwner", () => {
+    it("deletes every repo, then the owner org, then the ws-<slug> user with the admin token", async () => {
+      fetchMock.mockResolvedValue(res(204));
+      await host.eraseOwner("alice", ["workspace", "blog"]);
+
+      expect(callsTo(fetchMock)).toEqual([
+        expect.objectContaining({ method: "DELETE", url: `${BASE}/repos/alice/workspace` }),
+        expect.objectContaining({ method: "DELETE", url: `${BASE}/repos/alice/blog` }),
+        expect.objectContaining({ method: "DELETE", url: `${BASE}/orgs/alice` }),
+        expect.objectContaining({ method: "DELETE", url: `${BASE}/admin/users/ws-alice` }),
+      ]);
+      expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("token admin-tok");
+    });
+
+    it("treats 404 as already gone at every level", async () => {
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+      await expect(host.eraseOwner("ghost", ["missing"])).resolves.toBeUndefined();
+    });
+
+    it("throws with the status and body when a delete fails", async () => {
+      fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
+      await expect(host.eraseOwner("alice", ["x"])).rejects.toThrow(/deleteRepo alice\/x failed: 500 boom/);
+    });
   });
 });

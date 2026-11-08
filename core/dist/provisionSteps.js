@@ -136,7 +136,7 @@ export function buildRemoveCustomerConfig(current, slug, agentId) {
     }
     return config;
 }
-export async function provisionMattermost(ctx) {
+export async function provisionMattermost(ctx, channelHost) {
     const data = ctx.userData;
     const vibe = data.onboarding?.vibe ?? null;
     return provisionMattermostUser({
@@ -149,7 +149,7 @@ export async function provisionMattermost(ctx) {
             (data.displayName?.split(" ").slice(1).join(" ")) ||
             "",
         photoURL: data.photoURL || "",
-    });
+    }, channelHost);
 }
 export function upsertMattermostBindingByAgentAndPeer(bindings, binding) {
     const idx = bindings.findIndex((b) => b.agentId === binding.agentId &&

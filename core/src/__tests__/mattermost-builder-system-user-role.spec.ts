@@ -6,15 +6,15 @@ import { describe, it, expect } from "vitest";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PROVISION_SRC = path.resolve(__dirname, "../mattermost/provision.ts");
+const CHANNEL_HOST_SRC = path.resolve(__dirname, "../channel-host/mattermost.ts");
 
 describe("Builder MM user is created with least-privilege role (#766)", () => {
   function getUserCreateBody(): string {
-    const src = fs.readFileSync(PROVISION_SRC, "utf-8");
-    const userCreateIdx = src.indexOf('mmApiCall("POST", "/users"');
+    const src = fs.readFileSync(CHANNEL_HOST_SRC, "utf-8");
+    const userCreateIdx = src.indexOf('call("POST", "/users"');
     expect(userCreateIdx).toBeGreaterThan(-1);
 
-const bodyEnd = src.indexOf("if (!mmUser)", userCreateIdx);
+    const bodyEnd = src.indexOf("if (!user)", userCreateIdx);
     expect(bodyEnd).toBeGreaterThan(userCreateIdx);
     return src.slice(userCreateIdx, bodyEnd);
   }

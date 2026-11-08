@@ -1,3 +1,4 @@
+import type { ManagedChannelHost } from "../channel-host/types.js";
 export declare const COACH_PAT_DESCRIPTION = "Octogee coach agent (OpenClaw)";
 interface MintCollectionRef {
     doc(id: string): MintDocRef;
@@ -7,12 +8,11 @@ interface MintDocRef {
     set(data: Record<string, unknown>): Promise<unknown>;
 }
 export interface CoachPatMintDeps {
-    mmApiCall: (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
+    channelHost: Pick<ManagedChannelHost, "revokeTokens" | "issueToken">;
     db: {
         collection: (name: string) => MintCollectionRef;
     };
     now: () => unknown;
-    log?: (msg: string) => void;
 }
 export declare function mintAndPersistCoachToken(deps: CoachPatMintDeps, uid: string, coachMmUserId: string): Promise<{
     token: string;

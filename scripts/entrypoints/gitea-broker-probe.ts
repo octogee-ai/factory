@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 
 import { createFleetBrokerClient } from "../lib/fleet-broker-client.js";
-import { repoExists } from "../lib/gitea-admin-broker-client.js";
+import { brokeredGitHost } from "../lib/gitea-admin-broker-client.js";
 
 interface GiteaBrokerProbeDependencies {
   createClient?: (gatewayId: string) => {
@@ -34,7 +34,9 @@ export async function probeGiteaAdminBroker(
   const users = await client.assignedUsers();
   const slug = users.find((user) => user.slug.trim().length > 0)?.slug;
   if (!slug) throw new Error(`gateway ${gatewayId} has no assigned tenant for the Gitea broker probe`);
-  const workspaceRepoExists = await (dependencies.repoExists ?? repoExists)(slug, "workspace");
+  const repoExists = dependencies.repoExists ??
+    ((owner: string, repo: string) => brokeredGitHost.repoExists({ owner, repo }));
+  const workspaceRepoExists = await repoExists(slug, "workspace");
   return { slug, workspaceRepoExists };
 }
 

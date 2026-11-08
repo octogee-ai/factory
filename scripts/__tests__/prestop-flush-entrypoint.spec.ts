@@ -96,45 +96,45 @@ describe("prestop-flush entrypoint config", () => {
   });
 
   it("builds exact-key cleanup for a retiring tenant-bound pod", async () => {
-    const releaseGiteaUserKey = vi.fn(async () => {});
+    const releaseKey = vi.fn(async () => {});
     const release = createPreStopGiteaKeyRelease("alice", {
       readLocalCustomerPubKey: () => "ssh-ed25519 OLD predecessor",
-      releaseGiteaUserKey,
+      releaseKey,
     });
 
     await release?.();
-    expect(releaseGiteaUserKey).toHaveBeenCalledWith("alice", "ssh-ed25519 OLD predecessor");
+    expect(releaseKey).toHaveBeenCalledWith("alice", "ssh-ed25519 OLD predecessor");
   });
 
   it("fails loud instead of reporting cleanup when the local public key is missing", async () => {
     const release = createPreStopGiteaKeyRelease("alice", {
       readLocalCustomerPubKey: () => null,
       listLocalCustomerPubKeys: () => [],
-      releaseGiteaUserKey: vi.fn(async () => {}),
+      releaseKey: vi.fn(async () => {}),
     });
     await expect(release?.()).rejects.toThrow(/local SSH public key is missing/);
   });
 
   it("releases every exact local customer key from a retiring shared gateway", async () => {
-    const releaseGiteaUserKey = vi.fn(async () => {});
+    const releaseKey = vi.fn(async () => {});
     const release = createPreStopGiteaKeyRelease("", {
       readLocalCustomerPubKey: () => null,
       listLocalCustomerPubKeys: () => [
         { slug: "alice", pubKey: "ssh-ed25519 ALICE predecessor" },
         { slug: "bob", pubKey: "ssh-ed25519 BOB predecessor" },
       ],
-      releaseGiteaUserKey,
+      releaseKey,
     });
 
     await release?.();
-    expect(releaseGiteaUserKey.mock.calls).toEqual([
+    expect(releaseKey.mock.calls).toEqual([
       ["alice", "ssh-ed25519 ALICE predecessor"],
       ["bob", "ssh-ed25519 BOB predecessor"],
     ]);
   });
 
   it("reports shared-gateway key cleanup failure after attempting every local customer", async () => {
-    const releaseGiteaUserKey = vi.fn(async (slug: string) => {
+    const releaseKey = vi.fn(async (slug: string) => {
       if (slug === "alice") throw new Error("broker unavailable");
     });
     const release = createPreStopGiteaKeyRelease("", {
@@ -143,10 +143,10 @@ describe("prestop-flush entrypoint config", () => {
         { slug: "alice", pubKey: "ssh-ed25519 ALICE predecessor" },
         { slug: "bob", pubKey: "ssh-ed25519 BOB predecessor" },
       ],
-      releaseGiteaUserKey,
+      releaseKey,
     });
 
     await expect(release?.()).rejects.toThrow(/alice.*broker unavailable/i);
-    expect(releaseGiteaUserKey).toHaveBeenCalledTimes(2);
+    expect(releaseKey).toHaveBeenCalledTimes(2);
   });
 });

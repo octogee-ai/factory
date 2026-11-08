@@ -3,6 +3,7 @@ import type { SchedulerMigrationRequest, SchedulerMigrationResult, CustomerSnaps
 import type { FleetBrokerProjectCheckoutScope, FleetBrokerProjectAgent, FleetBrokerProjectRestore, FleetBrokerUserSnapshot } from "@octogee/shared/types/fleet-broker";
 import type { ProjectRepoSource } from "@octogee/shared/types/project";
 import type { MigrationActivationManifest, MigrationSourceIdentityCustody } from "./migration-activation-manifest.js";
+import type { ManagedGitHost } from "./git-host/types.js";
 export interface UserSnapshot {
     uid: string;
     slug: string;
@@ -142,13 +143,9 @@ export interface CustomerLifecycleAdapter {
     initWorkspaceRepoFromExistingDir: (ctx: CustomerContext) => Promise<string | null>;
     hasCustomerSshKey: (slug: string) => boolean;
     generateCustomerSshKey: (slug: string) => string;
-    createGiteaUser: (slug: string, pubKey: string) => Promise<void>;
-    ensureGiteaOrg: (slug: string) => Promise<void>;
-    ensureSystemConfigRepo: (slug: string) => Promise<void>;
+    gitHost: Pick<ManagedGitHost, "registerKey" | "listKeys" | "releaseKey" | "ensureOwner" | "ensureRepo">;
     readLocalCustomerPubKey: (slug: string) => string | null;
-    readGiteaCustomerPubKeys: (slug: string) => Promise<string[]>;
     deleteCustomerSshKey: (slug: string) => Promise<void>;
-    releaseGiteaUserKey: (slug: string, pubKey: string) => Promise<void>;
     blobSyncForSlug: (slug: string) => Promise<void>;
     restoreByosubForAgent: (slug: string) => Promise<{
         restored: boolean;

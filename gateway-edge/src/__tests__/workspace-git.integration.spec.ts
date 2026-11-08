@@ -98,6 +98,8 @@ vi.mock("../lib/gitea", () => ({
   giteaApiAs: vi.fn(),
   giteaApiAsAllowNotFound: vi.fn(),
   GITEA_ORG: "octogee-test",
+  GITEA_URL: "http://gitea.test:3000",
+  getToken: vi.fn(() => "gitea-token"),
 }));
 
 vi.mock("../lib/stripe", () => ({

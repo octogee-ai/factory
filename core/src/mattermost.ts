@@ -6,10 +6,7 @@ export type {
 } from "./mattermost/channel-members.js";
 export { customerChannelMembers } from "./mattermost/channel-members.js";
 
-export {
-  createOrRestoreChannel,
-  createProjectChannel,
-} from "./mattermost/channels.js";
+export { createProjectChannel } from "./mattermost/channels.js";
 
 export {
   COMMUNITY_CHANNELS,

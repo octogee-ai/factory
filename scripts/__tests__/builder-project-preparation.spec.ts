@@ -11,7 +11,7 @@ vi.mock("../lib/config.js", () => ({
   CUSTOMERS_DIR: `${paths.root}/customers`, CUSTOMER_KEYS_DIR: `${paths.root}/keys`,
   AGENTS_DIR: `${paths.root}/agents`, GIT_API_URL: "http://gitea.test", GIT_SSH_HOST: "gitea",
 }));
-vi.mock("../lib/gitea-admin-broker-client.js", () => ({ repoExists: vi.fn(async () => true) }));
+vi.mock("../lib/gitea-admin-broker-client.js", () => ({ brokeredGitHost: { repoExists: vi.fn(async () => true) } }));
 vi.mock("../lib/migration-activation-manifest.js", () => ({ readActivationManifest: vi.fn(async () => ({ slug: "alice" })) }));
 const { cloneProjectRepo, customerRepositoryHasCanonicalRemote, externalizeCustomerGitDir, projectCheckoutMatchesSource } = await import("../lib/git.js");
 const { createBuilderSurgeGateWiring } = await import("../lib/fleet-provisioner.js");

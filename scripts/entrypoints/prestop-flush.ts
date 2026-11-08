@@ -20,7 +20,7 @@ import {
   type LocalCustomerPubKey,
 } from "../lib/git.js";
 import { quiesceCustomerSessions } from "../lib/customer-session-quiesce.js";
-import { releaseGiteaUserKey } from "../lib/gitea-admin-broker-client.js";
+import { brokeredGitHost, type BrokeredGitHost } from "../lib/gitea-admin-broker-client.js";
 import {
   checkpointDurableSystemConfigForSlug,
   syncSystemConfigForSlug,
@@ -97,8 +97,8 @@ export function createPreStopGiteaKeyRelease(
   deps: {
     readLocalCustomerPubKey: typeof readLocalCustomerPubKey;
     listLocalCustomerPubKeys?: () => LocalCustomerPubKey[];
-    releaseGiteaUserKey: typeof releaseGiteaUserKey;
-  } = { readLocalCustomerPubKey, listLocalCustomerPubKeys, releaseGiteaUserKey },
+    releaseKey: BrokeredGitHost["releaseKey"];
+  } = { readLocalCustomerPubKey, listLocalCustomerPubKeys, releaseKey: brokeredGitHost.releaseKey },
 ): () => Promise<void> {
   return async () => {
     let keys: LocalCustomerPubKey[];
@@ -114,7 +114,7 @@ export function createPreStopGiteaKeyRelease(
     const failures: string[] = [];
     for (const key of keys) {
       try {
-        await deps.releaseGiteaUserKey(key.slug, key.pubKey);
+        await deps.releaseKey(key.slug, key.pubKey);
       } catch (err) {
         failures.push(`${key.slug}: ${err instanceof Error ? err.message : String(err)}`);
       }

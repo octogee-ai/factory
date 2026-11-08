@@ -9,7 +9,7 @@ import { defaultProjectRecipe, isProjectRecipeId } from "@octogee/shared/types/p
 import { getWorkspaceMmContext } from "../../lib/mattermost-context.js";
 import { withProject, type ProjectCtx } from "../../lib/withProject.js";
 import { provisionProjectRepo } from "./provisioning.js";
-import { projectRepoName } from "../../lib/gitea-naming.js";
+import { projectRepoName } from "@octogee/core/gitea-naming";
 import { provisionProjectAgent } from "../../lib/project-agent-service.js";
 
 const router = Router();

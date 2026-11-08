@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import { ensureGiteaOrgForWorkspace } from "../lib/gitea-admin.js";
+import { gitHost } from "../lib/git-host.js";
 import { createProjectGiteaRepo, giteaWriteFiles } from "../lib/gitea.js";
 
 // giteaWriteFiles drives Gitea's batch ChangeFiles endpoint (POST /repos/{org}/{repo}/contents),
@@ -51,7 +51,7 @@ describe.skipIf(!RUN_LIVE)("giteaWriteFiles — live batch ChangeFiles against r
   });
 
   it("writes every seed — including nested paths — in a single commit, then no-ops on re-entry", async () => {
-    await ensureGiteaOrgForWorkspace(SLUG);
+    await gitHost().ensureOwner(SLUG);
     await createProjectGiteaRepo(SLUG, REPO, "live seed test", true);
 
     const before = await commitMessages();

@@ -22,11 +22,10 @@ const loops: Array<[string, Start]> = [
     runTick: async () => { await work(); return { scanned: 0, released: 0 }; },
   })],
   ["gitea gateway key gc", (work, log) => startGiteaGatewayKeyGc({
-    gitea: { listUsernames: vi.fn(), listUserKeys: vi.fn(), deleteUserKey: vi.fn() },
+    git: { sweepKeys: async () => { await work(); return { users: [], passCompleted: true, calls: 0 }; } },
     readLiveKeyHolders: vi.fn(),
     mode: "enforce", maxCallsPerTick: 1, minCallIntervalMs: 0, graceMs: 0,
     now: Date.now, sleep: async () => {}, intervalMs: 100, log,
-    runTick: async () => { await work(); return { users: [], passCompleted: true, calls: 0 }; },
   })],
 ];
 

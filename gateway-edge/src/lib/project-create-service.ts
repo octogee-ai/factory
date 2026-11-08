@@ -9,7 +9,7 @@ import {
   PROJECT_ID_MIN_LENGTH,
   PROJECT_ID_MAX_LENGTH,
 } from "@octogee/shared/types/identity";
-import { projectRepoName } from "./gitea-naming.js";
+import { projectRepoName } from "@octogee/core/gitea-naming";
 import { deleteProjectRepo, provisionProjectRepoResult } from "../routes/projects/provisioning.js";
 import { isValidGithubRepoSource } from "./github.js";
 import type { RepoSourceAccess } from "../routes/projects/repo-source.js";

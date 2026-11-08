@@ -15,27 +15,15 @@ import {
 import {
   configuredBuilderBootstrapAllowed,
 } from "@octogee/core/gateway-live-release";
-import { gatewayKeyOwnerId } from "@octogee/core/gitea-naming";
-import { db } from "../../lib/db.js";
-import { requireInternalServiceAuth } from "../../middleware/auth.js";
-import { logger } from "../../middleware/logging.js";
 import {
-  archiveRepo,
-  deleteGiteaUserPubKey,
-  ensureGiteaOrgForWorkspace,
-  ensureGiteaUser,
-  ensureProjectRepo,
-  ensureProjectCoachRepo,
-  ensureSystemConfigRepo,
-  ensureWorkspaceRepo,
-  readGiteaUserPubKey,
-  readGiteaUserPubKeys,
-  repoExists,
-} from "../../lib/gitea-admin.js";
-import {
+  gatewayKeyOwnerId,
   systemConfigRepoName,
   workspaceRepoName,
-} from "../../lib/gitea-naming.js";
+} from "@octogee/core/gitea-naming";
+import { db } from "../../lib/db.js";
+import { gitHost } from "../../lib/git-host.js";
+import { requireInternalServiceAuth } from "../../middleware/auth.js";
+import { logger } from "../../middleware/logging.js";
 import {
   deleteProjectGiteaRepo,
   ensureProjectGiteaRepo,
@@ -237,7 +225,7 @@ router.post("/ensure-user", async (req: Request, res: Response) => {
   if (!(await requireAssignedHere(req, res, slug))) return;
   const keyOwner = gatewayKeyOwnerForRequest(req, res);
   if (!keyOwner) return;
-  await broker(res, "ensure-user", () => ensureGiteaUser(slug, pubKey, keyOwner));
+  await broker(res, "ensure-user", () => gitHost().registerKey(slug, pubKey, keyOwner));
 });
 
 router.post("/release-user-key", async (req: Request, res: Response) => {
@@ -249,7 +237,7 @@ router.post("/release-user-key", async (req: Request, res: Response) => {
   }
   const keyOwner = gatewayKeyOwnerForRequest(req, res);
   if (!keyOwner) return;
-  await broker(res, "release-user-key", () => deleteGiteaUserPubKey(slug, pubKey, keyOwner));
+  await broker(res, "release-user-key", () => gitHost().releaseKey(slug, pubKey, keyOwner));
 });
 
 router.get("/user-pubkey", async (req: Request, res: Response) => {
@@ -257,7 +245,7 @@ router.get("/user-pubkey", async (req: Request, res: Response) => {
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
   try {
-    const pubKey = await readGiteaUserPubKey(slug);
+    const pubKey = await gitHost().primaryKey(slug);
     res.json({ pubKey });
   } catch (err) {
     logger.error("internal/gitea user-pubkey failed", { err });
@@ -270,7 +258,7 @@ router.get("/user-pubkeys", async (req: Request, res: Response) => {
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
   try {
-    const pubKeys = await readGiteaUserPubKeys(slug);
+    const pubKeys = await gitHost().listKeys(slug);
     res.json({ pubKeys });
   } catch (err) {
     logger.error("internal/gitea user-pubkeys failed", { err });
@@ -282,28 +270,28 @@ router.post("/ensure-org", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "ensure-org", () => ensureGiteaOrgForWorkspace(slug));
+  await broker(res, "ensure-org", () => gitHost().ensureOwner(slug));
 });
 
 router.post("/ensure-workspace-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "ensure-workspace-repo", () => ensureWorkspaceRepo(slug));
+  await broker(res, "ensure-workspace-repo", () => gitHost().ensureRepo(slug, { kind: "workspace" }));
 });
 
 router.post("/ensure-system-config-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "ensure-system-config-repo", () => ensureSystemConfigRepo(slug));
+  await broker(res, "ensure-system-config-repo", () => gitHost().ensureRepo(slug, { kind: "system-config" }));
 });
 
 router.post("/ensure-project-coach-repo", async (req: Request, res: Response) => {
   const { slug } = (req.body ?? {}) as { slug?: unknown };
   if (!validSlug(res, slug)) return;
   if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "ensure-project-coach-repo", () => ensureProjectCoachRepo(slug));
+  await broker(res, "ensure-project-coach-repo", () => gitHost().ensureRepo(slug, { kind: "project-coaches" }));
 });
 
 router.post("/ensure-project-repo", async (req: Request, res: Response) => {
@@ -314,7 +302,7 @@ router.post("/ensure-project-repo", async (req: Request, res: Response) => {
     return;
   }
   if (!(await requireAssignedHere(req, res, slug))) return;
-  await broker(res, "ensure-project-repo", () => ensureProjectRepo(slug, projectName));
+  await broker(res, "ensure-project-repo", () => gitHost().ensureRepo(slug, { kind: "project", projectSlug: projectName }));
 });
 
 router.post("/provision-project-repo", async (req: Request, res: Response) => {
@@ -361,7 +349,7 @@ router.get("/repo-exists", async (req: Request, res: Response) => {
   }
   if (!(await requireAssignedHere(req, res, org))) return;
   try {
-    const exists = await repoExists(org, repo);
+    const exists = await gitHost().repoExists({ owner: org, repo });
     res.json({ exists });
   } catch (err) {
     logger.error("internal/gitea repo-exists failed", { err });
@@ -376,7 +364,7 @@ router.post("/archive-repo", async (req: Request, res: Response) => {
     return;
   }
   if (!(await requireAssignedHere(req, res, org))) return;
-  await broker(res, "archive-repo", () => archiveRepo(org, repo));
+  await broker(res, "archive-repo", () => gitHost().archiveRepo({ owner: org, repo }));
 });
 
 export default router;

@@ -20,12 +20,15 @@ vi.mock("../lib/config.js", async () => {
 });
 
 vi.mock("../lib/gitea-admin-broker-client.js", () => ({
-  repoExists: vi.fn(async () => true),
-  ensureGiteaUser: vi.fn(async () => {}),
-  readGiteaUserPubKeys: vi.fn(async () => []),
-  ensureWorkspaceRepo: vi.fn(async () => {}),
-  ensureProjectRepo: vi.fn(async () => {}),
-  archiveRepo: vi.fn(async () => {}),
+  brokeredGitHost: {
+    repoExists: vi.fn(async () => true),
+    registerKey: vi.fn(async () => {}),
+    listKeys: vi.fn(async () => []),
+    releaseKey: vi.fn(async () => {}),
+    ensureOwner: vi.fn(async () => {}),
+    ensureRepo: vi.fn(async () => {}),
+    archiveRepo: vi.fn(async () => {}),
+  },
 }));
 
 const { OPENCLAW_DIR, CUSTOMERS_DIR } = await import("../lib/config.js");

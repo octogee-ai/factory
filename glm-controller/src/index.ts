@@ -215,9 +215,9 @@ import {
   verifyCustomerStorageErasure,
 } from "./lib/customer-ops/avatars.js";
 import { loadCustomerCleanupContext } from "./lib/customer-ops/cleanup-context.js";
+import { createMattermostChannelHost } from "@octogee/core/channel-host";
+import { createGiteaGitHost } from "@octogee/core/git-host";
 import { firestoreBuilderAccountReader } from "@octogee/core/builder-account";
-import { createGiteaCleanupClient } from "./lib/customer-ops/gitea.js";
-import { createMmCleanupClient } from "./lib/customer-ops/mattermost.js";
 import { createUnmountFromGateway } from "./lib/customer-ops/unmount-gateway.js";
 import { isRetiredSharedGateway, retiredSharedGatewayRuntimeAbsent } from "./lib/customer-ops/retired-shared-gateway.js";
 import { nukeUserCloudSide } from "./lib/customer-ops/nuke-cloud.js";
@@ -356,7 +356,6 @@ import { recoverControllerOrphanedOperations, startStuckOpReaper } from "./stuck
 import { claimCrashLoopEviction } from "./surge-crashloop-eviction.js";
 import { startNativeReturnHoldReaper } from "./native-return-hold-reaper.js";
 import {
-  createGiteaKeyAdminClient,
   parseGiteaGatewayKeyGcMode,
   readFleetLiveKeyHolders,
   startGiteaGatewayKeyGc,
@@ -2270,10 +2269,12 @@ function startControllerBackgroundTasks({
     now: () => Date.now(),
   });
   const kubeOps = deps.kubeOps;
+  const keySweepApiUrl = requireEnv("GIT_API_URL", "the Gitea gateway key sweep requires it");
+  const keySweepToken = requireEnv("GIT_API_TOKEN", "the Gitea gateway key sweep requires it");
   const stopGiteaGatewayKeyGc = startGiteaGatewayKeyGc({
-    gitea: createGiteaKeyAdminClient({
-      apiUrl: requireEnv("GIT_API_URL", "the Gitea gateway key sweep requires it"),
-      token: requireEnv("GIT_API_TOKEN", "the Gitea gateway key sweep requires it"),
+    git: createGiteaGitHost({
+      apiBaseUrl: keySweepApiUrl,
+      token: () => keySweepToken,
     }),
     readLiveKeyHolders: () => readFleetLiveKeyHolders({
       informer,
@@ -3797,7 +3798,7 @@ function buildEraseCustomerHandler(db: Firestore, store: PlatformStateStore, log
         cleanup.mmCoachUserId,
         ...cleanup.projectAgentMmUserIds,
       ]) {
-        if (userId && await cloudCleanup.mattermost.userExists(userId)) {
+        if (userId && await cloudCleanup.channels.userExists(userId)) {
           remaining.push(`mattermost/users/${userId}`);
         }
       }
@@ -3897,12 +3898,12 @@ function buildSuspendCustomerHandler(
       for (const secretName of secretNames) await deleteSecret(secretName);
     },
     retireProjectAgentMattermostUsers: async (userIds) => {
-      const mattermost = createMmCleanupClient({
+      const channels = createMattermostChannelHost({
         baseUrl: requireEnv("MM_URL", "project-agent suspension requires Mattermost"),
         adminToken: requireEnv("MM_ADMIN_TOKEN", "project-agent suspension requires Mattermost"),
         log: logFn,
       });
-      for (const userId of userIds) await mattermost.destroyUser(userId);
+      await channels.erase({ teamId: null, ownerUserId: null, channelIds: [], userIds });
     },
     deleteProjectAgentCredentialDocs: (docPaths) => deleteProjectAgentCredentialSecrets(store, docPaths),
     ensureOwnedGatewaysRetired: (uid, deletionId) =>
@@ -4006,12 +4007,14 @@ function createBuilderHomeServices(store: PlatformStateStore, log: (message: str
 function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore, logFn: (msg: string) => void) {
   const cleanupEnv = (name: string) =>
     requireEnv(name, "customer erasure cloud cleanup requires it");
-  const gitea = createGiteaCleanupClient({
-    apiUrl: cleanupEnv("GIT_API_URL"),
-    token: cleanupEnv("GIT_API_TOKEN"),
+  const gitApiUrl = cleanupEnv("GIT_API_URL");
+  const gitApiToken = cleanupEnv("GIT_API_TOKEN");
+  const git = createGiteaGitHost({
+    apiBaseUrl: gitApiUrl,
+    token: () => gitApiToken,
     log: logFn,
   });
-  const mattermost = createMmCleanupClient({
+  const channels = createMattermostChannelHost({
     baseUrl: cleanupEnv("MM_URL"),
     adminToken: cleanupEnv("MM_ADMIN_TOKEN"),
     log: logFn,
@@ -4020,8 +4023,8 @@ function buildCustomerCloudCleanupDeps(db: Firestore, store: PlatformStateStore,
     baseUrl: cleanupEnv("PROJECT_HOSTING_RETIREMENT_URL"),
   });
   return {
-    gitea,
-    mattermost,
+    git,
+    channels,
     nukeUserFirestore: (
       uid: string,
       slug: string,

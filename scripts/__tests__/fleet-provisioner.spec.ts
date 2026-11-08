@@ -611,7 +611,7 @@ function createProvisioningCounter(): {
 function configuredBuilderLifecycleAdapter(input: {
   cloneWorkspaceRepo?: () => Promise<boolean>;
   writeMountMarker?: () => void;
-  createGiteaUser?: () => Promise<void>;
+  registerKey?: () => Promise<void>;
 } = {}): { adapter: CustomerLifecycleAdapter; calls: string[] } {
   const calls: string[] = [];
   let customerDir = false;
@@ -640,14 +640,16 @@ function configuredBuilderLifecycleAdapter(input: {
     }),
     hasCustomerSshKey: () => true,
     readLocalCustomerPubKey: () => "ssh-pubkey",
-    readGiteaCustomerPubKeys: async () => ["ssh-pubkey"],
     restoreByosubForAgent: async () => {
       calls.push("restore-byosub");
       return { restored: false, present: false };
     },
-    createGiteaUser: async () => {
-      calls.push("claim-gitea-key");
-      await input.createGiteaUser?.();
+    gitHost: {
+      listKeys: async () => ["ssh-pubkey"],
+      registerKey: async () => {
+        calls.push("claim-gitea-key");
+        await input.registerKey?.();
+      },
     },
     hasCustomerDir: () => customerDir,
     hasWorkspaceGitDir: () => workspaceGitDir,

@@ -7,7 +7,7 @@ import { validateFilePath } from "../../../gateway-edge/src/lib/path-validation.
 import { pathHasReservedOrHiddenSegment } from "../../../gateway-edge/src/routes/workspace/helpers.js";
 import { WorkspaceStorageQuotaError, type storeWorkspaceBlobCentrally } from "../../../gateway-edge/src/lib/workspace-blob.js";
 import { logger } from "../../../gateway-edge/src/middleware/logging.js";
-import { workspaceGiteaOrg, workspaceRepoName } from "../../../gateway-edge/src/lib/gitea-naming.js";
+import { workspaceGiteaOrg, workspaceRepoName } from "@octogee/core/gitea-naming";
 
 export type WorkspaceBlobStore = typeof storeWorkspaceBlobCentrally;
 interface AssignedWorkspace { uid: string; slug: string; gatewayId: string }

@@ -5,7 +5,7 @@ import { storage } from "../../lib/db.js";
 import { logger } from "../../middleware/logging.js";
 import { removeFromManifest } from "../../lib/manifest.js";
 import { giteaApiAsUser } from "../../lib/gitea.js";
-import { workspaceGiteaOrg, workspaceRepoName } from "../../lib/gitea-naming.js";
+import { workspaceGiteaOrg, workspaceRepoName } from "@octogee/core/gitea-naming";
 import {
   WorkspaceStorageQuotaError,
 } from "../../lib/workspace-blob.js";

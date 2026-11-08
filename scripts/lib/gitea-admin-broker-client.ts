@@ -1,12 +1,11 @@
+import type { GitRepoRole, ManagedGitHost } from "@octogee/core/git-host";
+
 import { internalFetch } from "./internal-fetch.js";
 
-// In-pod provisioner → octogee-api broker for Gitea ADMIN operations.
-// The provisioner runs in the OpenClaw gateway container and holds NO Gitea admin
-// token (GIT_API_TOKEN dropped, PLATFORM-CREDENTIAL-BROKERING). It calls octogee-api,
-// which holds GITEA_TOKEN, through internalFetch. internalFetch attaches the projected
-// gateway KSA token from disk; no shared INTERNAL_SERVICE_KEY is required in the gateway.
-// Every call fails loud on a non-2xx response —
-// the reconcile loop retries; nothing is swallowed.
+export type BrokeredGitHost = Pick<
+  ManagedGitHost,
+  "registerKey" | "listKeys" | "releaseKey" | "ensureOwner" | "ensureRepo" | "repoExists" | "archiveRepo"
+>;
 
 function baseUrl(): string {
   if (process.env.GITEA_ADMIN_BROKER_URL) return process.env.GITEA_ADMIN_BROKER_URL;
@@ -34,48 +33,44 @@ async function getJson(path: string): Promise<unknown> {
   return resp.json();
 }
 
-export async function ensureGiteaUser(slug: string, pubKey: string): Promise<void> {
-  await postVoid("/internal/gitea/ensure-user", { slug, pubKey });
+function ensureRepoRequest(slug: string, role: GitRepoRole): { path: string; body: Record<string, string> } {
+  switch (role.kind) {
+    case "workspace":
+      return { path: "/internal/gitea/ensure-workspace-repo", body: { slug } };
+    case "system-config":
+      return { path: "/internal/gitea/ensure-system-config-repo", body: { slug } };
+    case "project-coaches":
+      return { path: "/internal/gitea/ensure-project-coach-repo", body: { slug } };
+    case "project":
+      return { path: "/internal/gitea/ensure-project-repo", body: { slug, projectName: role.projectSlug } };
+  }
 }
 
-export async function releaseGiteaUserKey(slug: string, pubKey: string): Promise<void> {
-  await postVoid("/internal/gitea/release-user-key", { slug, pubKey });
-}
+export const brokeredGitHost: BrokeredGitHost = {
+  registerKey: (slug, pubKey) => postVoid("/internal/gitea/ensure-user", { slug, pubKey }),
 
-export async function readGiteaUserPubKeys(slug: string): Promise<string[]> {
-  const data = (await getJson(
-    `/internal/gitea/user-pubkeys?slug=${encodeURIComponent(slug)}`,
-  )) as { pubKeys: string[] };
-  return data.pubKeys;
-}
+  releaseKey: (slug, pubKey) => postVoid("/internal/gitea/release-user-key", { slug, pubKey }),
 
-export async function ensureGiteaOrgForWorkspace(slug: string): Promise<void> {
-  await postVoid("/internal/gitea/ensure-org", { slug });
-}
+  async listKeys(slug) {
+    const data = (await getJson(
+      `/internal/gitea/user-pubkeys?slug=${encodeURIComponent(slug)}`,
+    )) as { pubKeys: string[] };
+    return data.pubKeys;
+  },
 
-export async function ensureWorkspaceRepo(slug: string): Promise<void> {
-  await postVoid("/internal/gitea/ensure-workspace-repo", { slug });
-}
+  ensureOwner: (slug) => postVoid("/internal/gitea/ensure-org", { slug }),
 
-export async function ensureSystemConfigRepo(slug: string): Promise<void> {
-  await postVoid("/internal/gitea/ensure-system-config-repo", { slug });
-}
+  ensureRepo(slug, role) {
+    const { path, body } = ensureRepoRequest(slug, role);
+    return postVoid(path, body);
+  },
 
-export async function ensureProjectCoachRepo(slug: string): Promise<void> {
-  await postVoid("/internal/gitea/ensure-project-coach-repo", { slug });
-}
+  async repoExists({ owner, repo }) {
+    const data = (await getJson(
+      `/internal/gitea/repo-exists?org=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`,
+    )) as { exists: boolean };
+    return data.exists;
+  },
 
-export async function ensureProjectRepo(slug: string, projectName: string): Promise<void> {
-  await postVoid("/internal/gitea/ensure-project-repo", { slug, projectName });
-}
-
-export async function repoExists(org: string, repo: string): Promise<boolean> {
-  const data = (await getJson(
-    `/internal/gitea/repo-exists?org=${encodeURIComponent(org)}&repo=${encodeURIComponent(repo)}`,
-  )) as { exists: boolean };
-  return data.exists;
-}
-
-export async function archiveRepo(org: string, repo: string): Promise<void> {
-  await postVoid("/internal/gitea/archive-repo", { org, repo });
-}
+  archiveRepo: ({ owner, repo }) => postVoid("/internal/gitea/archive-repo", { org: owner, repo }),
+};

@@ -386,7 +386,7 @@ async function ensureMigrationGiteaKey(
   if (pubKey === null) {
     throw new Error(`[migration-http] local SSH public key is missing for ${slug}`);
   }
-  await deps.adapter.createGiteaUser(slug, pubKey);
+  await deps.adapter.gitHost.registerKey(slug, pubKey);
   deps.log?.(`[migration-http] Gitea SSH key claimed slug=${slug} phase=${phase}`);
 }
 

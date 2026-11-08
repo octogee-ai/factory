@@ -3,7 +3,7 @@ import type { Project } from "@octogee/shared/types/index";
 import { db, FieldValue } from "../../lib/db.js";
 import { giteaApi } from "../../lib/gitea.js";
 import { githubContentsApi } from "../../lib/github.js";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
 import { readConnectorAccessToken } from "../../lib/connector-tokens.js";
 import { readProject } from "../../lib/firestoreReads.js";
 import { withProject } from "../../lib/withProject.js";

@@ -32,7 +32,7 @@ import {
   systemConfigRepoName,
   workspaceGiteaOrg,
   workspaceRepoName,
-} from "../lib/gitea-naming.js";
+} from "@octogee/core/gitea-naming";
 
 beforeEach(() => {
   m.update.mockReset().mockResolvedValue(undefined);

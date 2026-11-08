@@ -17,63 +17,13 @@ vi.mock("../mattermost/channel-members.js", () => ({
   customerChannelMembers: vi.fn(() => ["mm-customer", "mm-admin"]),
 }));
 
-import {
-  createOrRestoreChannel,
-  createProjectChannel,
-} from "../mattermost/channels.js";
+import { createProjectChannel } from "../mattermost/channels.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.mmApiCall.mockReset();
   process.env.MM_URL = "http://mattermost.test";
   process.env.MM_ADMIN_USER_ID = "mm-admin";
-});
-
-describe("createOrRestoreChannel", () => {
-  it("returns the channel created by Mattermost", async () => {
-    h.mmApiCall.mockResolvedValueOnce({ id: "channel-1", name: "acme-general" });
-
-    const channel = await createOrRestoreChannel(
-      "team-1",
-      "acme-general",
-      "General",
-      "P",
-      "Workspace general",
-    );
-
-    expect(channel?.id).toBe("channel-1");
-    expect(h.mmApiCall).toHaveBeenCalledWith("POST", "/channels", {
-      team_id: "team-1",
-      name: "acme-general",
-      display_name: "General",
-      type: "P",
-      purpose: "Workspace general",
-    });
-  });
-
-  it("restores an archived channel when create and lookup miss", async () => {
-    h.mmApiCall
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: "archived-1", name: "acme-general", delete_at: 7 })
-      .mockResolvedValueOnce({ id: "archived-1", name: "acme-general" });
-
-    const channel = await createOrRestoreChannel(
-      "team-1",
-      "acme-general",
-      "General",
-      "P",
-      "Workspace general",
-    );
-
-    expect(channel?.id).toBe("archived-1");
-    expect(h.mmApiCall).toHaveBeenCalledWith(
-      "GET",
-      "/teams/team-1/channels/name/acme-general?include_deleted=true",
-    );
-    expect(h.mmApiCall).toHaveBeenCalledWith("POST", "/channels/archived-1/restore");
-    expect(h.log).toHaveBeenCalledWith("[mattermost] restored archived channel: acme-general");
-  });
 });
 
 describe("createProjectChannel", () => {

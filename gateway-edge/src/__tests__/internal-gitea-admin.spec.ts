@@ -2,7 +2,7 @@ import express from "express";
 import request from "supertest";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import * as giteaAdmin from "../lib/gitea-admin.js";
+import { gitHost } from "../lib/git-host.js";
 import {
   hasRunningInboundMigrationForSlug,
   readAssignedSlugsForGateway,
@@ -99,19 +99,19 @@ vi.mock("@octogee/core/assigned-roster", () => ({
   }),
 }));
 
-vi.mock("../lib/gitea-admin.js", () => ({
-  deleteGiteaUserPubKey: vi.fn(async () => {}),
-  ensureGiteaUser: vi.fn(async () => {}),
-  readGiteaUserPubKey: vi.fn(async () => "ssh-ed25519 OLD predecessor"),
-  readGiteaUserPubKeys: vi.fn(async () => ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"]),
-  ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
-  ensureWorkspaceRepo: vi.fn(async () => {}),
-  ensureProjectCoachRepo: vi.fn(async () => {}),
-  ensureSystemConfigRepo: vi.fn(async () => {}),
-  ensureProjectRepo: vi.fn(async () => {}),
-  repoExists: vi.fn(async () => true),
-  archiveRepo: vi.fn(async () => {}),
-}));
+vi.mock("../lib/git-host.js", () => {
+  const host = {
+    releaseKey: vi.fn(async () => {}),
+    registerKey: vi.fn(async () => {}),
+    primaryKey: vi.fn(async () => "ssh-ed25519 OLD predecessor"),
+    listKeys: vi.fn(async () => ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"]),
+    ensureOwner: vi.fn(async () => {}),
+    ensureRepo: vi.fn(async () => {}),
+    repoExists: vi.fn(async () => true),
+    archiveRepo: vi.fn(async () => {}),
+  };
+  return { gitHost: () => host };
+});
 
 const projectProvisioning = vi.hoisted(() => ({
   ensureProjectGiteaRepo: vi.fn(async () => ({ created: true })),
@@ -200,7 +200,7 @@ describe("internal gitea-admin route", () => {
   it("rejects requests without a bound gateway identity (401)", async () => {
     const res = await request(app(null)).post("/internal/gitea/ensure-user").send({ slug: "acme", pubKey: "k" });
     expect(res.status).toBe(401);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("ensure-user → 204 and calls the lib with slug + pubKey", async () => {
@@ -209,7 +209,7 @@ describe("internal gitea-admin route", () => {
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(204);
     expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+    expect(gitHost().registerKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 AAA",
       BENDER_KEY_OWNER,
@@ -221,7 +221,7 @@ describe("internal gitea-admin route", () => {
       request(app()).post("/internal/gitea/release-user-key"),
     ).send({ slug: "acme", pubKey: "ssh-ed25519 OLD predecessor" });
     expect(res.status).toBe(204);
-    expect(giteaAdmin.deleteGiteaUserPubKey).toHaveBeenCalledWith(
+    expect(gitHost().releaseKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 OLD predecessor",
       BENDER_KEY_OWNER,
@@ -235,7 +235,7 @@ describe("internal gitea-admin route", () => {
 
     expect(res.status).toBe(204);
     expect(readAssignedSlugsForGateway).not.toHaveBeenCalled();
-    expect(giteaAdmin.deleteGiteaUserPubKey).toHaveBeenCalledWith(
+    expect(gitHost().releaseKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 OLD predecessor",
       BENDER_KEY_OWNER,
@@ -252,7 +252,7 @@ describe("internal gitea-admin route", () => {
 
     expect(res.status).toBe(204);
     expect(readAssignedSlugsForGateway).toHaveBeenCalledWith(expect.anything(), "bender");
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+    expect(gitHost().registerKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 AAA",
       BENDER_KEY_OWNER,
@@ -264,7 +264,7 @@ describe("internal gitea-admin route", () => {
       request(app()).post("/internal/gitea/ensure-user"),
     ).send({ slug: "victim", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(403);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("allows the target gateway during a running inbound customer migration", async () => {
@@ -281,7 +281,7 @@ describe("internal gitea-admin route", () => {
       "bender",
       "acme",
     );
-    expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
+    expect(gitHost().primaryKey).toHaveBeenCalledWith("acme");
   });
 
   it("allows the authenticated stable gateway pod to bootstrap its configured builder", async () => {
@@ -293,7 +293,7 @@ describe("internal gitea-admin route", () => {
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+    expect(gitHost().registerKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 AAA",
       BENDER_KEY_OWNER,
@@ -309,7 +309,7 @@ describe("internal gitea-admin route", () => {
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(403);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("allows the initial stable pod before the gateway has a live release", async () => {
@@ -327,7 +327,7 @@ describe("internal gitea-admin route", () => {
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaUser).toHaveBeenCalledWith(
+    expect(gitHost().registerKey).toHaveBeenCalledWith(
       "acme",
       "ssh-ed25519 AAA",
       BENDER_KEY_OWNER,
@@ -343,7 +343,7 @@ describe("internal gitea-admin route", () => {
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(403);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -361,7 +361,7 @@ describe("internal gitea-admin route", () => {
       .send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
 
     expect(res.status).toBe(403);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("denies unassigned slugs when the inbound migration helper does not allow them", async () => {
@@ -377,7 +377,7 @@ describe("internal gitea-admin route", () => {
       "bender",
       "acme",
     );
-    expect(giteaAdmin.readGiteaUserPubKey).not.toHaveBeenCalled();
+    expect(gitHost().primaryKey).not.toHaveBeenCalled();
   });
 
   it("ensure-user → 502 when assignment lookup fails, before touching Gitea", async () => {
@@ -386,24 +386,24 @@ describe("internal gitea-admin route", () => {
       request(app()).post("/internal/gitea/ensure-user"),
     ).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(502);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("ensure-user → 400 when pubKey missing", async () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-user")).send({ slug: "acme" });
     expect(res.status).toBe(400);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("user-pubkey keeps the singular response for a predecessor image during a roll", async () => {
     const res = await authed(request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ pubKey: "ssh-ed25519 OLD predecessor" });
-    expect(giteaAdmin.readGiteaUserPubKey).toHaveBeenCalledWith("acme");
+    expect(gitHost().primaryKey).toHaveBeenCalledWith("acme");
   });
 
   it("user-pubkey → 200 { pubKey: null } when no managed key exists", async () => {
-    vi.mocked(giteaAdmin.readGiteaUserPubKey).mockResolvedValueOnce(null);
+    vi.mocked(gitHost().primaryKey).mockResolvedValueOnce(null);
     const res = await authed(request(app()).get("/internal/gitea/user-pubkey").query({ slug: "acme" }));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ pubKey: null });
@@ -415,25 +415,25 @@ describe("internal gitea-admin route", () => {
     expect(res.body).toEqual({
       pubKeys: ["ssh-ed25519 OLD predecessor", "ssh-ed25519 KEY octogee"],
     });
-    expect(giteaAdmin.readGiteaUserPubKeys).toHaveBeenCalledWith("acme");
+    expect(gitHost().listKeys).toHaveBeenCalledWith("acme");
   });
 
   it("ensure-org → 204 and calls the lib with slug", async () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-org")).send({ slug: "acme" });
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureGiteaOrgForWorkspace).toHaveBeenCalledWith("acme");
+    expect(gitHost().ensureOwner).toHaveBeenCalledWith("acme");
   });
 
   it("ensure-workspace-repo → 204", async () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-workspace-repo")).send({ slug: "acme" });
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureWorkspaceRepo).toHaveBeenCalledWith("acme");
+    expect(gitHost().ensureRepo).toHaveBeenCalledWith("acme", { kind: "workspace" });
   });
 
   it("ensure-system-config-repo → 204", async () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-system-config-repo")).send({ slug: "acme" });
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureSystemConfigRepo).toHaveBeenCalledWith("acme");
+    expect(gitHost().ensureRepo).toHaveBeenCalledWith("acme", { kind: "system-config" });
   });
 
   it("provisions the private coach repository only through its owner-scoped route", async () => {
@@ -444,8 +444,7 @@ describe("internal gitea-admin route", () => {
     expect(ordinary.status).toBe(400);
     const allowed = await authed(server.post("/internal/gitea/ensure-project-coach-repo")).send({ slug: "acme" });
     expect(allowed.status).toBe(204);
-    expect(giteaAdmin.ensureProjectCoachRepo).toHaveBeenCalledExactlyOnceWith("acme");
-    expect(giteaAdmin.ensureProjectRepo).not.toHaveBeenCalled();
+    expect(gitHost().ensureRepo).toHaveBeenCalledExactlyOnceWith("acme", { kind: "project-coaches" });
   });
 
   it("ensure-project-repo → 204 with slug + projectName", async () => {
@@ -454,7 +453,7 @@ describe("internal gitea-admin route", () => {
       projectName: "mygame",
     });
     expect(res.status).toBe(204);
-    expect(giteaAdmin.ensureProjectRepo).toHaveBeenCalledWith("acme", "mygame");
+    expect(gitHost().ensureRepo).toHaveBeenCalledWith("acme", { kind: "project", projectSlug: "mygame" });
   });
 
   it("provision-project-repo seeds through the assigned gateway's API broker", async () => {
@@ -523,13 +522,13 @@ describe("internal gitea-admin route", () => {
     const res = await authed(request(app()).get("/internal/gitea/repo-exists").query({ org: "acme", repo: "workspace" }));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ exists: true });
-    expect(giteaAdmin.repoExists).toHaveBeenCalledWith("acme", "workspace");
+    expect(gitHost().repoExists).toHaveBeenCalledWith({ owner: "acme", repo: "workspace" });
   });
 
   it("repo-exists accepts only the fixed system_config repo underscore exception", async () => {
     const ok = await authed(request(app()).get("/internal/gitea/repo-exists").query({ org: "acme", repo: "system_config" }));
     expect(ok.status).toBe(200);
-    expect(giteaAdmin.repoExists).toHaveBeenCalledWith("acme", "system_config");
+    expect(gitHost().repoExists).toHaveBeenCalledWith({ owner: "acme", repo: "system_config" });
 
     const bad = await authed(request(app()).get("/internal/gitea/repo-exists").query({ org: "acme", repo: "not_config" }));
     expect(bad.status).toBe(400);
@@ -538,17 +537,17 @@ describe("internal gitea-admin route", () => {
   it("archive-repo → 204 with org + repo", async () => {
     const res = await authed(request(app()).post("/internal/gitea/archive-repo")).send({ org: "acme", repo: "workspace" });
     expect(res.status).toBe(204);
-    expect(giteaAdmin.archiveRepo).toHaveBeenCalledWith("acme", "workspace");
+    expect(gitHost().archiveRepo).toHaveBeenCalledWith({ owner: "acme", repo: "workspace" });
   });
 
   it("archive-repo → 403 when org is not assigned to this gateway, before touching Gitea", async () => {
     const res = await authed(request(app()).post("/internal/gitea/archive-repo")).send({ org: "victim", repo: "workspace" });
     expect(res.status).toBe(403);
-    expect(giteaAdmin.archiveRepo).not.toHaveBeenCalled();
+    expect(gitHost().archiveRepo).not.toHaveBeenCalled();
   });
 
   it("→ 502 when the lib throws (fail loud, no silent success)", async () => {
-    vi.mocked(giteaAdmin.ensureGiteaUser).mockRejectedValueOnce(new Error("gitea down"));
+    vi.mocked(gitHost().registerKey).mockRejectedValueOnce(new Error("gitea down"));
     const res = await authed(request(app()).post("/internal/gitea/ensure-user")).send({ slug: "acme", pubKey: "ssh-ed25519 AAA" });
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/gitea down/);
@@ -559,13 +558,13 @@ describe("internal gitea-admin route", () => {
       const res = await authed(request(app()).post("/internal/gitea/ensure-user")).send({ slug, pubKey: "ssh-ed25519 AAA" });
       expect(res.status, `slug=${JSON.stringify(slug)}`).toBe(400);
     }
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("rejects a non-SSH pubKey with 400", async () => {
     const res = await authed(request(app()).post("/internal/gitea/ensure-user")).send({ slug: "acme", pubKey: "not-a-key" });
     expect(res.status).toBe(400);
-    expect(giteaAdmin.ensureGiteaUser).not.toHaveBeenCalled();
+    expect(gitHost().registerKey).not.toHaveBeenCalled();
   });
 
   it("rejects malformed projectName / org / repo with 400", async () => {
@@ -575,8 +574,8 @@ describe("internal gitea-admin route", () => {
     expect(r2.status).toBe(400);
     const r3 = await authed(request(app()).post("/internal/gitea/archive-repo")).send({ org: "../etc", repo: "workspace" });
     expect(r3.status).toBe(400);
-    expect(giteaAdmin.ensureProjectRepo).not.toHaveBeenCalled();
-    expect(giteaAdmin.repoExists).not.toHaveBeenCalled();
-    expect(giteaAdmin.archiveRepo).not.toHaveBeenCalled();
+    expect(gitHost().ensureRepo).not.toHaveBeenCalled();
+    expect(gitHost().repoExists).not.toHaveBeenCalled();
+    expect(gitHost().archiveRepo).not.toHaveBeenCalled();
   });
 });

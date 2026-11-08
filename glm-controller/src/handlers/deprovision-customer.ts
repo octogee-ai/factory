@@ -116,7 +116,6 @@ const nukeCtx: NukeCloudCtx = {
       currentOperationId: op.id,
       slug: cleanup.slug,
       email: cleanup.email,
-      giteaOrg: cleanup.giteaOrg,
       repoNames: cleanup.repoNames,
       projectSlugs: cleanup.projectSlugs,
       workspaceTeamId: cleanup.workspaceTeamId,

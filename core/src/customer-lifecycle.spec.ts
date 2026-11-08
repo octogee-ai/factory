@@ -152,41 +152,43 @@ if (!state.cloneSimulatesEmptyRepo) {
 
 return "ssh-pubkey";
     },
-    createGiteaUser: async (_slug, pubKey) => {
-      record("createGiteaUser");
-      if (state.giteaRegisterShouldFail) {
-        throw new Error("gitea register failed");
-      }
-
-      if (state.giteaRegisteredPubKeys) {
-        if (!state.giteaRegisteredPubKeys.includes(pubKey)) {
-          state.giteaRegisteredPubKeys.push(pubKey);
+    gitHost: {
+      registerKey: async (_slug, pubKey) => {
+        record("registerKey");
+        if (state.giteaRegisterShouldFail) {
+          throw new Error("gitea register failed");
         }
-      } else {
-        state.giteaRegisteredPubKey = pubKey;
-      }
-    },
-    ensureGiteaOrg: async () => {
-      record("ensureGiteaOrg");
-    },
-    ensureSystemConfigRepo: async () => {
-      record("ensureSystemConfigRepo");
+
+        if (state.giteaRegisteredPubKeys) {
+          if (!state.giteaRegisteredPubKeys.includes(pubKey)) {
+            state.giteaRegisteredPubKeys.push(pubKey);
+          }
+        } else {
+          state.giteaRegisteredPubKey = pubKey;
+        }
+      },
+      ensureOwner: async () => {
+        record("ensureOwner");
+      },
+      ensureRepo: async (_slug, role) => {
+        record(`ensureRepo:${role.kind}`);
+      },
+      listKeys: async () => {
+        if (state.giteaReadShouldThrow) {
+          throw new Error("Gitea key read failed (test transient)");
+        }
+        return state.giteaRegisteredPubKeys ??
+          (state.giteaRegisteredPubKey === null ? [] : [state.giteaRegisteredPubKey]);
+      },
+      releaseKey: async (_slug, pubKey) => {
+        record(`releaseKey:${pubKey}`);
+        if (state.giteaReleaseShouldFail) throw new Error("gitea release failed");
+      },
     },
     readLocalCustomerPubKey: () => (state.disk.sshKey ? "ssh-pubkey" : null),
-    readGiteaCustomerPubKeys: async () => {
-      if (state.giteaReadShouldThrow) {
-        throw new Error("Gitea key read failed (test transient)");
-      }
-      return state.giteaRegisteredPubKeys ??
-        (state.giteaRegisteredPubKey === null ? [] : [state.giteaRegisteredPubKey]);
-    },
     deleteCustomerSshKey: async () => {
       record("deleteCustomerSshKey");
       state.disk.sshKey = false;
-    },
-    releaseGiteaUserKey: async (_slug, pubKey) => {
-      record(`releaseGiteaUserKey:${pubKey}`);
-      if (state.giteaReleaseShouldFail) throw new Error("gitea release failed");
     },
 
     blobSyncForSlug: async () => {
@@ -502,7 +504,7 @@ expect(result.steps).toEqual([
     };
     await addCustomerToGateway(adapter, "uid-test");
 
-    expect(state.calls.indexOf("materializeBrokerProfiles")).toBeLessThan(state.calls.indexOf("createGiteaUser"));
+    expect(state.calls.indexOf("materializeBrokerProfiles")).toBeLessThan(state.calls.indexOf("registerKey"));
     expect(state.lastConfigPatchOpts?.brokerProfilesReady).toBeInstanceOf(Promise);
     await state.lastConfigPatchOpts!.brokerProfilesReady;
     expect(settled).toBe(true);
@@ -583,7 +585,7 @@ expect(result.steps).toEqual([
   it("ensures the per-workspace Gitea org BEFORE the workspace repo (#963)", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    const orgIdx = state.calls.indexOf("ensureGiteaOrg");
+    const orgIdx = state.calls.indexOf("ensureOwner");
     const repoIdx = state.calls.indexOf("initWorkspaceRepoFromExistingDir");
 
 expect(orgIdx).toBeGreaterThan(-1);
@@ -593,8 +595,8 @@ expect(orgIdx).toBeGreaterThan(-1);
   it("ensures the durable system_config repo for every customer, not just non-shared pods (#3196)", async () => {
     await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-    const orgIdx = state.calls.indexOf("ensureGiteaOrg");
-    const systemConfigIdx = state.calls.indexOf("ensureSystemConfigRepo");
+    const orgIdx = state.calls.indexOf("ensureOwner");
+    const systemConfigIdx = state.calls.indexOf("ensureRepo:system-config");
 
     expect(systemConfigIdx).toBeGreaterThan(-1);
     expect(systemConfigIdx).toBeGreaterThan(orgIdx);
@@ -1176,8 +1178,8 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
 
     expect(result.newCustomer).toBe(false);
     expect(result.steps).toEqual([]);
-    expect(state.calls).not.toContain("ensureGiteaOrg");
-    expect(state.calls).not.toContain("createGiteaUser");
+    expect(state.calls).not.toContain("ensureOwner");
+    expect(state.calls).not.toContain("registerKey");
     expect(state.calls).not.toContain("blobSyncForSlug");
     expect(state.calls).toContain("restoreByosubForAgent");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
@@ -1346,8 +1348,8 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
 
     expect(result.steps).toEqual(["ssh-key-resync"]);
     expect(state.giteaRegisteredPubKey).toBe("ssh-pubkey");
-    expect(state.calls).toContain("createGiteaUser");
-    expect(state.calls).not.toContain("ensureGiteaOrg");
+    expect(state.calls).toContain("registerKey");
+    expect(state.calls).not.toContain("ensureOwner");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
   });
 
@@ -1402,7 +1404,7 @@ describe("addCustomerToGateway — configured Builder overlay", () => {
     const result = await addCustomerToGateway(adapter, "uid-test");
 
     expect(state.calls).toContain("generateCustomerSshKey");
-    expect(state.calls).toContain("createGiteaUser");
+    expect(state.calls).toContain("registerKey");
     expect(state.calls).toContain("cloneWorkspaceRepo");
     expect(state.calls).not.toContain("applyAddCustomerConfigPatch");
     expect(state.calls).not.toContain("waitForAccountHealthy");
@@ -1573,7 +1575,7 @@ const state = makeState(
     ).rejects.toThrow(/SSH key registration failed/);
 
     expect(state.calls).toContain("generateCustomerSshKey");
-    expect(state.calls).toContain("createGiteaUser");
+    expect(state.calls).toContain("registerKey");
 
 expect(state.calls).toContain("deleteCustomerSshKey");
     expect(state.disk.sshKey).toBe(false);
@@ -1592,8 +1594,8 @@ const state = makeState(
     );
 
 const adapter = makeAdapter(state);
-    const orig = adapter.createGiteaUser;
-    adapter.createGiteaUser = async (slug, pubKey) => {
+    const orig = adapter.gitHost.registerKey;
+    adapter.gitHost.registerKey = async (slug, pubKey) => {
       
       await orig(slug, pubKey);
       state.giteaRegisteredPubKey = null;
@@ -1628,7 +1630,7 @@ const state = makeState(
 
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
-expect(state.calls).toContain("createGiteaUser");
+expect(state.calls).toContain("registerKey");
     expect(result.steps).toContain("ssh-key-resync");
     
     expect(state.calls).not.toContain("generateCustomerSshKey");
@@ -1684,7 +1686,7 @@ expect(state.calls).toContain("createGiteaUser");
     const result = await addCustomerToGateway(makeAdapter(state), "uid-test");
 
     expect(result.steps).not.toContain("ssh-key-resync");
-    expect(state.calls).not.toContain("createGiteaUser");
+    expect(state.calls).not.toContain("registerKey");
   });
 
   it("does NOT resync when local + Gitea keys match (healthy state)", async () => {
@@ -1710,7 +1712,7 @@ expect(state.calls).toContain("createGiteaUser");
 
     expect(result.steps).not.toContain("ssh-key");
     expect(result.steps).not.toContain("ssh-key-resync");
-    expect(state.calls).not.toContain("createGiteaUser");
+    expect(state.calls).not.toContain("registerKey");
   });
 
   it("reclaims a matching existing Gitea key when a target mount requires ownership", async () => {
@@ -1738,7 +1740,7 @@ expect(state.calls).toContain("createGiteaUser");
     });
 
     expect(result.steps).toContain("ssh-key-resync");
-    expect(state.calls).toContain("createGiteaUser");
+    expect(state.calls).toContain("registerKey");
   });
 
   it("treats transient Gitea-read failure as ERROR, not as 'key absent' (no spurious resync)", async () => {
@@ -1764,7 +1766,7 @@ const state = makeState(
       addCustomerToGateway(makeAdapter(state), "uid-test"),
     ).rejects.toThrow(/Gitea key read failed/);
     
-    expect(state.calls).not.toContain("createGiteaUser");
+    expect(state.calls).not.toContain("registerKey");
   });
 
   it("clones project repos that have giteaRepoName but no on-disk clone", async () => {
@@ -2070,7 +2072,7 @@ describe("removeCustomerFromGateway", () => {
 
     await removeCustomerFromGateway(makeAdapter(state), "uid-test");
 
-    const release = state.calls.indexOf("releaseGiteaUserKey:ssh-pubkey");
+    const release = state.calls.indexOf("releaseKey:ssh-pubkey");
     expect(release).toBeGreaterThan(state.calls.indexOf("applyRemoveCustomerConfigPatch"));
     expect(state.calls.indexOf("deleteCustomerSshKey")).toBeGreaterThan(release);
     expect(state.disk.sshKey).toBe(false);
@@ -2105,7 +2107,7 @@ describe("removeCustomerFromGateway", () => {
     });
 
     expect(result.retained).toBe(true);
-    expect(state.calls.some((call) => call.startsWith("releaseGiteaUserKey"))).toBe(false);
+    expect(state.calls.some((call) => call.startsWith("releaseKey"))).toBe(false);
     expect(state.disk.sshKey).toBe(true);
   });
 
@@ -2317,7 +2319,7 @@ releaseFirst();
     const realAdapter = makeAdapter(state);
     const hangingAdapter: CustomerLifecycleAdapter = {
       ...realAdapter,
-      readGiteaCustomerPubKeys: () => new Promise(() => {}),
+      gitHost: { ...realAdapter.gitHost, listKeys: () => new Promise(() => {}) },
     };
 
     await expect(
@@ -2420,13 +2422,13 @@ describe("restoreCustomerRuntimeFromSnapshot — blob backfill stays out of the 
     state.giteaRegisteredPubKey = "ssh-pubkey";
     let keyOwner = "native";
     const adapter = makeAdapter(state);
-    adapter.createGiteaUser = async () => { keyOwner = "shared"; };
+    adapter.gitHost.registerKey = async () => { keyOwner = "shared"; };
 
     await restoreCustomerRuntimeFromSnapshot(adapter, state.user!);
     if (keyOwner === "native") state.giteaRegisteredPubKey = null;
 
     expect(keyOwner).toBe("shared");
-    expect(await adapter.readGiteaCustomerPubKeys("test")).toEqual(["ssh-pubkey"]);
+    expect(await adapter.gitHost.listKeys("test")).toEqual(["ssh-pubkey"]);
   });
 
   it("shares one preparation deadline and request signal across snapshot project refreshes", async () => {
@@ -2743,9 +2745,12 @@ describe("restoreCustomerRuntimeFromSnapshot — same-uid in-flight dedup", () =
       ...realAdapter,
       hasCustomerSshKey: () => true,
       readLocalCustomerPubKey: () => "ssh-pubkey",
-      readGiteaCustomerPubKeys: async () => {
-        await read;
-        return ["ssh-pubkey"];
+      gitHost: {
+        ...realAdapter.gitHost,
+        listKeys: async () => {
+          await read;
+          return ["ssh-pubkey"];
+        },
       },
     };
     let workSettled: Promise<void> | undefined;
@@ -2827,12 +2832,9 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     deleteDepartedCustomerState: false,
     hasCustomerSshKey: false,
     generateCustomerSshKey: false,
-    createGiteaUser: false,
-    ensureGiteaOrg: false,
+    gitHost: false,
     readLocalCustomerPubKey: false,
-    readGiteaCustomerPubKeys: false,
     deleteCustomerSshKey: false,
-    releaseGiteaUserKey: false,
     blobSyncForSlug: false,
     restoreByosubForAgent: false,
     listProjectsNeedingClone: false,
@@ -2949,7 +2951,7 @@ const ADAPTER_REPO_TOUCHING: Record<keyof CustomerLifecycleAdapter, boolean> = {
     if (st.giteaRegisteredPubKey === null) st.giteaRegisteredPubKey = "ssh-pubkey";
     await addCustomerToGateway(makeAdapter(st), "uid-test");
 
-    const orgIdx = st.calls.indexOf("ensureGiteaOrg");
+    const orgIdx = st.calls.indexOf("ensureOwner");
 
 expect(orgIdx).toBeGreaterThan(-1);
 

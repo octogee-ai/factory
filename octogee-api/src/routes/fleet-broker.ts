@@ -318,7 +318,11 @@ async function defaultProvisionMattermost(input: {
   const { buildProvisioningContext, provisionMattermost } = await import(
     "@octogee/core/provisionSteps"
   );
-  return provisionMattermost(buildProvisioningContext(input.uid, input.userData));
+  const { mattermostChannelHostFromEnv } = await import("@octogee/core/channel-host");
+  return provisionMattermost(
+    buildProvisioningContext(input.uid, input.userData),
+    mattermostChannelHostFromEnv(),
+  );
 }
 
 async function defaultEnsureCommunityMembership(input: { mmUserId: string }): Promise<void> {

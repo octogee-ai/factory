@@ -21,25 +21,31 @@ const h = vi.hoisted(() => {
     },
     mmApiCall: vi.fn(),
     mintAndPersistCoachToken: vi.fn(),
-    createOrRestoreChannel: vi.fn(),
     mmUploadAvatar: vi.fn(),
   };
 });
 
 vi.mock("../firebase.js", () => ({ db: h.db }));
-vi.mock("../mattermost/client.js", () => ({
-  mmApiCall: h.mmApiCall,
-  assertMattermostConfigured: vi.fn(),
-}));
 vi.mock("../mattermost/coach-pat.js", () => ({
   mintAndPersistCoachToken: h.mintAndPersistCoachToken,
 }));
-vi.mock("../mattermost/channels.js", () => ({
-  createOrRestoreChannel: h.createOrRestoreChannel,
-}));
 vi.mock("../mattermost/avatars.js", () => ({ mmUploadAvatar: h.mmUploadAvatar }));
 
+import { createMattermostChannelHost } from "../channel-host/mattermost.js";
 import { provisionMattermostUser } from "../mattermost/provision.js";
+
+const host = createMattermostChannelHost({
+  baseUrl: "http://mm.test",
+  adminToken: "admin",
+  fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const endpoint = String(input).replace("http://mm.test/api/v4", "");
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    const result = await h.mmApiCall(init?.method ?? "GET", endpoint, body);
+    return result === null || result === undefined
+      ? new Response("", { status: 404 })
+      : new Response(JSON.stringify(result), { status: 200 });
+  }) as typeof fetch,
+});
 
 interface ProvisionInput {
   uid: string;
@@ -51,7 +57,7 @@ interface ProvisionInput {
   photoURL?: string;
 }
 
-const call = (i: ProvisionInput) => provisionMattermostUser(i);
+const call = (i: ProvisionInput) => provisionMattermostUser(i, host);
 
 const HAPPY: ProvisionInput = {
   uid: "u1",
@@ -64,19 +70,23 @@ const HAPPY: ProvisionInput = {
 };
 
 const seq = () => h.mmApiCall.mock.calls.map(([m, e]: [string, string]) => `${m} ${e}`);
+const createdChannelNames = () =>
+  h.mmApiCall.mock.calls
+    .filter(([m, e]: [string, string]) => m === "POST" && e === "/channels")
+    .map(([, , body]: [string, string, { name: string }]) => body.name);
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.setDocs({ "users/u1": {} });
-  h.mmApiCall.mockImplementation(async (method: string, endpoint: string) => {
+  h.mmApiCall.mockImplementation(async (method: string, endpoint: string, body?: { name?: string }) => {
     if (method === "POST" && endpoint === "/users") return { id: "builder-1", delete_at: 0 };
     if (method === "POST" && endpoint === "/teams") return { id: "team-1" };
+    if (method === "POST" && endpoint === "/channels") return { id: `ch:${body?.name}` };
     if (method === "POST" && endpoint === "/bots") return { user_id: "coach-1" };
     if (method === "POST" && endpoint === "/users/builder-1/tokens") return { token: "builder-token" };
     if (method === "GET" && endpoint.includes("/channels/name/")) return null;
     return {};
   });
-  h.createOrRestoreChannel.mockImplementation(async (_teamId: string, name: string) => ({ id: `ch:${name}` }));
   h.mintAndPersistCoachToken.mockResolvedValue({ token: "coach-pat" });
   h.mmUploadAvatar.mockResolvedValue(true);
 });
@@ -94,7 +104,7 @@ describe("provisionMattermostUser — new builder (happy path)", () => {
     expect(result["mattermost.dmChannelId"]).toBe(`ch:${workspaceCoachChannelName("acme")}`);
     expect(result["mattermost.generalChannelId"]).toBe(`ch:${workspaceGeneralChannelName("acme")}`);
     expect(result).not.toHaveProperty("mattermost.adminChannelId");
-    expect(h.createOrRestoreChannel.mock.calls.map(([, name]) => name)).toEqual([
+    expect(createdChannelNames()).toEqual([
       workspaceCoachChannelName("acme"),
       workspaceGeneralChannelName("acme"),
     ]);
@@ -227,8 +237,9 @@ describe("provisionMattermostUser — already provisioned (idempotent backfill)"
 
 describe("provisionMattermostUser — degraded paths", () => {
   it("reactivates and re-patches a soft-deleted user found by email", async () => {
-    h.mmApiCall.mockImplementation(async (method: string, endpoint: string) => {
+    h.mmApiCall.mockImplementation(async (method: string, endpoint: string, body?: { name?: string }) => {
       if (method === "POST" && endpoint === "/users") return null; // create conflicts
+      if (method === "POST" && endpoint === "/channels") return { id: `ch:${body?.name}` };
       if (method === "GET" && endpoint.startsWith("/users/username/")) return null; // username miss
       if (method === "GET" && endpoint.startsWith("/users/email/")) return { id: "builder-existing", delete_at: 5 };
       if (method === "POST" && endpoint === "/teams") return { id: "team-1" };

@@ -6,7 +6,7 @@ import {
   giteaWriteFilesIfAllAbsent,
 } from "../../lib/gitea.js";
 import { internalFetch } from "../../lib/internal-fetch.js";
-import { workspaceGiteaOrg, projectRepoName } from "../../lib/gitea-naming.js";
+import { workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
 import { renderReadmeTemplate } from "@octogee/core/templates/project-readmes";
 import {
   notesWelcomeSeed,

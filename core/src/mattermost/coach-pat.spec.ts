@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
+import { createMattermostChannelHost } from "../channel-host/mattermost.js";
 import { COACH_PAT_DESCRIPTION, mintAndPersistCoachToken } from "./coach-pat.js";
+
+type MmFake = (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
+
+function fetchOver(mmApiCall: MmFake): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const endpoint = String(input).replace("http://mm.test/api/v4", "");
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    const result = await mmApiCall(init?.method ?? "GET", endpoint, body);
+    return new Response(JSON.stringify(result ?? null), { status: 200 });
+  }) as typeof fetch;
+}
+
+function mintDeps(d: ReturnType<typeof deps>) {
+  return {
+    db: d.db,
+    now: d.now,
+    channelHost: createMattermostChannelHost({
+      baseUrl: "http://mm.test",
+      adminToken: "admin",
+      fetch: fetchOver(d.mmApiCall),
+      log: d.log,
+    }),
+  };
+}
 
 function deps() {
   const set = vi.fn(async () => undefined);
@@ -9,7 +34,7 @@ function deps() {
   const users = vi.fn(() => ({ doc: userDoc }));
   return {
     db: { collection: users },
-    mmApiCall: vi.fn(),
+    mmApiCall: vi.fn<MmFake>(),
     now: vi.fn(() => ({ __op: "serverTimestamp" })),
     log: vi.fn(),
     set,
@@ -55,7 +80,7 @@ describe("mintAndPersistCoachToken", () => {
       mintResult: { token: "coach-pat" },
     });
 
-    await expect(mintAndPersistCoachToken(d, "uid-coach", "mm-coach")).resolves.toEqual({
+    await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "mm-coach")).resolves.toEqual({
       token: "coach-pat",
     });
 
@@ -78,12 +103,12 @@ describe("mintAndPersistCoachToken", () => {
     const d = deps();
     d.mmApiCall = mm({ mintResult: { token: "coach-pat" } });
 
-    await expect(mintAndPersistCoachToken(d, "uid-coach", "")).resolves.toBeNull();
+    await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "")).resolves.toBeNull();
     expect(d.mmApiCall).not.toHaveBeenCalled();
     expect(d.set).not.toHaveBeenCalled();
 
     d.mmApiCall = mm({ mintResult: { ok: true } });
-    await expect(mintAndPersistCoachToken(d, "uid-coach", "mm-coach")).resolves.toBeNull();
+    await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "mm-coach")).resolves.toBeNull();
     expect(d.set).not.toHaveBeenCalled();
   });
 
@@ -94,7 +119,7 @@ describe("mintAndPersistCoachToken", () => {
       mintResult: { token: "coach-pat" },
     });
 
-    await expect(mintAndPersistCoachToken(d, "uid-coach", "mm-coach")).resolves.toEqual({
+    await expect(mintAndPersistCoachToken(mintDeps(d), "uid-coach", "mm-coach")).resolves.toEqual({
       token: "coach-pat",
     });
     expect(d.log).toHaveBeenCalled();
@@ -106,7 +131,7 @@ describe("mintAndPersistCoachToken", () => {
       mintResult: { token: "coach-pat" },
     });
 
-    await expect(mintAndPersistCoachToken(d2, "uid-coach", "mm-coach")).resolves.toEqual({
+    await expect(mintAndPersistCoachToken(mintDeps(d2), "uid-coach", "mm-coach")).resolves.toEqual({
       token: "coach-pat",
     });
     expect(d2.log).toHaveBeenCalled();

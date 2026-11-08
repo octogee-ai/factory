@@ -6,15 +6,11 @@ import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createGiteaUser,
   generateCustomerSshKey,
   gitExec,
   setRepoSshCommand,
 } from "../lib/git.js";
-import {
-  ensureGiteaOrgForWorkspace,
-  ensureSystemConfigRepo,
-} from "../lib/gitea-admin-broker-client.js";
+import { brokeredGitHost } from "../lib/gitea-admin-broker-client.js";
 import {
   auditSystemConfigForSlug,
   prepareBuilderPrelaunchConfig,
@@ -44,7 +40,6 @@ import { withBuilderClaim } from "./helpers/builder-claim.js";
 import { applyAgentStoreDatabasePatch } from "../entrypoints/pre-boot-config.js";
 
 vi.mock("../lib/git.js", () => ({
-  createGiteaUser: vi.fn(async () => {}),
   customerSshKeyPath: vi.fn((slug: string) => `/tmp/customer-keys/${slug}/id_ed25519`),
   generateCustomerSshKey: vi.fn(() => "ssh-ed25519 AAA octogee-acme@gateway"),
   gitExec: vi.fn(() => "ok"),
@@ -52,8 +47,11 @@ vi.mock("../lib/git.js", () => ({
 }));
 
 vi.mock("../lib/gitea-admin-broker-client.js", () => ({
-  ensureGiteaOrgForWorkspace: vi.fn(async () => {}),
-  ensureSystemConfigRepo: vi.fn(async () => {}),
+  brokeredGitHost: {
+    registerKey: vi.fn(async () => {}),
+    ensureOwner: vi.fn(async () => {}),
+    ensureRepo: vi.fn(async () => {}),
+  },
 }));
 
 function writeJson(filePath: string, value: unknown): void {
@@ -90,7 +88,7 @@ describe("system_config restore", () => {
 
     expect(result).toEqual({ skipped: "invalid-builder-slug", seeded: false, restored: false });
     expect(generateCustomerSshKey).not.toHaveBeenCalled();
-    expect(ensureSystemConfigRepo).not.toHaveBeenCalled();
+    expect(brokeredGitHost.ensureRepo).not.toHaveBeenCalled();
   });
 
   it("reads the accepted system config commit without requiring a local checkout", () => {
@@ -192,9 +190,9 @@ describe("system_config restore", () => {
       restored: true,
       configPath: path.join(repoDir, "openclaw.json"),
     });
-    expect(createGiteaUser).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA octogee-acme@gateway");
-    expect(ensureGiteaOrgForWorkspace).toHaveBeenCalledWith("acme");
-    expect(ensureSystemConfigRepo).toHaveBeenCalledWith("acme");
+    expect(brokeredGitHost.registerKey).toHaveBeenCalledWith("acme", "ssh-ed25519 AAA octogee-acme@gateway");
+    expect(brokeredGitHost.ensureOwner).toHaveBeenCalledWith("acme");
+    expect(brokeredGitHost.ensureRepo).toHaveBeenCalledWith("acme", { kind: "system-config" });
     expect(setRepoSshCommand).toHaveBeenCalledWith(repoDir, "acme");
     expect(gitExec).toHaveBeenCalledWith(repoDir, ["add", "openclaw.json", ".octogee.json", ".gitignore"]);
     expect(gitExec).toHaveBeenCalledWith(

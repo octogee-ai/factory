@@ -1,6 +1,6 @@
 import type { FileTarget } from "./fileTarget.js";
 import { createIssue } from "./issues.js";
-import { giteaUsername, workspaceGiteaOrg, projectRepoName } from "./gitea-naming.js";
+import { giteaUsername, workspaceGiteaOrg, projectRepoName } from "@octogee/core/gitea-naming";
 import { logger } from "../middleware/logging.js";
 
 export const BOARD_WELCOME_TITLE = "👋 Welcome to your Board";

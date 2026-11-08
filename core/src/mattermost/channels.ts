@@ -6,42 +6,6 @@ import { computeProjectChannelDisplayName } from "@octogee/shared/types/display-
 import { mmApiCall } from "./client.js";
 import { customerChannelMembers } from "./channel-members.js";
 
-interface MattermostChannel {
-  id: string;
-  name?: string;
-  delete_at?: number;
-}
-
-export async function createOrRestoreChannel(
-  teamId: string, name: string, displayName: string, type: string, purpose: string,
-): Promise<MattermostChannel | null> {
-  let channel = (await mmApiCall("POST", "/channels", {
-    team_id: teamId, name, display_name: displayName, type, purpose,
-  })) as MattermostChannel | null;
-  if (channel) return channel;
-
-  channel = (await mmApiCall("GET", `/teams/${teamId}/channels/name/${name}`)) as MattermostChannel | null;
-  if (channel) return channel;
-
-  const archived = await mmApiCall(
-    "GET",
-    `/teams/${teamId}/channels/name/${name}?include_deleted=true`,
-  );
-  if (isArchivedChannel(archived, name)) {
-    channel = (await mmApiCall("POST", `/channels/${archived.id}/restore`)) as MattermostChannel | null;
-    if (channel) log(`[mattermost] restored archived channel: ${name}`);
-    return channel;
-  }
-
-  return null;
-}
-
-function isArchivedChannel(candidate: unknown, name: string): candidate is MattermostChannel {
-  if (typeof candidate !== "object" || candidate === null) return false;
-  const channel = candidate as Partial<MattermostChannel>;
-  return channel.name === name && typeof channel.id === "string" && (channel.delete_at ?? 0) > 0;
-}
-
 export async function createProjectChannel(
   teamId: string,         // workspace team ID (Phase 4: team-per-workspace)
   slug: string,
